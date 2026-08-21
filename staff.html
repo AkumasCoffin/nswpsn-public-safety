@@ -2882,8 +2882,14 @@
                 <button class="filter-btn active" data-nd2-sitetab="overview" onclick="nd2SiteSetTab('overview')">Overview</button>
                 <button class="filter-btn" data-nd2-sitetab="talkgroups" onclick="nd2SiteSetTab('talkgroups')">Talkgroups</button>
                 <button class="filter-btn" data-nd2-sitetab="radios" onclick="nd2SiteSetTab('radios')">Radios</button>
+                <button class="filter-btn" data-nd2-sitetab="freq" onclick="nd2SiteSetTab('freq')">Freq/band plan</button>
+                <button class="filter-btn" data-nd2-sitetab="extra" onclick="nd2SiteSetTab('extra')">Extra</button>
               </div>
             </div>
+            <!-- Patch groups sit with Talkgroups: a patch IS a talkgroup relationship,
+                 so it belongs beside the talkgroup list rather than buried in the site
+                 metadata dump. Shown only on that tab. -->
+            <div id="nd2-site-patches" style="display: none;"></div>
             <!-- Shared paged panels are reparented here for the site level. -->
             <div id="nd2-site-panels"></div>
 
@@ -2918,6 +2924,14 @@
               </div>
             </div>
             </div><!-- /nd2-sitetab-overview -->
+            <!-- Freq/band plan: the site's RF layout — its channel list, the sites it
+                 points at, and the band plan those LCNs decode against. Grouped
+                 because they are read together and none of it changes minute to
+                 minute, unlike the overview. -->
+            <div id="nd2-sitetab-freq" style="display: none;"></div>
+            <!-- Extra: decode-health history, P25 site identity and advertised site
+                 services. Reference material — checked occasionally, not watched. -->
+            <div id="nd2-sitetab-extra" style="display: none;"></div>
           </div>
         </div>
 
@@ -4830,16 +4844,30 @@
 
     /** Same, one level down: the tabs on a single site's drill-down. */
     function nd2SiteSetTab(tab) {
-      if (tab !== 'overview' && tab !== 'talkgroups' && tab !== 'radios') return;
+      const TABS = ['overview', 'talkgroups', 'radios', 'freq', 'extra'];
+      if (!TABS.includes(tab)) return;
       nd2.sys.siteTab = tab;
       document.querySelectorAll('[data-nd2-sitetab]').forEach(b =>
         b.classList.toggle('active', b.dataset.nd2Sitetab === tab));
       nd2MountPagedPanels('site');
-      const ov = document.getElementById('nd2-sitetab-overview');
-      if (ov) ov.style.display = tab === 'overview' ? '' : 'none';
+      // Static panels: shown by id. The paged Talkgroups/Radios panels are
+      // shared with the system level and handled separately below.
+      const show = (id, on) => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = on ? '' : 'none';
+      };
+      show('nd2-sitetab-overview', tab === 'overview');
+      show('nd2-sitetab-freq', tab === 'freq');
+      show('nd2-sitetab-extra', tab === 'extra');
+      // Patch groups ride with the talkgroup list — a patch is a talkgroup
+      // relationship, so it reads there and nowhere else.
+      show('nd2-site-patches', tab === 'talkgroups');
       nd2ShowPagedPanel(tab);
       if (tab === 'talkgroups') { nd2.tg.offset = 0; nd2LoadTalkgroups(); }
       else if (tab === 'radios') { nd2.rad.offset = 0; nd2LoadRadios(); }
+      // freq/extra are rendered from the site payload, and 'extra' holds the
+      // decode chart, which can only size itself once its tab is visible —
+      // nd2LoadSite re-runs nd2RenderSiteMeta, which draws it.
       else nd2LoadSite();
     }
 
@@ -5380,8 +5408,23 @@
             snapshots (~1/min) and kept for 7 days.</div>
         </div></div>`;
 
-      host.innerHTML = header + control + statusCard + decodeCard + channelsCard + patchesCard + neighborsCard + bandsCard;
-      nd2LoadDecodeChart();
+      // Split across the site's tabs instead of stacking everything on the
+      // overview. Grouped by how they are USED: the control channel is live
+      // status you glance at, the band plan is RF layout you study, the rest is
+      // reference. Patch groups go with Talkgroups — a patch is a talkgroup
+      // relationship, not site metadata.
+      const put = (id, html) => {
+        const el = document.getElementById(id);
+        if (el) el.innerHTML = html;
+      };
+      put('nd2-site-meta', control);
+      put('nd2-sitetab-freq', channelsCard + neighborsCard + bandsCard);
+      put('nd2-sitetab-extra', decodeCard + header + statusCard);
+      put('nd2-site-patches', patchesCard);
+      // The chart lives on a tab that may be hidden right now; Chart.js sizes
+      // to a zero-height canvas and renders nothing, so only draw it once the
+      // Extra tab is actually visible (nd2SiteSetTab re-invokes this).
+      if (nd2.sys.siteTab === 'extra') nd2LoadDecodeChart();
     }
 
     // --- Talkgroups view -------------------------------------------------
