@@ -255,15 +255,59 @@ export async function recordActivityEvents(
             [existingGroup ?? rowId, rowId],
           );
 
+          // The other half of the ordering fix (migration 070): if this call's
+          // audio already arrived and found no row to flag, it is parked —
+          // claim it now. DELETE ... RETURNING consumes it in the same
+          // transaction, so one upload can never flag two calls, and a
+          // rollback puts it back for the next attempt.
+          //
+          // Same ranking as markRecorded: exact frequency, then exact calling
+          // unit, then nearest in time. Deliberately identical, because the
+          // two sides are choosing between the same candidates from opposite
+          // directions and must not disagree about which pairing is right.
+          const claimed = await client.query<{ audio_bytes: string }>(
+            `DELETE FROM node_pending_recordings
+              WHERE id = (
+                SELECT id FROM node_pending_recordings
+                 WHERE node_id = $1
+                   AND talkgroup IS NOT DISTINCT FROM $2
+                   AND started_at BETWEEN $3::timestamptz - interval '${RECORDED_WINDOW_SECONDS} seconds'
+                                      AND $3::timestamptz + interval '${RECORDED_WINDOW_SECONDS} seconds'
+                 ORDER BY COALESCE(frequency IS NOT NULL AND frequency = $4::bigint, false) DESC,
+                          COALESCE(source_unit IS NOT NULL AND source_unit = $5::integer, false) DESC,
+                          abs(extract(epoch FROM (started_at - $3::timestamptz)))
+                 LIMIT 1
+              )
+              RETURNING audio_bytes`,
+            [
+              nodeId,
+              talkgroup,
+              receivedAt.toISOString(),
+              safeInt(ev.frequencyHz),
+              sourceUnit,
+            ],
+          );
+          const claimedBytes = claimed.rows[0] ? Number(claimed.rows[0].audio_bytes) || 0 : null;
+          if (claimedBytes !== null) {
+            await client.query(
+              `UPDATE node_radio_events SET recorded = true, audio_bytes = $1 WHERE id = $2`,
+              [claimedBytes, rowId],
+            );
+          }
+
           const isNewGroup = existingGroup === null;
-          // Per-node forever bucket (raw receptions; bytes arrive later via
-          // markRecorded when/if the rdio call upload lands).
+          // Per-node forever bucket. Bytes are normally 0 here and folded in
+          // later by markRecorded when the upload lands — except when we just
+          // claimed a parked upload above, in which case they are already
+          // known and must be counted here or they are lost entirely (the
+          // pending row is gone, so nothing will add them later).
           await client.query(
             `INSERT INTO node_radio_hourly (hour, node_id, system, talkgroup, calls, audio_bytes)
-             VALUES (date_trunc('hour', $1::timestamptz), $2, $3, $4, 1, 0)
+             VALUES (date_trunc('hour', $1::timestamptz), $2, $3, $4, 1, $5)
              ON CONFLICT (hour, node_id, system, talkgroup) DO UPDATE
-               SET calls = node_radio_hourly.calls + 1`,
-            [receivedAt.toISOString(), nodeId, system ?? 0, talkgroup ?? 0],
+               SET calls = node_radio_hourly.calls + 1,
+                   audio_bytes = node_radio_hourly.audio_bytes + EXCLUDED.audio_bytes`,
+            [receivedAt.toISOString(), nodeId, system ?? 0, talkgroup ?? 0, claimedBytes ?? 0],
           );
           // Network-wide forever bucket. logical_calls +1 only when this row
           // STARTED a group (each over-the-air call counted once).
@@ -407,6 +451,20 @@ export async function markRecorded(
         [nodeId, tg, at.toISOString(), bytes, freq, unit],
       );
       const row = upd.rows[0];
+
+      // No event row yet — park the upload so the event can claim it when it
+      // arrives. The two feeds race (audio closes in ~1-2s on a short over,
+      // activity events ship on a 3-5s tick) and this used to be a one-shot
+      // give-up, which permanently lost the flag for exactly the calls that
+      // were quickest to upload. See migration 070.
+      if (!row) {
+        await client.query(
+          `INSERT INTO node_pending_recordings
+             (node_id, talkgroup, source_unit, frequency, started_at, audio_bytes)
+           VALUES ($1, $2, $3, $4, $5::timestamptz, $6)`,
+          [nodeId, tg, unit, freq, at.toISOString(), bytes],
+        );
+      }
 
       // Diagnostic (see RECORDED_DIAG): this used to no-op silently on a miss,
       // which made "why do most calls show no recorded icon?" unanswerable —

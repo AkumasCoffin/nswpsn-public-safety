@@ -22,6 +22,14 @@ const RETENTION_DAYS = 30;
  *  quiet fleet where call rows don't; and their whole purpose is a recent
  *  trend, not a permanent record. ~1.4k rows/site/day at this cadence. */
 const DECODE_SAMPLE_RETENTION_DAYS = 7;
+
+/** Parked call uploads (migration 070) are measured in MINUTES, not days.
+ *  A pending row exists only to survive the gap between an upload and the
+ *  activity event it belongs to — a few seconds. One still sitting here after
+ *  ten minutes has no event coming (the call was never decoded on this node,
+ *  or its events were dropped), so it is waste, and this is the one node table
+ *  with no natural upper bound on its growth. */
+const PENDING_RECORDING_RETENTION_MINUTES = 10;
 const BATCH_SIZE = 5000;
 
 let timer: NodeJS.Timeout | null = null;
@@ -31,20 +39,28 @@ let tickRunning = false;
 /** Batched delete of rows older than the retention window. Returns rows
  *  removed. Table name comes from the fixed list below — never user input. */
 async function pruneTable(
-  table: 'node_radio_events' | 'node_pager_events' | 'node_site_decode_samples',
+  table:
+    | 'node_radio_events'
+    | 'node_pager_events'
+    | 'node_site_decode_samples'
+    | 'node_pending_recordings',
 ): Promise<number> {
   const pool = await getWriterPool();
   if (!pool) return 0;
-  // Decode samples use their own (shorter) window and timestamp column.
+  // Each table brings its own timestamp column and window; pending uploads are
+  // the only one measured in minutes.
   const samples = table === 'node_site_decode_samples';
-  const tsCol = samples ? 'sampled_at' : 'received_at';
-  const days = samples ? DECODE_SAMPLE_RETENTION_DAYS : RETENTION_DAYS;
+  const pending = table === 'node_pending_recordings';
+  const tsCol = pending ? 'created_at' : samples ? 'sampled_at' : 'received_at';
+  const age = pending
+    ? `${PENDING_RECORDING_RETENTION_MINUTES} minutes`
+    : `${samples ? DECODE_SAMPLE_RETENTION_DAYS : RETENTION_DAYS} days`;
   let total = 0;
   for (;;) {
     const r = await pool.query(
       `DELETE FROM ${table} WHERE id IN (
          SELECT id FROM ${table}
-          WHERE ${tsCol} < now() - interval '${days} days'
+          WHERE ${tsCol} < now() - interval '${age}'
           LIMIT ${BATCH_SIZE}
        )`,
     );
@@ -61,8 +77,12 @@ export async function pruneNodeEventsOnce(): Promise<void> {
     const radio = await pruneTable('node_radio_events');
     const pager = await pruneTable('node_pager_events');
     const decode = await pruneTable('node_site_decode_samples');
-    if (radio > 0 || pager > 0 || decode > 0) {
-      log.info({ radio, pager, decode }, 'node events pruner: removed expired detail rows');
+    const pending = await pruneTable('node_pending_recordings');
+    if (radio > 0 || pager > 0 || decode > 0 || pending > 0) {
+      log.info(
+        { radio, pager, decode, pending },
+        'node events pruner: removed expired detail rows',
+      );
     }
   } catch (err) {
     log.warn({ err: (err as Error).message }, 'node events pruner: prune failed');

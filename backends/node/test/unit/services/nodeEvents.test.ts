@@ -247,6 +247,78 @@ describe('recordActivityEvents', () => {
   });
 });
 
+describe('recordActivityEvents claiming a parked upload', () => {
+  beforeEach(() => {
+    clientQuery.mockReset();
+    clientRelease.mockReset();
+  });
+
+  const ev = (over: Partial<ActivityEventInput> = {}): ActivityEventInput => ({
+    id: 1,
+    atMs: Date.now(),
+    action: 'CALL',
+    eventType: 'CALL_GROUP',
+    source: 2019985,
+    target: 12345,
+    frequencyHz: 851_062_500,
+    timeslot: null,
+    encrypted: false,
+    rfss: 4,
+    site: 85,
+    nac: null,
+    wacn: null,
+    systemId: 0x4a2,
+    channelName: null,
+    ...over,
+  });
+
+  /** Like armQueries but lets the pending-claim DELETE return a parked row. */
+  function armWithPending(pendingBytes: number | null) {
+    clientQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('SELECT logical_call_id FROM node_radio_events')) return { rows: [] };
+      if (sql.includes('DELETE FROM node_pending_recordings')) {
+        return { rows: pendingBytes === null ? [] : [{ audio_bytes: String(pendingBytes) }] };
+      }
+      if (sql.includes('INSERT INTO node_radio_events')) return { rows: [{ id: '101' }] };
+      return { rows: [] };
+    });
+  }
+
+  it('flags the new row and folds the bytes in when an upload was waiting', async () => {
+    armWithPending(90_000);
+    const n = await recordActivityEvents('node-aaaa', 's1', [ev()]);
+    expect(n).toBe(1);
+
+    const flag = callWith('SET recorded = true');
+    expect(flag?.[0]).toBe(90_000);
+    expect(flag?.[1]).toBe('101');
+    // The pending row is consumed, so nothing will add these bytes later —
+    // the hourly bucket must count them HERE or they are lost.
+    const hourly = callWith('INSERT INTO node_radio_hourly ');
+    expect(hourly?.[4]).toBe(90_000);
+  });
+
+  it('leaves the row unflagged and the bucket at zero bytes when none was waiting', async () => {
+    armWithPending(null);
+    await recordActivityEvents('node-aaaa', 's1', [ev()]);
+    expect(countCalls('SET recorded = true')).toBe(0);
+    const hourly = callWith('INSERT INTO node_radio_hourly ');
+    expect(hourly?.[4]).toBe(0);
+  });
+
+  it('claims within a transaction, so a rollback returns the upload to the queue', async () => {
+    armWithPending(1);
+    await recordActivityEvents('node-aaaa', 's1', [ev()]);
+    const sqls = clientQuery.mock.calls.map((a) => String(a[0]));
+    const begin = sqls.indexOf('BEGIN');
+    const del = sqls.findIndex((s) => s.includes('DELETE FROM node_pending_recordings'));
+    const commit = sqls.indexOf('COMMIT');
+    expect(begin).toBeGreaterThanOrEqual(0);
+    expect(del).toBeGreaterThan(begin);
+    expect(commit).toBeGreaterThan(del);
+  });
+});
+
 describe('markRecorded', () => {
   beforeEach(() => {
     clientQuery.mockReset();
@@ -372,6 +444,32 @@ describe('markRecorded', () => {
     // …and both still rank.
     expect(sql.slice(sql.indexOf('ORDER BY'))).toContain('frequency = $5');
     expect(sql.slice(sql.indexOf('ORDER BY'))).toContain('source_unit = $6');
+  });
+
+  it('parks the upload when no event row exists yet', async () => {
+    // The feeds race: audio closes in ~1-2s on a short over, activity events
+    // ship on a 3-5s tick. This used to be a one-shot give-up, permanently
+    // losing the flag for exactly the calls quickest to upload — which is why
+    // busy talkgroups scored worst (30017 at 67% vs 30003 at 95%).
+    armQueries({ updatedRow: null });
+    await markRecorded('node-aaaa', 12345, at, 90_000, 2019985, 851_062_500);
+
+    const parked = callWith('INSERT INTO node_pending_recordings');
+    expect(parked).toBeDefined();
+    // [nodeId, talkgroup, sourceUnit, frequency, startedAt, bytes] — the
+    // identity has to be parked too, or the event cannot tell which call it is.
+    expect(parked?.[0]).toBe('node-aaaa');
+    expect(parked?.[1]).toBe(12345);
+    expect(parked?.[2]).toBe(2019985);
+    expect(parked?.[3]).toBe(851_062_500);
+    expect(parked?.[5]).toBe(90_000);
+    expect(clientQuery.mock.calls.some((a) => a[0] === 'COMMIT')).toBe(true);
+  });
+
+  it('does NOT park when a row was flagged', async () => {
+    armQueries({ updatedRow: { received_at: at.toISOString(), system: 0x4a2, talkgroup: 12345 } });
+    await markRecorded('node-aaaa', 12345, at, 90_000);
+    expect(countCalls('INSERT INTO node_pending_recordings')).toBe(0);
   });
 
   it('is a clean no-op when no row matches', async () => {
