@@ -36,6 +36,12 @@ import (
 const (
 	statusInterval         = 15 * time.Second
 	spectrumStatusInterval = 3 * time.Second // faster status cadence while a spectrum stream is live
+	// liveStatusInterval: cadence while staff are watching the fleet Live view.
+	// A P25 over is often shorter than 15s, so at the heartbeat rate calls were
+	// starting and ending between two reports and never appeared at all — the
+	// view looked delayed and half-empty no matter how fast the server pushed,
+	// because the data underneath it was never fresher than 15s.
+	liveStatusInterval = 1 * time.Second
 	pingInterval           = 30 * time.Second
 	readDeadline           = 90 * time.Second
 	writeWait              = 10 * time.Second
@@ -70,6 +76,12 @@ type Client struct {
 	updateMu    sync.Mutex // serializes update checks (manifest + component ensure + self-update)
 
 	swapScheduled atomic.Bool // one-shot guard: at most one self-update swap+restart in flight
+
+	// liveWatch: ≥1 staff browser has the fleet Live view open. Set by the
+	// server (TypeLiveWatch), never inferred here — the agent cannot know who
+	// is looking. Cleared on reconnect so a dropped session can't strand the
+	// node at the fast cadence forever.
+	liveWatch atomic.Bool
 
 	// Component versions the RUNNING processes were launched with (snapshot of the
 	// current.txt pointers at startup, i.e. what resolveSDRTrunk/resolveRdio
@@ -255,12 +267,48 @@ func (c *Client) sendHello(conn *websocket.Conn) error {
 	return c.writeType(conn, protocol.TypeHello, h, "")
 }
 
+// handleLiveWatch switches the status cadence while staff watch the fleet Live
+// view. Sending one status immediately on the way UP matters: otherwise the
+// viewer stares at whatever the last heartbeat left behind for up to 15s, which
+// is the exact complaint the fast cadence exists to fix.
+func (c *Client) handleLiveWatch(env *protocol.Envelope) {
+	var d struct {
+		On bool `json:"on"`
+	}
+	if len(env.Data) > 0 {
+		if err := json.Unmarshal(env.Data, &d); err != nil {
+			log.Printf("wsclient: bad liveWatch payload: %v", err)
+			return
+		}
+	}
+	if c.liveWatch.Swap(d.On) == d.On {
+		return // no change
+	}
+	log.Printf("wsclient: live watch %t (status cadence %v)", d.On,
+		map[bool]time.Duration{true: liveStatusInterval, false: statusInterval}[d.On])
+	if d.On {
+		c.writeMu.Lock()
+		conn := c.conn
+		c.writeMu.Unlock()
+		if conn != nil {
+			if err := c.sendStatus(conn); err != nil {
+				log.Printf("wsclient: liveWatch immediate status failed: %v", err)
+			}
+		}
+	}
+}
+
 func (c *Client) statusLoop(ctx context.Context, conn *websocket.Conn) {
-	// Tick at the fast cadence and decide per-tick whether enough time has
-	// elapsed for the currently-desired interval: statusInterval normally, but
-	// spectrumStatusInterval while ≥1 spectrum stream is live so the staff
-	// drawer sees near-live channel/tuner state.
-	t := time.NewTicker(spectrumStatusInterval)
+	// A reconnect means the server's view of who is watching is gone; start
+	// from "nobody" and let it tell us again, or a dropped session would strand
+	// this node at the fast cadence indefinitely.
+	c.liveWatch.Store(false)
+	// Tick at the FASTEST cadence any mode needs and decide per-tick whether
+	// enough time has elapsed for the currently-desired interval:
+	// statusInterval normally, spectrumStatusInterval while ≥1 spectrum stream
+	// is live, liveStatusInterval while staff are watching the fleet Live view.
+	// A slower ticker would cap every mode at its own period.
+	t := time.NewTicker(liveStatusInterval)
 	defer t.Stop()
 	// Send one immediately so the server has fresh state.
 	if err := c.sendStatus(conn); err != nil {
@@ -275,6 +323,10 @@ func (c *Client) statusLoop(ctx context.Context, conn *websocket.Conn) {
 			interval := statusInterval
 			if c.spec.ActiveCount() > 0 {
 				interval = spectrumStatusInterval
+			}
+			// Live watching wins: it is the tightest of the three.
+			if c.liveWatch.Load() {
+				interval = liveStatusInterval
 			}
 			// Small slack so ticker jitter doesn't push a send one tick late.
 			if now.Sub(last) < interval-50*time.Millisecond {
@@ -403,6 +455,9 @@ func (c *Client) handle(conn *websocket.Conn, env *protocol.Envelope) {
 
 	case protocol.TypeSpectrumStop:
 		c.handleSpectrumStop(env)
+
+	case protocol.TypeLiveWatch:
+		c.handleLiveWatch(env)
 
 	case protocol.TypeConfigPush:
 		c.handleConfigPush(env)

@@ -195,6 +195,7 @@ class NodeHub {
     this.updatingUntil.delete(nodeId);
     log.info({ nodeId, installId }, 'node agent connected');
     this.broadcastToStaff(nodeId, 'nodePresence', { nodeId, online: true });
+    this.syncLiveWatchTo(nodeId);
   }
 
   unregisterAgent(nodeId: string, ws: WebSocket): void {
@@ -390,13 +391,40 @@ class NodeHub {
     for (const s of this.liveStaff) {
       if (s.ws === ws) this.liveStaff.delete(s);
     }
+    const wasEmpty = this.liveStaff.size === 0;
     this.liveStaff.add({ ws, userId });
+    if (wasEmpty) this.setAgentLiveWatch(true);
   }
 
   unsubscribeLiveStaff(ws: WebSocket): void {
     for (const s of this.liveStaff) {
       if (s.ws === ws) this.liveStaff.delete(s);
     }
+    if (this.liveStaff.size === 0) this.setAgentLiveWatch(false);
+  }
+
+  /**
+   * Ask every connected agent to speed up (or drop back) its status reports.
+   *
+   * Pushing faster from the server could never have fixed a laggy Live view on
+   * its own: the agent only reported every 15s, so that was the true age of the
+   * data no matter how promptly it was relayed. Short calls began and ended
+   * between two reports and were never seen at all.
+   *
+   * Only sent on the 0↔1 transition, so N viewers cost one message, not N. An
+   * agent too old to know the type logs and ignores it, and keeps the old
+   * cadence — the view is then merely as stale as before, never broken.
+   */
+  private setAgentLiveWatch(on: boolean): void {
+    for (const a of this.agents.values()) {
+      this.sendToAgent(a.nodeId, 'liveWatch', { on });
+    }
+  }
+
+  /** A newly-connected agent inherits the current watch state — it starts at
+   *  the slow cadence and would otherwise stay there for the whole session. */
+  private syncLiveWatchTo(nodeId: string): void {
+    if (this.liveStaff.size > 0) this.sendToAgent(nodeId, 'liveWatch', { on: true });
   }
 
   /** Every online node's current Live slice — the first paint on subscribe. */

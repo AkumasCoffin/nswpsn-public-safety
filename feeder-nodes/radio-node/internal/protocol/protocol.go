@@ -25,6 +25,10 @@ const (
 	TypeCmd           = "cmd"
 	TypeSpectrumStart = "spectrumStart"
 	TypeSpectrumStop  = "spectrumStop"
+	// TypeLiveWatch tells the agent whether any staff browser is watching the
+	// fleet Live view. While on, status goes out at the fast cadence so the
+	// view is actually live; while off it drops back to the heartbeat rate.
+	TypeLiveWatch = "liveWatch"
 	TypeDisabled      = "disabled"
 )
 

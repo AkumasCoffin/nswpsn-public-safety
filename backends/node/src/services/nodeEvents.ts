@@ -61,6 +61,27 @@ const GROUP_WINDOW_SECONDS = 4;
  *  wide window no longer risks claiming a neighbour's row. */
 const RECORDED_WINDOW_SECONDS = Number(process.env['RECORDED_WINDOW_SECONDS'] ?? 10) || 10;
 
+/**
+ * Outer bound for an IDENTITY match — same talkgroup, same calling unit, same
+ * traffic channel. Beyond the time window above, that combination is the same
+ * call by any reasonable reading, so the clock stops being the deciding factor.
+ *
+ * This exists because the two sides do not share a clock basis and cannot be
+ * made to. vce stamps the rdio upload with audioRecording.getStartTime() — the
+ * real call start — while the activity event carries observed_at_ms, when the
+ * activity logger WROTE the row (ControlActivityLookup: v.observed_at_ms).
+ * p25_activity_event has no call-start column, so there is nothing to align to.
+ *
+ * The identity, though, vce hands us on both sides already: FormField.SOURCE
+ * and FormField.FREQUENCY on the upload, source_unit and frequency on the
+ * event. Matching on what identifies the call beats matching on two clocks
+ * that were never the same clock.
+ *
+ * Still bounded, not unlimited: traffic channels are reused, so a much older
+ * call could otherwise present the same (unit, frequency) pair.
+ */
+const RECORDED_OUTER_SECONDS = Number(process.env['RECORDED_OUTER_SECONDS'] ?? 90) || 90;
+
 /** Log every markRecorded outcome (HIT with its timestamp skew, MISS with how
  *  near an event actually was). Off by default — one line per call upload is a
  *  lot of log on a busy system — but it is the only way to tell an upload that
@@ -338,16 +359,21 @@ export async function markRecorded(
         system: number | null;
         talkgroup: number | null;
       }>(
-        // Match order matters more than the window now. Both extra predicates
-        // are TOLERANT of a null on either side (same shape as the grouping
-        // query above): vce omits a field on some calls, and an older agent
-        // sends neither — in which case this degrades to the old time-only
-        // behaviour rather than matching nothing.
+        // Frequency and unit RANK candidates; they never exclude any. That
+        // distinction was learned the hard way — as WHERE clauses they cost
+        // more matches than they saved (measured 76 misses against 71 hits,
+        // nearly all with an eligible unrecorded row well inside the window).
+        // One call heard at several sites has a DIFFERENT traffic frequency
+        // per site while the upload carries only the recording site's, so a
+        // hard frequency predicate throws away the very rows it should be
+        // choosing between.
         //
-        // ORDER BY prefers an exact frequency match, then an exact unit match,
-        // then proximity in time. So when the discriminators are present the
-        // right row wins even if a neighbour is closer in time, and when they
-        // are absent nearest-in-time still applies.
+        // As a ranking it is all upside: an exact frequency match wins, then
+        // an exact unit match, then proximity in time — and when the upload
+        // carries neither (older agent) this degrades cleanly to the original
+        // nearest-in-time behaviour. A slightly mis-attributed flag within one
+        // talkgroup and ten seconds beats a missing one; a miss is invisible
+        // and permanent.
         //
         // The COALESCE is load-bearing, not decoration: `frequency = $5` is
         // NULL (not false) when the ROW's frequency is null, and DESC sorts
@@ -359,10 +385,19 @@ export async function markRecorded(
              WHERE node_id = $1
                AND talkgroup IS NOT DISTINCT FROM $2
                AND recorded = false
-               AND received_at BETWEEN $3::timestamptz - interval '${RECORDED_WINDOW_SECONDS} seconds'
-                                  AND $3::timestamptz + interval '${RECORDED_WINDOW_SECONDS} seconds'
-               AND ($5::bigint IS NULL OR frequency IS NULL OR frequency = $5::bigint)
-               AND ($6::integer IS NULL OR source_unit IS NULL OR source_unit = $6::integer)
+               AND received_at BETWEEN $3::timestamptz - interval '${RECORDED_OUTER_SECONDS} seconds'
+                                  AND $3::timestamptz + interval '${RECORDED_OUTER_SECONDS} seconds'
+               AND (
+                 -- Close in time: trust the clock, as before.
+                 abs(extract(epoch FROM (received_at - $3::timestamptz)))
+                   <= ${RECORDED_WINDOW_SECONDS}
+                 -- Further out: only on a full identity match. Talkgroup is
+                 -- already fixed above, so agreeing on BOTH the calling unit
+                 -- and the traffic channel is the same call by any reasonable
+                 -- reading — and it is precisely what the clock cannot tell us.
+                 OR ($5::bigint IS NOT NULL AND frequency = $5::bigint
+                     AND $6::integer IS NOT NULL AND source_unit = $6::integer)
+               )
              ORDER BY COALESCE($5::bigint IS NOT NULL AND frequency = $5::bigint, false) DESC,
                       COALESCE($6::integer IS NOT NULL AND source_unit = $6::integer, false) DESC,
                       abs(extract(epoch FROM (received_at - $3::timestamptz)))

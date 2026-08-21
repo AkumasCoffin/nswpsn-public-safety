@@ -2645,7 +2645,7 @@
         <!-- ===== Systems view (list › system overview › site overview) ===== -->
         <div id="nd2-view-live" style="display: none;">
           <div class="nd2-card">
-            <div class="nd2-card-h"><i class="fas fa-tower-broadcast"></i> Live channels
+            <div class="nd2-card-h"><i class="fas fa-tower-broadcast"></i> Control channels
               <span class="nd2-note" id="nd2-live-meta"></span></div>
             <div id="nd2-live-ch"></div>
           </div>
@@ -3866,11 +3866,22 @@
       nd2.tg.offset = 0;
       nd2Refresh();
     }
-    /** A live call row is encrypted per the server's explicit flag, falling
-     *  back to the vce state string for older payloads. */
+    /** A talkgroup whose ALIAS declares it encrypted, e.g. "065 - NSW PF (ENC)".
+     *  The decoder's per-call encrypted flag is not set at the instant a call
+     *  starts, so on an always-encrypted talkgroup the first seconds arrive
+     *  flagged clear — the alias is the reliable signal. Word-boundary matched
+     *  so "FENCE"/"ENCORE" are not swept up. Mirrors encryptedTalkgroupIds()
+     *  on the server so both ends hide the same set. */
+    function nd2IsEncLabel(label) {
+      return !!label && /\b(?:ENC|ENCRYPTED|ENCRYPT)\b/i.test(String(label));
+    }
+    /** A live call row is encrypted per the server's explicit flag, the vce
+     *  state string, or the talkgroup's alias. */
     function nd2IsEncCall(c) {
-      if (c && typeof c.encrypted === 'boolean') return c.encrypted;
-      return String((c && c.state) || '').toUpperCase() === 'ENCRYPTED';
+      if (!c) return false;
+      if (c.encrypted === true) return true;
+      if (String(c.state || '').toUpperCase() === 'ENCRYPTED') return true;
+      return nd2IsEncLabel(c.talkgroupLabel) || nd2IsEncLabel(c.toAlias);
     }
     /** Drop ALWAYS-encrypted talkgroups from a top-talkgroups list. A talkgroup
      *  carrying both clear and encrypted traffic stays: hiding it would lose
@@ -3879,7 +3890,12 @@
     function nd2FilterEncTgs(list) {
       const l = list || [];
       if (!nd2HideEnc()) return l;
-      return l.filter(t => !(Number(t.encryptedCalls) > 0 && Number(t.encryptedCalls) >= Number(t.calls)));
+      return l.filter(t => {
+        // Declared encrypted by its alias — goes regardless of the per-call
+        // counts, which under-report for exactly these talkgroups.
+        if (nd2IsEncLabel(t.label)) return false;
+        return !(Number(t.encryptedCalls) > 0 && Number(t.encryptedCalls) >= Number(t.calls));
+      });
     }
 
     let _nd2Timer = null;
@@ -5662,6 +5678,49 @@
     // pre-flattened.
     let _nd2LiveSlices = new Map();
 
+    /**
+     * Link receptions of ONE call into one row, the way the events list groups
+     * a logical call. A talkgroup call is simulcast across every site in the
+     * area, so each receiving site (and each node hearing that site) reports it
+     * separately — left ungrouped, one call fills the table with near-identical
+     * rows and hides how many other calls are actually up.
+     *
+     * Key is talkgroup + calling unit, NOT frequency or site: those are exactly
+     * the fields that differ between receptions of the same call. No time
+     * component is needed because everything here is in progress right now.
+     */
+    function nd2LinkLiveCalls(calls) {
+      const byCall = new Map();
+      for (const c of (calls || [])) {
+        const key = `${c.talkgroup == null ? '?' : c.talkgroup}|${c.from == null ? '?' : c.from}`;
+        const prev = byCall.get(key);
+        if (!prev) {
+          byCall.set(key, { ...c, sites: new Set(), nodes: new Set() });
+        }
+        const row = byCall.get(key);
+        if (c.site) row.sites.add(String(c.site));
+        if (c.node) row.nodes.add(String(c.node));
+        // Prefer the strongest reception's decode figure — the call IS being
+        // received that well somewhere, and showing the worst site's number
+        // reads as a problem that isn't one.
+        if (Number(c.syncPercent) > Number(row.syncPercent ?? -1)) {
+          row.syncPercent = c.syncPercent;
+          row.signalDbfs = c.signalDbfs;
+        }
+        // Any reception that resolved an alias supplies it for the whole call.
+        row.talkerAlias = row.talkerAlias || c.talkerAlias;
+        row.fromAlias = row.fromAlias || c.fromAlias;
+        row.talkgroupLabel = row.talkgroupLabel || c.talkgroupLabel;
+        row.agency = row.agency || c.agency;
+      }
+      return [...byCall.values()].map(r => ({
+        ...r,
+        siteCount: r.sites.size,
+        siteList: [...r.sites],
+        nodeCount: r.nodes.size,
+      }));
+    }
+
     /** Merge every node's slice, apply the node + hide-ENC filters, render. */
     function nd2RenderLive() {
       const chHost = document.getElementById('nd2-live-ch');
@@ -5685,6 +5744,7 @@
       // — a channel row is decode health, and dropping it (especially a
       // control channel) would misreport the site as not being received.
       if (nd2HideEnc()) calls = calls.filter(c => !nd2IsEncCall(c));
+      calls = nd2LinkLiveCalls(calls);
 
       // Say which feed is driving this. The poll fallback is silent by design,
       // so without this a dropped socket looks identical to a working one —
@@ -5716,7 +5776,7 @@
         ])) : '<div class="nd2-empty">No channels reporting. Nodes may be offline.</div>';
 
       callHost.innerHTML = calls.length ? nd2MiniTable(
-        [{ label: 'Talkgroup' }, { label: 'Agency' }, { label: 'Source' }, { label: 'Site' },
+        [{ label: 'Talkgroup' }, { label: 'Agency' }, { label: 'Source' }, { label: 'Sites' },
          { label: 'Freq', num: true }, { label: 'Decode', num: true }, { label: 'Node' }],
         calls.map(c => [
           nd2LiveTgCell(c),
@@ -5724,10 +5784,18 @@
           c.talkerAlias || c.fromAlias
             ? `<span class="nd-strong">${escapeHtml(String(c.talkerAlias || c.fromAlias))}</span> <span class="nd-sub">${escapeHtml(String(c.from == null ? '' : c.from))}</span>`
             : escapeHtml(String(c.from == null ? '—' : c.from)),
-          escapeHtml(String(c.site || '—')),
+          // Every site currently hearing this call. The count leads because
+          // reach is the point; the names follow for where.
+          c.siteCount
+            ? `<span class="nd2-chip" title="${escapeHtml(c.siteList.join(', '))}">×${c.siteCount}</span> `
+              + c.siteList.slice(0, 2).map(s => `<span class="nd-sub">${escapeHtml(s)}</span>`).join(', ')
+              + (c.siteCount > 2 ? ` <span class="nd-sub">+${c.siteCount - 2}</span>` : '')
+            : '<span class="nd-sub">—</span>',
           c.frequency != null ? (Number(c.frequency) / 1e6).toFixed(4) + ' MHz' : '—',
           nd2DecodePct(c.syncPercent),
-          nd2NodeChip(c.node ? { id: nd2ShortNode(c.node), name: c.nodeName } : null),
+          c.nodeCount > 1
+            ? `<span class="nd2-chip" title="Heard by ${c.nodeCount} nodes">×${c.nodeCount}</span>`
+            : nd2NodeChip(c.node ? { id: nd2ShortNode(c.node), name: c.nodeName } : null),
         ])) : '<div class="nd2-empty">No calls in progress.</div>';
     }
 

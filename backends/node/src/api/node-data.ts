@@ -870,7 +870,18 @@ nodeDataRouter.get(
           rConds.push(`site_rfss = ${add(siteRfss)}`);
           rConds.push(`site_id = ${add(siteId)}`);
         }
-        if (encrypted !== null) rConds.push(`encrypted = ${add(encrypted)}`);
+        if (encrypted !== null) {
+          rConds.push(`encrypted = ${add(encrypted)}`);
+          // Hiding encrypted traffic also has to drop talkgroups the playlist
+          // declares encrypted — their individual events are often flagged
+          // false simply because the decoder had not established it yet.
+          if (encrypted === false) {
+            const encTgs = await encryptedTalkgroupIds();
+            if (encTgs.length) {
+              rConds.push(`(talkgroup IS NULL OR talkgroup <> ALL(${add(encTgs)}::int[]))`);
+            }
+          }
+        }
         if (q !== null) {
           const like = add(`%${q}%`);
           rConds.push(`(talkgroup_label ILIKE ${like} OR system_label ILIKE ${like})`);
@@ -1106,6 +1117,29 @@ function qpIntOpt(url: URL, name: string): { value: number | null; error?: strin
   if (raw === null || raw === '') return { value: null };
   if (!/^\d+$/.test(raw)) return { value: null, error: `${name} must be a non-negative integer` };
   return { value: Number.parseInt(raw, 10) };
+}
+
+/**
+ * Talkgroups whose ALIAS declares them encrypted (e.g. "065 - NSW PF (ENC)").
+ *
+ * Hiding encrypted traffic cannot rely on the per-event `encrypted` flag alone:
+ * it comes from the decoder and is not set at the instant a call starts, so an
+ * always-encrypted talkgroup still produces rows flagged false and they sail
+ * straight through a `encrypted = false` filter. The alias, by contrast, is a
+ * standing declaration by whoever wrote the playlist — if it says ENC, every
+ * call on it is encrypted regardless of what any single event managed to
+ * decode in time.
+ *
+ * Word-boundary matched so a talkgroup merely CONTAINING those letters
+ * (e.g. "FENCE", "ENCORE") is not swept up.
+ */
+async function encryptedTalkgroupIds(): Promise<number[]> {
+  const cat = await talkgroupCatalog();
+  const out: number[] = [];
+  for (const [id, label] of cat.labels) {
+    if (/\b(?:ENC|ENCRYPTED|ENCRYPT)\b/i.test(label)) out.push(id);
+  }
+  return out;
 }
 
 /**
@@ -1921,6 +1955,16 @@ nodeDataRouter.get(
       if (qRaw) {
         params.push(`${qRaw}%`);
         conds.push(`talkgroup::text LIKE $${params.length}`);
+      }
+      if (encHide) {
+        // Playlist-declared ENC talkgroups go regardless of what their events
+        // were flagged — the HAVING below only sees the per-event flag, which
+        // lags the start of a call and so never reaches 100% for them.
+        const encTgs = await encryptedTalkgroupIds();
+        if (encTgs.length) {
+          params.push(encTgs);
+          conds.push(`talkgroup <> ALL($${params.length}::int[])`);
+        }
       }
       const where = conds.join(' AND ');
       const orderCol = sort === 'lastSeen' ? 'last_seen' : 'calls';

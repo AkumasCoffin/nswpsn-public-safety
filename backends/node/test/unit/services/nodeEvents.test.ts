@@ -321,18 +321,57 @@ describe('markRecorded', () => {
   });
 
   it('degrades to time-only matching when the upload carries neither', async () => {
-    // An older agent sends no source/frequency. The predicates must be
-    // tolerant of NULL on either side or every such upload would miss.
+    // An older agent sends no source/frequency; those uploads must still match.
     armQueries({ updatedRow: { received_at: at.toISOString(), system: 0x4a2, talkgroup: 12345 } });
     await markRecorded('node-aaaa', 12345, at, 1);
     const upd = callWith('UPDATE node_radio_events SET recorded = true');
     expect(upd?.[4]).toBeNull();
     expect(upd?.[5]).toBeNull();
+  });
+
+  it('accepts a far-in-time row when unit AND frequency both identify the call', async () => {
+    // The two sides do not share a clock: the upload is stamped with the real
+    // call start (getStartTime()), the event with observed_at_ms — when the
+    // activity logger wrote the row. There is no call-start column to align
+    // to, so identity has to carry matches the clock would reject.
+    armQueries({ updatedRow: { received_at: at.toISOString(), system: 0x4a2, talkgroup: 12345 } });
+    await markRecorded('node-aaaa', 12345, at, 1, 2019985, 851_062_500);
     const sql = String(clientQuery.mock.calls
       .map((a) => String(a[0]))
       .find((s) => s.includes('UPDATE node_radio_events SET recorded = true')));
-    expect(sql).toContain('$5::bigint IS NULL');
-    expect(sql).toContain('$6::integer IS NULL');
+    const where = sql.slice(sql.indexOf('WHERE'), sql.indexOf('ORDER BY'));
+    // Time-only acceptance stays, OR'd with a full identity match.
+    expect(where).toContain('frequency = $5::bigint');
+    expect(where).toContain('source_unit = $6::integer');
+    // The identity escape requires BOTH — either alone is not enough to
+    // override the clock (traffic channels are reused; units repeat).
+    expect(where).toMatch(/frequency = \$5::bigint\s*\n?\s*AND \$6::integer IS NOT NULL AND source_unit = \$6::integer/);
+    // …and it is still bounded, or a call from an hour ago could match.
+    const bounds = [...sql.matchAll(/interval '(\d+) seconds'/g)].map((m) => Number(m[1]));
+    for (const b of bounds) expect(b).toBeLessThanOrEqual(300);
+  });
+
+  it('frequency and unit only ever WIDEN the candidate set, never narrow it', async () => {
+    // As narrowing predicates these cost more matches than they saved (measured
+    // 76 misses to 71 hits): one call heard at several sites has a different
+    // traffic frequency per site, while the upload carries only the recording
+    // site's, so an AND discards the rows it should be choosing between. They
+    // may appear in WHERE solely inside the OR that admits a far-in-time
+    // identity match, and otherwise only rank.
+    armQueries({ updatedRow: { received_at: at.toISOString(), system: 0x4a2, talkgroup: 12345 } });
+    await markRecorded('node-aaaa', 12345, at, 1, 2019985, 851_062_500);
+    const sql = String(clientQuery.mock.calls
+      .map((a) => String(a[0]))
+      .find((s) => s.includes('UPDATE node_radio_events SET recorded = true')));
+    const where = sql.slice(sql.indexOf('WHERE'), sql.indexOf('ORDER BY'));
+    // Every mention of either column sits after the OR that widens.
+    const orIdx = where.indexOf('OR ($5::bigint IS NOT NULL');
+    expect(orIdx).toBeGreaterThan(-1);
+    expect(where.indexOf('frequency')).toBeGreaterThan(orIdx);
+    expect(where.indexOf('source_unit')).toBeGreaterThan(orIdx);
+    // …and both still rank.
+    expect(sql.slice(sql.indexOf('ORDER BY'))).toContain('frequency = $5');
+    expect(sql.slice(sql.indexOf('ORDER BY'))).toContain('source_unit = $6');
   });
 
   it('is a clean no-op when no row matches', async () => {
