@@ -1183,6 +1183,12 @@ interface ScopedDetail {
     calls: number;
     logicalCalls: number;
     encryptedCalls: number;
+    /** Calls whose audio reached central rdio. The counterpart to
+     *  encryptedCalls: encrypted traffic can never have audio, so a
+     *  contributor comparing the two can tell "my node isn't uploading" apart
+     *  from "this talkgroup is encrypted". Counted over DISTINCT logical calls
+     *  so it compares like-for-like against logicalCalls. */
+    recordedCalls: number;
     talkgroups: number;
     radios: number;
     sites: number;
@@ -1222,13 +1228,15 @@ async function scopedRadioDetail(
       calls: unknown;
       logical: unknown;
       enc: unknown;
+      rec: unknown;
       talkgroups: unknown;
       radios: unknown;
       sites: unknown;
     }>(
       `SELECT COUNT(*)::int AS calls,
               COUNT(DISTINCT logical_call_id)::int AS logical,
-              (COUNT(*) FILTER (WHERE encrypted))::int AS enc,
+              (COUNT(DISTINCT logical_call_id) FILTER (WHERE encrypted))::int AS enc,
+              (COUNT(DISTINCT logical_call_id) FILTER (WHERE recorded))::int AS rec,
               (COUNT(DISTINCT talkgroup) FILTER (WHERE ${TG_VALID}))::int AS talkgroups,
               COUNT(DISTINCT source_unit)::int AS radios,
               (COUNT(DISTINCT (site_rfss, site_id))
@@ -1283,6 +1291,7 @@ async function scopedRadioDetail(
       calls: num(t?.calls),
       logicalCalls: num(t?.logical),
       encryptedCalls: num(t?.enc),
+      recordedCalls: num(t?.rec),
       talkgroups: num(t?.talkgroups),
       radios: num(t?.radios),
       sites: num(t?.sites),

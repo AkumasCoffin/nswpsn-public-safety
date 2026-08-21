@@ -142,6 +142,11 @@ function feederNodeView(n: NodeRow) {
     messagesLast10m: callsLast10m,
     readersUp: isPager ? readersUp : null,
     queueDepth: typeof st?.queueDepth === 'number' ? st.queueDepth : null,
+    // Calls accepted from the node's local rdio that it could not persist —
+    // lost, since rdio does not retry a downstream. queueDepth stays 0 for
+    // them, so without this the owner's card shows a node shedding every call
+    // as perfectly healthy. Null on agents older than 0.2.20.
+    uploadsDropped: typeof st?.uploadsDropped === 'number' ? st.uploadsDropped : null,
     calibrated: st?.calibrated ?? null,
     jmbeInstalled: st?.jmbeInstalled ?? null,
     // Self-update in progress — the feeder card shows "updating" (not offline)
