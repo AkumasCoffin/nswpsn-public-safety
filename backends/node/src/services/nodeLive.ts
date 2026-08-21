@@ -18,8 +18,21 @@ import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { talkgroupCatalog } from './talkgroupCatalog.js';
 
-/** States that mean "traffic in progress" — mirrors the vce panel's own set. */
-const LIVE_CALL_STATES = new Set(['CALL', 'ACTIVE', 'ENCRYPTED']);
+/**
+ * States that mean a call is ON AIR right now.
+ *
+ * ACTIVE is deliberately NOT here. It means the traffic channel is up, not
+ * that audio is passing: after a transmission ends the channel keeps its
+ * from/to identifiers and sits in ACTIVE until teardown, so including it left
+ * finished calls on screen for as long as the grant lingered. That is what
+ * made the view feel sticky next to vce's own panel — calls appeared to last
+ * far longer than they did, and new ones stacked underneath the old.
+ *
+ * vce solves the same problem with an explicit hang time on its Now Playing
+ * (sdrtrunk.nowPlaying.trafficChannelHangMs, default 5s) rather than by
+ * treating ACTIVE as in-call.
+ */
+const LIVE_CALL_STATES = new Set(['CALL', 'ENCRYPTED']);
 
 export interface LiveNodeSlice {
   node: string;

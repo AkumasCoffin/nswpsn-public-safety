@@ -403,10 +403,21 @@ nodeIngestRouter.post('/api/node-ingest/activity', async (c) => {
 // auth + guards as /activity.
 // ---------------------------------------------------------------------------
 
-// JSON body cap. A node monitors a handful of sites, each ~a few KB of
-// nested channels/neighbors/bands, so 512KB is generous. Manual
-// Content-Length guard (NEVER hono bodyLimit — buffers chunked bodies).
-const MAX_SITE_BYTES = 512 * 1024;
+// JSON body cap. Manual Content-Length guard (NEVER hono bodyLimit — it
+// buffers chunked bodies).
+//
+// The original 512KB was sized for "a node monitors a handful of sites". That
+// is wrong: a node reports every site it has OBSERVED, and a live node was
+// posting 116 of them, each carrying nested channels, neighbours, bands and
+// patch groups. It outgrew the cap and began returning 413, which silently
+// stopped ALL site metadata updating — the site drill-downs just went stale,
+// with the rejection visible only in the API log.
+//
+// 4MB is a stopgap. The real fix is upstream: the node's /site/snapshots has
+// no LIMIT and no time filter, so this payload grows without bound as the node
+// observes more site generations. Until that is bounded, this cap must sit
+// above whatever a real node produces, because exceeding it loses the data.
+const MAX_SITE_BYTES = 4 * 1024 * 1024;
 
 // Per-node rate limit. Sites change rarely; the agent re-posts its full set
 // on a slow cadence, so a few posts/min is plenty. 20/min bounds abuse.
