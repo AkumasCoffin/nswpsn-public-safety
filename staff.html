@@ -4210,7 +4210,11 @@
       set('nd2-stat-nodes', nd2Num(t.activeNodes));
       set('nd2-stat-nodes-sub', 'reporting in window');
 
-      const tg = ((nd2.overview && nd2.overview.topTalkgroups) || [])[0];
+      // Honour Hide encrypted here too. Untouched, this tile reported an
+      // always-encrypted police talkgroup as the busiest on the network while
+      // every list below had (correctly) hidden it — the headline contradicted
+      // the page. nd2FilterEncTgs applies the same rule as those lists.
+      const tg = nd2FilterEncTgs((nd2.overview && nd2.overview.topTalkgroups) || [])[0];
       const tgEl = document.getElementById('nd2-stat-tg');
       if (tgEl) {
         const label = tg ? (tg.label || `TG ${tg.talkgroup}`) : '—';
@@ -5734,12 +5738,14 @@
         chs = chs.concat(s.channels || []);
         calls = calls.concat(s.calls || []);
       }
-      // Control channels first, then weakest decode: a site that is struggling
-      // is what an operator watching this page needs to see. Mirrors the
-      // server's snapshot ordering, which no longer applies once slices from
-      // several nodes are merged client-side.
-      chs.sort((x, y) => (y.control === true) - (x.control === true)
-        || (Number(x.syncPercent) || 0) - (Number(y.syncPercent) || 0));
+      // STABLE ordering: node, then channel name. Never by decode — those
+      // figures change every report, so at the 1s cadence sorting by them made
+      // rows swap places constantly and the table impossible to read. Position
+      // now means "which site this is" and stays put; decode health is carried
+      // by the colour of the number instead. Mirrors the server's snapshot
+      // ordering, which stops applying once several nodes' slices are merged.
+      const chKey = (r) => `${r.nodeName || r.node || ''} ${r.name || ''}`;
+      chs.sort((x, y) => chKey(x).localeCompare(chKey(y)));
       // Encrypted CALLS are hidden with the toggle; encrypted CHANNELS are not
       // — a channel row is decode health, and dropping it (especially a
       // control channel) would misreport the site as not being received.
@@ -5765,8 +5771,11 @@
         [{ label: 'Channel' }, { label: 'Site' }, { label: 'State' }, { label: 'Freq', num: true },
          { label: 'Decode', num: true }, { label: 'Signal', num: true }, { label: 'Node' }],
         chs.map(c => [
+          // No "CC" chip: the card is Control channels, so tagging every row
+          // as one carries no information. The EXCEPTION is worth marking —
+          // a non-control channel appearing here is a surprise, so it says so.
           `<span class="nd-strong">${escapeHtml(String(c.name || '—'))}</span>` +
-            (c.control ? ' <span class="nd2-chip">CC</span>' : ''),
+            (c.control === true ? '' : ' <span class="nd2-chip nd2-live-off">traffic</span>'),
           escapeHtml(String(c.site || '—')),
           `<span class="nd2-chip">${escapeHtml(String(c.state || '—'))}</span>`,
           c.frequency != null ? (Number(c.frequency) / 1e6).toFixed(4) + ' MHz' : '—',
