@@ -1827,9 +1827,18 @@
        onto a second line. Sites is the column that actually varies in length,
        so it should be the one that grows. */
     #nd2-live-calls th, #nd2-live-calls td { width: 1%; white-space: nowrap; }
+    /* Sites (4th) and Node (7th) both list a variable number of chips, so they
+       share the slack and are the only two allowed to wrap. Sites gets the
+       larger share — a call is commonly on several sites but rarely heard by
+       more than a couple of nodes. */
     #nd2-live-calls th:nth-child(4), #nd2-live-calls td:nth-child(4) {
       width: auto;
-      white-space: normal;   /* still wraps if a call really is on many sites */
+      white-space: normal;
+    }
+    #nd2-live-calls th:nth-child(7), #nd2-live-calls td:nth-child(7) {
+      width: 1%;
+      min-width: 12rem;
+      white-space: normal;
     }
 
     .nd2-tgpill-dot {
@@ -2068,9 +2077,11 @@
     .nd2-badge-rec { background: rgba(148, 163, 184, 0.12); color: #94a3b8; }
     .nd2-detail-gap { margin-bottom: 1.75rem; }
 
-    /* Sites hearing one live call. Wraps rather than truncating — the whole
-       point of the column is WHICH sites, so a hidden remainder defeats it. */
-    .nd2-live-sites {
+    /* The sites hearing one live call, and the nodes that received it. Both wrap
+       rather than truncating — the whole point of each column is WHICH, so a
+       hidden remainder (or a bare count) defeats it. */
+    .nd2-live-sites,
+    .nd2-live-nodes {
       display: inline-flex;
       flex-wrap: wrap;
       gap: 0.25rem;
@@ -5771,11 +5782,13 @@
         const key = `${c.talkgroup == null ? '?' : c.talkgroup}|${c.from == null ? '?' : c.from}`;
         const prev = byCall.get(key);
         if (!prev) {
-          byCall.set(key, { ...c, sites: new Set(), nodes: new Set() });
+          byCall.set(key, { ...c, sites: new Set(), nodes: new Map() });
         }
         const row = byCall.get(key);
         if (c.site) row.sites.add(String(c.site));
-        if (c.node) row.nodes.add(String(c.node));
+        // Keep the node NAME alongside the id — a merged call needs to name every
+        // node that heard it, not just count them.
+        if (c.node) row.nodes.set(String(c.node), c.nodeName || null);
         // Prefer the strongest reception's decode figure — the call IS being
         // received that well somewhere, and showing the worst site's number
         // reads as a problem that isn't one.
@@ -5794,6 +5807,7 @@
         siteCount: r.sites.size,
         siteList: [...r.sites],
         nodeCount: r.nodes.size,
+        nodeList: [...r.nodes].map(([id, name]) => ({ id, name })),
       }));
     }
 
@@ -5875,9 +5889,13 @@
             : '<span class="nd-sub">—</span>',
           c.frequency != null ? (Number(c.frequency) / 1e6).toFixed(4) + ' MHz' : '—',
           nd2DecodePct(c.syncPercent),
-          c.nodeCount > 1
-            ? `<span class="nd2-chip" title="Heard by ${c.nodeCount} nodes">×${c.nodeCount}</span>`
-            : nd2NodeChip(c.node ? { id: nd2ShortNode(c.node), name: c.nodeName } : null),
+          // Every node that heard the call, named. A bare "×2" said how many but
+          // not WHICH, and which node is receiving a call is the point of the
+          // column — same reasoning as Sites.
+          c.nodeCount
+            ? `<span class="nd2-live-nodes">${c.nodeList
+                .map(n => nd2NodeChip({ id: nd2ShortNode(n.id), name: n.name })).join('')}</span>`
+            : nd2NodeChip(null),
         ])) : '<div class="nd2-empty">No calls in progress.</div>';
     }
 
