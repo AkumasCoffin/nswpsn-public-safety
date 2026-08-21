@@ -411,8 +411,20 @@ nodeDataRouter.get(
                 )
               : null,
             wantRadio
-              ? pool.query<{ logical: unknown }>(
-                  `SELECT COUNT(DISTINCT logical_call_id)::int AS logical
+              ? pool.query<{ logical: unknown; encrypted: unknown; recorded: unknown }>(
+                  // Encrypted/recorded ride along on this scan, exactly as they
+                  // do on the detail path. Left out, they defaulted to 0 and the
+                  // tiles asserted "0% encrypted, 0 of N calls" for window=all —
+                  // stating that none of the fleet's traffic is encrypted when
+                  // most of it is. They cost nothing here: window=all radio
+                  // already reads node_radio_events (the hourly rollups have no
+                  // event_type and would count signaling as calls), so the rows
+                  // are being counted anyway.
+                  `SELECT COUNT(DISTINCT logical_call_id)::int AS logical,
+                          COUNT(DISTINCT logical_call_id)
+                            FILTER (WHERE encrypted)::int AS encrypted,
+                          COUNT(DISTINCT logical_call_id)
+                            FILTER (WHERE recorded)::int AS recorded
                      FROM node_radio_events WHERE ${CALL_GROUP}${nAllAnd}`,
                   nAllParams,
                 )
@@ -507,6 +519,8 @@ nodeDataRouter.get(
           ]);
         radioRaw = num(radioRawQ?.rows[0]?.raw);
         radioLogical = num(radioLogQ?.rows[0]?.logical);
+        radioEncrypted = num(radioLogQ?.rows[0]?.encrypted);
+        radioRecorded = num(radioLogQ?.rows[0]?.recorded);
         pages = num(pagerTotQ?.rows[0]?.raw);
         pagesLogical = num(pagerTotQ?.rows[0]?.logical);
         perNodeRadioRows = pnR?.rows ?? [];
