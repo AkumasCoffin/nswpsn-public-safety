@@ -1821,6 +1821,10 @@
     #nd2-live-ch th:not(:first-child):not(:nth-child(2)),
     #nd2-live-calls td:not(:first-child):not(:nth-child(2)),
     #nd2-live-calls th:not(:first-child):not(:nth-child(2)) { width: 1%; white-space: nowrap; }
+    /* …except the Sites cell, which lists every site hearing the call and must
+       be allowed to wrap. The rule above collapses every column after the
+       second to its content on one line, which would push the row wide. */
+    #nd2-live-calls td:has(.nd2-live-sites) { white-space: normal; width: auto; }
 
     .nd2-tgpill-dot {
       width: .5rem; height: .5rem;
@@ -2057,6 +2061,14 @@
     .nd2-badge-enc { background: rgba(245, 158, 11, 0.14); color: #fcd34d; }
     .nd2-badge-rec { background: rgba(148, 163, 184, 0.12); color: #94a3b8; }
     .nd2-detail-gap { margin-bottom: 1.75rem; }
+
+    /* Sites hearing one live call. Wraps rather than truncating — the whole
+       point of the column is WHICH sites, so a hidden remainder defeats it. */
+    .nd2-live-sites {
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 0.25rem;
+    }
 
     /* Live feed indicator: green when pushed over the WebSocket, amber when
        degraded to the 5s poll. Semantic state, not decoration — the two look
@@ -5487,6 +5499,34 @@
     // as the fallback for when this socket can't be established.
     let _nd2LiveWs = null;
     let _nd2LiveWsGen = 0;   // invalidates handlers from a superseded socket
+    let _nd2LiveWsRetry = null;   // pending reconnect timer
+    let _nd2LiveWsBackoff = 0;    // ms; grows on repeated failure, reset on success
+
+    // Reconnect with backoff. The first version deliberately had none — one
+    // blip (tunnel idle timeout, token refresh, a dropped packet) fell back to
+    // the 5s poll and STAYED there until the view was re-entered, which reads
+    // as "it keeps going to polling". The poll is a safety net for a socket
+    // that is down, not a destination.
+    const ND2_LIVE_BACKOFF_MIN = 1000;
+    const ND2_LIVE_BACKOFF_MAX = 30000;
+    function nd2ScheduleLiveReconnect() {
+      if (_nd2LiveWsRetry) return;                       // one in flight
+      if (nd2.view !== 'live' || currentTab !== 'data') return;
+      if (document.hidden) return;                       // resumes on visibilitychange
+      _nd2LiveWsBackoff = _nd2LiveWsBackoff
+        ? Math.min(_nd2LiveWsBackoff * 2, ND2_LIVE_BACKOFF_MAX)
+        : ND2_LIVE_BACKOFF_MIN;
+      _nd2LiveWsRetry = setTimeout(() => {
+        _nd2LiveWsRetry = null;
+        if (nd2.view === 'live' && currentTab === 'data' && !document.hidden) {
+          void nd2StartLiveWs();
+        }
+      }, _nd2LiveWsBackoff);
+      _nd2LiveWsRetry.unref?.();
+    }
+    function nd2CancelLiveReconnect() {
+      if (_nd2LiveWsRetry) { clearTimeout(_nd2LiveWsRetry); _nd2LiveWsRetry = null; }
+    }
 
     function nd2LiveWsSend(obj) {
       try {
@@ -5516,6 +5556,7 @@
             nd2LiveWsSend({ t: 'subscribeLive' });
             break;
           case 'liveSnapshot': {
+            _nd2LiveWsBackoff = 0;   // a working session clears the penalty
             const next = new Map();
             for (const s of ((d && d.nodes) || [])) next.set(s.node, s);
             _nd2LiveSlices = next;
@@ -5540,7 +5581,10 @@
       // on both so the header stops claiming "live" the moment it isn't.
       ws.onerror = () => { /* onclose follows */ };
       ws.onclose = () => {
-        if (_nd2LiveWs === ws) { _nd2LiveWs = null; nd2RenderLive(); }
+        if (_nd2LiveWs !== ws) return;   // superseded; a newer socket owns state
+        _nd2LiveWs = null;
+        nd2RenderLive();                 // stop claiming "live" immediately
+        nd2ScheduleLiveReconnect();
       };
     }
 
@@ -5563,6 +5607,8 @@
 
     function nd2StopLiveWs() {
       _nd2LiveWsGen++;
+      nd2CancelLiveReconnect();
+      _nd2LiveWsBackoff = 0;
       const ws = _nd2LiveWs;
       _nd2LiveWs = null;
       if (!ws) return;
@@ -5670,6 +5716,10 @@
     // site-detail tiles. This one colours a DECODE figure by health, and is
     // only for the Live tables.
     function nd2DecodePct(v) {
+      // Number(null) is 0, not NaN — so an ABSENT decode figure rendered as a
+      // confident "0%", which reads as "this site is dead" rather than "not
+      // reported". Absent must show as a dash.
+      if (v === null || v === undefined || v === '') return '<span class="nd-sub">—</span>';
       const n = Number(v);
       if (!Number.isFinite(n)) return '<span class="nd-sub">—</span>';
       const c = n >= 90 ? 'var(--success)' : (n >= 50 ? 'var(--warning)' : 'var(--danger)');
@@ -5793,12 +5843,13 @@
           c.talkerAlias || c.fromAlias
             ? `<span class="nd-strong">${escapeHtml(String(c.talkerAlias || c.fromAlias))}</span> <span class="nd-sub">${escapeHtml(String(c.from == null ? '' : c.from))}</span>`
             : escapeHtml(String(c.from == null ? '—' : c.from)),
-          // Every site currently hearing this call. The count leads because
-          // reach is the point; the names follow for where.
+          // Every site hearing this call, each as its own chip — same visual
+          // language as the Events table. Listing ALL of them (rather than two
+          // and a "+1") is the point of the column: which sites have it is the
+          // question being asked, and a hidden remainder can't answer it.
           c.siteCount
-            ? `<span class="nd2-chip" title="${escapeHtml(c.siteList.join(', '))}">×${c.siteCount}</span> `
-              + c.siteList.slice(0, 2).map(s => `<span class="nd-sub">${escapeHtml(s)}</span>`).join(', ')
-              + (c.siteCount > 2 ? ` <span class="nd-sub">+${c.siteCount - 2}</span>` : '')
+            ? `<span class="nd2-live-sites">${c.siteList
+                .map(s => `<span class="nd2-chip">${escapeHtml(s)}</span>`).join('')}</span>`
             : '<span class="nd-sub">—</span>',
           c.frequency != null ? (Number(c.frequency) / 1e6).toFixed(4) + ' MHz' : '—',
           nd2DecodePct(c.syncPercent),

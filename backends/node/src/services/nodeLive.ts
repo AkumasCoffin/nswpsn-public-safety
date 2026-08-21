@@ -61,6 +61,40 @@ const asRows = (v: unknown): Array<Record<string, unknown>> =>
   Array.isArray(v) ? (v as Array<Record<string, unknown>>) : [];
 
 /**
+ * Reduce a channel name to the SITE it belongs to, so a call on a traffic
+ * channel can be matched to that site's control channel.
+ *
+ * vce reports decode quality per channel, but a call's channel is the traffic
+ * channel it was granted ("T-Knights Hill"), while `channels[]` carries the
+ * control channels ("Knights Hill"). An exact-name lookup therefore never
+ * matched and every call showed no decode at all.
+ *
+ * Strips a leading traffic marker — "T-", "T ", "TC-" — then removes
+ * punctuation and case. The delimiter is required, so a site legitimately
+ * starting with T ("Tumut") is left alone. This is a naming CONVENTION, not a
+ * guarantee: when it doesn't match, the caller shows a dash, which is honest.
+ * The figure it finds is the site's control-channel decode, i.e. "how well are
+ * we hearing this site", which is what the column means.
+ */
+/**
+ * Display form of a channel name used as a SITE label: drops the traffic
+ * marker but keeps the original wording and case, so "T-Knights Hill" reads
+ * as "Knights Hill". The raw form is a decoder detail; the operator is looking
+ * for the site.
+ */
+function prettySiteName(name: string): string {
+  return name.trim().replace(/^t[c]?[-_ ]+/i, '') || name.trim();
+}
+
+function normaliseChannelName(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/^t[c]?[-_ ]+/, '')
+    .replace(/[^a-z0-9]/g, '');
+}
+
+/**
  * Shape one node's last-reported status into the Live view's rows. Returns
  * null when the node isn't a radio node or has reported nothing yet — callers
  * treat that as "nothing to show for this node", not an error.
@@ -95,11 +129,16 @@ export async function shapeNodeLive(
   for (const ch of asRows(st['channels'])) {
     const name = ch['name'];
     if (typeof name === 'string' && name) {
-      chFacts.set(name, {
+      const facts = {
         sync: ch['syncPercent'],
         signal: ch['signalDbfs'],
         site: ch['site'],
-      });
+      };
+      chFacts.set(name, facts);
+      // Also under the normalised key, so a call on a TRAFFIC channel can find
+      // its site's CONTROL channel — see normaliseChannelName.
+      const norm = normaliseChannelName(name);
+      if (norm && !chFacts.has(norm)) chFacts.set(norm, facts);
     }
   }
   /** Treat 0 as "not reported": a call in progress cannot be decoding at 0%,
@@ -147,7 +186,13 @@ export async function shapeNodeLive(
     // fallback for any build that reports it the other way.
     const chNameRaw = ac['channelName'] ?? ac['name'];
     const chName = typeof chNameRaw === 'string' ? chNameRaw : null;
-    const facts = chName ? chFacts.get(chName) : undefined;
+    // Exact name first, then the site-normalised form so a call on a traffic
+    // channel ("T-Knights Hill") resolves to its site's control channel
+    // ("Knights Hill"). Looking up only the raw name is what left every call
+    // with no decode.
+    const facts = chName
+      ? chFacts.get(chName) ?? chFacts.get(normaliseChannelName(chName))
+      : undefined;
     calls.push({
       node: nodeId,
       nodeName,
@@ -157,7 +202,7 @@ export async function shapeNodeLive(
       // fall back to the channel NAME, which is the site's name in this
       // deployment. Previously this read ac['name'], which is never set, so
       // every call reported no site at all.
-      site: ac['site'] ?? facts?.site ?? chName ?? null,
+      site: ac['site'] ?? facts?.site ?? (chName ? prettySiteName(chName) : null),
       state: ac['state'] ?? null,
       // Explicit flag so the frontend's hide-encrypted filter doesn't have to
       // re-derive it from a free-text state string.

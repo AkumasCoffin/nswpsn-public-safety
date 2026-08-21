@@ -106,6 +106,30 @@ describe('shapeNodeLive: a call inherits what vce never tells it', () => {
     expect(slice?.calls[0]!['color']).toBe('#ff8800');
   });
 
+  it('matches a TRAFFIC channel to its site\'s control channel', async () => {
+    // The real shape: calls ride "T-<site>" while channels[] holds the control
+    // channel "<site>". An exact-name lookup never matched, so every call
+    // showed no decode. The site label also drops the traffic marker.
+    const traffic = {
+      channels: STATUS.channels, // "Knights Hill"
+      activeCalls: [{ ...STATUS.activeCalls[0], channelName: 'T-Knights Hill' }],
+    };
+    const slice = await shape(traffic);
+    expect(slice?.calls[0]!['syncPercent']).toBe(97.5);
+    expect(slice?.calls[0]!['site']).toBe('Knights Hill');
+  });
+
+  it('leaves a site that genuinely starts with T alone', async () => {
+    // The traffic marker needs its delimiter, or "Tumut" would become "umut".
+    const tumut = {
+      channels: [{ ...STATUS.channels[0], name: 'Tumut', site: undefined, syncPercent: 80 }],
+      activeCalls: [{ ...STATUS.activeCalls[0], channelName: 'Tumut' }],
+    };
+    const slice = await shape(tumut);
+    expect(slice?.calls[0]!['site']).toBe('Tumut');
+    expect(slice?.calls[0]!['syncPercent']).toBe(80);
+  });
+
   it('drops a pager node entirely', async () => {
     vi.resetModules();
     queryMock.mockResolvedValue({ rows: [{ id: 'n1', name: 'pager-1', kind: 'pager' }] });
