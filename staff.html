@@ -4525,16 +4525,26 @@
 
       const tgEl = document.getElementById('nd2-top-tg');
       if (tgEl && !isPager) {
-        const rows = nd2FilterEncTgs((ov && ov.topTalkgroups) || []).slice(0, 10).map(t => [
+        const tgRows = nd2FilterEncTgs((ov && ov.topTalkgroups) || []).slice(0, 10);
+        // The Sys column is pure width on a single-system deployment — it reads
+        // the same number on every row. Shown only when the rows genuinely span
+        // more than one system; dropping it is what frees the space Receptions
+        // was being clipped out of.
+        const multiSys = new Set(tgRows.map(t => t.system)).size > 1;
+        const rows = tgRows.map(t => [
           nd2TgPill(t.talkgroup, t.label, t.color),
           nd2AgencyCell(t.agency),
-          `<span class="nd-sub">${escapeHtml(String(t.system != null ? t.system : '—'))}</span>`,
+          ...(multiSys
+            ? [`<span class="nd-sub">${escapeHtml(String(t.system != null ? t.system : '—'))}</span>`]
+            : []),
           nd2Num(t.logicalCalls != null ? t.logicalCalls : t.calls),
           nd2Num(t.calls),
         ]);
         tgEl.innerHTML = table(
-          [{ t: 'Talkgroup' }, { t: 'Agency' }, { t: 'Sys' }, { t: 'Calls', num: true },
-           { t: 'Receptions', num: true, title: 'Distinct node + site receptions of this talkgroup — each call counted once per receiving node and site (de-duped, not raw event rows)' }], rows);
+          [{ t: 'Talkgroup' }, { t: 'Agency' },
+           ...(multiSys ? [{ t: 'Sys' }] : []),
+           { t: 'Calls', num: true },
+           { t: 'Recept.', num: true, title: 'Distinct node + site receptions of this talkgroup — each call counted once per receiving node and site (de-duped, not raw event rows)' }], rows);
       }
 
       const unitsEl = document.getElementById('nd2-top-units');

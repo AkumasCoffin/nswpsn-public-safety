@@ -3037,7 +3037,12 @@ nodeDataRouter.get('/api/node-data/nodes', requireRole(canViewNodeData), async (
               COUNT(DISTINCT logical_call_id)::int AS calls,
               COUNT(*)::int AS receptions,
               (COUNT(DISTINCT talkgroup) FILTER (WHERE ${TG_VALID}))::int AS talkgroups,
-              (COUNT(DISTINCT (site_rfss, site_id))
+              -- Packed into one bigint rather than COUNT(DISTINCT (a, b)).
+              -- A composite DISTINCT builds and sorts row values for every row
+              -- in the window; on a node with ~125k receptions a day that
+              -- dominated the query. rfss and site are both small ints, so the
+              -- pack is lossless (site < 100000).
+              (COUNT(DISTINCT (site_rfss::bigint * 100000 + site_id))
                  FILTER (WHERE site_rfss IS NOT NULL AND site_id IS NOT NULL))::int AS sites,
               MAX(received_at) AS last_seen
          FROM node_radio_events
