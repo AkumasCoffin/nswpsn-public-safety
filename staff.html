@@ -3950,6 +3950,17 @@
       if (encBox) encBox.checked = nd2HideEnc();
       nd2LoadNodeList();
       nd2Refresh();
+      // Entering the tab ON the Live view has to start Live's own machinery.
+      // nd2SetView is the only other place that does, and it returns early when
+      // the view is already what's being set — which it is when the remembered
+      // view is restored on load. So a reload with Live open started neither the
+      // socket nor the 5s fallback, and 'live' is not in the 30s poll's switch
+      // either: the view painted once, never updated again, and sat on
+      // "polling" forever.
+      if (nd2.view === 'live') {
+        nd2StartLiveTimer();
+        void nd2StartLiveWs();
+      }
       if (_nd2Timer) return;
       _nd2Timer = setInterval(() => {
         // Refresh only the active view, and never yank a table out from under
