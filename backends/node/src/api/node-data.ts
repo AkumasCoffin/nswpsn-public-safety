@@ -1192,6 +1192,10 @@ interface ScopedDetail {
     talkgroups: number;
     radios: number;
     sites: number;
+    /** Feeder nodes that heard this scope. The drill-downs already list the
+     *  receiving nodes; without a count there was no headline figure to match
+     *  the table against. */
+    nodes: number;
   };
   topTalkgroups: Array<{
     talkgroup: number;
@@ -1232,6 +1236,7 @@ async function scopedRadioDetail(
       talkgroups: unknown;
       radios: unknown;
       sites: unknown;
+      nodes: unknown;
     }>(
       `SELECT COUNT(*)::int AS calls,
               COUNT(DISTINCT logical_call_id)::int AS logical,
@@ -1240,7 +1245,8 @@ async function scopedRadioDetail(
               (COUNT(DISTINCT talkgroup) FILTER (WHERE ${TG_VALID}))::int AS talkgroups,
               COUNT(DISTINCT source_unit)::int AS radios,
               (COUNT(DISTINCT (site_rfss, site_id))
-                 FILTER (WHERE site_rfss IS NOT NULL AND site_id IS NOT NULL))::int AS sites
+                 FILTER (WHERE site_rfss IS NOT NULL AND site_id IS NOT NULL))::int AS sites,
+              COUNT(DISTINCT node_id)::int AS nodes
          FROM node_radio_events
         WHERE ${where('')} AND ${CALL_GROUP}`,
       params,
@@ -1295,6 +1301,7 @@ async function scopedRadioDetail(
       talkgroups: num(t?.talkgroups),
       radios: num(t?.radios),
       sites: num(t?.sites),
+      nodes: num(t?.nodes),
     },
     topTalkgroups: tgQ.rows.map((r) => ({
       talkgroup: r.talkgroup,
@@ -2999,6 +3006,78 @@ nodeDataRouter.get(
     }
   },
 );
+
+// ---------------------------------------------------------------------------
+// GET /api/node-data/nodes?window=
+//
+// The RECEIVING side of the Systems view: one row per feeder node with what it
+// actually heard in the window. The overview's perNode carries raw receptions
+// only; this adds the distinct-call, talkgroup and site counts that make two
+// nodes comparable, plus live presence from the WS hub.
+//
+// Radio nodes only — a pager node has no calls, talkgroups or sites, and a row
+// of zeros reads as a fault rather than a different kind of node.
+// ---------------------------------------------------------------------------
+nodeDataRouter.get('/api/node-data/nodes', requireRole(canViewNodeData), async (c) => {
+  try {
+    const pool = await getPool();
+    if (!pool) return c.json({ error: 'database unavailable' }, 503);
+    const url = new URL(c.req.url);
+    const window = detailWindow(url);
+
+    const rows = await pool.query<{
+      node_id: string;
+      calls: unknown;
+      receptions: unknown;
+      talkgroups: unknown;
+      sites: unknown;
+      last_seen: Date;
+    }>(
+      `SELECT node_id,
+              COUNT(DISTINCT logical_call_id)::int AS calls,
+              COUNT(*)::int AS receptions,
+              (COUNT(DISTINCT talkgroup) FILTER (WHERE ${TG_VALID}))::int AS talkgroups,
+              (COUNT(DISTINCT (site_rfss, site_id))
+                 FILTER (WHERE site_rfss IS NOT NULL AND site_id IS NOT NULL))::int AS sites,
+              MAX(received_at) AS last_seen
+         FROM node_radio_events
+        WHERE received_at >= now() - $1::interval AND ${CALL_GROUP}
+        GROUP BY node_id`,
+      [WINDOW_INTERVAL[window]],
+    );
+    const byId = new Map(rows.rows.map((r) => [r.node_id, r]));
+
+    // Every RADIO node, not just those with traffic: a node that heard nothing
+    // is precisely the one worth seeing, and grouping the events alone would
+    // silently omit it.
+    const meta = await pool.query<{ id: string; name: string | null; kind: string | null }>(
+      'SELECT id, name, kind FROM nodes',
+    );
+    const online = new Set(hub.agentList().map((a) => a.nodeId));
+
+    const nodes = meta.rows
+      .filter((m) => (m.kind ?? 'radio') === 'radio')
+      .map((m) => {
+        const r = byId.get(m.id);
+        return {
+          nodeId: m.id,
+          name: m.name,
+          online: online.has(m.id),
+          calls: num(r?.calls),
+          receptions: num(r?.receptions),
+          talkgroups: num(r?.talkgroups),
+          sites: num(r?.sites),
+          lastSeen: r?.last_seen ? iso(r.last_seen) : null,
+        };
+      })
+      .sort((a, b) => b.calls - a.calls || (a.name ?? '').localeCompare(b.name ?? ''));
+
+    return c.json({ window, nodes });
+  } catch (err) {
+    log.error({ err }, '/api/node-data/nodes error');
+    return c.json({ error: 'failed to load nodes' }, 500);
+  }
+});
 
 // ---------------------------------------------------------------------------
 // GET /api/node-data/live[?node=<id>]

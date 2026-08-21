@@ -2599,6 +2599,7 @@
           <div class="nd2-seg" role="group" aria-label="Radio data view">
             <button class="filter-btn active" data-nd2-view="overview" onclick="nd2SetView('overview')">Overview</button>
             <button class="filter-btn" data-nd2-view="systems" onclick="nd2SetView('systems')">Systems</button>
+            <button class="filter-btn" data-nd2-view="nodes" onclick="nd2SetView('nodes')">Nodes</button>
             <button class="filter-btn" data-nd2-view="live" onclick="nd2SetView('live')">Live</button>
             <button class="filter-btn" data-nd2-view="events" onclick="nd2SetView('events')">Events</button>
           </div>
@@ -2673,6 +2674,13 @@
           <div class="nd2-card" id="nd2-top-sites-card">
             <div class="nd2-card-h"><i class="fas fa-tower-cell"></i> Top Sites</div>
             <div id="nd2-top-sites"><div class="nd2-empty">—</div></div>
+          </div>
+          <!-- Which nodes are actually hearing the network. The site and system
+               drill-downs both list receiving nodes; the fleet overview did not,
+               so there was no way to see coverage without opening a site. -->
+          <div class="nd2-card" id="nd2-top-nodes-card">
+            <div class="nd2-card-h"><i class="fas fa-server"></i> Receiving Nodes</div>
+            <div id="nd2-top-nodes"><div class="nd2-empty">—</div></div>
           </div>
         </div>
         </div>
@@ -2932,6 +2940,32 @@
             <!-- Extra: decode-health history, P25 site identity and advertised site
                  services. Reference material — checked occasionally, not watched. -->
             <div id="nd2-sitetab-extra" style="display: none;"></div>
+          </div>
+        </div>
+
+        <!-- ===== Nodes view ===== -->
+        <!-- The receiving side of the same data the Systems tab shows from the
+             network side: which feeder nodes are hearing what. A row opens the
+             Nodes tab's drawer, which already owns live tuners, channels,
+             spectrum, logs and commands for one node. -->
+        <div id="nd2-view-nodes" style="display: none;">
+          <div class="nd2-table-wrap">
+            <table class="nd-table">
+              <thead>
+                <tr>
+                  <th>Node</th>
+                  <th>Status</th>
+                  <th class="nd2-num">Calls</th>
+                  <th class="nd2-num">Receptions</th>
+                  <th class="nd2-num">Talkgroups</th>
+                  <th class="nd2-num">Sites</th>
+                  <th>Last heard</th>
+                </tr>
+              </thead>
+              <tbody id="nd2-nodes-body">
+                <tr><td colspan="7" class="nd2-empty">Loading…</td></tr>
+              </tbody>
+            </table>
           </div>
         </div>
 
@@ -3963,7 +3997,7 @@
     let _nd2RadDebounce = null;
     let _nd2CapDebounce = null;
     // Which views belong to each mode (drives the panel show/hide sweep).
-    const ND2_RADIO_VIEWS = ['overview', 'live', 'systems', 'events'];
+    const ND2_RADIO_VIEWS = ['overview', 'live', 'systems', 'nodes', 'events'];
     const ND2_PAGER_VIEWS = ['poverview', 'capcodes'];
     const _nd2AllViews = [...ND2_RADIO_VIEWS, ...ND2_PAGER_VIEWS];
 
@@ -4005,6 +4039,7 @@
               else nd2LoadSystem();
             }
             break;
+          case 'nodes': nd2LoadNodes(); break;
           case 'events': if (nd2.evOffset === 0) nd2LoadEvents(); break;
           case 'poverview': nd2LoadPagerOverview(); break;
           case 'capcodes': if (nd2.capLevel === 'list' && nd2.cap.offset === 0) nd2LoadCapcodes(); break;
@@ -4032,6 +4067,7 @@
         case 'overview': await nd2LoadOverview(); break;
         case 'live': await nd2LoadLive(); break;   // also on its own 5s timer
         case 'systems': await nd2LoadSystemsView(); break;
+        case 'nodes': await nd2LoadNodes(); break;
         case 'events': await Promise.all([nd2LoadOverview(), nd2LoadEvents()]); break;
         case 'poverview': await nd2LoadPagerOverview(); break;
         case 'capcodes': await nd2LoadCapcodesView(); break;
@@ -4424,6 +4460,7 @@
       showCard('nd2-top-tg-card', !isPager);
       showCard('nd2-top-units-card', !isPager);
       showCard('nd2-top-sites-card', !isPager);
+      showCard('nd2-top-nodes-card', !isPager);
 
       const table = (headers, rows) => rows.length
         ? `<table class="nd-table"><thead><tr>${headers.map(h =>
@@ -4468,7 +4505,25 @@
             : `<span class="nd-strong">R${escapeHtml(String(s.siteRfss))} S${escapeHtml(String(s.siteId))}</span>`,
           nd2Num(s.calls),
         ]);
-        sitesEl.innerHTML = table([{ t: 'Site' }, { t: 'Calls', num: true }], rows);
+        sitesEl.innerHTML = table([{ t: 'Site' }, { t: 'Calls', num: true }], rows);
+      }
+
+      // Radio nodes only: a pager node has no calls, and listing it at 0 reads
+      // as a fault rather than a different kind of node. Clickable — the Nodes
+      // tab and its drawer already own everything about one node, so this
+      // links there instead of duplicating it.
+      const nodesEl = document.getElementById('nd2-top-nodes');
+      if (nodesEl && !isPager) {
+        const rows = ((ov && ov.perNode) || [])
+          .filter(nd => (nd.kind || 'radio') === 'radio')
+          .sort((a, b) => Number(b.calls || 0) - Number(a.calls || 0))
+          .slice(0, 10)
+          .map(nd => [
+            `<span class="nd2-rowlink" onclick="nd2OpenNodeFromData(${nd2Arg(nd.nodeId)})" title="Open this node">`
+              + `<span class="nd-strong">${escapeHtml(nd.name || nd2ShortNode(nd.nodeId))}</span></span>`,
+            nd2Num(nd.calls),
+          ]);
+        nodesEl.innerHTML = table([{ t: 'Node' }, { t: 'Receptions', num: true }], rows);
       }
     }
 
@@ -5070,6 +5125,49 @@
       return name ? `${name} · ${id}` : `System ${id}`;
     }
 
+    /** Open a node from anywhere in the Data tab. Everything about ONE node —
+     *  live tuners, channels, spectrum, logs, commands — already lives in the
+     *  Nodes tab's drawer, so this switches to it rather than growing a second,
+     *  poorer copy inside Data. */
+    async function nd2LoadNodes() {
+      const body = document.getElementById('nd2-nodes-body');
+      if (!body) return;
+      const view = nd2.view;
+      try {
+        const d = await nd2Fetch(`/api/node-data/nodes?window=${encodeURIComponent(nd2.window)}`);
+        if (nd2.view !== view) return;          // switched away mid-fetch
+        const rows = d.nodes || [];
+        if (!rows.length) {
+          body.innerHTML = '<tr><td colspan="7" class="nd2-empty">No radio nodes registered.</td></tr>';
+          return;
+        }
+        body.innerHTML = rows.map(nd => `
+          <tr class="nd2-rowlink" onclick="nd2OpenNodeFromData(${nd2Arg(nd.nodeId)})" title="Open this node">
+            <td><span class="nd-strong">${escapeHtml(nd.name || nd2ShortNode(nd.nodeId))}</span></td>
+            <td>${nd.online
+              ? '<span class="nd2-chip nd2-live-on">online</span>'
+              : '<span class="nd2-chip nd2-live-off">offline</span>'}</td>
+            <td class="nd2-num">${nd2Num(nd.calls)}</td>
+            <td class="nd2-num">${nd2Num(nd.receptions)}</td>
+            <td class="nd2-num">${nd2Num(nd.talkgroups)}</td>
+            <td class="nd2-num">${nd2Num(nd.sites)}</td>
+            <td>${nd.lastSeen ? nd2LastSeen(nd.lastSeen) : '<span class="nd-sub">never</span>'}</td>
+          </tr>`).join('');
+      } catch (e) {
+        nd2TableMsg('nd2-nodes-body', 7, e);
+      }
+    }
+
+    function nd2OpenNodeFromData(nodeId) {
+      if (!nodeId) return;
+      if (currentTab !== 'nodes') switchTab('nodes');
+      // loadNodes() populates allNodes, which openNodeDrawer reads for the
+      // node's metadata; on a cold switch that list may not be there yet.
+      const open = () => { try { openNodeDrawer(nodeId); } catch (e) { console.error(e); } };
+      if (Array.isArray(window.allNodes) && allNodes.some(n => String(n.id) === String(nodeId))) open();
+      else Promise.resolve(loadNodes()).then(open).catch(open);
+    }
+
     function nd2ScopedTiles(prefix, tot, includeSites) {
       const tiles = [
         { label: 'Calls', value: nd2Num(tot.logicalCalls), sub: `${nd2Num(tot.calls)} receptions` },
@@ -5077,6 +5175,10 @@
         { label: 'Radios', value: nd2Num(tot.radios) },
       ];
       if (includeSites) tiles.push({ label: 'Sites', value: nd2Num(tot.sites) });
+      // Matches the Receiving Nodes table below: the table said WHICH nodes
+      // heard this scope but nothing gave the count, so there was no headline
+      // figure to read it against.
+      tiles.push({ label: 'Nodes', value: nd2Num(tot.nodes) });
       tiles.push({ label: 'Encrypted', value: nd2Num(tot.encryptedCalls), color: '#fcd34d' });
       nd2FillTiles(prefix, tiles);
     }
