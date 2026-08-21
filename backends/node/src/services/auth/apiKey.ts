@@ -45,7 +45,6 @@ export const PUBLIC_ENDPOINTS = new Set<string>([
   '/api/config',
   '/api/heartbeat',
   '/api/editor-requests',
-  '/api/waze/ingest',
   '/api/data/history/filters',
   '/api/status',
   // The cameras collection endpoint itself is public; sub-paths are

@@ -28,7 +28,6 @@ import { Hono } from 'hono';
 import { getPool } from '../db/pool.js';
 import { liveStore } from '../store/live.js';
 import { archiveWriter } from '../store/archive.js';
-import { ingestKeysConfigured } from '../services/auth/ingestKey.js';
 import { filterCacheLastRefreshAt } from '../store/filterCache.js';
 import { allSources } from '../services/sourceRegistry.js';
 import { getSourceMetrics } from '../services/poller.js';

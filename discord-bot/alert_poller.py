@@ -73,10 +73,6 @@ class AlertPoller:
             'ausgrid': '/api/ausgrid/outages',
             'essential_planned': '/api/essential/planned',
             'essential_future': '/api/essential/future',
-            'waze_hazard': '/api/waze/hazards',
-            'waze_jam': '/api/waze/hazards',
-            'waze_police': '/api/waze/police',
-            'waze_roadwork': '/api/waze/roadwork',
         }
         
         # Track last seen pager message ID
