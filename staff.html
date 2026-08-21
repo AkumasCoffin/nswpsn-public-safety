@@ -1818,13 +1818,19 @@
        large gaps between a 3-character state and a dash. */
     #nd2-live-ch table, #nd2-live-calls table { table-layout: auto; }
     #nd2-live-ch td:not(:first-child):not(:nth-child(2)),
-    #nd2-live-ch th:not(:first-child):not(:nth-child(2)),
-    #nd2-live-calls td:not(:first-child):not(:nth-child(2)),
-    #nd2-live-calls th:not(:first-child):not(:nth-child(2)) { width: 1%; white-space: nowrap; }
-    /* …except the Sites cell, which lists every site hearing the call and must
-       be allowed to wrap. The rule above collapses every column after the
-       second to its content on one line, which would push the row wide. */
-    #nd2-live-calls td:has(.nd2-live-sites) { white-space: normal; width: auto; }
+    #nd2-live-ch th:not(:first-child):not(:nth-child(2)) { width: 1%; white-space: nowrap; }
+
+    /* Active calls: every column hugs its content EXCEPT Sites (4th), which
+       takes all the slack. Previously Talkgroup and Agency were both left
+       flexible, so they split the leftover width between them — Agency drifted
+       into the middle of the row and Sites was squeezed until its chips wrapped
+       onto a second line. Sites is the column that actually varies in length,
+       so it should be the one that grows. */
+    #nd2-live-calls th, #nd2-live-calls td { width: 1%; white-space: nowrap; }
+    #nd2-live-calls th:nth-child(4), #nd2-live-calls td:nth-child(4) {
+      width: auto;
+      white-space: normal;   /* still wraps if a call really is on many sites */
+    }
 
     .nd2-tgpill-dot {
       width: .5rem; height: .5rem;
@@ -5508,7 +5514,11 @@
     // as "it keeps going to polling". The poll is a safety net for a socket
     // that is down, not a destination.
     const ND2_LIVE_BACKOFF_MIN = 1000;
-    const ND2_LIVE_BACKOFF_MAX = 30000;
+    // Capped low on purpose: Live is a foreground view someone is watching, and
+    // the usual reason the socket drops is the backend restarting — a gap of
+    // seconds. A 30s ceiling meant staring at "polling" long after the server
+    // was back.
+    const ND2_LIVE_BACKOFF_MAX = 8000;
     function nd2ScheduleLiveReconnect() {
       if (_nd2LiveWsRetry) return;                       // one in flight
       if (nd2.view !== 'live' || currentTab !== 'data') return;
@@ -5535,14 +5545,23 @@
     }
 
     async function nd2StartLiveWs() {
-      nd2StopLiveWs();
+      // Tear down WITHOUT clearing the backoff — this is also the retry path,
+      // and resetting here meant every attempt started from 1s, so repeated
+      // failures hammered the server instead of backing off. Only leaving the
+      // view (or a successful subscribe) clears it.
+      nd2StopLiveWs(false);
       const gen = ++_nd2LiveWsGen;
       let token = '';
-      try { token = (await authHeader()).replace(/^Bearer\s+/i, ''); } catch (e) { return; }
+      // Every failure below MUST schedule a retry. Returning bare left the view
+      // on the 5s poll permanently — one expired session or a transient
+      // constructor throw and it never came back until the view was re-entered,
+      // which is what "it keeps showing polling" was.
+      try { token = (await authHeader()).replace(/^Bearer\s+/i, ''); }
+      catch (e) { nd2ScheduleLiveReconnect(); return; }
       if (gen !== _nd2LiveWsGen || nd2.view !== 'live') return;  // left the view while awaiting
       let ws;
       try { ws = new WebSocket(API_BASE_URL.replace(/^http/i, 'ws') + '/api/node-ws/staff'); }
-      catch (e) { return; }
+      catch (e) { nd2ScheduleLiveReconnect(); return; }
       _nd2LiveWs = ws;
       ws.onopen = () => { if (gen === _nd2LiveWsGen) ws.send(JSON.stringify({ t: 'auth', data: { token } })); };
       ws.onmessage = (ev) => {
@@ -5605,10 +5624,13 @@
       }
     });
 
-    function nd2StopLiveWs() {
+    /** resetBackoff=false when this is a step in a RETRY (see nd2StartLiveWs);
+     *  true when the user genuinely left the view, so the next entry starts
+     *  fresh rather than inheriting a 30s penalty from an earlier outage. */
+    function nd2StopLiveWs(resetBackoff = true) {
       _nd2LiveWsGen++;
       nd2CancelLiveReconnect();
-      _nd2LiveWsBackoff = 0;
+      if (resetBackoff) _nd2LiveWsBackoff = 0;
       const ws = _nd2LiveWs;
       _nd2LiveWs = null;
       if (!ws) return;

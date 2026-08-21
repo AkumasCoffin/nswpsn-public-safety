@@ -56,6 +56,11 @@ type Queue struct {
 
 	mu       sync.Mutex // guards on-disk mutations to keep bound enforcement consistent
 	lastNano int64      // last filename timestamp used; monotonic guard against clock step-back
+
+	// Cached Depth(), guarded by mu. Invalidated on every enqueue/remove so it
+	// can only ever be stale by depthCacheTTL of no activity.
+	depthVal int
+	depthAt  time.Time
 }
 
 // Open initializes a queue rooted at dir. maxBytes<=0 and maxCount<=0 fall back
@@ -139,6 +144,7 @@ func (q *Queue) Enqueue(contentType string, body []byte) error {
 		return fmt.Errorf("commit queue item: %w", err)
 	}
 
+	q.invalidateDepth()
 	q.enforceBounds()
 	return nil
 }
@@ -160,6 +166,7 @@ func (q *Queue) enforceBounds() {
 		}
 		f := files[i]
 		if err := os.Remove(filepath.Join(q.dir, f.name)); err == nil {
+			q.invalidateDepth()
 			total -= f.size
 			dropped++
 		}
@@ -196,11 +203,34 @@ func (q *Queue) sortedFiles() []fileInfo {
 	return out
 }
 
+// depthCacheTTL bounds how stale a reported depth may be. Depth is a display
+// figure on the status heartbeat, not a control input, so a second of staleness
+// costs nothing.
+const depthCacheTTL = 2 * time.Second
+
 // Depth returns the number of queued .call files.
+//
+// Cached: the underlying scan is os.ReadDir + sort over the whole queue
+// directory (up to maxCount entries) and it runs while holding q.mu — the same
+// lock every Enqueue needs. The status heartbeat calls this, and that heartbeat
+// now runs once a SECOND while staff watch the Live view, so on a node with a
+// backlog it was a per-second 5000-entry scan serialised against call ingest.
 func (q *Queue) Depth() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return len(q.sortedFiles())
+	if !q.depthAt.IsZero() && time.Since(q.depthAt) < depthCacheTTL {
+		return q.depthVal
+	}
+	n := len(q.sortedFiles())
+	q.depthVal, q.depthAt = n, time.Now()
+	return n
+}
+
+// invalidateDepth drops the cached depth. Called under q.mu whenever the
+// directory contents change, so a caller never sees a count that predates its
+// own enqueue or send.
+func (q *Queue) invalidateDepth() {
+	q.depthAt = time.Time{}
 }
 
 // oldest returns the oldest queued item's filename, or "" if empty.
@@ -234,6 +264,7 @@ func (q *Queue) remove(name string) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	_ = os.Remove(filepath.Join(q.dir, name))
+	q.invalidateDepth()
 }
 
 // RunSender drains the queue in FIFO order until ctx is cancelled. It repeatedly

@@ -344,7 +344,21 @@ func (c *Client) handleLiveWatch(env *protocol.Envelope) {
 	}
 }
 
+// statusLoop sends the heartbeat until ctx is cancelled or a write fails.
+//
+// A write failure tears the SESSION down rather than just returning. Returning
+// quietly left the read loop running, so session() never returned and Run()
+// never reconnected: the node held a live socket while sending no heartbeat at
+// all, and the fleet page had no way to tell. One transient writeWait overrun
+// was enough, and the 1s live cadence makes 15x more writes contend for the
+// write mutex with spectrum frames.
 func (c *Client) statusLoop(ctx context.Context, conn *websocket.Conn) {
+	defer func() {
+		// Unblock readLoop so session() returns and Run() reconnects.
+		if ctx.Err() == nil {
+			_ = conn.Close()
+		}
+	}()
 	// Tick at the FASTEST cadence any mode needs and decide per-tick whether
 	// enough time has elapsed for the currently-desired interval:
 	// statusInterval normally, spectrumStatusInterval while ≥1 spectrum stream
@@ -357,6 +371,7 @@ func (c *Client) statusLoop(ctx context.Context, conn *websocket.Conn) {
 	last := time.Now()
 	// Send one immediately so the server has fresh state.
 	if err := c.sendStatus(conn); err != nil {
+		log.Printf("wsclient: status send failed, ending session: %v", err)
 		return
 	}
 	for {
@@ -367,6 +382,7 @@ func (c *Client) statusLoop(ctx context.Context, conn *websocket.Conn) {
 			// Someone started watching Live; refresh now rather than making them
 			// stare at the last heartbeat for up to statusInterval.
 			if err := c.sendStatus(conn); err != nil {
+				log.Printf("wsclient: status send failed, ending session: %v", err)
 				return
 			}
 			last = time.Now()
@@ -384,6 +400,7 @@ func (c *Client) statusLoop(ctx context.Context, conn *websocket.Conn) {
 				continue
 			}
 			if err := c.sendStatus(conn); err != nil {
+				log.Printf("wsclient: status send failed, ending session: %v", err)
 				return
 			}
 			last = now
