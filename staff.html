@@ -5695,7 +5695,7 @@
       const s = nd2.sys;
       if (!canvas || typeof Chart === 'undefined' || s.system == null) return;
       const params = new URLSearchParams({
-        window: nd2.window, system: String(s.system), rfss: String(s.rfss), site: String(s.site),
+        range: nd2.decodeRange, system: String(s.system), rfss: String(s.rfss), site: String(s.site),
       });
       if (nd2.node) params.set('node', nd2.node);
       try {
