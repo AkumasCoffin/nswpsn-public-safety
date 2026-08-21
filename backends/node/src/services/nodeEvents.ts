@@ -94,6 +94,23 @@ const RECORDED_DIAG = process.env['RECORDED_DIAG'] === '1';
  *  replaced with the server's now. */
 const CLOCK_SANITY_MS = 48 * 60 * 60 * 1000;
 
+/**
+ * Minimum spacing between stored decode samples for one (node, site).
+ *
+ * Migration 069 was written for "~1/min/site/node". Measured on a live site:
+ * 14,066 samples in ~20 hours from ONE node — about 11.5/min, because the
+ * agent ships site snapshots far more often than once a minute. That is ~11x
+ * the rows the retention estimate assumed, for no extra fidelity: the chart
+ * buckets to a minute at its finest, so anything denser is averaged away the
+ * moment it is read.
+ *
+ * Throttled in memory rather than by querying the last row — a SELECT per
+ * snapshot would cost more than the insert it saves. The map is bounded by
+ * (nodes x sites), which is a handful.
+ */
+const DECODE_SAMPLE_MIN_INTERVAL_MS = 55_000;
+const _lastDecodeSampleAt = new Map<string, number>();
+
 /** Parse anything → integer or null (NaN/Infinity/garbage → null). */
 export function safeInt(v: unknown): number | null {
   if (v === null || v === undefined || v === '') return null;
@@ -692,7 +709,13 @@ export async function upsertSiteSnapshots(
             const decodePct = zeroIsAbsent(dbl(q['decodeHealthPct']));
             const signalDbfs = zeroIsAbsent(dbl(q['signalDbfs']));
             const invalid = dbl(q['invalidFrames']);
-            if (decodePct !== null || signalDbfs !== null) {
+            // Throttle: see DECODE_SAMPLE_MIN_INTERVAL_MS. Keyed per node+site so a
+            // busy site cannot starve a quiet one.
+            const sampleKey = `${nodeId}:${systemId}:${rfss}:${siteId}`;
+            const lastSampleAt = _lastDecodeSampleAt.get(sampleKey) ?? 0;
+            const sampleDue = Date.now() - lastSampleAt >= DECODE_SAMPLE_MIN_INTERVAL_MS;
+            if (sampleDue && (decodePct !== null || signalDbfs !== null)) {
+              _lastDecodeSampleAt.set(sampleKey, Date.now());
               await client.query(
                 `INSERT INTO node_site_decode_samples
                    (node_id, system_id, rfss, site_id, decode_pct, signal_dbfs, invalid_frames)
