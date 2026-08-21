@@ -307,29 +307,6 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
       }
       vacuumMs = Date.now() - vacStart;
 
-      // 2b. Prune police_heatmap_bin_daily down to the heatmap window.
-      // The writer keeps adding new days indefinitely, so without this
-      // prune the table grows unbounded. 30 days mirrors WINDOW_DAYS in
-      // services/policeHeatmapCache — older days will never be summed
-      // into a refresh, so they're dead weight.
-      try {
-        const r = await client.query(
-          `DELETE FROM police_heatmap_bin_daily
-            WHERE day < (NOW() - INTERVAL '30 days')::date`,
-        );
-        if ((r.rowCount ?? 0) > 0) {
-          log.info(
-            { rows: r.rowCount },
-            'cleanup: pruned police_heatmap_bin_daily',
-          );
-        }
-      } catch (err) {
-        log.warn(
-          { err: (err as Error).message },
-          'cleanup: heatmap-daily prune failed',
-        );
-      }
-
       // 2c. Prune filter_facets_daily down to 14 days. filterCache reads
       // a 7-day window, so 14 days gives plenty of headroom for window
       // expansions or backfill replays without keeping rows that no

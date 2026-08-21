@@ -75,10 +75,6 @@ const RAW_SOURCE_TO_ALERT_TYPE: Record<string, string> = {
   rfs_incidents: 'rfs',
   bom_warnings: 'bom_land',
   traffic_incidents: 'traffic_incident',
-  // Single-key 'waze' is the WazeIngestCache shape — handled specially
-  // in computeFacets() because its bbox-keyed snapshot needs to be
-  // unpacked into per-type counts (police/hazard/roadwork/jam).
-  waze: 'waze_hazard',
 };
 
 const ALERT_TYPE_PROVIDER: Record<string, [string, string]> = {
@@ -95,10 +91,6 @@ const ALERT_TYPE_PROVIDER: Record<string, [string, string]> = {
   ausgrid: ['ausgrid', 'Outages'],
   essential_current: ['essential', 'Current Outages'],
   essential_future: ['essential', 'Future Outages'],
-  waze_hazard: ['waze', 'Hazards'],
-  waze_jam: ['waze', 'Traffic Jams'],
-  waze_police: ['waze', 'Police'],
-  waze_roadwork: ['waze', 'Roadwork'],
   pager: ['pager', 'Messages'],
   user_incident: ['user', 'User Incidents'],
   radio_summary: ['rdio', 'Hourly Summaries'],
@@ -124,7 +116,6 @@ const PROVIDER_ORDER = [
   'endeavour',
   'ausgrid',
   'essential',
-  'waze',
   'pager',
   'user',
   'rdio',
@@ -297,55 +288,8 @@ interface ComputedFacets {
  * duplicated here to avoid a cross-module cycle (filterCache shouldn't
  * import from a route's service layer).
  */
-function wazeAlertType(rec: Record<string, unknown>): string | null {
-  const t = String(rec['type'] ?? '').toUpperCase();
-  const s = String(rec['subtype'] ?? '').toUpperCase();
-  if (t === 'POLICE' || s.includes('POLICE')) return 'waze_police';
-  if (t === 'CONSTRUCTION' || s.includes('CONSTRUCTION')) return 'waze_roadwork';
-  // JAM-typed alert points belong with the waze_jam bucket, not Hazards.
-  // Checked after police/roadwork so those classes win — matches the
-  // isJamAlert precedence + the 2026-05-28 ingest split (commit cad4f27).
-  if (t === 'JAM') return 'waze_jam';
-  // Only HAZARD / ACCIDENT / ROAD_CLOSED are real hazards (mirrors
-  // isHazardAlert). Anything else is one the ingest drops (alertSource
-  // returns null), so return null here too — otherwise an unrecognised
-  // type would be miscounted as waze_hazard in the live facets while the
-  // archive never stored it, making the dropdown count diverge from the list.
-  if (t === 'HAZARD' || t === 'ACCIDENT' || t === 'ROAD_CLOSED') return 'waze_hazard';
-  return null;
-}
-
 /** Pull all alerts + jams from the bbox-keyed waze LiveStore snapshot,
  *  deduplicated by uuid/id. Mirrors store/wazeIngestCache.snapshot(). */
-function wazeRecords(data: unknown): {
-  alerts: Record<string, unknown>[];
-  jams: Record<string, unknown>[];
-} {
-  if (!isPlainObject(data)) return { alerts: [], jams: [] };
-  const bboxes = (data['bboxes'] as Record<string, unknown> | undefined) ?? {};
-  if (!isPlainObject(bboxes)) return { alerts: [], jams: [] };
-  const alertsById = new Map<string, Record<string, unknown>>();
-  const jamsById = new Map<string, Record<string, unknown>>();
-  for (const snap of Object.values(bboxes)) {
-    if (!isPlainObject(snap)) continue;
-    const a = Array.isArray(snap['alerts']) ? (snap['alerts'] as unknown[]) : [];
-    for (const rec of a) {
-      if (!isPlainObject(rec)) continue;
-      const id = String(rec['uuid'] ?? rec['id'] ?? '');
-      if (!id || alertsById.has(id)) continue;
-      alertsById.set(id, rec);
-    }
-    const j = Array.isArray(snap['jams']) ? (snap['jams'] as unknown[]) : [];
-    for (const rec of j) {
-      if (!isPlainObject(rec)) continue;
-      const id = String(rec['uuid'] ?? rec['id'] ?? '');
-      if (!id || jamsById.has(id)) continue;
-      jamsById.set(id, rec);
-    }
-  }
-  return { alerts: Array.from(alertsById.values()), jams: Array.from(jamsById.values()) };
-}
-
 function dimSlotFor(
   perTypeDims: DimMap,
   alertType: string,
@@ -375,22 +319,6 @@ function computeFacetsLive(): ComputedFacets {
     if (oldestUnix === null || snap.ts < oldestUnix) oldestUnix = snap.ts;
     if (newestUnix === null || snap.ts > newestUnix) newestUnix = snap.ts;
 
-    if (source === 'waze') {
-      const { alerts, jams } = wazeRecords(snap.data);
-      for (const a of alerts) {
-        const at = wazeAlertType(a);
-        if (!at) continue;   // unrecognised type — ingest drops it too
-        typeCounts[at] = (typeCounts[at] ?? 0) + 1;
-        const slot = dimSlotFor(perTypeDims, at);
-        const sub = String(a['subtype'] ?? '').toUpperCase();
-        if (sub) bumpCount(slot['subcategory'] as Record<string, number>, sub);
-        const cat = String(a['type'] ?? '').toUpperCase();
-        if (cat) bumpCount(slot['category'] as Record<string, number>, cat);
-      }
-      typeCounts['waze_jam'] = (typeCounts['waze_jam'] ?? 0) + jams.length;
-      continue;
-    }
-
     const alertType = canonicalAlertType(source);
     if (!alertType) continue;
     if (!ALERT_TYPE_PROVIDER[alertType]) continue;
@@ -417,33 +345,6 @@ function computeFacetsLive(): ComputedFacets {
   return { typeCounts, perTypeDims, oldestUnix, newestUnix };
 }
 
-/** Waze-only LiveStore walk. Used during the archive merge: archive
- *  scan covers non-waze; this fills the waze types from LiveStore. */
-function liveWazeFacets(): ComputedFacets {
-  const typeCounts: Record<string, number> = {};
-  const perTypeDims: DimMap = {};
-  let oldestUnix: number | null = null;
-  let newestUnix: number | null = null;
-
-  const snap = liveStore.get('waze');
-  if (!snap) return { typeCounts, perTypeDims, oldestUnix, newestUnix };
-  oldestUnix = snap.ts;
-  newestUnix = snap.ts;
-
-  const { alerts, jams } = wazeRecords(snap.data);
-  for (const a of alerts) {
-    const at = wazeAlertType(a);
-    if (!at) continue;   // unrecognised type — ingest drops it too
-    typeCounts[at] = (typeCounts[at] ?? 0) + 1;
-    const slot = dimSlotFor(perTypeDims, at);
-    const sub = String(a['subtype'] ?? '').toUpperCase();
-    if (sub) bumpCount(slot['subcategory'] as Record<string, number>, sub);
-    const cat = String(a['type'] ?? '').toUpperCase();
-    if (cat) bumpCount(slot['category'] as Record<string, number>, cat);
-  }
-  typeCounts['waze_jam'] = (typeCounts['waze_jam'] ?? 0) + jams.length;
-  return { typeCounts, perTypeDims, oldestUnix, newestUnix };
-}
 
 /**
  * Tables we GROUP BY for facet counts and the per-table lookback
