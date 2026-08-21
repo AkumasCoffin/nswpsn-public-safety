@@ -58,10 +58,6 @@ import {
 } from './services/centralwatchImageCache.js';
 import { prewarmAll, startPolling, stopPolling } from './services/poller.js';
 import {
-  startHeatmapRefreshLoop,
-  stopHeatmapRefreshLoop,
-} from './api/waze.js';
-import {
   startStatsArchiver,
   stopStatsArchiver,
 } from './services/statsArchiver.js';
@@ -70,10 +66,6 @@ import { startCleanupLoop, stopCleanupLoop, ensureArchivePartitions } from './se
 import { scheduleArchiveLatestBackfill } from './services/archiveLatestBackfill.js';
 import { scheduleArchiveLatestDimsBackfill } from './services/archiveLatestDimsBackfill.js';
 import { scheduleArchiveLatestRecompute } from './services/archiveLatestRecompute.js';
-import {
-  startPoliceHeatmapCacheRefresh,
-  stopPoliceHeatmapCacheRefresh,
-} from './services/policeHeatmapCache.js';
 import {
   start as startActivityMode,
   stop as stopActivityMode,
@@ -131,10 +123,8 @@ async function preflight(): Promise<void> {
   archiveWriter.startFlushLoop();
   startActivityMode(); // sweeper for stale heartbeats; toggles polling cadence
   startFilterCacheRefresh(); // 5-min archive-backed facet refresh for /api/data/history/filters
-  startHeatmapRefreshLoop(); // 5-min background refresh of police heatmap RAM cache
   startStatsArchiver(); // 5-min snapshots into stats_snapshots for /api/stats/history
   startCleanupLoop(); // hourly partition-drop + stats-snapshot prune
-  startPoliceHeatmapCacheRefresh(); // 10-min materialised heatmap (mirrors python)
   scheduleArchiveLatestBackfill(); // one-shot backfill of archive_*_latest sidecars (migration 017)
   scheduleArchiveLatestDimsBackfill(); // one-shot backfill of category/subcategory on sidecars (migration 021)
   scheduleArchiveLatestRecompute(); // one-shot recompute of latest_fetched_at to reflect actual change times
@@ -253,8 +243,6 @@ async function shutdown(signal: string) {
     stopPolling();
     stopActivityMode();
     stopFilterCacheRefresh();
-    stopHeatmapRefreshLoop();
-    stopPoliceHeatmapCacheRefresh();
     stopStatsArchiver();
     stopCleanupLoop();
     stopRdioSummaryScheduler();

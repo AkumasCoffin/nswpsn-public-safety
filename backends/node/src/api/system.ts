@@ -28,7 +28,6 @@ import { fetchJson } from '../sources/shared/http.js';
 import { _resetStatusCacheForTests } from './status.js';
 import { _resetW3wCacheForTests } from './w3w.js';
 import { _resetEndeavourPostcodesCacheForTests } from './endeavour.js';
-import { _resetHeatmapCacheForTests } from './waze.js';
 import { _resetNewsCacheForTests } from './news.js';
 import { _resetDataHistoryAggregateCache } from './data-history.js';
 import { _resetCentralwatchCacheForTests } from '../sources/centralwatch.js';
@@ -58,9 +57,6 @@ systemRouter.get('/api/cache/clear', (c) => {
   tryEach(_resetStatusCacheForTests);
   tryEach(_resetW3wCacheForTests);
   tryEach(_resetEndeavourPostcodesCacheForTests);
-  // Heatmap cache (5-min TTL on /api/waze/police-heatmap) — operators
-  // hitting cache/clear to force-refresh expect this to drop too.
-  tryEach(_resetHeatmapCacheForTests);
   // News RSS aggregator (5-min cache).
   tryEach(_resetNewsCacheForTests);
   // Centralwatch file reader (1-min mtime-keyed cache).

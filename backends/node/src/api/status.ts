@@ -10,7 +10,6 @@
  *   checks.database.ok                          → true / false
  *   checks.database.latency_ms < 200            → boolean
  *   checks.archive_writer.ok                    → true / false
- *   checks.waze_ingest.regions_cached >= 150    → boolean
  *
  * Shape parity with python's response — every check key python's
  * dashboard panels read is present here, even when the underlying
@@ -29,10 +28,8 @@ import { Hono } from 'hono';
 import { getPool } from '../db/pool.js';
 import { liveStore } from '../store/live.js';
 import { archiveWriter } from '../store/archive.js';
-import { snapshot as wazeSnapshot, ingestStats as wazeIngestStats } from '../store/wazeIngestCache.js';
 import { ingestKeysConfigured } from '../services/auth/ingestKey.js';
 import { filterCacheLastRefreshAt } from '../store/filterCache.js';
-import { policeHeatmapStatus, _heatmapCacheSize as heatmapCacheSize } from './waze.js';
 import { allSources } from '../services/sourceRegistry.js';
 import { getSourceMetrics } from '../services/poller.js';
 import { activeViewerCount } from '../services/activityMode.js';
@@ -231,56 +228,6 @@ function checkArchiveBuffer(): {
   };
 }
 
-function checkWazeIngest(now: number): {
-  block: Record<string, unknown>;
-  degraded: boolean;
-} {
-  if (!ingestKeysConfigured()) {
-    return {
-      block: {
-        ok: true,
-        enabled: false,
-        // python emits these as null when ingest is disabled; doing the
-        // same so the dashboard panel shows "—" not undefined.
-        last_ingest_age_secs: null,
-        threshold_secs: STATUS_WAZE_STALE_SECS,
-        regions_cached: null,
-        block_rate_pct: null,
-        gate_active: false,
-      },
-      degraded: false,
-    };
-  }
-  const s = wazeSnapshot();
-  const stats = wazeIngestStats();
-  const upSecs = (now - PROCESS_START_MS) / 1000;
-  const age = s.last_ingest_age_secs;
-  const inGrace = age === null && upSecs < WAZE_BOOT_GRACE_SECS;
-  const stale = age !== null && age > STATUS_WAZE_STALE_SECS;
-  const ok = !stale && (age !== null || inGrace);
-  return {
-    block: {
-      ok,
-      enabled: true,
-      last_ingest_age_secs: age,
-      threshold_secs: STATUS_WAZE_STALE_SECS,
-      regions_cached: s.regions_cached,
-      // Total + 60s rate are more useful than age alone — the userscript
-      // ingests every ~5s so age is always near zero. Showing rate makes
-      // a frozen vs healthy ingest immediately visible on the dev panel.
-      total_ingests: stats.total_ingests,
-      ingests_per_min: stats.ingests_per_min,
-      // Node doesn't track userscript block-rate yet (no equivalent of
-      // python's _waze_metrics_snapshot rolling counter). Surface as
-      // null so the panel renders "—" rather than 0% (which would be
-      // misleading: 0% looks like "no blocks ever" not "unknown").
-      block_rate_pct: null,
-      gate_active: false,
-    },
-    degraded: !ok,
-  };
-}
-
 function checkFilterCache(now: number): {
   block: Record<string, unknown>;
   degraded: boolean;
@@ -313,28 +260,6 @@ function checkFilterCache(now: number): {
 // using sentinel values (null / 0) where there's no Node equivalent yet.
 // ---------------------------------------------------------------------------
 
-/** Police-heatmap freshness. The Node backend runs a 5-min background
- *  refresh into an in-process cache; this reads its last-known state. */
-function checkPoliceHeatmap(): Record<string, unknown> {
-  const s = policeHeatmapStatus();
-  const stale =
-    s.last_refresh_age_secs !== null &&
-    s.last_refresh_age_secs > STATUS_HEATMAP_STALE_SECS;
-  return {
-    ok: !stale,
-    bins: s.bins,
-    last_refresh_age_secs: s.last_refresh_age_secs,
-    threshold_secs: STATUS_HEATMAP_STALE_SECS,
-    // How many distinct viewports the response cache is holding. This used to
-    // be unbounded — the key embeds the caller's bbox, so it grew by one entry
-    // per pan/zoom, each pinning thousands of coordinate triples. Exposed
-    // because "is that leak actually fixed?" should be a number you can read
-    // during peak traffic, not something inferred from the heap curve hours
-    // later. Expect single/low-double digits; anything in the hundreds means
-    // the bounding has regressed.
-    response_cache_entries: heatmapCacheSize(),
-  };
-}
 
 /** Ingest activity — pulled from the archive writer's flush counters. */
 function checkIngest(): Record<string, unknown> {
@@ -486,9 +411,6 @@ async function computeStatus(): Promise<{
   checks['archive_buffer'] = buffer.block;
   if (buffer.degraded) degraded = true;
 
-  const waze = checkWazeIngest(nowMs);
-  checks['waze_ingest'] = waze.block;
-  if (waze.degraded) degraded = true;
 
   const fc = checkFilterCache(nowMs);
   checks['filter_cache'] = fc.block;
@@ -496,7 +418,6 @@ async function computeStatus(): Promise<{
 
   // Sections python had that Node doesn't track yet — present so the
   // dashboard panels render with sensible zeros instead of "—".
-  checks['police_heatmap'] = checkPoliceHeatmap();
   checks['ingest'] = checkIngest();
   checks['cleanup'] = checkCleanup();
   checks['ram_cache'] = checkRamCache();

@@ -13,9 +13,6 @@ import { compress } from 'hono/compress';
 // Core endpoints (W1).
 import { healthRouter } from './api/health.js';
 import { configRouter } from './api/config.js';
-// Waze (W2).
-import { wazeRouter } from './api/waze.js';
-import { wazeIngestRouter } from './api/waze-ingest.js';
 // Simple sources (W3).
 import { rfsRouter } from './api/rfs.js';
 import { bomRouter } from './api/bom.js';
@@ -165,7 +162,7 @@ export function createApp() {
   app.use('*', requestLogger);
 
   // Brotli/gzip compression. The /api/data/history full payloads and
-  // /api/waze/police-heatmap (~1-2 MB raw) compress ~10×. Cloudflare/
+  // (~1-2 MB raw) compress ~10×. Cloudflare/
   // Apache may also gzip in front; double-compression is detected by
   // hono/compress (skips when Content-Encoding already set).
   app.use('*', compress());
@@ -182,10 +179,6 @@ export function createApp() {
     '/api/data/history/filters',
     '/api/data/history/sources',
     '/api/data/history/stats',
-    '/api/waze/police-heatmap',
-    '/api/waze/police',
-    '/api/waze/hazards',
-    '/api/waze/roadwork',
     '/api/news/rss',
     '/api/news/sources',
     '/api/stats/summary',
@@ -287,7 +280,7 @@ export function createApp() {
 
   // Global NSWPSN_API_KEY gate. The middleware itself short-circuits for
   // OPTIONS preflights, public endpoints (/api/health, /api/config,
-  // /api/heartbeat, POST /api/editor-requests, POST /api/waze/ingest,
+  // /api/heartbeat, POST /api/editor-requests,
   // /api/check-editor/*, etc.), any non-/api path, and any request already
   // authenticated as a Supabase user (a logged-in user is at least as
   // trusted as the public key). Mirrors Python's global before_request.
@@ -298,9 +291,6 @@ export function createApp() {
   // the Python equivalents.
   app.route('/', healthRouter);
   app.route('/', configRouter);
-  // Waze
-  app.route('/', wazeRouter);
-  app.route('/', wazeIngestRouter);
   // Simple sources
   app.route('/', rfsRouter);
   app.route('/', bomRouter);
@@ -378,7 +368,6 @@ export function createApp() {
           '/api/rfs/incidents',
           '/api/bom/warnings',
           '/api/traffic/{incidents,roadwork,flood,fire,majorevent,cameras}',
-          '/api/waze/{police,hazards,roadwork,alerts,police-heatmap}',
           '/api/endeavour/{current,planned,future}',
           '/api/ausgrid/outages',
           '/api/essential/{outages,planned,future}',

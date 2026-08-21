@@ -46,7 +46,6 @@ describe('/api/status', () => {
     const checks = body['checks'] as Record<string, Record<string, unknown>>;
     expect(checks['database']).toBeDefined();
     expect(checks['archive_writer']).toBeDefined();
-    expect(checks['waze_ingest']).toBeDefined();
     expect(checks['filter_cache']).toBeDefined();
   });
 
