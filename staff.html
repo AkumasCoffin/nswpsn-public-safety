@@ -5178,6 +5178,39 @@
       return name ? `${name} · ${id}` : `System ${id}`;
     }
 
+    /** The Nodes list: every radio node with what it heard in the window.
+     *  Lost once already to an over-greedy regex during the drill-down rewrite,
+     *  which is why the tab sat on "Loading…" — the dispatch called a function
+     *  that no longer existed, so the error path never ran either. */
+    async function nd2LoadNodes() {
+      const body = document.getElementById('nd2-nodes-body');
+      if (!body) return;
+      const view = nd2.view;
+      try {
+        const d = await nd2Fetch(`/api/node-data/nodes?window=${encodeURIComponent(nd2.window)}`);
+        if (nd2.view !== view) return;          // switched away mid-fetch
+        const rows = d.nodes || [];
+        if (!rows.length) {
+          body.innerHTML = '<tr><td colspan="7" class="nd2-empty">No radio nodes registered.</td></tr>';
+          return;
+        }
+        body.innerHTML = rows.map(nd => `
+          <tr class="nd2-rowlink" onclick="nd2OpenNodeFromData(${nd2Arg(nd.nodeId)}, ${nd2Arg(nd.name || '')})" title="Open this node">
+            <td><span class="nd-strong">${escapeHtml(nd.name || nd2ShortNode(nd.nodeId))}</span></td>
+            <td>${nd.online
+              ? '<span class="nd2-chip nd2-live-on">online</span>'
+              : '<span class="nd2-chip nd2-live-off">offline</span>'}</td>
+            <td class="nd2-num">${nd2Num(nd.calls)}</td>
+            <td class="nd2-num">${nd2Num(nd.receptions)}</td>
+            <td class="nd2-num">${nd2Num(nd.talkgroups)}</td>
+            <td class="nd2-num">${nd2Num(nd.sites)}</td>
+            <td>${nd.lastSeen ? nd2LastSeen(nd.lastSeen) : '<span class="nd-sub">never</span>'}</td>
+          </tr>`).join('');
+      } catch (e) {
+        nd2TableMsg('nd2-nodes-body', 7, e);
+      }
+    }
+
     /** Which panel a node sub-tab maps to. The node detail is the ordinary
      *  Data views with nd2.node set, so there is one renderer per view, not
      *  two. This also makes the old "All nodes" dropdown redundant. */
