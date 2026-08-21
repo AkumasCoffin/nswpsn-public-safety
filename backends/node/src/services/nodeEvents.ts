@@ -684,8 +684,13 @@ export async function upsertSiteSnapshots(
               const n = Number(v);
               return Number.isFinite(n) ? n : null;
             };
-            const decodePct = dbl(q['decodeHealthPct']);
-            const signalDbfs = dbl(q['signalDbfs']);
+            // 0 is "not measured", not "0% decode" / "0 dBFS". A sample is written
+            // when EITHER field is present, so a node reporting only signal would
+            // otherwise store a real decode_pct of 0 — which reads back as a site
+            // decoding at 0% and drags every average and minimum taken over it.
+            const zeroIsAbsent = (v: number | null): number | null => (v === 0 ? null : v);
+            const decodePct = zeroIsAbsent(dbl(q['decodeHealthPct']));
+            const signalDbfs = zeroIsAbsent(dbl(q['signalDbfs']));
             const invalid = dbl(q['invalidFrames']);
             if (decodePct !== null || signalDbfs !== null) {
               await client.query(

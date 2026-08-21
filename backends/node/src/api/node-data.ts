@@ -3113,13 +3113,22 @@ nodeDataRouter.get('/api/node-data/site-decode', requireRole(canViewNodeData), a
     }>(
       `SELECT to_timestamp(floor(extract(epoch FROM sampled_at) / ${bucketMinutes * 60})
                            * ${bucketMinutes * 60}) AS bucket,
-              AVG(decode_pct) AS decode_pct,
+              -- A ZERO decode reading means "not measured", not "0% decode":
+              -- the sample is written whenever quality carries EITHER a decode
+              -- figure or a signal figure, so a node that reported only signal
+              -- stores decode_pct = 0. Counting those pinned Worst to 0
+              -- permanently and dragged the average toward the midpoint — a
+              -- site reading 98% on its tile drew a flat 50% line, because the
+              -- mean was taken across a node receiving it and a node not.
+              -- Excluded from both aggregates so the chart describes the nodes
+              -- actually hearing the site.
+              AVG(decode_pct) FILTER (WHERE decode_pct > 0) AS decode_pct,
               -- Worst reading in the bucket. AVG alone is the wrong summary for
               -- a health metric: at coarse buckets a site that dropped to 40%
               -- for ten minutes averages away entirely, which is precisely the
               -- event the chart exists to show.
-              MIN(decode_pct) AS decode_min,
-              AVG(signal_dbfs) AS signal_dbfs,
+              MIN(decode_pct) FILTER (WHERE decode_pct > 0) AS decode_min,
+              AVG(signal_dbfs) FILTER (WHERE signal_dbfs <> 0) AS signal_dbfs,
               MAX(invalid_frames) AS invalid_frames,
               COUNT(*)::int AS samples
          FROM node_site_decode_samples
