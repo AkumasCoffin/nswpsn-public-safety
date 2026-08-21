@@ -42,13 +42,13 @@ const (
 	// view looked delayed and half-empty no matter how fast the server pushed,
 	// because the data underneath it was never fresher than 15s.
 	liveStatusInterval = 1 * time.Second
-	pingInterval           = 30 * time.Second
-	readDeadline           = 90 * time.Second
-	writeWait              = 10 * time.Second
-	backoffInitial         = 1 * time.Second
-	backoffMax             = 30 * time.Second // transient drops recover fast
-	backoffDisabled        = 30 * time.Second // 401/403 (disabled / role removed): retry every ~30s so re-enabling recovers quickly
-	backoffStableReset     = 15 * time.Second // a session must stay up this long before it resets the network backoff
+	pingInterval       = 30 * time.Second
+	readDeadline       = 90 * time.Second
+	writeWait          = 10 * time.Second
+	backoffInitial     = 1 * time.Second
+	backoffMax         = 30 * time.Second // transient drops recover fast
+	backoffDisabled    = 30 * time.Second // 401/403 (disabled / role removed): retry every ~30s so re-enabling recovers quickly
+	backoffStableReset = 15 * time.Second // a session must stay up this long before it resets the network backoff
 
 	updateInitialDelay = 30 * time.Second // let the WS settle before the first update check
 	updateInterval     = 6 * time.Hour    // periodic update check cadence
@@ -57,6 +57,12 @@ const (
 // depthProvider is the subset of the queue the client needs.
 type depthProvider interface {
 	Depth() int
+}
+
+// dropProvider reports calls accepted from rdio but never persisted. Optional
+// so the client keeps working if nothing supplies it (tests, pager builds).
+type dropProvider interface {
+	Dropped() uint64
 }
 
 // Client owns the WS connection lifecycle.
@@ -79,9 +85,15 @@ type Client struct {
 
 	// liveWatch: ≥1 staff browser has the fleet Live view open. Set by the
 	// server (TypeLiveWatch), never inferred here — the agent cannot know who
-	// is looking. Cleared on reconnect so a dropped session can't strand the
-	// node at the fast cadence forever.
+	// is looking. Cleared in session() before the read/status loops start, so a
+	// dropped session can't strand the node at the fast cadence forever.
 	liveWatch atomic.Bool
+	// statusNow asks the status loop for an immediate send. Buffered depth 1 and
+	// non-blocking on the send side: the read loop must never block on this.
+	statusNow chan struct{}
+
+	// drops reports calls lost between rdio and the queue (may be nil).
+	drops dropProvider
 
 	// Component versions the RUNNING processes were launched with (snapshot of the
 	// current.txt pointers at startup, i.e. what resolveSDRTrunk/resolveRdio
@@ -103,7 +115,13 @@ type Client struct {
 // spectrum WS is controlPort+1); both the REST client and the spectrum WS are
 // built here so they share the same port/token as the launched sdrtrunk.
 func New(cfg *agentcfg.Config, sup *supervise.Supervisor, q depthProvider, controlPort int, controlToken string, rdio *rdioctl.Client, rdioPassword string) *Client {
-	c := &Client{cfg: cfg, sup: sup, q: q, rdio: rdio, rdioPassword: rdioPassword}
+	c := &Client{
+		cfg: cfg, sup: sup, q: q, rdio: rdio, rdioPassword: rdioPassword,
+		// Allocated once for the client's lifetime, not per session: the status
+		// loop of a session that is still winding down would otherwise read a
+		// field the next session had already replaced.
+		statusNow: make(chan struct{}, 1),
+	}
 	c.sdr = sdrctl.New(controlPort, controlToken)
 	// Snapshot the versions the running processes were launched with. New() runs
 	// after resolveSDRTrunk/resolveRdio have already exec'd the components, so the
@@ -121,6 +139,11 @@ func New(cfg *agentcfg.Config, sup *supervise.Supervisor, q depthProvider, contr
 	})
 	return c
 }
+
+// SetDropProvider supplies the relay's dropped-call counter for the status
+// frame. Separate from New because the relay listener and the WS client are
+// constructed independently in main.
+func (c *Client) SetDropProvider(d dropProvider) { c.drops = d }
 
 // SendBinary writes a binary frame up the node WS under the shared write mutex.
 func (c *Client) SendBinary(b []byte) error {
@@ -224,6 +247,12 @@ func (c *Client) session(ctx context.Context) (connected bool, rejected bool, er
 		c.conn = nil
 		c.writeMu.Unlock()
 		_ = conn.Close()
+		// Tear down any spectrum stream with the session. Without this, sdrtrunk
+		// keeps pushing frames to a socket that is gone: every frame fails
+		// SendBinary and logs, ~10/s forever, and each reconnect leaks another
+		// spectrum socket and read goroutine. Staff must re-request the stream
+		// after a reconnect anyway, so nothing useful is lost.
+		c.spec.Close()
 	}()
 
 	// Read deadline + pong handler: a dead peer trips the read loop.
@@ -231,6 +260,21 @@ func (c *Client) session(ctx context.Context) (connected bool, rejected bool, er
 	conn.SetPongHandler(func(string) error {
 		return conn.SetReadDeadline(time.Now().Add(readDeadline))
 	})
+
+	// Reset the live-watch cadence HERE, before any frame can be read and before
+	// the status loop starts. Doing it inside statusLoop was a race: the server
+	// replays liveWatch on connect, that frame can already be buffered, and
+	// handleLiveWatch would set true only for the goroutine to clobber it back
+	// to false. Since the server only sends on 0<->1 transitions it would never
+	// re-send, leaving the node at the slow cadence for the whole session.
+	c.liveWatch.Store(false)
+	// Drain any nudge left by the previous session rather than reallocating the
+	// channel: the old session's statusLoop may still be winding down, and
+	// swapping the field under it would be a data race.
+	select {
+	case <-c.statusNow:
+	default:
+	}
 
 	// Send hello.
 	if err := c.sendHello(conn); err != nil {
@@ -287,22 +331,20 @@ func (c *Client) handleLiveWatch(env *protocol.Envelope) {
 	log.Printf("wsclient: live watch %t (status cadence %v)", d.On,
 		map[bool]time.Duration{true: liveStatusInterval, false: statusInterval}[d.On])
 	if d.On {
-		c.writeMu.Lock()
-		conn := c.conn
-		c.writeMu.Unlock()
-		if conn != nil {
-			if err := c.sendStatus(conn); err != nil {
-				log.Printf("wsclient: liveWatch immediate status failed: %v", err)
-			}
+		// NUDGE the status loop rather than sending from here. This runs on the
+		// read-loop goroutine, and sendStatus makes four REST calls to the JVM at
+		// a 4s timeout each — sending inline stalled the read loop for up to ~16s
+		// with sdrtrunk wedged, during which no cmd/configPush is processed AND
+		// gorilla's ping handler (which only runs inside ReadMessage) cannot
+		// answer the server's pings, so the backend drops the node.
+		select {
+		case c.statusNow <- struct{}{}:
+		default: // already pending — one refresh is enough
 		}
 	}
 }
 
 func (c *Client) statusLoop(ctx context.Context, conn *websocket.Conn) {
-	// A reconnect means the server's view of who is watching is gone; start
-	// from "nobody" and let it tell us again, or a dropped session would strand
-	// this node at the fast cadence indefinitely.
-	c.liveWatch.Store(false)
 	// Tick at the FASTEST cadence any mode needs and decide per-tick whether
 	// enough time has elapsed for the currently-desired interval:
 	// statusInterval normally, spectrumStatusInterval while ≥1 spectrum stream
@@ -310,15 +352,24 @@ func (c *Client) statusLoop(ctx context.Context, conn *websocket.Conn) {
 	// A slower ticker would cap every mode at its own period.
 	t := time.NewTicker(liveStatusInterval)
 	defer t.Stop()
+	// Stamp `last` BEFORE the send: the ticker is already running, so timing
+	// from after a slow first send would push the first live interval out to 2s.
+	last := time.Now()
 	// Send one immediately so the server has fresh state.
 	if err := c.sendStatus(conn); err != nil {
 		return
 	}
-	last := time.Now()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-c.statusNow:
+			// Someone started watching Live; refresh now rather than making them
+			// stare at the last heartbeat for up to statusInterval.
+			if err := c.sendStatus(conn); err != nil {
+				return
+			}
+			last = time.Now()
 		case now := <-t.C:
 			interval := statusInterval
 			if c.spec.ActiveCount() > 0 {
@@ -388,12 +439,18 @@ func (c *Client) sendStatus(conn *websocket.Conn) error {
 	}
 
 	st := protocol.Status{
-		Tuners:        tuners,
-		Channels:      channels,
-		ActiveCalls:   activeCalls,
-		Events:        events,
-		Components:    comps,
-		QueueDepth:    c.q.Depth(),
+		Tuners:      tuners,
+		Channels:    channels,
+		ActiveCalls: activeCalls,
+		Events:      events,
+		Components:  comps,
+		QueueDepth:  c.q.Depth(),
+		UploadsDropped: func() uint64 {
+			if c.drops == nil {
+				return 0
+			}
+			return c.drops.Dropped()
+		}(),
 		CPUPct:        0, // best-effort; not computed in Phase 2
 		MemMB:         int(ms.Alloc / (1024 * 1024)),
 		DiskFreeMB:    0, // best-effort; not computed in Phase 2

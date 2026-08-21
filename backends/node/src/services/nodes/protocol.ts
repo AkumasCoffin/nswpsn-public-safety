@@ -32,6 +32,11 @@ export interface StatusData {
   channels?: unknown[];
   components?: Record<string, string>;
   queueDepth?: number;
+  /** Calls accepted from the local rdio that the agent could not persist. They
+   *  are lost — rdio does not retry a downstream — and queueDepth stays 0 for
+   *  them, so this is the only signal that a node is shedding traffic.
+   *  Absent on agents older than 0.2.20. */
+  uploadsDropped?: number;
   cpuPct?: number;
   memMB?: number;
   diskFreeMB?: number;

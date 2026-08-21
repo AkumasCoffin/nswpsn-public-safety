@@ -29,7 +29,7 @@ const (
 	// fleet Live view. While on, status goes out at the fast cadence so the
 	// view is actually live; while off it drops back to the heartbeat rate.
 	TypeLiveWatch = "liveWatch"
-	TypeDisabled      = "disabled"
+	TypeDisabled  = "disabled"
 )
 
 // Envelope is the outer frame for every message.
@@ -55,16 +55,22 @@ type Hello struct {
 
 // Status is the periodic heartbeat describing the agent's live state.
 type Status struct {
-	Tuners        []any             `json:"tuners"`
-	Channels      []any             `json:"channels"`
-	ActiveCalls   []any             `json:"activeCalls"`
-	Events        []any             `json:"events"`
-	Components    map[string]string `json:"components"`
-	QueueDepth    int               `json:"queueDepth"`
-	CPUPct        float64           `json:"cpuPct"`
-	MemMB         int               `json:"memMB"`
-	DiskFreeMB    int               `json:"diskFreeMB"`
-	ConfigVersion *string           `json:"configVersion"`
+	Tuners      []any             `json:"tuners"`
+	Channels    []any             `json:"channels"`
+	ActiveCalls []any             `json:"activeCalls"`
+	Events      []any             `json:"events"`
+	Components  map[string]string `json:"components"`
+	QueueDepth  int               `json:"queueDepth"`
+	// UploadsDropped: calls accepted from the local rdio that could NOT be
+	// persisted to the queue (disk full, read-only data dir, fsync failure).
+	// They are gone — rdio does not retry a downstream — and QueueDepth stays 0
+	// for them, so without this a node shedding every call looks healthy.
+	// Counts since agent start; absent on older agents.
+	UploadsDropped uint64  `json:"uploadsDropped"`
+	CPUPct         float64 `json:"cpuPct"`
+	MemMB          int     `json:"memMB"`
+	DiskFreeMB     int     `json:"diskFreeMB"`
+	ConfigVersion  *string `json:"configVersion"`
 	// Node readiness reported by the SDR-Trunk control server (null on older
 	// builds): CPU calibration done, and the JMBE voice codec installed.
 	Calibrated    *bool `json:"calibrated"`

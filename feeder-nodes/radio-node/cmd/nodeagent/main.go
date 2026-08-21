@@ -147,6 +147,14 @@ func (p *program) Start(s service.Service) error {
 		defer close(p.done)
 		if err := runAgent(ctx, p.configPath); err != nil {
 			log.Printf("agent run ended with error: %v", err)
+			// Exit non-zero so the service manager restarts us. Returning
+			// quietly leaves a process that is registered and "running" but has
+			// no relay listener, so every call rdio hands it is refused and
+			// dropped — silently, and forever. Only when we were NOT asked to
+			// stop: a cancelled context is a normal shutdown.
+			if ctx.Err() == nil {
+				os.Exit(1)
+			}
 		}
 	}()
 	return nil
@@ -225,6 +233,12 @@ func controlService(action, configPath string) error {
 // ---- agent run --------------------------------------------------------------
 
 func runAgent(ctx context.Context, configPath string) error {
+	// Derived + cancelled on every return path, so a fatal component failure
+	// actually stops the supervisor, WS client, queue sender and shippers
+	// instead of leaving them running as orphans.
+	ctx, cancelAll := context.WithCancel(ctx)
+	defer cancelAll()
+
 	cfg, err := agentcfg.Load(configPath)
 	if err != nil {
 		return err
@@ -309,6 +323,9 @@ func runAgent(ctx context.Context, configPath string) error {
 	// WS control client (also bridges the SDR-Trunk control server on the same
 	// port/token used to launch sdrtrunk).
 	ws := wsclient.New(cfg, sup, q, cfg.SDRTrunkControlPort, controlToken, rdio, rdioPassword)
+	// Report calls lost between rdio and the queue in the status frame, so a
+	// node shedding traffic is visible on the fleet page instead of silent.
+	ws.SetDropProvider(listener)
 
 	// The queue sender POSTs each buffered call to the backend relay, enriching
 	// each with P25 site headers from the control server when available.
@@ -353,17 +370,26 @@ func runAgent(ctx context.Context, configPath string) error {
 
 	log.Printf("nodeagent running")
 
+	var runErr error
 	select {
 	case <-ctx.Done():
 		log.Printf("shutdown signal received; stopping...")
 	case e := <-errCh:
-		log.Printf("component error: %v", e)
+		// FATAL, not informational. The relay listener is how rdio hands us
+		// calls; if it never bound (port already in use) or died, rdio's POSTs
+		// are refused and it DISCARDS every call. Previously this logged one
+		// line and returned nil, so the service manager saw a clean exit and
+		// never restarted — a node losing 100% of its traffic while still
+		// reporting itself healthy. Surface it so we get restarted.
+		log.Printf("component error (fatal): %v", e)
+		runErr = e
 	}
+	cancelAll()
 
 	// Give in-flight graceful shutdowns a brief moment.
 	time.Sleep(300 * time.Millisecond)
 	log.Printf("stopped")
-	return nil
+	return runErr
 }
 
 // bootImportConfig re-imports the last-applied config payload (persisted by the

@@ -11,6 +11,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/queue"
@@ -24,7 +25,16 @@ type Listener struct {
 	addr string
 	q    *queue.Queue
 	srv  *http.Server
+	// dropped counts calls accepted from rdio that we then failed to persist.
+	// Those calls are GONE — rdio's downstream Send does not retry, it logs the
+	// error and moves on (rdio-scanner server/downstream.go) — so the only
+	// thing left to do is make the loss visible instead of silent. Surfaced in
+	// the status frame so a node shedding calls doesn't look healthy.
+	dropped atomic.Uint64
 }
+
+// Dropped returns the number of calls accepted but not persisted this run.
+func (l *Listener) Dropped() uint64 { return l.dropped.Load() }
 
 // New builds a Listener bound to addr (must be a loopback addr) enqueuing to q.
 func New(addr string, q *queue.Queue) *Listener {
@@ -102,12 +112,20 @@ func (l *Listener) handleCallUpload(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// Still respond 200; just log and drop this one.
 		log.Printf("relay: failed reading call-upload body: %v", err)
+		l.dropped.Add(1)
 		ok()
 		return
 	}
 
 	if err := l.q.Enqueue(contentType, body); err != nil {
-		log.Printf("relay: enqueue failed: %v", err)
+		// The call is lost. Responding non-200 would NOT save it: rdio's
+		// downstream sender logs the failure and moves on without retrying, so
+		// the only difference is which side records the loss. Keep the 200 (the
+		// contract this listener is built on) and count it — a disk-full or
+		// read-only queue dir otherwise sheds every call with nothing but a log
+		// line while the node reports QueueDepth 0 and looks perfectly fine.
+		n := l.dropped.Add(1)
+		log.Printf("relay: DROPPED call — enqueue failed (%d dropped this run): %v", n, err)
 	}
 	ok()
 }
