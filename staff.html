@@ -2058,6 +2058,21 @@
     .nd2-badge-rec { background: rgba(148, 163, 184, 0.12); color: #94a3b8; }
     .nd2-detail-gap { margin-bottom: 1.75rem; }
 
+    /* Live feed indicator: green when pushed over the WebSocket, amber when
+       degraded to the 5s poll. Semantic state, not decoration — the two look
+       identical otherwise. */
+    .nd2-live-on {
+      background: rgba(34, 197, 94, 0.14);
+      color: #4ade80;
+      border-color: rgba(34, 197, 94, 0.35);
+    }
+    .nd2-live-off {
+      background: rgba(245, 158, 11, 0.14);
+      color: #fcd34d;
+      border-color: rgba(245, 158, 11, 0.35);
+    }
+    .nd2-live-on i, .nd2-live-off i { margin-right: 0.25rem; font-size: 0.62rem; }
+
     /* Live view: two stacked cards (channels, then active calls). .nd2-card
        carries no margin of its own, so without this they sit flush and read as
        one long table. Separates the pair rather than trailing the second. */
@@ -5501,10 +5516,30 @@
         }
       };
       // No reconnect loop: on any failure the socket is dropped and the 5s poll
-      // (which never stopped ticking) resumes as the source of truth.
+      // (which never stopped ticking) resumes as the source of truth. Repaint
+      // on both so the header stops claiming "live" the moment it isn't.
       ws.onerror = () => { /* onclose follows */ };
-      ws.onclose = () => { if (_nd2LiveWs === ws) _nd2LiveWs = null; };
+      ws.onclose = () => {
+        if (_nd2LiveWs === ws) { _nd2LiveWs = null; nd2RenderLive(); }
+      };
     }
+
+    // A backgrounded tab is not "a user on the page": left open overnight it
+    // would keep the server shaping and pushing a frame per node per agent
+    // report, for nobody. Drop the socket while hidden and re-establish on
+    // return (the snapshot on subscribe repaints whatever was missed, so
+    // there is nothing to catch up manually).
+    document.addEventListener('visibilitychange', () => {
+      const onLive = currentTab === 'data' && nd2.view === 'live';
+      if (document.hidden) {
+        nd2StopLiveWs();
+        nd2StopLiveTimer();
+      } else if (onLive) {
+        nd2StartLiveTimer();
+        void nd2StartLiveWs();
+        void nd2LoadLive();   // immediate repaint; the socket needs a round-trip
+      }
+    });
 
     function nd2StopLiveWs() {
       _nd2LiveWsGen++;
@@ -5651,8 +5686,18 @@
       // control channel) would misreport the site as not being received.
       if (nd2HideEnc()) calls = calls.filter(c => !nd2IsEncCall(c));
 
+      // Say which feed is driving this. The poll fallback is silent by design,
+      // so without this a dropped socket looks identical to a working one —
+      // except for being seconds stale, which is the whole thing this view is
+      // judged on.
+      const pushing = _nd2LiveWs && _nd2LiveWs.readyState === WebSocket.OPEN;
       const meta = document.getElementById('nd2-live-meta');
-      if (meta) meta.textContent = `${chs.length} channel(s) · ${nodes} node(s) online`;
+      if (meta) {
+        meta.innerHTML = `${chs.length} channel(s) · ${nodes} node(s) online `
+          + (pushing
+            ? `<span class="nd2-chip nd2-live-on" title="Pushed over the staff WebSocket — updates the moment a node reports"><i class="fas fa-bolt"></i> live</span>`
+            : `<span class="nd2-chip nd2-live-off" title="WebSocket unavailable — falling back to a 5s poll, so rows can be up to 5s stale"><i class="fas fa-rotate"></i> polling</span>`);
+      }
       const cn = document.getElementById('nd2-live-calls-n');
       if (cn) cn.textContent = calls.length ? String(calls.length) : '';
 
