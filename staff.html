@@ -4078,7 +4078,10 @@
               else nd2LoadSystem();
             }
             break;
-          case 'nodes': nd2LoadNodes(); break;
+          case 'nodes':
+            if (nd2.nodes.level === 'detail') nd2NodeRefresh();
+            else nd2LoadNodes();
+            break;
           case 'events': if (nd2.evOffset === 0) nd2LoadEvents(); break;
           case 'poverview': nd2LoadPagerOverview(); break;
           case 'capcodes': if (nd2.capLevel === 'list' && nd2.cap.offset === 0) nd2LoadCapcodes(); break;
@@ -4106,7 +4109,12 @@
         case 'overview': await nd2LoadOverview(); break;
         case 'live': await nd2LoadLive(); break;   // also on its own 5s timer
         case 'systems': await nd2LoadSystemsView(); break;
-        case 'nodes': await nd2LoadNodes(); break;
+        // In a drill-down the list is hidden; refreshing it would reload the
+        // wrong thing and leave the open sub-tab stale.
+        case 'nodes':
+          if (nd2.nodes.level === 'detail') await nd2NodeRefresh();
+          else await nd2LoadNodes();
+          break;
         case 'events': await Promise.all([nd2LoadOverview(), nd2LoadEvents()]); break;
         case 'poverview': await nd2LoadPagerOverview(); break;
         case 'capcodes': await nd2LoadCapcodesView(); break;
@@ -5808,11 +5816,24 @@
     // Live is the one view where the Data tab's 30s cadence is too slow to be
     // "live" — a call is often over before the next poll. Runs only while the
     // view is open and is cleared on leave so it can't tick in the background.
+    /** Is the Live panel actually showing? True for the top-level Live view AND
+     *  for the Live sub-tab of a node drill-down, where nd2.view is 'nodes'.
+     *  Every piece of Live machinery — the poll, the socket, the reconnect and
+     *  the stale-response guard — used to test nd2.view === 'live' directly, so
+     *  inside a node they all short-circuited and the panel rendered nothing at
+     *  all: not even its empty state, because the loader returned before the
+     *  render. */
+    function nd2LiveShowing() {
+      if (currentTab !== 'data') return false;
+      if (nd2.view === 'live') return true;
+      return nd2.view === 'nodes' && nd2.nodes.level === 'detail' && nd2.nodes.tab === 'live';
+    }
+
     let _nd2LiveTimer = null;
     function nd2StartLiveTimer() {
       nd2StopLiveTimer();
       _nd2LiveTimer = setInterval(() => {
-        if (nd2.view !== 'live' || currentTab !== 'data') { nd2StopLiveTimer(); return; }
+        if (!nd2LiveShowing()) { nd2StopLiveTimer(); return; }
         // Only poll while the push feed is down. With the socket up, every
         // agent report has already repainted the view and a poll would just
         // overwrite it with the same (or staler) data.
@@ -5850,14 +5871,14 @@
     const ND2_LIVE_BACKOFF_MAX = 8000;
     function nd2ScheduleLiveReconnect() {
       if (_nd2LiveWsRetry) return;                       // one in flight
-      if (nd2.view !== 'live' || currentTab !== 'data') return;
+      if (!nd2LiveShowing()) return;
       if (document.hidden) return;                       // resumes on visibilitychange
       _nd2LiveWsBackoff = _nd2LiveWsBackoff
         ? Math.min(_nd2LiveWsBackoff * 2, ND2_LIVE_BACKOFF_MAX)
         : ND2_LIVE_BACKOFF_MIN;
       _nd2LiveWsRetry = setTimeout(() => {
         _nd2LiveWsRetry = null;
-        if (nd2.view === 'live' && currentTab === 'data' && !document.hidden) {
+        if (nd2LiveShowing() && !document.hidden) {
           void nd2StartLiveWs();
         }
       }, _nd2LiveWsBackoff);
@@ -5887,7 +5908,7 @@
       // which is what "it keeps showing polling" was.
       try { token = (await authHeader()).replace(/^Bearer\s+/i, ''); }
       catch (e) { nd2ScheduleLiveReconnect(); return; }
-      if (gen !== _nd2LiveWsGen || nd2.view !== 'live') return;  // left the view while awaiting
+      if (gen !== _nd2LiveWsGen || !nd2LiveShowing()) return;  // left the view while awaiting
       let ws;
       try { ws = new WebSocket(API_BASE_URL.replace(/^http/i, 'ws') + '/api/node-ws/staff'); }
       catch (e) { nd2ScheduleLiveReconnect(); return; }
@@ -5942,7 +5963,7 @@
     // return (the snapshot on subscribe repaints whatever was missed, so
     // there is nothing to catch up manually).
     document.addEventListener('visibilitychange', () => {
-      const onLive = currentTab === 'data' && nd2.view === 'live';
+      const onLive = nd2LiveShowing();
       if (document.hidden) {
         nd2StopLiveWs();
         nd2StopLiveTimer();
@@ -6254,7 +6275,7 @@
       // snapshot would throw away the other nodes' slices on every poll.
       try {
         const d = await nd2Fetch('/api/node-data/live');
-        if (nd2.view !== 'live') return;   // view changed mid-fetch
+        if (!nd2LiveShowing()) return;   // navigated away mid-fetch
         const next = new Map();
         for (const n of (d.nodes || [])) {
           next.set(n.node, {
