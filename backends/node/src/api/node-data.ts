@@ -41,112 +41,20 @@ import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { learnedAliasMap } from '../services/capcodeAliasSync.js';
 import { requireRole, canViewNodeData } from '../services/auth/roles.js';
-import { getGlobalConfig } from '../services/nodes/globalConfig.js';
 import { hub } from '../services/nodes/hub.js';
+import {
+  talkgroupCatalog,
+  talkgroupLabels,
+  talkgroupAgencies,
+  talkgroupColors,
+} from '../services/talkgroupCatalog.js';
+import { shapeNodeLive, sortLiveChannels } from '../services/nodeLive.js';
 
 /**
- * Talkgroup id → label, resolved from the imported sdrtrunk-vce alias list (the
- * single source of truth already pushed to nodes). Ingest stores no labels, so
- * the Data views resolve them here. Cached briefly to avoid re-reading the global
- * config on every request. Only individual talkgroup matchers are mapped (ranges
- * label a span, not a single id).
+ * Talkgroup label / agency / colour lookups live in services/talkgroupCatalog
+ * so the live WebSocket push (services/nodeLive.ts) can share the same ~60s
+ * cache instead of importing this router back and forming a cycle.
  */
-let _tgLabelCache: {
-  at: number;
-  map: {
-    labels: Map<number, string>;
-    agencies: Map<number, string>;
-    colors: Map<number, string>;
-  };
-} | null = null;
-async function talkgroupLabels(): Promise<Map<number, string>> {
-  return (await talkgroupCatalog()).labels;
-}
-
-/**
- * Talkgroup -> owning agency, taken from the SDR-Trunk alias `group`.
- *
- * An alias already carries the agency as its group (that is what groups are for
- * in a playlist), so this needs no new field anywhere — the mapping has been
- * sitting in the global config all along, just never read back out.
- */
-async function talkgroupAgencies(): Promise<Map<number, string>> {
-  return (await talkgroupCatalog()).agencies;
-}
-
-/**
- * Both talkgroup lookups from ONE pass over the alias list, sharing a single
- * ~60s cache: they read the same aliases, so resolving them separately would
- * double the config loads and let the two maps drift apart between refreshes.
- *
- * First alias wins for each talkgroup (matching the previous behaviour) so a
- * duplicate id can't flip a label or agency between requests.
- */
-/**
- * Alias colour -> a CSS hex string, or null if it isn't one.
- *
- * SDR-Trunk stores an alias colour as a Java Color RGB **integer**, and the
- * agent reads it back with atoiOr(a.Color, 0) — so the value here is normally a
- * numeric string like "-65536", not "#ff0000". Only accepting hex silently
- * dropped every colour.
- *
- * Java's getRGB() packs alpha into the high byte and is usually negative, so
- * the value is coerced to unsigned and masked to the low 24 bits. Output is
- * always a literal #rrggbb: this is interpolated into a style attribute, so
- * nothing from the config is ever passed through verbatim.
- */
-function normaliseAliasColor(raw: string): string | null {
-  const v = raw.trim();
-  if (/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(v)) return v;
-  // 0x-prefixed or plain (possibly negative) integer.
-  const n = /^-?\d+$/.test(v) ? Number(v) : /^0x[0-9a-f]+$/i.test(v) ? Number(v) : NaN;
-  if (!Number.isFinite(n)) return null;
-  const rgb = (n >>> 0) & 0xffffff;
-  // 0 is SDR-Trunk's "unset" default (atoiOr falls back to 0), not black.
-  if (rgb === 0) return null;
-  return '#' + rgb.toString(16).padStart(6, '0');
-}
-
-async function talkgroupColors(): Promise<Map<number, string>> {
-  return (await talkgroupCatalog()).colors;
-}
-
-async function talkgroupCatalog(): Promise<{
-  labels: Map<number, string>;
-  agencies: Map<number, string>;
-  colors: Map<number, string>;
-}> {
-  if (_tgLabelCache && Date.now() - _tgLabelCache.at < 60_000) return _tgLabelCache.map;
-  const labels = new Map<number, string>();
-  const agencies = new Map<number, string>();
-  const colors = new Map<number, string>();
-  try {
-    const cfg = await getGlobalConfig();
-    for (const a of cfg.sdrtrunkConfig?.aliases ?? []) {
-      const name = (a.name ?? '').trim();
-      if (!name) continue;
-      const group = (a.group ?? '').trim();
-      const color = (a.color ?? '').trim();
-      for (const id of a.ids ?? []) {
-        if (id.type === 'talkgroup') {
-          const v = Number(id.attrs?.['value']);
-          if (!Number.isInteger(v)) continue;
-          if (!labels.has(v)) labels.set(v, name);
-          if (group && !agencies.has(v)) agencies.set(v, group);
-          if (color && !colors.has(v)) {
-            const hex = normaliseAliasColor(color);
-            if (hex) colors.set(v, hex);
-          }
-        }
-      }
-    }
-  } catch (e) {
-    log.warn({ err: e }, 'talkgroupCatalog: failed to load global config');
-  }
-  const map = { labels, agencies, colors };
-  _tgLabelCache = { at: Date.now(), map };
-  return map;
-}
 
 /**
  * Site (system, rfss, site) → friendly name (channel_name from the latest
@@ -1110,6 +1018,7 @@ nodeDataRouter.get(
       const tgColorMap = await talkgroupColors();
       const agencies = await talkgroupAgencies();
       const colors = await talkgroupColors();
+      const evAgencies = await talkgroupAgencies();
       const siteMap = radioIds.length > 0 ? await siteNames(pool) : null;
       const capAliases = pagerIds.length > 0 ? capcodeAliases() : null;
 
@@ -1126,6 +1035,10 @@ nodeDataRouter.get(
               talkgroup: d.talkgroup,
               talkgroupLabel: d.talkgroup_label ?? (d.talkgroup !== null ? labels.get(d.talkgroup) ?? null : null),
               talkgroupColor: d.talkgroup !== null ? tgColorMap.get(d.talkgroup) ?? null : null,
+              // Owning agency, from the talkgroup's SDR-Trunk alias group —
+              // the events table shows it in its own column, same as every
+              // other list that renders a talkgroup.
+              agency: d.talkgroup !== null ? evAgencies.get(d.talkgroup) ?? null : null,
               systemLabel: d.system_label,
               sourceUnit: d.source_unit,
               sourceAlias: d.source_alias,
@@ -1195,6 +1108,28 @@ function qpIntOpt(url: URL, name: string): { value: number | null; error?: strin
   return { value: Number.parseInt(raw, 10) };
 }
 
+/**
+ * Optional site scope, as the two separate `rfss` + `site` params the site
+ * drill-down already holds in its state (NOT the "rfss-site" string /events
+ * takes — that shape exists because the events filter is a free-text box).
+ * Both or neither: a lone rfss would silently widen the scope to every site
+ * in that RFSS, which reads as a bug from the UI.
+ */
+function qpSiteScope(url: URL): {
+  rfss: number | null;
+  site: number | null;
+  error?: string;
+} {
+  const r = qpIntOpt(url, 'rfss');
+  if (r.error) return { rfss: null, site: null, error: r.error };
+  const s = qpIntOpt(url, 'site');
+  if (s.error) return { rfss: null, site: null, error: s.error };
+  if ((r.value === null) !== (s.value === null)) {
+    return { rfss: null, site: null, error: 'rfss and site must be given together' };
+  }
+  return { rfss: r.value, site: s.value };
+}
+
 interface ScopedDetail {
   totals: {
     calls: number;
@@ -1207,6 +1142,11 @@ interface ScopedDetail {
   topTalkgroups: Array<{
     talkgroup: number;
     label: string | null;
+    /** Owning agency + alias colour, same source as the paged /talkgroups list.
+     *  The drill-down cards render these as their own column / pill, so they
+     *  have to travel with every scoped list, not just the paged one. */
+    agency: string | null;
+    color: string | null;
     calls: number;
     logicalCalls: number;
     encryptedCalls: number;
@@ -1227,7 +1167,8 @@ async function scopedRadioDetail(
   where: (prefix: string) => string,
   params: unknown[],
 ): Promise<ScopedDetail> {
-  const _scopedTgLabels = await talkgroupLabels();
+  const _scopedTg = await talkgroupCatalog();
+  const _scopedTgLabels = _scopedTg.labels;
   const [totQ, tgQ, unQ, srQ] = await Promise.all([
     pool.query<{
       calls: unknown;
@@ -1301,6 +1242,8 @@ async function scopedRadioDetail(
     topTalkgroups: tgQ.rows.map((r) => ({
       talkgroup: r.talkgroup,
       label: _scopedTgLabels.get(r.talkgroup) ?? null,
+      agency: _scopedTg.agencies.get(r.talkgroup) ?? null,
+      color: _scopedTg.colors.get(r.talkgroup) ?? null,
       calls: num(r.calls),
       logicalCalls: num(r.logical),
       encryptedCalls: num(r.enc),
@@ -1950,6 +1893,12 @@ nodeDataRouter.get(
       const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit') ?? 50) || 50));
       const offset = Math.max(0, Number(url.searchParams.get('offset') ?? 0) || 0);
       const nodeId = qpNode(url);
+      const scope = qpSiteScope(url);
+      if (scope.error) return c.json({ error: scope.error }, 400);
+      // enc=hide drops always-encrypted talkgroups (every call encrypted).
+      // Server-side rather than a client filter because the list is paged: a
+      // client filter would punch holes in pages and break the total.
+      const encHide = url.searchParams.get('enc') === 'hide';
 
       const params: unknown[] = [WINDOW_INTERVAL[window]];
       // CALL_GROUP restricts to talkgroup voice calls; TG_VALID additionally
@@ -1958,6 +1907,12 @@ nodeDataRouter.get(
       if (system !== null) {
         params.push(system);
         conds.push(`system = $${params.length}`);
+      }
+      if (scope.rfss !== null) {
+        params.push(scope.rfss);
+        conds.push(`site_rfss = $${params.length}`);
+        params.push(scope.site);
+        conds.push(`site_id = $${params.length}`);
       }
       if (nodeId !== null) {
         params.push(nodeId);
@@ -1969,6 +1924,9 @@ nodeDataRouter.get(
       }
       const where = conds.join(' AND ');
       const orderCol = sort === 'lastSeen' ? 'last_seen' : 'calls';
+      // "Always encrypted" = no clear call at all. A talkgroup that carries
+      // BOTH stays listed — hiding it would lose its clear traffic too.
+      const having = encHide ? 'HAVING COUNT(*) FILTER (WHERE encrypted) < COUNT(*)' : '';
 
       const pageParams = [...params];
       pageParams.push(limit);
@@ -1978,8 +1936,15 @@ nodeDataRouter.get(
 
       const [countQ, pageQ] = await Promise.all([
         pool.query<{ n: unknown }>(
-          `SELECT COUNT(DISTINCT (wacn, system, talkgroup))::int AS n
-             FROM node_radio_events WHERE ${where}`,
+          // With enc=hide the predicate is per-GROUP, so the count has to
+          // group first and count the surviving groups.
+          encHide
+            ? `SELECT COUNT(*)::int AS n FROM (
+                 SELECT 1 FROM node_radio_events WHERE ${where}
+                  GROUP BY wacn, system, talkgroup ${having}
+               ) g`
+            : `SELECT COUNT(DISTINCT (wacn, system, talkgroup))::int AS n
+                 FROM node_radio_events WHERE ${where}`,
           params,
         ),
         pool.query<{
@@ -1998,7 +1963,7 @@ nodeDataRouter.get(
                   MAX(received_at) AS last_seen
              FROM node_radio_events
             WHERE ${where}
-            GROUP BY wacn, system, talkgroup
+            GROUP BY wacn, system, talkgroup ${having}
             ORDER BY ${orderCol} DESC, talkgroup ASC
             LIMIT $${limIdx} OFFSET $${offIdx}`,
           pageParams,
@@ -2017,8 +1982,21 @@ nodeDataRouter.get(
           topNode: { id: string; name: string | null; calls: number } | null;
         }
       >();
-      // Node scope for the per-key laterals below ($5 when set).
-      const nodeLat = nodeId !== null ? ` AND e.node_id = $5` : '';
+      // Scope for the per-key laterals below. They run on their OWN param
+      // array ($1 interval, $2-$4 the page's keys), so optional filters append
+      // from $5 — independent of the main query's numbering.
+      const latParams: unknown[] = [];
+      const latAdd = (v: unknown): string => {
+        latParams.push(v);
+        return `$${latParams.length + 4}`;
+      };
+      let nodeLat = '';
+      if (nodeId !== null) nodeLat += ` AND e.node_id = ${latAdd(nodeId)}`;
+      // Site scope matters here too: without it a site-level list would report
+      // each talkgroup's FLEET-wide top site/node, contradicting the page.
+      if (scope.rfss !== null) {
+        nodeLat += ` AND e.site_rfss = ${latAdd(scope.rfss)} AND e.site_id = ${latAdd(scope.site)}`;
+      }
       if (page.length > 0) {
         const enrich = await pool.query<{
           ord: number;
@@ -2080,7 +2058,7 @@ nodeDataRouter.get(
             page.map((r) => r.wacn),
             page.map((r) => r.system),
             page.map((r) => r.talkgroup),
-            ...(nodeId !== null ? [nodeId] : []),
+            ...latParams,
           ],
         );
         for (const r of enrich.rows) {
@@ -2171,6 +2149,8 @@ nodeDataRouter.get(
       const offset = Math.max(0, Number(url.searchParams.get('offset') ?? 0) || 0);
 
       const nodeId = qpNode(url);
+      const scope = qpSiteScope(url);
+      if (scope.error) return c.json({ error: scope.error }, 400);
       const params: unknown[] = [WINDOW_INTERVAL[window]];
       // CALL_GROUP: a radio here = a unit that made talkgroup voice calls
       // (source_unit of CALL_GROUP% events), not one merely seen in signaling.
@@ -2178,6 +2158,12 @@ nodeDataRouter.get(
       if (system !== null) {
         params.push(system);
         conds.push(`system = $${params.length}`);
+      }
+      if (scope.rfss !== null) {
+        params.push(scope.rfss);
+        conds.push(`site_rfss = $${params.length}`);
+        params.push(scope.site);
+        conds.push(`site_id = $${params.length}`);
       }
       if (nodeId !== null) {
         params.push(nodeId);
@@ -2237,8 +2223,18 @@ nodeDataRouter.get(
           topTalkgroups: Array<{ talkgroup: number; calls: number }>;
         }
       >();
-      // Node scope for the per-key laterals below ($5 when set).
-      const nodeLat = nodeId !== null ? ` AND e.node_id = $5` : '';
+      // Scope for the per-key laterals below. Own param array ($1 interval,
+      // $2-$4 the page's keys), so optional filters append from $5.
+      const latParams: unknown[] = [];
+      const latAdd = (v: unknown): string => {
+        latParams.push(v);
+        return `$${latParams.length + 4}`;
+      };
+      let nodeLat = '';
+      if (nodeId !== null) nodeLat += ` AND e.node_id = ${latAdd(nodeId)}`;
+      if (scope.rfss !== null) {
+        nodeLat += ` AND e.site_rfss = ${latAdd(scope.rfss)} AND e.site_id = ${latAdd(scope.site)}`;
+      }
       if (page.length > 0) {
         const enrich = await pool.query<{
           ord: number;
@@ -2321,7 +2317,7 @@ nodeDataRouter.get(
             page.map((r) => r.wacn),
             page.map((r) => r.system),
             page.map((r) => r.radio),
-            ...(nodeId !== null ? [nodeId] : []),
+            ...latParams,
           ],
         );
         for (const r of enrich.rows) {
@@ -2944,37 +2940,21 @@ nodeDataRouter.get(
 // "All" with "Active only" on, but across every online node rather than one
 // SDR-Trunk instance.
 //
-// Reads the WS hub's in-memory status (what each agent last reported, ~every
-// few seconds) rather than Postgres. node_radio_events is a HISTORY of calls
-// that have already ended and carries no control-channel state at all, so it
-// physically cannot answer "what is decoding right now" — and it lags by the
-// agent's ship interval. Nothing is stored for this endpoint; an offline node
-// simply isn't in the hub and so doesn't appear.
+// This is the SNAPSHOT form. The Live tab normally streams the same rows over
+// the staff WebSocket (subscribeLive), which pushes the instant an agent
+// reports instead of waiting for the next poll; this endpoint backs the first
+// paint and the fallback when that socket is unavailable. Both shape rows with
+// shapeNodeLive() so the two paths are byte-for-byte the same.
+//
+// Reads the WS hub's in-memory status rather than Postgres: node_radio_events
+// is a HISTORY of calls that have already ended and carries no control-channel
+// state at all. Nothing is stored for this endpoint; an offline node simply
+// isn't in the hub and so doesn't appear.
 // ---------------------------------------------------------------------------
-/** States that mean "traffic in progress" — mirrors the panel's own set. */
-const LIVE_CALL_STATES = new Set(['CALL', 'ACTIVE', 'ENCRYPTED']);
-
 nodeDataRouter.get('/api/node-data/live', requireRole(canViewNodeData), async (c) => {
   try {
-    const pool = await getPool();
-    if (!pool) return c.json({ error: 'database unavailable' }, 503);
     const url = new URL(c.req.url);
     const only = qpNode(url);
-    const tgLabels = await talkgroupLabels();
-    const tgAgencies = await talkgroupAgencies();
-    const tgColors = await talkgroupColors();
-
-    // Friendly node names — the hub only knows ids, and a raw uuid per row is
-    // unreadable. One small query, not per node.
-    const nameRows = await pool.query<{ id: string; name: string | null; kind: string | null }>(
-      'SELECT id, name, kind FROM nodes',
-    );
-    const nodeNames = new Map(nameRows.rows.map((r) => [r.id, r.name]));
-    // Live is a RADIO view — channels, control state, decode. Pager nodes have
-    // none of that and contributed nothing but an inflated "N nodes online".
-    const radioNodes = new Set(
-      nameRows.rows.filter((r) => (r.kind ?? 'radio') === 'radio').map((r) => r.id),
-    );
 
     const nodes: Array<Record<string, unknown>> = [];
     const channels: Array<Record<string, unknown>> = [];
@@ -2982,89 +2962,19 @@ nodeDataRouter.get('/api/node-data/live', requireRole(canViewNodeData), async (c
 
     for (const a of hub.agentList()) {
       if (only !== null && a.nodeId !== only) continue;
-      if (!radioNodes.has(a.nodeId)) continue;
       const live = hub.liveStatus(a.nodeId);
-      const st = (live.status ?? null) as Record<string, unknown> | null;
-      if (!st) continue;
+      const slice = await shapeNodeLive(a.nodeId, live.status, live.lastStatusAt);
+      if (!slice) continue; // pager node, or nothing reported yet
       nodes.push({
-        node: a.nodeId,
-        nodeName: nodeNames.get(a.nodeId) ?? null,
-        lastStatusAt: live.lastStatusAt !== null ? new Date(live.lastStatusAt).toISOString() : null,
+        node: slice.node,
+        nodeName: slice.nodeName,
+        lastStatusAt: slice.lastStatusAt,
       });
-
-      const asRows = (v: unknown): Array<Record<string, unknown>> =>
-        Array.isArray(v) ? (v as Array<Record<string, unknown>>) : [];
-
-      for (const ch of asRows(st['channels'])) {
-        const tg = Number(ch['to']);
-        channels.push({
-          node: a.nodeId,
-          nodeName: nodeNames.get(a.nodeId) ?? null,
-          name: ch['name'] ?? null,
-          system: ch['system'] ?? null,
-          site: ch['site'] ?? null,
-          state: ch['state'] ?? null,
-          control: ch['control'] === true,
-          processing: ch['processing'] === true,
-          frequency: ch['frequency'] ?? null,
-          // vce reports these per channel; they are the decode-health pair the
-          // Live view leads with.
-          syncPercent: ch['syncPercent'] ?? null,
-          signalDbfs: ch['signalDbfs'] ?? null,
-          timeslot: ch['timeslot'] ?? null,
-          talkgroup: Number.isInteger(tg) ? tg : null,
-          talkgroupLabel: Number.isInteger(tg) ? tgLabels.get(tg) ?? null : null,
-          agency: Number.isInteger(tg) ? tgAgencies.get(tg) ?? null : null,
-        });
-      }
-
-      for (const ac of asRows(st['activeCalls'])) {
-        // vce reports every processing channel here, including the control
-        // channels, which arrive with no talkgroup and showed up as a wall of
-        // duplicate "TG 0" rows mirroring the channel table above. Only states
-        // that represent traffic count as a call.
-        const state = String(ac['state'] ?? '').toUpperCase();
-        if (!LIVE_CALL_STATES.has(state)) continue;
-        // vce reports a granted traffic channel as active BETWEEN calls, with
-        // no target and no source. Those are not calls — they showed as "TG 0"
-        // rows at 0% decode. Require some call identity, matching the Nodes
-        // tab's Now Playing guard.
-        if (ac['to'] == null && ac['from'] == null && !ac['toAlias'] && !ac['fromAlias']) continue;
-        const tg = Number(ac['to']);
-        calls.push({
-          node: a.nodeId,
-          nodeName: nodeNames.get(a.nodeId) ?? null,
-          name: ac['name'] ?? null,
-          system: ac['system'] ?? null,
-          // Traffic channels often carry no site of their own; fall back to
-          // the channel name, which is the site's name in this deployment.
-          site: ac['site'] ?? ac['name'] ?? null,
-          state: ac['state'] ?? null,
-          frequency: ac['frequency'] ?? null,
-          timeslot: ac['timeslot'] ?? null,
-          from: ac['from'] ?? null,
-          fromAlias: ac['fromAlias'] ?? null,
-          talkerAlias: ac['talkerAlias'] ?? null,
-          to: ac['to'] ?? null,
-          toAlias: ac['toAlias'] ?? null,
-          talkgroup: Number.isInteger(tg) ? tg : null,
-          talkgroupLabel: Number.isInteger(tg) ? tgLabels.get(tg) ?? null : null,
-          agency: Number.isInteger(tg) ? tgAgencies.get(tg) ?? null : null,
-          color: Number.isInteger(tg) ? tgColors.get(tg) ?? null : null,
-          syncPercent: ac['syncPercent'] ?? null,
-          signalDbfs: ac['signalDbfs'] ?? null,
-        });
-      }
+      channels.push(...slice.channels);
+      calls.push(...slice.calls);
     }
 
-    // Control channels first, then by weakest decode: a site struggling is what
-    // an operator watching this page needs to see, not the healthy majority.
-    channels.sort((x, y) => {
-      const c = Number(y['control'] === true) - Number(x['control'] === true);
-      if (c !== 0) return c;
-      return Number(x['syncPercent'] ?? 0) - Number(y['syncPercent'] ?? 0);
-    });
-
+    sortLiveChannels(channels);
     return c.json({ nodes, channels, calls });
   } catch (err) {
     log.error({ err }, '/api/node-data/live error');

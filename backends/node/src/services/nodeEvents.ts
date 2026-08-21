@@ -38,10 +38,18 @@ import { log } from '../lib/log.js';
 const GROUP_WINDOW_SECONDS = 4;
 
 /** markRecorded's match window between an rdio call upload's dateTime and
- *  the activity event's atMs. Wider than the grouping window: the rdio
- *  call timestamp is stamped by a different pipeline (recorder finalise)
- *  than the vce event stream. */
-const RECORDED_WINDOW_SECONDS = 6;
+ *  the activity event's received_at. Deliberately TIGHT: the upload's
+ *  dateTime is the call's START, not some later finalise time — vce sends
+ *  `(int)(audioRecording.getStartTime() / 1E3)` (RdioScannerBroadcaster),
+ *  the same clock and the same instant the activity event is stamped from.
+ *  The only slack needed is that whole-second truncation (≤1s) plus the gap
+ *  between the recorder's first audio segment and the call-grant event.
+ *
+ *  Keeping it tight is the point: back-to-back calls on one talkgroup are
+ *  seconds apart, and a wide window let one upload claim a NEIGHBOUR's event
+ *  row (nearest-match, recorded=false), so only the first of a burst ever
+ *  showed the recorded icon. */
+const RECORDED_WINDOW_SECONDS = 2;
 
 /** A node with a wildly wrong clock must not scatter rows across the
  *  timeline (they'd never prune / group). Anything outside now±48h is
@@ -269,8 +277,9 @@ export async function recordActivityEvents(
 }
 
 /**
- * Mark the closest activity-event row for (node, talkgroup) within ±6s of
- * the rdio call upload's timestamp as recorded (audio exists in central
+ * Mark the closest activity-event row for (node, talkgroup) within
+ * ±RECORDED_WINDOW_SECONDS of the rdio call upload's start timestamp as
+ * recorded (audio exists in central
  * rdio) and stamp its audio size. Only rows with recorded=false are
  * eligible, so N uploads consume N distinct event rows. No-op (silently)
  * when nothing matches — e.g. the agent hasn't shipped that event yet or

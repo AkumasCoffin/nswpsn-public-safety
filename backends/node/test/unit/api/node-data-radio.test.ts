@@ -112,6 +112,64 @@ describe('GET /api/node-data/talkgroups', () => {
     expect(grouped?.sql).toContain('node_id = $');
     expect(grouped?.params).toContain('n1');
   });
+
+  // The site drill-down reuses this endpoint one rung down, so a site scope has
+  // to narrow BOTH the rollup and the per-key laterals — an unscoped lateral
+  // would report each talkgroup's fleet-wide top site/node on a page that says
+  // it is showing one site.
+  it('scopes the rollup AND the laterals to ?rfss=&site=', async () => {
+    const calls: Call[] = [];
+    queryMock.mockImplementation((sql: string, params: unknown[] = []) => {
+      calls.push({ sql, params });
+      if (sql.includes('AS n')) return { rows: [{ n: 1 }] };
+      if (sql.includes('GROUP BY wacn, system, talkgroup')) {
+        return { rows: [{ wacn: 1, system: 721, talkgroup: 10101, calls: 5, logical: 3, enc: 0, last_seen: LAST_SEEN }] };
+      }
+      return { rows: [] };
+    });
+    const app = await setupApp();
+    const res = await app.request('/api/node-data/talkgroups?window=7d&system=721&rfss=4&site=85');
+    expect(res.status).toBe(200);
+    const grouped = calls.find((c) => c.sql.includes('GROUP BY wacn, system, talkgroup'));
+    expect(grouped?.sql).toContain('site_rfss = $');
+    expect(grouped?.sql).toContain('site_id = $');
+    expect(grouped?.params).toEqual(expect.arrayContaining([4, 85]));
+    const lateral = calls.find((c) => c.sql.includes('WITH ORDINALITY'));
+    expect(lateral).toBeDefined();
+    expect(lateral?.sql).toContain('e.site_rfss = $5');
+    expect(lateral?.sql).toContain('e.site_id = $6');
+    expect(lateral?.params).toEqual(expect.arrayContaining([4, 85]));
+  });
+
+  it('rejects rfss without site (a lone rfss would silently widen the scope)', async () => {
+    const app = await setupApp();
+    expect((await app.request('/api/node-data/talkgroups?rfss=4')).status).toBe(400);
+    expect((await app.request('/api/node-data/talkgroups?site=85')).status).toBe(400);
+  });
+
+  // enc=hide drops ALWAYS-encrypted talkgroups. A mixed talkgroup stays, so the
+  // predicate has to be "< COUNT(*)", not "= 0".
+  it('enc=hide adds the HAVING filter to both the page and the count', async () => {
+    const calls = captureCalls();
+    const app = await setupApp();
+    const res = await app.request('/api/node-data/talkgroups?window=7d&enc=hide');
+    expect(res.status).toBe(200);
+    const having = 'HAVING COUNT(*) FILTER (WHERE encrypted) < COUNT(*)';
+    const grouped = calls.find((c) => c.sql.includes('GROUP BY wacn, system, talkgroup') && !c.sql.includes('AS n'));
+    expect(grouped?.sql).toContain(having);
+    // The count can no longer be a plain COUNT(DISTINCT ...): the predicate is
+    // per-group, so it must group first and count the survivors.
+    const count = calls.find((c) => c.sql.includes('AS n'));
+    expect(count?.sql).toContain(having);
+    expect(count?.sql).not.toContain('COUNT(DISTINCT (wacn, system, talkgroup))');
+  });
+
+  it('omits the HAVING filter without enc=hide', async () => {
+    const calls = captureCalls();
+    const app = await setupApp();
+    await app.request('/api/node-data/talkgroups?window=7d');
+    expect(calls.every((c) => !c.sql.includes('HAVING'))).toBe(true);
+  });
 });
 
 // A real P25 talkgroup is 16-bit (1..65535); the ingest drops 7-digit RADIO

@@ -276,6 +276,23 @@ describe('markRecorded', () => {
     expect(clientQuery.mock.calls.some((a) => a[0] === 'COMMIT')).toBe(true);
   });
 
+  it('matches on a tight window — an upload cannot claim a neighbouring call', async () => {
+    // The rdio upload's dateTime is the call START (vce sends
+    // getStartTime()/1E3), so the only slack needed is that truncation. A wide
+    // window let back-to-back calls on one talkgroup steal each other's rows,
+    // which is why only the first of a burst showed the recorded icon.
+    armQueries({ updatedRow: { received_at: at.toISOString(), system: 0x4a2, talkgroup: 12345 } });
+    await markRecorded('node-aaaa', 12345, at, 1);
+
+    const sql = clientQuery.mock.calls
+      .map((a) => String(a[0]))
+      .find((s) => s.includes('UPDATE node_radio_events SET recorded = true'));
+    expect(sql).toBeDefined();
+    const windows = [...String(sql).matchAll(/interval '(\d+) seconds'/g)].map((m) => Number(m[1]));
+    expect(windows.length).toBe(2); // lower + upper bound
+    for (const w of windows) expect(w).toBeLessThanOrEqual(2);
+  });
+
   it('is a clean no-op when no row matches', async () => {
     armQueries({ updatedRow: null });
     await markRecorded('node-aaaa', 12345, at, 90_000);

@@ -2058,6 +2058,11 @@
     .nd2-badge-rec { background: rgba(148, 163, 184, 0.12); color: #94a3b8; }
     .nd2-detail-gap { margin-bottom: 1.75rem; }
 
+    /* Live view: two stacked cards (channels, then active calls). .nd2-card
+       carries no margin of its own, so without this they sit flush and read as
+       one long table. Separates the pair rather than trailing the second. */
+    #nd2-view-live .nd2-card + .nd2-card { margin-top: 1.5rem; }
+
     /* Per-node scope selector (sits at the right of the window pill row). */
     .nd2-node-ctl {
       display: inline-flex;
@@ -2074,6 +2079,10 @@
       font-size: 0.8rem;
       padding: 0.4rem 0.55rem;
     }
+    /* Hide-encrypted switch sits beside the node selector; only the FIRST
+       control in the row takes the margin-left:auto that pushes the pair right. */
+    .nd2-enc-ctl { margin-left: 0.9rem; cursor: pointer; user-select: none; }
+    .nd2-enc-ctl input { accent-color: var(--accent, #60a5fa); cursor: pointer; }
 
     /* Systems folder tree (system = folder, site = nested file row). */
     .nd2-tree {
@@ -2527,6 +2536,13 @@
               <option value="">All nodes</option>
             </select>
           </label>
+          <!-- One switch for the whole tab (Radio mode only): encrypted calls
+               everywhere, and talkgroups that are ONLY ever encrypted. -->
+          <label class="nd2-node-ctl nd2-enc-ctl" id="nd2-enc-ctl"
+                 title="Hide encrypted calls, and talkgroups that only ever carry encrypted traffic">
+            <input type="checkbox" id="nd2-hide-enc" onchange="nd2SetHideEnc(this.checked)">
+            <i class="fas fa-lock"></i> Hide encrypted
+          </label>
         </div>
 
         <div class="nd2-controls nd2-viewbar" id="nd2-viewbar-radio">
@@ -2705,7 +2721,14 @@
               </div>
             </div>
 
-            <!-- Talkgroups tab (scoped to this system) -->
+            <!-- Mount point for the shared paged panels below. The Talkgroups
+                 and Radios tables are IDENTICAL at system and site level (only
+                 the scope params differ), so one copy is reparented here or
+                 into #nd2-site-panels rather than duplicated — which also
+                 keeps one set of element ids for the loaders and pagers. -->
+            <div id="nd2-sys-panels"></div>
+
+            <!-- Talkgroups tab (scoped to the open system, or one of its sites) -->
             <div id="nd2-systab-talkgroups" style="display: none;">
               <div class="filter-bar">
                 <div class="search-box" style="min-width: 150px;">
@@ -2749,7 +2772,7 @@
               </div>
             </div>
 
-            <!-- Radios tab (scoped to this system) -->
+            <!-- Radios tab (scoped to the open system, or one of its sites) -->
             <div id="nd2-systab-radios" style="display: none;">
               <div class="filter-bar">
                 <div class="search-box" style="min-width: 150px;">
@@ -2799,6 +2822,22 @@
               <h3 class="nd2-detail-title" id="nd2-site-title">Site</h3>
             </div>
             <div class="nd2-empty" id="nd2-site-msg" style="display: none;"></div>
+
+            <!-- Site-detail sub-tabs. Same three views as the system level, one
+                 rung further down: Talkgroups / Radios here are scoped to THIS
+                 site (?system=&rfss=&site=), answering "who uses this site"
+                 rather than "who uses this system". -->
+            <div class="nd2-controls nd2-systab-bar">
+              <div class="nd2-seg" role="group" aria-label="Site detail view">
+                <button class="filter-btn active" data-nd2-sitetab="overview" onclick="nd2SiteSetTab('overview')">Overview</button>
+                <button class="filter-btn" data-nd2-sitetab="talkgroups" onclick="nd2SiteSetTab('talkgroups')">Talkgroups</button>
+                <button class="filter-btn" data-nd2-sitetab="radios" onclick="nd2SiteSetTab('radios')">Radios</button>
+              </div>
+            </div>
+            <!-- Shared paged panels are reparented here for the site level. -->
+            <div id="nd2-site-panels"></div>
+
+            <div id="nd2-sitetab-overview">
             <div class="stats-bar" id="nd2-site-tiles"></div>
             <!-- Deep P25 site metadata (control channel, channel plan, neighbours,
                  frequency bands, decode quality) — filled by nd2RenderSiteMeta from
@@ -2828,6 +2867,7 @@
                 <div id="nd2-site-nodes"><div class="nd2-empty">—</div></div>
               </div>
             </div>
+            </div><!-- /nd2-sitetab-overview -->
           </div>
         </div>
 
@@ -2856,6 +2896,7 @@
                 <th>Time</th>
                 <th>System</th>
                 <th id="nd2-ev-tg-th">Talkgroup</th>
+                <th>Agency</th>
                 <th>Unit / Message</th>
                 <th>Sites</th>
                 <th>Nodes</th>
@@ -3775,8 +3816,9 @@
       evTotal: 0,
       loadedOnce: false,
       // Systems view navigation: list → one system → one site of that system.
-      // Within a system, `tab` selects the sub-view (sites | talkgroups | radios).
-      sys: { level: 'list', tab: 'sites', system: null, wacn: null, rfss: null, site: null, siteName: null },
+      // Within a system, `tab` selects the sub-view (sites | talkgroups |
+      // radios); `siteTab` is the same choice within one SITE.
+      sys: { level: 'list', tab: 'sites', siteTab: 'overview', system: null, wacn: null, rfss: null, site: null, siteName: null },
       sysExpanded: {},     // system id → bool: which folder rows are open (persisted)
       // Talkgroups / Radios sub-tabs (scoped to the open system): search + paging.
       tg: { q: '', sort: 'calls', offset: 0, limit: 50, total: 0 },
@@ -3789,6 +3831,42 @@
       msg: { capcode: null, alias: null, agency: null, offset: 0, limit: 50, total: 0 },
       reqSeq: 0,           // stale-fetch guard across view switches
     };
+    // --- Hide encrypted -----------------------------------------------------
+    // One switch for the whole Data tab, persisted. Default ON, matching the
+    // Nodes drawer (which has hidden encrypted traffic by default all along) —
+    // encrypted calls have no listenable audio and no unit detail, so they are
+    // noise in every list unless you are specifically looking for them.
+    const ND2_HIDE_ENC_KEY = 'nd2:hideEnc';
+    let _nd2HideEnc = (() => {
+      try { return localStorage.getItem(ND2_HIDE_ENC_KEY) !== '0'; } catch (e) { return true; }
+    })();
+    function nd2HideEnc() { return _nd2HideEnc; }
+    function nd2SetHideEnc(on) {
+      _nd2HideEnc = !!on;
+      try { localStorage.setItem(ND2_HIDE_ENC_KEY, _nd2HideEnc ? '1' : '0'); } catch (e) { /* private mode */ }
+      // Live re-renders from cached slices (no refetch needed); the paged and
+      // server-filtered lists have to go back for a correct page + total.
+      nd2RenderLive();
+      nd2.evOffset = 0;
+      nd2.tg.offset = 0;
+      nd2Refresh();
+    }
+    /** A live call row is encrypted per the server's explicit flag, falling
+     *  back to the vce state string for older payloads. */
+    function nd2IsEncCall(c) {
+      if (c && typeof c.encrypted === 'boolean') return c.encrypted;
+      return String((c && c.state) || '').toUpperCase() === 'ENCRYPTED';
+    }
+    /** Drop ALWAYS-encrypted talkgroups from a top-talkgroups list. A talkgroup
+     *  carrying both clear and encrypted traffic stays: hiding it would lose
+     *  its clear calls too. Mirrors the server's enc=hide rule on /talkgroups
+     *  so the cards and the paged table agree. */
+    function nd2FilterEncTgs(list) {
+      const l = list || [];
+      if (!nd2HideEnc()) return l;
+      return l.filter(t => !(Number(t.encryptedCalls) > 0 && Number(t.encryptedCalls) >= Number(t.calls)));
+    }
+
     let _nd2Timer = null;
     const _nd2IntervalMs = 30_000;
     let _nd2Chart = null;        // live Chart.js instance (destroyed on re-render)
@@ -3805,6 +3883,11 @@
     const _nd2AllViews = [...ND2_RADIO_VIEWS, ...ND2_PAGER_VIEWS];
 
     function nd2StartPolling() {
+      // Reflect the persisted hide-encrypted choice on the control itself —
+      // the checkbox defaults to unchecked in markup, and the state is read
+      // from localStorage, so without this the two disagree on first paint.
+      const encBox = document.getElementById('nd2-hide-enc');
+      if (encBox) encBox.checked = nd2HideEnc();
       nd2LoadNodeList();
       nd2Refresh();
       if (_nd2Timer) return;
@@ -3815,10 +3898,14 @@
           case 'overview': nd2LoadOverview(); break;
           case 'systems':
             if (nd2.sys.level === 'list') nd2LoadSystems();
-            else if (nd2.sys.level === 'system') {
-              // Refresh only the active sub-tab; guard paged tabs to page 0.
-              if (nd2.sys.tab === 'talkgroups') { if (nd2.tg.offset === 0) nd2LoadTalkgroups(); }
-              else if (nd2.sys.tab === 'radios') { if (nd2.rad.offset === 0) nd2LoadRadios(); }
+            else {
+              // Refresh only the active sub-tab; guard paged tabs to page 0 so
+              // an auto-refresh can't yank the user back off page 3. Same
+              // handling at both levels — the tabs exist on each.
+              const tab = nd2ActiveTab();
+              if (tab === 'talkgroups') { if (nd2.tg.offset === 0) nd2LoadTalkgroups(); }
+              else if (tab === 'radios') { if (nd2.rad.offset === 0) nd2LoadRadios(); }
+              else if (nd2.sys.level === 'site') nd2LoadSite();
               else nd2LoadSystem();
             }
             break;
@@ -3834,9 +3921,12 @@
         clearInterval(_nd2Timer);
         _nd2Timer = null;
       }
-      // Leaving the Data tab must also stop the Live view's own faster timer,
-      // or it keeps polling every 5s from a tab nobody is looking at.
+      // Leaving the Data tab must also stop the Live view's own faster timer
+      // AND its push socket, or both keep running for a tab nobody is
+      // looking at (the socket being the more expensive of the two — the
+      // server shapes and sends a frame per node per agent report).
       nd2StopLiveTimer();
+      nd2StopLiveWs();
     }
 
     // Load whatever view is currently active (used on tab entry, view switch,
@@ -3914,6 +4004,10 @@
       // fleet-wide); hide it entirely in Pager mode.
       const nodeCtl = document.getElementById('nd2-node-ctl');
       if (nodeCtl) nodeCtl.style.display = mode === 'radio' ? '' : 'none';
+      // Likewise hide-encrypted: pages have no encryption, so the switch would
+      // be a control that does nothing in Pager mode.
+      const encCtl = document.getElementById('nd2-enc-ctl');
+      if (encCtl) encCtl.style.display = mode === 'radio' ? '' : 'none';
       // Reset to the mode's first view; force nd2SetView past its equality guard.
       const first = mode === 'radio' ? 'overview' : 'poverview';
       nd2.view = null;
@@ -3934,9 +4028,10 @@
       nd2ApplyWindowChrome(view);
       // Systems / Capcodes always re-enter at their list level. Reset the
       // system-detail sub-tab so a stale Talkgroups/Radios tab never lingers.
-      if (view === 'systems') { nd2.sys.tab = 'sites'; nd2SysShow('list'); nd2SysCrumbs(); }
+      if (view === 'systems') { nd2.sys.tab = 'sites'; nd2.sys.siteTab = 'overview'; nd2SysShow('list'); nd2SysCrumbs(); }
       if (view === 'capcodes') { nd2CapShow('list'); }
-      if (view === 'live') nd2StartLiveTimer(); else nd2StopLiveTimer();
+      if (view === 'live') { nd2StartLiveTimer(); void nd2StartLiveWs(); }
+      else { nd2StopLiveTimer(); nd2StopLiveWs(); }
       nd2Refresh();
     }
 
@@ -4240,15 +4335,15 @@
 
       const tgEl = document.getElementById('nd2-top-tg');
       if (tgEl && !isPager) {
-        const rows = ((ov && ov.topTalkgroups) || []).slice(0, 10).map(t => [
-          nd2TgPill(t.talkgroup, t.label, t.color) +
-            (t.agency ? ` <span class="nd2-chip nd2-agency">${escapeHtml(String(t.agency))}</span>` : ''),
+        const rows = nd2FilterEncTgs((ov && ov.topTalkgroups) || []).slice(0, 10).map(t => [
+          nd2TgPill(t.talkgroup, t.label, t.color),
+          nd2AgencyCell(t.agency),
           `<span class="nd-sub">${escapeHtml(String(t.system != null ? t.system : '—'))}</span>`,
           nd2Num(t.logicalCalls != null ? t.logicalCalls : t.calls),
           nd2Num(t.calls),
         ]);
         tgEl.innerHTML = table(
-          [{ t: 'Talkgroup' }, { t: 'Sys' }, { t: 'Calls', num: true },
+          [{ t: 'Talkgroup' }, { t: 'Agency' }, { t: 'Sys' }, { t: 'Calls', num: true },
            { t: 'Receptions', num: true, title: 'Distinct node + site receptions of this talkgroup — each call counted once per receiving node and site (de-duped, not raw event rows)' }], rows);
       }
 
@@ -4338,6 +4433,9 @@
         if (unit) params.set('unit', unit);
         if (site) params.set('site', site);
         if (node) params.set('node', node);
+        // Server-side, not a client filter: the list is paged, so filtering
+        // after the fetch would punch holes in pages and break the total.
+        if (nd2HideEnc()) params.set('encrypted', 'false');
 
         const res = await fetch(`${API_BASE_URL}/api/node-data/events?${params}`, {
           headers: { 'Authorization': await authHeader() }
@@ -4373,7 +4471,7 @@
       const body = document.getElementById('nd2-ev-body');
       if (!body) return;
       if (!events.length) {
-        body.innerHTML = '<tr><td colspan="6" class="nd2-empty">No events match.</td></tr>';
+        body.innerHTML = '<tr><td colspan="7" class="nd2-empty">No events match.</td></tr>';
         nd2UpdatePager(0);
         return;
       }
@@ -4401,6 +4499,7 @@
             <td>${timeCell}</td>
             <td><span class="nd-sub">${escapeHtml(freq)}</span></td>
             <td>${capCell}</td>
+            <td>${nd2AgencyCell(ev.agency)}</td>
             <td><span class="nd2-msg" title="${escapeHtml(msg)}">${escapeHtml(msg) || '—'}</span></td>
             <td>—</td>
             <td>${nodeCell || '—'}</td>
@@ -4417,6 +4516,7 @@
           <td>${timeCell}</td>
           <td><span class="nd-sub">${escapeHtml(ev.systemLabel || String(ev.system != null ? ev.system : '—'))}</span></td>
           <td>${tgLabel}${badges}</td>
+          <td>${nd2AgencyCell(ev.agency)}</td>
           <td>${ev.sourceAlias
             ? `<span class="nd-strong">${escapeHtml(String(ev.sourceAlias))}</span> <span class="nd-sub">${escapeHtml(String(ev.sourceUnit != null ? ev.sourceUnit : '—'))}</span>`
             : (ev.sourceUnit != null ? escapeHtml(String(ev.sourceUnit)) : '—')}</td>
@@ -4496,18 +4596,20 @@
         + `<span class="nd2-tgpill-dot" style="background:${c}"></span>${body}</span>`;
     }
 
+    // Just the talkgroup pill. Agency is NOT appended here: it gets its own
+    // column in every table that shows talkgroups (see nd2AgencyCell), so
+    // inlining it too would render the chip twice on the same row.
     function nd2TgCell(o) {
       if (!o) return '—';
-      const tg = o.talkgroup;
-      const tgStr = tg != null ? String(tg) : '—';
-      // Agency comes from the talkgroup's SDR-Trunk alias group. Rendered as a
-      // chip after the id so it reads as ownership rather than part of the
-      // name, and omitted entirely when the alias has no group — an empty chip
-      // would imply "no agency" when it only means the playlist didn't say.
-      const agency = o.agency
-        ? ` <span class="nd2-chip nd2-agency">${escapeHtml(String(o.agency))}</span>`
-        : '';
-      return nd2TgPill(tg, o.label, o.color) + agency;
+      return nd2TgPill(o.talkgroup, o.label, o.color);
+    }
+    // Agency comes from the talkgroup's SDR-Trunk alias group. A talkgroup with
+    // no group renders a dash, not an empty chip: an empty chip would imply
+    // "no agency" when it only means the playlist didn't say.
+    function nd2AgencyCell(agency) {
+      return agency
+        ? `<span class="nd2-chip nd2-agency">${escapeHtml(String(agency))}</span>`
+        : '<span class="nd-sub">—</span>';
     }
     function nd2FillTiles(containerId, tiles) {
       const el = document.getElementById(containerId);
@@ -4585,13 +4687,42 @@
     // The system level splits into three sub-tabs (sites | talkgroups | radios);
     // refresh/window-change reloads whichever tab is active.
     async function nd2LoadSystemsView() {
-      if (nd2.sys.level === 'site') return nd2LoadSite();
+      if (nd2.sys.level === 'site') {
+        if (nd2.sys.siteTab === 'talkgroups') return nd2LoadTalkgroups();
+        if (nd2.sys.siteTab === 'radios') return nd2LoadRadios();
+        return nd2LoadSite();
+      }
       if (nd2.sys.level === 'system') {
         if (nd2.sys.tab === 'talkgroups') return nd2LoadTalkgroups();
         if (nd2.sys.tab === 'radios') return nd2LoadRadios();
         return nd2LoadSystem();
       }
       return nd2LoadSystems();
+    }
+
+    /** Which sub-tab is showing at the CURRENT level (system vs site). */
+    function nd2ActiveTab() {
+      return nd2.sys.level === 'site' ? nd2.sys.siteTab : nd2.sys.tab;
+    }
+
+    // The Talkgroups and Radios panels are one shared copy (see the mount-point
+    // comment in the markup); move them under whichever level is open so both
+    // levels can show them without duplicated markup or duplicated ids.
+    function nd2MountPagedPanels(level) {
+      const dest = document.getElementById(level === 'site' ? 'nd2-site-panels' : 'nd2-sys-panels');
+      if (!dest) return;
+      ['nd2-systab-talkgroups', 'nd2-systab-radios'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el && el.parentElement !== dest) dest.appendChild(el);
+      });
+    }
+
+    /** Show exactly one of the shared panels (or none, for the overview tab). */
+    function nd2ShowPagedPanel(tab) {
+      ['talkgroups', 'radios'].forEach(t => {
+        const el = document.getElementById('nd2-systab-' + t);
+        if (el) el.style.display = t === tab ? '' : 'none';
+      });
     }
 
     // Switch the system-detail sub-tab and load its data (each tab is scoped to
@@ -4602,13 +4733,28 @@
       nd2.sys.tab = tab;
       document.querySelectorAll('[data-nd2-systab]').forEach(b =>
         b.classList.toggle('active', b.dataset.nd2Systab === tab));
-      ['sites', 'talkgroups', 'radios'].forEach(t => {
-        const el = document.getElementById('nd2-systab-' + t);
-        if (el) el.style.display = t === tab ? '' : 'none';
-      });
+      nd2MountPagedPanels('system');
+      const sites = document.getElementById('nd2-systab-sites');
+      if (sites) sites.style.display = tab === 'sites' ? '' : 'none';
+      nd2ShowPagedPanel(tab);
       if (tab === 'talkgroups') { nd2.tg.offset = 0; nd2LoadTalkgroups(); }
       else if (tab === 'radios') { nd2.rad.offset = 0; nd2LoadRadios(); }
       else nd2LoadSystem();
+    }
+
+    /** Same, one level down: the tabs on a single site's drill-down. */
+    function nd2SiteSetTab(tab) {
+      if (tab !== 'overview' && tab !== 'talkgroups' && tab !== 'radios') return;
+      nd2.sys.siteTab = tab;
+      document.querySelectorAll('[data-nd2-sitetab]').forEach(b =>
+        b.classList.toggle('active', b.dataset.nd2Sitetab === tab));
+      nd2MountPagedPanels('site');
+      const ov = document.getElementById('nd2-sitetab-overview');
+      if (ov) ov.style.display = tab === 'overview' ? '' : 'none';
+      nd2ShowPagedPanel(tab);
+      if (tab === 'talkgroups') { nd2.tg.offset = 0; nd2LoadTalkgroups(); }
+      else if (tab === 'radios') { nd2.rad.offset = 0; nd2LoadRadios(); }
+      else nd2LoadSite();
     }
 
     function nd2SysShow(level) {
@@ -4616,6 +4762,9 @@
       document.getElementById('nd2-sys-list').style.display = level === 'list' ? '' : 'none';
       document.getElementById('nd2-sys-detail').style.display = level === 'system' ? '' : 'none';
       document.getElementById('nd2-site-detail').style.display = level === 'site' ? '' : 'none';
+      // Keep the shared panels under whichever detail container is visible;
+      // left behind, they would be hidden with the other level's container.
+      if (level === 'system' || level === 'site') nd2MountPagedPanels(level);
     }
 
     // Site label: friendly name (e.g. "Cambewarra MT") with its id, or just the id.
@@ -4666,8 +4815,15 @@
       }
     }
     function nd2SysGoList() { nd2SysShow('list'); nd2SysCrumbs(); nd2LoadSystems(); }
-    // Back from a site → the system detail, restoring whichever sub-tab was open.
-    function nd2SysGoSystem() { nd2SysShow('system'); nd2SysCrumbs(); nd2LoadSystemsView(); }
+    // Back from a site → the system detail, restoring whichever sub-tab was
+    // open. Paging resets: page 3 of one site's talkgroups is meaningless as
+    // page 3 of the whole system's, and would show an out-of-range slice.
+    function nd2SysGoSystem() {
+      nd2.tg.offset = 0; nd2.rad.offset = 0;
+      nd2SysShow('system');
+      nd2SysSetTab(nd2.sys.tab);
+      nd2SysCrumbs();
+    }
 
     async function nd2LoadSystems() {
       const view = nd2.view;
@@ -4812,8 +4968,9 @@
     }
     function nd2TopTgHtml(list) {
       return nd2MiniTable(
-        [{ label: 'Talkgroup' }, { label: 'Calls', num: true }, { label: 'Last seen' }],
-        (list || []).map(t => [nd2TgCell(t), nd2Num(t.calls), nd2LastSeen(t.lastSeen)]));
+        [{ label: 'Talkgroup' }, { label: 'Agency' }, { label: 'Calls', num: true }, { label: 'Last seen' }],
+        nd2FilterEncTgs(list).map(t =>
+          [nd2TgCell(t), nd2AgencyCell(t.agency), nd2Num(t.calls), nd2LastSeen(t.lastSeen)]));
     }
     function nd2TopRadioHtml(list) {
       return nd2MiniTable(
@@ -4866,9 +5023,15 @@
       nd2.sys.rfss = rfss;
       nd2.sys.site = site;
       nd2.sys.siteName = name ? decodeURIComponent(name) : null;
+      // Entering a new scope resets paging and the search boxes: page 3 (or a
+      // talkgroup filter) carried over from the system level would show an
+      // empty or misleading slice of a much smaller list.
+      nd2.tg.offset = 0; nd2.rad.offset = 0;
+      const tq = document.getElementById('nd2-tg-q'); if (tq) tq.value = '';
+      const rq = document.getElementById('nd2-rad-q'); if (rq) rq.value = '';
       nd2SysShow('site');
       nd2SysCrumbs();
-      nd2LoadSite();
+      nd2SiteSetTab('overview');   // default tab; also loads the site detail
     }
 
     async function nd2LoadSite() {
@@ -5151,12 +5314,23 @@
         limit: String(nd2.tg.limit), offset: String(nd2.tg.offset),
       });
       if (q) params.set('q', q);
-      // Scoped to the open system's drill-down.
+      // Scoped to the open system — and, one level down, to the open SITE.
       if (nd2.sys.system != null) params.set('system', String(nd2.sys.system));
+      const level = nd2.sys.level;
+      if (level === 'site' && nd2.sys.rfss != null && nd2.sys.site != null) {
+        params.set('rfss', String(nd2.sys.rfss));
+        params.set('site', String(nd2.sys.site));
+      }
       if (nd2.node) params.set('node', nd2.node);
+      // Server-side: the list is paged, so an always-encrypted talkgroup has to
+      // be excluded from the query or it would hole the page and the total.
+      if (nd2HideEnc()) params.set('enc', 'hide');
       try {
         const data = await nd2Fetch(`/api/node-data/talkgroups?${params}`);
-        if (nd2.view !== view || nd2.sys.level !== 'system') return;
+        // Both the view AND the level must still match: this table is shared
+        // between the system and site drill-downs, so a response that arrives
+        // after the user navigated between them would render the wrong scope.
+        if (nd2.view !== view || nd2.sys.level !== level) return;
         nd2.tg.total = data.total || 0;
         const body = document.getElementById('nd2-tg-body');
         const rows = data.talkgroups || [];
@@ -5167,7 +5341,7 @@
               <button class="nd2-linkbtn" title="Radios heard on this talkgroup"
                 onclick="event.stopPropagation();nd2ShowRel('talkgroup',${t.talkgroup},${nd2Arg(t.label || ('TG ' + t.talkgroup))})">
                 <i class="fas fa-diagram-project"></i></button></td>
-            <td>${t.agency ? `<span class="nd2-chip nd2-agency">${escapeHtml(String(t.agency))}</span>` : '<span class="nd-sub">—</span>'}</td>
+            <td>${nd2AgencyCell(t.agency)}</td>
             <td class="nd2-num">${nd2Num(t.logicalCalls)}<span class="nd-sub" title="receptions"> /${nd2Num(t.calls)}</span></td>
             <td class="nd2-num">${nd2Num(t.encryptedCalls)}</td>
             <td>${nd2LastSeen(t.lastSeen)}</td>
@@ -5201,12 +5375,19 @@
         limit: String(nd2.rad.limit), offset: String(nd2.rad.offset),
       });
       if (q) params.set('q', q);
-      // Scoped to the open system's drill-down.
+      // Scoped to the open system — and, one level down, to the open SITE.
       if (nd2.sys.system != null) params.set('system', String(nd2.sys.system));
+      const level = nd2.sys.level;
+      if (level === 'site' && nd2.sys.rfss != null && nd2.sys.site != null) {
+        params.set('rfss', String(nd2.sys.rfss));
+        params.set('site', String(nd2.sys.site));
+      }
       if (nd2.node) params.set('node', nd2.node);
       try {
         const data = await nd2Fetch(`/api/node-data/radios?${params}`);
-        if (nd2.view !== view || nd2.sys.level !== 'system') return;
+        // Level must still match — this table is shared between the system and
+        // site drill-downs (see nd2LoadTalkgroups).
+        if (nd2.view !== view || nd2.sys.level !== level) return;
         nd2.rad.total = data.total || 0;
         const body = document.getElementById('nd2-rad-body');
         const rows = data.radios || [];
@@ -5250,12 +5431,88 @@
       nd2StopLiveTimer();
       _nd2LiveTimer = setInterval(() => {
         if (nd2.view !== 'live' || currentTab !== 'data') { nd2StopLiveTimer(); return; }
+        // Only poll while the push feed is down. With the socket up, every
+        // agent report has already repainted the view and a poll would just
+        // overwrite it with the same (or staler) data.
+        if (_nd2LiveWs && _nd2LiveWs.readyState === WebSocket.OPEN) return;
         void nd2LoadLive();
       }, 5000);
       _nd2LiveTimer.unref?.();
     }
     function nd2StopLiveTimer() {
       if (_nd2LiveTimer) { clearInterval(_nd2LiveTimer); _nd2LiveTimer = null; }
+    }
+
+    // --- Live push feed ---------------------------------------------------
+    // The 5s poll can only ever show a frame that is up to 5s old ON TOP OF the
+    // agent's own report interval, which is why Live looked dead next to the
+    // vce panel (calls ending before they were ever drawn, 0% decode on rows
+    // that were fine). This subscribes to the same status reports the backend
+    // already receives and repaints the instant one lands. The poll above stays
+    // as the fallback for when this socket can't be established.
+    let _nd2LiveWs = null;
+    let _nd2LiveWsGen = 0;   // invalidates handlers from a superseded socket
+
+    function nd2LiveWsSend(obj) {
+      try {
+        if (_nd2LiveWs && _nd2LiveWs.readyState === WebSocket.OPEN) _nd2LiveWs.send(JSON.stringify(obj));
+      } catch (e) { /* the fallback poll covers this */ }
+    }
+
+    async function nd2StartLiveWs() {
+      nd2StopLiveWs();
+      const gen = ++_nd2LiveWsGen;
+      let token = '';
+      try { token = (await authHeader()).replace(/^Bearer\s+/i, ''); } catch (e) { return; }
+      if (gen !== _nd2LiveWsGen || nd2.view !== 'live') return;  // left the view while awaiting
+      let ws;
+      try { ws = new WebSocket(API_BASE_URL.replace(/^http/i, 'ws') + '/api/node-ws/staff'); }
+      catch (e) { return; }
+      _nd2LiveWs = ws;
+      ws.onopen = () => { if (gen === _nd2LiveWsGen) ws.send(JSON.stringify({ t: 'auth', data: { token } })); };
+      ws.onmessage = (ev) => {
+        if (gen !== _nd2LiveWsGen) return;
+        if (typeof ev.data !== 'string') return;   // binary is spectrum, not ours
+        let msg;
+        try { msg = JSON.parse(ev.data); } catch (e) { return; }
+        const d = msg && msg.data;
+        switch (msg && msg.t) {
+          case 'authOk':
+            nd2LiveWsSend({ t: 'subscribeLive' });
+            break;
+          case 'liveSnapshot': {
+            const next = new Map();
+            for (const s of ((d && d.nodes) || [])) next.set(s.node, s);
+            _nd2LiveSlices = next;
+            nd2RenderLive();
+            break;
+          }
+          case 'liveNode':
+            if (d && d.node) { _nd2LiveSlices.set(d.node, d); nd2RenderLive(); }
+            break;
+          case 'liveNodeOffline':
+            // A node that dropped has no live rows; leaving its last frame up
+            // would show stale calls as if they were still in progress.
+            if (d && d.nodeId && _nd2LiveSlices.delete(d.nodeId)) nd2RenderLive();
+            break;
+          case 'authError':
+            try { ws.close(); } catch (e) {}
+            break;
+        }
+      };
+      // No reconnect loop: on any failure the socket is dropped and the 5s poll
+      // (which never stopped ticking) resumes as the source of truth.
+      ws.onerror = () => { /* onclose follows */ };
+      ws.onclose = () => { if (_nd2LiveWs === ws) _nd2LiveWs = null; };
+    }
+
+    function nd2StopLiveWs() {
+      _nd2LiveWsGen++;
+      const ws = _nd2LiveWs;
+      _nd2LiveWs = null;
+      if (!ws) return;
+      try { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: 'unsubscribeLive' })); } catch (e) {}
+      try { ws.close(); } catch (e) {}
     }
 
     async function nd2LoadDecodeChart() {
@@ -5347,14 +5604,11 @@
       return /^[0-9a-f-]{30,}$/i.test(v) ? v.slice(0, 8) : v;
     }
 
+    // Alias colour is server-validated to #rgb/#rrggbb before it ever reaches
+    // the style attribute. Agency is a separate column, not appended here.
     function nd2LiveTgCell(o) {
-      const tg = o.talkgroup;
-      if (tg == null) return '<span class="nd-sub">—</span>';
-      // Alias colour, server-validated to #rgb/#rrggbb before it ever reaches
-      // this attribute.
-      const ag = o.agency
-        ? ` <span class="nd2-chip nd2-agency">${escapeHtml(String(o.agency))}</span>` : '';
-      return nd2TgPill(tg, o.talkgroupLabel, o.color) + ag;
+      if (o.talkgroup == null) return '<span class="nd-sub">—</span>';
+      return nd2TgPill(o.talkgroup, o.talkgroupLabel, o.color);
     }
 
     // NB: distinct from nd2Pct — that one formats a plain percentage for the
@@ -5367,52 +5621,101 @@
       return `<span style="color:${c};font-weight:600;">${n.toFixed(0)}%</span>`;
     }
 
-    async function nd2LoadLive() {
+    // Per-node live slices, keyed by node id: { node, nodeName, lastStatusAt,
+    // channels, calls }. The WS feed replaces ONE node's slice per frame, so
+    // the merged view has to be assembled at render time rather than stored
+    // pre-flattened.
+    let _nd2LiveSlices = new Map();
+
+    /** Merge every node's slice, apply the node + hide-ENC filters, render. */
+    function nd2RenderLive() {
       const chHost = document.getElementById('nd2-live-ch');
       const callHost = document.getElementById('nd2-live-calls');
       if (!chHost || !callHost) return;
-      const params = new URLSearchParams();
-      if (nd2.node) params.set('node', nd2.node);
+
+      let chs = [], calls = [], nodes = 0;
+      for (const s of _nd2LiveSlices.values()) {
+        if (nd2.node && s.node !== nd2.node) continue;
+        nodes++;
+        chs = chs.concat(s.channels || []);
+        calls = calls.concat(s.calls || []);
+      }
+      // Control channels first, then weakest decode: a site that is struggling
+      // is what an operator watching this page needs to see. Mirrors the
+      // server's snapshot ordering, which no longer applies once slices from
+      // several nodes are merged client-side.
+      chs.sort((x, y) => (y.control === true) - (x.control === true)
+        || (Number(x.syncPercent) || 0) - (Number(y.syncPercent) || 0));
+      // Encrypted CALLS are hidden with the toggle; encrypted CHANNELS are not
+      // — a channel row is decode health, and dropping it (especially a
+      // control channel) would misreport the site as not being received.
+      if (nd2HideEnc()) calls = calls.filter(c => !nd2IsEncCall(c));
+
+      const meta = document.getElementById('nd2-live-meta');
+      if (meta) meta.textContent = `${chs.length} channel(s) · ${nodes} node(s) online`;
+      const cn = document.getElementById('nd2-live-calls-n');
+      if (cn) cn.textContent = calls.length ? String(calls.length) : '';
+
+      chHost.innerHTML = chs.length ? nd2MiniTable(
+        [{ label: 'Channel' }, { label: 'Site' }, { label: 'State' }, { label: 'Freq', num: true },
+         { label: 'Decode', num: true }, { label: 'Signal', num: true }, { label: 'Node' }],
+        chs.map(c => [
+          `<span class="nd-strong">${escapeHtml(String(c.name || '—'))}</span>` +
+            (c.control ? ' <span class="nd2-chip">CC</span>' : ''),
+          escapeHtml(String(c.site || '—')),
+          `<span class="nd2-chip">${escapeHtml(String(c.state || '—'))}</span>`,
+          c.frequency != null ? (Number(c.frequency) / 1e6).toFixed(4) + ' MHz' : '—',
+          nd2DecodePct(c.syncPercent),
+          c.signalDbfs != null ? Number(c.signalDbfs).toFixed(1) + ' dBFS' : '—',
+          nd2NodeChip(c.node ? { id: nd2ShortNode(c.node), name: c.nodeName } : null),
+        ])) : '<div class="nd2-empty">No channels reporting. Nodes may be offline.</div>';
+
+      callHost.innerHTML = calls.length ? nd2MiniTable(
+        [{ label: 'Talkgroup' }, { label: 'Agency' }, { label: 'Source' }, { label: 'Site' },
+         { label: 'Freq', num: true }, { label: 'Decode', num: true }, { label: 'Node' }],
+        calls.map(c => [
+          nd2LiveTgCell(c),
+          nd2AgencyCell(c.agency),
+          c.talkerAlias || c.fromAlias
+            ? `<span class="nd-strong">${escapeHtml(String(c.talkerAlias || c.fromAlias))}</span> <span class="nd-sub">${escapeHtml(String(c.from == null ? '' : c.from))}</span>`
+            : escapeHtml(String(c.from == null ? '—' : c.from)),
+          escapeHtml(String(c.site || '—')),
+          c.frequency != null ? (Number(c.frequency) / 1e6).toFixed(4) + ' MHz' : '—',
+          nd2DecodePct(c.syncPercent),
+          nd2NodeChip(c.node ? { id: nd2ShortNode(c.node), name: c.nodeName } : null),
+        ])) : '<div class="nd2-empty">No calls in progress.</div>';
+    }
+
+    /** Snapshot load — first paint, and the fallback when the WS is down. */
+    async function nd2LoadLive() {
+      const chHost = document.getElementById('nd2-live-ch');
+      if (!chHost) return;
+      // No node param: the snapshot fills the same per-node map the WS feed
+      // does, and the node filter is applied at render. Fetching a filtered
+      // snapshot would throw away the other nodes' slices on every poll.
       try {
-        const d = await nd2Fetch(`/api/node-data/live?${params}`);
+        const d = await nd2Fetch('/api/node-data/live');
         if (nd2.view !== 'live') return;   // view changed mid-fetch
-        const chs = d.channels || [];
-        const calls = d.calls || [];
-        const meta = document.getElementById('nd2-live-meta');
-        if (meta) meta.textContent = `${chs.length} channel(s) · ${(d.nodes || []).length} node(s) online`;
-        const cn = document.getElementById('nd2-live-calls-n');
-        if (cn) cn.textContent = calls.length ? String(calls.length) : '';
-
-        chHost.innerHTML = chs.length ? nd2MiniTable(
-          [{ label: 'Channel' }, { label: 'Site' }, { label: 'State' }, { label: 'Freq', num: true },
-           { label: 'Decode', num: true }, { label: 'Signal', num: true }, { label: 'Node' }],
-          chs.map(c => [
-            `<span class="nd-strong">${escapeHtml(String(c.name || '—'))}</span>` +
-              (c.control ? ' <span class="nd2-chip">CC</span>' : ''),
-            escapeHtml(String(c.site || '—')),
-            `<span class="nd2-chip">${escapeHtml(String(c.state || '—'))}</span>`,
-            c.frequency != null ? (Number(c.frequency) / 1e6).toFixed(4) + ' MHz' : '—',
-            nd2DecodePct(c.syncPercent),
-            c.signalDbfs != null ? Number(c.signalDbfs).toFixed(1) + ' dBFS' : '—',
-            nd2NodeChip(c.node ? { id: nd2ShortNode(c.node), name: c.nodeName } : null),
-          ])) : '<div class="nd2-empty">No channels reporting. Nodes may be offline.</div>';
-
-        callHost.innerHTML = calls.length ? nd2MiniTable(
-          [{ label: 'Talkgroup' }, { label: 'Source' }, { label: 'Site' }, { label: 'Freq', num: true },
-           { label: 'Decode', num: true }, { label: 'Node' }],
-          calls.map(c => [
-            nd2LiveTgCell(c),
-            c.talkerAlias || c.fromAlias
-              ? `<span class="nd-strong">${escapeHtml(String(c.talkerAlias || c.fromAlias))}</span> <span class="nd-sub">${escapeHtml(String(c.from == null ? '' : c.from))}</span>`
-              : escapeHtml(String(c.from == null ? '—' : c.from)),
-            escapeHtml(String(c.site || '—')),
-            c.frequency != null ? (Number(c.frequency) / 1e6).toFixed(4) + ' MHz' : '—',
-            nd2DecodePct(c.syncPercent),
-            nd2NodeChip(c.node ? { id: nd2ShortNode(c.node), name: c.nodeName } : null),
-          ])) : '<div class="nd2-empty">No calls in progress.</div>';
+        const next = new Map();
+        for (const n of (d.nodes || [])) {
+          next.set(n.node, {
+            node: n.node, nodeName: n.nodeName, lastStatusAt: n.lastStatusAt,
+            channels: [], calls: [],
+          });
+        }
+        const bucket = (id) => {
+          let s = next.get(id);
+          if (!s) { s = { node: id, nodeName: null, lastStatusAt: null, channels: [], calls: [] }; next.set(id, s); }
+          return s;
+        };
+        for (const c of (d.channels || [])) bucket(c.node).channels.push(c);
+        for (const c of (d.calls || [])) bucket(c.node).calls.push(c);
+        _nd2LiveSlices = next;
+        nd2RenderLive();
       } catch (e) {
         chHost.innerHTML = `<div class="nd2-empty">Failed to load live state: ${escapeHtml(String(e.message || e))}</div>`;
-        callHost.innerHTML = '';
+        const callHost = document.getElementById('nd2-live-calls');
+        if (callHost) callHost.innerHTML = '';
       }
     }
 

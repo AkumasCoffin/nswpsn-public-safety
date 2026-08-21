@@ -35,6 +35,18 @@ interface PendingCmd {
   timer: ReturnType<typeof setTimeout>;
 }
 
+/**
+ * Turns one node's raw status into the Live view's rows. Supplied by the WS
+ * route (see setLiveShaper) rather than imported here, so the hub keeps its
+ * "connections only, no DB" shape. Returning null means "nothing to show for
+ * this node" (a pager node, or one that hasn't reported yet).
+ */
+type LiveShaper = (
+  nodeId: string,
+  status: StatusData | null,
+  lastStatusAt: number | null,
+) => Promise<unknown | null>;
+
 const CMD_TIMEOUT_MS = 15_000;
 
 const UPLOAD_WINDOW_MS = 10 * 60 * 1000; // rolling "calls in the last 10 min"
@@ -59,6 +71,13 @@ export interface PagerMessageView {
 class NodeHub {
   private agents = new Map<string, AgentConn>();
   private staff = new Map<string, Set<StaffConn>>();
+  // Staff watching the FLEET-wide Live view. Separate from `staff` (which is
+  // keyed per node, for the drawer): a Live viewer wants every radio node at
+  // once and has no single nodeId to key on.
+  private liveStaff = new Set<StaffConn>();
+  // Shapes one node's status into Live rows. Injected by the WS route so the
+  // hub stays free of DB/config imports (it is pure connection plumbing).
+  private liveShaper: LiveShaper | null = null;
   private pending = new Map<string, PendingCmd>();
   // Per-node timestamps of calls actually forwarded to central rdio (fed by the
   // relay). In-memory + ephemeral: a rolling live signal, not durable stats
@@ -184,6 +203,9 @@ class NodeHub {
       this.agents.delete(nodeId);
       log.info({ nodeId }, 'node agent disconnected');
       this.broadcastToStaff(nodeId, 'nodePresence', { nodeId, online: false });
+      // Live is "what is decoding RIGHT NOW" — a node that dropped has no rows
+      // any more. Without this its last frame would sit there looking live.
+      this.broadcastLive('liveNodeOffline', { nodeId });
     }
   }
 
@@ -219,6 +241,21 @@ class NodeHub {
     a.lastStatus = status;
     a.lastStatusAt = Date.now();
     this.broadcastToStaff(nodeId, 'nodeStatus', { nodeId, status });
+    // Fleet Live viewers get the same report reshaped. This is what makes the
+    // Live tab as current as the vce panel: it repaints when the agent speaks,
+    // instead of on a poll timer that is stale by up to its whole interval.
+    this.pushLive(nodeId, status, a.lastStatusAt);
+  }
+
+  /** Shape + fan one node's status out to fleet-Live subscribers. */
+  private pushLive(nodeId: string, status: StatusData | null, at: number | null): void {
+    if (this.liveStaff.size === 0 || !this.liveShaper) return;
+    void this.liveShaper(nodeId, status, at)
+      .then((slice) => {
+        if (!slice) return; // pager node / nothing reported
+        this.broadcastLive('liveNode', slice);
+      })
+      .catch((err) => log.debug({ err, nodeId }, 'hub: live shape failed'));
   }
 
   relayEvent(nodeId: string, data: unknown): void {
@@ -337,6 +374,57 @@ class NodeHub {
         if (s.ws === ws) set.delete(s);
       }
       if (set.size === 0) this.staff.delete(nodeId);
+    }
+  }
+
+  // ── staff: fleet-wide Live view ──────────────────────────────────────
+  /** Install the status→Live-rows shaper (called once, at route setup). */
+  setLiveShaper(fn: LiveShaper): void {
+    this.liveShaper = fn;
+  }
+
+  subscribeLiveStaff(ws: WebSocket, userId: string): void {
+    // Same de-dupe as subscribeStaff: a re-subscribe (reconnect, or the user
+    // leaving and re-entering the view) must not leave two entries that
+    // double-deliver every frame to one viewer.
+    for (const s of this.liveStaff) {
+      if (s.ws === ws) this.liveStaff.delete(s);
+    }
+    this.liveStaff.add({ ws, userId });
+  }
+
+  unsubscribeLiveStaff(ws: WebSocket): void {
+    for (const s of this.liveStaff) {
+      if (s.ws === ws) this.liveStaff.delete(s);
+    }
+  }
+
+  /** Every online node's current Live slice — the first paint on subscribe. */
+  async liveSnapshot(): Promise<unknown[]> {
+    if (!this.liveShaper) return [];
+    const out: unknown[] = [];
+    for (const a of this.agents.values()) {
+      try {
+        const slice = await this.liveShaper(a.nodeId, a.lastStatus, a.lastStatusAt);
+        if (slice) out.push(slice);
+      } catch (err) {
+        log.debug({ err, nodeId: a.nodeId }, 'hub: live snapshot shape failed');
+      }
+    }
+    return out;
+  }
+
+  private broadcastLive(t: string, data: unknown): void {
+    const msg = envelope(t, data);
+    for (const s of this.liveStaff) {
+      if (s.ws.readyState === s.ws.OPEN) {
+        if (wsOverBuffered(s.ws)) continue;
+        try {
+          s.ws.send(msg);
+        } catch {
+          /* ignore */
+        }
+      }
     }
   }
 

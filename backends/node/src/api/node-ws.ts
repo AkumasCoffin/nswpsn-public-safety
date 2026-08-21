@@ -34,6 +34,11 @@ import {
   type StatusData,
 } from '../services/nodes/protocol.js';
 import { buildConfigPayload } from '../services/nodes/configMerge.js';
+import { shapeNodeLive } from '../services/nodeLive.js';
+
+// The hub is pure connection plumbing and must not import config/DB itself, so
+// the Live row shaper is handed to it from here (module load = route setup).
+hub.setLiveShaper((nodeId, status, at) => shapeNodeLive(nodeId, status, at));
 
 const AGENT_PATH = '/api/node-ws/agent';
 const STAFF_PATH = '/api/node-ws/staff';
@@ -348,6 +353,7 @@ function setupStaffConnection(ws: Alive): void {
   ws.on('close', () => {
     clearTimeout(authTimer);
     hub.unsubscribeStaff(ws);
+    hub.unsubscribeLiveStaff(ws);
   });
   ws.on('error', (err) => log.debug({ err }, 'staff ws error'));
 }
@@ -393,6 +399,21 @@ async function handleStaffMessage(
     }
     case 'unsubscribeNode': {
       hub.unsubscribeStaff(ws);
+      return;
+    }
+    // Fleet-wide Live view. Unlike subscribeNode this has no nodeId: the
+    // viewer wants every radio node at once. Read-only, so the same viewer
+    // roles that may subscribeNode may subscribe here (canManage not needed).
+    case 'subscribeLive': {
+      hub.subscribeLiveStaff(ws, state.userId!);
+      // First paint: everything currently online, in one frame. Per-node
+      // `liveNode` updates follow as agents report.
+      const nodes = await hub.liveSnapshot();
+      if (ws.readyState === ws.OPEN) ws.send(envelope('liveSnapshot', { nodes }));
+      return;
+    }
+    case 'unsubscribeLive': {
+      hub.unsubscribeLiveStaff(ws);
       return;
     }
     case 'cmd': {
