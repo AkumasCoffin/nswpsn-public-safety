@@ -1,0 +1,115 @@
+/**
+ * Fleet Live row shaping.
+ *
+ * These exist because the shape of vce's activeCalls payload is easy to get
+ * wrong in a way nothing catches: a call refers to its channel as
+ * `channelName`, and carries NO site, syncPercent or signalDbfs at all
+ * (ControlServer.buildActiveCalls emits state/from/to/aliases/timeslot/
+ * frequency and stops). Reading `name` off a call silently resolves undefined,
+ * so the Sites and Decode columns rendered empty with no error anywhere.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+const queryMock = vi.fn();
+vi.mock('../../../src/db/pool.js', () => ({
+  getPool: vi.fn(async () => ({ query: queryMock })),
+  getWriterPool: vi.fn(async () => ({ query: queryMock })),
+  closePool: vi.fn(async () => undefined),
+}));
+
+vi.mock('../../../src/services/talkgroupCatalog.js', () => ({
+  talkgroupCatalog: vi.fn(async () => ({
+    labels: new Map([[30017, '141 STHHG A']]),
+    agencies: new Map([[30017, 'Rural Fire Service']]),
+    colors: new Map([[30017, '#ff8800']]),
+  })),
+}));
+
+const NODE_ROW = { id: 'n1', name: 'radio-cl0ud', kind: 'radio' };
+
+/** One control channel plus one call riding it, in vce's actual field shape. */
+const STATUS = {
+  channels: [
+    {
+      name: 'Knights Hill',
+      site: 'Knights Hill',
+      state: 'CONTROL',
+      control: true,
+      syncPercent: 97.5,
+      signalDbfs: -42.5,
+    },
+  ],
+  activeCalls: [
+    {
+      state: 'CALL',
+      channelName: 'Knights Hill', // NOT `name` — this is the whole point
+      to: '30017',
+      from: '2019985',
+      frequency: 851062500,
+      // no site, no syncPercent, no signalDbfs — vce does not send them
+    },
+  ],
+};
+
+async function shape(status: unknown) {
+  vi.resetModules();
+  queryMock.mockResolvedValue({ rows: [NODE_ROW] });
+  const { shapeNodeLive } = await import('../../../src/services/nodeLive.js');
+  return shapeNodeLive('n1', status, Date.now());
+}
+
+beforeEach(() => {
+  queryMock.mockReset();
+});
+
+describe('shapeNodeLive: a call inherits what vce never tells it', () => {
+  it('takes decode health from the carrying channel', async () => {
+    const slice = await shape(STATUS);
+    expect(slice?.calls).toHaveLength(1);
+    expect(slice?.calls[0]!['syncPercent']).toBe(97.5);
+    expect(slice?.calls[0]!['signalDbfs']).toBe(-42.5);
+  });
+
+  it('takes the site from the carrying channel', async () => {
+    const slice = await shape(STATUS);
+    expect(slice?.calls[0]!['site']).toBe('Knights Hill');
+  });
+
+  it('resolves the channel via channelName, not name', async () => {
+    // Same payload with the field renamed the way an earlier version wrongly
+    // assumed: nothing should resolve, proving the lookup keys on channelName.
+    const renamed = {
+      channels: STATUS.channels,
+      activeCalls: [{ ...STATUS.activeCalls[0], channelName: 'Somewhere Else' }],
+    };
+    const slice = await shape(renamed);
+    expect(slice?.calls[0]!['syncPercent']).toBeNull();
+    // …and the site still degrades to the channel name rather than vanishing.
+    expect(slice?.calls[0]!['site']).toBe('Somewhere Else');
+  });
+
+  it('treats a reported 0% as unmeasured and prefers the channel', async () => {
+    // A call in progress cannot be decoding at 0%; a literal zero means the
+    // field was defaulted. This is why `??` was not enough.
+    const zeroed = {
+      channels: STATUS.channels,
+      activeCalls: [{ ...STATUS.activeCalls[0], syncPercent: 0 }],
+    };
+    const slice = await shape(zeroed);
+    expect(slice?.calls[0]!['syncPercent']).toBe(97.5);
+  });
+
+  it('still labels and colours the talkgroup', async () => {
+    const slice = await shape(STATUS);
+    expect(slice?.calls[0]!['talkgroupLabel']).toBe('141 STHHG A');
+    expect(slice?.calls[0]!['agency']).toBe('Rural Fire Service');
+    expect(slice?.calls[0]!['color']).toBe('#ff8800');
+  });
+
+  it('drops a pager node entirely', async () => {
+    vi.resetModules();
+    queryMock.mockResolvedValue({ rows: [{ id: 'n1', name: 'pager-1', kind: 'pager' }] });
+    const { shapeNodeLive } = await import('../../../src/services/nodeLive.js');
+    expect(await shapeNodeLive('n1', STATUS, Date.now())).toBeNull();
+  });
+});
