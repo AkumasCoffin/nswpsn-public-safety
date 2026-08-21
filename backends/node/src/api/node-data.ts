@@ -3074,14 +3074,28 @@ nodeDataRouter.get('/api/node-data/site-decode', requireRole(canViewNodeData), a
     if (system === null || rfss === null || site === null) {
       return c.json({ error: 'system, rfss and site are required' }, 400);
     }
-    const window = detailWindow(url);
     const nodeId = qpNode(url);
 
-    // Bucket width tracks the window so the point count stays roughly constant
-    // (~150-300) whatever range is asked for.
-    const bucketMinutes = window === '24h' ? 5 : window === '7d' ? 30 : 120;
+    // This chart takes its OWN range, independent of the page window, because
+    // the underlying data has its own lifetime: samples are pruned at 7 days
+    // (nodeEventsPruner) while call detail is kept for 30. Driving it from the
+    // page's 30d option promised a month of history that cannot exist — the
+    // chart drew about a day of samples stretched across a 30-day axis.
+    //
+    // Ranges are capped at that 7-day retention for the same reason.
+    const RANGES: Record<string, { interval: string; bucketMinutes: number }> = {
+      // ~1 sample/min/site/node, so the bucket is sized to land near 150 points
+      // whatever range is picked — enough to show shape, few enough to draw.
+      '1h': { interval: '1 hour', bucketMinutes: 1 },
+      '6h': { interval: '6 hours', bucketMinutes: 3 },
+      '24h': { interval: '24 hours', bucketMinutes: 10 },
+      '7d': { interval: '7 days', bucketMinutes: 60 },
+    };
+    const rangeRaw = (url.searchParams.get('range') ?? '24h').toLowerCase();
+    const range = RANGES[rangeRaw] ? rangeRaw : '24h';
+    const { interval, bucketMinutes } = RANGES[range]!;
 
-    const params: unknown[] = [WINDOW_INTERVAL[window], system, rfss, site];
+    const params: unknown[] = [interval, system, rfss, site];
     let where =
       `sampled_at >= now() - $1::interval AND system_id = $2 AND rfss = $3 AND site_id = $4`;
     if (nodeId !== null) {
@@ -3092,6 +3106,7 @@ nodeDataRouter.get('/api/node-data/site-decode', requireRole(canViewNodeData), a
     const r = await pool.query<{
       bucket: Date;
       decode_pct: string | null;
+      decode_min: string | null;
       signal_dbfs: string | null;
       invalid_frames: string | null;
       samples: number;
@@ -3099,6 +3114,11 @@ nodeDataRouter.get('/api/node-data/site-decode', requireRole(canViewNodeData), a
       `SELECT to_timestamp(floor(extract(epoch FROM sampled_at) / ${bucketMinutes * 60})
                            * ${bucketMinutes * 60}) AS bucket,
               AVG(decode_pct) AS decode_pct,
+              -- Worst reading in the bucket. AVG alone is the wrong summary for
+              -- a health metric: at coarse buckets a site that dropped to 40%
+              -- for ten minutes averages away entirely, which is precisely the
+              -- event the chart exists to show.
+              MIN(decode_pct) AS decode_min,
               AVG(signal_dbfs) AS signal_dbfs,
               MAX(invalid_frames) AS invalid_frames,
               COUNT(*)::int AS samples
@@ -3110,11 +3130,15 @@ nodeDataRouter.get('/api/node-data/site-decode', requireRole(canViewNodeData), a
     );
 
     return c.json({
-      window,
+      range,
       bucketMinutes,
+      /** Retention ceiling, so the UI can label/limit its own range picker
+       *  instead of hard-coding a number that has to track the pruner. */
+      maxRangeDays: 7,
       points: r.rows.map((x) => ({
         at: iso(x.bucket),
         decodePct: x.decode_pct !== null ? Number(x.decode_pct) : null,
+        decodeMin: x.decode_min !== null ? Number(x.decode_min) : null,
         signalDbfs: x.signal_dbfs !== null ? Number(x.signal_dbfs) : null,
         invalidFrames: x.invalid_frames !== null ? Number(x.invalid_frames) : null,
         samples: num(x.samples),

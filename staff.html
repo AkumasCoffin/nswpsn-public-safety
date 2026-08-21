@@ -2080,6 +2080,12 @@
     /* The sites hearing one live call, and the nodes that received it. Both wrap
        rather than truncating — the whole point of each column is WHICH, so a
        hidden remainder (or a bare count) defeats it. */
+    /* The decode chart's own range pills, in the card header — deliberately
+       separate from the page-level window row, because this chart's data has a
+       different lifetime (7-day sample retention) to the call history. */
+    .nd2-decode-range { display: inline-flex; gap: .25rem; margin-left: auto; }
+    .nd2-decode-range .filter-btn { padding: .12rem .45rem; font-size: .68rem; }
+
     .nd2-live-sites,
     .nd2-live-nodes {
       display: inline-flex;
@@ -3862,6 +3868,11 @@
       // Systems view navigation: list → one system → one site of that system.
       // Within a system, `tab` selects the sub-view (sites | talkgroups |
       // radios); `siteTab` is the same choice within one SITE.
+      // decodeRange: the decode-health chart's OWN range (1h|6h|24h|7d).
+      // Independent of nd2.window because the samples behind it are pruned at
+      // 7 days while call detail is kept for 30 — driving it from the page
+      // window offered a 30d view of data that cannot exist.
+      decodeRange: '24h',
       sys: { level: 'list', tab: 'sites', siteTab: 'overview', system: null, wacn: null, rfss: null, site: null, siteName: null },
       sysExpanded: {},     // system id → bool: which folder rows are open (persisted)
       // Talkgroups / Radios sub-tabs (scoped to the open system): search + paging.
@@ -5355,7 +5366,13 @@
 
       const decodeCard = `<div class="nd2-card nd2-detail-gap">
         <div class="nd2-card-h"><i class="fas fa-chart-line"></i> Decode health
-          <span class="nd2-note" id="nd2-decode-note"></span></div>
+          <span class="nd2-note" id="nd2-decode-note"></span>
+          <span class="nd2-decode-range" role="group" aria-label="Decode chart range">
+            <button class="filter-btn" data-nd2-drange="1h" onclick="nd2SetDecodeRange('1h')">1h</button>
+            <button class="filter-btn" data-nd2-drange="6h" onclick="nd2SetDecodeRange('6h')">6h</button>
+            <button class="filter-btn active" data-nd2-drange="24h" onclick="nd2SetDecodeRange('24h')">24h</button>
+            <button class="filter-btn" data-nd2-drange="7d" onclick="nd2SetDecodeRange('7d')">7d</button>
+          </span></div>
         <div class="nd2-chart-wrap">
           <canvas id="nd2-decode-chart" aria-label="Site decode health over time" role="img"></canvas>
           <div class="nd2-empty" id="nd2-decode-empty" style="display:none;">
@@ -5660,6 +5677,17 @@
       try { ws.close(); } catch (e) {}
     }
 
+    /** Switch the decode chart's range. Deliberately does NOT touch nd2.window:
+     *  this chart reads node_site_decode_samples, which is pruned at 7 days, so
+     *  its useful range is unrelated to the page's 24h/7d/30d call window. */
+    function nd2SetDecodeRange(range) {
+      if (nd2.decodeRange === range) return;
+      nd2.decodeRange = range;
+      document.querySelectorAll('[data-nd2-drange]').forEach(b =>
+        b.classList.toggle('active', b.dataset.nd2Drange === range));
+      nd2LoadDecodeChart();
+    }
+
     async function nd2LoadDecodeChart() {
       const canvas = document.getElementById('nd2-decode-chart');
       const emptyEl = document.getElementById('nd2-decode-empty');
@@ -5676,7 +5704,13 @@
         const pts = d.points || [];
         const hasData = pts.some(p => p.decodePct != null);
         if (emptyEl) emptyEl.style.display = hasData ? 'none' : '';
-        if (noteEl) noteEl.textContent = hasData ? `${d.bucketMinutes}-minute average` : '';
+        if (noteEl) {
+          noteEl.textContent = hasData
+            ? (d.bucketMinutes > 1
+                ? `${d.bucketMinutes}-min buckets · line = average, shaded = worst`
+                : 'per-minute samples')
+            : '';
+        }
         if (_nd2DecodeChart) { _nd2DecodeChart.destroy(); _nd2DecodeChart = null; }
         if (!hasData) return;
 
@@ -5698,6 +5732,14 @@
                 borderColor: '#22c55e', backgroundColor: '#22c55e14',
                 borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, pointHitRadius: 12,
                 fill: true, tension: 0.3, yAxisID: 'y', spanGaps: false },
+              // Worst reading in each bucket. Without this the chart showed only the
+              // average, and at coarse buckets a site that dropped to 40% for ten
+              // minutes averaged away entirely — the one event worth charting. Thin
+              // and dimmer so it reads as a floor beneath the average.
+              { label: 'Worst', data: pts.map(p => p.decodeMin),
+                borderColor: '#22c55e66', borderWidth: 1,
+                pointRadius: 0, pointHoverRadius: 3, pointHitRadius: 12,
+                fill: false, tension: 0.3, yAxisID: 'y', spanGaps: false },
               // Signal shares the chart but not the axis: dBFS is negative and
               // on a different scale, so forcing one axis would flatten decode.
               { label: 'Signal dBFS', data: pts.map(p => p.signalDbfs),
@@ -5726,7 +5768,10 @@
                    ticks: { color: '#64748b', maxTicksLimit: 5, callback: v => v + '%',
                             font: { family: "'Space Grotesk', sans-serif", size: 10 } } },
               y1: { position: 'right', grid: { display: false }, border: { display: false },
-                    ticks: { color: '#64748b', maxTicksLimit: 5, callback: v => v + ' dB',
+                    ticks: { color: '#64748b', maxTicksLimit: 5,
+                             // Chart.js hands back raw floats, so bare
+                             // concatenation printed "-46.400000000000006 dB".
+                             callback: v => Number(v).toFixed(1) + ' dB',
                              font: { family: "'Space Grotesk', sans-serif", size: 10 } } },
             },
           },
