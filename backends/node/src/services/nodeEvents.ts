@@ -348,6 +348,11 @@ export async function markRecorded(
         // then proximity in time. So when the discriminators are present the
         // right row wins even if a neighbour is closer in time, and when they
         // are absent nearest-in-time still applies.
+        //
+        // The COALESCE is load-bearing, not decoration: `frequency = $5` is
+        // NULL (not false) when the ROW's frequency is null, and DESC sorts
+        // NULLS FIRST in Postgres — so without it a row that knows nothing
+        // would outrank the exact match this whole change is built on.
         `UPDATE node_radio_events SET recorded = true, audio_bytes = $4
           WHERE id = (
             SELECT id FROM node_radio_events
@@ -358,8 +363,8 @@ export async function markRecorded(
                                   AND $3::timestamptz + interval '${RECORDED_WINDOW_SECONDS} seconds'
                AND ($5::bigint IS NULL OR frequency IS NULL OR frequency = $5::bigint)
                AND ($6::integer IS NULL OR source_unit IS NULL OR source_unit = $6::integer)
-             ORDER BY ($5::bigint IS NOT NULL AND frequency = $5::bigint) DESC,
-                      ($6::integer IS NOT NULL AND source_unit = $6::integer) DESC,
+             ORDER BY COALESCE($5::bigint IS NOT NULL AND frequency = $5::bigint, false) DESC,
+                      COALESCE($6::integer IS NOT NULL AND source_unit = $6::integer, false) DESC,
                       abs(extract(epoch FROM (received_at - $3::timestamptz)))
              LIMIT 1
           )

@@ -312,6 +312,12 @@ describe('markRecorded', () => {
     expect(String(sql).indexOf('source_unit = $6', order)).toBeGreaterThan(-1);
     expect(String(sql).indexOf('abs(extract(epoch', order))
       .toBeGreaterThan(String(sql).indexOf('source_unit = $6', order));
+    // `frequency = $5` yields NULL when the ROW's frequency is null, and DESC
+    // sorts NULLS FIRST in Postgres — an unguarded expression would rank a row
+    // that knows nothing ABOVE the exact match. Both keys must be coalesced.
+    const orderClause = String(sql).slice(order);
+    expect(orderClause).toContain('COALESCE($5::bigint IS NOT NULL AND frequency = $5::bigint, false) DESC');
+    expect(orderClause).toContain('COALESCE($6::integer IS NOT NULL AND source_unit = $6::integer, false) DESC');
   });
 
   it('degrades to time-only matching when the upload carries neither', async () => {
