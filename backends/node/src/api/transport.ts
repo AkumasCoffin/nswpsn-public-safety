@@ -398,9 +398,17 @@ export function normalizeStops(raw: RawStopsResponse): TransportStop[] {
 
 // ---------------------------------------------------------------------
 
-const vehiclesCache = new SwrCache<TransportVehiclesSnapshot>(500);
-const stopsCache = new SwrCache<TransportStopsSnapshot>(500);
-const shapeCache = new SwrCache<TransportShapeSnapshot>(1000);
+// Entry counts here are deliberately small because the ENTRIES are large, not
+// because the key space is. A vehicles entry holds up to MAX_VEHICLES (1500)
+// objects with a nested route — roughly a megabyte — and the key is a snapped
+// viewport, so the key space is effectively every place anyone has panned to.
+// At 500 entries that is ~500MB resident, which was a large part of the heap
+// the process was dying on. 60 covers the viewports actually in play at any
+// moment (SwrCache also ages entries out now), and a miss just refetches.
+const vehiclesCache = new SwrCache<TransportVehiclesSnapshot>(60);
+const stopsCache = new SwrCache<TransportStopsSnapshot>(60);
+// Shapes are single encoded polyline strings — small, and worth keeping more of.
+const shapeCache = new SwrCache<TransportShapeSnapshot>(400);
 
 export interface TransportShapeSnapshot {
   /** Google encoded polyline (precision 5) — decoded client-side. */

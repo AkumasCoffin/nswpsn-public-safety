@@ -39,15 +39,47 @@ export interface SwrOptions<T> {
  *  (per-filter/per-query keys) without changing SWR semantics. */
 const DEFAULT_MAX_ENTRIES = 500;
 
+/**
+ * Drop an entry this long after its last write, regardless of the cap.
+ *
+ * The count cap alone does not bound memory in any useful sense: a cache of 500
+ * bbox-keyed viewports, each holding up to 1500 vehicle objects, is ~500MB, and
+ * an entry nobody has asked for since yesterday is retained until 500 NEWER
+ * keys push it out. Since keys are viewports, that eviction may never happen —
+ * the working set simply plateaus at the cap and stays resident. A hard age
+ * bound turns "bounded by entry count" into "bounded by recent traffic", which
+ * is what the cap was meant to express.
+ *
+ * Well past any caller's `stale` window (minutes), so this only ever collects
+ * entries that are dead to SWR anyway.
+ */
+const MAX_ENTRY_AGE_MS = 15 * 60_000;
+
 export class SwrCache<T> {
   private readonly entries = new Map<string, CacheEntry<T>>();
   // Coalesce in-flight refreshes per key — concurrent callers share the
   // promise instead of all hitting the upstream at once.
   private readonly inflight = new Map<string, Promise<T>>();
   private readonly maxEntries: number;
+  private readonly maxAgeMs: number;
 
-  constructor(maxEntries: number = DEFAULT_MAX_ENTRIES) {
+  constructor(maxEntries: number = DEFAULT_MAX_ENTRIES, maxAgeMs: number = MAX_ENTRY_AGE_MS) {
     this.maxEntries = Math.max(1, maxEntries);
+    this.maxAgeMs = Math.max(1000, maxAgeMs);
+  }
+
+  /** Drop entries older than maxAgeMs. Cheap: Map is in write order, so this
+   *  stops at the first entry still within the window. */
+  private evictAged(now: number): void {
+    for (const [key, entry] of this.entries) {
+      if (now - entry.storedAt <= this.maxAgeMs) break;
+      this.entries.delete(key);
+    }
+  }
+
+  /** Entries currently held — for the memory report. */
+  size(): number {
+    return this.entries.size;
   }
 
   /**
@@ -63,6 +95,10 @@ export class SwrCache<T> {
     opts: SwrOptions<T>,
   ): Promise<{ value: T; ageMs: number; warming: boolean }> {
     const now = Date.now();
+    // Sweep on read as well as on write: a cache whose traffic stops (a map
+    // nobody is looking at overnight) would otherwise hold its whole working
+    // set until the next refresh, which may never come.
+    this.evictAged(now);
     const entry = this.entries.get(key);
     const ageMs = entry ? now - entry.storedAt : Infinity;
 
@@ -101,8 +137,10 @@ export class SwrCache<T> {
         // Refresh insertion order so the cap evicts the genuinely
         // least-recently-written key, then store.
         this.entries.delete(key);
-        this.entries.set(key, { value: v, storedAt: Date.now() });
-        // Bound memory: drop the oldest entry once over the cap.
+        const storedAt = Date.now();
+        this.entries.set(key, { value: v, storedAt });
+        // Age first, then the count cap as a backstop for a burst.
+        this.evictAged(storedAt);
         while (this.entries.size > this.maxEntries) {
           const oldest = this.entries.keys().next().value;
           if (oldest === undefined) break;

@@ -203,6 +203,8 @@ const POLICE_VALID_SUBTYPES = new Set([
 // in-process cache we already use for request-scoped responses.
 const HEATMAP_REFRESH_INTERVAL_MS = 5 * 60_000; // 5 min
 let heatmapRefreshTimer: NodeJS.Timeout | null = null;
+/** In-flight guard for refreshHeatmapCache — see the comment there. */
+let heatmapRefreshRunning = false;
 let heatmapLastRefreshTs: number | null = null;
 let heatmapLastBinCount = 0;
 
@@ -215,9 +217,19 @@ const heatmapCache = new Map<string, HeatmapBucket>();
 /**
  * Hard ceiling on distinct cached viewports, as a backstop for a burst of
  * different bboxes inside one TTL window. Small on purpose: each entry can
- * hold up to HEATMAP_MAX_BINS (60k) [lat, lng, count] triples.
+ * hold up to HEATMAP_MAX_BINS (60k) [lat, lng, count] triples — roughly 5-6MB
+ * of JS arrays. At the previous ceiling of 64 that was ~350MB of the heap the
+ * process was OOM-ing on, and because the sweep runs on WRITE only, sustained
+ * traffic kept every slot pinned rather than letting them age out. Entries
+ * expire after HEATMAP_CACHE_TTL_MS anyway, so a lower ceiling costs a refetch
+ * on a viewport nobody has looked at in the last minute.
  */
-const HEATMAP_CACHE_MAX = 64;
+const HEATMAP_CACHE_MAX = 12;
+
+/** The cap, for tests — so they assert the BEHAVIOUR (a hard ceiling that
+ *  evicts oldest-first) rather than pinning a literal that has to be edited
+ *  every time the memory budget is retuned. */
+export const _heatmapCacheMaxForTests = HEATMAP_CACHE_MAX;
 
 /**
  * Store a heatmap result, dropping what can no longer be served.
@@ -599,6 +611,18 @@ export function _resetHeatmapCacheForTests(): void {
  * entry is left in place, and the next interval tries again.
  */
 async function refreshHeatmapCache(): Promise<void> {
+  // Re-entrancy guard. Every other timed loop in this codebase has one
+  // (statsArchiver, cleanup, filterCache, policeHeatmapCache, poller); this was
+  // the exception. A refresh slower than the 5-minute interval — a saturated
+  // DB, or the live-aggregation fallback — let ticks overlap, and each in-flight
+  // tick retains its own 60k-point result set AND holds a pool connection,
+  // so the slow case compounded into exactly the memory pressure that made it
+  // slow. Skipping a tick is free: the next one is 5 minutes away.
+  if (heatmapRefreshRunning) {
+    log.debug('police-heatmap refresh already in flight, skipping tick');
+    return;
+  }
+  heatmapRefreshRunning = true;
   const startedAt = Date.now();
   try {
     const cacheRead = await readPoliceHeatmapCache(null, null);
@@ -644,6 +668,8 @@ async function refreshHeatmapCache(): Promise<void> {
       },
       'police-heatmap background refresh failed',
     );
+  } finally {
+    heatmapRefreshRunning = false;
   }
 }
 

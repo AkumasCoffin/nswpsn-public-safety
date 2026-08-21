@@ -15,8 +15,13 @@ vi.mock('../../../src/db/pool.js', () => ({
   getWriterPool: vi.fn(async () => null),
 }));
 
-const { _rememberHeatmapForTests, _heatmapCacheSize, _resetHeatmapCacheForTests, _heatmapCacheKeyForTests } =
-  await import('../../../src/api/waze.js');
+const {
+  _rememberHeatmapForTests,
+  _heatmapCacheSize,
+  _resetHeatmapCacheForTests,
+  _heatmapCacheKeyForTests,
+  _heatmapCacheMaxForTests,
+} = await import('../../../src/api/waze.js');
 
 /** A response the size the endpoint really produces at the top end. */
 const bigResult = () => ({ points: Array.from({ length: 1000 }, (_, i) => [i, i, i]) });
@@ -33,7 +38,7 @@ describe('police-heatmap cache bounding', () => {
       _rememberHeatmapForTests(key, bigResult(), now);
     }
     // Before the fix this was 5000 entries, each holding its own points array.
-    expect(_heatmapCacheSize()).toBeLessThanOrEqual(64);
+    expect(_heatmapCacheSize()).toBeLessThanOrEqual(_heatmapCacheMaxForTests);
   });
 
   it('drops entries that have outlived their TTL', () => {
@@ -57,12 +62,16 @@ describe('police-heatmap cache bounding', () => {
   });
 
   it('evicts oldest-first when the cap is reached', () => {
+    // Asserts the ceiling HOLDS, not what it happens to be — each entry can
+    // hold 60k coordinate triples, so the number is a memory-budget knob that
+    // gets retuned; the invariant is that it is never exceeded.
+    const cap = _heatmapCacheMaxForTests;
     const now = Date.now();
-    for (let i = 0; i < 70; i++) _rememberHeatmapForTests(`k${i}`, bigResult(), now);
-    expect(_heatmapCacheSize()).toBe(64);
-    // The survivors are the most recent 64, so the earliest keys are gone.
+    for (let i = 0; i < cap + 6; i++) _rememberHeatmapForTests(`k${i}`, bigResult(), now);
+    expect(_heatmapCacheSize()).toBe(cap);
+    // The survivors are the most recent `cap`, so the earliest keys are gone.
     _rememberHeatmapForTests('k0', bigResult(), now);
-    expect(_heatmapCacheSize()).toBe(64);
+    expect(_heatmapCacheSize()).toBe(cap);
   });
 
   it('treats a different bbox as a different key', () => {
