@@ -45,11 +45,23 @@ const GROUP_WINDOW_SECONDS = 4;
  *  The only slack needed is that whole-second truncation (≤1s) plus the gap
  *  between the recorder's first audio segment and the call-grant event.
  *
- *  Keeping it tight is the point: back-to-back calls on one talkgroup are
- *  seconds apart, and a wide window let one upload claim a NEIGHBOUR's event
- *  row (nearest-match, recorded=false), so only the first of a burst ever
- *  showed the recorded icon. */
-const RECORDED_WINDOW_SECONDS = 2;
+ *  Tight avoids MIS-attribution: back-to-back calls on one talkgroup are
+ *  seconds apart, and a wide window lets an upload claim a NEIGHBOUR's row.
+ *  It does NOT change how MANY rows get flagged — recorded=false means N
+ *  uploads always claim N distinct rows — so if most calls show no recorded
+ *  icon, the window is not the cause; see RECORDED_DIAG.
+ *
+ *  Overridable because the true skew (call-grant event → first audio segment)
+ *  is a property of the deployment, not a constant: measure it with
+ *  RECORDED_DIAG before changing this. */
+const RECORDED_WINDOW_SECONDS = Number(process.env['RECORDED_WINDOW_SECONDS'] ?? 2) || 2;
+
+/** Log every markRecorded outcome (HIT with its timestamp skew, MISS with how
+ *  near an event actually was). Off by default — one line per call upload is a
+ *  lot of log on a busy system — but it is the only way to tell an upload that
+ *  never arrived from one that arrived and matched nothing. Enable with
+ *  RECORDED_DIAG=1 for a minute, read the answer, turn it back off. */
+const RECORDED_DIAG = process.env['RECORDED_DIAG'] === '1';
 
 /** A node with a wildly wrong clock must not scatter rows across the
  *  timeline (they'd never prune / group). Anything outside now±48h is
@@ -325,6 +337,55 @@ export async function markRecorded(
         [nodeId, tg, at.toISOString(), bytes],
       );
       const row = upd.rows[0];
+
+      // Diagnostic (see RECORDED_DIAG): this used to no-op silently on a miss,
+      // which made "why do most calls show no recorded icon?" unanswerable —
+      // an upload that never arrived and one that arrived but matched nothing
+      // looked identical. On a HIT we log the skew between the upload's start
+      // timestamp and the event's, which is the only way to size the match
+      // window from measurements rather than guesswork.
+      if (RECORDED_DIAG) {
+        if (row) {
+          const skewMs = row.received_at instanceof Date
+            ? row.received_at.getTime() - at.getTime()
+            : null;
+          log.info(
+            { node: nodeId.slice(0, 8), tg, skewMs, bytes },
+            'nodeEvents: markRecorded HIT',
+          );
+        } else {
+          // How many events exist for this (node, talkgroup) in a much WIDER
+          // window, and how close the nearest one is: distinguishes "the event
+          // is there but outside the window / already claimed" from "no event
+          // for this call at all" (i.e. the upload beat the activity stream,
+          // or the call was never decoded on this node).
+          const near = await client.query<{ n: string; nearest_ms: string | null; unrecorded: string }>(
+            `SELECT COUNT(*)::text AS n,
+                    MIN(abs(extract(epoch FROM (received_at - $3::timestamptz)) * 1000))::text AS nearest_ms,
+                    (COUNT(*) FILTER (WHERE recorded = false))::text AS unrecorded
+               FROM node_radio_events
+              WHERE node_id = $1
+                AND talkgroup IS NOT DISTINCT FROM $2
+                AND received_at BETWEEN $3::timestamptz - interval '60 seconds'
+                                   AND $3::timestamptz + interval '60 seconds'`,
+            [nodeId, tg, at.toISOString()],
+          );
+          const n = near.rows[0];
+          log.info(
+            {
+              node: nodeId.slice(0, 8),
+              tg,
+              bytes,
+              within60s: Number(n?.n ?? 0),
+              unrecorded60s: Number(n?.unrecorded ?? 0),
+              nearestMs: n?.nearest_ms !== null && n?.nearest_ms !== undefined ? Math.round(Number(n.nearest_ms)) : null,
+              windowSec: RECORDED_WINDOW_SECONDS,
+            },
+            'nodeEvents: markRecorded MISS',
+          );
+        }
+      }
+
       if (row && bytes > 0) {
         await client.query(
           `INSERT INTO node_radio_hourly (hour, node_id, system, talkgroup, calls, audio_bytes)
