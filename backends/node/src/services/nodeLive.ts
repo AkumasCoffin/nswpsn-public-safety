@@ -141,10 +141,22 @@ export async function shapeNodeLive(
       if (norm && !chFacts.has(norm)) chFacts.set(norm, facts);
     }
   }
-  /** Treat 0 as "not reported": a call in progress cannot be decoding at 0%,
-   *  so a literal zero here means the field was defaulted, not measured. */
-  const orChannel = (own: unknown, fromChannel: unknown): unknown =>
-    own === null || own === undefined || own === 0 ? fromChannel ?? null : own;
+  /**
+   * Decode health for a call is the call's OWN measurement — vce reports it
+   * per traffic channel (ChannelProcessingManager.supportsControlChannelQuality
+   * covers TRAFFIC channels, so the monitor is attached to voice calls too).
+   *
+   * The carrying channel is NOT used as a substitute. A call is weak precisely
+   * when its traffic channel is weak while the site's control channel is fine,
+   * so borrowing the control figure would paint over the one case the column
+   * exists to reveal. Null stays null and renders as a dash — an honest "not
+   * reported" rather than a healthy-looking number that isn't about this call.
+   *
+   * 0 is still treated as unmeasured: a call in progress cannot be decoding at
+   * 0%, so a literal zero is a defaulted field.
+   */
+  const ownQuality = (v: unknown): unknown =>
+    v === null || v === undefined || v === 0 ? null : v;
 
   for (const ch of asRows(st['channels'])) {
     const id = Number(ch['to']);
@@ -218,9 +230,9 @@ export async function shapeNodeLive(
       talkgroupLabel: Number.isInteger(id) ? tg.labels.get(id) ?? null : null,
       agency: Number.isInteger(id) ? tg.agencies.get(id) ?? null : null,
       color: Number.isInteger(id) ? tg.colors.get(id) ?? null : null,
-      // Decode health comes from the carrying channel (see chFacts).
-      syncPercent: orChannel(ac['syncPercent'], facts?.sync),
-      signalDbfs: orChannel(ac['signalDbfs'], facts?.signal),
+      // The call's own decode, never the control channel's (see ownQuality).
+      syncPercent: ownQuality(ac['syncPercent']),
+      signalDbfs: ownQuality(ac['signalDbfs']),
     });
   }
 

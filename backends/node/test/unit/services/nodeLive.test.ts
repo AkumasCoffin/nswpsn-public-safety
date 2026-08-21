@@ -63,11 +63,27 @@ beforeEach(() => {
 });
 
 describe('shapeNodeLive: a call inherits what vce never tells it', () => {
-  it('takes decode health from the carrying channel', async () => {
+  it('never borrows the control channel\'s decode for a call', async () => {
+    // The control channel's health is NOT the call's. A call is weak exactly
+    // when its traffic channel is weak while the site's control channel is
+    // fine, so borrowing would paint over the one case the column exists to
+    // reveal. vce reports null for a traffic row (the quality monitor counts
+    // TSBK/LCCH control signalling, which a voice channel does not carry), and
+    // null must stay null so the UI shows an honest dash.
     const slice = await shape(STATUS);
     expect(slice?.calls).toHaveLength(1);
-    expect(slice?.calls[0]!['syncPercent']).toBe(97.5);
-    expect(slice?.calls[0]!['signalDbfs']).toBe(-42.5);
+    expect(slice?.calls[0]!['syncPercent']).toBeNull();
+    expect(slice?.calls[0]!['signalDbfs']).toBeNull();
+  });
+
+  it('reports the call\'s OWN decode when vce provides one', async () => {
+    const withOwn = {
+      channels: STATUS.channels,
+      activeCalls: [{ ...STATUS.activeCalls[0], syncPercent: 61.5, signalDbfs: -70 }],
+    };
+    const slice = await shape(withOwn);
+    expect(slice?.calls[0]!['syncPercent']).toBe(61.5);
+    expect(slice?.calls[0]!['signalDbfs']).toBe(-70);
   });
 
   it('takes the site from the carrying channel', async () => {
@@ -88,15 +104,16 @@ describe('shapeNodeLive: a call inherits what vce never tells it', () => {
     expect(slice?.calls[0]!['site']).toBe('Somewhere Else');
   });
 
-  it('treats a reported 0% as unmeasured and prefers the channel', async () => {
+  it('treats a reported 0% as unmeasured rather than a real reading', async () => {
     // A call in progress cannot be decoding at 0%; a literal zero means the
-    // field was defaulted. This is why `??` was not enough.
+    // field was defaulted, and must read as "not reported", not as a site
+    // that is dead.
     const zeroed = {
       channels: STATUS.channels,
       activeCalls: [{ ...STATUS.activeCalls[0], syncPercent: 0 }],
     };
     const slice = await shape(zeroed);
-    expect(slice?.calls[0]!['syncPercent']).toBe(97.5);
+    expect(slice?.calls[0]!['syncPercent']).toBeNull();
   });
 
   it('still labels and colours the talkgroup', async () => {
@@ -115,8 +132,9 @@ describe('shapeNodeLive: a call inherits what vce never tells it', () => {
       activeCalls: [{ ...STATUS.activeCalls[0], channelName: 'T-Knights Hill' }],
     };
     const slice = await shape(traffic);
-    expect(slice?.calls[0]!['syncPercent']).toBe(97.5);
     expect(slice?.calls[0]!['site']).toBe('Knights Hill');
+    // …but decode is still the call's own, not the control channel's.
+    expect(slice?.calls[0]!['syncPercent']).toBeNull();
   });
 
   it('leaves a site that genuinely starts with T alone', async () => {
@@ -127,7 +145,6 @@ describe('shapeNodeLive: a call inherits what vce never tells it', () => {
     };
     const slice = await shape(tumut);
     expect(slice?.calls[0]!['site']).toBe('Tumut');
-    expect(slice?.calls[0]!['syncPercent']).toBe(80);
   });
 
   it('drops a pager node entirely', async () => {
