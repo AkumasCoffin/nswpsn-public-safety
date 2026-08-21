@@ -19,20 +19,21 @@ import { log } from '../lib/log.js';
 import { talkgroupCatalog } from './talkgroupCatalog.js';
 
 /**
- * States that mean a call is ON AIR right now.
+ * States that count as a live call.
  *
- * ACTIVE is deliberately NOT here. It means the traffic channel is up, not
- * that audio is passing: after a transmission ends the channel keeps its
- * from/to identifiers and sits in ACTIVE until teardown, so including it left
- * finished calls on screen for as long as the grant lingered. That is what
- * made the view feel sticky next to vce's own panel — calls appeared to last
- * far longer than they did, and new ones stacked underneath the old.
+ * ACTIVE is included. It was briefly removed on the theory that finished calls
+ * linger in ACTIVE until teardown and were making the view sticky — but the
+ * real complaint is calls going MISSING, and excluding a state can only ever
+ * remove rows. Reverted rather than left in: a wrong hypothesis that drops data
+ * is worse than the cosmetic issue it was aimed at.
  *
- * vce solves the same problem with an explicit hang time on its Now Playing
- * (sdrtrunk.nowPlaying.trafficChannelHangMs, default 5s) rather than by
- * treating ACTIVE as in-call.
+ * The missing calls are a CADENCE problem, not a filter one: a P25 over is
+ * often shorter than the agent's 15s status interval, so it begins and ends
+ * between two reports and is never observed at all. That is what the 1s
+ * liveWatch cadence exists to fix, and it only takes effect once nodes run
+ * agent 0.2.21 (see the liveWatch reset race and read-loop block fixed there).
  */
-const LIVE_CALL_STATES = new Set(['CALL', 'ENCRYPTED']);
+const LIVE_CALL_STATES = new Set(['CALL', 'ACTIVE', 'ENCRYPTED']);
 
 export interface LiveNodeSlice {
   node: string;
