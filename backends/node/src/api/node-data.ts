@@ -286,8 +286,31 @@ const WINDOW_INTERVAL: Record<Exclude<Windows, 'all'>, string> = {
  * 'e.') to match queries that alias the events table, mirroring the scope
  * helpers. `TG_VALID` is the bare (unprefixed) form.
  */
-const tgValid = (prefix = ''): string => `${prefix}talkgroup BETWEEN 1 AND 65535`;
+// A CALL talkgroup on this network is always 5 digits, so the floor is 10000
+// rather than 1 — 798 / 1085 / 40 are corrupted decodes, and without this they
+// leak into every embedded "top talkgroups" column even though the talkgroup
+// LIST filters them out. 65535 remains the 16-bit P25 ceiling.
+const tgValid = (prefix = ''): string => `${prefix}talkgroup BETWEEN 10000 AND 65535`;
 const TG_VALID = tgValid();
+
+/**
+ * The same rule, plus the operator's deliberate exceptions: AirBand carries
+ * aviation channels as low pseudo-talkgroups (id 5 today, more expected), so
+ * anything CONFIGURED outside the 5-digit range is allowed back in.
+ *
+ * The ids are inlined rather than parameterised because this predicate is
+ * interpolated into queries that own their own parameter lists; they come from
+ * the zod-validated config as integers and are re-checked here, so there is
+ * nothing injectable. Empty exception list → the plain predicate.
+ */
+async function tgValidConfigured(prefix = ''): Promise<string> {
+  const configured = (await talkgroupCatalog()).configuredTalkgroups;
+  const extra = [...configured].filter(
+    (id) => Number.isSafeInteger(id) && (id < 10000 || id > 65535),
+  );
+  const base = tgValid(prefix);
+  return extra.length === 0 ? base : `(${base} OR ${prefix}talkgroup IN (${extra.join(',')}))`;
+}
 
 /**
  * "This row is a talkgroup VOICE call." node_radio_events stores EVERY P25
@@ -1067,6 +1090,7 @@ nodeDataRouter.get(
       const agencies = await talkgroupAgencies();
       const colors = await talkgroupColors();
       const evAgencies = await talkgroupAgencies();
+      const evRadio = await radioDisplay();
       const siteMap = radioIds.length > 0 ? await siteNames(pool) : null;
       const capAliases = pagerIds.length > 0 ? capcodeAliases() : null;
 
@@ -1089,7 +1113,14 @@ nodeDataRouter.get(
               agency: d.talkgroup !== null ? evAgencies.get(d.talkgroup) ?? null : null,
               systemLabel: d.system_label,
               sourceUnit: d.source_unit,
+              // `sourceAlias` is the OTA the call carried; the other two are
+              // properties of the UID itself (its configured unit label and
+              // the agency that owns it), so a radio shows both aliases here
+              // exactly as it does in the Radios and Aliases tables.
               sourceAlias: d.source_alias,
+              sourceUnitAlias: d.source_unit !== null ? evRadio.labels.get(d.source_unit) ?? null : null,
+              sourceAgency: d.source_unit !== null ? evRadio.agencies.get(d.source_unit) ?? null : null,
+              sourceColor: d.source_unit !== null ? evRadio.colors.get(d.source_unit) ?? null : null,
               frequency: d.frequency !== null ? Number(d.frequency) : null,
               action: d.action,
               eventType: d.event_type,
@@ -1691,6 +1722,16 @@ nodeDataRouter.get(
         (wacnIdx !== null ? ` AND ${p}wacn = $${wacnIdx}` : '') +
         (nodeIdx !== null ? ` AND ${p}node_id = $${nodeIdx}` : '');
 
+      // Hide-encrypted must reach the per-site "top talkgroup" lateral, or a
+      // site's headline talkgroup stays an ENC one while the talkgroup list
+      // excludes it. Inlined as validated integers — this lateral shares the
+      // handler's parameter list and appending to it would renumber the scope.
+      let siteEncSql = '';
+      if (url.searchParams.get('enc') === 'hide') {
+        const safeEnc = (await encryptedTalkgroupIds()).filter((id) => Number.isSafeInteger(id));
+        if (safeEnc.length) siteEncSql = `AND e.talkgroup <> ALL(ARRAY[${safeEnc.join(',')}]::int[])`;
+      }
+
       // Same scope against node_site_snapshots, whose system column is
       // `system_id`. Snapshots are UPSERTed per (node, system, rfss, site)
       // every ~60s, so received_at tracks "still being monitored" and the
@@ -1767,7 +1808,8 @@ nodeDataRouter.get(
                SELECT e.talkgroup, COUNT(*)::int AS calls
                  FROM node_radio_events e
                 WHERE ${scope('e.')} AND e.site_rfss = s.rfss AND e.site_id = s.site
-                  AND ${callGroup('e.')} AND ${tgValid('e.')}
+                  AND ${callGroup('e.')} AND ${await tgValidConfigured('e.')}
+                  ${siteEncSql}
                 GROUP BY e.talkgroup
                 ORDER BY calls DESC, e.talkgroup ASC
                 LIMIT 1
@@ -2061,19 +2103,11 @@ nodeDataRouter.get(
       }
       // This table is what was RECEIVED in the window, not what is programmed
       // (Global settings owns that), so every talkgroup heard is listed —
-      // programmed or not. The ONLY exclusion is ids that cannot be talkgroups:
-      // a call talkgroup on this network is always 5 digits, so 798 / 1085 / 40
-      // are corrupted decodes. The exception is anything the operator has
-      // deliberately configured — AirBand carries aviation channels as low
-      // pseudo-talkgroups (id 5 today, more expected), and a blind digit filter
-      // would hide them.
-      const configured = (await talkgroupCatalog()).configuredTalkgroups;
-      if (configured.size > 0) {
-        params.push([...configured]);
-        conds.push(`(talkgroup BETWEEN 10000 AND 99999 OR talkgroup = ANY($${params.length}::int[]))`);
-      } else {
-        conds.push('talkgroup BETWEEN 10000 AND 99999');
-      }
+      // programmed or not. The only exclusion is ids that cannot be talkgroups,
+      // with the standing exception for configured ones (AirBand). Same
+      // predicate the embedded "top talkgroups" columns use, so a talkgroup
+      // can't be filtered out of the list yet still appear inside a row.
+      conds.push(await tgValidConfigured());
       const where = conds.join(' AND ');
       const orderCol = sort === 'lastSeen' ? 'last_seen' : 'calls';
       // "Always encrypted" = no clear call at all. A talkgroup that carries
@@ -2415,6 +2449,15 @@ nodeDataRouter.get(
         latParams.push(v);
         return `$${latParams.length + 4}`;
       };
+      // Hide-encrypted has to reach the per-radio "top talkgroups" lateral too,
+      // or an always-encrypted talkgroup keeps showing inside a row while being
+      // excluded from the talkgroup list itself. Inlined as validated integers
+      // because this lateral's parameter numbering is offset by the page keys.
+      let radEncSql = '';
+      if (url.searchParams.get('enc') === 'hide') {
+        const safeEnc = (await encryptedTalkgroupIds()).filter((id) => Number.isSafeInteger(id));
+        if (safeEnc.length) radEncSql = `AND e.talkgroup <> ALL(ARRAY[${safeEnc.join(',')}]::int[])`;
+      }
       let nodeLat = '';
       if (nodeId !== null) nodeLat += ` AND e.node_id = ${latAdd(nodeId)}`;
       if (scope.rfss !== null) {
@@ -2490,7 +2533,8 @@ nodeDataRouter.get(
                       AND e.system IS NOT DISTINCT FROM k.system
                       AND e.source_unit = k.radio${nodeLat}
                   AND ${callGroup('e.')}
-                      AND ${tgValid('e.')}
+                      AND ${await tgValidConfigured('e.')}
+                      ${radEncSql}
                     GROUP BY e.talkgroup
                     ORDER BY calls DESC, e.talkgroup ASC
                     LIMIT 3

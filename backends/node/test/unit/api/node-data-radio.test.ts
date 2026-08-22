@@ -174,7 +174,7 @@ describe('GET /api/node-data/talkgroups', () => {
 
 // A real P25 talkgroup is 16-bit (1..65535); the ingest drops 7-digit RADIO
 // IDs into the same column, so every talkgroup list/count must gate on
-// `talkgroup BETWEEN 1 AND 65535`. The pg pool is mocked, so we emulate the DB
+// `talkgroup BETWEEN 10000 AND 65535`. The pg pool is mocked, so we emulate the DB
 // filter in the mock: it only drops the out-of-range row when the executed SQL
 // actually carries the predicate — proving BOTH the list query and the
 // distinct-talkgroup COUNT wire it in (a missing predicate keeps the bogus row
@@ -185,13 +185,13 @@ describe('talkgroup range filter (radio ids excluded)', () => {
     { wacn: null, system: 721, talkgroup: 10101, calls: 5, logical: 3, enc: 0, last_seen: LAST_SEEN },
     { wacn: null, system: 721, talkgroup: 2315291, calls: 2, logical: 1, enc: 0, last_seen: LAST_SEEN },
   ];
-  const TG_PREDICATE = 'talkgroup BETWEEN 1 AND 65535';
+  const TG_PREDICATE = 'talkgroup BETWEEN 10000 AND 65535';
   const applyRange = (sql: string, rows: typeof CANDIDATE_TGS) =>
     sql.includes(TG_PREDICATE)
-      ? rows.filter((r) => r.talkgroup >= 1 && r.talkgroup <= 65535)
+      ? rows.filter((r) => r.talkgroup >= 10000 && r.talkgroup <= 65535)
       : rows;
 
-  it('/talkgroups drops a >65535 tg from the list AND the distinct count, keeps a 5-digit tg', async () => {
+  it('/talkgroups drops out-of-range tgs from the list AND the distinct count, keeps a 5-digit tg', async () => {
     queryMock.mockImplementation((sql: string) => {
       if (sql.includes('DISTINCT ON (system_id, rfss, site_id)')) return { rows: [SNAPSHOT_ROW] };
       // Distinct-talkgroup COUNT for pagination total.
@@ -209,6 +209,8 @@ describe('talkgroup range filter (radio ids excluded)', () => {
     // List: only the valid 5-digit TG survives.
     expect(body.talkgroups.map((t: { talkgroup: number }) => t.talkgroup)).toEqual([10101]);
     expect(body.talkgroups.some((t: { talkgroup: number }) => t.talkgroup === 2315291)).toBe(false);
+    // ...and so does the sub-5-digit decode noise.
+    expect(body.talkgroups.some((t: { talkgroup: number }) => t.talkgroup === 798)).toBe(false);
     // Distinct-talkgroup count: the radio id is excluded from the tally too.
     expect(body.total).toBe(1);
   });
@@ -220,12 +222,12 @@ describe('talkgroup range filter (radio ids excluded)', () => {
     expect(res.status).toBe(200);
     // The TALKGROUPS tile count must exclude out-of-range ids via FILTER.
     const totals = calls.find((c) => c.sql.includes('AS talkgroups'));
-    expect(totals?.sql).toContain('FILTER (WHERE talkgroup BETWEEN 1 AND 65535)');
+    expect(totals?.sql).toContain('FILTER (WHERE talkgroup BETWEEN 10000 AND 65535)');
     // The scoped top-talkgroups list is gated too.
     const tgList = calls.find(
       (c) => c.sql.includes('GROUP BY talkgroup') && c.sql.includes('ORDER BY calls DESC, talkgroup ASC'),
     );
-    expect(tgList?.sql).toContain('talkgroup BETWEEN 1 AND 65535');
+    expect(tgList?.sql).toContain('talkgroup BETWEEN 10000 AND 65535');
   });
 });
 
