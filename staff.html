@@ -2934,18 +2934,6 @@
                         onchange="nd2TgSetAgency(this.value)">
                   <option value="">All agencies</option>
                 </select>
-                <!-- Talkgroups absent from the global config are near-always
-                     corrupted decodes (one call each), so they are hidden
-                     unless asked for. Ids that aren't 5 digits are never
-                     talkgroups at all and stay hidden either way, unless the
-                     operator has explicitly configured one (AirBand). -->
-                <select class="nd-input" id="nd2-tg-unknown" style="max-width: 200px;"
-                        aria-label="Show talkgroups that are not in the config"
-                        title="Unconfigured ids are almost always corrupted decodes. Ids that aren't 5 digits are never shown unless configured."
-                        onchange="nd2TgSetUnknown(this.value)">
-                  <option value="">Configured only</option>
-                  <option value="show">Include unknown 5-digit</option>
-                </select>
                 <div class="filter-spacer"></div>
                 <div class="nd2-seg" role="group" aria-label="Sort talkgroups by">
                   <button class="filter-btn active" data-nd2-tgsort="calls" onclick="nd2TgSetSort('calls')">Calls</button>
@@ -4172,9 +4160,7 @@
       // Talkgroups / Radios sub-tabs (scoped to the open system): search + paging.
       // `agency` = the /agencies filter; `has` = 'ota' | 'alias' | '' (a radio
       // can carry both, so this picks WHICH one must be present, never "named").
-      // `unknown`: '' = configured talkgroups only (decode noise hidden),
-      // 'show' = include ids absent from the global config.
-      tg: { q: '', sort: 'calls', agency: '', unknown: '', offset: 0, limit: 50, total: 0 },
+      tg: { q: '', sort: 'calls', agency: '', offset: 0, limit: 50, total: 0 },
       rad: { q: '', sort: 'calls', agency: '', has: '', offset: 0, limit: 50, total: 0 },
       // Over-the-air radio aliases, one row per radio. Unwindowed: an alias is
       // durable identity, so the interesting radio is often a quiet one.
@@ -6008,11 +5994,6 @@
       nd2.tg.offset = 0;
       nd2LoadTalkgroups();
     }
-    function nd2TgSetUnknown(v) {
-      nd2.tg.unknown = v === 'show' ? 'show' : '';
-      nd2.tg.offset = 0;
-      nd2LoadTalkgroups();
-    }
     function nd2TgSetSort(sort) {
       if (nd2.tg.sort === sort) return;
       nd2.tg.sort = sort; nd2.tg.offset = 0;
@@ -6037,7 +6018,6 @@
       // Agency is a property of the talkgroup's alias group, so the server
       // resolves it to an id set — the page and its total stay correct.
       if (nd2.tg.agency) params.set('agency', nd2.tg.agency);
-      if (nd2.tg.unknown === 'show') params.set('unknown', 'show');
       // Two callers share this one panel and loader: the Systems drill-down
       // (scoped to a system, or one of its sites) and the top-level Talkgroups
       // view, which is fleet-wide. nd2.sys.* is NOT cleared when a top-level
@@ -6130,6 +6110,9 @@
       const view = nd2.view;
       void nd2FillAgencySelects();
       const params = new URLSearchParams({
+        // Windowed like the other received tables — which radios named
+        // themselves in this period, not every radio that ever has.
+        window: nd2.window,
         sort: nd2.alias.sort,
         limit: String(nd2.alias.limit),
         offset: String(nd2.alias.offset),

@@ -2059,27 +2059,18 @@ nodeDataRouter.get(
         params.push(ids);
         conds.push(`talkgroup = ANY($${params.length}::int[])`);
       }
-      // Decode noise lists as real talkgroups. Two rules, in order of strength:
-      //
-      // 1. A P25 talkgroup on this network is ALWAYS 5 digits — anything else
-      //    is a corrupted decode, full stop (798, 1085, 40, …). Always applied,
-      //    even with unknown=show. The one exception is a talkgroup the
-      //    operator has explicitly configured: AirBand is an aviation channel
-      //    carried as pseudo-talkgroup 5, and a blind digit filter would hide
-      //    it, so anything in the config survives regardless of its id.
-      // 2. Of the ids that ARE 5 digits, the ones absent from the config are
-      //    still overwhelmingly noise (in a 24h sample all 34 had exactly one
-      //    call, while every configured talkgroup had far more). Hidden by
-      //    default, restored by unknown=show so a genuinely new talkgroup can
-      //    be spotted before it is added to the config.
-      const showUnknown = url.searchParams.get('unknown') === 'show';
+      // This table is what was RECEIVED in the window, not what is programmed
+      // (Global settings owns that), so every talkgroup heard is listed —
+      // programmed or not. The ONLY exclusion is ids that cannot be talkgroups:
+      // a call talkgroup on this network is always 5 digits, so 798 / 1085 / 40
+      // are corrupted decodes. The exception is anything the operator has
+      // deliberately configured — AirBand carries aviation channels as low
+      // pseudo-talkgroups (id 5 today, more expected), and a blind digit filter
+      // would hide them.
       const configured = (await talkgroupCatalog()).configuredTalkgroups;
-      // Never filter on an EMPTY configured set — a config with no talkgroups
-      // yet would otherwise hide the entire list rather than the noise.
       if (configured.size > 0) {
         params.push([...configured]);
-        const inConfig = `talkgroup = ANY($${params.length}::int[])`;
-        conds.push(showUnknown ? `(talkgroup BETWEEN 10000 AND 99999 OR ${inConfig})` : inConfig);
+        conds.push(`(talkgroup BETWEEN 10000 AND 99999 OR talkgroup = ANY($${params.length}::int[]))`);
       } else {
         conds.push('talkgroup BETWEEN 10000 AND 99999');
       }
@@ -3292,14 +3283,15 @@ nodeDataRouter.get('/api/node-data/live', requireRole(canViewNodeData), async (c
 // ---------------------------------------------------------------------------
 // GET /api/node-data/radio-aliases?q=&sort=lastSeen|timesSeen|radio&limit=&offset=
 //
-// Every radio that has ever transmitted an over-the-air alias, ONE ROW PER
-// RADIO. Reads node_radio_aliases rather than the event detail: aliases are
-// durable identity, the detail table is pruned at 30 days, and deduping 400k
-// event rows to a few hundred radios on every request would be wasteful.
+// Radios that transmitted an over-the-air alias, ONE ROW PER RADIO. Reads
+// node_radio_aliases rather than the event detail: aliases are durable
+// identity, the detail table is pruned at 30 days, and deduping 400k event
+// rows to a few hundred radios on every request would be wasteful.
 //
-// Deliberately unwindowed — "every radio that has ever named itself" is the
-// question, and a radio quiet for a month is exactly the one you are looking
-// up.
+// WINDOWED on last_seen, like every other "what was received" table — this
+// answers "which radios were heard this period", not "what is programmed"
+// (Global settings owns that). The alias row itself is still kept forever, so
+// `window=all` restores the full history.
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 // GET /api/node-data/agencies
@@ -3379,6 +3371,16 @@ nodeDataRouter.get('/api/node-data/radio-aliases', requireRole(canViewNodeData),
       }
       params.push(ids);
       conds.push(`radio_id = ANY($${params.length}::bigint[])`);
+    }
+    // Windowed like every other RECEIVED table: this lists radios heard in the
+    // selected period, not every radio that has ever named itself. (The alias
+    // ROW is still kept forever — durable identity — it just isn't listed here
+    // unless the radio was heard in-window.) `window=all` drops the bound.
+    const windowRaw = (url.searchParams.get('window') ?? '').toLowerCase();
+    if (windowRaw !== 'all') {
+      const iv = WINDOW_INTERVAL[(['24h', '7d', '30d'] as const).find((w) => w === windowRaw) ?? '7d'];
+      params.push(iv);
+      conds.push(`last_seen >= now() - $${params.length}::interval`);
     }
     const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
     const orderBy = {
