@@ -36,6 +36,7 @@ import {
 } from '../services/nodes/registry.js';
 import { getUsername } from './users.js';
 import { hub } from '../services/nodes/hub.js';
+import { liveCallWindow } from '../services/nodeCallWindow.js';
 import { getZoneGroups, isValidZone } from '../services/nodes/rfsZones.js';
 import { getPool } from '../db/pool.js';
 import { feederRadioStats } from './node-data.js';
@@ -617,6 +618,7 @@ feederRouter.delete('/api/feeder/nodes/:id', async (c) => {
   try {
     hub.forceDisconnectAgent(node.id);
     hub.clearNode(node.id);
+    liveCallWindow.dropNode(node.id);
     await deleteNode(node.id);
     _clearNodeTokenCache();
     return c.json({ ok: true });

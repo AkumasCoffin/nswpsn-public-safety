@@ -2120,6 +2120,19 @@
     }
     .nd2-live-on i, .nd2-live-off i { margin-right: 0.25rem; font-size: 0.62rem; }
 
+    /* A call that has finished but is still held on screen. Recedes rather than
+       disappears, so the eye keeps its place while live rows stay dominant.
+       Never the ONLY signal that a call ended — it is paired with a chip, since
+       dimming alone is invisible to some viewers. */
+    .nd2-call-ended > td { opacity: 0.55; }
+    .nd2-call-chip {
+      background: rgba(148, 163, 184, 0.14);
+      color: #cbd5e1;
+      border-color: rgba(148, 163, 184, 0.3);
+      white-space: nowrap;
+    }
+    .nd2-call-chip i { margin-right: 0.2rem; font-size: 0.58rem; }
+
     /* Live view: two stacked cards (channels, then active calls). .nd2-card
        carries no margin of its own, so without this they sit flush and read as
        one long table. Separates the pair rather than trailing the second. */
@@ -5857,6 +5870,10 @@
     let _nd2LiveWsGen = 0;   // invalidates handlers from a superseded socket
     let _nd2LiveWsRetry = null;   // pending reconnect timer
     let _nd2LiveWsBackoff = 0;    // ms; grows on repeated failure, reset on success
+    // True once the CURRENT socket has actually delivered live data. The poll
+    // defers to the push feed only from that point — before it, the socket may
+    // be open but has nothing to show, and deferring would blank the view.
+    let _nd2LiveWsFed = false;
 
     // Reconnect with backoff. The first version deliberately had none — one
     // blip (tunnel idle timeout, token refresh, a dropped packet) fell back to
@@ -5926,6 +5943,7 @@
             break;
           case 'liveSnapshot': {
             _nd2LiveWsBackoff = 0;   // a working session clears the penalty
+            _nd2LiveWsFed = true;    // the poll now defers to this feed
             const next = new Map();
             for (const s of ((d && d.nodes) || [])) next.set(s.node, s);
             _nd2LiveSlices = next;
@@ -5933,7 +5951,7 @@
             break;
           }
           case 'liveNode':
-            if (d && d.node) { _nd2LiveSlices.set(d.node, d); nd2RenderLive(); }
+            if (d && d.node) { _nd2LiveWsFed = true; _nd2LiveSlices.set(d.node, d); nd2RenderLive(); }
             break;
           case 'liveNodeOffline':
             // A node that dropped has no live rows; leaving its last frame up
@@ -5952,6 +5970,7 @@
       ws.onclose = () => {
         if (_nd2LiveWs !== ws) return;   // superseded; a newer socket owns state
         _nd2LiveWs = null;
+        _nd2LiveWsFed = false;           // the poll is the source of truth again
         nd2RenderLive();                 // stop claiming "live" immediately
         nd2ScheduleLiveReconnect();
       };
@@ -5979,6 +5998,10 @@
      *  fresh rather than inheriting a 30s penalty from an earlier outage. */
     function nd2StopLiveWs(resetBackoff = true) {
       _nd2LiveWsGen++;
+      // The next socket starts with nothing delivered, so the poll takes over
+      // again until it does. Missing this would leave the poll deferring to a
+      // feed that is gone.
+      _nd2LiveWsFed = false;
       nd2CancelLiveReconnect();
       if (resetBackoff) _nd2LiveWsBackoff = 0;
       const ws = _nd2LiveWs;
@@ -6112,6 +6135,35 @@
       return nd2TgPill(o.talkgroup, o.talkgroupLabel, o.color);
     }
 
+    /** How long a call ran, for the ended chip. Sub-second overs are real and
+     *  common, so they get one decimal rather than rounding to "0s". */
+    function nd2CallDuration(ms) {
+      const n = Number(ms);
+      if (!Number.isFinite(n) || n <= 0) return '';
+      if (n < 10000) return (n / 1000).toFixed(1) + 's';
+      if (n < 60000) return Math.round(n / 1000) + 's';
+      return Math.floor(n / 60000) + 'm' + String(Math.round((n % 60000) / 1000)).padStart(2, '0') + 's';
+    }
+
+    /** The chip that distinguishes a call still on air from one being held.
+     *
+     *  Finished calls stay listed for a few seconds (the backend's call window)
+     *  so the table doesn't blink them out mid-read — but a held row must never
+     *  be mistaken for live traffic, hence an explicit marker rather than only
+     *  dimming, which a colour-blind or low-contrast viewer could miss.
+     *
+     *  "recovered" means the call was never caught on air: it was shorter than
+     *  the poll interval and was reconstructed from the node's decode-event
+     *  log, so it is a record that it happened, not a sighting. */
+    function nd2LiveCallState(c) {
+      if (!c.ended) return '';
+      const dur = nd2CallDuration(c.durationMs);
+      if (c.synthetic) {
+        return ` <span class="nd2-chip nd2-call-chip" title="Shorter than the poll interval — recovered from the node's decode-event log rather than seen live"><i class="fas fa-clock-rotate-left"></i>${dur ? ' ' + escapeHtml(dur) : ' recovered'}</span>`;
+      }
+      return ` <span class="nd2-chip nd2-call-chip" title="Call finished — held briefly so it doesn't vanish mid-read"><i class="fas fa-square"></i>${dur ? ' ' + escapeHtml(dur) : ' ended'}</span>`;
+    }
+
     // NB: distinct from nd2Pct — that one formats a plain percentage for the
     // site-detail tiles. This one colours a DECODE figure by health, and is
     // only for the Live tables.
@@ -6146,12 +6198,28 @@
     function nd2LinkLiveCalls(calls) {
       const byCall = new Map();
       for (const c of (calls || [])) {
-        const key = `${c.talkgroup == null ? '?' : c.talkgroup}|${c.from == null ? '?' : c.from}`;
+        // With neither a talkgroup nor a calling unit there is nothing to match
+        // on, and every such reception used to key to the same literal "?|?" —
+        // collapsing genuinely different unidentified calls, across all nodes,
+        // into a single row. Fall back to the channel, which at least keeps
+        // separate calls separate; the cost is that one call heard by two nodes
+        // may show twice, which is the honest failure of the two.
+        const key = (c.talkgroup == null && c.from == null)
+          ? `?|${c.name || ''}|${c.timeslot == null ? '' : c.timeslot}|${c.node || ''}`
+          : `${c.talkgroup == null ? '?' : c.talkgroup}|${c.from == null ? '?' : c.from}`;
         const prev = byCall.get(key);
         if (!prev) {
           byCall.set(key, { ...c, sites: new Set(), nodes: new Map() });
         }
         const row = byCall.get(key);
+        // A call is over only once EVERY node that heard it says so: while any
+        // site still has it, it is still on air.
+        row.ended = row.ended !== false && c.ended === true;
+        if (c.endedAt && (!row.endedAt || c.endedAt > row.endedAt)) row.endedAt = c.endedAt;
+        if (c.startedAt && (!row.startedAt || c.startedAt < row.startedAt)) row.startedAt = c.startedAt;
+        if (Number(c.durationMs) > Number(row.durationMs ?? -1)) row.durationMs = c.durationMs;
+        // A call anyone actually heard is not a reconstruction.
+        if (c.synthetic !== true) row.synthetic = false;
         if (c.site) row.sites.add(String(c.site));
         // Keep the node NAME alongside the id — a merged call needs to name every
         // node that heard it, not just count them.
@@ -6204,6 +6272,16 @@
       // control channel) would misreport the site as not being received.
       if (nd2HideEnc()) calls = calls.filter(c => !nd2IsEncCall(c));
       calls = nd2LinkLiveCalls(calls);
+      // On air first, then the most recently finished. Within each group the
+      // order is stable (talkgroup), so a row doesn't jump while you read it —
+      // the same reasoning as the channel table above. A call crossing from
+      // live to ended moves once, which is the one movement that means
+      // something.
+      calls.sort((x, y) => {
+        if (!!x.ended !== !!y.ended) return x.ended ? 1 : -1;
+        if (x.ended) return String(y.endedAt || '').localeCompare(String(x.endedAt || ''));
+        return String(x.talkgroup ?? '').localeCompare(String(y.talkgroup ?? ''));
+      });
 
       // Say which feed is driving this. The poll fallback is silent by design,
       // so without this a dropped socket looks identical to a working one —
@@ -6241,7 +6319,7 @@
         [{ label: 'Talkgroup' }, { label: 'Agency' }, { label: 'Source' }, { label: 'Sites' },
          { label: 'Freq', num: true }, { label: 'Decode', num: true }, { label: 'Node' }],
         calls.map(c => [
-          nd2LiveTgCell(c),
+          nd2LiveTgCell(c) + nd2LiveCallState(c),
           nd2AgencyCell(c.agency),
           c.talkerAlias || c.fromAlias
             ? `<span class="nd-strong">${escapeHtml(String(c.talkerAlias || c.fromAlias))}</span> <span class="nd-sub">${escapeHtml(String(c.from == null ? '' : c.from))}</span>`
@@ -6263,7 +6341,8 @@
             ? `<span class="nd2-live-nodes">${c.nodeList
                 .map(n => nd2NodeChip({ id: nd2ShortNode(n.id), name: n.name })).join('')}</span>`
             : nd2NodeChip(null),
-        ])) : '<div class="nd2-empty">No calls in progress.</div>';
+        ]), (ri) => (calls[ri] && calls[ri].ended ? 'nd2-call-ended' : ''))
+        : '<div class="nd2-empty">No calls in progress.</div>';
     }
 
     /** Snapshot load — first paint, and the fallback when the WS is down. */
@@ -6273,9 +6352,22 @@
       // No node param: the snapshot fills the same per-node map the WS feed
       // does, and the node filter is applied at render. Fetching a filtered
       // snapshot would throw away the other nodes' slices on every poll.
+      // Snapshot the socket generation BEFORE the fetch. This runs on first
+      // paint and on tab un-hide, i.e. in parallel with the socket coming up,
+      // so by the time it resolves several liveNode frames may already have
+      // landed — assigning unconditionally overwrote fresher pushed data with
+      // an older REST reply, which read as calls jumping backwards.
+      const gen = _nd2LiveWsGen;
       try {
         const d = await nd2Fetch('/api/node-data/live');
         if (!nd2LiveShowing()) return;   // navigated away mid-fetch
+        if (gen !== _nd2LiveWsGen) return;   // a newer socket owns the state now
+        // The push feed is authoritative ONCE IT HAS ACTUALLY DELIVERED. Testing
+        // only readyState would be wrong in the common case: this fetch races
+        // the socket on first paint, and a socket that is open but has not yet
+        // sent its snapshot has nothing to show — dropping the REST reply there
+        // would leave the table empty for a round-trip.
+        if (_nd2LiveWsFed) return;
         const next = new Map();
         for (const n of (d.nodes || [])) {
           next.set(n.node, {

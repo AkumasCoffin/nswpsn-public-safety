@@ -248,6 +248,19 @@ class NodeHub {
     this.pushLive(nodeId, status, a.lastStatusAt);
   }
 
+  /**
+   * Re-shape and re-broadcast a node's CURRENT state without a new frame.
+   *
+   * Live rows now outlive the frame that produced them (calls hang for a few
+   * seconds after they end), so something has to repaint when that hang runs
+   * out. A node on the 15s heartbeat would otherwise leave its last ended call
+   * on screen until it next spoke.
+   */
+  refreshLive(nodeId: string): void {
+    const a = this.agents.get(nodeId);
+    if (a) this.pushLive(nodeId, a.lastStatus, a.lastStatusAt);
+  }
+
   /** Shape + fan one node's status out to fleet-Live subscribers. */
   private pushLive(nodeId: string, status: StatusData | null, at: number | null): void {
     if (this.liveStaff.size === 0 || !this.liveShaper) return;
@@ -385,22 +398,35 @@ class NodeHub {
   }
 
   subscribeLiveStaff(ws: WebSocket, userId: string): void {
-    // Same de-dupe as subscribeStaff: a re-subscribe (reconnect, or the user
-    // leaving and re-entering the view) must not leave two entries that
-    // double-deliver every frame to one viewer.
+    // Count viewers BEFORE the de-dupe delete. The frontend re-sends
+    // subscribeLive on every reconnect, so the sole viewer routinely
+    // re-subscribes on the same socket: removing its own entry first made the
+    // set look empty and fired a fleet-wide "speed up" on what was a 1→1
+    // transition, not 0→1.
+    const wasEmpty = this.liveStaff.size === 0;
+    // A re-subscribe must not leave two entries that double-deliver every
+    // frame to one viewer.
     for (const s of this.liveStaff) {
       if (s.ws === ws) this.liveStaff.delete(s);
     }
-    const wasEmpty = this.liveStaff.size === 0;
     this.liveStaff.add({ ws, userId });
     if (wasEmpty) this.setAgentLiveWatch(true);
   }
 
   unsubscribeLiveStaff(ws: WebSocket): void {
+    // Only a socket that was actually subscribed can end the watch. This is
+    // called on EVERY staff socket close, and the frontend also sends an
+    // explicit unsubscribeLive before closing, so without the guard a normal
+    // teardown broadcast the fleet-wide "slow down" twice — and any staff
+    // socket that never opened Live at all broadcast it once.
+    let removed = false;
     for (const s of this.liveStaff) {
-      if (s.ws === ws) this.liveStaff.delete(s);
+      if (s.ws === ws) {
+        this.liveStaff.delete(s);
+        removed = true;
+      }
     }
-    if (this.liveStaff.size === 0) this.setAgentLiveWatch(false);
+    if (removed && this.liveStaff.size === 0) this.setAgentLiveWatch(false);
   }
 
   /**

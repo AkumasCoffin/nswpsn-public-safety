@@ -49,6 +49,7 @@ import {
   talkgroupColors,
 } from '../services/talkgroupCatalog.js';
 import { shapeNodeLive, sortLiveChannels } from '../services/nodeLive.js';
+import { liveCallWindow } from '../services/nodeCallWindow.js';
 
 /**
  * Talkgroup label / agency / colour lookups live in services/talkgroupCatalog
@@ -3114,7 +3115,12 @@ nodeDataRouter.get('/api/node-data/live', requireRole(canViewNodeData), async (c
     for (const a of hub.agentList()) {
       if (only !== null && a.nodeId !== only) continue;
       const live = hub.liveStatus(a.nodeId);
-      const slice = await shapeNodeLive(a.nodeId, live.status, live.lastStatusAt);
+      const slice = await shapeNodeLive(
+        a.nodeId,
+        live.status,
+        live.lastStatusAt,
+        liveCallWindow.callsFor(a.nodeId),
+      );
       if (!slice) continue; // pager node, or nothing reported yet
       nodes.push({
         node: slice.node,

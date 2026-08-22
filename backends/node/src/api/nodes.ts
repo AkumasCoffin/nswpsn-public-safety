@@ -41,6 +41,7 @@ import {
   type NodePatch,
 } from '../services/nodes/registry.js';
 import { hub } from '../services/nodes/hub.js';
+import { liveCallWindow } from '../services/nodeCallWindow.js';
 import { isAgentCommandAction } from '../services/nodes/protocol.js';
 import { getUsernameMap, getUsername } from './users.js';
 import { ConfigOverrideSchema } from '../services/nodes/configSchema.js';
@@ -510,6 +511,7 @@ nodesRouter.delete('/api/nodes/:id', requireRole(isOwner), async (c) => {
   try {
     hub.forceDisconnectAgent(id);
     hub.clearNode(id);
+    liveCallWindow.dropNode(id);
     const ok = await deleteNode(id);
     if (!ok) return c.json({ error: 'node not found' }, 404);
     _clearNodeTokenCache();

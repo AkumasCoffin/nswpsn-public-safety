@@ -17,23 +17,7 @@ import type { Pool } from 'pg';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { talkgroupCatalog } from './talkgroupCatalog.js';
-
-/**
- * States that count as a live call.
- *
- * ACTIVE is included. It was briefly removed on the theory that finished calls
- * linger in ACTIVE until teardown and were making the view sticky — but the
- * real complaint is calls going MISSING, and excluding a state can only ever
- * remove rows. Reverted rather than left in: a wrong hypothesis that drops data
- * is worse than the cosmetic issue it was aimed at.
- *
- * The missing calls are a CADENCE problem, not a filter one: a P25 over is
- * often shorter than the agent's 15s status interval, so it begins and ends
- * between two reports and is never observed at all. That is what the 1s
- * liveWatch cadence exists to fix, and it only takes effect once nodes run
- * agent 0.2.21 (see the liveWatch reset race and read-loop block fixed there).
- */
-const LIVE_CALL_STATES = new Set(['CALL', 'ACTIVE', 'ENCRYPTED']);
+import { isLiveCallRow, type WindowCall } from './nodeCallWindow.js';
 
 export interface LiveNodeSlice {
   node: string;
@@ -112,11 +96,19 @@ function normaliseChannelName(name: string): string {
  * Shape one node's last-reported status into the Live view's rows. Returns
  * null when the node isn't a radio node or has reported nothing yet — callers
  * treat that as "nothing to show for this node", not an error.
+ *
+ * `windowCalls` is the node's rolling call window (nodeCallWindow). When given,
+ * it REPLACES `status.activeCalls` as the source of call rows: the window is a
+ * superset — every live call, plus ones that ended moments ago and ones
+ * recovered from the event log — and it carries the timing the raw frame has
+ * no room for. Omitting it falls back to shaping the bare frame, which is what
+ * the unit tests exercise and what any future caller without a window gets.
  */
 export async function shapeNodeLive(
   nodeId: string,
   status: unknown,
   lastStatusAt: number | null,
+  windowCalls?: readonly WindowCall[] | null,
 ): Promise<LiveNodeSlice | null> {
   const nodes = await liveNodeNames();
   const meta = nodes.get(nodeId);
@@ -195,18 +187,26 @@ export async function shapeNodeLive(
     });
   }
 
-  for (const ac of asRows(st['activeCalls'])) {
-    // vce reports every processing channel here, including the control
-    // channels, which arrive with no talkgroup and showed up as a wall of
-    // duplicate "TG 0" rows mirroring the channel table above. Only states
-    // that represent traffic count as a call.
+  /** Timing a raw frame cannot carry — supplied by the call window. */
+  interface CallTiming {
+    ended: boolean;
+    endedAt: string | null;
+    startedAt: string | null;
+    lastHeardAt: string | null;
+    durationMs: number | null;
+    synthetic: boolean;
+  }
+  const NO_TIMING: CallTiming = {
+    ended: false,
+    endedAt: null,
+    startedAt: null,
+    lastHeardAt: null,
+    durationMs: null,
+    synthetic: false,
+  };
+
+  const buildCall = (ac: Record<string, unknown>, timing: CallTiming): Record<string, unknown> => {
     const state = String(ac['state'] ?? '').toUpperCase();
-    if (!LIVE_CALL_STATES.has(state)) continue;
-    // vce reports a granted traffic channel as active BETWEEN calls, with no
-    // target and no source. Those are not calls — they showed as "TG 0" rows
-    // at 0% decode. Require some call identity, matching the Nodes tab's Now
-    // Playing guard.
-    if (ac['to'] == null && ac['from'] == null && !ac['toAlias'] && !ac['fromAlias']) continue;
     const id = Number(ac['to']);
     // vce calls this `channelName`; `name` is kept only as a defensive
     // fallback for any build that reports it the other way.
@@ -219,7 +219,7 @@ export async function shapeNodeLive(
     const facts = chName
       ? chFacts.get(chName) ?? chFacts.get(normaliseChannelName(chName))
       : undefined;
-    calls.push({
+    return {
       node: nodeId,
       nodeName,
       name: chName,
@@ -247,7 +247,38 @@ export async function shapeNodeLive(
       // The call's own decode, never the control channel's (see ownQuality).
       syncPercent: ownQuality(ac['syncPercent']),
       signalDbfs: ownQuality(ac['signalDbfs']),
-    });
+      ...timing,
+    };
+  };
+
+  if (windowCalls) {
+    // The window already applied the state + identity guard at ingest, so its
+    // rows are shaped verbatim. An ended call keeps its last reported values —
+    // that is the point of holding it.
+    for (const wc of windowCalls) {
+      calls.push(
+        buildCall(wc.raw, {
+          ended: wc.endedAt !== null,
+          endedAt: wc.endedAt !== null ? new Date(wc.endedAt).toISOString() : null,
+          startedAt: new Date(wc.firstSeenAt).toISOString(),
+          lastHeardAt: new Date(wc.lastSeenAt).toISOString(),
+          // For a call still up this is how long it has been OBSERVED, not
+          // wall-clock elapsed. Deliberate: every timestamp here comes from the
+          // window's own clock, and reaching for Date.now() to make a live call
+          // tick would mix two clocks — which in testing produced a duration of
+          // roughly three years. At the 1s live cadence the two differ by less
+          // than a second anyway, and if a node stops reporting the figure
+          // correctly stops growing instead of inventing airtime.
+          durationMs: Math.max(0, (wc.endedAt ?? wc.lastSeenAt) - wc.firstSeenAt),
+          synthetic: wc.fromEvent,
+        }),
+      );
+    }
+  } else {
+    for (const ac of asRows(st['activeCalls'])) {
+      if (!isLiveCallRow(ac)) continue;
+      calls.push(buildCall(ac, NO_TIMING));
+    }
   }
 
   return {

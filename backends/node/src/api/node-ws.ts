@@ -35,10 +35,26 @@ import {
 } from '../services/nodes/protocol.js';
 import { buildConfigPayload } from '../services/nodes/configMerge.js';
 import { shapeNodeLive } from '../services/nodeLive.js';
+import { liveCallWindow } from '../services/nodeCallWindow.js';
 
 // The hub is pure connection plumbing and must not import config/DB itself, so
 // the Live row shaper is handed to it from here (module load = route setup).
-hub.setLiveShaper((nodeId, status, at) => shapeNodeLive(nodeId, status, at));
+// Calls come from the rolling window rather than the raw frame — see
+// nodeCallWindow for why the frame alone can't answer "what is on air".
+hub.setLiveShaper((nodeId, status, at) =>
+  shapeNodeLive(nodeId, status, at, liveCallWindow.callsFor(nodeId)),
+);
+
+// Live rows outlive the frame that produced them, so their expiry needs its own
+// heartbeat: without this the last ended call of a quiet node would sit on
+// screen until that node next reported (up to 15s on the slow cadence).
+// sweepExpired only names nodes that actually changed, and refreshLive is a
+// no-op when nobody is watching.
+const LIVE_EXPIRY_SWEEP_MS = 2_000;
+const liveExpirySweep = setInterval(() => {
+  for (const nodeId of liveCallWindow.sweepExpired()) hub.refreshLive(nodeId);
+}, LIVE_EXPIRY_SWEEP_MS);
+liveExpirySweep.unref?.();
 
 const AGENT_PATH = '/api/node-ws/agent';
 const STAFF_PATH = '/api/node-ws/staff';
@@ -228,7 +244,13 @@ function setupAgentConnection(ws: Alive, ctx: AgentCtx): void {
     void handleAgentMessage(ws, ctx, msg.t, msg.id, msg.data);
   });
 
-  ws.on('close', () => hub.unregisterAgent(ctx.nodeId, ws));
+  ws.on('close', () => {
+    // Drop the call window with the connection: the client removes the node's
+    // whole slice on liveNodeOffline, so holding ended calls across a
+    // disconnect would only resurrect them if it reconnected inside the hang.
+    liveCallWindow.dropNode(ctx.nodeId);
+    hub.unregisterAgent(ctx.nodeId, ws);
+  });
   ws.on('error', (err) => log.debug({ err, nodeId: ctx.nodeId }, 'agent ws error'));
 }
 
@@ -285,7 +307,13 @@ async function handleAgentMessage(
       return;
     }
     case 'status': {
-      hub.recordStatus(ctx.nodeId, (data ?? {}) as StatusData);
+      const st = (data ?? {}) as StatusData;
+      // Fold the frame into the call window BEFORE the hub fans it out:
+      // recordStatus triggers the reshape, and the shaper reads the window, so
+      // observing afterwards would broadcast the previous frame's calls.
+      // Synchronous by design — no await may separate these two.
+      liveCallWindow.observe(ctx.nodeId, st, Date.now());
+      hub.recordStatus(ctx.nodeId, st);
       void touchNodeSeen(ctx.nodeId);
       return;
     }

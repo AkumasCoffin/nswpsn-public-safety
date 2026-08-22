@@ -437,27 +437,36 @@ func (c *Client) sendStatus(conn *websocket.Conn) error {
 		jmbeInstalled = ss.JmbeInstalled
 	}
 
-	if ts, err := c.sdr.Tuners(); err != nil {
-		// Control API unreachable: only reflect it if the process is up.
-		if comps["sdrtrunk"] == supervise.StatusRunning {
-			comps["sdrtrunk"] = "unreachable"
-		}
-	} else {
+	// Each fetch stands on its own. These used to be nested inside a successful
+	// /tuners call, so ONE slow tuner enumeration - a 4s timeout, a device
+	// hiccup - reported zero channels, zero calls and zero events even though
+	// /channels would have answered fine. Downstream that is indistinguishable
+	// from "nothing is on air", so the Live view silently emptied.
+	if ts, err := c.sdr.Tuners(); err == nil {
 		for _, tuner := range ts {
 			tuners = append(tuners, tuner)
 		}
-		if cs, acs, err := c.sdr.Channels(); err == nil {
-			for _, ch := range cs {
-				channels = append(channels, ch)
-			}
-			for _, ac := range acs {
-				activeCalls = append(activeCalls, ac)
-			}
+	}
+
+	cs, acs, chErr := c.sdr.Channels()
+	if chErr == nil {
+		for _, ch := range cs {
+			channels = append(channels, ch)
 		}
-		if evs, err := c.sdr.Events(20); err == nil {
-			for _, e := range evs {
-				events = append(events, e)
-			}
+		for _, ac := range acs {
+			activeCalls = append(activeCalls, ac)
+		}
+	} else if comps["sdrtrunk"] == supervise.StatusRunning {
+		// /channels is the call picture, so failing it IS the control API being
+		// unreachable - and the backend keys on this exact value to tell an
+		// empty frame that means "degraded" from one that means "quiet", and so
+		// hold the calls it already knows about rather than ending them all.
+		comps["sdrtrunk"] = "unreachable"
+	}
+
+	if evs, err := c.sdr.Events(20); err == nil {
+		for _, e := range evs {
+			events = append(events, e)
 		}
 	}
 

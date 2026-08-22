@@ -154,3 +154,100 @@ describe('shapeNodeLive: a call inherits what vce never tells it', () => {
     expect(await shapeNodeLive('n1', STATUS, Date.now())).toBeNull();
   });
 });
+
+describe('shapeNodeLive: rows from the call window', () => {
+  async function shapeWithWindow(windowCalls: unknown[]) {
+    vi.resetModules();
+    queryMock.mockResolvedValue({ rows: [NODE_ROW] });
+    const { shapeNodeLive } = await import('../../../src/services/nodeLive.js');
+    return shapeNodeLive('n1', STATUS, Date.now(), windowCalls as never);
+  }
+
+  const ENDED_AT = 1_700_000_005_000;
+  const STARTED_AT = 1_700_000_000_000;
+
+  it('carries the timing the raw frame has no room for', async () => {
+    const slice = await shapeWithWindow([
+      {
+        key: 'k',
+        raw: STATUS.activeCalls[0],
+        firstSeenAt: STARTED_AT,
+        lastSeenAt: ENDED_AT,
+        endedAt: ENDED_AT,
+        fromEvent: false,
+      },
+    ]);
+    const row = slice!.calls[0]!;
+    expect(row['ended']).toBe(true);
+    expect(row['endedAt']).toBe(new Date(ENDED_AT).toISOString());
+    expect(row['startedAt']).toBe(new Date(STARTED_AT).toISOString());
+    expect(row['durationMs']).toBe(5_000);
+    expect(row['synthetic']).toBe(false);
+  });
+
+  it('still enriches an ended call with its site and talkgroup', async () => {
+    // A held row is a real call that just finished — it must not lose the
+    // labelling that made it readable while it was up.
+    const slice = await shapeWithWindow([
+      {
+        key: 'k',
+        raw: { ...STATUS.activeCalls[0], channelName: 'T-Knights Hill' },
+        firstSeenAt: STARTED_AT,
+        lastSeenAt: ENDED_AT,
+        endedAt: ENDED_AT,
+        fromEvent: false,
+      },
+    ]);
+    const row = slice!.calls[0]!;
+    expect(row['site']).toBe('Knights Hill');
+    expect(row['talkgroupLabel']).toBe('141 STHHG A');
+    expect(row['agency']).toBe('Rural Fire Service');
+  });
+
+  it('marks a call recovered from the event log as synthetic', async () => {
+    const slice = await shapeWithWindow([
+      {
+        key: 'ev:1',
+        raw: { state: 'CALL', channelName: null, to: '30017', from: '7001' },
+        firstSeenAt: STARTED_AT,
+        lastSeenAt: ENDED_AT,
+        endedAt: ENDED_AT,
+        fromEvent: true,
+      },
+    ]);
+    const row = slice!.calls[0]!;
+    expect(row['synthetic']).toBe(true);
+    expect(row['ended']).toBe(true);
+    // No channel means no site to claim — honest rather than invented.
+    expect(row['site']).toBeNull();
+    expect(row['talkgroupLabel']).toBe('141 STHHG A');
+  });
+
+  it('takes calls ONLY from the window, ignoring the frame', async () => {
+    // The window is a superset of the frame; shaping both would double every
+    // live call.
+    const slice = await shapeWithWindow([]);
+    expect(slice!.calls).toHaveLength(0);
+    // …while channels still come from the frame.
+    expect(slice!.channels).toHaveLength(1);
+  });
+
+  it('leaves the no-window path byte-identical', async () => {
+    const withWindow = await shapeWithWindow([
+      {
+        key: 'k',
+        raw: STATUS.activeCalls[0],
+        firstSeenAt: STARTED_AT,
+        lastSeenAt: ENDED_AT,
+        endedAt: null,
+        fromEvent: false,
+      },
+    ]);
+    const without = await shape(STATUS);
+    const strip = (r: Record<string, unknown>) => {
+      const { ended, endedAt, startedAt, lastHeardAt, durationMs, synthetic, ...rest } = r;
+      return rest;
+    };
+    expect(strip(withWindow!.calls[0]!)).toEqual(strip(without!.calls[0]!));
+  });
+});
