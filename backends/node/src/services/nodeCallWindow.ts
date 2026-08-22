@@ -130,15 +130,13 @@ function slotKey(ac: Record<string, unknown>): string {
   return `${ch}|${ts}|${to}`;
 }
 
-/** Identity for matching a decode EVENT against a call we already tracked.
- *  Channel is not usable here: EventBuffer sets `channel` to the descriptor
- *  text (a frequency or logical channel number), not the configured channel
- *  name that activeCalls reports, so the two never compare equal. */
-function partyKey(r: Record<string, unknown>): string {
-  const to = str(r['to']) ?? str(r['toAlias']) ?? '?';
-  const from = str(r['from']) ?? '?';
-  const ts = str(r['timeslot']) ?? '';
-  return `${to}|${from}|${ts}`;
+/** Who a call is TO — the anchor for matching a decode event against a call we
+ *  already tracked. Channel is not usable for this: EventBuffer sets `channel`
+ *  to the descriptor text (a frequency or logical channel number), not the
+ *  configured channel name activeCalls reports, so the two never compare
+ *  equal. */
+function targetOf(r: Record<string, unknown>): string | null {
+  return str(r['to']) ?? str(r['toAlias']);
 }
 
 export class LiveCallWindow {
@@ -300,6 +298,10 @@ export class LiveCallWindow {
       // timeEnd is 0 while the call is still in progress — that call is being
       // tracked from activeCalls, so there is nothing to recover.
       if (!timeStart || !timeEnd || timeEnd <= 0 || timeStart <= 0) continue;
+      // Zero-length events are signalling vce stamped with one instant, not
+      // audio anyone could have heard. They were rendering as calls of no
+      // duration, which says nothing and just adds rows.
+      if (timeEnd <= timeStart) continue;
       if (timeEnd < at - this.cfg.hangMs) continue; // already older than the hang
       if (timeEnd > at + 60_000) continue; // node clock far ahead — do not trust
       if (!isLiveCallRow({ state: 'CALL', ...ev })) continue;
@@ -355,9 +357,19 @@ export class LiveCallWindow {
     }
   }
 
-  /** Did we already see this call live? Compared on the parties rather than the
-   *  channel, and required to overlap in time — the same talkgroup and caller
-   *  an hour apart is a different call. */
+  /**
+   * Did we already see this call live? Anchored on the TALKGROUP plus a time
+   * overlap, because a talkgroup carries one conversation at a time — the same
+   * target at the same moment is the same call, however many sites heard it.
+   *
+   * The caller and timeslot only ever REFUTE a match, never require one. vce
+   * routinely logs a call event with no source at all, and the timeslot is
+   * frequently present on one side and absent on the other; demanding they be
+   * equal meant almost nothing matched, so live calls were being duplicated by
+   * a "recovered" copy of themselves — which is exactly what this test exists
+   * to prevent. Two different callers on one talkgroup at overlapping times are
+   * still told apart, since then both values are present and differ.
+   */
   private alreadyTracked(
     w: NodeWindow,
     ev: Record<string, unknown>,
@@ -365,14 +377,21 @@ export class LiveCallWindow {
     timeEnd: number,
     at: number,
   ): boolean {
-    const key = partyKey(ev);
+    const to = targetOf(ev);
+    if (!to) return false;
+    const from = str(ev['from']);
+    const ts = str(ev['timeslot']);
     const SLACK = 2_000;
-    const overlaps = (c: WindowCall): boolean =>
-      partyKey(c.raw) === key &&
-      c.firstSeenAt <= timeEnd + SLACK &&
-      (c.endedAt ?? at) >= timeStart - SLACK;
-    for (const c of w.active.values()) if (overlaps(c)) return true;
-    return w.ended.some(overlaps);
+    const sameCall = (c: WindowCall): boolean => {
+      if (targetOf(c.raw) !== to) return false;
+      const cFrom = str(c.raw['from']);
+      if (from && cFrom && from !== cFrom) return false;
+      const cTs = str(c.raw['timeslot']);
+      if (ts && cTs && ts !== cTs) return false;
+      return c.firstSeenAt <= timeEnd + SLACK && (c.endedAt ?? at) >= timeStart - SLACK;
+    };
+    for (const c of w.active.values()) if (sameCall(c)) return true;
+    return w.ended.some(sameCall);
   }
 
   private prune(w: NodeWindow, at: number): boolean {

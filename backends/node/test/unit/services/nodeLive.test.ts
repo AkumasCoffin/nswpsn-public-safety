@@ -147,6 +147,29 @@ describe('shapeNodeLive: a call inherits what vce never tells it', () => {
     expect(slice?.calls[0]!['site']).toBe('Tumut');
   });
 
+  it('resolves the talkgroup of a PATCH call', async () => {
+    // A patched call reports the whole patch as its target — the supergroup
+    // followed by its members. Number() gives NaN on that, so every patched
+    // call was rendering as a bare dash with no label, agency or colour.
+    const patched = {
+      channels: STATUS.channels,
+      activeCalls: [{ ...STATUS.activeCalls[0], to: 'P:30017 [10120, 10125]' }],
+    };
+    const slice = await shape(patched);
+    expect(slice?.calls[0]!['talkgroup']).toBe(30017);
+    expect(slice?.calls[0]!['talkgroupLabel']).toBe('141 STHHG A');
+    expect(slice?.calls[0]!['agency']).toBe('Rural Fire Service');
+  });
+
+  it('leaves a genuinely unidentifiable target as no talkgroup', async () => {
+    const odd = {
+      channels: STATUS.channels,
+      activeCalls: [{ ...STATUS.activeCalls[0], to: 'UNKNOWN', toAlias: 'x' }],
+    };
+    const slice = await shape(odd);
+    expect(slice?.calls[0]!['talkgroup']).toBeNull();
+  });
+
   it('drops a pager node entirely', async () => {
     vi.resetModules();
     queryMock.mockResolvedValue({ rows: [{ id: 'n1', name: 'pager-1', kind: 'pager' }] });

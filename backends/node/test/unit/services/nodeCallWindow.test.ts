@@ -215,6 +215,66 @@ describe('LiveCallWindow — recovering calls from decode events', () => {
     expect(w.callsFor('n1')[0]!.fromEvent).toBe(false);
   });
 
+  it('does not duplicate a live call when the event carries no source', () => {
+    // Observed in production: half of all frames showed a talkgroup twice —
+    // once live, once as a "recovered" copy of itself. vce routinely logs a
+    // call event with from=null, and requiring the source to match meant the
+    // overlap test almost never fired.
+    const { w, tick } = mk();
+    w.observe('n1', frame([call({ to: '30302', from: '2315678' })]));
+    tick(1_000);
+    w.observe('n1', frame([call({ to: '30302', from: '2315678' })], {
+      events: [ev({ to: '30302', from: null, timeStart: T0 - 500, timeEnd: T0 + 500 })],
+    }));
+    const rows = w.callsFor('n1');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.fromEvent).toBe(false);
+  });
+
+  it('does not duplicate when the event omits the timeslot', () => {
+    const { w, tick } = mk();
+    w.observe('n1', frame([call({ to: '30302', from: '2315678', timeslot: 2 })]));
+    tick(1_000);
+    w.observe('n1', frame([call({ to: '30302', from: '2315678', timeslot: 2 })], {
+      events: [ev({ to: '30302', from: '2315678', timeslot: null, timeStart: T0, timeEnd: T0 + 500 })],
+    }));
+    expect(w.callsFor('n1')).toHaveLength(1);
+  });
+
+  it('does not duplicate a call already tracked across several sites', () => {
+    // One call heard by three sites is three activeCall rows; the event for it
+    // must match, not add a fourth.
+    const { w, tick } = mk();
+    w.observe('n1', frame([
+      call({ to: '30302', from: '2315678', channelName: 'T-Knights Hill' }),
+      call({ to: '30302', from: '2315678', channelName: 'T-Saddleback Mt' }),
+      call({ to: '30302', from: '2315678', channelName: 'T-Vincentia' }),
+    ]));
+    tick(1_000);
+    w.observe('n1', frame([], { events: [ev({ to: '30302', from: null, timeStart: T0, timeEnd: T0 + 900 })] }));
+    expect(w.callsFor('n1').filter((c) => c.fromEvent)).toHaveLength(0);
+  });
+
+  it('still recovers a genuinely different caller on the same talkgroup', () => {
+    // Back-to-back overs must not be collapsed: both sources are known and
+    // differ, so this one really was missed.
+    const { w, tick } = mk();
+    w.observe('n1', frame([call({ to: '30302', from: '2315678' })]));
+    tick(1_000);
+    w.observe('n1', frame([call({ to: '30302', from: '2315678' })], {
+      events: [ev({ to: '30302', from: '9999999', timeStart: T0, timeEnd: T0 + 400 })],
+    }));
+    expect(w.callsFor('n1').filter((c) => c.fromEvent)).toHaveLength(1);
+  });
+
+  it('ignores a zero-length event', () => {
+    // vce stamps some signalling with one instant. A call of no duration is
+    // not something anyone heard.
+    const { w } = mk();
+    w.observe('n1', frame([], { events: [ev({ timeStart: T0 - 500, timeEnd: T0 - 500 })] }));
+    expect(w.callsFor('n1')).toHaveLength(0);
+  });
+
   it('ignores in-progress, stale, and non-audio event types', () => {
     const { w } = mk();
     w.observe(

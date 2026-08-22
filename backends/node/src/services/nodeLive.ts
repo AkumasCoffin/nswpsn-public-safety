@@ -84,6 +84,25 @@ function prettySiteName(name: string): string {
   return name.trim().replace(/^t[c]?[-_ ]+/i, '') || name.trim();
 }
 
+/**
+ * The talkgroup id a call is TO.
+ *
+ * Usually just the number, but a PATCH call reports the whole patch as its
+ * target — "P:10128 [10120, 10125]", the supergroup followed by its members.
+ * Number() gives NaN on that, so every patched call arrived with no talkgroup,
+ * which rendered as a bare dash with no label, agency or colour: on air and
+ * apparently unidentifiable. The supergroup is the talkgroup being spoken on,
+ * so that is the one to resolve.
+ */
+function talkgroupIdOf(to: unknown): number {
+  if (to === null || to === undefined) return NaN;
+  const raw = String(to).trim();
+  const direct = Number(raw);
+  if (Number.isInteger(direct)) return direct;
+  const patch = /^P:\s*(\d+)/i.exec(raw);
+  return patch ? Number(patch[1]) : NaN;
+}
+
 function normaliseChannelName(name: string): string {
   return name
     .trim()
@@ -207,7 +226,7 @@ export async function shapeNodeLive(
 
   const buildCall = (ac: Record<string, unknown>, timing: CallTiming): Record<string, unknown> => {
     const state = String(ac['state'] ?? '').toUpperCase();
-    const id = Number(ac['to']);
+    const id = talkgroupIdOf(ac['to']);
     // vce calls this `channelName`; `name` is kept only as a defensive
     // fallback for any build that reports it the other way.
     const chNameRaw = ac['channelName'] ?? ac['name'];
