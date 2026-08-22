@@ -5763,7 +5763,6 @@
         limit: String(nd2.tg.limit), offset: String(nd2.tg.offset),
       });
       if (q) params.set('q', q);
-      if (nd2.rad.named) params.set('named', '1');
       // Scoped to the open system — and, one level down, to the open SITE.
       if (nd2.sys.system != null) params.set('system', String(nd2.sys.system));
       const level = nd2.sys.level;
@@ -5915,6 +5914,7 @@
         limit: String(nd2.rad.limit), offset: String(nd2.rad.offset),
       });
       if (q) params.set('q', q);
+      if (nd2.rad.named) params.set('named', '1');
       // Scoped to the open system — and, one level down, to the open SITE.
       if (nd2.sys.system != null) params.set('system', String(nd2.sys.system));
       const level = nd2.sys.level;
