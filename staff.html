@@ -2674,6 +2674,7 @@
           <div class="nd2-seg" role="group" aria-label="Radio data view">
             <button class="filter-btn active" data-nd2-view="overview" onclick="nd2SetView('overview')">Overview</button>
             <button class="filter-btn" data-nd2-view="systems" onclick="nd2SetView('systems')">Systems</button>
+            <button class="filter-btn" data-nd2-view="talkgroups" onclick="nd2SetView('talkgroups')">Talkgroups</button>
             <button class="filter-btn" data-nd2-view="nodes" onclick="nd2SetView('nodes')">Nodes</button>
             <button class="filter-btn" data-nd2-view="live" onclick="nd2SetView('live')">Live</button>
             <button class="filter-btn" data-nd2-view="aliases" onclick="nd2SetView('aliases')">Aliases</button>
@@ -2945,8 +2946,11 @@
                 <table class="nd-table">
                   <thead>
                     <tr>
+                      <!-- Radio + OTA are one pill, so Agency takes the column
+                           they used to need between them — column count (and
+                           therefore the table's width) is unchanged. -->
                       <th>Radio</th>
-                      <th>OTA</th>
+                      <th>Agency</th>
                       <th class="nd2-num">Calls</th>
                       <th>Last seen</th>
                       <th>Last site</th>
@@ -3042,6 +3046,16 @@
           </div>
         </div>
 
+        <!-- ===== Talkgroups view (fleet-wide) ===== -->
+        <!-- The same table the system / site drill-downs show, with no system
+             or site scope. It is literally the SAME element: the shared
+             #nd2-systab-talkgroups panel is reparented in here by
+             nd2MountTgTop(), because duplicating the markup would duplicate
+             every id its loader, sort pills and pager address. -->
+        <div id="nd2-view-talkgroups" style="display: none;">
+          <div id="nd2-tgtop-panels"></div>
+        </div>
+
         <!-- ===== Nodes view ===== -->
         <!-- The receiving side of the same data the Systems tab shows from the
              network side: which feeder nodes are hearing what. A row opens the
@@ -3075,10 +3089,18 @@
               <i class="fas fa-id-card"></i> Radio aliases
               <span class="nd-sub" id="nd2-alias-count"></span>
             </div>
-            <div class="nd2-filters">
-              <input type="search" id="nd2-alias-q" class="nd2-input"
-                     placeholder="Search alias or radio id…"
-                     oninput="nd2AliasInputChanged()" />
+            <!-- Same search chrome as the Talkgroups panel's #nd2-tg-q box
+                 (.filter-bar > .search-box + magnifier). The old .nd2-filters /
+                 .nd2-input classes had no CSS at all, so this input rendered as
+                 a bare white browser box next to the styled sort pills. -->
+            <div class="filter-bar">
+              <div class="search-box" style="min-width: 200px;">
+                <i class="fas fa-search"></i>
+                <input type="search" id="nd2-alias-q"
+                       placeholder="Search alias or radio id…"
+                       oninput="nd2AliasInputChanged()" />
+              </div>
+              <div class="filter-spacer"></div>
               <div class="nd2-seg" role="group" aria-label="Sort aliases by">
                 <button class="filter-btn active" data-nd2-alias-sort="lastSeen"
                         onclick="nd2AliasSetSort('lastSeen')">Last heard</button>
@@ -3094,8 +3116,11 @@
               <table class="nd-table">
                 <thead>
                   <tr>
-                    <th>Alias</th>
+                    <!-- Alias and radio id are ONE pill (the alias is the body,
+                         the UID the secondary), so they share one column; the
+                         freed column carries the owning agency. -->
                     <th>Radio</th>
+                    <th>Agency</th>
                     <th class="nd2-num">Times heard</th>
                     <th>First heard</th>
                     <th>Last heard</th>
@@ -4129,7 +4154,7 @@
     let _nd2RadDebounce = null;
     let _nd2CapDebounce = null;
     // Which views belong to each mode (drives the panel show/hide sweep).
-    const ND2_RADIO_VIEWS = ['overview', 'live', 'systems', 'nodes', 'aliases', 'events'];
+    const ND2_RADIO_VIEWS = ['overview', 'live', 'systems', 'talkgroups', 'nodes', 'aliases', 'events'];
     const ND2_PAGER_VIEWS = ['poverview', 'capcodes'];
     const _nd2AllViews = [...ND2_RADIO_VIEWS, ...ND2_PAGER_VIEWS];
 
@@ -4159,6 +4184,9 @@
         switch (nd2.view) {
           case 'overview': nd2LoadOverview(); break;
           case 'aliases': if (nd2.alias.offset === 0) nd2LoadAliases(); break;
+          // Top-level (fleet-wide) Talkgroups — NOT the systems sub-tab of the
+          // same name, which is handled inside case 'systems' below.
+          case 'talkgroups': if (nd2.tg.offset === 0) nd2LoadTalkgroups(); break;
           case 'systems':
             if (nd2.sys.level === 'list') nd2LoadSystems();
             else {
@@ -4203,6 +4231,9 @@
         case 'overview': await nd2LoadOverview(); break;
         case 'live': await nd2LoadLive(); break;   // also on its own 5s timer
         case 'systems': await nd2LoadSystemsView(); break;
+        // Fleet-wide Talkgroups: the same loader, which drops the system/site
+        // params when the TOP-LEVEL view is the one asking.
+        case 'talkgroups': await nd2LoadTalkgroups(); break;
         // In a drill-down the list is hidden; refreshing it would reload the
         // wrong thing and leave the open sub-tab stale.
         case 'nodes':
@@ -4317,6 +4348,9 @@
       nd2ShowNodeChrome(false);
       if (view === 'nodes') { const l = document.getElementById('nd2-view-nodes'); if (l) l.style.display = ''; }
       if (view === 'systems') { nd2.sys.tab = 'sites'; nd2.sys.siteTab = 'overview'; nd2SysShow('list'); nd2SysCrumbs(); }
+      // Fleet-wide Talkgroups borrows the shared panel from the Systems
+      // drill-down, so it has to be moved here before nd2Refresh() paints it.
+      if (view === 'talkgroups') { nd2.tg.offset = 0; nd2MountTgTop(); }
       if (view === 'capcodes') { nd2CapShow('list'); }
       if (view === 'live') { nd2StartLiveTimer(); void nd2StartLiveWs(); }
       else { nd2StopLiveTimer(); nd2StopLiveWs(); }
@@ -4653,13 +4687,16 @@
 
       const unitsEl = document.getElementById('nd2-top-units');
       if (unitsEl && !isPager) {
+        // Unit + OTA collapse into one pill (alias as body, UID secondary),
+        // which frees the column the agency chip now uses — same shape as the
+        // Top Talkgroups card next to it.
         const rows = ((ov && ov.topUnits) || []).slice(0, 10).map(u => [
-          `<span class="nd-strong">${escapeHtml(String(u.unit))}</span>`,
-          u.alias ? escapeHtml(String(u.alias)) : '<span class="nd-sub">—</span>',
+          nd2RadioPill(u.unit, u.alias, u.color),
+          nd2AgencyCell(u.agency),
           nd2Num(u.calls),
         ]);
         unitsEl.innerHTML = table(
-          [{ t: 'Unit' }, { t: 'OTA' }, { t: 'Calls', num: true }], rows);
+          [{ t: 'Unit' }, { t: 'Agency' }, { t: 'Calls', num: true }], rows);
       }
       const unitsNote = document.getElementById('nd2-units-note');
       if (unitsNote) unitsNote.style.display = (ov && ov.unitsWindowCapped) ? '' : 'none';
@@ -4920,6 +4957,24 @@
         + `<span class="nd2-tgpill-dot" style="background:${c}"></span>${body}</span>`;
     }
 
+    // The radio (unit) equivalent of nd2TgPill, and deliberately the same
+    // visual family: a UID and a talkgroup are both "an id with an optional
+    // name", and rendering one as a pill and the other as bare text made two
+    // adjacent columns of the same table look like different kinds of thing.
+    // Colour is the OWNING AGENCY's colour (talkgroupCatalog.unitColors, from
+    // the agencies' rdio unit lists), not a per-radio colour — a radio whose id
+    // is in no agency's list arrives with color: null and gets the neutral pill.
+    function nd2RadioPill(radio, alias, color) {
+      if (radio == null && !alias) return '<span class="nd-sub">—</span>';
+      const body = alias
+        ? `${escapeHtml(String(alias))} <span class="nd2-pill-id">${escapeHtml(String(radio == null ? '' : radio))}</span>`
+        : `UID ${escapeHtml(String(radio))}`;
+      if (!color) return `<span class="nd2-tgpill">${body}</span>`;
+      const c = escapeHtml(String(color));
+      return `<span class="nd2-tgpill" style="background:${c}22;border-color:${c}88;">`
+        + `<span class="nd2-tgpill-dot" style="background:${c}"></span>${body}</span>`;
+    }
+
     // Just the talkgroup pill. Agency is NOT appended here: it gets its own
     // column in every table that shows talkgroups (see nd2AgencyCell), so
     // inlining it too would render the chip twice on the same row.
@@ -5039,6 +5094,21 @@
         const el = document.getElementById(id);
         if (el && el.parentElement !== dest) dest.appendChild(el);
       });
+    }
+
+    // Third home for the shared Talkgroups panel: the TOP-LEVEL Talkgroups
+    // view, which shows the same table with no system/site scope at all.
+    // Radios stays behind — there is no fleet-wide Radios pill.
+    function nd2MountTgTop() {
+      const dest = document.getElementById('nd2-tgtop-panels');
+      const el = document.getElementById('nd2-systab-talkgroups');
+      if (!dest || !el) return;
+      if (el.parentElement !== dest) dest.appendChild(el);
+      // nd2ShowPagedPanel may have left it hidden under the drill-down.
+      el.style.display = '';
+      // The drill-downs clear this box on entry; do the same, or a talkgroup
+      // number typed while scoped to one system silently narrows the fleet list.
+      const q = document.getElementById('nd2-tg-q'); if (q) q.value = '';
     }
 
     /** Show exactly one of the shared panels (or none, for the overview tab). */
@@ -5802,10 +5872,16 @@
         limit: String(nd2.tg.limit), offset: String(nd2.tg.offset),
       });
       if (q) params.set('q', q);
+      // Two callers share this one panel and loader: the Systems drill-down
+      // (scoped to a system, or one of its sites) and the top-level Talkgroups
+      // view, which is fleet-wide. nd2.sys.* is NOT cleared when a top-level
+      // pill is clicked, so the scope must be keyed off the view, not off
+      // whether a system happens to still be remembered.
+      const top = view === 'talkgroups';
       // Scoped to the open system — and, one level down, to the open SITE.
-      if (nd2.sys.system != null) params.set('system', String(nd2.sys.system));
+      if (!top && nd2.sys.system != null) params.set('system', String(nd2.sys.system));
       const level = nd2.sys.level;
-      if (level === 'site' && nd2.sys.rfss != null && nd2.sys.site != null) {
+      if (!top && level === 'site' && nd2.sys.rfss != null && nd2.sys.site != null) {
         params.set('rfss', String(nd2.sys.rfss));
         params.set('site', String(nd2.sys.site));
       }
@@ -5818,7 +5894,9 @@
         // Both the view AND the level must still match: this table is shared
         // between the system and site drill-downs, so a response that arrives
         // after the user navigated between them would render the wrong scope.
-        if (nd2.view !== view || nd2.sys.level !== level) return;
+        // The level check is drill-down-only — the fleet-wide view doesn't use
+        // it, and nd2.sys.level keeps whatever the last drill-down left behind.
+        if (nd2.view !== view || (!top && nd2.sys.level !== level)) return;
         nd2.tg.total = data.total || 0;
         const body = document.getElementById('nd2-tg-body');
         const rows = data.talkgroups || [];
@@ -5891,11 +5969,11 @@
           body.innerHTML = rows.map(r => `
             <tr class="nd2-rowlink" onclick="nd2JumpToEvents({unit:${r.radio}})"
                 title="View events for this radio">
-              <td><span class="nd-strong">${escapeHtml(String(r.alias))}</span></td>
-              <td>${escapeHtml(String(r.radio))}
+              <td>${nd2RadioPill(r.radio, r.alias, r.color)}
                 <button class="nd2-linkbtn" title="Talkgroups this radio has been heard on"
                   onclick="event.stopPropagation();nd2ShowRel('radio',${r.radio},${nd2Arg(r.alias || r.radio)})">
                   <i class="fas fa-diagram-project"></i></button></td>
+              <td>${nd2AgencyCell(r.agency)}</td>
               <td class="nd2-num">${nd2Num(r.timesSeen)}</td>
               <td>${nd2LastSeen(r.firstSeen)}</td>
               <td>${nd2LastSeen(r.lastSeen)}</td>
@@ -5979,13 +6057,11 @@
           ).join(' ') || '—';
           return `
           <tr class="nd2-rowlink" onclick="nd2JumpToEvents({unit:${r.radio}})" title="View events for this radio">
-            <td><span class="nd-strong">${escapeHtml(String(r.radio))}</span>
+            <td>${nd2RadioPill(r.radio, r.alias, r.color)}
               <button class="nd2-linkbtn" title="Talkgroups this radio has been heard on"
                 onclick="event.stopPropagation();nd2ShowRel('radio',${r.radio},${nd2Arg(r.alias || r.radio)})">
                 <i class="fas fa-diagram-project"></i></button></td>
-            <td>${r.alias
-              ? `<span class="nd-strong">${escapeHtml(String(r.alias))}</span>`
-              : '<span class="nd-sub">—</span>'}</td>
+            <td>${nd2AgencyCell(r.agency)}</td>
             <td class="nd2-num">${nd2Num(r.calls)}</td>
             <td>${nd2LastSeen(r.lastSeen)}</td>
             <td>${nd2SiteChip(r.lastSite)}</td>
