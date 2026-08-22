@@ -60,6 +60,47 @@ export type Alias = z.infer<typeof AliasSchema>;
 // every field) so the round-trip through the editor never drops data.
 const LooseObj = z.record(z.string(), z.unknown());
 
+/**
+ * ONE talkgroup — the single row that drives BOTH programs. The rdio talkgroup
+ * and the SDR-Trunk alias are DERIVED from this at push time, so a talkgroup
+ * cannot exist on one side only and the two can never drift (they used to be
+ * two independently-imported lists, which left ~600 talkgroups streaming audio
+ * that rdio then dropped for having no matching talkgroup row).
+ *
+ * `groupId`/`tagId`/`priority` are null when the row INHERITS the agency
+ * default — an explicit value overrides it. That's what lets an agency set its
+ * group + tag once instead of on all 623 rows.
+ *
+ * `aliasName` is the SDR-Trunk alias name kept verbatim, because its leading
+ * number is each agency's OWN channel numbering (RFS "1209 AVATN 1", FRNSW
+ * "101 ME1", SES "0916 OPS 16", Endeavour "D01 CNTRLE1", Rail none at all) and
+ * is NOT derivable from the talkgroup id. Null = the alias is named by `label`.
+ *
+ * Passthrough keeps the rdio fields we don't model (led, led2, order, _id)
+ * round-tripping untouched.
+ */
+// The staff editor historically saved unset numeric fields as "" (e.g. a
+// talkgroup added but never given a group), and that shape exists in stored
+// configs — treat empty-string as unset rather than failing the row.
+const optionalInt = z.preprocess((v) => (v === '' ? undefined : v), z.number().int().nullish());
+const optionalNum = z.preprocess((v) => (v === '' ? undefined : v), z.number().nullish());
+
+export const TalkgroupSchema = z
+  .object({
+    id: z.number().int(),
+    label: z.string().max(200).nullish(),
+    name: z.string().max(200).nullish(),
+    groupId: optionalInt,
+    tagId: optionalInt,
+    frequency: optionalNum,
+    delay: optionalNum,
+    alert: z.string().max(40).nullish(),
+    aliasName: z.string().max(200).nullish(),
+    priority: optionalInt,
+  })
+  .passthrough();
+export type Talkgroup = z.infer<typeof TalkgroupSchema>;
+
 /** The single SDR-Trunk alias list every generated alias belongs to. Auto-set —
  *  there is one playlist, so operators never pick a list. The channel's
  *  alias_list_name must match this (preset ships it). */
@@ -100,7 +141,22 @@ export const AgencySchema = z
     blacklists: z.string().max(8000).nullish(),
     delay: z.number().nullish(),
     alert: z.string().max(40).nullish(),
-    talkgroups: z.array(LooseObj).max(8192).default([]),
+    // Inherited by this agency's talkgroups whenever their own groupId/tagId is
+    // null. 17 of 19 systems use a single group and 16 a single tag, so this is
+    // the field that stops the same value being typed on every row.
+    defaultGroupId: z.number().int().nullish(),
+    defaultTagId: z.number().int().nullish(),
+    // The SDR-Trunk alias `group` attribute, which is NOT the agency name:
+    // FRNSW aliases group under "Fire & Rescue NSW" while the agency, system
+    // label and stream are all "Fire and Rescue". Generating it from the name
+    // would silently rename every alias in sdrtrunk-vce. Null = use the name.
+    sdrGroupName: z.string().max(200).nullish(),
+    // An ENCRYPTED agency is SDR-Trunk only: its talkgroups produce aliases (so
+    // decode events still get a readable label) but no rdio system, no rdio
+    // talkgroups, no stream and no broadcastChannel — there is never any audio
+    // to upload. NSW PF (12001-12275) is the one such agency today.
+    encrypted: z.boolean().nullish(),
+    talkgroups: z.array(TalkgroupSchema).max(8192).default([]),
     units: z.array(LooseObj).max(8192).default([]),
   })
   // passthrough so any extra rdio system field we don't model round-trips.
@@ -134,12 +190,28 @@ export type SdrtrunkConfig = z.infer<typeof SdrtrunkConfigSchema>;
 
 const EMPTY_SDRTRUNK: SdrtrunkConfig = { aliasLists: [], aliases: [], streams: [] };
 
+/** Fleet-wide talkgroup defaults, set once instead of per row/agency:
+ *  `color` is THE alias colour (the operator chose one global colour over the
+ *  old per-agency palette); `priority` is the SDR-Trunk monitor priority every
+ *  agency inherits unless it overrides (FRNSW pins -1 = do-not-monitor).
+ *  sdrtrunk colours are signed-int ARGB strings (e.g. "-65536"). */
+export const TalkgroupDefaultsSchema = z
+  .object({
+    color: z.string().max(40).nullish(),
+    priority: z.number().int().nullish(),
+  })
+  .strict();
+export type TalkgroupDefaults = z.infer<typeof TalkgroupDefaultsSchema>;
+
+const EMPTY_DEFAULTS: TalkgroupDefaults = {};
+
 export const GlobalConfigSchema = z
   .object({
     agencies: z.array(AgencySchema).max(4096).default([]),
     rdioGroups: z.array(LooseObj).max(4096).default([]),
     rdioTags: z.array(LooseObj).max(4096).default([]),
     sdrtrunkConfig: SdrtrunkConfigSchema.default(EMPTY_SDRTRUNK),
+    defaults: TalkgroupDefaultsSchema.default(EMPTY_DEFAULTS),
   })
   .strict();
 export type GlobalConfigInput = z.infer<typeof GlobalConfigSchema>;
@@ -153,6 +225,7 @@ export const GlobalConfigPatchSchema = z
     rdioGroups: z.array(LooseObj).max(4096),
     rdioTags: z.array(LooseObj).max(4096),
     sdrtrunkConfig: SdrtrunkConfigSchema,
+    defaults: TalkgroupDefaultsSchema,
   })
   .partial()
   .strict();
@@ -191,6 +264,7 @@ export function globalConfigVersion(c: {
   rdioGroups: unknown;
   rdioTags: unknown;
   sdrtrunkConfig?: unknown;
+  defaults?: unknown;
 }): string {
   const canon = canonicalize({
     agencies: c.agencies,
@@ -198,6 +272,8 @@ export function globalConfigVersion(c: {
     rdioTags: c.rdioTags,
     // Folded in so a sdrtrunk-only import bumps the version and re-syncs the fleet.
     sdrtrunkConfig: c.sdrtrunkConfig ?? EMPTY_SDRTRUNK,
+    // Colour/priority feed the derived aliases, so changing them must re-sync too.
+    defaults: c.defaults ?? EMPTY_DEFAULTS,
   });
   return createHash('sha256').update(JSON.stringify(canon)).digest('hex');
 }
@@ -239,9 +315,63 @@ export function agenciesToAliases(agencies: Agency[]): Alias[] {
   return agencies.map(agencyToAlias).filter((a): a is Alias => a !== null);
 }
 
+/**
+ * The SDR-Trunk aliases DERIVED from the unified talkgroup rows — one alias per
+ * talkgroup, every agency. This replaces pushing the imported
+ * `sdrtrunkConfig.aliases` verbatim (configMerge falls back to that legacy list
+ * whenever it is still non-empty, so pre-merge configs are untouched).
+ *
+ * Field resolution, most-specific wins:
+ *   name     = aliasName ?? label ?? name ?? String(id)   (aliasName carries the
+ *              agency's own channel numbering and is never generated)
+ *   group    = agency.sdrGroupName ?? agency.name  (sdrGroupName exists because
+ *              the historical alias group is NOT the agency name)
+ *   color    = defaults.color                       (the one global colour)
+ *   priority = row.priority ?? agency.priority ?? defaults.priority ?? 100
+ *   route    = broadcastChannel -> trimmed agency name, OMITTED for encrypted
+ *              agencies (no stream, nothing ever uploads)
+ */
+export function deriveAliasesFromTalkgroups(
+  agencies: Agency[],
+  defaults: TalkgroupDefaults,
+): Alias[] {
+  const out: Alias[] = [];
+  for (const a of agencies) {
+    const group = (a.sdrGroupName ?? a.name).trim();
+    const channel = a.name.trim();
+    for (const tg of a.talkgroups) {
+      const row = tg as Talkgroup;
+      if (typeof row.id !== 'number' || !Number.isInteger(row.id)) continue;
+      const name =
+        (row.aliasName ?? '').trim() ||
+        (row.label ?? '').trim() ||
+        (row.name ?? '').trim() ||
+        String(row.id);
+      const priority = row.priority ?? a.priority ?? defaults.priority ?? 100;
+      const ids: AliasId[] = [
+        { type: 'priority', attrs: { priority: String(priority) } },
+        { type: 'talkgroup', attrs: { value: String(row.id), protocol: 'APCO25' } },
+      ];
+      if (!a.encrypted) {
+        ids.push({ type: 'broadcastChannel', attrs: { channel } });
+      }
+      out.push({
+        name,
+        list: ALIAS_LIST_NAME,
+        group,
+        color: defaults.color ?? undefined,
+        ids,
+      });
+    }
+  }
+  return out;
+}
+
 /** Build the rdio system doc for an agency: id/label from systemId/name, all
- *  other rdio fields (led/talkgroups/units/…) carried through; alias-only fields
- *  stripped. */
+ *  other rdio fields (led/talkgroups/units/…) carried through; alias-only and
+ *  unified-model fields stripped. Talkgroup rows materialise the agency
+ *  defaults — rdio wants a concrete groupId/tagId on every row, so the
+ *  null-means-inherit convention stops here. */
 function agencyToSystem(a: Agency): Record<string, unknown> {
   const {
     systemId,
@@ -251,12 +381,25 @@ function agencyToSystem(a: Agency): Record<string, unknown> {
     priority: _priority,
     streamTalkgroupAlias: _sta,
     aliasIds: _aliasIds,
+    defaultGroupId: _dg,
+    defaultTagId: _dt,
+    sdrGroupName: _sgn,
+    encrypted: _enc,
+    talkgroups,
     id: _strayId,
     _id: _strayUnderId,
     label: _strayLabel,
     ...rest
   } = a as Agency & Record<string, unknown>;
-  return { ...rest, id: systemId, label: name };
+  const rdioTalkgroups = (talkgroups as Talkgroup[]).map((tg) => {
+    const { aliasName: _an, priority: _pr, groupId, tagId, ...tgRest } = tg;
+    return {
+      ...tgRest,
+      groupId: groupId ?? a.defaultGroupId ?? undefined,
+      tagId: tagId ?? a.defaultTagId ?? undefined,
+    };
+  });
+  return { ...rest, talkgroups: rdioTalkgroups, id: systemId, label: name };
 }
 
 /**
@@ -274,6 +417,9 @@ export function agenciesToSystems(agencies: Agency[]): Record<string, unknown>[]
   const dropped: number[] = [];
 
   for (const agency of agencies) {
+    // Encrypted agencies are SDR-Trunk only: aliases label their decode events,
+    // but no audio can ever arrive, so no rdio system exists for them.
+    if (agency.encrypted) continue;
     const sys = agencyToSystem(agency);
     const id = sys.id;
     if (typeof id !== 'number' || Number.isNaN(id)) {
@@ -316,7 +462,14 @@ export function buildAgencies(aliases: Alias[], systems: Record<string, unknown>
       systemId,
       name,
       ...sysRest,
-      talkgroups: Array.isArray(s['talkgroups']) ? (s['talkgroups'] as Record<string, unknown>[]) : [],
+      // Legacy rdio talkgroups have an integer id; rows missing one can't be
+      // addressed by the unified model, so they're dropped here (keepValid does
+      // the same on read).
+      talkgroups: Array.isArray(s['talkgroups'])
+        ? (s['talkgroups'] as Record<string, unknown>[]).filter(
+            (t): t is Talkgroup => typeof t['id'] === 'number' && Number.isInteger(t['id']),
+          )
+        : [],
       units: Array.isArray(s['units']) ? (s['units'] as Record<string, unknown>[]) : [],
       aliasIds: [],
     };
@@ -434,6 +587,7 @@ function seedFromPresets(): GlobalConfigInput {
     rdioTags: asArr(rdio['tags']),
     // The sdrtrunk-vce alias lists/streams are imported by the operator, not seeded.
     sdrtrunkConfig: EMPTY_SDRTRUNK,
+    defaults: EMPTY_DEFAULTS,
   };
 }
 
@@ -449,6 +603,8 @@ interface Row {
   rdio_tags: unknown;
   // The sdrtrunk-vce config (alias lists + aliases + streams), imported separately.
   sdrtrunk_config: unknown;
+  // Fleet-wide talkgroup defaults (global alias colour + monitor priority).
+  talkgroup_defaults: unknown;
   version: string;
   updated_at: string | null;
   updated_by: string | null;
@@ -477,8 +633,9 @@ function salvageConfig(
     // rdioGroups/rdioTags are the loose element type used in GlobalConfigSchema.
     rdioGroups: keepValid(LooseObj, rdioGroups),
     rdioTags: keepValid(LooseObj, rdioTags),
-    // sdrtrunkConfig is salvaged separately by the caller (rowToConfig).
+    // sdrtrunkConfig/defaults are salvaged separately by the caller (rowToConfig).
     sdrtrunkConfig: EMPTY_SDRTRUNK,
+    defaults: EMPTY_DEFAULTS,
   };
 }
 
@@ -512,11 +669,16 @@ function rowToConfig(r: Row): GlobalConfig {
       'sdrtrunk config failed schema on read; salvaged valid elements',
     );
   }
+  // Defaults are tiny and additive — a malformed value falls back to empty
+  // rather than dragging the rest of the config down with it.
+  const defaultsParsed = TalkgroupDefaultsSchema.safeParse(r.talkgroup_defaults ?? EMPTY_DEFAULTS);
+  const defaults: TalkgroupDefaults = defaultsParsed.success ? defaultsParsed.data : EMPTY_DEFAULTS;
   const parsed = GlobalConfigSchema.safeParse({
     agencies: agencies ?? [],
     rdioGroups: r.rdio_groups ?? [],
     rdioTags: r.rdio_tags ?? [],
     sdrtrunkConfig,
+    defaults,
   });
   let content: GlobalConfigInput;
   if (parsed.success) {
@@ -526,7 +688,7 @@ function rowToConfig(r: Row): GlobalConfig {
     // so one malformed agency would otherwise wipe (and then re-persist + fan out)
     // every agency/group/tag fleet-wide. Instead salvage the valid elements and
     // drop only the offenders, logging what was rejected so it's visible.
-    content = { ...salvageConfig(agencies ?? [], r.rdio_groups ?? [], r.rdio_tags ?? []), sdrtrunkConfig };
+    content = { ...salvageConfig(agencies ?? [], r.rdio_groups ?? [], r.rdio_tags ?? []), sdrtrunkConfig, defaults };
     log.error(
       { issues: parsed.error.issues.slice(0, 20), kept: content.agencies.length },
       'global config failed schema on read; salvaged valid elements (dropped offenders)',
@@ -546,7 +708,8 @@ const EMPTY: GlobalConfig = {
   rdioGroups: [],
   rdioTags: [],
   sdrtrunkConfig: EMPTY_SDRTRUNK,
-  version: globalConfigVersion({ agencies: [], rdioGroups: [], rdioTags: [], sdrtrunkConfig: EMPTY_SDRTRUNK }),
+  defaults: EMPTY_DEFAULTS,
+  version: globalConfigVersion({ agencies: [], rdioGroups: [], rdioTags: [], sdrtrunkConfig: EMPTY_SDRTRUNK, defaults: EMPTY_DEFAULTS }),
   updatedAt: null,
   updatedBy: null,
   streamNames: [],
@@ -561,7 +724,7 @@ export async function getGlobalConfig(): Promise<GlobalConfig> {
   const pool = await getPool();
   if (!pool) return { ...EMPTY, streamNames: presetStreamNames() };
   const res = await pool.query<Row>(
-    `SELECT agencies, sdrtrunk_aliases, rdio_systems, rdio_groups, rdio_tags, sdrtrunk_config, version, updated_at, updated_by
+    `SELECT agencies, sdrtrunk_aliases, rdio_systems, rdio_groups, rdio_tags, sdrtrunk_config, talkgroup_defaults, version, updated_at, updated_by
        FROM feeder_global_config WHERE id = 1`,
   );
   const row = res.rows[0];
@@ -682,24 +845,26 @@ export async function saveGlobalConfig(
   }
   const res = await pool.query<Row>(
     `INSERT INTO feeder_global_config
-       (id, agencies, sdrtrunk_aliases, rdio_systems, rdio_groups, rdio_tags, sdrtrunk_config, version, updated_at, updated_by)
-     VALUES (1, $1, '[]'::jsonb, '[]'::jsonb, $2, $3, $4, $5, now(), $6)
+       (id, agencies, sdrtrunk_aliases, rdio_systems, rdio_groups, rdio_tags, sdrtrunk_config, talkgroup_defaults, version, updated_at, updated_by)
+     VALUES (1, $1, '[]'::jsonb, '[]'::jsonb, $2, $3, $4, $5, $6, now(), $7)
      ON CONFLICT (id) DO UPDATE SET
-       agencies         = EXCLUDED.agencies,
-       sdrtrunk_aliases = '[]'::jsonb,
-       rdio_systems     = '[]'::jsonb,
-       rdio_groups      = EXCLUDED.rdio_groups,
-       rdio_tags        = EXCLUDED.rdio_tags,
-       sdrtrunk_config  = EXCLUDED.sdrtrunk_config,
-       version          = EXCLUDED.version,
-       updated_at       = now(),
-       updated_by       = EXCLUDED.updated_by
-     RETURNING agencies, sdrtrunk_aliases, rdio_systems, rdio_groups, rdio_tags, sdrtrunk_config, version, updated_at, updated_by`,
+       agencies           = EXCLUDED.agencies,
+       sdrtrunk_aliases   = '[]'::jsonb,
+       rdio_systems       = '[]'::jsonb,
+       rdio_groups        = EXCLUDED.rdio_groups,
+       rdio_tags          = EXCLUDED.rdio_tags,
+       sdrtrunk_config    = EXCLUDED.sdrtrunk_config,
+       talkgroup_defaults = EXCLUDED.talkgroup_defaults,
+       version            = EXCLUDED.version,
+       updated_at         = now(),
+       updated_by         = EXCLUDED.updated_by
+     RETURNING agencies, sdrtrunk_aliases, rdio_systems, rdio_groups, rdio_tags, sdrtrunk_config, talkgroup_defaults, version, updated_at, updated_by`,
     [
       JSON.stringify(input.agencies),
       JSON.stringify(input.rdioGroups),
       JSON.stringify(input.rdioTags),
       JSON.stringify(input.sdrtrunkConfig ?? EMPTY_SDRTRUNK),
+      JSON.stringify(input.defaults ?? EMPTY_DEFAULTS),
       version,
       updatedBy,
     ],

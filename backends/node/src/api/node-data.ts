@@ -1149,26 +1149,30 @@ function qpIntOpt(url: URL, name: string): { value: number | null; error?: strin
 }
 
 /**
- * Talkgroups whose ALIAS declares them encrypted (e.g. "065 - NSW PF (ENC)").
+ * Talkgroups declared encrypted — primarily by their AGENCY's encrypted toggle
+ * (an SDR-Trunk-only agency like NSW PF, where every talkgroup is encrypted by
+ * construction), with the historical label sniff kept as a fallback for
+ * configs from before the unified-talkgroup merge (e.g. "065 - NSW PF (ENC)").
  *
  * Hiding encrypted traffic cannot rely on the per-event `encrypted` flag alone:
  * it comes from the decoder and is not set at the instant a call starts, so an
  * always-encrypted talkgroup still produces rows flagged false and they sail
- * straight through a `encrypted = false` filter. The alias, by contrast, is a
- * standing declaration by whoever wrote the playlist — if it says ENC, every
- * call on it is encrypted regardless of what any single event managed to
- * decode in time.
+ * straight through a `encrypted = false` filter. The agency toggle, by
+ * contrast, is a standing declaration — every call on those talkgroups is
+ * encrypted regardless of what any single event managed to decode in time.
+ * (The old label regex missed the 135 police talkgroups marked only by their
+ * alias GROUP; the flag covers all of them.)
  *
  * Word-boundary matched so a talkgroup merely CONTAINING those letters
  * (e.g. "FENCE", "ENCORE") is not swept up.
  */
 async function encryptedTalkgroupIds(): Promise<number[]> {
   const cat = await talkgroupCatalog();
-  const out: number[] = [];
+  const out = new Set<number>(cat.encrypted);
   for (const [id, label] of cat.labels) {
-    if (/\b(?:ENC|ENCRYPTED|ENCRYPT)\b/i.test(label)) out.push(id);
+    if (/\b(?:ENC|ENCRYPTED|ENCRYPT)\b/i.test(label)) out.add(id);
   }
-  return out;
+  return [...out];
 }
 
 /**

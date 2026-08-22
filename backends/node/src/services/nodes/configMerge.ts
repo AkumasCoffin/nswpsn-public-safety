@@ -33,6 +33,7 @@ import {
 import {
   getGlobalConfig,
   agenciesToSystems,
+  deriveAliasesFromTalkgroups,
   type Alias,
   type GlobalConfig,
 } from './globalConfig.js';
@@ -334,30 +335,39 @@ export async function buildConfigPayload(
   const channels = deriveChannels(override, node);
   const tuners = deriveTuners(override);
 
-  // Agencies are the single source of truth: derive the SDR-Trunk aliases + the
-  // rdio systems from them (id/label/name/broadcastChannel all unified). The
-  // agency-level aliases carry the streaming ranges + routing; the per-talkgroup
-  // aliases give every talkgroup its own label and route (so all talkgroups get
-  // imported into sdrtrunk-vce and show individually in the activity view).
-  // sdrtrunk-vce aliases come from the IMPORTED sdrtrunk config (not generated
-  // from the rdio talkgroups). P25 channels reference a single alias list, so
-  // collapse every imported alias into one list — a channel's list then carries
-  // all labels + ranges + routes. Primary list = the first imported list, else a
-  // default. Empty when no sdrtrunk config has been imported yet.
+  // Agencies are the single source of truth: the unified talkgroup rows drive
+  // BOTH programs — each row derives its rdio talkgroup AND its SDR-Trunk alias
+  // (name/group/colour/priority/route), so the two sides cannot drift.
+  //
+  // LEGACY SWITCH: while `sdrtrunkConfig.aliases` is still non-empty (the
+  // pre-unification imported list), it is pushed verbatim exactly as before —
+  // the one-off merge moves that data into the talkgroup rows and clears the
+  // list, flipping the fleet to derived aliases as a property of the DATA, not
+  // of what happens to be deployed. P25 channels reference a single alias list,
+  // so imported aliases are collapsed into one (the list most aliases belong
+  // to, else the first declared, else a default); derived aliases are all born
+  // on ALIAS_LIST_NAME already.
   const sdr = globalCfg.sdrtrunkConfig ?? { aliasLists: [], aliases: [], streams: [] };
-  // Primary list = the one the MOST aliases belong to (the comprehensive list,
-  // e.g. NSWPSN with ~1,500 vs the 27-entry range list), falling back to the
-  // first declared list, then a default.
-  const listCounts = new Map<string, number>();
-  for (const a of sdr.aliases) {
-    if (a.list) listCounts.set(a.list, (listCounts.get(a.list) ?? 0) + 1);
+  let aliases: Alias[];
+  if (sdr.aliases.length > 0) {
+    const listCounts = new Map<string, number>();
+    for (const a of sdr.aliases) {
+      if (a.list) listCounts.set(a.list, (listCounts.get(a.list) ?? 0) + 1);
+    }
+    const primaryList =
+      [...listCounts.entries()].sort((x, y) => y[1] - x[1])[0]?.[0] ??
+      sdr.aliasLists[0]?.name ??
+      'NSWPSN';
+    aliases = sdr.aliases.map((a) => ({ ...a, list: primaryList }));
+  } else {
+    aliases = deriveAliasesFromTalkgroups(globalCfg.agencies, globalCfg.defaults ?? {});
   }
-  const primaryList =
-    [...listCounts.entries()].sort((x, y) => y[1] - x[1])[0]?.[0] ??
-    sdr.aliasLists[0]?.name ??
-    'NSWPSN';
-  const aliases = sdr.aliases.map((a) => ({ ...a, list: primaryList }));
   const derivedSystems = agenciesToSystems(globalCfg.agencies);
+  // systemIds of encrypted agencies — excluded from streams/apiKeys below (they
+  // have no rdio side at all).
+  const encryptedSystemIds = new Set(
+    globalCfg.agencies.filter((a) => a.encrypted).map((a) => a.systemId),
+  );
 
   // The rdio document: preset as the base (options/apiKeys/downstreams/etc.),
   // with the fleet-wide systems/groups/tags overlaid from the global config.
@@ -390,10 +400,15 @@ export async function buildConfigPayload(
       .filter((t): t is StreamTarget => t !== null);
   }
   // De-dup stream targets by systemId (a single systemId must map to ONE rdio
-  // apiKey, else the local rdio 500s on UNIQUE(key)/UNIQUE(system id)).
+  // apiKey, else the local rdio 500s on UNIQUE(key)/UNIQUE(system id)) and drop
+  // encrypted agencies' systemIds — nothing ever uploads for them.
   {
     const seen = new Set<number>();
-    streamTargets = streamTargets.filter((t) => (seen.has(t.systemId) ? false : (seen.add(t.systemId), true)));
+    streamTargets = streamTargets.filter(
+      (t) =>
+        !encryptedSystemIds.has(t.systemId) &&
+        (seen.has(t.systemId) ? false : (seen.add(t.systemId), true)),
+    );
   }
 
   // Generate one rdio apiKey per system from the SAME systems list, so a system

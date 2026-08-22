@@ -1,0 +1,542 @@
+{
+ "10108": {
+  "label": "MNRN EST",
+  "name": "Wave Patch / Link - Metro East"
+ },
+ "10109": {
+  "label": "MNRN WST",
+  "name": "Wave Patch / Link - Metro West / Metro South"
+ },
+ "10113": {
+  "label": "MNRN NTH",
+  "name": "Wave Patch / Link - Metro North / Region North"
+ },
+ "10131": {
+  "label": "MNRN SW",
+  "name": "Wave Patch / Link - Region South"
+ },
+ "10163": {
+  "label": "1508 AVIATION",
+  "name": "Aviation"
+ },
+ "10501": {
+  "label": "CALLING",
+  "name": "Quiet / Calling"
+ },
+ "10502": {
+  "label": "STATE",
+  "name": "Statewide"
+ },
+ "10503": {
+  "label": "GH UG",
+  "name": "Gore Hill Underground"
+ },
+ "10504": {
+  "label": "GH OH",
+  "name": "Gore Hill Overhead"
+ },
+ "10505": {
+  "label": "HORN OH",
+  "name": "Hornsby Overhead"
+ },
+ "10506": {
+  "label": "HORN UG",
+  "name": "Hornsby Underground"
+ },
+ "10507": {
+  "label": "NTH SUBS",
+  "name": "North Substations"
+ },
+ "10508": {
+  "label": "NTH PROT",
+  "name": "North Protection"
+ },
+ "10509": {
+  "label": "NTH DIST OPS",
+  "name": "North District Operators"
+ },
+ "10510": {
+  "label": "GH STREET",
+  "name": "Gore Hill Street Lighting"
+ },
+ "10511": {
+  "label": "NTH OP",
+  "name": "North Operator"
+ },
+ "10512": {
+  "label": "UTIL 1",
+  "name": "Utility 1"
+ },
+ "10513": {
+  "label": "NTH EMSO 1",
+  "name": "North EMSO Data 1"
+ },
+ "10514": {
+  "label": "DY OH 1",
+  "name": "Dee Why Overhead 1"
+ },
+ "10515": {
+  "label": "DY OH 2",
+  "name": "Dee Why Overhead 2"
+ },
+ "10516": {
+  "label": "DY OP",
+  "name": "Dee Why Operator"
+ },
+ "10517": {
+  "label": "DY SUBS",
+  "name": "Dee Why Substations"
+ },
+ "10518": {
+  "label": "PROJECTS",
+  "name": "Projects and Contracts"
+ },
+ "10519": {
+  "label": "EAST OP",
+  "name": "East Operator"
+ },
+ "10520": {
+  "label": "UTIL 1",
+  "name": "Utility 1"
+ },
+ "10521": {
+  "label": "UTIL 2",
+  "name": "Utility 2"
+ },
+ "10522": {
+  "label": "EAST UG",
+  "name": "East Underground"
+ },
+ "10523": {
+  "label": "EAST OH",
+  "name": "East Overhead"
+ },
+ "10524": {
+  "label": "EAST SUBS",
+  "name": "East Substations"
+ },
+ "10525": {
+  "label": "ASSET ACC",
+  "name": "Asset Access"
+ },
+ "10526": {
+  "label": "EAST DIST OPS",
+  "name": "East District Operators"
+ },
+ "10527": {
+  "label": "EAST PROT",
+  "name": "East Protection"
+ },
+ "10528": {
+  "label": "CBD HV UG",
+  "name": "CBD High Voltage Underground"
+ },
+ "10529": {
+  "label": "PINC CTRL",
+  "name": "PINC Network Operations Controller"
+ },
+ "10530": {
+  "label": "SO TPDR 1",
+  "name": "SO Transponder 1"
+ },
+ "10531": {
+  "label": "SO TODR 2",
+  "name": "SO Transponder 2"
+ },
+ "10532": {
+  "label": "RAD CMDR",
+  "name": "Radio Commander"
+ },
+ "10535": {
+  "label": "STH OP",
+  "name": "South Operator"
+ },
+ "10536": {
+  "label": "IW OH",
+  "name": "Inner West Overhead"
+ },
+ "10537": {
+  "label": "HB UG",
+  "name": "Homebush Underground"
+ },
+ "10538": {
+  "label": "SW TRAIN",
+  "name": "Silverwater Training Centre"
+ },
+ "10539": {
+  "label": "BT OH",
+  "name": "Bankstown Overhead"
+ },
+ "10540": {
+  "label": "BT DIST OP",
+  "name": "Bankstown District Operators"
+ },
+ "10541": {
+  "label": "STH DIST OP",
+  "name": "South District Operators"
+ },
+ "10542": {
+  "label": "BT OP",
+  "name": "Bankstown Operator"
+ },
+ "10544": {
+  "label": "OAT OH",
+  "name": "Oatley Overhead"
+ },
+ "10545": {
+  "label": "STH EMSO 1",
+  "name": "South EMSO Data 1"
+ },
+ "10548": {
+  "label": "TRANS 1",
+  "name": "Transmission 1"
+ },
+ "10549": {
+  "label": "TRANS 2",
+  "name": "Transmission 2"
+ },
+ "10556": {
+  "label": "NTH OP",
+  "name": "North Operator"
+ },
+ "10557": {
+  "label": "STH OP",
+  "name": "South Operator"
+ },
+ "10558": {
+  "label": "EAST OP",
+  "name": "East Operator"
+ },
+ "10559": {
+  "label": "BT OP",
+  "name": "Bankstown Operator"
+ },
+ "10560": {
+  "label": "DY OP",
+  "name": "Dee Why Operator"
+ },
+ "10561": {
+  "label": "TELECTRL",
+  "name": "Telecontrol / Facilities / Driver Training"
+ },
+ "10562": {
+  "label": "CIP-IMS",
+  "name": "CIP IMS Control Duty Managers"
+ },
+ "10563": {
+  "label": "INC OPS",
+  "name": "Incident Operations"
+ },
+ "10564": {
+  "label": "SUBS METER",
+  "name": "TCA Substations Metering"
+ },
+ "10565": {
+  "label": "NET TEST 1",
+  "name": "TCA Network Test 1"
+ },
+ "10566": {
+  "label": "NET TEST 2",
+  "name": "TCA Network Test 2"
+ },
+ "10567": {
+  "label": "NET TEST 3",
+  "name": "TCA Network Test 3"
+ },
+ "10568": {
+  "label": "NET TEST 4",
+  "name": "TCA Network Test 4"
+ },
+ "10569": {
+  "label": "NET TEST 5",
+  "name": "TCA Network Test 5"
+ },
+ "10570": {
+  "label": "CASS DATA 1",
+  "name": "CASS Data 1"
+ },
+ "10730": {
+  "label": "D REG TRANS OPS",
+  "name": "Regional Transport Operations"
+ },
+ "10731": {
+  "label": "D P2P TRANS COM",
+  "name": "Point to Point Transport Commissioner"
+ },
+ "10901": {
+  "label": "SYD HAR",
+  "name": "Sydney Harbour"
+ },
+ "10902": {
+  "label": "PAR RVR",
+  "name": "Parramatta River"
+ },
+ "10903": {
+  "label": "MNT",
+  "name": "Maintenance"
+ },
+ "10905": {
+  "label": "ADM",
+  "name": "Administration"
+ },
+ "10907": {
+  "label": "BAL YRD",
+  "name": "Balmain Shipyard"
+ },
+ "10909": {
+  "label": "REV PRO",
+  "name": "Revenue Protection"
+ },
+ "10920": {
+  "label": "MCM PNT",
+  "name": "McMahons Point"
+ },
+ "10921": {
+  "label": "MED BNK",
+  "name": "Meadowbank"
+ },
+ "10924": {
+  "label": "WAT BAY",
+  "name": "Watsons Bay"
+ },
+ "10927": {
+  "label": "TAR ZOO",
+  "name": "Taronga Zoo"
+ },
+ "10952": {
+  "label": "CCN",
+  "name": "Operations - Central Coast"
+ },
+ "11653": {
+  "label": "MET CENT",
+  "name": "Fisheries - Metro Central"
+ },
+ "11654": {
+  "label": "NTH CST",
+  "name": "Fisheries - North Coast"
+ },
+ "11655": {
+  "label": "SHAV/ILLA",
+  "name": "Fisheries - Shoalhaven / Illawarra"
+ },
+ "11656": {
+  "label": "STH CST",
+  "name": "Fisheries - Coast"
+ },
+ "11657": {
+  "label": "F NTH CST",
+  "name": "Fisheries - Far North Coast"
+ },
+ "11658": {
+  "label": "NTH WST",
+  "name": "Fisheries - North West"
+ },
+ "11659": {
+  "label": "STH WST",
+  "name": "Fisheries - South West"
+ },
+ "11668": {
+  "label": "CIU 1",
+  "name": "Fisheries - Compliance Unit 1"
+ },
+ "11669": {
+  "label": "CIU 2",
+  "name": "Fisheries - Compliance Unit 2"
+ },
+ "12538": {
+  "label": "OPS - MNC - NTH",
+  "name": "Operations - Mid North Coast - North"
+ },
+ "12539": {
+  "label": "OPS - HCC - NTH",
+  "name": "Operations - Central Coast - North"
+ },
+ "20326": {
+  "label": "SYD WKSP OPS",
+  "name": "Sydney - Workshop Operations"
+ },
+ "20334": {
+  "label": "SYD TRNG OPS",
+  "name": "Sydney - Training Operations"
+ },
+ "20335": {
+  "label": "SYD TRNG OPS",
+  "name": "Sydney - Training Operations"
+ },
+ "20336": {
+  "label": "SYD WKSP OPS",
+  "name": "Sydney - Workshop Operations"
+ },
+ "20501": {
+  "label": "CC OP",
+  "name": "Central Coast Operator"
+ },
+ "20502": {
+  "label": "CC INSPECT",
+  "name": "Central Coast Installation Inspector"
+ },
+ "20503": {
+  "label": "CC EMSOS",
+  "name": "Central Coast EMSOs"
+ },
+ "20504": {
+  "label": "CC SUBS",
+  "name": "Central Coast Substations"
+ },
+ "20505": {
+  "label": "GOS OH",
+  "name": "Gosford Overhead"
+ },
+ "20506": {
+  "label": "CC UG",
+  "name": "Central Coast Underground"
+ },
+ "20507": {
+  "label": "CC DIST OPS",
+  "name": "Central Coast District Operators"
+ },
+ "20508": {
+  "label": "NORA OH",
+  "name": "Noraville Overhead"
+ },
+ "20509": {
+  "label": "CC PROT",
+  "name": "Central Coast Protection"
+ },
+ "20510": {
+  "label": "NORA OH",
+  "name": "Noraville Overhead"
+ },
+ "20511": {
+  "label": "CC EMSO 1",
+  "name": "Central Coast EMSO Data 1"
+ },
+ "20512": {
+  "label": "CC OP",
+  "name": "Central Coast Operator"
+ },
+ "20513": {
+  "label": "NEWC OP",
+  "name": "Newcastle Operator"
+ },
+ "20514": {
+  "label": "NEWC DES DAT",
+  "name": "Newcastle Despatch Data 1"
+ },
+ "20515": {
+  "label": "WALL OH 1",
+  "name": "Wallsend Overhead 1"
+ },
+ "20516": {
+  "label": "WALL UG",
+  "name": "Wallsend Underground"
+ },
+ "20517": {
+  "label": "WALL SUBS",
+  "name": "Wallsend Substations"
+ },
+ "20518": {
+  "label": "MAIT 1",
+  "name": "Maitland 1"
+ },
+ "20519": {
+  "label": "WALL OH 2",
+  "name": "Wallsend Overhead 2"
+ },
+ "20520": {
+  "label": "HUNT TCA",
+  "name": "TCA Hunter"
+ },
+ "20521": {
+  "label": "HUNT OP",
+  "name": "Hunter Operator"
+ },
+ "20522": {
+  "label": "MUSW 1",
+  "name": "Muswellbrook 1"
+ },
+ "20523": {
+  "label": "MUSW 2",
+  "name": "Muswellbrook 2"
+ },
+ "20524": {
+  "label": "CASS DATA 2",
+  "name": "CASS Data 2"
+ },
+ "20525": {
+  "label": "SING",
+  "name": "Singleton"
+ },
+ "20526": {
+  "label": "HUNT DIST OP",
+  "name": "Hunter District Operators"
+ },
+ "20527": {
+  "label": "NEWC DIST OP",
+  "name": "Newcastle District Operators"
+ },
+ "20528": {
+  "label": "HUNT PROJ",
+  "name": "Hunter Projects"
+ },
+ "30326": {
+  "label": "NTH HUN WST OPS",
+  "name": "North - Hunter West Operations"
+ },
+ "30332": {
+  "label": "SYD WKSP OPS",
+  "name": "Sydney - Workshop Operations"
+ },
+ "30336": {
+  "label": "SYD TRNG OPS",
+  "name": "Sydney - Training Operations"
+ },
+ "30337": {
+  "label": "SYD 5 EVT OPS",
+  "name": "Sydney - Event Operations"
+ },
+ "30338": {
+  "label": "SYD CENT INCDT 5",
+  "name": "Sydney - Central - Incident 5"
+ },
+ "30342": {
+  "label": "NTH TRNG OPS",
+  "name": "North - Training Operations"
+ },
+ "30343": {
+  "label": "SYD TRNG OPS",
+  "name": "Sydney - Training Operations"
+ },
+ "30347": {
+  "label": "SYD WKSP OPS",
+  "name": "Sydney - Workshop Operations"
+ },
+ "30348": {
+  "label": "SYD WKSP OPS",
+  "name": "Sydney - Workshop Operations"
+ },
+ "30349": {
+  "label": "NTH INCDT 6",
+  "name": "North - Incident 6"
+ },
+ "30352": {
+  "label": "SYD WKSP OPS",
+  "name": "Sydney - Workshop Operations"
+ },
+ "30359": {
+  "label": "SYD TRNG OPS",
+  "name": "Sydney - Training Operations"
+ },
+ "30367": {
+  "label": "NTH CC HOSP",
+  "name": "North - Central Coast Hospitals"
+ },
+ "30368": {
+  "label": "NTH MNC HOSP",
+  "name": "North - Mid North Coast Hospitals"
+ },
+ "30370": {
+  "label": "NTH INCDT",
+  "name": "North - Incident"
+ }
+}

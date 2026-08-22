@@ -9,12 +9,17 @@
  * be a cycle, and a second copy would drift.
  */
 import { log } from '../lib/log.js';
-import { getGlobalConfig } from './nodes/globalConfig.js';
+import { getGlobalConfig, deriveAliasesFromTalkgroups } from './nodes/globalConfig.js';
 
 export interface TalkgroupCatalog {
   labels: Map<number, string>;
   agencies: Map<number, string>;
   colors: Map<number, string>;
+  /** Talkgroups of agencies with the encrypted toggle on (SDR-Trunk-only
+   *  agencies like NSW PF): every call on them is encrypted regardless of what
+   *  any single decode event managed to establish in time. Empty until the
+   *  unified-talkgroup merge has run. */
+  encrypted: Set<number>;
 }
 
 let _cache: { at: number; map: TalkgroupCatalog } | null = null;
@@ -58,9 +63,22 @@ export async function talkgroupCatalog(): Promise<TalkgroupCatalog> {
   const labels = new Map<number, string>();
   const agencies = new Map<number, string>();
   const colors = new Map<number, string>();
+  const encrypted = new Set<number>();
   try {
     const cfg = await getGlobalConfig();
-    for (const a of cfg.sdrtrunkConfig?.aliases ?? []) {
+    // Same data-level switch as configMerge: a non-empty imported alias list is
+    // the pre-unification config and is read verbatim; once the merge clears it
+    // the aliases are derived from the unified talkgroup rows.
+    const imported = cfg.sdrtrunkConfig?.aliases ?? [];
+    const aliasList =
+      imported.length > 0 ? imported : deriveAliasesFromTalkgroups(cfg.agencies ?? [], cfg.defaults ?? {});
+    for (const ag of cfg.agencies ?? []) {
+      if (!ag.encrypted) continue;
+      for (const tg of ag.talkgroups) {
+        if (typeof tg.id === 'number' && Number.isInteger(tg.id)) encrypted.add(tg.id);
+      }
+    }
+    for (const a of aliasList) {
       const name = (a.name ?? '').trim();
       if (!name) continue;
       const group = (a.group ?? '').trim();
@@ -81,7 +99,7 @@ export async function talkgroupCatalog(): Promise<TalkgroupCatalog> {
   } catch (e) {
     log.warn({ err: e }, 'talkgroupCatalog: failed to load global config');
   }
-  const map = { labels, agencies, colors };
+  const map = { labels, agencies, colors, encrypted };
   _cache = { at: Date.now(), map };
   return map;
 }

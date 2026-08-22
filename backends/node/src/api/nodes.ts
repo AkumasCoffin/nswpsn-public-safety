@@ -165,6 +165,7 @@ nodesRouter.put('/api/nodes/global-config', requireRole(canManageNodes), async (
       rdioGroups: parsed.data.rdioGroups ?? current.rdioGroups,
       rdioTags: parsed.data.rdioTags ?? current.rdioTags,
       sdrtrunkConfig: parsed.data.sdrtrunkConfig ?? current.sdrtrunkConfig,
+      defaults: parsed.data.defaults ?? current.defaults,
     };
     const config = await saveGlobalConfig(merged, c.get('userId') ?? null);
     // Fan the new config out to every online node so the fleet re-syncs.
