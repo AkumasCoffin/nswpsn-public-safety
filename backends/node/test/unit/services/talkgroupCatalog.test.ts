@@ -190,3 +190,42 @@ describe('radio display lookups (unit → agency / colour / configured label)', 
     expect(cat.labels.has(2000115)).toBe(false); // not a talkgroup label either
   });
 });
+
+describe('configuredTalkgroups (what the talkgroup list is allowed to show)', () => {
+  it('carries ids that are NOT 5 digits, so configured AirBand channels survive', async () => {
+    // A P25 talkgroup on this network is always 5 digits, and the list filters
+    // on that — but AirBand carries aviation channels as low pseudo-talkgroups.
+    // Anything the operator configured must pass regardless of its id, and
+    // adding more AirBand channels must keep working with no code change.
+    const cat = await withConfig(
+      cfg([
+        {
+          systemId: 99,
+          name: 'AirBand',
+          talkgroups: [
+            { id: 5, label: 'TWR YSNW', name: 'Tower Nowra Airport' },
+            { id: 6, label: 'CTR SY', name: 'Sydney Centre' }, // a future one
+          ],
+          units: [],
+        },
+        {
+          systemId: 1,
+          name: 'Rural Fire Service',
+          talkgroups: [{ id: 30015, label: 'SWS A', name: 'South Western Slopes A' }],
+          units: [],
+        },
+      ]),
+    );
+    expect(cat.configuredTalkgroups.has(5)).toBe(true);
+    expect(cat.configuredTalkgroups.has(6)).toBe(true);
+    expect(cat.configuredTalkgroups.has(30015)).toBe(true);
+    // Decode noise is never configured, which is what the list filters on.
+    expect(cat.configuredTalkgroups.has(798)).toBe(false);
+    expect(cat.configuredTalkgroups.has(23610)).toBe(false);
+  });
+
+  it('is empty for a config with no talkgroups (callers must not filter on it)', async () => {
+    const cat = await withConfig(cfg([]));
+    expect(cat.configuredTalkgroups.size).toBe(0);
+  });
+});
