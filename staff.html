@@ -1821,8 +1821,7 @@
     .nd2-top-grid .nd-table td { font-size: 0.74rem; }
     /* Top Talkgroups carries five columns (pill, agency, system, calls,
        receptions) where its neighbours carry two, but auto-fit gives every card
-       an equal share — so its right-hand column was clipped, and adding the
-       Receiving Nodes card made every share narrower still. Give it two tracks
+       an equal share — so its right-hand column was clipped. Give it two tracks
        where there is room. */
     #nd2-top-tg-card { grid-column: span 2; }
     @media (max-width: 1100px) {
@@ -1830,7 +1829,7 @@
     }
     /* Safety net: a table that still cannot fit scrolls inside its own card
        rather than clipping, so no column is ever silently unreachable. */
-    #nd2-top-tg, #nd2-top-units, #nd2-top-sites, #nd2-top-nodes { overflow-x: auto; }
+    #nd2-top-tg, #nd2-top-units, #nd2-top-sites { overflow-x: auto; }
     .nd2-num { text-align: right; font-variant-numeric: tabular-nums; }
     /* num HEADER must right-align too, or it won't line up over its right-aligned
        values (.nd-table th's left-align otherwise outranks .nd2-num). */
@@ -2838,13 +2837,6 @@
           <div class="nd2-card" id="nd2-top-sites-card">
             <div class="nd2-card-h"><i class="fas fa-tower-cell"></i> Top Sites</div>
             <div id="nd2-top-sites"><div class="nd2-empty">—</div></div>
-          </div>
-          <!-- Which nodes are actually hearing the network. The site and system
-               drill-downs both list receiving nodes; the fleet overview did not,
-               so there was no way to see coverage without opening a site. -->
-          <div class="nd2-card" id="nd2-top-nodes-card">
-            <div class="nd2-card-h"><i class="fas fa-server"></i> Receiving Nodes</div>
-            <div id="nd2-top-nodes"><div class="nd2-empty">—</div></div>
           </div>
         </div>
         </div>
@@ -4755,10 +4747,6 @@
       showCard('nd2-top-tg-card', !isPager);
       showCard('nd2-top-units-card', !isPager);
       showCard('nd2-top-sites-card', !isPager);
-      // Receiving Nodes answers "which nodes hear this traffic" — meaningless
-      // when the page is already scoped to ONE node, where it can only ever
-      // list that node back.
-      showCard('nd2-top-nodes-card', !isPager && !nd2.node);
 
       const table = (headers, rows) => rows.length
         ? `<table class="nd-table"><thead><tr>${headers.map(h =>
@@ -4823,23 +4811,11 @@
         sitesEl.innerHTML = table([{ t: 'Site' }, { t: 'Calls', num: true }], rows);
       }
 
-      // Radio nodes only: a pager node has no calls, and listing it at 0 reads
-      // as a fault rather than a different kind of node. Clickable — the Nodes
-      // tab and its drawer already own everything about one node, so this
-      // links there instead of duplicating it.
-      const nodesEl = document.getElementById('nd2-top-nodes');
-      if (nodesEl && !isPager) {
-        const rows = ((ov && ov.perNode) || [])
-          .filter(nd => (nd.kind || 'radio') === 'radio')
-          .sort((a, b) => Number(b.calls || 0) - Number(a.calls || 0))
-          .slice(0, 10)
-          .map(nd => [
-            `<span class="nd2-rowlink" onclick="nd2OpenNodeFromData(${nd2Arg(nd.nodeId)}, ${nd2Arg(nd.name || '')})" title="Open this node">`
-              + `<span class="nd-strong">${escapeHtml(nd.name || nd2ShortNode(nd.nodeId))}</span></span>`,
-            nd2Num(nd.calls),
-          ]);
-        nodesEl.innerHTML = table([{ t: 'Node' }, { t: 'Receptions', num: true }], rows);
-      }
+      // NOTE: there is deliberately no "Receiving Nodes" card here. The Nodes
+      // tab already lists every node with its calls, receptions, talkgroups and
+      // sites, so a second copy on the overview was pure duplication — and it
+      // was actively wrong once the page was scoped to a single node, where it
+      // could only list that node back at itself.
     }
 
     // Keep the events node-filter <select> in sync with overview.perNode,
