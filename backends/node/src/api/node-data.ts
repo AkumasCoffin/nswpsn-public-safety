@@ -94,6 +94,39 @@ async function siteNames(pool: Pool): Promise<Map<string, string>> {
   return map;
 }
 
+/**
+ * Radio id → the over-the-air alias it last transmitted, LIFETIME.
+ *
+ * An OTA is durable identity: once a radio has announced its name, that name is
+ * true whether or not it happened to announce it again inside the page's time
+ * window. Deriving it from the windowed events (as the top-units / radios
+ * rollups used to) meant a radio heard today showed no OTA because it last
+ * named itself a fortnight ago — the same bug the Aliases table had.
+ *
+ * Reads node_radio_aliases, which is the forever table and only a few hundred
+ * rows, behind the same ~60s cache as siteNames(). Rows whose "alias" is just
+ * the radio's own id are excluded — that is the decoder echoing the id, not a
+ * name (see migration 076).
+ */
+let _radioOtaCache: { at: number; map: Map<number, string> } | null = null;
+async function radioOtaAliases(pool: Pool): Promise<Map<number, string>> {
+  if (_radioOtaCache && Date.now() - _radioOtaCache.at < 60_000) return _radioOtaCache.map;
+  const map = new Map<number, string>();
+  try {
+    const res = await pool.query<{ radio_id: number; alias: string }>(
+      `SELECT DISTINCT ON (radio_id) radio_id, alias
+         FROM node_radio_aliases
+        WHERE NOT (alias ~ '^[0-9]+$' AND alias::bigint = radio_id)
+        ORDER BY radio_id, last_seen DESC`,
+    );
+    for (const r of res.rows) map.set(r.radio_id, r.alias);
+  } catch (err) {
+    log.warn({ err }, 'radioOtaAliases: failed to load radio aliases');
+  }
+  _radioOtaCache = { at: Date.now(), map };
+  return map;
+}
+
 /** Resolve a site name from the siteNames() map (system key, then fallback). */
 function siteNameFor(
   map: Map<string, string>,
@@ -761,6 +794,7 @@ nodeDataRouter.get(
       const tgAgencies = await talkgroupAgencies();
       const tgColors = await talkgroupColors();
       const radioDisp = await radioDisplay();
+      const otaMap = await radioOtaAliases(pool);
       const siteMap = await siteNames(pool);
       const body: Record<string, unknown> = {
         window,
@@ -790,7 +824,9 @@ nodeDataRouter.get(
           // A radio can have BOTH: `ota` is the alias it transmits over the air
           // (P25 talker alias), `alias` is what the operator named it in the
           // agency's unit list. Separate columns — neither replaces the other.
-          ota: r.alias ?? null,
+          // Both are LIFETIME: identity doesn't expire with the time window, so
+          // the OTA comes from the alias table rather than this window's events.
+          ota: otaMap.get(r.unit) ?? r.alias ?? null,
           alias: radioDisp.labels.get(r.unit) ?? null,
           agency: radioDisp.agencies.get(r.unit) ?? null,
           color: radioDisp.colors.get(r.unit) ?? null,
@@ -1294,6 +1330,7 @@ async function scopedRadioDetail(
 ): Promise<ScopedDetail> {
   const _scopedTg = await talkgroupCatalog();
   const _scopedTgLabels = _scopedTg.labels;
+  const _scopedOta = await radioOtaAliases(pool);
   const _scopedRadio = {
     labels: _scopedTg.unitLabels,
     agencies: _scopedTg.unitAgencies,
@@ -1389,7 +1426,8 @@ async function scopedRadioDetail(
       radio: r.radio,
       // Same split as every other radio surface: the OTA the radio transmitted
       // vs the label the operator configured for that UID, plus its agency.
-      ota: r.alias ?? null,
+      // Both LIFETIME — identity does not expire with the window.
+      ota: _scopedOta.get(r.radio) ?? r.alias ?? null,
       alias: _scopedRadio.labels.get(r.radio) ?? null,
       agency: _scopedRadio.agencies.get(r.radio) ?? null,
       color: _scopedRadio.colors.get(r.radio) ?? null,
@@ -2599,6 +2637,7 @@ nodeDataRouter.get(
       const tgAgencies = await talkgroupAgencies();
       const tgColors = await talkgroupColors();
       const radioDisp = await radioDisplay();
+      const radioOtaMap = await radioOtaAliases(pool);
       const siteMap = await siteNames(pool);
       return c.json({
         window,
@@ -2612,7 +2651,8 @@ nodeDataRouter.get(
             system: r.system,
             radio: r.radio,
             // OTA = transmitted over the air; alias = configured unit label.
-            ota: r.alias ?? null,
+            // Both LIFETIME — identity does not expire with the window.
+            ota: radioOtaMap.get(r.radio) ?? r.alias ?? null,
             alias: radioDisp.labels.get(r.radio) ?? null,
             agency: radioDisp.agencies.get(r.radio) ?? null,
             color: radioDisp.colors.get(r.radio) ?? null,
