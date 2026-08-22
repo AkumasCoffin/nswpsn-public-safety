@@ -47,6 +47,8 @@ import {
   talkgroupLabels,
   talkgroupAgencies,
   talkgroupColors,
+  unitAgencies,
+  unitColors,
 } from '../services/talkgroupCatalog.js';
 import { shapeNodeLive, sortLiveChannels } from '../services/nodeLive.js';
 import { liveCallWindow } from '../services/nodeCallWindow.js';
@@ -736,6 +738,7 @@ nodeDataRouter.get(
       const tgLabels = await talkgroupLabels();
       const tgAgencies = await talkgroupAgencies();
       const tgColors = await talkgroupColors();
+      const [unitAgencyMap, unitColorMap] = await Promise.all([unitAgencies(), unitColors()]);
       const siteMap = await siteNames(pool);
       const body: Record<string, unknown> = {
         window,
@@ -763,6 +766,8 @@ nodeDataRouter.get(
         topUnits: topUnitRows.map((r) => ({
           unit: r.unit,
           alias: r.alias ?? null,
+          agency: unitAgencyMap.get(r.unit) ?? null,
+          color: unitColorMap.get(r.unit) ?? null,
           calls: num(r.calls),
         })),
         topSites: topSiteRows.map((r) => ({
@@ -2447,6 +2452,7 @@ nodeDataRouter.get(
       const tgLabels = await talkgroupLabels();
       const tgAgencies = await talkgroupAgencies();
       const tgColors = await talkgroupColors();
+      const [unitAgencyMap, unitColorMap] = await Promise.all([unitAgencies(), unitColors()]);
       const siteMap = await siteNames(pool);
       return c.json({
         window,
@@ -2460,6 +2466,9 @@ nodeDataRouter.get(
             system: r.system,
             radio: r.radio,
             alias: r.alias ?? null,
+            // Agency + colour for the UID pill, from the agency unit lists.
+            agency: unitAgencyMap.get(r.radio) ?? null,
+            color: unitColorMap.get(r.radio) ?? null,
             calls: num(r.calls),
             lastSeen: iso(r.last_seen),
             lastSite: ex?.lastSite
@@ -3226,6 +3235,7 @@ nodeDataRouter.get('/api/node-data/radio-aliases', requireRole(canViewNodeData),
       `SELECT count(*)::int AS n FROM node_radio_aliases ${where}`,
       params,
     );
+    const [unitAgencyMap, unitColorMap] = await Promise.all([unitAgencies(), unitColors()]);
     params.push(limit, offset);
     const rows = await pool.query<{
       system: number;
@@ -3250,6 +3260,10 @@ nodeDataRouter.get('/api/node-data/radio-aliases', requireRole(canViewNodeData),
         system: r.system,
         radio: r.radio_id,
         alias: r.alias,
+        // Radios have no talkgroup, so the agency (and its colour) come from
+        // the agency unit list this radio id belongs to.
+        agency: unitAgencyMap.get(r.radio_id) ?? null,
+        color: unitColorMap.get(r.radio_id) ?? null,
         firstSeen: r.first_seen,
         lastSeen: r.last_seen,
         timesSeen: r.times_seen,

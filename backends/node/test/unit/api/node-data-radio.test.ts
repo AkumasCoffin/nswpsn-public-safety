@@ -412,7 +412,15 @@ describe('display enrichment (labels, site names, aliases)', () => {
     const body = await res.json();
     // Overview topSites rows carry no system id — resolved via "rfss:site".
     expect(body.topSites[0]).toEqual({ siteRfss: 4, siteId: 85, name: 'Cambewarra MT', calls: 9 });
-    expect(body.topUnits[0]).toEqual({ unit: 999, alias: 'CAR 1', calls: 9 });
+    // agency/color come from the agencies' unit lists — null here, since this
+    // stubbed config has no agencies to own unit 999.
+    expect(body.topUnits[0]).toEqual({
+      unit: 999,
+      alias: 'CAR 1',
+      agency: null,
+      color: null,
+      calls: 9,
+    });
   });
 });
 

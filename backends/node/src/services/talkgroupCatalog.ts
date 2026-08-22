@@ -15,6 +15,13 @@ export interface TalkgroupCatalog {
   labels: Map<number, string>;
   agencies: Map<number, string>;
   colors: Map<number, string>;
+  /** Radio (unit) id → owning agency name, from the agencies' rdio unit lists.
+   *  A radio has no talkgroup of its own, so this is the only thing that can
+   *  colour a UID by agency. First agency wins on a duplicate id (rdio scopes
+   *  units per system, so the same id CAN exist under two agencies). */
+  unitAgencies: Map<number, string>;
+  /** Radio (unit) id → its agency's display colour (same source as above). */
+  unitColors: Map<number, string>;
   /** Talkgroups of agencies with the encrypted toggle on (SDR-Trunk-only
    *  agencies like NSW PF): every call on them is encrypted regardless of what
    *  any single decode event managed to establish in time. Empty until the
@@ -66,6 +73,8 @@ export async function talkgroupCatalog(): Promise<TalkgroupCatalog> {
   const agencies = new Map<number, string>();
   const colors = new Map<number, string>();
   const encrypted = new Set<number>();
+  const unitAgencies = new Map<number, string>();
+  const unitColors = new Map<number, string>();
   try {
     const cfg = await getGlobalConfig();
     // Same data-level switch as configMerge: a non-empty imported alias list is
@@ -75,6 +84,16 @@ export async function talkgroupCatalog(): Promise<TalkgroupCatalog> {
     const aliasList =
       imported.length > 0 ? imported : deriveAliasesFromTalkgroups(cfg.agencies ?? [], cfg.defaults ?? {});
     for (const ag of cfg.agencies ?? []) {
+      // Radios: the agency's unit list is the only unit → agency mapping there
+      // is (a radio carries no talkgroup), so it drives the UID pill's colour.
+      const agencyName = ag.name.trim();
+      const agencyColor = normaliseAliasColor(String(ag.color ?? '')) ?? ledHex(ag);
+      for (const u of (ag.units ?? []) as Array<Record<string, unknown>>) {
+        const uid = Number(u['id']);
+        if (!Number.isInteger(uid) || unitAgencies.has(uid)) continue;
+        if (agencyName) unitAgencies.set(uid, agencyName);
+        if (agencyColor) unitColors.set(uid, agencyColor);
+      }
       for (const tg of ag.talkgroups ?? []) {
         if (typeof tg.id !== 'number' || !Number.isInteger(tg.id)) continue;
         if (ag.encrypted) encrypted.add(tg.id);
@@ -107,9 +126,30 @@ export async function talkgroupCatalog(): Promise<TalkgroupCatalog> {
   } catch (e) {
     log.warn({ err: e }, 'talkgroupCatalog: failed to load global config');
   }
-  const map = { labels, agencies, colors, encrypted };
+  const map = { labels, agencies, colors, encrypted, unitAgencies, unitColors };
   _cache = { at: Date.now(), map };
   return map;
+}
+
+/** rdio LED preset name → the same hex the staff editor shows, so an agency
+ *  that only set an LED still colours its radios. */
+function ledHex(ag: { led?: unknown }): string | null {
+  const led = typeof ag.led === 'string' ? ag.led.trim().toLowerCase() : '';
+  const HEX: Record<string, string> = {
+    blue: '#2563eb', cyan: '#06b6d4', green: '#22c55e', magenta: '#d946ef',
+    orange: '#f97316', red: '#ef4444', white: '#e5e7eb', yellow: '#eab308',
+  };
+  return HEX[led] ?? null;
+}
+
+/** Radio (unit) id → owning agency name. */
+export async function unitAgencies(): Promise<Map<number, string>> {
+  return (await talkgroupCatalog()).unitAgencies;
+}
+
+/** Radio (unit) id → its agency's colour. */
+export async function unitColors(): Promise<Map<number, string>> {
+  return (await talkgroupCatalog()).unitColors;
 }
 
 export async function talkgroupLabels(): Promise<Map<number, string>> {
