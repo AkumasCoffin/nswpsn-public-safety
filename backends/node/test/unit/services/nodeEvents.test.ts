@@ -348,6 +348,29 @@ describe('markRecorded', () => {
     expect(clientQuery.mock.calls.some((a) => a[0] === 'COMMIT')).toBe(true);
   });
 
+  // Every radio showed as a bare id because the OTA alias was being thrown
+  // away. It rides on the audio upload next to `source` and `talkgroup` — the
+  // only path it reaches us on, since the activity feed's own sourceAlias
+  // arrives null — and this is the point where that form is read.
+  it('records the radio\'s over-the-air alias from the upload', async () => {
+    armQueries({ updatedRow: { received_at: at.toISOString(), system: 0x4a2, talkgroup: 12345 } });
+    await markRecorded('node-aaaa', 12345, at, 90_000, 2019977, 851062500, '  FIRE ENG 12  ');
+
+    const upd = callWith('UPDATE node_radio_events SET recorded = true');
+    expect(upd?.[6]).toBe('FIRE ENG 12'); // trimmed
+    expect(String(clientQuery.mock.calls.find(
+      (a) => String(a[0]).includes('UPDATE node_radio_events SET recorded = true'))?.[0]))
+      .toContain('COALESCE(source_alias');  // never overwrite an alias we know
+  });
+
+  it('treats a blank alias as no alias', async () => {
+    // Most radios never transmit one; an empty form field must not write ''
+    // over a name captured from an earlier call.
+    armQueries({ updatedRow: { received_at: at.toISOString(), system: 0x4a2, talkgroup: 12345 } });
+    await markRecorded('node-aaaa', 12345, at, 90_000, 2019977, 851062500, '   ');
+    expect(callWith('UPDATE node_radio_events SET recorded = true')?.[6]).toBeNull();
+  });
+
   // The window has to cover the PHYSICAL gap between the call-grant event
   // (which stamps the row) and the recorder's first audio sample (which stamps
   // the upload) — measured at ~1.7-5s live, with a tail. A 2s window matched

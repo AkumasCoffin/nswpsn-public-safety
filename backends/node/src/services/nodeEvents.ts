@@ -402,6 +402,17 @@ export async function markRecorded(
    *  seconds apart are on different traffic channels, so this pins the exact
    *  reception even when the same unit keys up twice. */
   frequencyHz: number | null = null,
+  /** The radio's OVER-THE-AIR alias (rdio form field `talkerAlias`), when the
+   *  radio transmitted one.
+   *
+   *  This is the only path it reaches us on. The activity-event feed carries a
+   *  `sourceAlias`, but that is resolved through vce's trunked identity tables
+   *  and arrives null in practice, which left every radio unnamed. vce puts the
+   *  alias straight onto the audio upload next to `source` and `talkgroup`
+   *  (RdioScannerBroadcaster: FormField.TALKER_ALIAS) — the same form we were
+   *  already parsing for the recorded flag, and simply discarding this field
+   *  from. */
+  talkerAlias: string | null = null,
 ): Promise<void> {
   try {
     const pool = await getWriterPool();
@@ -411,6 +422,13 @@ export async function markRecorded(
     const unit = safeInt(sourceUnit);
     const freq = safeInt(frequencyHz);
     const bytes = Math.max(0, safeInt(audioBytes) ?? 0);
+    // Over-the-air text, so it is attacker-influenced in principle and blank
+    // when the radio sent no alias. Trim, drop empties, and bound it to the
+    // column rather than trusting the length.
+    const alias = ((): string | null => {
+      const s = (talkerAlias ?? '').trim();
+      return s === '' ? null : s.slice(0, 64);
+    })();
 
     const client = await pool.connect();
     try {
@@ -440,7 +458,12 @@ export async function markRecorded(
         // NULL (not false) when the ROW's frequency is null, and DESC sorts
         // NULLS FIRST in Postgres — so without it a row that knows nothing
         // would outrank the exact match this whole change is built on.
-        `UPDATE node_radio_events SET recorded = true, audio_bytes = $4
+        // source_alias is filled in only when it is still empty: the alias is a
+        // property of the RADIO, so the first sighting is as good as any, and
+        // never overwriting means a later call that happened to carry no alias
+        // cannot blank one we already know.
+        `UPDATE node_radio_events SET recorded = true, audio_bytes = $4,
+                source_alias = COALESCE(source_alias, $7::text)
           WHERE id = (
             SELECT id FROM node_radio_events
              WHERE node_id = $1
@@ -465,7 +488,7 @@ export async function markRecorded(
              LIMIT 1
           )
           RETURNING received_at, system, talkgroup`,
-        [nodeId, tg, at.toISOString(), bytes, freq, unit],
+        [nodeId, tg, at.toISOString(), bytes, freq, unit, alias],
       );
       const row = upd.rows[0];
 

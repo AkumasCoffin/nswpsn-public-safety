@@ -167,6 +167,10 @@ nodeIngestRouter.post('/api/node-ingest/call-upload', async (c) => {
         // alone cannot when a talkgroup is busy.
         safeInt(formFirstString(form, 'source')),
         safeInt(formFirstString(form, 'frequency')),
+        // The radio's over-the-air alias, when it transmitted one. Sent on
+        // every upload (FormField.TALKER_ALIAS) and previously discarded here,
+        // which is why every radio showed as a bare id.
+        formFirstString(form, 'talkerAlias') ?? null,
       );
     } catch (err) {
       log.warn({ err, node: node.id.slice(0, 8) }, 'node relay: recorded stamp failed');
