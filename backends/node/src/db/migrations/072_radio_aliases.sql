@@ -1,9 +1,12 @@
 -- Over-the-air radio aliases, one row per radio.
 --
 -- Some radios transmit a text alias alongside their id (P25 vendor talker-alias
--- link control). vce forwards it on the audio upload as `talkerAlias`, which is
--- the only path it reaches us on — the activity feed's own sourceAlias resolves
--- through vce's trunked identity tables and arrives null in practice.
+-- link control). It reaches us on two paths: the activity feed's `sourceAlias`
+-- (vce's trunked_identity_summary.last_talker_alias) and the audio upload's
+-- `talkerAlias` form field. At the time this migration was written only the
+-- upload delivered — the identity join arrived null — which is no longer the
+-- case: the feed now supplies every alias we hold and the two never disagree.
+-- The upload path is kept as a fallback. See services/nodeEvents.ts.
 --
 -- This is a FOREVER table, deliberately separate from node_radio_events:
 --

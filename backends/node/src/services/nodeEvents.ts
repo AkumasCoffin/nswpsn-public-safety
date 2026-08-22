@@ -444,15 +444,17 @@ export async function markRecorded(
    *  reception even when the same unit keys up twice. */
   frequencyHz: number | null = null,
   /** The radio's OVER-THE-AIR alias (rdio form field `talkerAlias`), when the
-   *  radio transmitted one.
+   *  radio transmitted one. vce puts it straight onto the audio upload next to
+   *  `source` and `talkgroup` (RdioScannerBroadcaster: FormField.TALKER_ALIAS).
    *
-   *  This is the only path it reaches us on. The activity-event feed carries a
-   *  `sourceAlias`, but that is resolved through vce's trunked identity tables
-   *  and arrives null in practice, which left every radio unnamed. vce puts the
-   *  alias straight onto the audio upload next to `source` and `talkgroup`
-   *  (RdioScannerBroadcaster: FormField.TALKER_ALIAS) — the same form we were
-   *  already parsing for the recorded flag, and simply discarding this field
-   *  from. */
+   *  SECOND of two paths, kept as a fallback. This was once the only one that
+   *  worked — the activity feed's `sourceAlias` resolves through vce's trunked
+   *  identity tables and used to arrive null, leaving every radio unnamed. That
+   *  is no longer true: measured over 30 days the feed named all 306 radios we
+   *  know, the upload contributed no name the feed had missed, and the two
+   *  never disagreed. So this path currently adds nothing — but it costs a
+   *  single upsert on a form we already parse, and it is the only source left
+   *  if the identity join ever regresses, so it stays. */
   talkerAlias: string | null = null,
 ): Promise<void> {
   try {
