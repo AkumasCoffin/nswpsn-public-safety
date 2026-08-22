@@ -4755,7 +4755,10 @@
       showCard('nd2-top-tg-card', !isPager);
       showCard('nd2-top-units-card', !isPager);
       showCard('nd2-top-sites-card', !isPager);
-      showCard('nd2-top-nodes-card', !isPager);
+      // Receiving Nodes answers "which nodes hear this traffic" — meaningless
+      // when the page is already scoped to ONE node, where it can only ever
+      // list that node back.
+      showCard('nd2-top-nodes-card', !isPager && !nd2.node);
 
       const table = (headers, rows) => rows.length
         ? `<table class="nd-table"><thead><tr>${headers.map(h =>
