@@ -1741,6 +1741,15 @@
       padding: 0.2rem;
     }
     .nd2-seg .filter-btn { border: none; padding: 0.35rem 0.95rem; font-size: 0.78rem; }
+    /* Divider between button groups inside a pill bar. Inset vertically so it
+       reads as a separator rather than a full-height rule cutting the pill. */
+    .nd2-seg-div {
+      width: 1px;
+      align-self: stretch;
+      margin: 0.25rem 0.3rem;
+      background: var(--border-subtle);
+      flex: 0 0 auto;
+    }
     .nd2-seg .filter-btn:not(.active) { background: transparent; }
 
     /* Inline soft error / not-deployed-yet banner (mirrors .nd-banner). */
@@ -2739,13 +2748,18 @@
 
         <div class="nd2-controls nd2-viewbar" id="nd2-viewbar-radio">
           <div class="nd2-seg" role="group" aria-label="Radio data view">
+            <!-- Grouped by what you're asking: what's happening now, what the
+                 network is made of, then who is on it. The dividers are the
+                 grouping — without them the seven read as one flat list. -->
             <button class="filter-btn active" data-nd2-view="overview" onclick="nd2SetView('overview')">Overview</button>
+            <button class="filter-btn" data-nd2-view="live" onclick="nd2SetView('live')">Live</button>
+            <button class="filter-btn" data-nd2-view="events" onclick="nd2SetView('events')">Events</button>
+            <span class="nd2-seg-div" aria-hidden="true"></span>
             <button class="filter-btn" data-nd2-view="systems" onclick="nd2SetView('systems')">Systems</button>
             <button class="filter-btn" data-nd2-view="nodes" onclick="nd2SetView('nodes')">Nodes</button>
+            <span class="nd2-seg-div" aria-hidden="true"></span>
             <button class="filter-btn" data-nd2-view="talkgroups" onclick="nd2SetView('talkgroups')">Talkgroups</button>
-            <button class="filter-btn" data-nd2-view="live" onclick="nd2SetView('live')">Live</button>
             <button class="filter-btn" data-nd2-view="aliases" onclick="nd2SetView('aliases')">Aliases</button>
-            <button class="filter-btn" data-nd2-view="events" onclick="nd2SetView('events')">Events</button>
           </div>
         </div>
         <div class="nd2-controls nd2-viewbar" id="nd2-viewbar-pager" style="display: none;">
@@ -4237,7 +4251,7 @@
     // Which views belong to each mode (drives the panel show/hide sweep).
     // Listed in tab order (the buttons are the source of truth for display;
     // this drives the panel show/hide sweep and the saved-view whitelist).
-    const ND2_RADIO_VIEWS = ['overview', 'systems', 'nodes', 'talkgroups', 'live', 'aliases', 'events'];
+    const ND2_RADIO_VIEWS = ['overview', 'live', 'events', 'systems', 'nodes', 'talkgroups', 'aliases'];
     const ND2_PAGER_VIEWS = ['poverview', 'capcodes'];
     const _nd2AllViews = [...ND2_RADIO_VIEWS, ...ND2_PAGER_VIEWS];
 
