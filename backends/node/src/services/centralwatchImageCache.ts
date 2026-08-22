@@ -38,6 +38,19 @@ const MIN_IMAGE_BYTES = 500; // python: anything smaller is treated as a 1x1/err
 // strategy is gone — the DOM <img> path can't set the required header, so only
 // the fetch() path works now.
 const TOKEN_RENEW_MARGIN_S = 60; // re-mint a token this many seconds before its exp
+
+// Back-off when Central Watch stops answering.
+//
+// This loop asks for ~50 things a minute, every minute, forever. When upstream
+// starts refusing, retrying at that rate is both useless and rude — and it is
+// how a rate-limit (429) turns into an outright IP ban (403), which is exactly
+// what happened. After this many consecutive fruitless passes the loop slows to
+// a probe; one good pass restores normal cadence.
+//
+// Deliberately not worked around with proxies or address rotation: a 403 is the
+// operator declining, not an obstacle to route around.
+const FAILING_PASSES_BEFORE_BACKOFF = 5;
+const BACKOFF_INTERVAL_MS = 15 * 60 * 1000; // 15 min while upstream is refusing
 const tokenCache = new Map<string, { token: string; exp: number }>();
 
 const cache = new Map<string, CachedImage>();
@@ -45,6 +58,10 @@ const cache = new Map<string, CachedImage>();
 let batchTimer: NodeJS.Timeout | null = null;
 let batchInFlight = false;
 let stopRequested = false;
+/** Consecutive passes that cached nothing at all. */
+let failingPasses = 0;
+/** Whether the loop is currently on the slow probe cadence. */
+let backedOff = false;
 
 export function setImage(
   cameraId: string,
@@ -209,12 +226,36 @@ export function startCentralwatchImageBatchLoop(): void {
     return;
   }
   stopRequested = false;
+  const reschedule = (intervalMs: number): void => {
+    if (batchTimer) clearInterval(batchTimer);
+    batchTimer = setInterval(() => void tick(), intervalMs);
+  };
   const tick = async (): Promise<void> => {
     if (stopRequested) return;
     if (batchInFlight) return;
     batchInFlight = true;
     try {
-      await runBatchOnce();
+      const res = await runBatchOnce();
+      // "Cached nothing" is the only signal that reaches here — the individual
+      // 403s are logged deeper down — and it is sufficient: a pass that stores
+      // no image did the user no good whatever the cause.
+      if (res.cached > 0) {
+        if (backedOff) {
+          log.info('centralwatch: upstream answering again — resuming normal cadence');
+          backedOff = false;
+          reschedule(BATCH_INTERVAL_MS);
+        }
+        failingPasses = 0;
+      } else if (!backedOff && ++failingPasses >= FAILING_PASSES_BEFORE_BACKOFF) {
+        log.warn(
+          { failingPasses, nextIntervalMs: BACKOFF_INTERVAL_MS },
+          'centralwatch: no images cached for several passes — backing off. ' +
+            'A sustained 403 means this address has been blocked upstream, ' +
+            'which no amount of retrying will clear.',
+        );
+        backedOff = true;
+        reschedule(BACKOFF_INTERVAL_MS);
+      }
     } catch (err) {
       log.warn(
         { err: (err as Error).message },
@@ -232,6 +273,8 @@ export function startCentralwatchImageBatchLoop(): void {
 
 export function stopCentralwatchImageBatchLoop(): void {
   stopRequested = true;
+  failingPasses = 0;
+  backedOff = false;
   if (batchTimer) {
     clearInterval(batchTimer);
     batchTimer = null;
