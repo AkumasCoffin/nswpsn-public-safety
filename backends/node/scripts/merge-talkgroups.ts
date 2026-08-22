@@ -7,9 +7,10 @@
  * from the rows" (see buildConfigPayload).
  *
  * Merge rules (operator-agreed):
- *   - union by (agency, talkgroup id); rdio label/name WIN over the alias name,
- *     which is preserved verbatim in `aliasName` (it carries each agency's own
- *     channel numbering and is not derivable).
+ *   - union by (agency, talkgroup id). The rdio LABEL is also the SDR-Trunk
+ *     alias name — one field for both programs — so rdio's label wins and the
+ *     old alias name is dropped (that is what renames e.g. "144 SWS A" to
+ *     "SWS A"). An alias name is only kept when the row has no label at all.
  *   - alias-only rows become new talkgroups under their broadcastChannel's
  *     agency. Aliases routed to a channel with NO matching agency are reported
  *     and skipped — this tool never creates agencies, with ONE exception:
@@ -234,11 +235,12 @@ export function mergeTalkgroups(cfg: GlobalConfigInput): { merged: GlobalConfigI
       // Both sides: rdio label/name win; the alias name is preserved verbatim.
       report.matched++;
       touchedByAlias.add(existing);
+      // The label IS the alias name now, and rdio's label wins — the alias name
+      // is only adopted when the row has no label of its own ("-" is a
+      // placeholder, not a name).
       const aliasNm = (al.name ?? '').trim();
-      // "-" is a placeholder, not a name — leave aliasName unset so the alias
-      // takes the (real, possibly RR-filled) rdio label.
-      if (aliasNm && aliasNm !== '-' && aliasNm !== ((existing.label ?? '').trim() || (existing.name ?? '').trim())) {
-        existing.aliasName = aliasNm;
+      if (blank(existing.label) && aliasNm && aliasNm !== '-') {
+        existing.label = aliasNm;
       }
       if (priority !== null) rowPriority.set(existing, priority);
     } else {

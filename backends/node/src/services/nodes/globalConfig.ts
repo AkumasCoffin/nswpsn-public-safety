@@ -71,10 +71,9 @@ const LooseObj = z.record(z.string(), z.unknown());
  * default — an explicit value overrides it. That's what lets an agency set its
  * group + tag once instead of on all 623 rows.
  *
- * `aliasName` is the SDR-Trunk alias name kept verbatim, because its leading
- * number is each agency's OWN channel numbering (RFS "1209 AVATN 1", FRNSW
- * "101 ME1", SES "0916 OPS 16", Endeavour "D01 CNTRLE1", Rail none at all) and
- * is NOT derivable from the talkgroup id. Null = the alias is named by `label`.
+ * `label` doubles as the SDR-Trunk alias name — one field, both programs, so
+ * the two can never disagree about what a talkgroup is called. `name` is the
+ * friendly form the Data tab displays.
  *
  * Passthrough keeps the rdio fields we don't model (led, led2, order, _id)
  * round-tripping untouched.
@@ -88,14 +87,16 @@ const optionalNum = z.preprocess((v) => (v === '' ? undefined : v), z.number().n
 export const TalkgroupSchema = z
   .object({
     id: z.number().int(),
+    /** The short label — ALSO the SDR-Trunk alias name (one field, both
+     *  programs). Displayed by rdio; matched in vce. */
     label: z.string().max(200).nullish(),
+    /** The friendly name ("South Western Slopes A") — what the Data tab shows. */
     name: z.string().max(200).nullish(),
     groupId: optionalInt,
     tagId: optionalInt,
     frequency: optionalNum,
     delay: optionalNum,
     alert: z.string().max(40).nullish(),
-    aliasName: z.string().max(200).nullish(),
     priority: optionalInt,
   })
   .passthrough();
@@ -339,8 +340,9 @@ function ledToAliasColor(led: unknown): string | null {
  * whenever it is still non-empty, so pre-merge configs are untouched).
  *
  * Field resolution, most-specific wins:
- *   name     = aliasName ?? label ?? name ?? String(id)   (aliasName carries the
- *              agency's own channel numbering and is never generated)
+ *   name     = label ?? name ?? String(id). The label IS the alias name — one
+ *              field serves both programs (rdio's short label and the
+ *              SDR-Trunk alias), so they can never say different things.
  *   group    = agency.sdrGroupName ?? agency.name  (sdrGroupName exists because
  *              the historical alias group is NOT the agency name)
  *   color    = agency.color ?? agency's LED colour (each agency has ONE colour
@@ -363,7 +365,6 @@ export function deriveAliasesFromTalkgroups(
       const row = tg as Talkgroup;
       if (typeof row.id !== 'number' || !Number.isInteger(row.id)) continue;
       const name =
-        (row.aliasName ?? '').trim() ||
         (row.label ?? '').trim() ||
         (row.name ?? '').trim() ||
         String(row.id);
@@ -412,7 +413,10 @@ function agencyToSystem(a: Agency): Record<string, unknown> {
     ...rest
   } = a as Agency & Record<string, unknown>;
   const rdioTalkgroups = (talkgroups as Talkgroup[]).map((tg) => {
-    const { aliasName: _an, priority: _pr, groupId, tagId, ...tgRest } = tg;
+    // aliasName is legacy (label is the alias name now) — stripped along with
+    // the SDR-Trunk-only priority so neither reaches rdio.
+    const { aliasName: _an, priority: _pr, groupId, tagId, ...tgRest } = tg as Talkgroup &
+      Record<string, unknown>;
     return {
       ...tgRest,
       groupId: groupId ?? a.defaultGroupId ?? undefined,

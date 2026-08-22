@@ -34,17 +34,18 @@ const idOf = (al: { ids: Array<{ type: string; attrs: Record<string, string> }> 
   al.ids.find((i) => i.type === type);
 
 describe('deriveAliasesFromTalkgroups', () => {
-  it('resolves the alias name aliasName > label > name > String(id), treating whitespace-only as empty', () => {
+  it('resolves the alias name label > name > String(id), treating whitespace-only as empty', () => {
     const a = agency({
       talkgroups: [
-        { id: 1209, aliasName: '1209 AVATN 1', label: 'Aviation', name: 'RFS Aviation' },
+        // The label IS the alias name — one field for both programs.
+        { id: 1209, label: 'AVATN 1', name: 'Aviation Operations 1' },
         { id: 101, label: 'ME1', name: 'Metro East 1' },
-        { id: 5, aliasName: '   ', label: '', name: 'Ops' }, // whitespace/empty fall through
-        { id: 6, aliasName: null, label: '  ', name: null }, // nothing usable → the id
+        { id: 5, label: '', name: 'Ops' }, // whitespace/empty fall through to name
+        { id: 6, label: '  ', name: null }, // nothing usable → the id
       ],
     });
     const out = deriveAliasesFromTalkgroups([a], {});
-    expect(out.map((al) => al.name)).toEqual(['1209 AVATN 1', 'ME1', 'Ops', '6']);
+    expect(out.map((al) => al.name)).toEqual(['AVATN 1', 'ME1', 'Ops', '6']);
   });
 
   it('inherits priority row > agency > defaults > 100 and emits it as a string attr', () => {
@@ -149,9 +150,10 @@ describe('agenciesToSystems (unified talkgroup rows)', () => {
     ]);
   });
 
-  it('strips the SDR-Trunk-only aliasName/priority from the rdio talkgroup doc, keeping passthrough fields', () => {
+  it('strips the SDR-Trunk-only priority (and legacy aliasName) from the rdio talkgroup doc, keeping passthrough fields', () => {
     const a = agency({
       talkgroups: [
+        // aliasName is legacy — pre-merge configs may still carry one.
         { id: 10101, label: 'Ops', aliasName: '1209 AVATN 1', priority: 3, led2: 'blue', order: 4 },
       ],
     });
@@ -251,12 +253,12 @@ describe('buildConfigPayload legacy switch (imported aliases vs derived)', () =>
           name: 'Fire and Rescue',
           sdrGroupName: 'Fire & Rescue NSW',
           color: '-65536',
-          talkgroups: [{ id: 101, label: 'ME1' }, { id: 102, aliasName: '102 ME2' }],
+          talkgroups: [{ id: 101, label: 'ME1' }, { id: 102, label: 'ME2' }],
         }),
       ],
     });
     const p = await buildConfigPayload(radioNode(), global);
-    expect(p.aliases.map((a) => a.name)).toEqual(['ME1', '102 ME2']);
+    expect(p.aliases.map((a) => a.name)).toEqual(['ME1', 'ME2']);
     expect(new Set(p.aliases.map((a) => a.list))).toEqual(new Set([ALIAS_LIST_NAME]));
     expect(p.aliases[0]!.group).toBe('Fire & Rescue NSW');
     expect(p.aliases[0]!.color).toBe('-65536');

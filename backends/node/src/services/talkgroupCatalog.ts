@@ -50,13 +50,15 @@ export function normaliseAliasColor(raw: string): string | null {
 }
 
 /**
- * All three lookups from ONE pass over the alias list, sharing a single ~60s
- * cache: they read the same aliases, so resolving them separately would double
- * the config loads and let the maps drift apart between refreshes.
+ * All lookups from ONE pass, sharing a single ~60s cache: they read the same
+ * config, so resolving them separately would double the config loads and let
+ * the maps drift apart between refreshes.
  *
- * First alias wins for each talkgroup so a duplicate id can't flip a label,
- * agency or colour between requests. Only individual talkgroup matchers are
- * mapped (a range labels a span, not a single id).
+ * `labels` is the DISPLAY name: a talkgroup's friendly name when the unified
+ * row has one, else the alias name (the short label). The alias pass never
+ * overwrites a friendly name — first write wins per talkgroup, so a duplicate
+ * id can't flip a label, agency or colour between requests. Only individual
+ * talkgroup matchers are mapped (a range labels a span, not a single id).
  */
 export async function talkgroupCatalog(): Promise<TalkgroupCatalog> {
   if (_cache && Date.now() - _cache.at < 60_000) return _cache.map;
@@ -73,9 +75,15 @@ export async function talkgroupCatalog(): Promise<TalkgroupCatalog> {
     const aliasList =
       imported.length > 0 ? imported : deriveAliasesFromTalkgroups(cfg.agencies ?? [], cfg.defaults ?? {});
     for (const ag of cfg.agencies ?? []) {
-      if (!ag.encrypted) continue;
-      for (const tg of ag.talkgroups) {
-        if (typeof tg.id === 'number' && Number.isInteger(tg.id)) encrypted.add(tg.id);
+      for (const tg of ag.talkgroups ?? []) {
+        if (typeof tg.id !== 'number' || !Number.isInteger(tg.id)) continue;
+        if (ag.encrypted) encrypted.add(tg.id);
+        // DISPLAY name: the friendly name ("South Western Slopes A") in
+        // preference to the short label ("SWS A") the alias carries. Read from
+        // the unified rows because only they hold both; the alias pass below
+        // fills anything these don't cover (and every legacy config).
+        const friendly = (tg.name ?? '').trim();
+        if (friendly) labels.set(tg.id, friendly);
       }
     }
     for (const a of aliasList) {
