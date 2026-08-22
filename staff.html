@@ -2888,6 +2888,7 @@
                   <thead>
                     <tr>
                       <th>Radio</th>
+                      <th>OTA</th>
                       <th class="nd2-num">Calls</th>
                       <th>Last seen</th>
                       <th>Last site</th>
@@ -2897,7 +2898,7 @@
                     </tr>
                   </thead>
                   <tbody id="nd2-rad-body">
-                    <tr><td colspan="7" class="nd2-empty">Loading…</td></tr>
+                    <tr><td colspan="8" class="nd2-empty">Loading…</td></tr>
                   </tbody>
                 </table>
               </div>
@@ -5927,7 +5928,7 @@
         nd2.rad.total = data.total || 0;
         const body = document.getElementById('nd2-rad-body');
         const rows = data.radios || [];
-        if (!rows.length) { body.innerHTML = `<tr><td colspan="7" class="nd2-empty">${
+        if (!rows.length) { body.innerHTML = `<tr><td colspan="8" class="nd2-empty">${
           nd2.rad.named ? 'No radio here has transmitted an alias.' : 'No radios match.'
         }</td></tr>`; }
         else body.innerHTML = rows.map(r => {
@@ -5936,12 +5937,13 @@
           ).join(' ') || '—';
           return `
           <tr class="nd2-rowlink" onclick="nd2JumpToEvents({unit:${r.radio}})" title="View events for this radio">
-            <td>${r.alias
-              ? `<span class="nd-strong">${escapeHtml(String(r.alias))}</span> <span class="nd-sub">${escapeHtml(String(r.radio))}</span>`
-              : `<span class="nd-strong">${escapeHtml(String(r.radio))}</span>`}
+            <td><span class="nd-strong">${escapeHtml(String(r.radio))}</span>
               <button class="nd2-linkbtn" title="Talkgroups this radio has been heard on"
                 onclick="event.stopPropagation();nd2ShowRel('radio',${r.radio},${nd2Arg(r.alias || r.radio)})">
                 <i class="fas fa-diagram-project"></i></button></td>
+            <td>${r.alias
+              ? `<span class="nd-strong">${escapeHtml(String(r.alias))}</span>`
+              : '<span class="nd-sub">—</span>'}</td>
             <td class="nd2-num">${nd2Num(r.calls)}</td>
             <td>${nd2LastSeen(r.lastSeen)}</td>
             <td>${nd2SiteChip(r.lastSite)}</td>
