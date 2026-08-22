@@ -2300,7 +2300,10 @@ nodeDataRouter.get(
       const systemP = qpIntOpt(url, 'system');
       if (systemP.error) return c.json({ error: systemP.error }, 400);
       const system = systemP.value;
-      const qRaw = (url.searchParams.get('q') ?? '').trim();
+      // A radio id is 7 digits but vce strips a LEADING ZERO, so 0200307 is
+      // stored as 200307. The UI displays the padded form, so a search for what
+      // the operator can see has to drop those zeros again before matching.
+      const qRaw = (url.searchParams.get('q') ?? '').trim().replace(/^0+(?=\d)/, '');
       if (qRaw && !/^\d+$/.test(qRaw)) {
         return c.json({ error: 'q must be a numeric radio-id prefix' }, 400);
       }
@@ -3356,7 +3359,15 @@ nodeDataRouter.get('/api/node-data/radio-aliases', requireRole(canViewNodeData),
     const conds: string[] = [];
     if (qRaw) {
       params.push(`%${qRaw.toLowerCase()}%`);
-      conds.push(`(lower(alias) LIKE $${params.length} OR radio_id::text LIKE $${params.length})`);
+      // Radio ids are stored without vce's stripped leading zero, so also try
+      // the query with leading zeros removed — otherwise searching for the
+      // 0200307 shown in the table matches nothing.
+      params.push(`%${qRaw.toLowerCase().replace(/^0+(?=\d)/, '')}%`);
+      conds.push(
+        `(lower(alias) LIKE $${params.length - 1}` +
+          ` OR radio_id::text LIKE $${params.length - 1}` +
+          ` OR radio_id::text LIKE $${params.length})`,
+      );
     }
     if (agencyFilter || hasFilter === 'alias') {
       let ids: number[] = [];

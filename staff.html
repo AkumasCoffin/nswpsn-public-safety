@@ -5076,7 +5076,7 @@
     function nd2RadioPill(radio, color) {
       if (radio == null) return '<span class="nd-sub">—</span>';
       // Just the number — the column heading already says what it is.
-      const body = escapeHtml(String(radio));
+      const body = escapeHtml(nd2Rid(radio));
       if (!color) return `<span class="nd2-tgpill">${body}</span>`;
       const c = escapeHtml(String(color));
       return `<span class="nd2-tgpill" style="background:${c}22;border-color:${c}88;">`
@@ -5087,6 +5087,16 @@
     // em-dash rather than an empty cell so "not named" is visibly a value.
     function nd2NameCell(v) {
       return v ? escapeHtml(String(v)) : '<span class="nd-sub">—</span>';
+    }
+
+    // A radio id is 7 digits, but vce strips a LEADING ZERO — so a real
+    // 0200307 arrives (and is stored) as the number 200307. Pad it back for
+    // display; the stored value is numeric and unchanged, so config lookups
+    // and the API are unaffected. Ids that are already 7+ digits pass through.
+    const ND2_RID_LEN = 7;
+    function nd2Rid(v) {
+      const s = String(v);
+      return /^\d+$/.test(s) && s.length < ND2_RID_LEN ? s.padStart(ND2_RID_LEN, '0') : s;
     }
 
     // Fill every agency <select> (data-nd2-agency) from /api/node-data/agencies.
@@ -6143,7 +6153,7 @@
                 title="View events for this radio">
               <td>${nd2RadioPill(r.radio, r.color)}
                 <button class="nd2-linkbtn" title="Talkgroups this radio has been heard on"
-                  onclick="event.stopPropagation();nd2ShowRel('radio',${r.radio},${nd2Arg(r.alias || r.ota || r.radio)})">
+                  onclick="event.stopPropagation();nd2ShowRel('radio',${r.radio},${nd2Arg(r.alias || r.ota || nd2Rid(r.radio))})">
                   <i class="fas fa-diagram-project"></i></button></td>
               <td>${nd2NameCell(r.ota)}</td>
               <td>${nd2NameCell(r.alias)}</td>
@@ -6238,7 +6248,7 @@
           <tr class="nd2-rowlink" onclick="nd2JumpToEvents({unit:${r.radio}})" title="View events for this radio">
             <td>${nd2RadioPill(r.radio, r.color)}
               <button class="nd2-linkbtn" title="Talkgroups this radio has been heard on"
-                onclick="event.stopPropagation();nd2ShowRel('radio',${r.radio},${nd2Arg(r.alias || r.ota || r.radio)})">
+                onclick="event.stopPropagation();nd2ShowRel('radio',${r.radio},${nd2Arg(r.alias || r.ota || nd2Rid(r.radio))})">
                 <i class="fas fa-diagram-project"></i></button></td>
             <td>${nd2NameCell(r.ota)}</td>
             <td>${nd2NameCell(r.alias)}</td>
