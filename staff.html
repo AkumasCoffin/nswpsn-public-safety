@@ -3456,13 +3456,9 @@
         <h2><i class="fas fa-globe" style="color: var(--accent);"></i> Global node settings</h2>
         <span id="gc-meta" class="gc-meta"></span>
         <span class="gc-h-spacer"></span>
-        <label class="gc-badge-btn" title="Import rdio-scanner config (fleet-wide)" style="cursor: pointer; margin: 0;">
-          <i class="fas fa-upload"></i> rdio-scanner.json
+        <label class="gc-badge-btn" title="Import an rdio-scanner config export (fleet-wide) — merged into the existing agencies by system ID; nothing is deleted" style="cursor: pointer; margin: 0;">
+          <i class="fas fa-upload"></i> Import rdio-scanner.json
           <input type="file" accept=".json,application/json" style="display: none;" onchange="_gcImportRdioFile(this)">
-        </label>
-        <label class="gc-badge-btn" title="Import sdrtrunk database (fleet-wide)" style="cursor: pointer; margin: 0;">
-          <i class="fas fa-upload"></i> sdrtrunk .db
-          <input type="file" accept=".db,.sqlite,.sqlite3" style="display: none;" onchange="_gcImportSdrtrunkFile(this)">
         </label>
         <button class="btn btn-secondary" onclick="closeGlobalConfig()">Cancel</button>
         <button class="btn btn-primary" onclick="_gcSave()" id="gc-save-btn"><i class="fas fa-floppy-disk"></i> Save &amp; sync</button>
@@ -10343,11 +10339,12 @@
       _gcRenderTags();
     }
 
-    // === Config import (rdio-scanner.json + sdrtrunk .db) ================
-    // Each side imports independently and only replaces its own part of the
-    // config; a normal Save then PUTs all four keys (the backend PUT is
-    // PATCH-style, so the untouched side is preserved). Parsing is entirely
-    // client-side. sql.js is lazily loaded on first .db import (~1 MB).
+    // === Config import (rdio-scanner.json) ===============================
+    // The rdio export is now the ONLY import: every SDR-Trunk alias is DERIVED
+    // from the unified talkgroup rows server-side and each agency's stream is
+    // auto-created by _gcEnsureAgencyStream, so there is nothing left to read out
+    // of a sdrtrunk .db. Parsing is entirely client-side, and the import MERGES
+    // into the loaded config (see _gcImportRdioFile) rather than replacing it.
     function _gcImportMsg(html, kind) {
       const el = document.getElementById('gc-import-msg');
       if (!el) return;
@@ -10359,6 +10356,43 @@
     }
 
     // --- rdio-scanner.json → agencies + rdioGroups + rdioTags -----------
+    // The import MERGES, it never replaces. The unified model carries fields an
+    // rdio export knows nothing about (defaultGroupId / defaultTagId /
+    // sdrGroupName / encrypted / aliasIds / per-row priority) and agencies that
+    // by design never appear in an rdio config at all (the encrypted, SDR-Trunk
+    // only "NSW PF (ENC)"), so assigning `agencies = json.systems.map(...)` would
+    // silently wipe curated work. Rule: the rdio-owned fields below are taken
+    // from the import, everything else is preserved, and nothing local is ever
+    // dropped — an agency/talkgroup/unit missing from the import is KEPT.
+    const GC_RDIO_SYS_FIELDS = ['led', 'led2', 'autoPopulate', 'blacklists', 'delay', 'alert', 'order'];
+    // NOTE: `priority` is deliberately absent — it is SDR-Trunk-only and curated here.
+    const GC_RDIO_TG_FIELDS = ['label', 'name', 'groupId', 'tagId', 'frequency', 'delay', 'alert'];
+    const GC_RDIO_UNIT_FIELDS = ['label'];
+    // Copy the listed fields from `src` onto `dst`; a field absent from `src` is
+    // left alone (an import that omits a field must not clear it).
+    function _gcCopyFields(dst, src, fields) {
+      fields.forEach(f => { if (src && Object.prototype.hasOwnProperty.call(src, f)) dst[f] = src[f]; });
+    }
+    // Merge imported rows into the existing ones by id: a matching id updates in
+    // place (import wins on `fields` only), an unknown id is appended, and an
+    // existing row absent from the import is kept untouched.
+    function _gcMergeById(existing, imported, fields) {
+      const rows = Array.isArray(existing) ? existing.slice() : [];
+      const byId = new Map();
+      rows.forEach((r, ix) => { if (r && r.id != null && r.id !== '') byId.set(String(r.id), ix); });
+      (Array.isArray(imported) ? imported : []).forEach(r => {
+        if (!r || typeof r !== 'object') return;
+        const key = (r.id == null || r.id === '') ? null : String(r.id);
+        const ix = key == null ? undefined : byId.get(key);
+        if (ix === undefined) {
+          rows.push(Object.assign({}, r));
+          if (key != null) byId.set(key, rows.length - 1);
+        } else {
+          _gcCopyFields(rows[ix], r, fields);
+        }
+      });
+      return rows;
+    }
     async function _gcImportRdioFile(input) {
       const file = input && input.files && input.files[0];
       if (input) input.value = '';           // allow re-selecting the same file
@@ -10372,156 +10406,57 @@
         if (!json || !Array.isArray(json.systems)) {
           throw new Error('No "systems" array — is this a rdio-scanner config export?');
         }
-        // Passthrough every scalar system field (led, autoPopulate, alert, delay,
-        // order, …); remap id→systemId, label→name; keep talkgroups/units verbatim.
-        const agencies = json.systems.map(s => {
-          const a = Object.assign({}, s);
-          delete a.id; delete a.label;
-          a.systemId = s.id;
-          a.name = s.label;
-          a.talkgroups = Array.isArray(s.talkgroups) ? s.talkgroups : [];
-          a.units = Array.isArray(s.units) ? s.units : [];
-          a.aliasIds = [];
-          return a;
+        if (!Array.isArray(_gcData.agencies)) _gcData.agencies = [];
+        const agencies = _gcData.agencies;
+        const bySysId = new Map();
+        agencies.forEach((a, ix) => { if (a && a.systemId != null && a.systemId !== '') bySysId.set(String(a.systemId), ix); });
+        let updated = 0, added = 0, nTg = 0, nU = 0;
+        json.systems.forEach(s => {
+          if (!s || typeof s !== 'object') return;
+          const tgIn = Array.isArray(s.talkgroups) ? s.talkgroups : [];
+          const uIn = Array.isArray(s.units) ? s.units : [];
+          nTg += tgIn.length; nU += uIn.length;
+          const key = (s.id == null || s.id === '') ? null : String(s.id);
+          const ix = key == null ? undefined : bySysId.get(key);
+          if (ix === undefined) {
+            // Unknown system → a brand-new agency: passthrough every scalar system
+            // field (led, autoPopulate, alert, delay, order, …); remap id→systemId,
+            // label→name; keep talkgroups/units verbatim.
+            const a = Object.assign({}, s);
+            delete a.id; delete a.label;
+            a.systemId = s.id;
+            a.name = s.label;
+            a.talkgroups = tgIn.map(t => Object.assign({}, t));
+            a.units = uIn.map(u => Object.assign({}, u));
+            a.aliasIds = [];
+            agencies.push(a);
+            if (key != null) bySysId.set(key, agencies.length - 1);
+            added++;
+            return;
+          }
+          // Known system → refresh only what rdio owns; the unified-only agency
+          // fields (defaultGroupId/defaultTagId/sdrGroupName/encrypted/priority/
+          // color/iconName/aliasIds) are simply never written here.
+          const a = agencies[ix];
+          _gcCopyFields(a, s, GC_RDIO_SYS_FIELDS);
+          if (s.label != null && s.label !== '') a.name = s.label;
+          a.talkgroups = _gcMergeById(a.talkgroups, tgIn, GC_RDIO_TG_FIELDS);
+          a.units = _gcMergeById(a.units, uIn, GC_RDIO_UNIT_FIELDS);
+          updated++;
         });
-        _gcData.agencies = agencies;
-        _gcData.rdioGroups = Array.isArray(json.groups) ? json.groups : [];
-        _gcData.rdioTags = Array.isArray(json.tags) ? json.tags : [];
+        // Global lookup tables: replaced wholesale (they are the id space the
+        // talkgroup group/tag dropdowns resolve against), but an import that
+        // omits them must not empty the ones we already have.
+        if (Array.isArray(json.groups) && json.groups.length) _gcData.rdioGroups = json.groups;
+        else if (!Array.isArray(_gcData.rdioGroups)) _gcData.rdioGroups = [];
+        if (Array.isArray(json.tags) && json.tags.length) _gcData.rdioTags = json.tags;
+        else if (!Array.isArray(_gcData.rdioTags)) _gcData.rdioTags = [];
         _gcView = 'agency'; _gcSelectedAgency = 0; _gcAgencyTab = 'tg'; _gcUnitsQuery = '';
         _gcOpenTg.clear();
         _gcRenderAll();
-        const nTg = agencies.reduce((n, a) => n + (a.talkgroups ? a.talkgroups.length : 0), 0);
-        const nU = agencies.reduce((n, a) => n + (a.units ? a.units.length : 0), 0);
-        _gcImportMsg(`<i class="fas fa-check"></i> rdio import: ${agencies.length} systems, ${nTg} talkgroups, ${nU} units, ${_gcData.rdioGroups.length} groups, ${_gcData.rdioTags.length} tags. Review, then Save &amp; sync.`, 'ok');
+        _gcImportMsg(`<i class="fas fa-check"></i> rdio import: ${json.systems.length} systems (${updated} updated, ${added} added), ${nTg} talkgroups, ${nU} units, ${_gcData.rdioGroups.length} groups, ${_gcData.rdioTags.length} tags — review, then Save &amp; sync.`, 'ok');
       } catch (e) {
         _gcImportMsg(`rdio import failed: ${escapeHtml(e && e.message ? e.message : String(e))}`, 'err');
-      }
-    }
-
-    // --- lazy sql.js loader (self-hosted under assets/) -----------------
-    let _gcSqlJsPromise = null;
-    function _gcLoadSqlJs() {
-      if (_gcSqlJsPromise) return _gcSqlJsPromise;
-      _gcSqlJsPromise = new Promise((resolve, reject) => {
-        if (window.initSqlJs) { resolve(window.initSqlJs); return; }
-        const s = document.createElement('script');
-        s.src = 'assets/sql-wasm.js';
-        s.onload = () => window.initSqlJs
-          ? resolve(window.initSqlJs)
-          : reject(new Error('sql.js loaded but initSqlJs is missing.'));
-        s.onerror = () => { _gcSqlJsPromise = null; reject(new Error('Failed to load assets/sql-wasm.js')); };
-        document.head.appendChild(s);
-      });
-      return _gcSqlJsPromise;
-    }
-
-    // --- parse a sdrtrunk-vce SQLite DB into sdrtrunkConfig -------------
-    function _gcParseSdrtrunkDb(db) {
-      const q = (sql) => {
-        const res = db.exec(sql);
-        if (!res || !res.length) return [];
-        const { columns, values } = res[0];
-        return values.map(row => { const o = {}; columns.forEach((c, i) => { o[c] = row[i]; }); return o; });
-      };
-      const hasCol = (table, col) => {
-        try { return q(`PRAGMA table_info(${table})`).some(r => r.name === col); }
-        catch (e) { return false; }
-      };
-      const S = v => (v == null ? '' : String(v));
-
-      // alias lists
-      const aliasLists = q('SELECT name, family FROM alias_list')
-        .map(r => ({ name: S(r.name), family: S(r.family) }));
-      const listById = {};
-      q('SELECT id, name FROM alias_list').forEach(r => { listById[r.id] = r.name; });
-
-      // broadcast routes grouped per alias
-      const routesByAlias = {};
-      q('SELECT alias_id, channel_name FROM alias_broadcast_channel').forEach(r => {
-        if (r.channel_name == null || r.channel_name === '') return;
-        (routesByAlias[r.alias_id] = routesByAlias[r.alias_id] || []).push(r.channel_name);
-      });
-
-      const hasP25 = hasCol('alias', 'wacn') && hasCol('alias', 'p25_system_id');
-      const aliases = [];
-      let dropped = 0;
-      const skipped = {};
-      q('SELECT * FROM alias').forEach(r => {
-        const ids = [];
-        (routesByAlias[r.id] || []).forEach(ch => ids.push({ type: 'broadcastChannel', attrs: { channel: S(ch) } }));
-        if (r.record_enabled) ids.push({ type: 'record', attrs: {} });
-        if (r.priority != null) ids.push({ type: 'priority', attrs: { priority: S(r.priority) } });
-        const proto = S(r.protocol);
-        let matcher = null;
-        switch (r.matcher_type) {
-          case 'TALKGROUP':
-            matcher = { type: 'talkgroup', attrs: { protocol: proto, value: S(r.value) } }; break;
-          case 'TALKGROUP_RANGE':
-            matcher = { type: 'talkgroupRange', attrs: { protocol: proto, min: S(r.min_value), max: S(r.max_value) } }; break;
-          case 'RADIO_ID':
-            matcher = { type: 'radio', attrs: { protocol: proto, value: S(r.value) } }; break;
-          case 'RADIO_ID_RANGE':
-            matcher = { type: 'radioRange', attrs: { protocol: proto, min: S(r.min_value), max: S(r.max_value) } }; break;
-          case 'P25_FULLY_QUALIFIED_TALKGROUP':
-            if (hasP25) matcher = { type: 'p25FullyQualifiedTalkgroup', attrs: { protocol: proto, value: S(r.value), wacn: S(r.wacn), system: S(r.p25_system_id) } };
-            break;
-        }
-        if (!matcher) {                 // no supported matcher → drop (vce rejects matcher-less aliases)
-          dropped++;
-          if (r.matcher_type) skipped[r.matcher_type] = (skipped[r.matcher_type] || 0) + 1;
-          return;
-        }
-        ids.push(matcher);
-        const alias = { name: S(r.name), list: S(listById[r.alias_list_id]), ids };
-        if (r.group_name != null && r.group_name !== '') alias.group = S(r.group_name);
-        if (r.color != null && r.color !== '') alias.color = S(r.color);
-        if (r.icon_name != null && r.icon_name !== '') alias.iconName = S(r.icon_name);
-        if (r.stream_as_talkgroup != null && r.stream_as_talkgroup !== '') alias.streamTalkgroupAlias = r.stream_as_talkgroup;
-        aliases.push(alias);
-      });
-
-      // streams: systemID + enabled come from the parsed config_json blob
-      const streams = [];
-      q('SELECT name, config_json FROM configuration_broadcast_stream').forEach(r => {
-        let cfg = null;
-        try { cfg = JSON.parse(r.config_json); } catch (e) { return; }
-        if (!cfg) return;
-        const sid = Number(cfg.systemID);
-        if (!Number.isFinite(sid)) return;          // skip streams with no numeric systemID
-        streams.push({ name: S(r.name), systemId: sid, enabled: !!cfg.enabled });
-      });
-
-      return { aliasLists, aliases, streams, dropped, skipped };
-    }
-
-    async function _gcImportSdrtrunkFile(input) {
-      const file = input && input.files && input.files[0];
-      if (input) input.value = '';
-      if (!file) return;
-      if (!_gcData) { _gcImportMsg('Config not loaded yet — reopen the modal.', 'err'); return; }
-      _gcImportMsg('<i class="fas fa-spinner fa-spin"></i> Loading SQLite engine…', 'info');
-      let db = null;
-      try {
-        const initSqlJs = await _gcLoadSqlJs();
-        const SQL = await initSqlJs({ locateFile: f => 'assets/' + f });
-        _gcImportMsg(`<i class="fas fa-spinner fa-spin"></i> Reading ${escapeHtml(file.name)}…`, 'info');
-        const buf = new Uint8Array(await file.arrayBuffer());
-        db = new SQL.Database(buf);
-        const r = _gcParseSdrtrunkDb(db);
-        _gcData.sdrtrunkConfig = { aliasLists: r.aliasLists, aliases: r.aliases, streams: r.streams };
-        // The import can flip unified ↔ legacy mode — re-render the whole layout.
-        _gcView = 'agency'; _gcSelectedAgency = 0;
-        _gcRenderAll();
-        let msg = `sdrtrunk import: ${r.aliasLists.length} lists, ${r.aliases.length} aliases, ${r.streams.length} streams`;
-        if (r.dropped) {
-          const detail = Object.keys(r.skipped).map(t => `${r.skipped[t]}×${t}`).join(', ');
-          msg += `; dropped ${r.dropped} unsupported${detail ? ' (' + detail + ')' : ''}`;
-        }
-        _gcImportMsg(`<i class="fas fa-check"></i> ${escapeHtml(msg)}. Review, then Save &amp; sync.`, 'ok');
-      } catch (e) {
-        _gcImportMsg(`sdrtrunk import failed: ${escapeHtml(e && e.message ? e.message : String(e))}`, 'err');
-      } finally {
-        if (db) { try { db.close(); } catch (e) {} }
       }
     }
 
@@ -10739,7 +10674,7 @@
       </section>`;
       const legacySdr = unified ? '' : `<section class="gc-sect gc-sect-sdr" style="margin-top:0.7rem;">
         <div class="gc-sect-h"><span class="gc-src-badge gc-src-sdr">SDR-Trunk</span> Aliases &amp; streams <span class="gc-sect-count">${sdr.aliases.length.toLocaleString()}</span></div>
-        <div class="gc-hint">Readable alias names for this agency's talkgroups — imported from your sdrtrunk-vce database (Import above) and editable here. Routed to this agency by system ID ${(a.systemId == null || a.systemId === '') ? '<em>(unset)</em>' : escapeHtml(String(a.systemId))}.</div>
+        <div class="gc-hint">Readable alias names for this agency's talkgroups — legacy, from a pre-merge sdrtrunk-vce import, editable here until the one-off merge is run (aliases are derived from the talkgroup rows after it). Routed to this agency by system ID ${(a.systemId == null || a.systemId === '') ? '<em>(unset)</em>' : escapeHtml(String(a.systemId))}.</div>
         ${(a.systemId != null && a.systemId !== '')
           ? `<div class="gc-hint" style="margin-top:0.2rem;"><i class="fas fa-link"></i> Stream + API key auto-linked by system ID ${escapeHtml(String(a.systemId))}${sdr.streams.length ? ` (stream &ldquo;${escapeHtml(sdr.streams[0].name)}&rdquo;)` : ''}.</div>
           ${sdrAliasRows || `<div class="gc-empty" style="padding:0.6rem;">No aliases yet — add one below.</div>`}
@@ -10775,8 +10710,9 @@
       if (!tgs.length) return `<div class="gc-empty">No talkgroups yet — add one above.</div>`;
       if (!shownTgs.length) return `<div class="gc-empty">No talkgroups match your search.</div>`;
       const rdioCols = !enc;
-      const cols = 3 + (unified ? 1 : 0) + (rdioCols ? 2 : 0) + 1;
-      const head = `<tr><th style="width:90px;">ID</th><th>Label</th><th>Name</th>${unified ? '<th>Alias name</th>' : ''}${rdioCols ? '<th>Group</th><th>Tag</th>' : ''}<th style="width:${rdioCols ? '78' : '44'}px;"></th></tr>`;
+      const cols = 3 + (rdioCols ? 2 : 0) + 1;
+      const labelTip = 'The rdio label AND the SDR-Trunk alias name — one field, both programs, so the two can never disagree about what a talkgroup is called.';
+      const head = `<tr><th style="width:90px;">ID</th><th title="${escapeHtml(labelTip)}">Label / alias</th><th>Name</th>${rdioCols ? '<th>Group</th><th>Tag</th>' : ''}<th style="width:${rdioCols ? '78' : '44'}px;"></th></tr>`;
       const rows = shownTgs.map(({ tg, ti }) => {
         const open = _gcOpenTg.has(i + ':' + ti);
         const transcribeOn = tg.transcribe !== false; // default true
@@ -10784,9 +10720,8 @@
         const tagSel = unified ? _gcOptionsInherit(_gcData.rdioTags, tg.tagId, a.defaultTagId) : _gcOptions(_gcData.rdioTags, tg.tagId);
         const main = `<tr class="gc-tg-row">
           <td><input type="number" value="${escapeHtml(String(tg.id == null ? '' : tg.id))}" oninput="_gcTgSet(${i},${ti},'id',this.value)"></td>
-          <td><input type="text" value="${escapeHtml(tg.label || '')}" oninput="_gcTgSet(${i},${ti},'label',this.value)"></td>
+          <td><input type="text" value="${escapeHtml(tg.label || '')}" title="${escapeHtml(labelTip)}" oninput="_gcTgSet(${i},${ti},'label',this.value)"></td>
           <td><input type="text" value="${escapeHtml(tg.name || '')}" oninput="_gcTgSet(${i},${ti},'name',this.value)"></td>
-          ${unified ? `<td><input type="text" value="${escapeHtml(tg.aliasName || '')}" placeholder="= label" oninput="_gcTgSet(${i},${ti},'aliasName',this.value,true)"></td>` : ''}
           ${rdioCols ? `<td><select onchange="_gcTgSet(${i},${ti},'groupId',this.value${unified ? ',true' : ''})">${grpSel}</select></td>
           <td><select onchange="_gcTgSet(${i},${ti},'tagId',this.value${unified ? ',true' : ''})">${tagSel}</select></td>` : ''}
           <td><div class="gc-tg-actions">${rdioCols ? `<button class="gc-more-btn ${open ? 'open' : ''}" title="More settings (frequency / delay / alert / transcribe)" onclick="_gcToggleTg(${i},${ti})"><i class="fas fa-chevron-down"></i></button>` : ''}<button class="gc-icon-btn" title="Remove talkgroup" onclick="_gcRemoveTg(${i},${ti})"><i class="fas fa-trash"></i></button></div></td>
@@ -11068,8 +11003,8 @@
     }
 
     // Talkgroup row helpers. In unified mode each row drives BOTH sides: the
-    // rdio talkgroup AND the derived SDR-Trunk alias (aliasName = the agency's
-    // own channel numbering; blank = named by label). Group/tag inherit the
+    // rdio talkgroup AND the derived SDR-Trunk alias, whose name IS this row's
+    // `label` (one field, both programs). Group/tag inherit the
     // agency default when unset (the key is absent, NOT ''). _gcToggleTg drives
     // the per-row "more" expander (structural → re-render); _gcTgSet /
     // _gcUnitSet are mutate-only so typing focus survives.
