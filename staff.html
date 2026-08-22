@@ -3081,12 +3081,13 @@
                 <th id="nd2-ev-tg-th">Talkgroup</th>
                 <th>Agency</th>
                 <th>Unit / Message</th>
+                <th>OTA</th>
                 <th>Sites</th>
                 <th>Nodes</th>
               </tr>
             </thead>
             <tbody id="nd2-ev-body">
-              <tr><td colspan="7" class="nd2-empty">Loading…</td></tr>
+              <tr><td colspan="8" class="nd2-empty">Loading…</td></tr>
             </tbody>
           </table>
         </div>
@@ -4614,12 +4615,12 @@
       const unitsEl = document.getElementById('nd2-top-units');
       if (unitsEl && !isPager) {
         const rows = ((ov && ov.topUnits) || []).slice(0, 10).map(u => [
-          u.alias
-            ? `<span class="nd-strong">${escapeHtml(String(u.alias))}</span> <span class="nd-sub">${escapeHtml(String(u.unit))}</span>`
-            : `<span class="nd-strong">${escapeHtml(String(u.unit))}</span>`,
+          `<span class="nd-strong">${escapeHtml(String(u.unit))}</span>`,
+          u.alias ? escapeHtml(String(u.alias)) : '<span class="nd-sub">—</span>',
           nd2Num(u.calls),
         ]);
-        unitsEl.innerHTML = table([{ t: 'Unit' }, { t: 'Calls', num: true }], rows);
+        unitsEl.innerHTML = table(
+          [{ t: 'Unit' }, { t: 'OTA' }, { t: 'Calls', num: true }], rows);
       }
       const unitsNote = document.getElementById('nd2-units-note');
       if (unitsNote) unitsNote.style.display = (ov && ov.unitsWindowCapped) ? '' : 'none';
@@ -4733,7 +4734,7 @@
           const msg = e.status === 404 ? 'Events API not available yet.'
             : (e.status === 401 || e.status === 403) ? 'Not authorised to view events.'
             : `Could not load events: ${e.message}`;
-          body.innerHTML = `<tr><td colspan="7" class="nd2-empty">${escapeHtml(msg)}</td></tr>`;
+          body.innerHTML = `<tr><td colspan="8" class="nd2-empty">${escapeHtml(msg)}</td></tr>`;
         }
         nd2UpdatePager(0);
       }
@@ -4753,7 +4754,7 @@
       const body = document.getElementById('nd2-ev-body');
       if (!body) return;
       if (!events.length) {
-        body.innerHTML = '<tr><td colspan="7" class="nd2-empty">No events match.</td></tr>';
+        body.innerHTML = '<tr><td colspan="8" class="nd2-empty">No events match.</td></tr>';
         nd2UpdatePager(0);
         return;
       }
@@ -4783,6 +4784,7 @@
             <td>${capCell}</td>
             <td>${nd2AgencyCell(ev.agency)}</td>
             <td><span class="nd2-msg" title="${escapeHtml(msg)}">${escapeHtml(msg) || '—'}</span></td>
+            <td><span class="nd-sub">—</span></td>
             <td>—</td>
             <td>${nodeCell || '—'}</td>
           </tr>`;
@@ -4799,9 +4801,10 @@
           <td><span class="nd-sub">${escapeHtml(ev.systemLabel || String(ev.system != null ? ev.system : '—'))}</span></td>
           <td>${tgLabel}${badges}</td>
           <td>${nd2AgencyCell(ev.agency)}</td>
+          <td>${ev.sourceUnit != null
+            ? `<span class="nd-strong">${escapeHtml(String(ev.sourceUnit))}</span>` : '—'}</td>
           <td>${ev.sourceAlias
-            ? `<span class="nd-strong">${escapeHtml(String(ev.sourceAlias))}</span> <span class="nd-sub">${escapeHtml(String(ev.sourceUnit != null ? ev.sourceUnit : '—'))}</span>`
-            : (ev.sourceUnit != null ? escapeHtml(String(ev.sourceUnit)) : '—')}</td>
+            ? escapeHtml(String(ev.sourceAlias)) : '<span class="nd-sub">—</span>'}</td>
           <td>${sites || '—'}</td>
           <td>${nodeCell || '—'}</td>
         </tr>`;
@@ -5399,11 +5402,11 @@
     }
     function nd2TopRadioHtml(list) {
       return nd2MiniTable(
-        [{ label: 'Radio' }, { label: 'Calls', num: true }, { label: 'Last seen' }],
+        [{ label: 'Radio' }, { label: 'OTA' }, { label: 'Calls', num: true },
+         { label: 'Last seen' }],
         (list || []).map(r => [
-          r.alias
-            ? `<span class="nd-strong">${escapeHtml(String(r.alias))}</span> <span class="nd-sub">${escapeHtml(String(r.radio))}</span>`
-            : escapeHtml(String(r.radio)),
+          `<span class="nd-strong">${escapeHtml(String(r.radio))}</span>`,
+          r.alias ? escapeHtml(String(r.alias)) : '<span class="nd-sub">—</span>',
           nd2Num(r.calls), nd2LastSeen(r.lastSeen)]));
     }
 
@@ -6534,16 +6537,21 @@
           body.innerHTML = '<div class="nd2-empty">No counterparts in this window.</div>';
           return;
         }
+        // Listing RADIOS gets an OTA column; listing talkgroups has no UID to
+        // name, so the column would be dead weight there.
         body.innerHTML = nd2MiniTable(
-          [{ label: isRadio ? 'Talkgroup' : 'Radio' }, { label: 'Calls', num: true },
+          [{ label: isRadio ? 'Talkgroup' : 'Radio' },
+           ...(isRadio ? [] : [{ label: 'OTA' }]),
+           { label: 'Calls', num: true },
            { label: 'Group', num: true }, { label: 'Private', num: true },
            { label: 'Enc', num: true }, { label: 'Audio', num: true }, { label: 'Last seen' }],
           rows.map(r => [
             isRadio
               ? nd2TgPill(r.id, r.label, r.color)
-              : (r.label
-                  ? `<span class="nd-strong">${escapeHtml(String(r.label))}</span> <span class="nd-sub">${escapeHtml(String(r.id))}</span>`
-                  : `<span class="nd-strong">${escapeHtml(String(r.id))}</span>`),
+              : `<span class="nd-strong">${escapeHtml(String(r.id))}</span>`,
+            ...(isRadio ? [] : [r.label
+              ? escapeHtml(String(r.label))
+              : '<span class="nd-sub">—</span>']),
             nd2Num(r.calls), nd2Num(r.group), nd2Num(r.private),
             nd2Num(r.encrypted), nd2Num(r.recorded), nd2LastSeen(r.lastSeen),
           ]));
