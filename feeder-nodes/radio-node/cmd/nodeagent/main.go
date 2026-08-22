@@ -526,7 +526,15 @@ func resolveSDRTrunk(cfg *agentcfg.Config, spec update.ComponentSpec, controlTok
 func seedRdioAdminPassword(bin, baseDir, pw string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, bin, "--base_dir", baseDir, "--admin_password", pw).CombinedOutput()
+	cmd := exec.CommandContext(ctx, bin, "--base_dir", baseDir, "--admin_password", pw)
+	// Bound Wait(): CombinedOutput reads through OS pipes, so the context alone
+	// isn't enough — it kills the direct child, but anything that inherited the
+	// pipe keeps Wait blocked indefinitely. This runs during startup, before the
+	// supervisor and WS client exist, so a hang here leaves the agent alive but
+	// completely dark: no components, never online, and nothing in the log to
+	// say why.
+	cmd.WaitDelay = 5 * time.Second
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
 	}

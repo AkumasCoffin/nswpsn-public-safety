@@ -122,6 +122,17 @@ func (s *Supervisor) runComponent(ctx context.Context, c *component) {
 		// kill the WHOLE group — not just the launcher — so SDR-Trunk's JVM can't
 		// be orphaned holding its control port.
 		setProcessGroup(cmd)
+		// Bound Wait(): stdout/stderr go to a logWriter (NOT an *os.File), so
+		// os/exec wires real pipes and Wait blocks until every holder of the
+		// write end closes it. A grandchild that escaped the process group —
+		// a helper that double-forked or called setsid — keeps that pipe open
+		// forever, parking this supervise loop mid-iteration. The damage is
+		// silent: the last status written is StatusRunning, so the component
+		// reports healthy while nothing decodes or uploads, AND Restart() only
+		// signals a channel this parked loop never reads, so the staff restart
+		// button does nothing at all. Wait then returns exec.ErrWaitDelay and
+		// the loop carries on into recordExit/backoff as usual.
+		cmd.WaitDelay = 10 * time.Second
 		cmd.Cancel = func() error {
 			killProcessGroup(cmd)
 			return nil

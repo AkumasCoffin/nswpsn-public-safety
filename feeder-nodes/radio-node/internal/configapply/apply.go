@@ -465,35 +465,66 @@ func (d Deps) applyRdio(payload ConfigPayload, localKeys map[int]string) error {
 	// tunes the node) doesn't touch rdio config, and killing+restarting rdio on
 	// every apply drops in-flight calls and thrashes it. The DB write above is
 	// idempotent and runs every time, so rdio's DB stays correct regardless.
-	if d.rdioConfigChanged(rdioCfg) && d.Supervisor != nil {
-		if rerr := d.Supervisor.Restart("rdio"); rerr != nil {
-			log.Printf("configapply: rdio config written but restart failed (config persisted; loads on next boot): %v", rerr)
+	sig := rdioConfigSignature(rdioCfg)
+	if !d.rdioSignatureApplied(sig) {
+		switch {
+		case d.Supervisor == nil:
+			log.Printf("configapply: rdio config changed but no supervisor is configured; restart skipped")
+		default:
+			if rerr := d.Supervisor.Restart("rdio"); rerr != nil {
+				// Deliberately NOT recorded as applied: leaving the signature
+				// unwritten is what makes the next apply retry the bounce.
+				log.Printf("configapply: rdio config written but restart failed (will retry on the next apply): %v", rerr)
+			} else {
+				d.recordRdioSignature(sig)
+			}
 		}
 	}
 	return nil
 }
 
-// rdioConfigChanged reports whether the rdio config differs from the one that last
-// triggered a bounce, recording the new signature when it does. The signature is a
-// sha256 over encoding/json's output — Go sorts map keys, so it's stable across
-// applies — meaning a channel-only edit (identical rdio config) won't bounce rdio.
-// Best-effort: a marshal error or a missing signature file returns true (bounce), so
-// a genuine change is never silently skipped.
-func (d Deps) rdioConfigChanged(rdioCfg map[string]any) bool {
+// rdioConfigSignature is a sha256 over encoding/json's output — Go sorts map keys,
+// so it is stable across applies, which is what lets a channel-only edit (identical
+// rdio config) skip the bounce. "" means the config could not be hashed: treated as
+// "always bounce, never record".
+func rdioConfigSignature(rdioCfg map[string]any) string {
 	body, err := json.Marshal(rdioCfg)
 	if err != nil {
-		return true
+		return ""
 	}
 	sum := sha256.Sum256(body)
-	sig := hex.EncodeToString(sum[:])
-	sigPath := filepath.Join(d.DataDir, "rdio", "rdio-config.sig")
-	if prev, rerr := os.ReadFile(sigPath); rerr == nil && strings.TrimSpace(string(prev)) == sig {
+	return hex.EncodeToString(sum[:])
+}
+
+func (d Deps) rdioSigPath() string {
+	return filepath.Join(d.DataDir, "rdio", "rdio-config.sig")
+}
+
+// rdioSignatureApplied reports whether sig is the signature that last triggered a
+// SUCCESSFUL rdio bounce.
+//
+// The recording deliberately happens AFTER the restart, not as a side effect of this
+// check. Writing it up front meant a failed restart still marked the config applied,
+// so every later apply skipped the bounce and rdio served the old config forever —
+// while the node acked configApplied, because the restart error is only logged. The
+// same bug also fired when no supervisor was configured at all, since the old
+// `changed() && Supervisor != nil` short-circuit evaluated the recording side effect
+// first.
+func (d Deps) rdioSignatureApplied(sig string) bool {
+	if sig == "" {
 		return false
 	}
-	// Persist the new signature (the rdio dir already exists — WriteConfigDB opened
-	// the DB there). Ignore write errors: worst case is an extra bounce next time.
-	_ = os.WriteFile(sigPath, []byte(sig), 0o644)
-	return true
+	prev, err := os.ReadFile(d.rdioSigPath())
+	return err == nil && strings.TrimSpace(string(prev)) == sig
+}
+
+// recordRdioSignature marks sig as the config rdio is now actually running.
+// Best-effort: a write error just costs an extra bounce next time.
+func (d Deps) recordRdioSignature(sig string) {
+	if sig == "" {
+		return
+	}
+	_ = os.WriteFile(d.rdioSigPath(), []byte(sig), 0o644)
 }
 
 // enrichRdioRowIDs copies the `_id` (rowid) of each existing rdio config entry
@@ -757,7 +788,17 @@ func (d Deps) applyTuners(tuners []TunerSettings) {
 		// node for no reason. Tolerance is 1 Hz: these are discrete hardware
 		// rates, so anything closer than that is the same rate.
 		if ts.SampleRate > 0 && math.Abs(lt.SampleRate-ts.SampleRate) > 1 {
-			_ = d.SDR.SetSampleRate(lt.ID, ts.SampleRate)
+			// Expected to be REJECTED on a steady-state re-apply: channels from
+			// the previous import already hold the tuner LOCKED, and sdrtrunk
+			// refuses a rate change while locked. It lands on the next sdrtrunk
+			// restart, via the boot-time tuner pass. Logged because swallowing it
+			// silently meant the panel kept showing the old rate with nothing to
+			// explain why the new one never took. Not an error: the agent must
+			// NOT stop channels to free the tuner — allocation is sdrtrunk's job.
+			if err := d.SDR.SetSampleRate(lt.ID, ts.SampleRate); err != nil {
+				log.Printf("configapply: tuner %s sample rate %.0f→%.0f rejected (%v); applies on next sdrtrunk restart",
+					lt.ID, lt.SampleRate, ts.SampleRate, err)
+			}
 		}
 		// Gain: auto/AGC wins; then an explicit multi-axis params object; then a
 		// plain scalar. Mirrors the panel's Apply order so a restart reproduces
