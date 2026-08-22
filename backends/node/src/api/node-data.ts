@@ -47,8 +47,7 @@ import {
   talkgroupLabels,
   talkgroupAgencies,
   talkgroupColors,
-  unitAgencies,
-  unitColors,
+  radioDisplay,
 } from '../services/talkgroupCatalog.js';
 import { shapeNodeLive, sortLiveChannels } from '../services/nodeLive.js';
 import { liveCallWindow } from '../services/nodeCallWindow.js';
@@ -738,7 +737,7 @@ nodeDataRouter.get(
       const tgLabels = await talkgroupLabels();
       const tgAgencies = await talkgroupAgencies();
       const tgColors = await talkgroupColors();
-      const [unitAgencyMap, unitColorMap] = await Promise.all([unitAgencies(), unitColors()]);
+      const radioDisp = await radioDisplay();
       const siteMap = await siteNames(pool);
       const body: Record<string, unknown> = {
         window,
@@ -765,9 +764,13 @@ nodeDataRouter.get(
         })),
         topUnits: topUnitRows.map((r) => ({
           unit: r.unit,
-          alias: r.alias ?? null,
-          agency: unitAgencyMap.get(r.unit) ?? null,
-          color: unitColorMap.get(r.unit) ?? null,
+          // A radio can have BOTH: `ota` is the alias it transmits over the air
+          // (P25 talker alias), `alias` is what the operator named it in the
+          // agency's unit list. Separate columns — neither replaces the other.
+          ota: r.alias ?? null,
+          alias: radioDisp.labels.get(r.unit) ?? null,
+          agency: radioDisp.agencies.get(r.unit) ?? null,
+          color: radioDisp.colors.get(r.unit) ?? null,
           calls: num(r.calls),
         })),
         topSites: topSiteRows.map((r) => ({
@@ -1391,11 +1394,12 @@ export async function feederRadioStats(
   const params: unknown[] = [WINDOW_INTERVAL[window], nodeId];
   // $2 = node id, $1 = window interval. Shared by every query below.
   const where = () => `node_id = $2 AND received_at >= now() - $1::interval`;
-  const [detail, siteMap, labels, tgColorsFeeder, siteQ, actQ] = await Promise.all([
+  const [detail, siteMap, labels, tgColorsFeeder, evRadioDisp, siteQ, actQ] = await Promise.all([
     scopedRadioDetail(pool, where, params),
     siteNames(pool),
     talkgroupLabels(),
     talkgroupColors(),
+    radioDisplay(),
     pool.query<{
       rfss: number;
       site: number;
@@ -1478,7 +1482,13 @@ export async function feederRadioStats(
       talkgroupColor: r.talkgroup != null ? tgColorsFeeder.get(r.talkgroup) ?? null : null,
       system: r.system,
       sourceUnit: r.source_unit,
+      // The OTA alias this event carried (what the radio transmitted), plus
+      // the radio's configured alias + agency colour, which are properties of
+      // the UID rather than of the event.
       sourceAlias: r.source_alias,
+      sourceUnitAlias: r.source_unit != null ? evRadioDisp.labels.get(r.source_unit) ?? null : null,
+      sourceAgency: r.source_unit != null ? evRadioDisp.agencies.get(r.source_unit) ?? null : null,
+      sourceColor: r.source_unit != null ? evRadioDisp.colors.get(r.source_unit) ?? null : null,
       rfss: r.rfss,
       site: r.site,
       siteName: siteNameFor(siteMap, r.system, r.rfss, r.site),
@@ -2020,6 +2030,16 @@ nodeDataRouter.get(
           conds.push(`talkgroup <> ALL($${params.length}::int[])`);
         }
       }
+      // Agency is a property of the talkgroup's alias group, not of the events,
+      // so it resolves to the id set for that agency (empty set = no rows).
+      const agencyFilter = (url.searchParams.get('agency') ?? '').trim();
+      if (agencyFilter) {
+        const tgAgencyMap = await talkgroupAgencies();
+        const ids: number[] = [];
+        for (const [tg, ag] of tgAgencyMap) if (ag === agencyFilter) ids.push(tg);
+        params.push(ids);
+        conds.push(`talkgroup = ANY($${params.length}::int[])`);
+      }
       const where = conds.join(' AND ');
       const orderCol = sort === 'lastSeen' ? 'last_seen' : 'calls';
       // "Always encrypted" = no clear call at all. A talkgroup that carries
@@ -2271,6 +2291,24 @@ nodeDataRouter.get(
         params.push(`${qRaw}%`);
         conds.push(`source_unit::text LIKE $${params.length}`);
       }
+      // Agency and "has a configured alias" are both properties of the UID, not
+      // of the events, so they resolve to a set of unit ids from the config and
+      // filter as a plain WHERE. Both together = the intersection.
+      const agencyFilter = (url.searchParams.get('agency') ?? '').trim();
+      const hasFilter = url.searchParams.get('has'); // 'ota' | 'alias' | null
+      if (agencyFilter || hasFilter === 'alias') {
+        const disp = await radioDisplay();
+        let ids: number[] = [];
+        if (agencyFilter) {
+          for (const [uid, ag] of disp.agencies) if (ag === agencyFilter) ids.push(uid);
+          if (hasFilter === 'alias') ids = ids.filter((uid) => disp.labels.has(uid));
+        } else {
+          ids = [...disp.labels.keys()];
+        }
+        // An empty set must match nothing, not everything.
+        params.push(ids);
+        conds.push(`source_unit = ANY($${params.length}::bigint[])`);
+      }
       const where = conds.join(' AND ');
       const orderCol = sort === 'lastSeen' ? 'last_seen' : 'calls';
       // Only radios that have transmitted an over-the-air alias. Applied as a
@@ -2278,7 +2316,7 @@ nodeDataRouter.get(
       // radio's calls — most calls from a named radio carry no alias, so
       // filtering rows would drop nearly all of its traffic and wreck the
       // counts alongside it.
-      const namedOnly = url.searchParams.get('named') === '1';
+      const namedOnly = url.searchParams.get('named') === '1' || hasFilter === 'ota';
       const having = namedOnly ? 'HAVING COUNT(source_alias) > 0' : '';
 
       const pageParams = [...params];
@@ -2452,7 +2490,7 @@ nodeDataRouter.get(
       const tgLabels = await talkgroupLabels();
       const tgAgencies = await talkgroupAgencies();
       const tgColors = await talkgroupColors();
-      const [unitAgencyMap, unitColorMap] = await Promise.all([unitAgencies(), unitColors()]);
+      const radioDisp = await radioDisplay();
       const siteMap = await siteNames(pool);
       return c.json({
         window,
@@ -2465,10 +2503,11 @@ nodeDataRouter.get(
             wacn: r.wacn,
             system: r.system,
             radio: r.radio,
-            alias: r.alias ?? null,
-            // Agency + colour for the UID pill, from the agency unit lists.
-            agency: unitAgencyMap.get(r.radio) ?? null,
-            color: unitColorMap.get(r.radio) ?? null,
+            // OTA = transmitted over the air; alias = configured unit label.
+            ota: r.alias ?? null,
+            alias: radioDisp.labels.get(r.radio) ?? null,
+            agency: radioDisp.agencies.get(r.radio) ?? null,
+            color: radioDisp.colors.get(r.radio) ?? null,
             calls: num(r.calls),
             lastSeen: iso(r.last_seen),
             lastSite: ex?.lastSite
@@ -3018,20 +3057,32 @@ nodeDataRouter.get(
 
       const tgLabels = await talkgroupLabels();
       const tgRelColors = await talkgroupColors();
+      const tgRelAgencies = await talkgroupAgencies();
+      const radioDisp = await radioDisplay();
+      // of === 'radio'  → counterparts are TALKGROUPS
+      // of === 'talkgroup' → counterparts are RADIOS
+      const ofRadio = radio !== null;
       return c.json({
         window,
-        of: radio !== null ? 'radio' : 'talkgroup',
+        of: ofRadio ? 'radio' : 'talkgroup',
         id: radio ?? talkgroup,
         counterparts: rows.rows.map((r) => ({
           id: r.id,
-          // A radio counterpart carries the OTA talker alias; a talkgroup one
-          // takes its label, preferring the event's own over the catalogue.
-          label:
-            radio !== null
-              ? (r.label ?? tgLabels.get(r.id) ?? null)
-              : (r.alias ?? null),
-          // Only a talkgroup counterpart has an alias colour; a radio has none.
-          color: radio !== null ? tgRelColors.get(r.id) ?? null : null,
+          // A talkgroup counterpart takes its label, preferring the event's own
+          // over the catalogue. A radio counterpart has no single "label" — it
+          // has an OTA alias AND a configured alias, carried separately below.
+          label: ofRadio ? (r.label ?? tgLabels.get(r.id) ?? null) : null,
+          // Radio counterparts only: the two aliases, kept distinct.
+          ota: ofRadio ? null : (r.alias ?? null),
+          alias: ofRadio ? null : (radioDisp.labels.get(r.id) ?? null),
+          // Both kinds are colour-coded now: a talkgroup by its own alias
+          // colour, a radio by the colour of the agency that owns its UID.
+          color: ofRadio
+            ? (tgRelColors.get(r.id) ?? null)
+            : (radioDisp.colors.get(r.id) ?? null),
+          agency: ofRadio
+            ? (tgRelAgencies.get(r.id) ?? null)
+            : (radioDisp.agencies.get(r.id) ?? null),
           calls: num(r.calls),
           group: num(r.grp),
           private: num(r.priv),
@@ -3204,6 +3255,38 @@ nodeDataRouter.get('/api/node-data/live', requireRole(canViewNodeData), async (c
 // question, and a radio quiet for a month is exactly the one you are looking
 // up.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// GET /api/node-data/agencies
+//
+// The agency names the talkgroup / radio filters offer, with their colours.
+// Derived from the same catalogue the tables colour themselves from, so a
+// filter option can never name an agency no row could match. Sorted by name.
+// ---------------------------------------------------------------------------
+nodeDataRouter.get('/api/node-data/agencies', requireRole(canViewNodeData), async (c) => {
+  try {
+    const cat = await talkgroupCatalog();
+    const byName = new Map<string, { name: string; color: string | null; talkgroups: number; radios: number }>();
+    const get = (name: string) =>
+      byName.get(name) ?? (byName.set(name, { name, color: null, talkgroups: 0, radios: 0 }), byName.get(name)!);
+    for (const [tg, name] of cat.agencies) {
+      const e = get(name);
+      e.talkgroups++;
+      if (!e.color) e.color = cat.colors.get(tg) ?? null;
+    }
+    for (const [uid, name] of cat.unitAgencies) {
+      const e = get(name);
+      e.radios++;
+      if (!e.color) e.color = cat.unitColors.get(uid) ?? null;
+    }
+    return c.json({
+      agencies: [...byName.values()].sort((a, b) => a.name.localeCompare(b.name)),
+    });
+  } catch (err) {
+    log.error({ err }, '/api/node-data/agencies error');
+    return c.json({ error: 'failed to load agencies' }, 500);
+  }
+});
+
 nodeDataRouter.get('/api/node-data/radio-aliases', requireRole(canViewNodeData), async (c) => {
   try {
     const pool = await getPool();
@@ -3218,12 +3301,32 @@ nodeDataRouter.get('/api/node-data/radio-aliases', requireRole(canViewNodeData),
     const limit = Math.max(1, Math.min(200, Number(url.searchParams.get('limit') ?? 100) || 100));
     const offset = Math.max(0, Number(url.searchParams.get('offset') ?? 0) || 0);
 
+    // Agency / "has a configured alias" live in the config, not this table, so
+    // they resolve to a unit-id set the same way /radios does. Every row here
+    // has an OTA by definition (that is what the table records), so there is no
+    // has=ota filter to apply.
+    const agencyFilter = (url.searchParams.get('agency') ?? '').trim();
+    const hasFilter = url.searchParams.get('has');
+    const radioDisp = await radioDisplay();
+
     const params: unknown[] = [];
-    let where = '';
+    const conds: string[] = [];
     if (qRaw) {
       params.push(`%${qRaw.toLowerCase()}%`);
-      where = `WHERE lower(alias) LIKE $${params.length} OR radio_id::text LIKE $${params.length}`;
+      conds.push(`(lower(alias) LIKE $${params.length} OR radio_id::text LIKE $${params.length})`);
     }
+    if (agencyFilter || hasFilter === 'alias') {
+      let ids: number[] = [];
+      if (agencyFilter) {
+        for (const [uid, ag] of radioDisp.agencies) if (ag === agencyFilter) ids.push(uid);
+        if (hasFilter === 'alias') ids = ids.filter((uid) => radioDisp.labels.has(uid));
+      } else {
+        ids = [...radioDisp.labels.keys()];
+      }
+      params.push(ids);
+      conds.push(`radio_id = ANY($${params.length}::bigint[])`);
+    }
+    const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
     const orderBy = {
       lastSeen: 'last_seen DESC',
       timesSeen: 'times_seen DESC',
@@ -3235,7 +3338,6 @@ nodeDataRouter.get('/api/node-data/radio-aliases', requireRole(canViewNodeData),
       `SELECT count(*)::int AS n FROM node_radio_aliases ${where}`,
       params,
     );
-    const [unitAgencyMap, unitColorMap] = await Promise.all([unitAgencies(), unitColors()]);
     params.push(limit, offset);
     const rows = await pool.query<{
       system: number;
@@ -3259,11 +3361,15 @@ nodeDataRouter.get('/api/node-data/radio-aliases', requireRole(canViewNodeData),
       rows: rows.rows.map((r) => ({
         system: r.system,
         radio: r.radio_id,
-        alias: r.alias,
+        // This table IS the OTA history (node_radio_aliases records what each
+        // radio transmitted), so `ota` is the stored alias; `alias` is the
+        // separate configured unit label. A radio can have both.
+        ota: r.alias,
+        alias: radioDisp.labels.get(r.radio_id) ?? null,
         // Radios have no talkgroup, so the agency (and its colour) come from
         // the agency unit list this radio id belongs to.
-        agency: unitAgencyMap.get(r.radio_id) ?? null,
-        color: unitColorMap.get(r.radio_id) ?? null,
+        agency: radioDisp.agencies.get(r.radio_id) ?? null,
+        color: radioDisp.colors.get(r.radio_id) ?? null,
         firstSeen: r.first_seen,
         lastSeen: r.last_seen,
         timesSeen: r.times_seen,

@@ -120,3 +120,61 @@ describe('normaliseAliasColor', () => {
     expect(normaliseAliasColor('nonsense')).toBeNull();
   });
 });
+
+describe('radio display lookups (unit → agency / colour / configured label)', () => {
+  const agencies = [
+    {
+      systemId: 1,
+      name: 'Rural Fire Service',
+      color: '-1671091',
+      talkgroups: [{ id: 30015, label: 'SWS A', name: 'South Western Slopes A' }],
+      units: [
+        { id: 2000115, label: 'NEWRAD15' },
+        { id: 2010046, label: 'Gwandalan Pumper' },
+        { id: 2010047, label: '  ' }, // blank label = no configured alias
+      ],
+    },
+    {
+      // No explicit colour — falls back to the rdio LED preset.
+      systemId: 4,
+      name: 'State Emergency Service',
+      led: 'yellow',
+      talkgroups: [],
+      units: [{ id: 2044011, label: 'Armidale 12' }, { id: 2000115, label: 'DUPLICATE' }],
+    },
+  ];
+
+  it('maps a unit to its agency, colour and configured label', async () => {
+    const cat = await withConfig(cfg(agencies));
+    expect(cat.unitAgencies.get(2010046)).toBe('Rural Fire Service');
+    expect(cat.unitColors.get(2010046)).toBe('#e6804d'); // -1671091
+    expect(cat.unitLabels.get(2010046)).toBe('Gwandalan Pumper');
+  });
+
+  it('falls back to the LED preset when an agency has no explicit colour', async () => {
+    const cat = await withConfig(cfg(agencies));
+    expect(cat.unitAgencies.get(2044011)).toBe('State Emergency Service');
+    expect(cat.unitColors.get(2044011)).toBe('#eab308'); // yellow
+  });
+
+  it('first agency wins on a duplicate unit id', async () => {
+    const cat = await withConfig(cfg(agencies));
+    expect(cat.unitAgencies.get(2000115)).toBe('Rural Fire Service');
+    expect(cat.unitLabels.get(2000115)).toBe('NEWRAD15');
+  });
+
+  it('a blank label is not a configured alias', async () => {
+    const cat = await withConfig(cfg(agencies));
+    expect(cat.unitAgencies.get(2010047)).toBe('Rural Fire Service'); // still owned
+    expect(cat.unitLabels.has(2010047)).toBe(false); // but unnamed
+  });
+
+  it('the configured label is independent of any OTA alias', async () => {
+    // The catalogue knows nothing about OTA aliases — those live per-event in
+    // node_radio_events.source_alias / node_radio_aliases. A radio can have
+    // both, and this map must never be treated as the OTA.
+    const cat = await withConfig(cfg(agencies));
+    expect(cat.unitLabels.get(2000115)).toBe('NEWRAD15');
+    expect(cat.labels.has(2000115)).toBe(false); // not a talkgroup label either
+  });
+});

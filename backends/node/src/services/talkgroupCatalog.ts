@@ -22,6 +22,12 @@ export interface TalkgroupCatalog {
   unitAgencies: Map<number, string>;
   /** Radio (unit) id → its agency's display colour (same source as above). */
   unitColors: Map<number, string>;
+  /** Radio (unit) id → its CONFIGURED label from the agency's unit list
+   *  ("Illawarra Duty"). This is NOT the OTA alias: a radio can have both —
+   *  the OTA is what the radio transmits over the air with its UID (P25 talker
+   *  alias, stored per event as source_alias), this is what the operator named
+   *  it in the config. They are shown in separate columns. */
+  unitLabels: Map<number, string>;
   /** Talkgroups of agencies with the encrypted toggle on (SDR-Trunk-only
    *  agencies like NSW PF): every call on them is encrypted regardless of what
    *  any single decode event managed to establish in time. Empty until the
@@ -75,6 +81,7 @@ export async function talkgroupCatalog(): Promise<TalkgroupCatalog> {
   const encrypted = new Set<number>();
   const unitAgencies = new Map<number, string>();
   const unitColors = new Map<number, string>();
+  const unitLabels = new Map<number, string>();
   try {
     const cfg = await getGlobalConfig();
     // Same data-level switch as configMerge: a non-empty imported alias list is
@@ -93,6 +100,8 @@ export async function talkgroupCatalog(): Promise<TalkgroupCatalog> {
         if (!Number.isInteger(uid) || unitAgencies.has(uid)) continue;
         if (agencyName) unitAgencies.set(uid, agencyName);
         if (agencyColor) unitColors.set(uid, agencyColor);
+        const label = typeof u['label'] === 'string' ? u['label'].trim() : '';
+        if (label) unitLabels.set(uid, label);
       }
       for (const tg of ag.talkgroups ?? []) {
         if (typeof tg.id !== 'number' || !Number.isInteger(tg.id)) continue;
@@ -126,7 +135,7 @@ export async function talkgroupCatalog(): Promise<TalkgroupCatalog> {
   } catch (e) {
     log.warn({ err: e }, 'talkgroupCatalog: failed to load global config');
   }
-  const map = { labels, agencies, colors, encrypted, unitAgencies, unitColors };
+  const map = { labels, agencies, colors, encrypted, unitAgencies, unitColors, unitLabels };
   _cache = { at: Date.now(), map };
   return map;
 }
@@ -150,6 +159,22 @@ export async function unitAgencies(): Promise<Map<number, string>> {
 /** Radio (unit) id → its agency's colour. */
 export async function unitColors(): Promise<Map<number, string>> {
   return (await talkgroupCatalog()).unitColors;
+}
+
+/** Radio (unit) id → its CONFIGURED label (distinct from the OTA alias). */
+export async function unitLabels(): Promise<Map<number, string>> {
+  return (await talkgroupCatalog()).unitLabels;
+}
+
+/** The three radio display lookups in one await — every radio-bearing endpoint
+ *  needs all of them, and they share a cache entry. */
+export async function radioDisplay(): Promise<{
+  agencies: Map<number, string>;
+  colors: Map<number, string>;
+  labels: Map<number, string>;
+}> {
+  const cat = await talkgroupCatalog();
+  return { agencies: cat.unitAgencies, colors: cat.unitColors, labels: cat.unitLabels };
 }
 
 export async function talkgroupLabels(): Promise<Map<number, string>> {

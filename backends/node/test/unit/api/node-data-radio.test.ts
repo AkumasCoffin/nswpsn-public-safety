@@ -412,11 +412,14 @@ describe('display enrichment (labels, site names, aliases)', () => {
     const body = await res.json();
     // Overview topSites rows carry no system id — resolved via "rfss:site".
     expect(body.topSites[0]).toEqual({ siteRfss: 4, siteId: 85, name: 'Cambewarra MT', calls: 9 });
-    // agency/color come from the agencies' unit lists — null here, since this
-    // stubbed config has no agencies to own unit 999.
+    // A radio can carry BOTH aliases: `ota` is what it transmitted over the
+    // air, `alias` is its configured unit label. agency/color come from the
+    // agencies' unit lists — all null here, since this stubbed config has no
+    // agencies to own unit 999.
     expect(body.topUnits[0]).toEqual({
       unit: 999,
-      alias: 'CAR 1',
+      ota: 'CAR 1',
+      alias: null,
       agency: null,
       color: null,
       calls: 9,
