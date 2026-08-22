@@ -2059,20 +2059,29 @@ nodeDataRouter.get(
         params.push(ids);
         conds.push(`talkgroup = ANY($${params.length}::int[])`);
       }
-      // Unconfigured talkgroups are almost always corrupted decodes — in a 24h
-      // production sample every one of the 41 unknown ids had exactly one call
-      // (2 receptions) while every configured talkgroup had far more. Hidden by
-      // default; `unknown=show` brings them back, which is how a genuinely new
-      // talkgroup gets noticed before it is added to the config.
+      // Decode noise lists as real talkgroups. Two rules, in order of strength:
+      //
+      // 1. A P25 talkgroup on this network is ALWAYS 5 digits — anything else
+      //    is a corrupted decode, full stop (798, 1085, 40, …). Always applied,
+      //    even with unknown=show. The one exception is a talkgroup the
+      //    operator has explicitly configured: AirBand is an aviation channel
+      //    carried as pseudo-talkgroup 5, and a blind digit filter would hide
+      //    it, so anything in the config survives regardless of its id.
+      // 2. Of the ids that ARE 5 digits, the ones absent from the config are
+      //    still overwhelmingly noise (in a 24h sample all 34 had exactly one
+      //    call, while every configured talkgroup had far more). Hidden by
+      //    default, restored by unknown=show so a genuinely new talkgroup can
+      //    be spotted before it is added to the config.
       const showUnknown = url.searchParams.get('unknown') === 'show';
-      if (!showUnknown) {
-        const configured = (await talkgroupCatalog()).configuredTalkgroups;
-        // Never filter on an EMPTY set — a config with no talkgroups yet would
-        // otherwise hide the entire list rather than the noise.
-        if (configured.size > 0) {
-          params.push([...configured]);
-          conds.push(`talkgroup = ANY($${params.length}::int[])`);
-        }
+      const configured = (await talkgroupCatalog()).configuredTalkgroups;
+      // Never filter on an EMPTY configured set — a config with no talkgroups
+      // yet would otherwise hide the entire list rather than the noise.
+      if (configured.size > 0) {
+        params.push([...configured]);
+        const inConfig = `talkgroup = ANY($${params.length}::int[])`;
+        conds.push(showUnknown ? `(talkgroup BETWEEN 10000 AND 99999 OR ${inConfig})` : inConfig);
+      } else {
+        conds.push('talkgroup BETWEEN 10000 AND 99999');
       }
       const where = conds.join(' AND ');
       const orderCol = sort === 'lastSeen' ? 'last_seen' : 'calls';

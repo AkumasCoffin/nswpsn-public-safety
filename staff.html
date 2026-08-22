@@ -2936,12 +2936,15 @@
                 </select>
                 <!-- Talkgroups absent from the global config are near-always
                      corrupted decodes (one call each), so they are hidden
-                     unless asked for. -->
-                <select class="nd-input" id="nd2-tg-unknown" style="max-width: 190px;"
+                     unless asked for. Ids that aren't 5 digits are never
+                     talkgroups at all and stay hidden either way, unless the
+                     operator has explicitly configured one (AirBand). -->
+                <select class="nd-input" id="nd2-tg-unknown" style="max-width: 200px;"
                         aria-label="Show talkgroups that are not in the config"
+                        title="Unconfigured ids are almost always corrupted decodes. Ids that aren't 5 digits are never shown unless configured."
                         onchange="nd2TgSetUnknown(this.value)">
                   <option value="">Configured only</option>
-                  <option value="show">Include unknown</option>
+                  <option value="show">Include unknown 5-digit</option>
                 </select>
                 <div class="filter-spacer"></div>
                 <div class="nd2-seg" role="group" aria-label="Sort talkgroups by">
