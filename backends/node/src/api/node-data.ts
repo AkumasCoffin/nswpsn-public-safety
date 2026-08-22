@@ -2047,8 +2047,12 @@ nodeDataRouter.get(
       if (qRaw && !/^\d+$/.test(qRaw)) {
         return c.json({ error: 'q must be a numeric talkgroup prefix' }, 400);
       }
+      // Every column heading is clickable, so the whitelist covers each column
+      // the table renders that SQL can order by, plus a direction.
       const sortRaw = url.searchParams.get('sort') ?? 'calls';
-      const sort = (['calls', 'lastSeen'] as const).find((s) => s === sortRaw) ?? 'calls';
+      const sort = (['calls', 'lastSeen', 'talkgroup', 'enc', 'logical'] as const)
+        .find((s) => s === sortRaw) ?? 'calls';
+      const dir = url.searchParams.get('dir') === 'asc' ? 'ASC' : 'DESC';
       const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit') ?? 50) || 50));
       const offset = Math.max(0, Number(url.searchParams.get('offset') ?? 0) || 0);
       const nodeId = qpNode(url);
@@ -2109,7 +2113,16 @@ nodeDataRouter.get(
       // can't be filtered out of the list yet still appear inside a row.
       conds.push(await tgValidConfigured());
       const where = conds.join(' AND ');
-      const orderCol = sort === 'lastSeen' ? 'last_seen' : 'calls';
+      // Whitelisted keys → the grouped expression each sorts on. `talkgroup`
+      // is the tie-breaker everywhere so paging stays stable when the primary
+      // key ties (very common on calls/enc).
+      const orderCol = ({
+        calls: 'calls',
+        lastSeen: 'last_seen',
+        talkgroup: 'talkgroup',
+        enc: 'enc',
+        logical: 'logical',
+      } as const)[sort];
       // "Always encrypted" = no clear call at all. A talkgroup that carries
       // BOTH stays listed — hiding it would lose its clear traffic too.
       const having = encHide ? 'HAVING COUNT(*) FILTER (WHERE encrypted) < COUNT(*)' : '';
@@ -2150,7 +2163,7 @@ nodeDataRouter.get(
              FROM node_radio_events
             WHERE ${where}
             GROUP BY wacn, system, talkgroup ${having}
-            ORDER BY ${orderCol} DESC, talkgroup ASC
+            ORDER BY ${orderCol} ${dir}, talkgroup ASC
             LIMIT $${limIdx} OFFSET $${offIdx}`,
           pageParams,
         ),
@@ -2332,8 +2345,13 @@ nodeDataRouter.get(
       if (qRaw && !/^\d+$/.test(qRaw)) {
         return c.json({ error: 'q must be a numeric radio-id prefix' }, 400);
       }
+      // Clickable column headings: `radio` and `ota` join the traffic sorts.
+      // `ota` orders on the same aggregate the row displays, so a click on the
+      // OTA heading groups the named radios together.
       const sortRaw = url.searchParams.get('sort') ?? 'calls';
-      const sort = (['calls', 'lastSeen'] as const).find((s) => s === sortRaw) ?? 'calls';
+      const sort = (['calls', 'lastSeen', 'radio', 'ota'] as const).find((s) => s === sortRaw)
+        ?? 'calls';
+      const dir = url.searchParams.get('dir') === 'asc' ? 'ASC' : 'DESC';
       const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit') ?? 50) || 50));
       const offset = Math.max(0, Number(url.searchParams.get('offset') ?? 0) || 0);
 
@@ -2381,7 +2399,16 @@ nodeDataRouter.get(
         conds.push(`source_unit = ANY($${params.length}::bigint[])`);
       }
       const where = conds.join(' AND ');
-      const orderCol = sort === 'lastSeen' ? 'last_seen' : 'calls';
+      // Whitelisted key -> grouped expression. `alias` is the OTA aggregate the
+      // row shows; NULLS LAST keeps unnamed radios out of the way when sorting
+      // by it. `radio` is the tie-breaker so paging stays stable on ties.
+      const orderCol = ({
+        calls: 'calls',
+        lastSeen: 'last_seen',
+        radio: 'radio',
+        ota: 'alias',
+      } as const)[sort];
+      const orderNulls = sort === 'ota' ? ' NULLS LAST' : '';
       // Only radios that have transmitted an over-the-air alias. Applied as a
       // HAVING rather than a WHERE because the alias is an aggregate over the
       // radio's calls — most calls from a named radio carry no alias, so
@@ -2425,7 +2452,7 @@ nodeDataRouter.get(
             WHERE ${where}
             GROUP BY wacn, system, source_unit
             ${having}
-            ORDER BY ${orderCol} DESC, radio ASC
+            ORDER BY ${orderCol} ${dir}${orderNulls}, radio ASC
             LIMIT $${limIdx} OFFSET $${offIdx}`,
           pageParams,
         ),
@@ -3378,7 +3405,8 @@ nodeDataRouter.get('/api/node-data/radio-aliases', requireRole(canViewNodeData),
     // one or the other and shouldn't have to know which box it goes in.
     const qRaw = (url.searchParams.get('q') ?? '').trim().slice(0, 64);
     const sortRaw = url.searchParams.get('sort') ?? 'lastSeen';
-    const sort = (['lastSeen', 'timesSeen', 'radio', 'alias'] as const).find((s) => s === sortRaw)
+    const dir = url.searchParams.get('dir') === 'asc' ? 'ASC' : 'DESC';
+    const sort = (['lastSeen', 'firstSeen', 'timesSeen', 'radio', 'ota'] as const).find((s) => s === sortRaw)
       ?? 'lastSeen';
     const limit = Math.max(1, Math.min(200, Number(url.searchParams.get('limit') ?? 100) || 100));
     const offset = Math.max(0, Number(url.searchParams.get('offset') ?? 0) || 0);
@@ -3427,12 +3455,18 @@ nodeDataRouter.get('/api/node-data/radio-aliases', requireRole(canViewNodeData),
       conds.push(`last_seen >= now() - $${params.length}::interval`);
     }
     const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
-    const orderBy = {
-      lastSeen: 'last_seen DESC',
-      timesSeen: 'times_seen DESC',
-      radio: 'radio_id ASC',
-      alias: 'lower(alias) ASC',
-    }[sort];
+    // Clickable headings: each column the table renders maps to an expression,
+    // and `dir` flips it. radio_id is the tie-breaker so paging is stable.
+    // (`ota` is this table's own alias column — the configured Alias and Agency
+    // columns come from the config and are sorted client-side on the page.)
+    const orderExpr = ({
+      lastSeen: 'last_seen',
+      firstSeen: 'first_seen',
+      timesSeen: 'times_seen',
+      radio: 'radio_id',
+      ota: 'lower(alias)',
+    } as const)[sort];
+    const orderBy = `${orderExpr} ${dir}, radio_id ASC`;
 
     const totalRes = await pool.query<{ n: string }>(
       `SELECT count(*)::int AS n FROM node_radio_aliases ${where}`,

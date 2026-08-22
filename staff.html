@@ -1887,6 +1887,33 @@
     }
     .nd2-table-wrap .nd-table { min-width: 760px; font-size: 0.74rem; }
     .nd2-table-wrap .nd-table th { padding: 0.5rem 0.7rem; }
+    /* Click-to-sort column headings. On the Talkgroups / Radios / Aliases
+       tables the HEADING is the sort control — click one to sort by it, click
+       the active one to flip direction — which is why those panels no longer
+       carry sort pills or has-OTA/Alias selects. The <button> takes over the
+       cell padding so the whole cell is the hit target, while the <th> itself
+       keeps position:sticky (the button must not become the positioned box).
+       Headings without .nd2-sortable stay visually inert: no hover, no caret. */
+    .nd-table th.nd2-sortable,
+    .nd2-table-wrap .nd-table th.nd2-sortable { padding: 0; }
+    .nd2-sort-btn {
+      display: inline-flex; align-items: center; gap: 0.3rem;
+      width: 100%; box-sizing: border-box;
+      background: none; border: 0; border-radius: 0;
+      font: inherit; color: inherit; letter-spacing: inherit;
+      text-transform: inherit; text-align: inherit;
+      padding: 0.5rem 0.7rem; cursor: pointer;
+    }
+    .nd-table th.nd2-num .nd2-sort-btn { justify-content: flex-end; }
+    .nd2-sort-btn:hover { color: var(--text-primary); background: rgba(148, 163, 184, 0.1); }
+    .nd2-sort-btn:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
+    .nd2-sort-btn.active { color: var(--text-primary); }
+    /* The caret always occupies its slot, so activating a column never reflows
+       the header row; on an inactive heading it fades in on hover as the
+       affordance that the column can be sorted at all. */
+    .nd2-caret { font-size: 0.95em; opacity: 1; }
+    .nd2-caret-off { opacity: 0; }
+    .nd2-sort-btn:hover .nd2-caret-off { opacity: 0.45; }
     /* Row rhythm: a consistent line-height + vertical-align keeps rows the same
        height whether or not a cell carries a chip. Without it a row with an
        agency/CC chip sits taller than its neighbours and the table looks ragged. */
@@ -2938,21 +2965,18 @@
                         onchange="nd2TgSetAgency(this.value)">
                   <option value="">All agencies</option>
                 </select>
-                <div class="filter-spacer"></div>
-                <div class="nd2-seg" role="group" aria-label="Sort talkgroups by">
-                  <button class="filter-btn active" data-nd2-tgsort="calls" onclick="nd2TgSetSort('calls')">Calls</button>
-                  <button class="filter-btn" data-nd2-tgsort="lastSeen" onclick="nd2TgSetSort('lastSeen')">Last seen</button>
-                </div>
               </div>
+              <!-- Sorting lives in the column headings (see .nd2-sort-btn) —
+                   click a heading to sort by it, click it again to flip. -->
               <div class="nd2-table-wrap">
                 <table class="nd-table">
                   <thead>
                     <tr>
-                      <th>Talkgroup</th>
+                      <th class="nd2-sortable"><button type="button" class="nd2-sort-btn" data-nd2-sort="tg" data-nd2-key="talkgroup" onclick="nd2TgSort('talkgroup')">Talkgroup <i class="fas fa-caret-down nd2-caret nd2-caret-off"></i></button></th>
                       <th>Agency</th>
-                      <th class="nd2-num">Calls</th>
-                      <th class="nd2-num">Enc</th>
-                      <th>Last seen</th>
+                      <th class="nd2-num nd2-sortable"><button type="button" class="nd2-sort-btn" data-nd2-sort="tg" data-nd2-key="calls" onclick="nd2TgSort('calls')">Calls <i class="fas fa-caret-down nd2-caret nd2-caret-off"></i></button></th>
+                      <th class="nd2-num nd2-sortable"><button type="button" class="nd2-sort-btn" data-nd2-sort="tg" data-nd2-key="enc" onclick="nd2TgSort('enc')">Enc <i class="fas fa-caret-down nd2-caret nd2-caret-off"></i></button></th>
+                      <th class="nd2-sortable"><button type="button" class="nd2-sort-btn" data-nd2-sort="tg" data-nd2-key="lastSeen" onclick="nd2TgSort('lastSeen')">Last seen <i class="fas fa-caret-down nd2-caret nd2-caret-off"></i></button></th>
                       <th>Last site</th>
                       <th>Top site</th>
                       <th>Top node</th>
@@ -2987,22 +3011,10 @@
                         onchange="nd2RadSetAgency(this.value)">
                   <option value="">All agencies</option>
                 </select>
-                <!-- OTA vs Alias are DIFFERENT things (transmitted over the air
-                     vs configured in the agency's unit list), so this filters on
-                     one or the other, never "named" as a single idea. -->
-                <select class="nd-input" id="nd2-rad-has" style="max-width: 170px;"
-                        aria-label="Filter radios by alias kind"
-                        onchange="nd2RadSetHas(this.value)">
-                  <option value="">All radios</option>
-                  <option value="ota">Has OTA</option>
-                  <option value="alias">Has alias</option>
-                </select>
-                <div class="filter-spacer"></div>
-                <div class="nd2-seg" role="group" aria-label="Sort radios by">
-                  <button class="filter-btn active" data-nd2-radsort="calls" onclick="nd2RadSetSort('calls')">Calls</button>
-                  <button class="filter-btn" data-nd2-radsort="lastSeen" onclick="nd2RadSetSort('lastSeen')">Last seen</button>
-                </div>
               </div>
+              <!-- The has-OTA / has-alias selects are gone: sorting on the OTA
+                   heading groups the radios that transmit a name at the top,
+                   which answers the same question without a second control. -->
               <div class="nd2-table-wrap">
                 <table class="nd-table">
                   <thead>
@@ -3012,12 +3024,12 @@
                            that id (P25 talker alias), and the label the operator
                            gave the id in the agency's unit list. A radio can have
                            both aliases at once, so each gets its own column. -->
-                      <th>Radio</th>
-                      <th title="Over-the-air alias — the name the radio transmits with its UID">OTA</th>
+                      <th class="nd2-sortable"><button type="button" class="nd2-sort-btn" data-nd2-sort="rad" data-nd2-key="radio" onclick="nd2RadSort('radio')">Radio <i class="fas fa-caret-down nd2-caret nd2-caret-off"></i></button></th>
+                      <th class="nd2-sortable" title="Over-the-air alias — the name the radio transmits with its UID"><button type="button" class="nd2-sort-btn" data-nd2-sort="rad" data-nd2-key="ota" onclick="nd2RadSort('ota')">OTA <i class="fas fa-caret-down nd2-caret nd2-caret-off"></i></button></th>
                       <th title="Configured label from the agency's unit list">Alias</th>
                       <th>Agency</th>
-                      <th class="nd2-num">Calls</th>
-                      <th>Last seen</th>
+                      <th class="nd2-num nd2-sortable"><button type="button" class="nd2-sort-btn" data-nd2-sort="rad" data-nd2-key="calls" onclick="nd2RadSort('calls')">Calls <i class="fas fa-caret-down nd2-caret nd2-caret-off"></i></button></th>
+                      <th class="nd2-sortable"><button type="button" class="nd2-sort-btn" data-nd2-sort="rad" data-nd2-key="lastSeen" onclick="nd2RadSort('lastSeen')">Last seen <i class="fas fa-caret-down nd2-caret nd2-caret-off"></i></button></th>
                       <th>Last site</th>
                       <th>Top site</th>
                       <th>Top node</th>
@@ -3170,43 +3182,27 @@
                       onchange="nd2AliasSetAgency(this.value)">
                 <option value="">All agencies</option>
               </select>
-              <!-- No "Has OTA" option here: every row in this table IS an OTA
-                   observation, so it would select the whole list. -->
-              <select class="nd-input" id="nd2-alias-has" style="max-width: 170px;"
-                      aria-label="Filter aliases by configured alias"
-                      onchange="nd2AliasSetHas(this.value)">
-                <option value="">All radios</option>
-                <option value="alias">Has alias</option>
-              </select>
-              <div class="filter-spacer"></div>
-              <div class="nd2-seg" role="group" aria-label="Sort aliases by">
-                <button class="filter-btn active" data-nd2-alias-sort="lastSeen"
-                        onclick="nd2AliasSetSort('lastSeen')">Last heard</button>
-                <button class="filter-btn" data-nd2-alias-sort="timesSeen"
-                        onclick="nd2AliasSetSort('timesSeen')">Times heard</button>
-                <!-- sort=alias orders by node_radio_aliases.alias, which IS the
-                     OTA — labelled accordingly now that Alias means the
-                     configured unit label in the column beside it. -->
-                <button class="filter-btn" data-nd2-alias-sort="alias"
-                        onclick="nd2AliasSetSort('alias')">OTA</button>
-                <button class="filter-btn" data-nd2-alias-sort="radio"
-                        onclick="nd2AliasSetSort('radio')">Radio</button>
-              </div>
             </div>
+            <!-- Sorting is in the headings; the "has alias" select is gone
+                 because sorting on a column groups its populated rows at the
+                 top, which is what that filter was really being used for. -->
             <div class="nd2-table-wrap">
               <table class="nd-table">
                 <thead>
                   <tr>
                     <!-- UID / OTA / Alias are three separate columns: the id, the
                          name transmitted with it, and the configured unit label.
-                         A radio commonly has both aliases, and they differ. -->
-                    <th>Radio</th>
-                    <th title="Over-the-air alias — the name this radio transmitted">OTA</th>
+                         A radio commonly has both aliases, and they differ.
+                         sort=ota orders by node_radio_aliases.alias, which IS
+                         the OTA — the configured Alias/Agency columns come from
+                         the config and have no server-side ordering. -->
+                    <th class="nd2-sortable"><button type="button" class="nd2-sort-btn" data-nd2-sort="alias" data-nd2-key="radio" onclick="nd2AliasSort('radio')">Radio <i class="fas fa-caret-down nd2-caret nd2-caret-off"></i></button></th>
+                    <th class="nd2-sortable" title="Over-the-air alias — the name this radio transmitted"><button type="button" class="nd2-sort-btn" data-nd2-sort="alias" data-nd2-key="ota" onclick="nd2AliasSort('ota')">OTA <i class="fas fa-caret-down nd2-caret nd2-caret-off"></i></button></th>
                     <th title="Configured label from the agency's unit list">Alias</th>
                     <th>Agency</th>
-                    <th class="nd2-num">Times heard</th>
-                    <th>First heard</th>
-                    <th>Last heard</th>
+                    <th class="nd2-num nd2-sortable"><button type="button" class="nd2-sort-btn" data-nd2-sort="alias" data-nd2-key="timesSeen" onclick="nd2AliasSort('timesSeen')">Times heard <i class="fas fa-caret-down nd2-caret nd2-caret-off"></i></button></th>
+                    <th class="nd2-sortable"><button type="button" class="nd2-sort-btn" data-nd2-sort="alias" data-nd2-key="firstSeen" onclick="nd2AliasSort('firstSeen')">First heard <i class="fas fa-caret-down nd2-caret nd2-caret-off"></i></button></th>
+                    <th class="nd2-sortable"><button type="button" class="nd2-sort-btn" data-nd2-sort="alias" data-nd2-key="lastSeen" onclick="nd2AliasSort('lastSeen')">Last heard <i class="fas fa-caret-down nd2-caret nd2-caret-off"></i></button></th>
                   </tr>
                 </thead>
                 <tbody id="nd2-alias-body">
@@ -4162,13 +4158,16 @@
       sys: { level: 'list', tab: 'sites', siteTab: 'overview', system: null, wacn: null, rfss: null, site: null, siteName: null },
       sysExpanded: {},     // system id → bool: which folder rows are open (persisted)
       // Talkgroups / Radios sub-tabs (scoped to the open system): search + paging.
-      // `agency` = the /agencies filter; `has` = 'ota' | 'alias' | '' (a radio
-      // can carry both, so this picks WHICH one must be present, never "named").
-      tg: { q: '', sort: 'calls', agency: '', offset: 0, limit: 50, total: 0 },
-      rad: { q: '', sort: 'calls', agency: '', has: '', offset: 0, limit: 50, total: 0 },
+      // `agency` = the /agencies filter. `sort`/`dir` are driven by the column
+      // HEADINGS (nd2TgSort / nd2RadSort / nd2AliasSort) — there are no sort
+      // pills, and no has-OTA/Alias selects either: sorting on the OTA/Alias
+      // column groups the rows that have one at the top, which is the same
+      // answer the filter gave.
+      tg: { q: '', sort: 'calls', dir: 'desc', agency: '', offset: 0, limit: 50, total: 0 },
+      rad: { q: '', sort: 'calls', dir: 'desc', agency: '', offset: 0, limit: 50, total: 0 },
       // Over-the-air radio aliases, one row per radio. Unwindowed: an alias is
       // durable identity, so the interesting radio is often a quiet one.
-      alias: { q: '', sort: 'lastSeen', agency: '', has: '', offset: 0, limit: 100, total: 0 },
+      alias: { q: '', sort: 'lastSeen', dir: 'desc', agency: '', offset: 0, limit: 100, total: 0 },
       // Agency filter options, fetched once per page load and shared by every
       // agency <select> — the list is config-derived and never changes between
       // keystrokes, so refetching it per filter change would be pure waste.
@@ -6009,6 +6008,47 @@
       if (nd2.sys.siteTab === 'extra') nd2LoadDecodeChart();
     }
 
+    // --- Click-to-sort column headings -----------------------------------
+    // The Talkgroups / Radios / Aliases tables are sorted by clicking their
+    // column headings: a new column adopts the direction that reads as "most
+    // interesting first" for its kind, and clicking the ACTIVE column flips it.
+    // Numbers and times start DESC (busiest / most recent first); identifiers
+    // and names start ASC (alphabetical / lowest id first), which is also what
+    // makes the OTA column usable as the old "has an alias" filter — the named
+    // radios sort to the top.
+    const ND2_SORT_DESC_FIRST = new Set([
+      'calls', 'enc', 'logical', 'timesSeen', 'lastSeen', 'firstSeen',
+    ]);
+
+    /**
+     * Apply a heading click to `state` and repaint the group's carets. Every
+     * click changes something (the active column flips direction), so the
+     * caller always reloads — and always from offset 0, since a re-sorted list
+     * makes the page you were on meaningless.
+     */
+    function nd2SortClicked(state, group, key) {
+      if (state.sort === key) state.dir = state.dir === 'asc' ? 'desc' : 'asc';
+      else { state.sort = key; state.dir = ND2_SORT_DESC_FIRST.has(key) ? 'desc' : 'asc'; }
+      state.offset = 0;
+      nd2SyncSortHeads(group, state);
+    }
+
+    /** Paint the caret + active state on one table's sortable headings. */
+    function nd2SyncSortHeads(group, state) {
+      document.querySelectorAll('[data-nd2-sort="' + group + '"]').forEach(btn => {
+        const active = btn.dataset.nd2Key === state.sort;
+        const up = active && state.dir === 'asc';
+        btn.classList.toggle('active', active);
+        const th = btn.closest('th');
+        if (th) th.setAttribute('aria-sort', !active ? 'none' : (up ? 'ascending' : 'descending'));
+        const caret = btn.querySelector('.nd2-caret');
+        if (caret) {
+          caret.className = 'fas fa-caret-' + (up ? 'up' : 'down') +
+            ' nd2-caret' + (active ? '' : ' nd2-caret-off');
+        }
+      });
+    }
+
     // --- Talkgroups view -------------------------------------------------
     function nd2TgInputChanged() { clearTimeout(_nd2TgDebounce); _nd2TgDebounce = setTimeout(() => { nd2.tg.offset = 0; nd2LoadTalkgroups(); }, 400); }
     function nd2TgSetAgency(v) {
@@ -6016,10 +6056,8 @@
       nd2.tg.offset = 0;
       nd2LoadTalkgroups();
     }
-    function nd2TgSetSort(sort) {
-      if (nd2.tg.sort === sort) return;
-      nd2.tg.sort = sort; nd2.tg.offset = 0;
-      document.querySelectorAll('[data-nd2-tgsort]').forEach(b => b.classList.toggle('active', b.dataset.nd2Tgsort === sort));
+    function nd2TgSort(key) {
+      nd2SortClicked(nd2.tg, 'tg', key);
       nd2LoadTalkgroups();
     }
     function nd2TgPage(dir) {
@@ -6032,8 +6070,9 @@
       const view = nd2.view;
       void nd2FillAgencySelects();
       const q = (document.getElementById('nd2-tg-q')?.value || '').trim();
+      nd2SyncSortHeads('tg', nd2.tg);
       const params = new URLSearchParams({
-        window: nd2.window, sort: nd2.tg.sort,
+        window: nd2.window, sort: nd2.tg.sort, dir: nd2.tg.dir,
         limit: String(nd2.tg.limit), offset: String(nd2.tg.offset),
       });
       if (q) params.set('q', q);
@@ -6106,18 +6145,8 @@
       nd2.alias.offset = 0;
       nd2LoadAliases();
     }
-    /** '' | 'alias'. There is no 'ota' here — every row in this table is an OTA
-     *  observation, so that option would select the entire list. */
-    function nd2AliasSetHas(v) {
-      nd2.alias.has = v === 'alias' ? 'alias' : '';
-      nd2.alias.offset = 0;
-      nd2LoadAliases();
-    }
-    function nd2AliasSetSort(sort) {
-      if (nd2.alias.sort === sort) return;
-      nd2.alias.sort = sort; nd2.alias.offset = 0;
-      document.querySelectorAll('[data-nd2-alias-sort]').forEach(b =>
-        b.classList.toggle('active', b.dataset.nd2AliasSort === sort));
+    function nd2AliasSort(key) {
+      nd2SortClicked(nd2.alias, 'alias', key);
       nd2LoadAliases();
     }
     function nd2AliasPage(dir) {
@@ -6131,17 +6160,18 @@
       if (!body) return;
       const view = nd2.view;
       void nd2FillAgencySelects();
+      nd2SyncSortHeads('alias', nd2.alias);
       const params = new URLSearchParams({
         // Windowed like the other received tables — which radios named
         // themselves in this period, not every radio that ever has.
         window: nd2.window,
         sort: nd2.alias.sort,
+        dir: nd2.alias.dir,
         limit: String(nd2.alias.limit),
         offset: String(nd2.alias.offset),
       });
       if (nd2.alias.q) params.set('q', nd2.alias.q);
       if (nd2.alias.agency) params.set('agency', nd2.alias.agency);
-      if (nd2.alias.has) params.set('has', nd2.alias.has);
       try {
         const data = await nd2Fetch('/api/node-data/radio-aliases?' + params);
         if (nd2.view !== view) return;   // navigated away mid-fetch
@@ -6149,7 +6179,7 @@
         const rows = data.rows || [];
         if (!rows.length) {
           body.innerHTML = `<tr><td colspan="7" class="nd2-empty">${
-            (nd2.alias.q || nd2.alias.agency || nd2.alias.has)
+            (nd2.alias.q || nd2.alias.agency)
               ? 'No radios match.' : 'No radio has transmitted an alias yet.'
           }</td></tr>`;
         } else {
@@ -6192,19 +6222,8 @@
       nd2.rad.offset = 0;
       nd2LoadRadios();
     }
-    /** '' | 'ota' | 'alias'. Two DIFFERENT questions, not two spellings of one:
-     *  'ota' = the radio has transmitted a name over the air (most never do),
-     *  'alias' = its UID is labelled in an agency's configured unit list. This
-     *  replaces the old single "Named only" toggle, which conflated them. */
-    function nd2RadSetHas(v) {
-      nd2.rad.has = (v === 'ota' || v === 'alias') ? v : '';
-      nd2.rad.offset = 0;
-      nd2LoadRadios();
-    }
-    function nd2RadSetSort(sort) {
-      if (nd2.rad.sort === sort) return;
-      nd2.rad.sort = sort; nd2.rad.offset = 0;
-      document.querySelectorAll('[data-nd2-radsort]').forEach(b => b.classList.toggle('active', b.dataset.nd2Radsort === sort));
+    function nd2RadSort(key) {
+      nd2SortClicked(nd2.rad, 'rad', key);
       nd2LoadRadios();
     }
     function nd2RadPage(dir) {
@@ -6217,13 +6236,13 @@
       const view = nd2.view;
       void nd2FillAgencySelects();
       const q = (document.getElementById('nd2-rad-q')?.value || '').trim();
+      nd2SyncSortHeads('rad', nd2.rad);
       const params = new URLSearchParams({
-        window: nd2.window, sort: nd2.rad.sort,
+        window: nd2.window, sort: nd2.rad.sort, dir: nd2.rad.dir,
         limit: String(nd2.rad.limit), offset: String(nd2.rad.offset),
       });
       if (q) params.set('q', q);
       if (nd2.rad.agency) params.set('agency', nd2.rad.agency);
-      if (nd2.rad.has) params.set('has', nd2.rad.has);
       // Scoped to the open system — and, one level down, to the open SITE.
       if (nd2.sys.system != null) params.set('system', String(nd2.sys.system));
       const level = nd2.sys.level;
@@ -6240,11 +6259,7 @@
         nd2.rad.total = data.total || 0;
         const body = document.getElementById('nd2-rad-body');
         const rows = data.radios || [];
-        if (!rows.length) { body.innerHTML = `<tr><td colspan="10" class="nd2-empty">${
-          nd2.rad.has === 'ota' ? 'No radio here has transmitted an over-the-air alias.'
-            : nd2.rad.has === 'alias' ? 'No radio here has a configured alias.'
-            : 'No radios match.'
-        }</td></tr>`; }
+        if (!rows.length) { body.innerHTML = '<tr><td colspan="10" class="nd2-empty">No radios match.</td></tr>'; }
         else body.innerHTML = rows.map(r => {
           const topTgs = (r.topTalkgroups || []).map(t =>
             nd2TgPill(t.talkgroup, t.label, t.color) + ` <span class="nd-sub">${nd2Num(t.calls)}</span>`
