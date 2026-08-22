@@ -2889,6 +2889,14 @@
                   <i class="fas fa-search"></i>
                   <input type="text" id="nd2-tg-q" placeholder="Talkgroup #" inputmode="numeric" oninput="nd2TgInputChanged()">
                 </div>
+                <!-- Agency filter. Options come from /api/node-data/agencies —
+                     the same catalogue the pills take their colour from — so an
+                     option can never name an agency no row could match. -->
+                <select class="nd-input" id="nd2-tg-agency" data-nd2-agency
+                        style="max-width: 190px;" aria-label="Filter talkgroups by agency"
+                        onchange="nd2TgSetAgency(this.value)">
+                  <option value="">All agencies</option>
+                </select>
                 <div class="filter-spacer"></div>
                 <div class="nd2-seg" role="group" aria-label="Sort talkgroups by">
                   <button class="filter-btn active" data-nd2-tgsort="calls" onclick="nd2TgSetSort('calls')">Calls</button>
@@ -2933,10 +2941,22 @@
                   <i class="fas fa-search"></i>
                   <input type="text" id="nd2-rad-q" placeholder="Radio ID" inputmode="numeric" oninput="nd2RadInputChanged()">
                 </div>
+                <select class="nd-input" id="nd2-rad-agency" data-nd2-agency
+                        style="max-width: 190px;" aria-label="Filter radios by agency"
+                        onchange="nd2RadSetAgency(this.value)">
+                  <option value="">All agencies</option>
+                </select>
+                <!-- OTA vs Alias are DIFFERENT things (transmitted over the air
+                     vs configured in the agency's unit list), so this filters on
+                     one or the other, never "named" as a single idea. -->
+                <select class="nd-input" id="nd2-rad-has" style="max-width: 170px;"
+                        aria-label="Filter radios by alias kind"
+                        onchange="nd2RadSetHas(this.value)">
+                  <option value="">All radios</option>
+                  <option value="ota">Has OTA</option>
+                  <option value="alias">Has alias</option>
+                </select>
                 <div class="filter-spacer"></div>
-                <button class="filter-btn" id="nd2-rad-named" aria-pressed="false"
-                        title="Show only radios that have transmitted an over-the-air alias"
-                        onclick="nd2RadToggleNamed()"><i class="fas fa-id-card"></i> Named only</button>
                 <div class="nd2-seg" role="group" aria-label="Sort radios by">
                   <button class="filter-btn active" data-nd2-radsort="calls" onclick="nd2RadSetSort('calls')">Calls</button>
                   <button class="filter-btn" data-nd2-radsort="lastSeen" onclick="nd2RadSetSort('lastSeen')">Last seen</button>
@@ -2946,10 +2966,14 @@
                 <table class="nd-table">
                   <thead>
                     <tr>
-                      <!-- Radio + OTA are one pill, so Agency takes the column
-                           they used to need between them — column count (and
-                           therefore the table's width) is unchanged. -->
+                      <!-- UID, OTA and Alias are three separate facts about one
+                           radio: the id it transmits, the name it transmits with
+                           that id (P25 talker alias), and the label the operator
+                           gave the id in the agency's unit list. A radio can have
+                           both aliases at once, so each gets its own column. -->
                       <th>Radio</th>
+                      <th title="Over-the-air alias — the name the radio transmits with its UID">OTA</th>
+                      <th title="Configured label from the agency's unit list">Alias</th>
                       <th>Agency</th>
                       <th class="nd2-num">Calls</th>
                       <th>Last seen</th>
@@ -2960,7 +2984,7 @@
                     </tr>
                   </thead>
                   <tbody id="nd2-rad-body">
-                    <tr><td colspan="8" class="nd2-empty">Loading…</td></tr>
+                    <tr><td colspan="10" class="nd2-empty">Loading…</td></tr>
                   </tbody>
                 </table>
               </div>
@@ -3100,14 +3124,30 @@
                        placeholder="Search alias or radio id…"
                        oninput="nd2AliasInputChanged()" />
               </div>
+              <select class="nd-input" id="nd2-alias-agency" data-nd2-agency
+                      style="max-width: 190px;" aria-label="Filter aliases by agency"
+                      onchange="nd2AliasSetAgency(this.value)">
+                <option value="">All agencies</option>
+              </select>
+              <!-- No "Has OTA" option here: every row in this table IS an OTA
+                   observation, so it would select the whole list. -->
+              <select class="nd-input" id="nd2-alias-has" style="max-width: 170px;"
+                      aria-label="Filter aliases by configured alias"
+                      onchange="nd2AliasSetHas(this.value)">
+                <option value="">All radios</option>
+                <option value="alias">Has alias</option>
+              </select>
               <div class="filter-spacer"></div>
               <div class="nd2-seg" role="group" aria-label="Sort aliases by">
                 <button class="filter-btn active" data-nd2-alias-sort="lastSeen"
                         onclick="nd2AliasSetSort('lastSeen')">Last heard</button>
                 <button class="filter-btn" data-nd2-alias-sort="timesSeen"
                         onclick="nd2AliasSetSort('timesSeen')">Times heard</button>
+                <!-- sort=alias orders by node_radio_aliases.alias, which IS the
+                     OTA — labelled accordingly now that Alias means the
+                     configured unit label in the column beside it. -->
                 <button class="filter-btn" data-nd2-alias-sort="alias"
-                        onclick="nd2AliasSetSort('alias')">Alias</button>
+                        onclick="nd2AliasSetSort('alias')">OTA</button>
                 <button class="filter-btn" data-nd2-alias-sort="radio"
                         onclick="nd2AliasSetSort('radio')">Radio</button>
               </div>
@@ -3116,10 +3156,12 @@
               <table class="nd-table">
                 <thead>
                   <tr>
-                    <!-- Alias and radio id are ONE pill (the alias is the body,
-                         the UID the secondary), so they share one column; the
-                         freed column carries the owning agency. -->
+                    <!-- UID / OTA / Alias are three separate columns: the id, the
+                         name transmitted with it, and the configured unit label.
+                         A radio commonly has both aliases, and they differ. -->
                     <th>Radio</th>
+                    <th title="Over-the-air alias — the name this radio transmitted">OTA</th>
+                    <th title="Configured label from the agency's unit list">Alias</th>
                     <th>Agency</th>
                     <th class="nd2-num">Times heard</th>
                     <th>First heard</th>
@@ -3127,7 +3169,7 @@
                   </tr>
                 </thead>
                 <tbody id="nd2-alias-body">
-                  <tr><td colspan="5" class="nd2-empty">Loading…</td></tr>
+                  <tr><td colspan="7" class="nd2-empty">Loading…</td></tr>
                 </tbody>
               </table>
             </div>
@@ -3164,13 +3206,14 @@
                 <th id="nd2-ev-tg-th">Talkgroup</th>
                 <th>Agency</th>
                 <th>Unit / Message</th>
-                <th>OTA</th>
+                <th title="Over-the-air alias — the name the radio transmits with its UID">OTA</th>
+                <th title="Configured alias — what this UID is named in its agency's unit list">Alias</th>
                 <th>Sites</th>
                 <th>Nodes</th>
               </tr>
             </thead>
             <tbody id="nd2-ev-body">
-              <tr><td colspan="8" class="nd2-empty">Loading…</td></tr>
+              <tr><td colspan="9" class="nd2-empty">Loading…</td></tr>
             </tbody>
           </table>
         </div>
@@ -4078,11 +4121,17 @@
       sys: { level: 'list', tab: 'sites', siteTab: 'overview', system: null, wacn: null, rfss: null, site: null, siteName: null },
       sysExpanded: {},     // system id → bool: which folder rows are open (persisted)
       // Talkgroups / Radios sub-tabs (scoped to the open system): search + paging.
-      tg: { q: '', sort: 'calls', offset: 0, limit: 50, total: 0 },
-      rad: { q: '', sort: 'calls', named: false, offset: 0, limit: 50, total: 0 },
+      // `agency` = the /agencies filter; `has` = 'ota' | 'alias' | '' (a radio
+      // can carry both, so this picks WHICH one must be present, never "named").
+      tg: { q: '', sort: 'calls', agency: '', offset: 0, limit: 50, total: 0 },
+      rad: { q: '', sort: 'calls', agency: '', has: '', offset: 0, limit: 50, total: 0 },
       // Over-the-air radio aliases, one row per radio. Unwindowed: an alias is
       // durable identity, so the interesting radio is often a quiet one.
-      alias: { q: '', sort: 'lastSeen', offset: 0, limit: 100, total: 0 },
+      alias: { q: '', sort: 'lastSeen', agency: '', has: '', offset: 0, limit: 100, total: 0 },
+      // Agency filter options, fetched once per page load and shared by every
+      // agency <select> — the list is config-derived and never changes between
+      // keystrokes, so refetching it per filter change would be pure waste.
+      agencies: null,
       systemsCache: null,  // list-row cache (drives the open-system name lookup)
       // Pager mode: overview payload + capcodes list/messages drill-down.
       pov: null,
@@ -4687,16 +4736,20 @@
 
       const unitsEl = document.getElementById('nd2-top-units');
       if (unitsEl && !isPager) {
-        // Unit + OTA collapse into one pill (alias as body, UID secondary),
-        // which frees the column the agency chip now uses — same shape as the
-        // Top Talkgroups card next to it.
+        // UID / OTA / Alias, three columns — the same split every radio table
+        // uses. The agency column is dropped HERE only: this card is narrow and
+        // the UID pill is already tinted with the owning agency's colour.
         const rows = ((ov && ov.topUnits) || []).slice(0, 10).map(u => [
-          nd2RadioPill(u.unit, u.alias, u.color),
-          nd2AgencyCell(u.agency),
+          nd2RadioPill(u.unit, u.color),
+          nd2NameCell(u.ota),
+          nd2NameCell(u.alias),
           nd2Num(u.calls),
         ]);
         unitsEl.innerHTML = table(
-          [{ t: 'Unit' }, { t: 'Agency' }, { t: 'Calls', num: true }], rows);
+          [{ t: 'Unit' },
+           { t: 'OTA', title: 'Over-the-air alias — the name the radio transmits with its UID' },
+           { t: 'Alias', title: "Configured label from the agency's unit list" },
+           { t: 'Calls', num: true }], rows);
       }
       const unitsNote = document.getElementById('nd2-units-note');
       if (unitsNote) unitsNote.style.display = (ov && ov.unitsWindowCapped) ? '' : 'none';
@@ -4810,7 +4863,7 @@
           const msg = e.status === 404 ? 'Events API not available yet.'
             : (e.status === 401 || e.status === 403) ? 'Not authorised to view events.'
             : `Could not load events: ${e.message}`;
-          body.innerHTML = `<tr><td colspan="8" class="nd2-empty">${escapeHtml(msg)}</td></tr>`;
+          body.innerHTML = `<tr><td colspan="9" class="nd2-empty">${escapeHtml(msg)}</td></tr>`;
         }
         nd2UpdatePager(0);
       }
@@ -4830,7 +4883,7 @@
       const body = document.getElementById('nd2-ev-body');
       if (!body) return;
       if (!events.length) {
-        body.innerHTML = '<tr><td colspan="8" class="nd2-empty">No events match.</td></tr>';
+        body.innerHTML = '<tr><td colspan="9" class="nd2-empty">No events match.</td></tr>';
         nd2UpdatePager(0);
         return;
       }
@@ -4877,10 +4930,9 @@
           <td><span class="nd-sub">${escapeHtml(ev.systemLabel || String(ev.system != null ? ev.system : '—'))}</span></td>
           <td>${tgLabel}${badges}</td>
           <td>${nd2AgencyCell(ev.agency)}</td>
-          <td>${ev.sourceUnit != null
-            ? `<span class="nd-strong">${escapeHtml(String(ev.sourceUnit))}</span>` : '—'}</td>
-          <td>${ev.sourceAlias
-            ? escapeHtml(String(ev.sourceAlias)) : '<span class="nd-sub">—</span>'}</td>
+          <td>${ev.sourceUnit != null ? nd2RadioPill(ev.sourceUnit, ev.sourceColor) : '—'}</td>
+          <td>${nd2NameCell(ev.sourceAlias)}</td>
+          <td>${nd2NameCell(ev.sourceUnitAlias)}</td>
           <td>${sites || '—'}</td>
           <td>${nodeCell || '—'}</td>
         </tr>`;
@@ -4958,21 +5010,51 @@
     }
 
     // The radio (unit) equivalent of nd2TgPill, and deliberately the same
-    // visual family: a UID and a talkgroup are both "an id with an optional
-    // name", and rendering one as a pill and the other as bare text made two
-    // adjacent columns of the same table look like different kinds of thing.
-    // Colour is the OWNING AGENCY's colour (talkgroupCatalog.unitColors, from
-    // the agencies' rdio unit lists), not a per-radio colour — a radio whose id
-    // is in no agency's list arrives with color: null and gets the neutral pill.
-    function nd2RadioPill(radio, alias, color) {
-      if (radio == null && !alias) return '<span class="nd-sub">—</span>';
-      const body = alias
-        ? `${escapeHtml(String(alias))} <span class="nd2-pill-id">${escapeHtml(String(radio == null ? '' : radio))}</span>`
-        : `UID ${escapeHtml(String(radio))}`;
+    // visual family: the pill carries the IDENTITY, the agency dot carries who
+    // owns it. Colour is the OWNING AGENCY's colour (talkgroupCatalog.unitColors,
+    // from the agencies' rdio unit lists), not a per-radio colour — a radio whose
+    // id is in no agency's list arrives with color: null and gets the neutral pill.
+    //
+    // The pill body is the UID and ONLY the UID. A radio can hold TWO aliases at
+    // once — the OTA name it transmits and the label configured in its agency's
+    // unit list — and they are frequently different, so neither may stand in for
+    // the id inside this pill: each gets its own column beside it (nd2NameCell).
+    function nd2RadioPill(radio, color) {
+      if (radio == null) return '<span class="nd-sub">—</span>';
+      const body = `UID ${escapeHtml(String(radio))}`;
       if (!color) return `<span class="nd2-tgpill">${body}</span>`;
       const c = escapeHtml(String(color));
       return `<span class="nd2-tgpill" style="background:${c}22;border-color:${c}88;">`
         + `<span class="nd2-tgpill-dot" style="background:${c}"></span>${body}</span>`;
+    }
+
+    // Plain-text cell for an OTA / configured alias. Null renders as the muted
+    // em-dash rather than an empty cell so "not named" is visibly a value.
+    function nd2NameCell(v) {
+      return v ? escapeHtml(String(v)) : '<span class="nd-sub">—</span>';
+    }
+
+    // Fill every agency <select> (data-nd2-agency) from /api/node-data/agencies.
+    // Cached on nd2.agencies: the loaders call this on every load — including
+    // each debounced keystroke — and the option list is config-derived, so it is
+    // fetched at most once per page load. Selects already filled are skipped so
+    // an open dropdown is never rebuilt underneath the user.
+    async function nd2FillAgencySelects() {
+      if (!nd2.agencies) {
+        try {
+          const data = await nd2Fetch('/api/node-data/agencies');
+          nd2.agencies = data.agencies || [];
+        } catch (e) { nd2.agencies = []; }
+      }
+      const opts = nd2.agencies.map(a => {
+        const n = escapeHtml(String(a.name));
+        return `<option value="${n}">${n}</option>`;
+      }).join('');
+      document.querySelectorAll('select[data-nd2-agency]').forEach(sel => {
+        if (sel.dataset.nd2Filled === '1') return;
+        sel.insertAdjacentHTML('beforeend', opts);
+        sel.dataset.nd2Filled = '1';
+      });
     }
 
     // Just the talkgroup pill. Agency is NOT appended here: it gets its own
@@ -5510,12 +5592,16 @@
           [nd2TgCell(t), nd2AgencyCell(t.agency), nd2Num(t.calls), nd2LastSeen(t.lastSeen)]));
     }
     function nd2TopRadioHtml(list) {
+      // UID / OTA / Alias, same three-column split as every other radio table:
+      // the OTA is what the radio transmitted, the alias is its configured unit
+      // label, and the UID pill carries its agency's colour.
       return nd2MiniTable(
-        [{ label: 'Radio' }, { label: 'OTA' }, { label: 'Calls', num: true },
+        [{ label: 'Radio' }, { label: 'OTA' }, { label: 'Alias' }, { label: 'Calls', num: true },
          { label: 'Last seen' }],
         (list || []).map(r => [
-          `<span class="nd-strong">${escapeHtml(String(r.radio))}</span>`,
-          r.alias ? escapeHtml(String(r.alias)) : '<span class="nd-sub">—</span>',
+          nd2RadioPill(r.radio, r.color),
+          nd2NameCell(r.ota),
+          nd2NameCell(r.alias),
           nd2Num(r.calls), nd2LastSeen(r.lastSeen)]));
     }
 
@@ -5852,6 +5938,11 @@
 
     // --- Talkgroups view -------------------------------------------------
     function nd2TgInputChanged() { clearTimeout(_nd2TgDebounce); _nd2TgDebounce = setTimeout(() => { nd2.tg.offset = 0; nd2LoadTalkgroups(); }, 400); }
+    function nd2TgSetAgency(v) {
+      nd2.tg.agency = v || '';
+      nd2.tg.offset = 0;
+      nd2LoadTalkgroups();
+    }
     function nd2TgSetSort(sort) {
       if (nd2.tg.sort === sort) return;
       nd2.tg.sort = sort; nd2.tg.offset = 0;
@@ -5866,12 +5957,16 @@
 
     async function nd2LoadTalkgroups() {
       const view = nd2.view;
+      void nd2FillAgencySelects();
       const q = (document.getElementById('nd2-tg-q')?.value || '').trim();
       const params = new URLSearchParams({
         window: nd2.window, sort: nd2.tg.sort,
         limit: String(nd2.tg.limit), offset: String(nd2.tg.offset),
       });
       if (q) params.set('q', q);
+      // Agency is a property of the talkgroup's alias group, so the server
+      // resolves it to an id set — the page and its total stay correct.
+      if (nd2.tg.agency) params.set('agency', nd2.tg.agency);
       // Two callers share this one panel and loader: the Systems drill-down
       // (scoped to a system, or one of its sites) and the top-level Talkgroups
       // view, which is fleet-wide. nd2.sys.* is NOT cleared when a top-level
@@ -5933,6 +6028,18 @@
         nd2LoadAliases();
       }, 400);
     }
+    function nd2AliasSetAgency(v) {
+      nd2.alias.agency = v || '';
+      nd2.alias.offset = 0;
+      nd2LoadAliases();
+    }
+    /** '' | 'alias'. There is no 'ota' here — every row in this table is an OTA
+     *  observation, so that option would select the entire list. */
+    function nd2AliasSetHas(v) {
+      nd2.alias.has = v === 'alias' ? 'alias' : '';
+      nd2.alias.offset = 0;
+      nd2LoadAliases();
+    }
     function nd2AliasSetSort(sort) {
       if (nd2.alias.sort === sort) return;
       nd2.alias.sort = sort; nd2.alias.offset = 0;
@@ -5950,29 +6057,35 @@
       const body = document.getElementById('nd2-alias-body');
       if (!body) return;
       const view = nd2.view;
+      void nd2FillAgencySelects();
       const params = new URLSearchParams({
         sort: nd2.alias.sort,
         limit: String(nd2.alias.limit),
         offset: String(nd2.alias.offset),
       });
       if (nd2.alias.q) params.set('q', nd2.alias.q);
+      if (nd2.alias.agency) params.set('agency', nd2.alias.agency);
+      if (nd2.alias.has) params.set('has', nd2.alias.has);
       try {
         const data = await nd2Fetch('/api/node-data/radio-aliases?' + params);
         if (nd2.view !== view) return;   // navigated away mid-fetch
         nd2.alias.total = data.total || 0;
         const rows = data.rows || [];
         if (!rows.length) {
-          body.innerHTML = `<tr><td colspan="5" class="nd2-empty">${
-            nd2.alias.q ? 'No radios match.' : 'No radio has transmitted an alias yet.'
+          body.innerHTML = `<tr><td colspan="7" class="nd2-empty">${
+            (nd2.alias.q || nd2.alias.agency || nd2.alias.has)
+              ? 'No radios match.' : 'No radio has transmitted an alias yet.'
           }</td></tr>`;
         } else {
           body.innerHTML = rows.map(r => `
             <tr class="nd2-rowlink" onclick="nd2JumpToEvents({unit:${r.radio}})"
                 title="View events for this radio">
-              <td>${nd2RadioPill(r.radio, r.alias, r.color)}
+              <td>${nd2RadioPill(r.radio, r.color)}
                 <button class="nd2-linkbtn" title="Talkgroups this radio has been heard on"
-                  onclick="event.stopPropagation();nd2ShowRel('radio',${r.radio},${nd2Arg(r.alias || r.radio)})">
+                  onclick="event.stopPropagation();nd2ShowRel('radio',${r.radio},${nd2Arg(r.alias || r.ota || r.radio)})">
                   <i class="fas fa-diagram-project"></i></button></td>
+              <td>${nd2NameCell(r.ota)}</td>
+              <td>${nd2NameCell(r.alias)}</td>
               <td>${nd2AgencyCell(r.agency)}</td>
               <td class="nd2-num">${nd2Num(r.timesSeen)}</td>
               <td>${nd2LastSeen(r.firstSeen)}</td>
@@ -5992,23 +6105,24 @@
         if (prev) prev.disabled = nd2.alias.offset <= 0;
         if (next) next.disabled = nd2.alias.offset + nd2.alias.limit >= nd2.alias.total;
       } catch (e) {
-        body.innerHTML = `<tr><td colspan="5" class="nd2-empty">Failed to load aliases: ${
+        body.innerHTML = `<tr><td colspan="7" class="nd2-empty">Failed to load aliases: ${
           escapeHtml(String(e.message || e))}</td></tr>`;
       }
     }
 
     function nd2RadInputChanged() { clearTimeout(_nd2RadDebounce); _nd2RadDebounce = setTimeout(() => { nd2.rad.offset = 0; nd2LoadRadios(); }, 400); }
-    /** Only radios that have transmitted an over-the-air alias. Most radios
-     *  never do, so this is the difference between a few hundred identifiable
-     *  units and a wall of bare ids. */
-    function nd2RadToggleNamed() {
-      nd2.rad.named = !nd2.rad.named;
+    function nd2RadSetAgency(v) {
+      nd2.rad.agency = v || '';
       nd2.rad.offset = 0;
-      const btn = document.getElementById('nd2-rad-named');
-      if (btn) {
-        btn.classList.toggle('active', nd2.rad.named);
-        btn.setAttribute('aria-pressed', nd2.rad.named ? 'true' : 'false');
-      }
+      nd2LoadRadios();
+    }
+    /** '' | 'ota' | 'alias'. Two DIFFERENT questions, not two spellings of one:
+     *  'ota' = the radio has transmitted a name over the air (most never do),
+     *  'alias' = its UID is labelled in an agency's configured unit list. This
+     *  replaces the old single "Named only" toggle, which conflated them. */
+    function nd2RadSetHas(v) {
+      nd2.rad.has = (v === 'ota' || v === 'alias') ? v : '';
+      nd2.rad.offset = 0;
       nd2LoadRadios();
     }
     function nd2RadSetSort(sort) {
@@ -6025,13 +6139,15 @@
 
     async function nd2LoadRadios() {
       const view = nd2.view;
+      void nd2FillAgencySelects();
       const q = (document.getElementById('nd2-rad-q')?.value || '').trim();
       const params = new URLSearchParams({
         window: nd2.window, sort: nd2.rad.sort,
         limit: String(nd2.rad.limit), offset: String(nd2.rad.offset),
       });
       if (q) params.set('q', q);
-      if (nd2.rad.named) params.set('named', '1');
+      if (nd2.rad.agency) params.set('agency', nd2.rad.agency);
+      if (nd2.rad.has) params.set('has', nd2.rad.has);
       // Scoped to the open system — and, one level down, to the open SITE.
       if (nd2.sys.system != null) params.set('system', String(nd2.sys.system));
       const level = nd2.sys.level;
@@ -6048,8 +6164,10 @@
         nd2.rad.total = data.total || 0;
         const body = document.getElementById('nd2-rad-body');
         const rows = data.radios || [];
-        if (!rows.length) { body.innerHTML = `<tr><td colspan="8" class="nd2-empty">${
-          nd2.rad.named ? 'No radio here has transmitted an alias.' : 'No radios match.'
+        if (!rows.length) { body.innerHTML = `<tr><td colspan="10" class="nd2-empty">${
+          nd2.rad.has === 'ota' ? 'No radio here has transmitted an over-the-air alias.'
+            : nd2.rad.has === 'alias' ? 'No radio here has a configured alias.'
+            : 'No radios match.'
         }</td></tr>`; }
         else body.innerHTML = rows.map(r => {
           const topTgs = (r.topTalkgroups || []).map(t =>
@@ -6057,10 +6175,12 @@
           ).join(' ') || '—';
           return `
           <tr class="nd2-rowlink" onclick="nd2JumpToEvents({unit:${r.radio}})" title="View events for this radio">
-            <td>${nd2RadioPill(r.radio, r.alias, r.color)}
+            <td>${nd2RadioPill(r.radio, r.color)}
               <button class="nd2-linkbtn" title="Talkgroups this radio has been heard on"
-                onclick="event.stopPropagation();nd2ShowRel('radio',${r.radio},${nd2Arg(r.alias || r.radio)})">
+                onclick="event.stopPropagation();nd2ShowRel('radio',${r.radio},${nd2Arg(r.alias || r.ota || r.radio)})">
                 <i class="fas fa-diagram-project"></i></button></td>
+            <td>${nd2NameCell(r.ota)}</td>
+            <td>${nd2NameCell(r.alias)}</td>
             <td>${nd2AgencyCell(r.agency)}</td>
             <td class="nd2-num">${nd2Num(r.calls)}</td>
             <td>${nd2LastSeen(r.lastSeen)}</td>
@@ -6071,7 +6191,7 @@
           </tr>`;
         }).join('');
         nd2PageBtns('rad', nd2.rad, rows.length);
-      } catch (e) { nd2TableMsg('nd2-rad-body', 7, e); nd2.rad.total = 0; nd2PageBtns('rad', nd2.rad, 0); }
+      } catch (e) { nd2TableMsg('nd2-rad-body', 10, e); nd2.rad.total = 0; nd2PageBtns('rad', nd2.rad, 0); }
     }
 
     // --- Site decode-health trend -----------------------------------------
@@ -6652,21 +6772,20 @@
           body.innerHTML = '<div class="nd2-empty">No counterparts in this window.</div>';
           return;
         }
-        // Listing RADIOS gets an OTA column; listing talkgroups has no UID to
-        // name, so the column would be dead weight there.
+        // Listing RADIOS gets the same UID / OTA / Alias split as every other
+        // radio table (and the agency-coloured pill); listing talkgroups has no
+        // UID to name, so those columns would be dead weight there.
         body.innerHTML = nd2MiniTable(
           [{ label: isRadio ? 'Talkgroup' : 'Radio' },
-           ...(isRadio ? [] : [{ label: 'OTA' }]),
+           ...(isRadio ? [] : [{ label: 'OTA' }, { label: 'Alias' }]),
            { label: 'Calls', num: true },
            { label: 'Group', num: true }, { label: 'Private', num: true },
            { label: 'Enc', num: true }, { label: 'Audio', num: true }, { label: 'Last seen' }],
           rows.map(r => [
             isRadio
               ? nd2TgPill(r.id, r.label, r.color)
-              : `<span class="nd-strong">${escapeHtml(String(r.id))}</span>`,
-            ...(isRadio ? [] : [r.label
-              ? escapeHtml(String(r.label))
-              : '<span class="nd-sub">—</span>']),
+              : nd2RadioPill(r.id, r.color),
+            ...(isRadio ? [] : [nd2NameCell(r.ota), nd2NameCell(r.alias)]),
             nd2Num(r.calls), nd2Num(r.group), nd2Num(r.private),
             nd2Num(r.encrypted), nd2Num(r.recorded), nd2LastSeen(r.lastSeen),
           ]));

@@ -1237,7 +1237,16 @@ interface ScopedDetail {
     encryptedCalls: number;
     lastSeen: string;
   }>;
-  topRadios: Array<{ radio: number; alias: string | null; calls: number; lastSeen: string }>;
+  topRadios: Array<{
+    radio: number;
+    /** OTA alias the radio transmitted; `alias` is its configured unit label. */
+    ota: string | null;
+    alias: string | null;
+    agency: string | null;
+    color: string | null;
+    calls: number;
+    lastSeen: string;
+  }>;
   series: Array<{ hour: string; calls: number }>;
 }
 
@@ -1254,6 +1263,11 @@ async function scopedRadioDetail(
 ): Promise<ScopedDetail> {
   const _scopedTg = await talkgroupCatalog();
   const _scopedTgLabels = _scopedTg.labels;
+  const _scopedRadio = {
+    labels: _scopedTg.unitLabels,
+    agencies: _scopedTg.unitAgencies,
+    colors: _scopedTg.unitColors,
+  };
   const [totQ, tgQ, unQ, srQ] = await Promise.all([
     pool.query<{
       calls: unknown;
@@ -1342,7 +1356,12 @@ async function scopedRadioDetail(
     })),
     topRadios: unQ.rows.map((r) => ({
       radio: r.radio,
-      alias: r.alias ?? null,
+      // Same split as every other radio surface: the OTA the radio transmitted
+      // vs the label the operator configured for that UID, plus its agency.
+      ota: r.alias ?? null,
+      alias: _scopedRadio.labels.get(r.radio) ?? null,
+      agency: _scopedRadio.agencies.get(r.radio) ?? null,
+      color: _scopedRadio.colors.get(r.radio) ?? null,
       calls: num(r.calls),
       lastSeen: iso(r.last_seen),
     })),

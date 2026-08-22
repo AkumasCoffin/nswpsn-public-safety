@@ -335,7 +335,10 @@ describe('display enrichment (labels, site names, aliases)', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.topTalkgroups[0].label).toBe('Sydney Metro 01');
-    expect(body.topRadios[0].alias).toBe('CAR 1');
+    // 'CAR 1' is the OTA the radio transmitted; `alias` is the separate
+    // configured unit label, absent in this stubbed config.
+    expect(body.topRadios[0].ota).toBe('CAR 1');
+    expect(body.topRadios[0].alias).toBeNull();
     expect(body.sites[0].name).toBe('Cambewarra MT');
     expect(body.sites[0].topTalkgroup).toEqual({ talkgroup: 10101, label: 'Sydney Metro 01', calls: 5 });
   });
