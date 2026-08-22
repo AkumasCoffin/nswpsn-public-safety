@@ -83,7 +83,19 @@ describe('talkgroupCatalog display names', () => {
       ),
     );
     expect(cat.labels.get(30015)).toBe('South Western Slopes A');
-    expect(cat.agencies.get(30015)).toBe('RFS'); // group still comes from the alias
+    // The agency is the AGENCY'S NAME, not the alias group — talkgroups and
+    // radios must agree on one name or the filters list the agency twice.
+    expect(cat.agencies.get(30015)).toBe('Rural Fire Service');
+  });
+
+  it('falls back to the alias group when no unified row owns the talkgroup', async () => {
+    const cat = await withConfig(
+      cfg(
+        [], // legacy config: nothing but the imported alias list
+        [{ name: '144 SWS A', group: 'RFS', ids: [{ type: 'talkgroup', attrs: { value: '30015' } }] }],
+      ),
+    );
+    expect(cat.agencies.get(30015)).toBe('RFS');
   });
 
   it('collects encrypted talkgroups from agencies with the flag', async () => {

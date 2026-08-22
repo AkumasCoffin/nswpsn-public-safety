@@ -716,6 +716,28 @@
     }
     .nd-input:focus { outline: none; border-color: var(--accent-border); }
     .nd-input-sm { width: 64px; }
+    /* A <select> using .nd-input otherwise keeps the platform's chrome — a
+       light popup with a system arrow, which reads as a foreign control on a
+       dark page. Drop the native appearance, draw our own caret, and set the
+       popup's own colours (Chrome honours background/color on select+option,
+       which is what themes the open list). color-scheme: dark stops the
+       scrollbar inside that popup rendering light. */
+    select.nd-input {
+      appearance: none; -webkit-appearance: none; -moz-appearance: none;
+      padding-right: 1.35rem;
+      background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath fill='%2394a3b8' d='M1.4 1.7 6 6.3l4.6-4.6'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 0.45rem center;
+      background-size: 0.6rem;
+      color-scheme: dark;
+      cursor: pointer;
+    }
+    select.nd-input:hover { border-color: var(--accent-border); }
+    select.nd-input option {
+      background: var(--bg-card, #111827);
+      color: var(--text-primary, #e2e8f0);
+    }
+    select.nd-input option:checked { background: var(--accent-border, #38bdf8); color: #0b1220; }
     /* Device-aware tuner controls: <select> reuse .nd-input; gain axes stack. */
     .nd-sel { width: auto; min-width: 62px; padding-right: 0.25rem; }
     .nd-gain-cell { min-width: 120px; }
@@ -2674,8 +2696,8 @@
           <div class="nd2-seg" role="group" aria-label="Radio data view">
             <button class="filter-btn active" data-nd2-view="overview" onclick="nd2SetView('overview')">Overview</button>
             <button class="filter-btn" data-nd2-view="systems" onclick="nd2SetView('systems')">Systems</button>
-            <button class="filter-btn" data-nd2-view="talkgroups" onclick="nd2SetView('talkgroups')">Talkgroups</button>
             <button class="filter-btn" data-nd2-view="nodes" onclick="nd2SetView('nodes')">Nodes</button>
+            <button class="filter-btn" data-nd2-view="talkgroups" onclick="nd2SetView('talkgroups')">Talkgroups</button>
             <button class="filter-btn" data-nd2-view="live" onclick="nd2SetView('live')">Live</button>
             <button class="filter-btn" data-nd2-view="aliases" onclick="nd2SetView('aliases')">Aliases</button>
             <button class="filter-btn" data-nd2-view="events" onclick="nd2SetView('events')">Events</button>
@@ -4203,7 +4225,9 @@
     let _nd2RadDebounce = null;
     let _nd2CapDebounce = null;
     // Which views belong to each mode (drives the panel show/hide sweep).
-    const ND2_RADIO_VIEWS = ['overview', 'live', 'systems', 'talkgroups', 'nodes', 'aliases', 'events'];
+    // Listed in tab order (the buttons are the source of truth for display;
+    // this drives the panel show/hide sweep and the saved-view whitelist).
+    const ND2_RADIO_VIEWS = ['overview', 'systems', 'nodes', 'talkgroups', 'live', 'aliases', 'events'];
     const ND2_PAGER_VIEWS = ['poverview', 'capcodes'];
     const _nd2AllViews = [...ND2_RADIO_VIEWS, ...ND2_PAGER_VIEWS];
 
@@ -5021,7 +5045,8 @@
     // the id inside this pill: each gets its own column beside it (nd2NameCell).
     function nd2RadioPill(radio, color) {
       if (radio == null) return '<span class="nd-sub">—</span>';
-      const body = `UID ${escapeHtml(String(radio))}`;
+      // Just the number — the column heading already says what it is.
+      const body = escapeHtml(String(radio));
       if (!color) return `<span class="nd2-tgpill">${body}</span>`;
       const c = escapeHtml(String(color));
       return `<span class="nd2-tgpill" style="background:${c}22;border-color:${c}88;">`

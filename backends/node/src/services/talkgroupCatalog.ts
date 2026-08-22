@@ -106,6 +106,11 @@ export async function talkgroupCatalog(): Promise<TalkgroupCatalog> {
       for (const tg of ag.talkgroups ?? []) {
         if (typeof tg.id !== 'number' || !Number.isInteger(tg.id)) continue;
         if (ag.encrypted) encrypted.add(tg.id);
+        // Agency by NAME, not by the alias group: the two differ (FRNSW aliases
+        // group under "Fire & Rescue NSW" while the agency is "Fire and
+        // Rescue"), and taking talkgroups from one source and radios from the
+        // other listed the same agency twice in the filters.
+        if (agencyName) agencies.set(tg.id, agencyName);
         // DISPLAY name: the friendly name ("South Western Slopes A") in
         // preference to the short label ("SWS A") the alias carries. Read from
         // the unified rows because only they hold both; the alias pass below
