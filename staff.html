@@ -1015,43 +1015,10 @@
 
     /* --- Global settings modal (P3) --- */
     .modal-content.wide { max-width: 940px; }
-    .gc-tabs { display: flex; gap: 0.35rem; border-bottom: 1px solid var(--border-subtle); margin: 0.5rem 0 1rem; }
-    .gc-tab {
-      background: none; border: none; cursor: pointer; color: var(--text-soft);
-      font-family: inherit; font-weight: 600; font-size: 0.82rem;
-      padding: 0.5rem 0.9rem; border-bottom: 2px solid transparent; margin-bottom: -1px;
-    }
-    .gc-tab:hover { color: var(--text-primary); }
-    .gc-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
-    .gc-panel { display: none; }
-    .gc-panel.active { display: block; }
-    .gc-scroll { max-height: 58vh; overflow-y: auto; padding-right: 0.3rem; }
-    .gc-subtabs { display: flex; gap: 0.3rem; margin-bottom: 0.8rem; }
-    .gc-subtab {
-      background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border-subtle);
-      border-radius: 999px; color: var(--text-soft); cursor: pointer;
-      font-family: inherit; font-size: 0.76rem; font-weight: 600; padding: 0.3rem 0.85rem;
-    }
-    .gc-subtab.active { background: var(--accent-soft); border-color: var(--accent-border); color: #7dd3fc; }
     .gc-toolbar { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.8rem; flex-wrap: wrap; }
     .gc-note { display: flex; gap: 0.5rem; align-items: flex-start; margin: 0 0 0.8rem; padding: 0.5rem 0.7rem;
       border-radius: 6px; background: var(--accent-soft); color: var(--text-soft); font-size: 0.75rem; line-height: 1.35; }
     .gc-note i { margin-top: 0.15rem; color: #7dd3fc; }
-    .gc-card {
-      border: 1px solid var(--border-subtle); border-radius: 10px;
-      margin-bottom: 0.6rem; background: rgba(0, 0, 0, 0.16); overflow: hidden;
-    }
-    .gc-card-head {
-      display: flex; align-items: center; gap: 0.55rem; cursor: pointer;
-      padding: 0.6rem 0.8rem; user-select: none;
-    }
-    .gc-card-head:hover { background: rgba(255, 255, 255, 0.03); }
-    .gc-card-head .gc-caret { transition: transform 0.15s ease; color: var(--text-soft); font-size: 0.7rem; }
-    .gc-card.open .gc-card-head .gc-caret { transform: rotate(90deg); }
-    .gc-card-title { flex: 1; font-weight: 600; color: var(--text-primary); font-size: 0.85rem; }
-    .gc-card-meta { font-size: 0.68rem; color: var(--text-soft); }
-    .gc-card-body { display: none; padding: 0.2rem 0.8rem 0.8rem; }
-    .gc-card.open .gc-card-body { display: block; }
     .gc-inline { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: end; margin-bottom: 0.6rem; }
     .gc-color-swatch { width: 22px; height: 22px; border-radius: 5px; border: 1px solid var(--border-subtle); flex-shrink: 0; }
     /* Titled sub-sections inside an agency card. Each carries a source badge so
@@ -1110,6 +1077,97 @@
       font-family: inherit; font-size: 0.74rem; font-weight: 600;
     }
     .gc-badge-btn:hover { background: rgba(56, 189, 248, 0.2); }
+
+    /* --- Global settings: near-fullscreen two-pane layout ------------- */
+    .modal-content.gc-shell {
+      width: 96vw; max-width: none; height: 92vh;
+      display: flex; flex-direction: column;
+      padding: 0; overflow: hidden;
+    }
+    .gc-head {
+      flex-shrink: 0; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+      padding: 0.75rem 1.1rem; border-bottom: 1px solid var(--border-subtle);
+    }
+    .gc-head h2 { font-size: 1.05rem; font-weight: 700; margin: 0; white-space: nowrap; }
+    .gc-meta { display: flex; gap: 0.8rem; font-size: 0.72rem; color: var(--text-soft); white-space: nowrap; }
+    .gc-h-spacer { flex: 1; }
+    .gc-head .btn { width: auto; padding: 0.42rem 1rem; font-size: 0.8rem; }
+    .gc-import-msg { flex-shrink: 0; font-size: 0.82rem; }
+    .gc-import-msg:not(:empty) { padding: 0.4rem 1.1rem; border-bottom: 1px solid var(--border-subtle); }
+    .gc-body { flex: 1; display: grid; grid-template-columns: 270px 1fr; min-height: 0; }
+    /* left sidebar: search + agency list + footer nav */
+    .gc-side { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--border-subtle); background: rgba(0, 0, 0, 0.14); }
+    .gc-side-search { margin: 0.6rem 0.6rem 0.45rem; min-width: 0; }
+    .gc-side-list { flex: 1; overflow-y: auto; min-height: 0; padding: 0 0.45rem 0.45rem; }
+    .gc-side-row {
+      display: flex; align-items: center; gap: 0.45rem;
+      padding: 0.42rem 0.55rem; border-radius: 7px; cursor: pointer; user-select: none;
+      border: 1px solid transparent; margin-bottom: 2px; font-size: 0.8rem; color: var(--text-primary);
+    }
+    .gc-side-row:hover { background: rgba(255, 255, 255, 0.04); }
+    .gc-side-row.sel { background: var(--accent-soft); border-color: var(--accent-border); }
+    .gc-side-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; border: 1px solid var(--border-subtle); }
+    .gc-side-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+    .gc-side-lock { font-size: 0.62rem; color: var(--text-soft); flex-shrink: 0; }
+    .gc-side-tgn { font-size: 0.68rem; color: var(--text-soft); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+    .gc-side-foot { flex-shrink: 0; border-top: 1px solid var(--border-subtle); padding: 0.55rem 0.6rem; display: flex; flex-direction: column; gap: 0.45rem; }
+    .gc-side-nav {
+      display: flex; align-items: center; gap: 0.5rem; width: 100%;
+      background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border-subtle); border-radius: 7px;
+      color: var(--text-primary); cursor: pointer; font-family: inherit; font-size: 0.78rem; font-weight: 600;
+      padding: 0.45rem 0.6rem;
+    }
+    .gc-side-nav:hover { background: rgba(255, 255, 255, 0.07); }
+    .gc-side-nav.sel { background: var(--accent-soft); border-color: var(--accent-border); color: #7dd3fc; }
+    /* right pane */
+    .gc-main { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+    .gc-detail { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    .gc-agency-head {
+      flex-shrink: 0; display: flex; align-items: center; gap: 0.6rem;
+      padding: 0.65rem 1.1rem; border-bottom: 1px solid var(--border-subtle);
+    }
+    .gc-agency-title { font-size: 0.95rem; font-weight: 700; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .gc-sys-chip {
+      font-size: 0.66rem; font-weight: 700; color: var(--text-soft);
+      border: 1px solid var(--border-subtle); border-radius: 999px; padding: 0.14rem 0.5rem; white-space: nowrap;
+    }
+    .gc-enc-chip { color: #fbbf24; border-color: rgba(251, 191, 36, 0.4); }
+    .gc-agency-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0.8rem 1.1rem 1rem; }
+    .gc-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 0.5rem 0.6rem; align-items: end; }
+    .gc-fields .gc-span2 { grid-column: span 2; }
+    .gc-agency-tabs { display: flex; align-items: center; gap: 0.4rem; margin: 0.9rem 0 0.5rem; }
+    .gc-atab {
+      background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border-subtle);
+      border-radius: 999px; color: var(--text-soft); cursor: pointer;
+      font-family: inherit; font-size: 0.76rem; font-weight: 600; padding: 0.32rem 0.9rem;
+    }
+    .gc-atab:hover { color: var(--text-primary); }
+    .gc-atab.active { background: var(--accent-soft); border-color: var(--accent-border); color: #7dd3fc; }
+    /* talkgroup / unit tables: sticky header + quiet inputs (border on focus only) */
+    .gc-tgt thead th { position: sticky; top: 0; z-index: 2; background: var(--bg-card-2); }
+    .gc-tgt input, .gc-tgt select { background: transparent; border-color: transparent; }
+    .gc-tgt tr:hover input, .gc-tgt tr:hover select { border-color: rgba(148, 163, 184, 0.18); }
+    .gc-tgt input:focus, .gc-tgt select:focus { background: rgba(0, 0, 0, 0.3); border-color: var(--accent-border); }
+    .gc-tg-actions { display: flex; gap: 0.3rem; justify-content: flex-end; align-items: center; }
+    .gc-more-btn {
+      background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border-subtle);
+      color: var(--text-soft); border-radius: 6px; cursor: pointer; padding: 0.25rem 0.5rem;
+      font-size: 0.68rem; line-height: 1;
+    }
+    .gc-more-btn:hover { color: var(--text-primary); background: rgba(255, 255, 255, 0.1); }
+    .gc-more-btn i { transition: transform 0.15s ease; }
+    .gc-more-btn.open i { transform: rotate(180deg); }
+    .gc-tg-more > td { background: rgba(255, 255, 255, 0.025); padding: 0.5rem 0.6rem; }
+    .gc-units-bar { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem; flex-wrap: wrap; }
+    /* Groups & Tags view: two columns side by side in the right pane */
+    .gc-grouptags { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; padding: 0.9rem 1.1rem 1rem; }
+    .gc-gt-col { display: flex; flex-direction: column; min-height: 0; border: 1px solid var(--border-subtle); border-radius: 10px; padding: 0.7rem 0.75rem; background: rgba(255, 255, 255, 0.015); }
+    .gc-gt-scroll { flex: 1; min-height: 0; overflow-y: auto; }
+    @media (max-width: 900px) {
+      .gc-body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+      .gc-side { border-right: none; border-bottom: 1px solid var(--border-subtle); max-height: 34vh; }
+      .gc-grouptags { grid-template-columns: 1fr; overflow-y: auto; }
+    }
 
     /* === Filter / toolbar row ========================================= */
     .filter-bar {
@@ -3389,71 +3447,55 @@
     </div>
   </div>
 
-  <!-- Global node settings modal (P3) -->
+  <!-- Global node settings modal (P3) — near-fullscreen two-pane layout:
+       fixed header (title / meta / import / save), left agency sidebar,
+       right editor pane (agency fields + talkgroup/unit tables, or Groups & Tags). -->
   <div id="global-config-modal" class="modal">
-    <div class="modal-content wide">
-      <div class="modal-header">
+    <div class="modal-content gc-shell">
+      <div class="gc-head">
         <h2><i class="fas fa-globe" style="color: var(--accent);"></i> Global node settings</h2>
-        <button class="modal-close" onclick="closeGlobalConfig()">&times;</button>
-      </div>
-      <div id="gc-meta" class="dev-card-secondary" style="margin-bottom: 0.4rem;"></div>
-      <div class="gc-import-bar" style="display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; padding: 0.5rem 0.6rem; border: 1px solid var(--border, #2a2a3a); border-radius: 8px;">
-        <span style="opacity: 0.75; font-size: 0.85rem;"><i class="fas fa-file-import"></i> Import config (fleet-wide):</span>
-        <label class="gc-badge-btn" style="cursor: pointer; margin: 0;">
+        <span id="gc-meta" class="gc-meta"></span>
+        <span class="gc-h-spacer"></span>
+        <label class="gc-badge-btn" title="Import rdio-scanner config (fleet-wide)" style="cursor: pointer; margin: 0;">
           <i class="fas fa-upload"></i> rdio-scanner.json
           <input type="file" accept=".json,application/json" style="display: none;" onchange="_gcImportRdioFile(this)">
         </label>
-        <label class="gc-badge-btn" style="cursor: pointer; margin: 0;">
+        <label class="gc-badge-btn" title="Import sdrtrunk database (fleet-wide)" style="cursor: pointer; margin: 0;">
           <i class="fas fa-upload"></i> sdrtrunk .db
           <input type="file" accept=".db,.sqlite,.sqlite3" style="display: none;" onchange="_gcImportSdrtrunkFile(this)">
         </label>
-        <span id="gc-import-msg" style="font-size: 0.85rem; flex-basis: 100%;"></span>
+        <button class="btn btn-secondary" onclick="closeGlobalConfig()">Cancel</button>
+        <button class="btn btn-primary" onclick="_gcSave()" id="gc-save-btn"><i class="fas fa-floppy-disk"></i> Save &amp; sync</button>
+        <button class="modal-close" onclick="closeGlobalConfig()">&times;</button>
       </div>
-      <div class="gc-tabs">
-        <button class="gc-tab active" data-gc="agencies" onclick="_gcSetTab('agencies')">Agencies</button>
-        <button class="gc-tab" data-gc="grouptags" onclick="_gcSetTab('grouptags')">Groups &amp; Tags</button>
-      </div>
-
-      <!-- Agencies panel -->
-      <div class="gc-panel active" id="gc-panel-agencies">
-        <div class="gc-toolbar">
-          <div class="search-box" style="min-width: 220px;">
+      <div id="gc-import-msg" class="gc-import-msg"></div>
+      <div class="gc-body">
+        <aside class="gc-side">
+          <div class="search-box gc-side-search">
             <i class="fas fa-search"></i>
             <input type="text" id="gc-agency-search" placeholder="Search agencies / talkgroups…" oninput="_gcRenderAgencies()">
           </div>
-          <button class="gc-badge-btn" onclick="_gcAddAgency()"><i class="fas fa-plus"></i> Add agency</button>
-          <span class="result-count" id="gc-agency-count"></span>
-        </div>
-        <div class="gc-note"><i class="fas fa-circle-info"></i> Each agency has a System ID that links its SDR-Trunk stream and rdio API key — both auto-created and keyed by that System ID (keys are generated per node and never repeat). Add the agency's talkgroups (each gets a readable alias name) and its units. Set the name + System ID first.</div>
-        <div id="gc-defaults-bar" style="display: none;"></div>
-        <div class="gc-scroll" id="gc-agencies"></div>
-      </div>
-
-      <!-- Groups & Tags panel -->
-      <div class="gc-panel" id="gc-panel-grouptags">
-        <div class="gc-subtabs">
-          <button class="gc-subtab active" data-rd="groups" onclick="_gcSetRdioTab('groups')">Groups</button>
-          <button class="gc-subtab" data-rd="tags" onclick="_gcSetRdioTab('tags')">Tags</button>
-        </div>
-
-        <div class="gc-panel active" id="gc-rd-groups">
-          <div class="gc-toolbar">
-            <button class="gc-badge-btn" onclick="_gcAddGroup()"><i class="fas fa-plus"></i> Add group</button>
+          <div class="gc-side-list" id="gc-side-list"></div>
+          <div class="gc-side-foot">
+            <span class="result-count" id="gc-agency-count"></span>
+            <div id="gc-defaults-bar" style="display: none;"></div>
+            <button class="gc-badge-btn" onclick="_gcAddAgency()"><i class="fas fa-plus"></i> Add agency</button>
+            <button class="gc-side-nav" id="gc-nav-grouptags" onclick="_gcShowGroupTags()"><i class="fas fa-tags"></i> Groups &amp; Tags</button>
           </div>
-          <div class="gc-scroll" id="gc-groups"></div>
-        </div>
-
-        <div class="gc-panel" id="gc-rd-tags">
-          <div class="gc-toolbar">
-            <button class="gc-badge-btn" onclick="_gcAddTag()"><i class="fas fa-plus"></i> Add tag</button>
+        </aside>
+        <main class="gc-main">
+          <div class="gc-detail" id="gc-agencies"></div>
+          <div class="gc-grouptags" id="gc-panel-grouptags" style="display: none;">
+            <section class="gc-gt-col">
+              <div class="gc-sect-h" style="margin-bottom: 0.55rem;"><span class="gc-src-badge gc-src-rdio">rdio</span> Groups <span class="gc-h-spacer"></span><button class="gc-badge-btn" onclick="_gcAddGroup()"><i class="fas fa-plus"></i> Add group</button></div>
+              <div class="gc-gt-scroll" id="gc-groups"></div>
+            </section>
+            <section class="gc-gt-col">
+              <div class="gc-sect-h" style="margin-bottom: 0.55rem;"><span class="gc-src-badge gc-src-rdio">rdio</span> Tags <span class="gc-h-spacer"></span><button class="gc-badge-btn" onclick="_gcAddTag()"><i class="fas fa-plus"></i> Add tag</button></div>
+              <div class="gc-gt-scroll" id="gc-tags"></div>
+            </section>
           </div>
-          <div class="gc-scroll" id="gc-tags"></div>
-        </div>
-      </div>
-
-      <div style="display: flex; gap: 0.5rem; margin-top: 1.2rem;">
-        <button class="btn btn-secondary" onclick="closeGlobalConfig()" style="flex: 1;">Cancel</button>
-        <button class="btn btn-primary" onclick="_gcSave()" style="flex: 1;" id="gc-save-btn"><i class="fas fa-floppy-disk"></i> Save &amp; sync</button>
+        </main>
       </div>
     </div>
   </div>
@@ -10217,10 +10259,11 @@
     // and edited in place (unknown fields are preserved), then PUT back to
     // /api/nodes/global-config which fans it out to all nodes.
     let _gcData = null;
-    let _gcTab = 'agencies';
-    let _gcRdioTab = 'groups';
-    const _gcOpenAgency = new Set();
-    const _gcOpenTg = new Set(); // keys "agencyIdx:tgIdx"
+    let _gcView = 'agency';        // right pane: 'agency' (selected agency editor) | 'grouptags'
+    let _gcSelectedAgency = 0;     // sidebar selection (index into _gcData.agencies)
+    let _gcAgencyTab = 'tg';       // agency editor sub-tab: 'tg' | 'units'
+    let _gcUnitsQuery = '';        // units-table filter (reset on agency select)
+    const _gcOpenTg = new Set();   // keys "agencyIdx:tgIdx" — talkgroup rows with the "more" panel open
 
     // rdio LED = named-colour dropdown (NOT a colour picker). Alerts = None + 1..9.
     const GC_LED_COLORS = ['blue', 'cyan', 'green', 'magenta', 'orange', 'red', 'white', 'yellow'];
@@ -10234,9 +10277,10 @@
       const modal = document.getElementById('global-config-modal');
       if (!modal) return;
       modal.style.display = 'flex';
-      _gcTab = 'agencies'; _gcRdioTab = 'groups';
-      _gcOpenAgency.clear(); _gcOpenTg.clear();
-      _gcSetTab('agencies'); _gcSetRdioTab('groups');
+      _gcView = 'agency'; _gcSelectedAgency = 0; _gcAgencyTab = 'tg'; _gcUnitsQuery = '';
+      _gcOpenTg.clear();
+      const search = document.getElementById('gc-agency-search');
+      if (search) search.value = '';
       document.getElementById('gc-agencies').innerHTML = `<div class="gc-empty"><i class="fas fa-spinner fa-spin"></i> Loading…</div>`;
       await _gcLoad();
     }
@@ -10246,20 +10290,14 @@
       if (modal) modal.style.display = 'none';
     }
 
-
-    function _gcSetTab(name) {
-      _gcTab = name;
-      document.querySelectorAll('.gc-tabs .gc-tab').forEach(b => b.classList.toggle('active', b.dataset.gc === name));
-      document.getElementById('gc-panel-agencies').classList.toggle('active', name === 'agencies');
-      document.getElementById('gc-panel-grouptags').classList.toggle('active', name === 'grouptags');
+    // Sidebar navigation. Selecting an agency (or the Groups & Tags view) is
+    // structural → full re-render.
+    function _gcSelectAgency(i) {
+      _gcView = 'agency'; _gcSelectedAgency = i; _gcUnitsQuery = '';
+      _gcRenderAgencies();
     }
-
-    function _gcSetRdioTab(name) {
-      _gcRdioTab = name;
-      document.querySelectorAll('.gc-subtabs .gc-subtab').forEach(b => b.classList.toggle('active', b.dataset.rd === name));
-      document.getElementById('gc-rd-groups').classList.toggle('active', name === 'groups');
-      document.getElementById('gc-rd-tags').classList.toggle('active', name === 'tags');
-    }
+    function _gcShowGroupTags() { _gcView = 'grouptags'; _gcRenderAgencies(); }
+    function _gcSetAgencyTab(t) { _gcAgencyTab = t; _gcRenderAgencies(); }
 
     async function _gcLoad() {
       try {
@@ -10278,8 +10316,8 @@
           // SDR-Trunk side (alias lists + aliases + streams). Edited only via the
           // .db import; carried through Save so the PATCH-style PUT preserves it.
           sdrtrunkConfig: (cfg.sdrtrunkConfig && typeof cfg.sdrtrunkConfig === 'object') ? cfg.sdrtrunkConfig : null,
-          // Fleet-wide talkgroup defaults (unified model): the one global alias
-          // colour + the monitor priority everything inherits unless overridden.
+          // Fleet-wide talkgroup defaults (unified model): the monitor priority
+          // everything inherits unless overridden.
           defaults: (cfg.defaults && typeof cfg.defaults === 'object') ? cfg.defaults : {},
           version: cfg.version, updatedAt: cfg.updatedAt
         };
@@ -10349,8 +10387,9 @@
         _gcData.agencies = agencies;
         _gcData.rdioGroups = Array.isArray(json.groups) ? json.groups : [];
         _gcData.rdioTags = Array.isArray(json.tags) ? json.tags : [];
+        _gcView = 'agency'; _gcSelectedAgency = 0; _gcAgencyTab = 'tg'; _gcUnitsQuery = '';
+        _gcOpenTg.clear();
         _gcRenderAll();
-        _gcSetTab('agencies');
         const nTg = agencies.reduce((n, a) => n + (a.talkgroups ? a.talkgroups.length : 0), 0);
         const nU = agencies.reduce((n, a) => n + (a.units ? a.units.length : 0), 0);
         _gcImportMsg(`<i class="fas fa-check"></i> rdio import: ${agencies.length} systems, ${nTg} talkgroups, ${nU} units, ${_gcData.rdioGroups.length} groups, ${_gcData.rdioTags.length} tags. Review, then Save &amp; sync.`, 'ok');
@@ -10470,6 +10509,9 @@
         db = new SQL.Database(buf);
         const r = _gcParseSdrtrunkDb(db);
         _gcData.sdrtrunkConfig = { aliasLists: r.aliasLists, aliases: r.aliases, streams: r.streams };
+        // The import can flip unified ↔ legacy mode — re-render the whole layout.
+        _gcView = 'agency'; _gcSelectedAgency = 0;
+        _gcRenderAll();
         let msg = `sdrtrunk import: ${r.aliasLists.length} lists, ${r.aliases.length} aliases, ${r.streams.length} streams`;
         if (r.dropped) {
           const detail = Object.keys(r.skipped).map(t => `${r.skipped[t]}×${t}`).join(', ');
@@ -10534,14 +10576,9 @@
       const sc = _gcData && _gcData.sdrtrunkConfig;
       return !(sc && Array.isArray(sc.aliases) && sc.aliases.length > 0);
     }
-    // Fleet-wide defaults (_gcData.defaults): the one global alias colour + the
-    // monitor priority every agency inherits. Mutate-only (no re-render) so the
-    // colour picker keeps focus while dragging.
-    function _gcDefaultsColorSet(hex) {
-      if (!_gcData.defaults) _gcData.defaults = {};
-      const rgb = parseInt(String(hex || '#000000').slice(1), 16) & 0xFFFFFF;
-      _gcData.defaults.color = String(((0xFF << 24) | rgb) | 0);   // signed ARGB int string (sdrtrunk format)
-    }
+    // Fleet-wide defaults (_gcData.defaults): the monitor priority every agency
+    // inherits (colour is PER AGENCY — agency.led/color). Mutate-only (no
+    // re-render) so the select keeps focus.
     function _gcDefaultsPrioritySet(val) {
       if (!_gcData.defaults) _gcData.defaults = {};
       if (val === 'default') delete _gcData.defaults.priority; else _gcData.defaults.priority = Number(val);
@@ -10569,8 +10606,9 @@
       return Array.from(set).sort();
     }
 
-    // The fleet-wide defaults bar (unified mode only): one alias colour + one
-    // monitor priority, inherited by every agency/talkgroup unless overridden.
+    // The fleet-wide defaults (unified mode only): the one monitor priority
+    // inherited by every agency/talkgroup unless overridden. Lives in the
+    // sidebar footer of the two-pane layout.
     function _gcRenderDefaultsBar(unified) {
       const bar = document.getElementById('gc-defaults-bar');
       if (!bar) return;
@@ -10581,121 +10619,223 @@
       const prioOpts = [`<option value="default" ${priVal === 'default' ? 'selected' : ''}>Default (100)</option>`,
         `<option value="-1" ${priVal === '-1' ? 'selected' : ''}>Do not monitor</option>`]
         .concat(Array.from({ length: 99 }, (_, n) => { const v = String(n + 1); return `<option value="${v}" ${v === priVal ? 'selected' : ''}>Priority ${v}</option>`; })).join('');
-      bar.innerHTML = `<div class="gc-inline" style="align-items:flex-end;margin-bottom:0.5rem;padding:0.5rem 0.6rem;border:1px solid var(--border, #2a2a3a);border-radius:8px;">
-        <span style="opacity:0.75;font-size:0.85rem;align-self:center;"><i class="fas fa-sliders"></i> Talkgroup defaults (fleet-wide):</span>
-        <div class="nd-fld"><label>Alias colour</label><input type="color" value="${_gcColorHex(d.color)}" oninput="_gcDefaultsColorSet(this.value)"></div>
-        <div class="nd-fld"><label>Default priority</label><select onchange="_gcDefaultsPrioritySet(this.value)">${prioOpts}</select></div>
-      </div>`;
+      bar.innerHTML = `<div class="nd-fld"><label>Default monitor priority (fleet-wide)</label><select onchange="_gcDefaultsPrioritySet(this.value)">${prioOpts}</select></div>`;
     }
 
+    // Orchestrator for the two-pane layout: filters by search, keeps the
+    // selection valid, renders the sidebar list + the right pane (the selected
+    // agency's editor, or the Groups & Tags view).
     function _gcRenderAgencies() {
-      const el = document.getElementById('gc-agencies');
-      if (!el || !_gcData) return;
+      if (!_gcData) return;
       const unified = _gcUnified();
       _gcRenderDefaultsBar(unified);
-      const q = (document.getElementById('gc-agency-search').value || '').toLowerCase();
+      const searchEl = document.getElementById('gc-agency-search');
+      const q = ((searchEl && searchEl.value) || '').toLowerCase();
       const list = _gcData.agencies;
-      const cnt = document.getElementById('gc-agency-count');
-      if (cnt) cnt.textContent = list.length + (list.length === 1 ? ' agency' : ' agencies');
       const matchTg = (tg) => String(tg.label || '').toLowerCase().includes(q) || String(tg.name || '').toLowerCase().includes(q) || String(tg.id == null ? '' : tg.id).toLowerCase().includes(q);
       const shown = list.map((a, i) => ({ a, i })).filter(({ a }) =>
         !q || String(a.name || '').toLowerCase().includes(q) || String(a.systemId == null ? '' : a.systemId).toLowerCase().includes(q)
         || (Array.isArray(a.talkgroups) && a.talkgroups.some(matchTg)));
-      const datalist = `<datalist id="gc-icon-names">${_gcIconNames().map(n => `<option value="${escapeHtml(n)}"></option>`).join('')}</datalist>`;
-      if (!shown.length) { el.innerHTML = datalist + `<div class="gc-empty">No agencies${q ? ' match your search' : ' yet'}.</div>`; return; }
-      el.innerHTML = datalist + shown.map(({ a, i }) => {
-        const open = _gcOpenAgency.has(i);
-        const aliasIds = Array.isArray(a.aliasIds) ? a.aliasIds : [];
-        const tgs = Array.isArray(a.talkgroups) ? a.talkgroups : [];
-        const units = Array.isArray(a.units) ? a.units : [];
-        const transcribeOn = a.transcribe !== false; // default true
-        const swHex = _gcLedHex(a.led) || (a.color ? _gcColorHex(a.color) : null);
-        const priVal = _gcAgencyPriorityVal(a);
-        const prioOpts = [`<option value="default" ${priVal === 'default' ? 'selected' : ''}>Monitor (default)</option>`,
-          `<option value="-1" ${priVal === '-1' ? 'selected' : ''}>Do not monitor</option>`]
-          .concat(Array.from({ length: 99 }, (_, n) => { const v = String(n + 1); return `<option value="${v}" ${v === priVal ? 'selected' : ''}>Priority ${v}</option>`; })).join('');
-        const enc = unified && a.encrypted === true;   // encrypted = SDR-Trunk only (no rdio system, no stream)
-        if (!enc && a.systemId != null && a.systemId !== '') _gcEnsureAgencyStream(i); // idempotent: auto-provision the stream for this systemID
-        const sdr = _gcSdrForAgency(a);
-        const sdrAliasRows = unified ? '' : _gcRenderSdrAliases(a, sdr);
-        const shownTgs = tgs.map((tg, ti) => ({ tg, ti })).filter(({ tg }) => !q || matchTg(tg));
-        const body = !open ? '' : `<div class="gc-card-body">
-          <section class="gc-sect gc-sect-global">
-            <div class="gc-sect-h"><span class="gc-src-badge gc-src-global">Global</span> Agency</div>
-            <div class="gc-inline">
-              <div class="nd-fld"><label>System ID</label><input type="number" style="max-width:110px;" value="${escapeHtml(String(a.systemId == null ? '' : a.systemId))}" oninput="_gcAgencySet(${i},'systemId',this.value)"></div>
-              <div class="nd-fld" style="flex:1;min-width:200px;"><label>Name</label><input type="text" value="${escapeHtml(a.name || '')}" oninput="_gcAgencySet(${i},'name',this.value)"></div>
-              <div class="nd-fld"><label>Icon</label><input type="text" list="gc-icon-names" value="${escapeHtml(a.iconName || '')}" oninput="_gcAgencySet(${i},'iconName',this.value)" placeholder="named icon"></div>
-              ${enc ? '' : `<div class="nd-fld"><label>Colour</label>${_gcLedSelect(a.led, `_gcAgencyLedSet(${i},this.value)`)}</div>`}
-              <div class="nd-fld"><label>Priority</label><select onchange="_gcAgencyPrioritySet(${i},this.value)">${prioOpts}</select></div>
-            </div>
-            ${unified ? `<div class="gc-inline" style="align-items:center;">
-              ${enc ? '' : `<div class="nd-fld"><label>Default group</label><select onchange="_gcAgencyRefSet(${i},'defaultGroupId',this.value)">${_gcOptions(_gcData.rdioGroups, a.defaultGroupId)}</select></div>
-              <div class="nd-fld"><label>Default tag</label><select onchange="_gcAgencyRefSet(${i},'defaultTagId',this.value)">${_gcOptions(_gcData.rdioTags, a.defaultTagId)}</select></div>`}
-              <div class="nd-fld"><label>SDR group name</label><input type="text" value="${escapeHtml(a.sdrGroupName || '')}" placeholder="${escapeHtml(a.name || '')}" oninput="_gcAgencySdrGroupSet(${i},this.value)"></div>
-              <div class="nd-fld" style="flex-direction:row;align-items:center;gap:0.4rem;"><label style="margin:0;">Encrypted</label><label class="node-switch"><input type="checkbox" ${enc ? 'checked' : ''} onchange="_gcAgencyEncryptedSet(${i},this.checked)"><span class="track"></span></label></div>
-            </div>` : ''}
-            ${enc ? `<div class="gc-hint"><i class="fas fa-lock"></i> SDR-Trunk only — no rdio system, no stream.</div>` : `<div class="gc-inline" style="align-items:center;">
-              <div class="nd-fld"><label>Delay</label><input type="number" style="max-width:90px;" value="${escapeHtml(a.delay != null ? String(a.delay) : '')}" oninput="_gcAgencySet(${i},'delay',this.value)"></div>
-              <div class="nd-fld"><label>Alert</label>${_gcAlertSelect(a.alert, `_gcAgencySet(${i},'alert',this.value,true)`)}</div>
-              <div class="nd-fld" style="flex-direction:row;align-items:center;gap:0.4rem;"><label style="margin:0;">Auto-populate</label><label class="node-switch"><input type="checkbox" ${a.autoPopulate ? 'checked' : ''} onchange="_gcAgencySet(${i},'autoPopulate',this.checked)"><span class="track"></span></label></div>
-              <div class="nd-fld" style="flex-direction:row;align-items:center;gap:0.4rem;"><label style="margin:0;">Transcribe</label><label class="node-switch"><input type="checkbox" ${transcribeOn ? 'checked' : ''} onchange="_gcAgencySet(${i},'transcribe',this.checked)"><span class="track"></span></label></div>
-            </div>
-            <div class="gc-inline">
-              <div class="nd-fld" style="flex:1;min-width:220px;"><label>Transcription prompt</label><textarea rows="2" oninput="_gcAgencySet(${i},'transcriptionPrompt',this.value)">${escapeHtml(a.transcriptionPrompt || '')}</textarea></div>
-              <div class="nd-fld" style="flex:1;min-width:220px;"><label>Blacklists (comma-separated ids)</label><textarea rows="2" oninput="_gcAgencySet(${i},'blacklists',this.value)">${escapeHtml(a.blacklists == null ? '' : String(a.blacklists))}</textarea></div>
-            </div>`}
-            ${unified && !enc ? ((a.systemId != null && a.systemId !== '')
-              ? `<div class="gc-hint"><i class="fas fa-link"></i> Stream + API key auto-linked by system ID ${escapeHtml(String(a.systemId))}${sdr.streams.length ? ` (stream &ldquo;${escapeHtml(sdr.streams[0].name)}&rdquo;)` : ''}.</div>`
-              : `<div class="gc-hint"><i class="fas fa-link"></i> Set this agency's System ID above to auto-create its SDR-Trunk stream + rdio API key.</div>`) : ''}
-          </section>
+      // Keep the selection valid: clamp to the list, then auto-select the first
+      // search match when the current selection is filtered out.
+      if (_gcSelectedAgency >= list.length) _gcSelectedAgency = Math.max(0, list.length - 1);
+      if (q && shown.length && !shown.some(({ i }) => i === _gcSelectedAgency)) _gcSelectedAgency = shown[0].i;
+      const cnt = document.getElementById('gc-agency-count');
+      if (cnt) cnt.textContent = q ? `${shown.length} of ${list.length} match` : (list.length + (list.length === 1 ? ' agency' : ' agencies'));
+      // Idempotent: auto-provision the SDR-Trunk stream for every systemID-bearing
+      // agency (encrypted agencies have no rdio system and no stream).
+      list.forEach((a, i) => {
+        const e = unified && a.encrypted === true;
+        if (!e && a.systemId != null && a.systemId !== '') _gcEnsureAgencyStream(i);
+      });
+      _gcRenderSidebar(shown, q, unified);
+      const detail = document.getElementById('gc-agencies');
+      const gt = document.getElementById('gc-panel-grouptags');
+      const nav = document.getElementById('gc-nav-grouptags');
+      const showGt = _gcView === 'grouptags';
+      if (detail) detail.style.display = showGt ? 'none' : '';
+      if (gt) gt.style.display = showGt ? '' : 'none';
+      if (nav) nav.classList.toggle('sel', showGt);
+      if (!showGt) _gcRenderAgencyDetail(q, unified, matchTg);
+    }
 
-          ${unified ? '' : `<section class="gc-sect gc-sect-sdr">
-            <div class="gc-sect-h"><span class="gc-src-badge gc-src-sdr">SDR-Trunk</span> Aliases &amp; streams <span class="gc-sect-count">${sdr.aliases.length.toLocaleString()}</span></div>
-            <div class="gc-hint">Readable alias names for this agency's talkgroups — imported from your sdrtrunk-vce database (Import above) and editable here. Routed to this agency by system ID ${(a.systemId == null || a.systemId === '') ? '<em>(unset)</em>' : escapeHtml(String(a.systemId))}.</div>
-            ${(a.systemId != null && a.systemId !== '')
-              ? `<div class="gc-hint" style="margin-top:0.2rem;"><i class="fas fa-link"></i> Stream + API key auto-linked by system ID ${escapeHtml(String(a.systemId))}${sdr.streams.length ? ` (stream &ldquo;${escapeHtml(sdr.streams[0].name)}&rdquo;)` : ''}.</div>
-              ${sdrAliasRows || `<div class="gc-empty" style="padding:0.6rem;">No aliases yet — add one below.</div>`}
-              <button class="gc-badge-btn" style="margin-top:0.4rem;" onclick="_gcSdrAliasAdd(${i})"><i class="fas fa-plus"></i> Add alias</button>`
-              : `<div class="gc-empty" style="padding:0.6rem;">Set this agency's System ID above to auto-create its SDR-Trunk stream + rdio API key, then add aliases.</div>`}
-          </section>`}
-
-          <section class="gc-sect gc-sect-rdio">
-            <div class="gc-sect-h"><span class="gc-src-badge gc-src-rdio">rdio</span> Talkgroups <span class="gc-sect-count">${tgs.length}</span></div>
-            ${shownTgs.map(({ tg, ti }) => _gcRenderTg(i, ti, tg, a, unified)).join('') || `<div class="gc-empty" style="padding:0.6rem;">No talkgroups${q ? ' match your search' : ''}.</div>`}
-            <button class="gc-badge-btn" style="margin-top:0.4rem;" onclick="_gcAddTg(${i})"><i class="fas fa-plus"></i> Add talkgroup</button>
-          </section>
-
-          <section class="gc-sect gc-sect-rdio">
-            <div class="gc-sect-h"><span class="gc-src-badge gc-src-rdio">rdio</span> Units <span class="gc-sect-count">${units.length}</span></div>
-            <div class="nd-table-scroll">
-            <table class="gc-table"><thead><tr><th>ID</th><th>Label</th><th></th></tr></thead><tbody>
-            ${units.map((u, ui) => `<tr>
-              <td><input type="number" value="${escapeHtml(String(u.id == null ? '' : u.id))}" oninput="_gcUnitSet(${i},${ui},'id',this.value)"></td>
-              <td><input type="text" value="${escapeHtml(u.label || '')}" oninput="_gcUnitSet(${i},${ui},'label',this.value)"></td>
-              <td><button class="gc-icon-btn" onclick="_gcRemoveUnit(${i},${ui})"><i class="fas fa-trash"></i></button></td>
-            </tr>`).join('')}
-            </tbody></table></div>
-            <button class="gc-badge-btn" style="margin-top:0.4rem;" onclick="_gcAddUnit(${i})"><i class="fas fa-plus"></i> Add unit</button>
-          </section>
-        </div>`;
-        const ledDot = `<span class="gc-color-swatch" style="width:12px;height:12px;background:${swHex || 'transparent'};${swHex ? '' : 'opacity:0.3;border-style:dashed;'}"></span>`;
-        const priBadge = priVal === '-1' ? ' · muted' : (priVal !== 'default' ? ' · pri ' + priVal : '');
-        return `<div class="gc-card ${open ? 'open' : ''}">
-          <div class="gc-card-head">
-            <i class="fas fa-chevron-right gc-caret" onclick="_gcToggleAgency(${i})"></i>
-            ${ledDot}
-            ${enc ? '<i class="fas fa-lock" style="opacity:0.7;font-size:0.75rem;" title="Encrypted — SDR-Trunk only"></i>' : ''}
-            <span class="gc-card-title" onclick="_gcToggleAgency(${i})">${escapeHtml(a.name || ('Agency ' + (a.systemId != null && a.systemId !== '' ? a.systemId : i)))}</span>
-            <span class="gc-card-meta">${tgs.length} TG · ${units.length} units${a.systemId != null && a.systemId !== '' ? ' · id ' + escapeHtml(String(a.systemId)) : ''}${priBadge}</span>
-            <button class="gc-icon-btn" title="Remove agency" onclick="_gcRemoveAgency(${i})"><i class="fas fa-trash"></i></button>
-          </div>
-          ${body}
+    // Left sidebar: one row per (search-matched) agency — colour dot, name,
+    // encrypted lock, right-aligned talkgroup count.
+    function _gcRenderSidebar(shown, q, unified) {
+      const el = document.getElementById('gc-side-list');
+      if (!el) return;
+      if (!shown.length) { el.innerHTML = `<div class="gc-empty">No agencies${q ? ' match your search' : ' yet'}.</div>`; return; }
+      el.innerHTML = shown.map(({ a, i }) => {
+        const enc = unified && a.encrypted === true;
+        const hex = _gcLedHex(a.led) || (a.color ? _gcColorHex(a.color) : null);
+        const tgN = Array.isArray(a.talkgroups) ? a.talkgroups.length : 0;
+        const sel = _gcView === 'agency' && i === _gcSelectedAgency;
+        return `<div class="gc-side-row ${sel ? 'sel' : ''}" onclick="_gcSelectAgency(${i})">
+          <span class="gc-side-dot" style="background:${hex || 'transparent'};${hex ? '' : 'opacity:0.35;border-style:dashed;'}"></span>
+          <span class="gc-side-name">${escapeHtml(a.name || ('Agency ' + (a.systemId != null && a.systemId !== '' ? a.systemId : i)))}</span>
+          ${enc ? '<i class="fas fa-lock gc-side-lock" title="Encrypted — SDR-Trunk only"></i>' : ''}
+          <span class="gc-side-tgn" title="${tgN} talkgroups">${tgN}</span>
         </div>`;
       }).join('');
     }
 
-    function _gcToggleAgency(i) { if (_gcOpenAgency.has(i)) _gcOpenAgency.delete(i); else _gcOpenAgency.add(i); _gcRenderAgencies(); }
+    // Right pane: the selected agency — sticky header, compact field grid
+    // (same fields + gating as the old accordion: encrypted hides all rdio-only
+    // fields; legacy mode adds the imported Aliases & streams section), then the
+    // Talkgroups / Units sub-tab tables.
+    function _gcRenderAgencyDetail(q, unified, matchTg) {
+      const el = document.getElementById('gc-agencies');
+      if (!el) return;
+      const list = _gcData.agencies;
+      if (!list.length) { el.innerHTML = `<div class="gc-empty" style="margin:auto;">No agencies yet — use <strong>+ Add agency</strong> in the sidebar.</div>`; return; }
+      const i = _gcSelectedAgency;
+      const a = list[i];
+      if (!a) { el.innerHTML = `<div class="gc-empty" style="margin:auto;">Select an agency.</div>`; return; }
+      const tgs = Array.isArray(a.talkgroups) ? a.talkgroups : [];
+      const units = Array.isArray(a.units) ? a.units : [];
+      const transcribeOn = a.transcribe !== false; // default true
+      const swHex = _gcLedHex(a.led) || (a.color ? _gcColorHex(a.color) : null);
+      const priVal = _gcAgencyPriorityVal(a);
+      const prioOpts = [`<option value="default" ${priVal === 'default' ? 'selected' : ''}>Monitor (default)</option>`,
+        `<option value="-1" ${priVal === '-1' ? 'selected' : ''}>Do not monitor</option>`]
+        .concat(Array.from({ length: 99 }, (_, n) => { const v = String(n + 1); return `<option value="${v}" ${v === priVal ? 'selected' : ''}>Priority ${v}</option>`; })).join('');
+      const enc = unified && a.encrypted === true;   // encrypted = SDR-Trunk only (no rdio system, no stream)
+      const sdr = _gcSdrForAgency(a);
+      const sdrAliasRows = unified ? '' : _gcRenderSdrAliases(a, sdr);
+      const datalist = `<datalist id="gc-icon-names">${_gcIconNames().map(n => `<option value="${escapeHtml(n)}"></option>`).join('')}</datalist>`;
+      const head = `<div class="gc-agency-head">
+        <span class="gc-color-swatch" style="width:13px;height:13px;background:${swHex || 'transparent'};${swHex ? '' : 'opacity:0.3;border-style:dashed;'}"></span>
+        <span class="gc-agency-title">${escapeHtml(a.name || ('Agency ' + (a.systemId != null && a.systemId !== '' ? a.systemId : i)))}</span>
+        <span class="gc-sys-chip">sys ${a.systemId != null && a.systemId !== '' ? escapeHtml(String(a.systemId)) : '—'}</span>
+        ${enc ? '<span class="gc-sys-chip gc-enc-chip" title="Encrypted — SDR-Trunk only"><i class="fas fa-lock"></i> ENC</span>' : ''}
+        ${priVal === '-1' ? '<span class="gc-sys-chip">muted</span>' : (priVal !== 'default' ? `<span class="gc-sys-chip">pri ${priVal}</span>` : '')}
+        <span class="gc-h-spacer"></span>
+        <button class="gc-icon-btn" title="Remove agency" onclick="_gcRemoveAgency(${i})"><i class="fas fa-trash"></i> Delete agency</button>
+      </div>`;
+      const fields = `<section class="gc-sect gc-sect-global">
+        <div class="gc-sect-h"><span class="gc-src-badge gc-src-global">Global</span> Agency</div>
+        <div class="gc-fields">
+          <div class="nd-fld"><label>System ID</label><input type="number" value="${escapeHtml(String(a.systemId == null ? '' : a.systemId))}" oninput="_gcAgencySet(${i},'systemId',this.value)"></div>
+          <div class="nd-fld"><label>Name</label><input type="text" value="${escapeHtml(a.name || '')}" oninput="_gcAgencySet(${i},'name',this.value)"></div>
+          <div class="nd-fld"><label>Icon</label><input type="text" list="gc-icon-names" value="${escapeHtml(a.iconName || '')}" oninput="_gcAgencySet(${i},'iconName',this.value)" placeholder="named icon"></div>
+          ${enc ? '' : `<div class="nd-fld"><label>Colour</label>${_gcLedSelect(a.led, `_gcAgencyLedSet(${i},this.value)`)}</div>`}
+          <div class="nd-fld"><label>Priority</label><select onchange="_gcAgencyPrioritySet(${i},this.value)">${prioOpts}</select></div>
+          ${unified ? `${enc ? '' : `<div class="nd-fld"><label>Default group</label><select onchange="_gcAgencyRefSet(${i},'defaultGroupId',this.value)">${_gcOptions(_gcData.rdioGroups, a.defaultGroupId)}</select></div>
+          <div class="nd-fld"><label>Default tag</label><select onchange="_gcAgencyRefSet(${i},'defaultTagId',this.value)">${_gcOptions(_gcData.rdioTags, a.defaultTagId)}</select></div>`}
+          <div class="nd-fld"><label>SDR group name</label><input type="text" value="${escapeHtml(a.sdrGroupName || '')}" placeholder="${escapeHtml(a.name || '')}" oninput="_gcAgencySdrGroupSet(${i},this.value)"></div>
+          <div class="nd-fld" style="flex-direction:row;align-items:center;gap:0.4rem;"><label style="margin:0;">Encrypted</label><label class="node-switch"><input type="checkbox" ${enc ? 'checked' : ''} onchange="_gcAgencyEncryptedSet(${i},this.checked)"><span class="track"></span></label></div>` : ''}
+          ${enc ? '' : `<div class="nd-fld"><label>Delay</label><input type="number" value="${escapeHtml(a.delay != null ? String(a.delay) : '')}" oninput="_gcAgencySet(${i},'delay',this.value)"></div>
+          <div class="nd-fld"><label>Alert</label>${_gcAlertSelect(a.alert, `_gcAgencySet(${i},'alert',this.value,true)`)}</div>
+          <div class="nd-fld" style="flex-direction:row;align-items:center;gap:0.4rem;"><label style="margin:0;">Auto-populate</label><label class="node-switch"><input type="checkbox" ${a.autoPopulate ? 'checked' : ''} onchange="_gcAgencySet(${i},'autoPopulate',this.checked)"><span class="track"></span></label></div>
+          <div class="nd-fld" style="flex-direction:row;align-items:center;gap:0.4rem;"><label style="margin:0;">Transcribe</label><label class="node-switch"><input type="checkbox" ${transcribeOn ? 'checked' : ''} onchange="_gcAgencySet(${i},'transcribe',this.checked)"><span class="track"></span></label></div>`}
+        </div>
+        ${enc ? `<div class="gc-hint" style="margin:0.5rem 0 0;"><i class="fas fa-lock"></i> SDR-Trunk only — no rdio system, no stream.</div>` : `<div class="gc-fields" style="margin-top:0.55rem;">
+          <div class="nd-fld gc-span2"><label>Transcription prompt</label><textarea rows="2" oninput="_gcAgencySet(${i},'transcriptionPrompt',this.value)">${escapeHtml(a.transcriptionPrompt || '')}</textarea></div>
+          <div class="nd-fld gc-span2"><label>Blacklists (comma-separated ids)</label><textarea rows="2" oninput="_gcAgencySet(${i},'blacklists',this.value)">${escapeHtml(a.blacklists == null ? '' : String(a.blacklists))}</textarea></div>
+        </div>`}
+        ${unified && !enc ? ((a.systemId != null && a.systemId !== '')
+          ? `<div class="gc-hint" style="margin:0.5rem 0 0;"><i class="fas fa-link"></i> Stream + API key auto-linked by system ID ${escapeHtml(String(a.systemId))}${sdr.streams.length ? ` (stream &ldquo;${escapeHtml(sdr.streams[0].name)}&rdquo;)` : ''}.</div>`
+          : `<div class="gc-hint" style="margin:0.5rem 0 0;"><i class="fas fa-link"></i> Set this agency's System ID above to auto-create its SDR-Trunk stream + rdio API key.</div>`) : ''}
+      </section>`;
+      const legacySdr = unified ? '' : `<section class="gc-sect gc-sect-sdr" style="margin-top:0.7rem;">
+        <div class="gc-sect-h"><span class="gc-src-badge gc-src-sdr">SDR-Trunk</span> Aliases &amp; streams <span class="gc-sect-count">${sdr.aliases.length.toLocaleString()}</span></div>
+        <div class="gc-hint">Readable alias names for this agency's talkgroups — imported from your sdrtrunk-vce database (Import above) and editable here. Routed to this agency by system ID ${(a.systemId == null || a.systemId === '') ? '<em>(unset)</em>' : escapeHtml(String(a.systemId))}.</div>
+        ${(a.systemId != null && a.systemId !== '')
+          ? `<div class="gc-hint" style="margin-top:0.2rem;"><i class="fas fa-link"></i> Stream + API key auto-linked by system ID ${escapeHtml(String(a.systemId))}${sdr.streams.length ? ` (stream &ldquo;${escapeHtml(sdr.streams[0].name)}&rdquo;)` : ''}.</div>
+          ${sdrAliasRows || `<div class="gc-empty" style="padding:0.6rem;">No aliases yet — add one below.</div>`}
+          <button class="gc-badge-btn" style="margin-top:0.4rem;" onclick="_gcSdrAliasAdd(${i})"><i class="fas fa-plus"></i> Add alias</button>`
+          : `<div class="gc-empty" style="padding:0.6rem;">Set this agency's System ID above to auto-create its SDR-Trunk stream + rdio API key, then add aliases.</div>`}
+      </section>`;
+      const shownTgs = tgs.map((tg, ti) => ({ tg, ti })).filter(({ tg }) => !q || matchTg(tg));
+      const tabs = `<div class="gc-agency-tabs">
+        <button class="gc-atab ${_gcAgencyTab === 'tg' ? 'active' : ''}" onclick="_gcSetAgencyTab('tg')">Talkgroups ${tgs.length.toLocaleString()}</button>
+        <button class="gc-atab ${_gcAgencyTab === 'units' ? 'active' : ''}" onclick="_gcSetAgencyTab('units')">Units ${units.length.toLocaleString()}</button>
+        <span class="gc-h-spacer"></span>
+        ${_gcAgencyTab === 'tg'
+          ? `<button class="gc-badge-btn" onclick="_gcAddTg(${i})"><i class="fas fa-plus"></i> Add talkgroup</button>`
+          : `<button class="gc-badge-btn" onclick="_gcAddUnit(${i})"><i class="fas fa-plus"></i> Add unit</button>`}
+      </div>`;
+      const tabBody = _gcAgencyTab === 'tg'
+        ? _gcRenderTgTable(i, a, shownTgs, q, unified, enc)
+        : `<div class="gc-units-bar">
+            <div class="search-box" style="min-width:220px;">
+              <i class="fas fa-search"></i>
+              <input type="text" id="gc-units-search" placeholder="Search units (id / label)…" value="${escapeHtml(_gcUnitsQuery)}" oninput="_gcUnitsSearch(${i},this.value)">
+            </div>
+          </div>
+          <div id="gc-units-wrap">${_gcRenderUnitsTable(i)}</div>`;
+      el.innerHTML = datalist + head + `<div class="gc-agency-scroll">${fields}${legacySdr}${tabs}${tabBody}</div>`;
+    }
+
+    // Talkgroups as a real table: one row per talkgroup with inline inputs, a
+    // per-row "more" expander (frequency / delay / alert / transcribe) and a
+    // delete button. Encrypted agencies keep only the SDR-Trunk columns.
+    function _gcRenderTgTable(i, a, shownTgs, q, unified, enc) {
+      const tgs = Array.isArray(a.talkgroups) ? a.talkgroups : [];
+      if (!tgs.length) return `<div class="gc-empty">No talkgroups yet — add one above.</div>`;
+      if (!shownTgs.length) return `<div class="gc-empty">No talkgroups match your search.</div>`;
+      const rdioCols = !enc;
+      const cols = 3 + (unified ? 1 : 0) + (rdioCols ? 2 : 0) + 1;
+      const head = `<tr><th style="width:90px;">ID</th><th>Label</th><th>Name</th>${unified ? '<th>Alias name</th>' : ''}${rdioCols ? '<th>Group</th><th>Tag</th>' : ''}<th style="width:${rdioCols ? '78' : '44'}px;"></th></tr>`;
+      const rows = shownTgs.map(({ tg, ti }) => {
+        const open = _gcOpenTg.has(i + ':' + ti);
+        const transcribeOn = tg.transcribe !== false; // default true
+        const grpSel = unified ? _gcOptionsInherit(_gcData.rdioGroups, tg.groupId, a.defaultGroupId) : _gcOptions(_gcData.rdioGroups, tg.groupId);
+        const tagSel = unified ? _gcOptionsInherit(_gcData.rdioTags, tg.tagId, a.defaultTagId) : _gcOptions(_gcData.rdioTags, tg.tagId);
+        const main = `<tr class="gc-tg-row">
+          <td><input type="number" value="${escapeHtml(String(tg.id == null ? '' : tg.id))}" oninput="_gcTgSet(${i},${ti},'id',this.value)"></td>
+          <td><input type="text" value="${escapeHtml(tg.label || '')}" oninput="_gcTgSet(${i},${ti},'label',this.value)"></td>
+          <td><input type="text" value="${escapeHtml(tg.name || '')}" oninput="_gcTgSet(${i},${ti},'name',this.value)"></td>
+          ${unified ? `<td><input type="text" value="${escapeHtml(tg.aliasName || '')}" placeholder="= label" oninput="_gcTgSet(${i},${ti},'aliasName',this.value,true)"></td>` : ''}
+          ${rdioCols ? `<td><select onchange="_gcTgSet(${i},${ti},'groupId',this.value${unified ? ',true' : ''})">${grpSel}</select></td>
+          <td><select onchange="_gcTgSet(${i},${ti},'tagId',this.value${unified ? ',true' : ''})">${tagSel}</select></td>` : ''}
+          <td><div class="gc-tg-actions">${rdioCols ? `<button class="gc-more-btn ${open ? 'open' : ''}" title="More settings (frequency / delay / alert / transcribe)" onclick="_gcToggleTg(${i},${ti})"><i class="fas fa-chevron-down"></i></button>` : ''}<button class="gc-icon-btn" title="Remove talkgroup" onclick="_gcRemoveTg(${i},${ti})"><i class="fas fa-trash"></i></button></div></td>
+        </tr>`;
+        const more = (open && rdioCols) ? `<tr class="gc-tg-more"><td colspan="${cols}"><div class="gc-inline" style="margin-bottom:0;">
+          <div class="nd-fld"><label>Frequency (Hz)</label><input type="number" style="max-width:130px;" value="${escapeHtml(tg.frequency != null ? String(tg.frequency) : '')}" oninput="_gcTgSet(${i},${ti},'frequency',this.value)"></div>
+          <div class="nd-fld"><label>Delay</label><input type="number" style="max-width:90px;" value="${escapeHtml(tg.delay != null ? String(tg.delay) : '')}" oninput="_gcTgSet(${i},${ti},'delay',this.value)"></div>
+          <div class="nd-fld"><label>Alert</label>${_gcAlertSelect(tg.alert, `_gcTgSet(${i},${ti},'alert',this.value,true)`)}</div>
+          <div class="nd-fld" style="flex-direction:row;align-items:center;gap:0.4rem;"><label style="margin:0;">Transcribe</label><label class="node-switch"><input type="checkbox" ${transcribeOn ? 'checked' : ''} onchange="_gcTgSet(${i},${ti},'transcribe',this.checked)"><span class="track"></span></label></div>
+        </div></td></tr>` : '';
+        return main + more;
+      }).join('');
+      return `<table class="gc-table gc-tgt"><thead>${head}</thead><tbody>${rows}</tbody></table>`;
+    }
+
+    // Units table, filtered + capped: agencies carry up to ~3k units, so render
+    // at most GC_UNITS_MAX rows and let the search narrow the rest. Freshly
+    // added blank rows are always appended so they stay editable.
+    const GC_UNITS_MAX = 200;
+    function _gcRenderUnitsTable(i) {
+      const a = _gcData.agencies[i];
+      const units = (a && Array.isArray(a.units)) ? a.units : [];
+      if (!units.length) return `<div class="gc-empty">No units yet — add one above.</div>`;
+      const uq = _gcUnitsQuery.trim().toLowerCase();
+      const matched = units.map((u, ui) => ({ u, ui })).filter(({ u }) =>
+        !uq || String(u.id == null ? '' : u.id).toLowerCase().includes(uq) || String(u.label || '').toLowerCase().includes(uq));
+      const rows = matched.slice(0, GC_UNITS_MAX);
+      const inRows = new Set(rows.map(r => r.ui));
+      units.forEach((u, ui) => {
+        if (!inRows.has(ui) && String(u.id == null ? '' : u.id) === '' && !(u.label)) { rows.push({ u, ui }); inRows.add(ui); }
+      });
+      const capped = matched.length > GC_UNITS_MAX;
+      if (!rows.length) return `<div class="gc-empty">No units match &ldquo;${escapeHtml(_gcUnitsQuery)}&rdquo;.</div>`;
+      return `<table class="gc-table gc-tgt"><thead><tr><th style="width:110px;">ID</th><th>Label</th><th style="width:44px;"></th></tr></thead><tbody>` +
+        rows.map(({ u, ui }) => `<tr>
+          <td><input type="number" value="${escapeHtml(String(u.id == null ? '' : u.id))}" oninput="_gcUnitSet(${i},${ui},'id',this.value)"></td>
+          <td><input type="text" value="${escapeHtml(u.label || '')}" oninput="_gcUnitSet(${i},${ui},'label',this.value)"></td>
+          <td><button class="gc-icon-btn" title="Remove unit" onclick="_gcRemoveUnit(${i},${ui})"><i class="fas fa-trash"></i></button></td>
+        </tr>`).join('') + `</tbody></table>` +
+        (capped ? `<div class="gc-hint" style="margin:0.45rem 0 0;"><i class="fas fa-filter"></i> Showing ${GC_UNITS_MAX} of ${matched.length.toLocaleString()} ${uq ? 'matching ' : ''}units — refine the search to see the rest.</div>` : '');
+    }
+
+    // Units search: re-render only the table wrap (the input lives outside it,
+    // so typing focus survives).
+    function _gcUnitsSearch(i, val) {
+      _gcUnitsQuery = String(val || '');
+      const wrap = document.getElementById('gc-units-wrap');
+      if (wrap) wrap.innerHTML = _gcRenderUnitsTable(i);
+    }
     function _gcAgencySet(i, field, val, delEmpty) {
       const a = _gcData.agencies[i]; if (!a) return;
       const prevSysId = a.systemId, prevName = a.name;
@@ -10704,8 +10844,21 @@
       // in sync whenever the join key (systemId) or the stream name source (name) moves.
       if (field === 'systemId' || field === 'name') _gcEnsureAgencyStream(i, prevSysId, prevName);
     }
-    function _gcAddAgency() { _gcData.agencies.push({ systemId: '', name: 'New agency', aliasIds: [], talkgroups: [], units: [] }); _gcOpenAgency.clear(); _gcOpenAgency.add(_gcData.agencies.length - 1); _gcRenderAgencies(); }
-    async function _gcRemoveAgency(i) { if (!await uiConfirm('Remove this agency (its alias, system, talkgroups and units)?', { danger: true, okText: 'Remove' })) return; _gcData.agencies.splice(i, 1); _gcOpenAgency.clear(); _gcOpenTg.clear(); _gcRenderAgencies(); }
+    function _gcAddAgency() {
+      _gcData.agencies.push({ systemId: '', name: 'New agency', aliasIds: [], talkgroups: [], units: [] });
+      // Clear the search so the new agency is visible in the sidebar, then select it.
+      const s = document.getElementById('gc-agency-search');
+      if (s) s.value = '';
+      _gcView = 'agency'; _gcSelectedAgency = _gcData.agencies.length - 1; _gcAgencyTab = 'tg'; _gcUnitsQuery = '';
+      _gcRenderAgencies();
+    }
+    async function _gcRemoveAgency(i) {
+      if (!await uiConfirm('Remove this agency (its alias, system, talkgroups and units)?', { danger: true, okText: 'Remove' })) return;
+      _gcData.agencies.splice(i, 1);
+      _gcOpenTg.clear();
+      if (_gcSelectedAgency >= i) _gcSelectedAgency = Math.max(0, _gcSelectedAgency - 1);
+      _gcRenderAgencies();
+    }
     // SDR-Trunk aliases + streams are import-managed fleet-wide (from the sdrtrunk-vce
     // .db), NOT edited per agency. They link to an agency only by systemID: each alias
     // routes to a broadcastChannel that is a stream name, and the stream carries the
@@ -10914,57 +11067,18 @@
       if (deleteEmpty && (val === '' || val == null)) delete obj[field]; else obj[field] = val;
     }
 
-    // One talkgroup, as a collapsible sub-panel (agencies can hold 80+). In
-    // unified mode each row drives BOTH sides: the rdio talkgroup AND the derived
-    // SDR-Trunk alias (aliasName = the agency's own channel numbering; blank =
-    // named by label). Group/tag inherit the agency default when unset (the key
-    // is absent, NOT ''). Rows of an encrypted agency keep only the SDR-Trunk
-    // fields — there is no rdio system for them.
-    function _gcRenderTg(i, ti, tg, a, unified) {
-      const key = i + ':' + ti;
-      const open = _gcOpenTg.has(key);
-      const enc = !!(unified && a && a.encrypted === true);
-      const transcribeOn = tg.transcribe !== false; // default true
-      const grpLabel = (_gcData.rdioGroups.find(g => String(g._id) === String(tg.groupId)) || {}).label;
-      const tagLabel = (_gcData.rdioTags.find(t => String(t._id) === String(tg.tagId)) || {}).label;
-      const meta = [grpLabel, tagLabel].filter(Boolean).map(escapeHtml).join(' · ');
-      const aliasNameFld = !unified ? '' : `<div class="nd-fld"><label>Alias name</label><input type="text" value="${escapeHtml(tg.aliasName || '')}" placeholder="= label" oninput="_gcTgSet(${i},${ti},'aliasName',this.value,true)"></div>`;
-      const grpSel = unified ? _gcOptionsInherit(_gcData.rdioGroups, tg.groupId, a && a.defaultGroupId) : _gcOptions(_gcData.rdioGroups, tg.groupId);
-      const tagSel = unified ? _gcOptionsInherit(_gcData.rdioTags, tg.tagId, a && a.defaultTagId) : _gcOptions(_gcData.rdioTags, tg.tagId);
-      const rdioRow = enc ? '' : `<div class="gc-inline">
-          <div class="nd-fld"><label>Group</label><select onchange="_gcTgSet(${i},${ti},'groupId',this.value${unified ? ',true' : ''})">${grpSel}</select></div>
-          <div class="nd-fld"><label>Tag</label><select onchange="_gcTgSet(${i},${ti},'tagId',this.value${unified ? ',true' : ''})">${tagSel}</select></div>
-          <div class="nd-fld"><label>Frequency (Hz)</label><input type="number" style="max-width:130px;" value="${escapeHtml(tg.frequency != null ? String(tg.frequency) : '')}" oninput="_gcTgSet(${i},${ti},'frequency',this.value)"></div>
-          <div class="nd-fld"><label>Delay</label><input type="number" style="max-width:90px;" value="${escapeHtml(tg.delay != null ? String(tg.delay) : '')}" oninput="_gcTgSet(${i},${ti},'delay',this.value)"></div>
-          <div class="nd-fld"><label>Alert</label>${_gcAlertSelect(tg.alert, `_gcTgSet(${i},${ti},'alert',this.value,true)`)}</div>
-          <div class="nd-fld" style="flex-direction:row;align-items:center;gap:0.4rem;"><label style="margin:0;">Transcribe</label><label class="node-switch"><input type="checkbox" ${transcribeOn ? 'checked' : ''} onchange="_gcTgSet(${i},${ti},'transcribe',this.checked)"><span class="track"></span></label></div>
-        </div>`;
-      const body = !open ? '' : `<div class="gc-card-body" style="padding-top:0.4rem;">
-        <div class="gc-inline">
-          <div class="nd-fld"><label>ID</label><input type="number" style="max-width:100px;" value="${escapeHtml(String(tg.id == null ? '' : tg.id))}" oninput="_gcTgSet(${i},${ti},'id',this.value)"></div>
-          <div class="nd-fld"><label>Label</label><input type="text" value="${escapeHtml(tg.label || '')}" oninput="_gcTgSet(${i},${ti},'label',this.value)"></div>
-          <div class="nd-fld"><label>Name</label><input type="text" value="${escapeHtml(tg.name || '')}" oninput="_gcTgSet(${i},${ti},'name',this.value)"></div>
-          ${aliasNameFld}
-        </div>
-        ${rdioRow}
-      </div>`;
-      return `<div class="gc-card ${open ? 'open' : ''}" style="margin-bottom:0.3rem;">
-        <div class="gc-card-head" style="padding:0.4rem 0.6rem;">
-          <i class="fas fa-chevron-right gc-caret" onclick="_gcToggleTg(${i},${ti})"></i>
-          <span class="gc-card-title" style="font-size:0.8rem;" onclick="_gcToggleTg(${i},${ti})">${escapeHtml(String(tg.id == null ? '?' : tg.id))} · ${escapeHtml(tg.label || tg.name || '(unnamed)')}</span>
-          <span class="gc-card-meta">${meta}</span>
-          <button class="gc-icon-btn" title="Remove talkgroup" onclick="_gcRemoveTg(${i},${ti})"><i class="fas fa-trash"></i></button>
-        </div>
-        ${body}
-      </div>`;
-    }
-
+    // Talkgroup row helpers. In unified mode each row drives BOTH sides: the
+    // rdio talkgroup AND the derived SDR-Trunk alias (aliasName = the agency's
+    // own channel numbering; blank = named by label). Group/tag inherit the
+    // agency default when unset (the key is absent, NOT ''). _gcToggleTg drives
+    // the per-row "more" expander (structural → re-render); _gcTgSet /
+    // _gcUnitSet are mutate-only so typing focus survives.
     function _gcToggleTg(i, ti) { const k = i + ':' + ti; if (_gcOpenTg.has(k)) _gcOpenTg.delete(k); else _gcOpenTg.add(k); _gcRenderAgencies(); }
     function _gcTgSet(i, ti, field, val, delEmpty) { const tg = _gcData.agencies[i].talkgroups[ti]; if (tg) _gcAssignField(tg, field, val, delEmpty); }
-    function _gcAddTg(i) { const a = _gcData.agencies[i]; if (!Array.isArray(a.talkgroups)) a.talkgroups = []; a.talkgroups.push({ id: '', label: '', name: '' }); _gcOpenTg.add(i + ':' + (a.talkgroups.length - 1)); _gcRenderAgencies(); }
+    function _gcAddTg(i) { const a = _gcData.agencies[i]; if (!Array.isArray(a.talkgroups)) a.talkgroups = []; a.talkgroups.push({ id: '', label: '', name: '' }); _gcAgencyTab = 'tg'; _gcOpenTg.add(i + ':' + (a.talkgroups.length - 1)); _gcRenderAgencies(); }
     function _gcRemoveTg(i, ti) { _gcData.agencies[i].talkgroups.splice(ti, 1); _gcOpenTg.clear(); _gcRenderAgencies(); }
     function _gcUnitSet(i, ui, field, val) { const u = _gcData.agencies[i].units[ui]; if (u) u[field] = val; }
-    function _gcAddUnit(i) { const a = _gcData.agencies[i]; if (!Array.isArray(a.units)) a.units = []; a.units.push({ id: '', label: '', order: a.units.length }); _gcRenderAgencies(); }
+    function _gcAddUnit(i) { const a = _gcData.agencies[i]; if (!Array.isArray(a.units)) a.units = []; a.units.push({ id: '', label: '', order: a.units.length }); _gcAgencyTab = 'units'; _gcRenderAgencies(); }
     function _gcRemoveUnit(i, ui) { _gcData.agencies[i].units.splice(ui, 1); _gcRenderAgencies(); }
 
     // --- rdio groups / tags (flat global {_id, label} lists) ---
@@ -11012,7 +11126,12 @@
       });
       _gcData.rdioGroups.forEach(g => coerce(g, ['_id']));
       _gcData.rdioTags.forEach(t => coerce(t, ['_id']));
-      if (_gcData.defaults && typeof _gcData.defaults === 'object') coerce(_gcData.defaults, ['priority']);
+      if (_gcData.defaults && typeof _gcData.defaults === 'object') {
+        coerce(_gcData.defaults, ['priority']);
+        // Colour is per agency now; the strict backend schema rejects a stray
+        // legacy defaults.color, so drop it if an old local state carried one.
+        delete _gcData.defaults.color;
+      }
       const btn = document.getElementById('gc-save-btn');
       if (btn) btn.disabled = true;
       try {
@@ -11026,8 +11145,8 @@
             // PATCH-style backend: sending the stored sdrtrunkConfig back keeps the
             // SDR-Trunk side intact on a rdio-only edit (and vice-versa on import).
             sdrtrunkConfig: _gcData.sdrtrunkConfig,
-            // Fleet-wide talkgroup defaults (unified model): global alias colour +
-            // inherited monitor priority.
+            // Fleet-wide talkgroup defaults (unified model): the inherited
+            // monitor priority (colour is per agency).
             defaults: _gcData.defaults || {}
           })
         });
