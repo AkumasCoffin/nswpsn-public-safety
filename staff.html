@@ -2618,6 +2618,7 @@
             <button class="filter-btn" data-nd2-view="systems" onclick="nd2SetView('systems')">Systems</button>
             <button class="filter-btn" data-nd2-view="nodes" onclick="nd2SetView('nodes')">Nodes</button>
             <button class="filter-btn" data-nd2-view="live" onclick="nd2SetView('live')">Live</button>
+            <button class="filter-btn" data-nd2-view="aliases" onclick="nd2SetView('aliases')">Aliases</button>
             <button class="filter-btn" data-nd2-view="events" onclick="nd2SetView('events')">Events</button>
           </div>
         </div>
@@ -3006,6 +3007,50 @@
         </div>
 
         <!-- ===== Events view ===== -->
+        <div id="nd2-view-aliases" style="display: none;">
+          <div class="nd2-card">
+            <div class="nd2-card-h">
+              <i class="fas fa-id-card"></i> Radio aliases
+              <span class="nd-sub" id="nd2-alias-count"></span>
+            </div>
+            <div class="nd2-filters">
+              <input type="search" id="nd2-alias-q" class="nd2-input"
+                     placeholder="Search alias or radio id…"
+                     oninput="nd2AliasInputChanged()" />
+              <div class="nd2-seg" role="group" aria-label="Sort aliases by">
+                <button class="filter-btn active" data-nd2-alias-sort="lastSeen"
+                        onclick="nd2AliasSetSort('lastSeen')">Last heard</button>
+                <button class="filter-btn" data-nd2-alias-sort="timesSeen"
+                        onclick="nd2AliasSetSort('timesSeen')">Times heard</button>
+                <button class="filter-btn" data-nd2-alias-sort="alias"
+                        onclick="nd2AliasSetSort('alias')">Alias</button>
+                <button class="filter-btn" data-nd2-alias-sort="radio"
+                        onclick="nd2AliasSetSort('radio')">Radio</button>
+              </div>
+            </div>
+            <div class="nd2-table-wrap">
+              <table class="nd-table">
+                <thead>
+                  <tr>
+                    <th>Alias</th>
+                    <th>Radio</th>
+                    <th class="nd2-num">Times heard</th>
+                    <th>First heard</th>
+                    <th>Last heard</th>
+                  </tr>
+                </thead>
+                <tbody id="nd2-alias-body">
+                  <tr><td colspan="5" class="nd2-empty">Loading…</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="nd2-pgr">
+              <button class="filter-btn" id="nd2-alias-prev" onclick="nd2AliasPage(-1)">Prev</button>
+              <span class="nd-sub" id="nd2-alias-range"></span>
+              <button class="filter-btn" id="nd2-alias-next" onclick="nd2AliasPage(1)">Next</button>
+            </div>
+          </div>
+        </div>
         <div id="nd2-view-events" style="display: none;">
         <h3 class="dev-section-h">Recent Events</h3>
         <div class="filter-bar">
@@ -3966,6 +4011,9 @@
       // Talkgroups / Radios sub-tabs (scoped to the open system): search + paging.
       tg: { q: '', sort: 'calls', offset: 0, limit: 50, total: 0 },
       rad: { q: '', sort: 'calls', offset: 0, limit: 50, total: 0 },
+      // Over-the-air radio aliases, one row per radio. Unwindowed: an alias is
+      // durable identity, so the interesting radio is often a quiet one.
+      alias: { q: '', sort: 'lastSeen', offset: 0, limit: 100, total: 0 },
       systemsCache: null,  // list-row cache (drives the open-system name lookup)
       // Pager mode: overview payload + capcodes list/messages drill-down.
       pov: null,
@@ -4037,7 +4085,7 @@
     let _nd2RadDebounce = null;
     let _nd2CapDebounce = null;
     // Which views belong to each mode (drives the panel show/hide sweep).
-    const ND2_RADIO_VIEWS = ['overview', 'live', 'systems', 'nodes', 'events'];
+    const ND2_RADIO_VIEWS = ['overview', 'live', 'systems', 'nodes', 'aliases', 'events'];
     const ND2_PAGER_VIEWS = ['poverview', 'capcodes'];
     const _nd2AllViews = [...ND2_RADIO_VIEWS, ...ND2_PAGER_VIEWS];
 
@@ -4066,6 +4114,7 @@
         // someone who has paged deeper in (only auto-refresh on the first page).
         switch (nd2.view) {
           case 'overview': nd2LoadOverview(); break;
+          case 'aliases': if (nd2.alias.offset === 0) nd2LoadAliases(); break;
           case 'systems':
             if (nd2.sys.level === 'list') nd2LoadSystems();
             else {
@@ -4116,6 +4165,7 @@
           if (nd2.nodes.level === 'detail') await nd2NodeRefresh();
           else await nd2LoadNodes();
           break;
+        case 'aliases': await nd2LoadAliases(); break;
         case 'events': await Promise.all([nd2LoadOverview(), nd2LoadEvents()]); break;
         case 'poverview': await nd2LoadPagerOverview(); break;
         case 'capcodes': await nd2LoadCapcodesView(); break;
@@ -4234,7 +4284,8 @@
     // views) reads the 30-day detail tables, so hide it and coerce 'all'→30d.
     function nd2ApplyWindowChrome(view) {
       // Live is instantaneous state, so no window applies at all.
-      const windowless = view === 'live';
+      // Aliases are durable identity, not traffic in a window.
+      const windowless = view === 'live' || view === 'aliases';
       const winRow = document.getElementById('nd2-window-row') || document.querySelector('[data-nd2-window]')?.parentElement;
       if (winRow) winRow.style.visibility = windowless ? 'hidden' : '';
       const supportsAll = nd2.mode === 'radio' && (view === 'overview' || view === 'events');
@@ -4253,7 +4304,7 @@
       document.querySelectorAll('[data-nd2-window]').forEach(b =>
         b.classList.toggle('active', b.dataset.nd2Window === win));
       // Window change resets pagination on the paged views, then reloads active.
-      nd2.tg.offset = 0; nd2.rad.offset = 0;
+      nd2.tg.offset = 0; nd2.rad.offset = 0; nd2.alias.offset = 0;
       nd2.cap.offset = 0; nd2.msg.offset = 0;
       nd2.systemsCache = null;   // rebuilt for the new window on next use
       nd2Refresh();
@@ -5745,6 +5796,83 @@
     }
 
     // --- Radios view -----------------------------------------------------
+    // --- Radio aliases (over-the-air) --------------------------------------
+    // Some radios transmit a text name alongside their id. Deduped to one row
+    // per radio, and deliberately unwindowed: the alias is durable identity, so
+    // the radio you are trying to identify is often one that has gone quiet.
+    let _nd2AliasDebounce = null;
+    function nd2AliasInputChanged() {
+      clearTimeout(_nd2AliasDebounce);
+      _nd2AliasDebounce = setTimeout(() => {
+        nd2.alias.q = (document.getElementById('nd2-alias-q') || {}).value || '';
+        nd2.alias.offset = 0;
+        nd2LoadAliases();
+      }, 400);
+    }
+    function nd2AliasSetSort(sort) {
+      if (nd2.alias.sort === sort) return;
+      nd2.alias.sort = sort; nd2.alias.offset = 0;
+      document.querySelectorAll('[data-nd2-alias-sort]').forEach(b =>
+        b.classList.toggle('active', b.dataset.nd2AliasSort === sort));
+      nd2LoadAliases();
+    }
+    function nd2AliasPage(dir) {
+      const next = nd2.alias.offset + dir * nd2.alias.limit;
+      if (next < 0 || next >= nd2.alias.total) return;
+      nd2.alias.offset = next; nd2LoadAliases();
+    }
+
+    async function nd2LoadAliases() {
+      const body = document.getElementById('nd2-alias-body');
+      if (!body) return;
+      const view = nd2.view;
+      const params = new URLSearchParams({
+        sort: nd2.alias.sort,
+        limit: String(nd2.alias.limit),
+        offset: String(nd2.alias.offset),
+      });
+      if (nd2.alias.q) params.set('q', nd2.alias.q);
+      try {
+        const data = await nd2Fetch('/api/node-data/radio-aliases?' + params);
+        if (nd2.view !== view) return;   // navigated away mid-fetch
+        nd2.alias.total = data.total || 0;
+        const rows = data.rows || [];
+        if (!rows.length) {
+          body.innerHTML = `<tr><td colspan="5" class="nd2-empty">${
+            nd2.alias.q ? 'No radios match.' : 'No radio has transmitted an alias yet.'
+          }</td></tr>`;
+        } else {
+          body.innerHTML = rows.map(r => `
+            <tr class="nd2-rowlink" onclick="nd2JumpToEvents({unit:${r.radio}})"
+                title="View events for this radio">
+              <td><span class="nd-strong">${escapeHtml(String(r.alias))}</span></td>
+              <td>${escapeHtml(String(r.radio))}
+                <button class="nd2-linkbtn" title="Talkgroups this radio has been heard on"
+                  onclick="event.stopPropagation();nd2ShowRel('radio',${r.radio},${nd2Arg(r.alias || r.radio)})">
+                  <i class="fas fa-diagram-project"></i></button></td>
+              <td class="nd2-num">${nd2Num(r.timesSeen)}</td>
+              <td>${nd2LastSeen(r.firstSeen)}</td>
+              <td>${nd2LastSeen(r.lastSeen)}</td>
+            </tr>`).join('');
+        }
+        const cnt = document.getElementById('nd2-alias-count');
+        if (cnt) cnt.textContent = nd2.alias.total ? `${nd2Num(nd2.alias.total)} radio(s)` : '';
+        const range = document.getElementById('nd2-alias-range');
+        if (range) {
+          const from = nd2.alias.total ? nd2.alias.offset + 1 : 0;
+          const to = Math.min(nd2.alias.offset + nd2.alias.limit, nd2.alias.total);
+          range.textContent = `${from}-${to} of ${nd2Num(nd2.alias.total)}`;
+        }
+        const prev = document.getElementById('nd2-alias-prev');
+        const next = document.getElementById('nd2-alias-next');
+        if (prev) prev.disabled = nd2.alias.offset <= 0;
+        if (next) next.disabled = nd2.alias.offset + nd2.alias.limit >= nd2.alias.total;
+      } catch (e) {
+        body.innerHTML = `<tr><td colspan="5" class="nd2-empty">Failed to load aliases: ${
+          escapeHtml(String(e.message || e))}</td></tr>`;
+      }
+    }
+
     function nd2RadInputChanged() { clearTimeout(_nd2RadDebounce); _nd2RadDebounce = setTimeout(() => { nd2.rad.offset = 0; nd2LoadRadios(); }, 400); }
     function nd2RadSetSort(sort) {
       if (nd2.rad.sort === sort) return;

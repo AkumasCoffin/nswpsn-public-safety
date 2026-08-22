@@ -304,8 +304,22 @@ const TG_VALID = tgValid();
  * case drift. Prefixable ('' or 'e.') to match queries that alias the events
  * table; `CALL_GROUP` is the bare (unprefixed) form. NULL event_type (none post
  * migration 044) is treated as not-a-call — LIKE over NULL is not true.
+ *
+ * CALL_PATCH_GROUP has to be spelled out separately: it does NOT start with
+ * "CALL_GROUP", so a single prefix match silently dropped every patched call —
+ * 34k events over 5.5k calls here, about a tenth of the voice traffic, missing
+ * from call counts, talkgroup rollups and radio rollups alike. They are real
+ * voice calls on a patched talkgroup, and they overlap a plain CALL_GROUP on
+ * the same logical call 5 times in 400k rows, so counting them adds calls
+ * rather than double-counting existing ones.
+ *
+ * It is also why no radio had an over-the-air alias: essentially every alias
+ * this network transmits arrives on a patch call, so the rollups excluded all
+ * of them.
  */
-const callGroup = (prefix = ''): string => `upper(${prefix}event_type) LIKE 'CALL_GROUP%'`;
+const callGroup = (prefix = ''): string =>
+  `(upper(${prefix}event_type) LIKE 'CALL_GROUP%'` +
+  ` OR upper(${prefix}event_type) LIKE 'CALL_PATCH_GROUP%')`;
 const CALL_GROUP = callGroup();
 
 /** Parse a query param as a non-negative int, else null. */
@@ -3153,6 +3167,84 @@ nodeDataRouter.get('/api/node-data/live', requireRole(canViewNodeData), async (c
 // a chart can meaningfully draw. Averaging per bucket also merges nodes
 // watching the same site into one trend line instead of interleaving them.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// GET /api/node-data/radio-aliases?q=&sort=lastSeen|timesSeen|radio&limit=&offset=
+//
+// Every radio that has ever transmitted an over-the-air alias, ONE ROW PER
+// RADIO. Reads node_radio_aliases rather than the event detail: aliases are
+// durable identity, the detail table is pruned at 30 days, and deduping 400k
+// event rows to a few hundred radios on every request would be wasteful.
+//
+// Deliberately unwindowed — "every radio that has ever named itself" is the
+// question, and a radio quiet for a month is exactly the one you are looking
+// up.
+// ---------------------------------------------------------------------------
+nodeDataRouter.get('/api/node-data/radio-aliases', requireRole(canViewNodeData), async (c) => {
+  try {
+    const pool = await getPool();
+    if (!pool) return c.json({ error: 'database unavailable' }, 503);
+    const url = new URL(c.req.url);
+    // Free text: matches the alias OR the radio id, since you arrive here with
+    // one or the other and shouldn't have to know which box it goes in.
+    const qRaw = (url.searchParams.get('q') ?? '').trim().slice(0, 64);
+    const sortRaw = url.searchParams.get('sort') ?? 'lastSeen';
+    const sort = (['lastSeen', 'timesSeen', 'radio', 'alias'] as const).find((s) => s === sortRaw)
+      ?? 'lastSeen';
+    const limit = Math.max(1, Math.min(200, Number(url.searchParams.get('limit') ?? 100) || 100));
+    const offset = Math.max(0, Number(url.searchParams.get('offset') ?? 0) || 0);
+
+    const params: unknown[] = [];
+    let where = '';
+    if (qRaw) {
+      params.push(`%${qRaw.toLowerCase()}%`);
+      where = `WHERE lower(alias) LIKE $${params.length} OR radio_id::text LIKE $${params.length}`;
+    }
+    const orderBy = {
+      lastSeen: 'last_seen DESC',
+      timesSeen: 'times_seen DESC',
+      radio: 'radio_id ASC',
+      alias: 'lower(alias) ASC',
+    }[sort];
+
+    const totalRes = await pool.query<{ n: string }>(
+      `SELECT count(*)::int AS n FROM node_radio_aliases ${where}`,
+      params,
+    );
+    params.push(limit, offset);
+    const rows = await pool.query<{
+      system: number;
+      radio_id: number;
+      alias: string;
+      first_seen: Date;
+      last_seen: Date;
+      times_seen: number;
+    }>(
+      `SELECT system, radio_id, alias, first_seen, last_seen, times_seen
+         FROM node_radio_aliases ${where}
+        ORDER BY ${orderBy}
+        LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      params,
+    );
+
+    return c.json({
+      total: Number(totalRes.rows[0]?.n ?? 0),
+      limit,
+      offset,
+      rows: rows.rows.map((r) => ({
+        system: r.system,
+        radio: r.radio_id,
+        alias: r.alias,
+        firstSeen: r.first_seen,
+        lastSeen: r.last_seen,
+        timesSeen: r.times_seen,
+      })),
+    });
+  } catch (err) {
+    log.error({ err }, '/api/node-data/radio-aliases error');
+    return c.json({ error: 'failed to load radio aliases' }, 500);
+  }
+});
+
 nodeDataRouter.get('/api/node-data/site-decode', requireRole(canViewNodeData), async (c) => {
   try {
     const pool = await getPool();

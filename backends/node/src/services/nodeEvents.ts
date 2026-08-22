@@ -272,6 +272,27 @@ export async function recordActivityEvents(
             [existingGroup ?? rowId, rowId],
           );
 
+          // Remember the radio's over-the-air name permanently. This is where
+          // aliases actually arrive — nearly all of them ride patch calls —
+          // and node_radio_events is pruned at 30 days, so without a durable
+          // copy a radio that goes quiet for a month becomes an anonymous
+          // number again. See migration 072.
+          const evAlias = ((): string | null => {
+            const s = (ev.sourceAlias ?? '').trim();
+            return s === '' ? null : s.slice(0, 64);
+          })();
+          if (evAlias && sourceUnit !== null) {
+            await client.query(
+              `INSERT INTO node_radio_aliases (system, radio_id, alias)
+               VALUES ($1, $2, $3)
+               ON CONFLICT (system, radio_id) DO UPDATE
+                 SET alias = EXCLUDED.alias,
+                     last_seen = now(),
+                     times_seen = node_radio_aliases.times_seen + 1`,
+              [system ?? 0, sourceUnit, evAlias],
+            );
+          }
+
           // The other half of the ordering fix (migration 070): if this call's
           // audio already arrived and found no row to flag, it is parked —
           // claim it now. DELETE ... RETURNING consumes it in the same
@@ -491,6 +512,24 @@ export async function markRecorded(
         [nodeId, tg, at.toISOString(), bytes, freq, unit, alias],
       );
       const row = upd.rows[0];
+
+      // Remember the radio's name permanently, independently of whether the
+      // call row above matched. node_radio_events is pruned at 30 days, and an
+      // alias is durable identity rather than traffic — forgetting it a month
+      // later would lose the most useful thing we know about a radio. The
+      // upload alone carries both the id and the alias, so a matched event row
+      // is not required. See migration 072.
+      if (alias && unit !== null) {
+        await client.query(
+          `INSERT INTO node_radio_aliases (system, radio_id, alias)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (system, radio_id) DO UPDATE
+             SET alias = EXCLUDED.alias,
+                 last_seen = now(),
+                 times_seen = node_radio_aliases.times_seen + 1`,
+          [row?.system ?? 0, unit, alias],
+        );
+      }
 
       // No event row yet — park the upload so the event can claim it when it
       // arrives. The two feeds race (audio closes in ~1-2s on a short over,
