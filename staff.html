@@ -1775,7 +1775,11 @@
         var(--bg-card);
       border: 1px solid var(--border-subtle);
       border-radius: 12px;
-      overflow: hidden;
+      /* `clip`, not `hidden`: both keep content inside the rounded corners, but
+         `hidden` makes this a scroll container, and a scroll container ancestor
+         silently disables position:sticky for everything inside it — which is
+         what stopped the tables in these cards from getting sticky headers. */
+      overflow: clip;
     }
     .nd2-card-h {
       display: flex;
@@ -4449,12 +4453,18 @@
     // radio Overview + Events. Everything else (radio detail views + all pager
     // views) reads the 30-day detail tables, so hide it and coerce 'all'→30d.
     function nd2ApplyWindowChrome(view) {
-      // Live is instantaneous state, so no window applies at all.
-      // Aliases are durable identity, not traffic in a window.
-      const windowless = view === 'live' || view === 'aliases';
+      // The whole Data page reports what came over the air in a period, so
+      // every view takes the window — except Live, which is instantaneous
+      // state. (Aliases used to be windowless on the grounds that an alias is
+      // durable identity; but the table lists radios HEARD, so it follows the
+      // window like its siblings and `All` restores the full history.)
+      const windowless = view === 'live';
       const winRow = document.getElementById('nd2-window-row') || document.querySelector('[data-nd2-window]')?.parentElement;
       if (winRow) winRow.style.visibility = windowless ? 'hidden' : '';
-      const supportsAll = nd2.mode === 'radio' && (view === 'overview' || view === 'events');
+      // `All` is offered wherever the backend can answer it: the rollup views
+      // plus Aliases, whose alias rows are kept indefinitely.
+      const supportsAll = nd2.mode === 'radio'
+        && (view === 'overview' || view === 'events' || view === 'aliases');
       const allBtn = document.querySelector('[data-nd2-window="all"]');
       if (allBtn) allBtn.style.display = supportsAll ? '' : 'none';
       if (!supportsAll && nd2.window === 'all') {
@@ -4462,6 +4472,13 @@
         document.querySelectorAll('[data-nd2-window]').forEach(b =>
           b.classList.toggle('active', b.dataset.nd2Window === '30d'));
       }
+    }
+
+    // The window pill as an absolute ISO start time, for endpoints that take
+    // from/to instead of a window name. null for 'all' (no lower bound).
+    function nd2WindowStart() {
+      const hours = { '24h': 24, '7d': 24 * 7, '30d': 24 * 30 }[nd2.window];
+      return hours ? new Date(Date.now() - hours * 3600 * 1000).toISOString() : null;
     }
 
     function nd2SetWindow(win) {
@@ -4869,6 +4886,11 @@
           limit: String(nd2.evLimit),
           offset: String(nd2.evOffset),
         });
+        // Events takes an explicit from/to rather than a window name, so the
+        // page's window pill has to be translated — without this the tab
+        // silently ignored it and always showed the newest events regardless.
+        const evFrom = nd2WindowStart();
+        if (evFrom) params.set('from', evFrom);
         const q = nd2EvVal('nd2-ev-q');
         const tg = nd2EvVal('nd2-ev-tg');
         const unit = nd2EvVal('nd2-ev-unit');
