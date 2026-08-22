@@ -521,7 +521,7 @@ nodeDataRouter.get(
               ? pool.query<{ unit: number; alias: string | null; calls: unknown }>(
                   `SELECT source_unit AS unit,
                           (array_agg(source_alias ORDER BY received_at DESC)
-                             FILTER (WHERE source_alias IS NOT NULL))[1] AS alias,
+                             FILTER (WHERE source_alias IS NOT NULL AND source_alias <> source_unit::text))[1] AS alias,
                           COUNT(*)::int AS calls
                      FROM node_radio_events
                     WHERE received_at >= now() - interval '30 days'
@@ -655,7 +655,7 @@ nodeDataRouter.get(
             ? pool.query<{ unit: number; alias: string | null; calls: unknown }>(
                 `SELECT source_unit AS unit,
                         (array_agg(source_alias ORDER BY received_at DESC)
-                           FILTER (WHERE source_alias IS NOT NULL))[1] AS alias,
+                           FILTER (WHERE source_alias IS NOT NULL AND source_alias <> source_unit::text))[1] AS alias,
                         COUNT(*)::int AS calls
                    FROM node_radio_events
                   WHERE ${radioCond} AND ${CALL_GROUP} AND source_unit IS NOT NULL
@@ -1037,7 +1037,7 @@ nodeDataRouter.get(
                       (array_agg(e.source_unit ORDER BY (e.action = 'CALL') DESC, e.received_at DESC)
                          FILTER (WHERE e.source_unit IS NOT NULL))[1] AS source_unit,
                       (array_agg(e.source_alias ORDER BY e.received_at DESC)
-                         FILTER (WHERE e.source_alias IS NOT NULL))[1] AS source_alias,
+                         FILTER (WHERE e.source_alias IS NOT NULL AND e.source_alias <> e.source_unit::text))[1] AS source_alias,
                       (array_agg(e.frequency ORDER BY (e.action = 'CALL') DESC, e.received_at DESC)
                          FILTER (WHERE e.frequency IS NOT NULL))[1]::bigint AS frequency,
                       (array_agg(e.action ORDER BY (e.action = 'CALL') DESC, e.received_at DESC))[1] AS action,
@@ -1345,7 +1345,7 @@ async function scopedRadioDetail(
     pool.query<{ radio: number; alias: string | null; calls: unknown; last_seen: Date }>(
       `SELECT source_unit AS radio,
               (array_agg(source_alias ORDER BY received_at DESC)
-                 FILTER (WHERE source_alias IS NOT NULL))[1] AS alias,
+                 FILTER (WHERE source_alias IS NOT NULL AND source_alias <> source_unit::text))[1] AS alias,
               COUNT(*)::int AS calls,
               MAX(received_at) AS last_seen
          FROM node_radio_events
@@ -1496,7 +1496,7 @@ export async function feederRadioStats(
               (array_agg(source_unit ORDER BY (action = 'CALL') DESC, received_at DESC)
                  FILTER (WHERE source_unit IS NOT NULL))[1] AS source_unit,
               (array_agg(source_alias ORDER BY received_at DESC)
-                 FILTER (WHERE source_alias IS NOT NULL))[1] AS source_alias,
+                 FILTER (WHERE source_alias IS NOT NULL AND source_alias <> source_unit::text))[1] AS source_alias,
               (array_agg(site_rfss ORDER BY received_at DESC)
                  FILTER (WHERE site_rfss IS NOT NULL))[1] AS rfss,
               (array_agg(site_id ORDER BY received_at DESC)
@@ -2445,7 +2445,7 @@ nodeDataRouter.get(
           // (source_alias from vce); null when none was ever captured.
           `SELECT wacn, system, source_unit AS radio,
                   (array_agg(source_alias ORDER BY received_at DESC)
-                     FILTER (WHERE source_alias IS NOT NULL))[1] AS alias,
+                     FILTER (WHERE source_alias IS NOT NULL AND source_alias <> source_unit::text))[1] AS alias,
                   COUNT(*)::int AS calls,
                   MAX(received_at) AS last_seen
              FROM node_radio_events
@@ -3151,7 +3151,7 @@ nodeDataRouter.get(
                 COUNT(*) FILTER (WHERE encrypted)::int AS encrypted,
                 COUNT(*) FILTER (WHERE recorded)::int AS recorded,
                 (array_agg(source_alias ORDER BY received_at DESC)
-                   FILTER (WHERE source_alias IS NOT NULL))[1] AS alias,
+                   FILTER (WHERE source_alias IS NOT NULL AND source_alias <> source_unit::text))[1] AS alias,
                 (array_agg(talkgroup_label ORDER BY received_at DESC)
                    FILTER (WHERE talkgroup_label IS NOT NULL))[1] AS label,
                 MAX(received_at) AS last_seen
@@ -3428,9 +3428,9 @@ nodeDataRouter.get('/api/node-data/radio-aliases', requireRole(canViewNodeData),
       // 0200307 shown in the table matches nothing.
       params.push(`%${qRaw.toLowerCase().replace(/^0+(?=\d)/, '')}%`);
       conds.push(
-        `(lower(alias) LIKE $${params.length - 1}` +
-          ` OR radio_id::text LIKE $${params.length - 1}` +
-          ` OR radio_id::text LIKE $${params.length})`,
+        `(lower(a.alias) LIKE $${params.length - 1}` +
+          ` OR a.radio_id::text LIKE $${params.length - 1}` +
+          ` OR a.radio_id::text LIKE $${params.length})`,
       );
     }
     if (agencyFilter || hasFilter === 'alias') {
@@ -3442,34 +3442,62 @@ nodeDataRouter.get('/api/node-data/radio-aliases', requireRole(canViewNodeData),
         ids = [...radioDisp.labels.keys()];
       }
       params.push(ids);
-      conds.push(`radio_id = ANY($${params.length}::bigint[])`);
+      conds.push(`a.radio_id = ANY($${params.length}::bigint[])`);
     }
-    // Windowed like every other RECEIVED table: this lists radios heard in the
-    // selected period, not every radio that has ever named itself. (The alias
-    // ROW is still kept forever — durable identity — it just isn't listed here
-    // unless the radio was heard in-window.) `window=all` drops the bound.
+    // WINDOW SEMANTICS — identity is durable, traffic is not:
+    //
+    //   OTA / configured Alias / First heard -> lifetime, NEVER windowed. Once a
+    //     radio has told us its name that stays true, so a radio heard 2 days
+    //     ago still shows an OTA it transmitted 10 days ago.
+    //   Times heard / Last heard             -> the selected window only.
+    //   Row membership                       -> radios HEARD in the window,
+    //     which is NOT the same as radios whose ALIAS was heard in the window.
+    //     Filtering on node_radio_aliases.last_seen (as this used to) dropped
+    //     exactly that case: an active radio vanished from the list because its
+    //     last announcement fell outside the window.
+    //
+    // window=all needs no join — the alias table's own lifetime counters ARE the
+    // all-time answer, and skipping the events scan keeps that case cheap.
     const windowRaw = (url.searchParams.get('window') ?? '').toLowerCase();
-    if (windowRaw !== 'all') {
+    const lifetime = windowRaw === 'all';
+    let heardJoin = '';
+    if (!lifetime) {
       const iv = WINDOW_INTERVAL[(['24h', '7d', '30d'] as const).find((w) => w === windowRaw) ?? '7d'];
       params.push(iv);
-      conds.push(`last_seen >= now() - $${params.length}::interval`);
+      // INNER join: no traffic in the window means not listed, but a radio WITH
+      // traffic keeps its lifetime alias columns.
+      heardJoin = `JOIN (
+             SELECT source_unit AS radio_id,
+                    MAX(received_at) AS heard_last,
+                    COUNT(*)::int AS heard_times
+               FROM node_radio_events
+              WHERE received_at >= now() - $${params.length}::interval
+                AND source_unit IS NOT NULL
+              GROUP BY source_unit
+           ) h ON h.radio_id = a.radio_id`;
     }
+    // Rows recorded before the ingest guard can hold the radio's own id as its
+    // "alias" — the decoder echoes the id when a radio sends no talker alias.
+    // That is not a name, so the row is not an alias row.
+    conds.push('a.alias <> a.radio_id::text');
     const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
+    const heardLast = lifetime ? 'a.last_seen' : 'h.heard_last';
+    const heardTimes = lifetime ? 'a.times_seen' : 'h.heard_times';
     // Clickable headings: each column the table renders maps to an expression,
     // and `dir` flips it. radio_id is the tie-breaker so paging is stable.
     // (`ota` is this table's own alias column — the configured Alias and Agency
     // columns come from the config and are sorted client-side on the page.)
     const orderExpr = ({
-      lastSeen: 'last_seen',
-      firstSeen: 'first_seen',
-      timesSeen: 'times_seen',
-      radio: 'radio_id',
-      ota: 'lower(alias)',
+      lastSeen: heardLast,
+      firstSeen: 'a.first_seen',
+      timesSeen: heardTimes,
+      radio: 'a.radio_id',
+      ota: 'lower(a.alias)',
     } as const)[sort];
-    const orderBy = `${orderExpr} ${dir}, radio_id ASC`;
+    const orderBy = `${orderExpr} ${dir}, a.radio_id ASC`;
 
     const totalRes = await pool.query<{ n: string }>(
-      `SELECT count(*)::int AS n FROM node_radio_aliases ${where}`,
+      `SELECT count(*)::int AS n FROM node_radio_aliases a ${heardJoin} ${where}`,
       params,
     );
     params.push(limit, offset);
@@ -3481,8 +3509,9 @@ nodeDataRouter.get('/api/node-data/radio-aliases', requireRole(canViewNodeData),
       last_seen: Date;
       times_seen: number;
     }>(
-      `SELECT system, radio_id, alias, first_seen, last_seen, times_seen
-         FROM node_radio_aliases ${where}
+      `SELECT a.system, a.radio_id, a.alias, a.first_seen,
+              ${heardLast} AS last_seen, ${heardTimes} AS times_seen
+         FROM node_radio_aliases a ${heardJoin} ${where}
         ORDER BY ${orderBy}
         LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params,

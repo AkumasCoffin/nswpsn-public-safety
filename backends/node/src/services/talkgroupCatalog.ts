@@ -108,8 +108,13 @@ export async function talkgroupCatalog(): Promise<TalkgroupCatalog> {
         if (!Number.isInteger(uid) || unitAgencies.has(uid)) continue;
         if (agencyName) unitAgencies.set(uid, agencyName);
         if (agencyColor) unitColors.set(uid, agencyColor);
+        // A label that is just the unit's own id is rdio's auto-populate
+        // placeholder, not a name — keeping it made the Data tab print the same
+        // number as UID, OTA and Alias on one row.
         const label = typeof u['label'] === 'string' ? u['label'].trim() : '';
-        if (label) unitLabels.set(uid, label);
+        if (label && !(/^\d+$/.test(label) && Number(label) === uid)) {
+          unitLabels.set(uid, label);
+        }
       }
       for (const tg of ag.talkgroups ?? []) {
         if (typeof tg.id !== 'number' || !Number.isInteger(tg.id)) continue;

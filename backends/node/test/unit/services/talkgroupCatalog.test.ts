@@ -229,3 +229,32 @@ describe('configuredTalkgroups (what the talkgroup list is allowed to show)', ()
     expect(cat.configuredTalkgroups.size).toBe(0);
   });
 });
+
+describe('an id echoed back is not a name', () => {
+  it('drops a unit label that is just the unit id', async () => {
+    // rdio auto-populate names an unknown unit after its own id, and the
+    // decoder echoes the id into the talker-alias field when a radio sends
+    // none — which printed the same number as UID, OTA and Alias on one row.
+    const cat = await withConfig(
+      cfg([
+        {
+          systemId: 1,
+          name: 'RFS',
+          talkgroups: [],
+          units: [
+            { id: 2072676, label: '2072676' }, // the id echoed back
+            { id: 2073350, label: 'LP 260 - Lambton' }, // a real name
+            { id: 2073447, label: '02073447' }, // zero-padded echo
+            { id: 2073548, label: '260' }, // numeric but NOT its own id — kept
+          ],
+        },
+      ]),
+    );
+    expect(cat.unitLabels.has(2072676)).toBe(false);
+    expect(cat.unitLabels.get(2073350)).toBe('LP 260 - Lambton');
+    expect(cat.unitLabels.has(2073447)).toBe(false);
+    expect(cat.unitLabels.get(2073548)).toBe('260');
+    // Ownership is unaffected — the radio still belongs to its agency.
+    expect(cat.unitAgencies.get(2072676)).toBe('RFS');
+  });
+});

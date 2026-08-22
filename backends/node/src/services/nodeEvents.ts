@@ -119,6 +119,25 @@ export function safeInt(v: unknown): number | null {
   return Math.trunc(n);
 }
 
+/**
+ * Is this talker alias an actual NAME, or just the radio's own id echoed back?
+ *
+ * When a radio transmits no alias, the decoder frequently reports its id in the
+ * alias field — so "2072676" arrives as the OTA for radio 2072676. Recording it
+ * makes a radio look named when it has never announced itself, and the Data tab
+ * then shows the same number three times over (UID, OTA, Alias). An alias that
+ * is nothing but the id it belongs to carries no information, so it is not an
+ * alias. Other numeric strings are kept — a radio may legitimately be named
+ * something numeric that isn't its own id.
+ */
+export function isRealTalkerAlias(alias: string, radioId: number | null): boolean {
+  const s = alias.trim();
+  if (s === '') return false;
+  if (radioId === null) return true;
+  // Compare numerically so a zero-padded echo ("0200307" for 200307) is caught.
+  return !(/^\d+$/.test(s) && Number(s) === radioId);
+}
+
 function clampReceivedAt(d: Date): Date {
   const t = d instanceof Date ? d.getTime() : NaN;
   if (!Number.isFinite(t)) return new Date();
@@ -279,7 +298,8 @@ export async function recordActivityEvents(
           // number again. See migration 072.
           const evAlias = ((): string | null => {
             const s = (ev.sourceAlias ?? '').trim();
-            return s === '' ? null : s.slice(0, 64);
+            if (s === '' || !isRealTalkerAlias(s, sourceUnit)) return null;
+            return s.slice(0, 64);
           })();
           if (evAlias && sourceUnit !== null) {
             await client.query(
@@ -519,7 +539,7 @@ export async function markRecorded(
       // later would lose the most useful thing we know about a radio. The
       // upload alone carries both the id and the alias, so a matched event row
       // is not required. See migration 072.
-      if (alias && unit !== null) {
+      if (alias && unit !== null && isRealTalkerAlias(alias, unit)) {
         await client.query(
           `INSERT INTO node_radio_aliases (system, radio_id, alias)
            VALUES ($1, $2, $3)

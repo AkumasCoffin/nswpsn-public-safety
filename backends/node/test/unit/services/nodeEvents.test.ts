@@ -566,3 +566,22 @@ describe('safeInt', () => {
     expect(safeInt(Infinity)).toBeNull();
   });
 });
+
+describe('isRealTalkerAlias', () => {
+  it('rejects an alias that is only the radio id echoed back', async () => {
+    const { isRealTalkerAlias } = await import('../../../src/services/nodeEvents.js');
+    expect(isRealTalkerAlias('2072676', 2072676)).toBe(false);
+    expect(isRealTalkerAlias('02072676', 2072676)).toBe(false); // zero-padded echo
+    expect(isRealTalkerAlias('  2072676  ', 2072676)).toBe(false);
+    expect(isRealTalkerAlias('', 2072676)).toBe(false);
+  });
+
+  it('keeps a real name, including a numeric one that is not the id', async () => {
+    const { isRealTalkerAlias } = await import('../../../src/services/nodeEvents.js');
+    expect(isRealTalkerAlias('NEWRAD03', 2000103)).toBe(true);
+    expect(isRealTalkerAlias('260', 2073548)).toBe(true);
+    expect(isRealTalkerAlias('P359', 2073252)).toBe(true);
+    // No unit id to compare against — keep whatever was transmitted.
+    expect(isRealTalkerAlias('anything', null)).toBe(true);
+  });
+});
