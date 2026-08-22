@@ -81,22 +81,29 @@ describe('deriveAliasesFromTalkgroups', () => {
     expect(idOf(p!, 'broadcastChannel')?.attrs['channel']).toBe('Rural Fire Service');
   });
 
-  it('encrypted agency: talkgroup + priority ids but NO broadcastChannel; global colour; auto list', () => {
+  it('encrypted agency: talkgroup + priority ids but NO broadcastChannel; agency colour; auto list', () => {
     const enc = agency({
       systemId: 12,
       name: 'NSW PF',
       encrypted: true,
+      color: '-65536',
       talkgroups: [{ id: 12001, label: 'PF 1' }],
     });
-    const [al] = deriveAliasesFromTalkgroups([enc], { color: '-65536' });
+    const [al] = deriveAliasesFromTalkgroups([enc], {});
     expect(al!.name).toBe('PF 1');
     expect(al!.list).toBe(ALIAS_LIST_NAME); // always 'NSWPSN'
-    expect(al!.color).toBe('-65536'); // the one global colour
+    expect(al!.color).toBe('-65536'); // the AGENCY's colour
     expect(idOf(al!, 'broadcastChannel')).toBeUndefined(); // no stream, nothing uploads
     expect(idOf(al!, 'priority')?.attrs['priority']).toBe('100');
     expect(idOf(al!, 'talkgroup')?.attrs).toEqual({ value: '12001', protocol: 'APCO25' });
-    // No default colour set → the alias simply has none.
-    const [plainAl] = deriveAliasesFromTalkgroups([enc], {});
+    // No explicit colour → the agency's rdio LED preset maps to the matching
+    // alias ARGB; with neither, the alias simply has none.
+    const ledOnly = agency({ systemId: 13, name: 'L', encrypted: true, talkgroups: [{ id: 12002 }] });
+    (ledOnly as Record<string, unknown>)['led'] = 'red';
+    const [ledAl] = deriveAliasesFromTalkgroups([ledOnly], {});
+    expect(ledAl!.color).toBe(String(((0xff << 24) | 0xef4444) | 0));
+    const bare = agency({ systemId: 14, name: 'B', encrypted: true, talkgroups: [{ id: 12003 }] });
+    const [plainAl] = deriveAliasesFromTalkgroups([bare], {});
     expect(plainAl!.color).toBeUndefined();
   });
 
@@ -243,10 +250,10 @@ describe('buildConfigPayload legacy switch (imported aliases vs derived)', () =>
           systemId: 2,
           name: 'Fire and Rescue',
           sdrGroupName: 'Fire & Rescue NSW',
+          color: '-65536',
           talkgroups: [{ id: 101, label: 'ME1' }, { id: 102, aliasName: '102 ME2' }],
         }),
       ],
-      defaults: { color: '-65536' },
     });
     const p = await buildConfigPayload(radioNode(), global);
     expect(p.aliases.map((a) => a.name)).toEqual(['ME1', '102 ME2']);
@@ -297,12 +304,12 @@ describe('buildConfigPayload legacy switch (imported aliases vs derived)', () =>
 describe('globalConfigVersion folds in defaults', () => {
   const base = { agencies: [], rdioGroups: [], rdioTags: [] };
 
-  it('changes when defaults.color changes, stable when defaults are equal', () => {
-    const red = globalConfigVersion({ ...base, defaults: { color: '-65536' } });
-    const blue = globalConfigVersion({ ...base, defaults: { color: '-16776961' } });
-    const redAgain = globalConfigVersion({ ...base, defaults: { color: '-65536' } });
-    expect(red).not.toBe(blue); // colour feeds the derived aliases → must re-sync
-    expect(red).toBe(redAgain);
+  it('changes when defaults.priority changes, stable when defaults are equal', () => {
+    const dnm = globalConfigVersion({ ...base, defaults: { priority: -1 } });
+    const normal = globalConfigVersion({ ...base, defaults: { priority: 100 } });
+    const dnmAgain = globalConfigVersion({ ...base, defaults: { priority: -1 } });
+    expect(dnm).not.toBe(normal); // priority feeds the derived aliases → must re-sync
+    expect(dnm).toBe(dnmAgain);
   });
 
   it('treats absent defaults the same as empty defaults', () => {
@@ -311,9 +318,9 @@ describe('globalConfigVersion folds in defaults', () => {
 });
 
 describe('GlobalConfigSchema defaults key', () => {
-  it('defaults to empty and accepts colour + priority', () => {
+  it('defaults to empty and accepts a priority', () => {
     expect(GlobalConfigSchema.parse({}).defaults).toEqual({});
-    const parsed = GlobalConfigSchema.parse({ defaults: { color: '-65536', priority: -1 } });
-    expect(parsed.defaults).toEqual({ color: '-65536', priority: -1 });
+    const parsed = GlobalConfigSchema.parse({ defaults: { priority: -1 } });
+    expect(parsed.defaults).toEqual({ priority: -1 });
   });
 });

@@ -163,9 +163,10 @@ export function mergeTalkgroups(cfg: GlobalConfigInput): { merged: GlobalConfigI
 
   const aliases = cfg.sdrtrunkConfig?.aliases ?? [];
 
-  // Per-row priorities collected for hoisting; alias colours for the global pick.
+  // Per-row priorities collected for hoisting; per-agency alias colours so an
+  // agency whose rdio side never set a colour keeps the one its aliases used.
   const rowPriority = new Map<Talkgroup, number>();
-  const colours: string[] = [];
+  const aliasColourPerAgency = new Map<Agency, string[]>();
 
   // ── 1. fold every alias into a talkgroup row ──────────────────────────────
   const encRows: Talkgroup[] = [];
@@ -194,7 +195,6 @@ export function mergeTalkgroups(cfg: GlobalConfigInput): { merged: GlobalConfigI
 
   for (const al of aliases) {
     const { tg, priority, channel } = aliasParts(al);
-    if (al.color) colours.push(String(al.color));
     if (tg === null) {
       report.unroutableAliases.push(`alias "${al.name}" has no talkgroup id`);
       continue;
@@ -222,6 +222,11 @@ export function mergeTalkgroups(cfg: GlobalConfigInput): { merged: GlobalConfigI
       const g = aliasGroupPerAgency.get(agency) ?? [];
       g.push(al.group.trim());
       aliasGroupPerAgency.set(agency, g);
+    }
+    if (al.color && String(al.color) !== '0') {
+      const c = aliasColourPerAgency.get(agency) ?? [];
+      c.push(String(al.color));
+      aliasColourPerAgency.set(agency, c);
     }
     const rows = seenPerAgency.get(agency)!;
     const existing = rows.get(tg);
@@ -294,16 +299,22 @@ export function mergeTalkgroups(cfg: GlobalConfigInput): { merged: GlobalConfigI
   }
 
   // ── 3. hoist repetition ───────────────────────────────────────────────────
-  // Global colour: the most common EXPLICIT alias colour — "0" is sdrtrunk's
-  // unset/black and outnumbers everything, but it carries no intent.
-  const color = mostCommon(colours.filter((c) => c !== '0'));
-  // Global priority: the most common per-row priority.
+  // Global priority: the most common per-row priority. Colour is PER AGENCY
+  // (each agency's one colour drives its rdio LED and its aliases) — an agency
+  // that has no explicit colour inherits the modal colour its aliases used.
   const allPriorities = [...rowPriority.values()];
   const globalPriority = mostCommon(allPriorities);
   const defaults: TalkgroupDefaults = {};
-  if (color !== null) defaults.color = color;
   if (globalPriority !== null) defaults.priority = globalPriority;
-  report.chosen = { color: color ?? null, priority: globalPriority ?? null };
+  report.chosen = { color: null, priority: globalPriority ?? null };
+  for (const a of agencies) {
+    if (a.color != null) continue; // explicit agency colour wins
+    const modalColour = mostCommon(aliasColourPerAgency.get(a) ?? []);
+    if (modalColour !== null) {
+      a.color = modalColour;
+      report.hoisted.push(`${a.name}: color=${modalColour} from its aliases`);
+    }
+  }
 
   for (const a of agencies) {
     if (a.encrypted) continue; // SDR-Trunk only — no rdio group/tag to default
@@ -483,7 +494,6 @@ async function main(): Promise<void> {
   console.log(`encrypted rows       : ${report.encRows}`);
   console.log(`labels filled from RR: ${report.labelsFilled} (+${report.namesFilled} names)`);
   console.log(`units added          : ${report.unitsAdded} (+${report.unitsRelabelled} relabelled)`);
-  console.log(`global colour        : ${report.chosen.color}`);
   console.log(`global priority      : ${report.chosen.priority}`);
   for (const h of report.hoisted) console.log(`hoisted: ${h}`);
   for (const d of report.duplicates) console.log(`DUPLICATE: ${d}`);

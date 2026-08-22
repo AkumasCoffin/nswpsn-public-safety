@@ -191,13 +191,12 @@ export type SdrtrunkConfig = z.infer<typeof SdrtrunkConfigSchema>;
 const EMPTY_SDRTRUNK: SdrtrunkConfig = { aliasLists: [], aliases: [], streams: [] };
 
 /** Fleet-wide talkgroup defaults, set once instead of per row/agency:
- *  `color` is THE alias colour (the operator chose one global colour over the
- *  old per-agency palette); `priority` is the SDR-Trunk monitor priority every
- *  agency inherits unless it overrides (FRNSW pins -1 = do-not-monitor).
- *  sdrtrunk colours are signed-int ARGB strings (e.g. "-65536"). */
+ *  `priority` is the SDR-Trunk monitor priority every agency inherits unless it
+ *  overrides (production is uniformly -1 = do-not-monitor — headless nodes
+ *  have no local audio to prioritise). Alias COLOUR is deliberately NOT here:
+ *  it is per agency (each agency's one LED colour drives its aliases). */
 export const TalkgroupDefaultsSchema = z
   .object({
-    color: z.string().max(40).nullish(),
     priority: z.number().int().nullish(),
   })
   .strict();
@@ -315,6 +314,24 @@ export function agenciesToAliases(agencies: Agency[]): Alias[] {
   return agencies.map(agencyToAlias).filter((a): a is Alias => a !== null);
 }
 
+/** rdio LED preset name -> SDR-Trunk alias colour (signed ARGB int string).
+ *  Hues match the staff editor's LED swatches so the alias colour in vce agrees
+ *  with the LED dot the operator picked. Agencies store an explicit `color`
+ *  when set via the editor; this covers configs that only carry `led`. */
+const LED_ALIAS_ARGB: Record<string, string> = {};
+for (const [led, hex] of Object.entries({
+  blue: '#2563eb', cyan: '#06b6d4', green: '#22c55e', magenta: '#d946ef',
+  orange: '#f97316', red: '#ef4444', white: '#e5e7eb', yellow: '#eab308',
+})) {
+  const rgb = Number.parseInt(hex.slice(1), 16);
+  LED_ALIAS_ARGB[led] = String(((0xff << 24) | rgb) | 0);
+}
+
+function ledToAliasColor(led: unknown): string | null {
+  if (typeof led !== 'string') return null;
+  return LED_ALIAS_ARGB[led.trim().toLowerCase()] ?? null;
+}
+
 /**
  * The SDR-Trunk aliases DERIVED from the unified talkgroup rows — one alias per
  * talkgroup, every agency. This replaces pushing the imported
@@ -326,7 +343,9 @@ export function agenciesToAliases(agencies: Agency[]): Alias[] {
  *              agency's own channel numbering and is never generated)
  *   group    = agency.sdrGroupName ?? agency.name  (sdrGroupName exists because
  *              the historical alias group is NOT the agency name)
- *   color    = defaults.color                       (the one global colour)
+ *   color    = agency.color ?? agency's LED colour (each agency has ONE colour
+ *              that drives both its rdio LED and its aliases; there is no
+ *              fleet-wide colour)
  *   priority = row.priority ?? agency.priority ?? defaults.priority ?? 100
  *   route    = broadcastChannel -> trimmed agency name, OMITTED for encrypted
  *              agencies (no stream, nothing ever uploads)
@@ -339,6 +358,7 @@ export function deriveAliasesFromTalkgroups(
   for (const a of agencies) {
     const group = (a.sdrGroupName ?? a.name).trim();
     const channel = a.name.trim();
+    const color = a.color ?? ledToAliasColor((a as Record<string, unknown>)['led']);
     for (const tg of a.talkgroups) {
       const row = tg as Talkgroup;
       if (typeof row.id !== 'number' || !Number.isInteger(row.id)) continue;
@@ -359,7 +379,7 @@ export function deriveAliasesFromTalkgroups(
         name,
         list: ALIAS_LIST_NAME,
         group,
-        color: defaults.color ?? undefined,
+        color: color ?? undefined,
         ids,
       });
     }
