@@ -1864,7 +1864,22 @@
       border: 1px solid var(--border-subtle);
       border-radius: 12px;
       overflow-x: auto;
+      /* NOT `visible`: a visible cross-axis is forced to `auto`, which makes
+         this a scroll container and kills page-level sticky for the header row
+         below. `clip` doesn't create a scroll container, so the thead can stick
+         to the page while the table still scrolls sideways. */
+      overflow-y: clip;
       -webkit-overflow-scrolling: touch;
+    }
+    /* The header row docks under the page header (and the crumb bar when one is
+       showing) so it stays readable while the rows scroll behind it. Opaque
+       background + a shadowed bottom border, or scrolled rows show through. */
+    .nd2-table-wrap .nd-table thead th {
+      position: sticky;
+      top: var(--nd2-thead-top, 68px);
+      z-index: 12;
+      background: var(--bg-card);
+      box-shadow: inset 0 -1px 0 var(--border-subtle);
     }
     .nd2-table-wrap .nd-table { min-width: 760px; font-size: 0.74rem; }
     .nd2-table-wrap .nd-table th { padding: 0.5rem 0.7rem; }
@@ -2918,6 +2933,15 @@
                         style="max-width: 190px;" aria-label="Filter talkgroups by agency"
                         onchange="nd2TgSetAgency(this.value)">
                   <option value="">All agencies</option>
+                </select>
+                <!-- Talkgroups absent from the global config are near-always
+                     corrupted decodes (one call each), so they are hidden
+                     unless asked for. -->
+                <select class="nd-input" id="nd2-tg-unknown" style="max-width: 190px;"
+                        aria-label="Show talkgroups that are not in the config"
+                        onchange="nd2TgSetUnknown(this.value)">
+                  <option value="">Configured only</option>
+                  <option value="show">Include unknown</option>
                 </select>
                 <div class="filter-spacer"></div>
                 <div class="nd2-seg" role="group" aria-label="Sort talkgroups by">
@@ -4145,7 +4169,9 @@
       // Talkgroups / Radios sub-tabs (scoped to the open system): search + paging.
       // `agency` = the /agencies filter; `has` = 'ota' | 'alias' | '' (a radio
       // can carry both, so this picks WHICH one must be present, never "named").
-      tg: { q: '', sort: 'calls', agency: '', offset: 0, limit: 50, total: 0 },
+      // `unknown`: '' = configured talkgroups only (decode noise hidden),
+      // 'show' = include ids absent from the global config.
+      tg: { q: '', sort: 'calls', agency: '', unknown: '', offset: 0, limit: 50, total: 0 },
       rad: { q: '', sort: 'calls', agency: '', has: '', offset: 0, limit: 50, total: 0 },
       // Over-the-air radio aliases, one row per radio. Unwindowed: an alias is
       // durable identity, so the interesting radio is often a quiet one.
@@ -4582,7 +4608,7 @@
       const tg = nd2FilterEncTgs((nd2.overview && nd2.overview.topTalkgroups) || [])[0];
       const tgEl = document.getElementById('nd2-stat-tg');
       if (tgEl) {
-        const label = tg ? (tg.label || `TG ${tg.talkgroup}`) : '—';
+        const label = tg ? (tg.label || String(tg.talkgroup)) : '—';
         tgEl.textContent = label;
         tgEl.title = label;
       }
@@ -5026,7 +5052,8 @@
       if (tg == null && !label) return '<span class="nd-sub">—</span>';
       const body = label
         ? `${escapeHtml(String(label))} <span class="nd2-pill-id">${escapeHtml(String(tg == null ? '' : tg))}</span>`
-        : `TG ${escapeHtml(String(tg))}`;
+        // Unnamed: just the number — the column already says it's a talkgroup.
+        : escapeHtml(String(tg));
       if (!color) return `<span class="nd2-tgpill">${body}</span>`;
       const c = escapeHtml(String(color));
       return `<span class="nd2-tgpill" style="background:${c}22;border-color:${c}88;">`
@@ -5968,6 +5995,11 @@
       nd2.tg.offset = 0;
       nd2LoadTalkgroups();
     }
+    function nd2TgSetUnknown(v) {
+      nd2.tg.unknown = v === 'show' ? 'show' : '';
+      nd2.tg.offset = 0;
+      nd2LoadTalkgroups();
+    }
     function nd2TgSetSort(sort) {
       if (nd2.tg.sort === sort) return;
       nd2.tg.sort = sort; nd2.tg.offset = 0;
@@ -5992,6 +6024,7 @@
       // Agency is a property of the talkgroup's alias group, so the server
       // resolves it to an id set — the page and its total stay correct.
       if (nd2.tg.agency) params.set('agency', nd2.tg.agency);
+      if (nd2.tg.unknown === 'show') params.set('unknown', 'show');
       // Two callers share this one panel and loader: the Systems drill-down
       // (scoped to a system, or one of its sites) and the top-level Talkgroups
       // view, which is fleet-wide. nd2.sys.* is NOT cleared when a top-level
@@ -13238,10 +13271,24 @@
     // offset tracks the real header size across wraps/resizes.
     function nd2SyncHeaderH() {
       const h = document.querySelector('.header');
-      if (h) document.documentElement.style.setProperty('--nd2-header-h', h.offsetHeight + 'px');
+      const hh = h ? h.offsetHeight : 68;
+      const root = document.documentElement.style;
+      root.setProperty('--nd2-header-h', hh + 'px');
+      // Table headers dock BELOW the crumb bar when one is on screen, else
+      // straight under the page header. Measured rather than assumed so a
+      // wrapped crumb bar can't hide the first row of a table.
+      const crumb = [...document.querySelectorAll('.nd2-crumbbar')]
+        .find(el => el.offsetParent !== null);
+      root.setProperty('--nd2-thead-top', (hh + (crumb ? crumb.offsetHeight : 0)) + 'px');
     }
     window.addEventListener('resize', nd2SyncHeaderH);
     window.addEventListener('load', nd2SyncHeaderH);
+    // The crumb bar appears/disappears as you drill in and out, so re-measure
+    // after any render that could have changed it.
+    window.addEventListener('scroll', () => {
+      if (nd2SyncHeaderH._q) return;
+      nd2SyncHeaderH._q = requestAnimationFrame(() => { nd2SyncHeaderH._q = 0; nd2SyncHeaderH(); });
+    }, { passive: true });
     nd2SyncHeaderH();
 
     // Initialize

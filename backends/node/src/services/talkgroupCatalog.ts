@@ -15,6 +15,13 @@ export interface TalkgroupCatalog {
   labels: Map<number, string>;
   agencies: Map<number, string>;
   colors: Map<number, string>;
+  /** Every talkgroup id the operator has configured, across all agencies.
+   *  A group call on an id NOT in here is almost always a corrupted decode:
+   *  in a 24h production sample all 41 such ids had exactly 2 receptions (one
+   *  call) each, while every configured talkgroup had far more — so this is
+   *  what separates real traffic from decode noise. Empty on a config with no
+   *  talkgroups, in which case callers must NOT filter on it. */
+  configuredTalkgroups: Set<number>;
   /** Radio (unit) id → owning agency name, from the agencies' rdio unit lists.
    *  A radio has no talkgroup of its own, so this is the only thing that can
    *  colour a UID by agency. First agency wins on a duplicate id (rdio scopes
@@ -82,6 +89,7 @@ export async function talkgroupCatalog(): Promise<TalkgroupCatalog> {
   const unitAgencies = new Map<number, string>();
   const unitColors = new Map<number, string>();
   const unitLabels = new Map<number, string>();
+  const configuredTalkgroups = new Set<number>();
   try {
     const cfg = await getGlobalConfig();
     // Same data-level switch as configMerge: a non-empty imported alias list is
@@ -106,6 +114,7 @@ export async function talkgroupCatalog(): Promise<TalkgroupCatalog> {
       for (const tg of ag.talkgroups ?? []) {
         if (typeof tg.id !== 'number' || !Number.isInteger(tg.id)) continue;
         if (ag.encrypted) encrypted.add(tg.id);
+        configuredTalkgroups.add(tg.id);
         // Agency by NAME, not by the alias group: the two differ (FRNSW aliases
         // group under "Fire & Rescue NSW" while the agency is "Fire and
         // Rescue"), and taking talkgroups from one source and radios from the
@@ -140,7 +149,10 @@ export async function talkgroupCatalog(): Promise<TalkgroupCatalog> {
   } catch (e) {
     log.warn({ err: e }, 'talkgroupCatalog: failed to load global config');
   }
-  const map = { labels, agencies, colors, encrypted, unitAgencies, unitColors, unitLabels };
+  const map = {
+    labels, agencies, colors, encrypted, configuredTalkgroups,
+    unitAgencies, unitColors, unitLabels,
+  };
   _cache = { at: Date.now(), map };
   return map;
 }

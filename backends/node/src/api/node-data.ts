@@ -2059,6 +2059,21 @@ nodeDataRouter.get(
         params.push(ids);
         conds.push(`talkgroup = ANY($${params.length}::int[])`);
       }
+      // Unconfigured talkgroups are almost always corrupted decodes — in a 24h
+      // production sample every one of the 41 unknown ids had exactly one call
+      // (2 receptions) while every configured talkgroup had far more. Hidden by
+      // default; `unknown=show` brings them back, which is how a genuinely new
+      // talkgroup gets noticed before it is added to the config.
+      const showUnknown = url.searchParams.get('unknown') === 'show';
+      if (!showUnknown) {
+        const configured = (await talkgroupCatalog()).configuredTalkgroups;
+        // Never filter on an EMPTY set — a config with no talkgroups yet would
+        // otherwise hide the entire list rather than the noise.
+        if (configured.size > 0) {
+          params.push([...configured]);
+          conds.push(`talkgroup = ANY($${params.length}::int[])`);
+        }
+      }
       const where = conds.join(' AND ');
       const orderCol = sort === 'lastSeen' ? 'last_seen' : 'calls';
       // "Always encrypted" = no clear call at all. A talkgroup that carries
