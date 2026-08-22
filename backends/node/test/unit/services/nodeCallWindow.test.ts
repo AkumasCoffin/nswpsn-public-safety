@@ -30,7 +30,6 @@ const call = (over: Record<string, unknown> = {}) => ({
 
 const frame = (calls: unknown[], over: Record<string, unknown> = {}) => ({
   activeCalls: calls,
-  events: [],
   ...over,
 });
 
@@ -58,7 +57,6 @@ describe('LiveCallWindow — live calls', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]!.endedAt).toBeNull();
     expect(rows[0]!.firstSeenAt).toBe(T0);
-    expect(rows[0]!.fromEvent).toBe(false);
   });
 
   it('holds a finished call for the hang window, then drops it', () => {
@@ -164,160 +162,6 @@ describe('LiveCallWindow — degraded frames', () => {
     w.observe('n1', degraded([]));
     // Held while plausibly still up, but not forever.
     expect(w.callsFor('n1').every((c) => c.endedAt !== null)).toBe(true);
-  });
-});
-
-describe('LiveCallWindow — recovering calls from decode events', () => {
-  const ev = (over: Record<string, unknown> = {}) => ({
-    type: 'CALL_GROUP',
-    timeStart: T0 - 2_000,
-    timeEnd: T0 - 1_000,
-    durationMs: 1_000,
-    from: '7001',
-    to: '1300',
-    toAlias: 'Ambo 3',
-    timeslot: 0,
-    channel: '460.5250',
-    ...over,
-  });
-
-  it('recovers a call that ended between two polls', () => {
-    const { w } = mk();
-    w.observe('n1', frame([], { events: [ev()] }));
-    const rows = w.callsFor('n1');
-    expect(rows).toHaveLength(1);
-    expect(rows[0]!.fromEvent).toBe(true);
-    expect(rows[0]!.firstSeenAt).toBe(T0 - 2_000);
-    expect(rows[0]!.endedAt).toBe(T0 - 1_000);
-    expect(rows[0]!.raw['to']).toBe('1300');
-    // The event's `channel` is a frequency descriptor, not a channel name —
-    // claiming it as one would invent a site.
-    expect(rows[0]!.raw['channelName']).toBeNull();
-  });
-
-  it('does not duplicate when the same events array is re-sent every frame', () => {
-    const { w, tick } = mk();
-    w.observe('n1', frame([], { events: [ev()] }));
-    tick(1_000);
-    w.observe('n1', frame([], { events: [ev()] }));
-    tick(1_000);
-    w.observe('n1', frame([], { events: [ev()] }));
-    expect(w.callsFor('n1')).toHaveLength(1);
-  });
-
-  it('skips an event for a call already tracked live', () => {
-    const { w, tick } = mk();
-    // Same parties, observed live right now.
-    w.observe('n1', frame([call({ to: '1300', from: '7001' })]));
-    tick(1_000);
-    w.observe('n1', frame([call({ to: '1300', from: '7001' })], { events: [ev({ timeStart: T0, timeEnd: T0 + 500 })] }));
-    expect(w.callsFor('n1')).toHaveLength(1);
-    expect(w.callsFor('n1')[0]!.fromEvent).toBe(false);
-  });
-
-  it('does not duplicate a live call when the event carries no source', () => {
-    // Observed in production: half of all frames showed a talkgroup twice —
-    // once live, once as a "recovered" copy of itself. vce routinely logs a
-    // call event with from=null, and requiring the source to match meant the
-    // overlap test almost never fired.
-    const { w, tick } = mk();
-    w.observe('n1', frame([call({ to: '30302', from: '2315678' })]));
-    tick(1_000);
-    w.observe('n1', frame([call({ to: '30302', from: '2315678' })], {
-      events: [ev({ to: '30302', from: null, timeStart: T0 - 500, timeEnd: T0 + 500 })],
-    }));
-    const rows = w.callsFor('n1');
-    expect(rows).toHaveLength(1);
-    expect(rows[0]!.fromEvent).toBe(false);
-  });
-
-  it('does not duplicate when the event omits the timeslot', () => {
-    const { w, tick } = mk();
-    w.observe('n1', frame([call({ to: '30302', from: '2315678', timeslot: 2 })]));
-    tick(1_000);
-    w.observe('n1', frame([call({ to: '30302', from: '2315678', timeslot: 2 })], {
-      events: [ev({ to: '30302', from: '2315678', timeslot: null, timeStart: T0, timeEnd: T0 + 500 })],
-    }));
-    expect(w.callsFor('n1')).toHaveLength(1);
-  });
-
-  it('does not duplicate a call already tracked across several sites', () => {
-    // One call heard by three sites is three activeCall rows; the event for it
-    // must match, not add a fourth.
-    const { w, tick } = mk();
-    w.observe('n1', frame([
-      call({ to: '30302', from: '2315678', channelName: 'T-Knights Hill' }),
-      call({ to: '30302', from: '2315678', channelName: 'T-Saddleback Mt' }),
-      call({ to: '30302', from: '2315678', channelName: 'T-Vincentia' }),
-    ]));
-    tick(1_000);
-    w.observe('n1', frame([], { events: [ev({ to: '30302', from: null, timeStart: T0, timeEnd: T0 + 900 })] }));
-    expect(w.callsFor('n1').filter((c) => c.fromEvent)).toHaveLength(0);
-  });
-
-  it('still recovers a genuinely different caller on the same talkgroup', () => {
-    // Back-to-back overs must not be collapsed: both sources are known and
-    // differ, so this one really was missed.
-    const { w, tick } = mk();
-    w.observe('n1', frame([call({ to: '30302', from: '2315678' })]));
-    tick(1_000);
-    w.observe('n1', frame([call({ to: '30302', from: '2315678' })], {
-      events: [ev({ to: '30302', from: '9999999', timeStart: T0, timeEnd: T0 + 400 })],
-    }));
-    expect(w.callsFor('n1').filter((c) => c.fromEvent)).toHaveLength(1);
-  });
-
-  it('ignores a zero-length event', () => {
-    // vce stamps some signalling with one instant. A call of no duration is
-    // not something anyone heard.
-    const { w } = mk();
-    w.observe('n1', frame([], { events: [ev({ timeStart: T0 - 500, timeEnd: T0 - 500 })] }));
-    expect(w.callsFor('n1')).toHaveLength(0);
-  });
-
-  it('ignores in-progress, stale, and non-audio event types', () => {
-    const { w } = mk();
-    w.observe(
-      'n1',
-      frame([], {
-        events: [
-          ev({ timeEnd: 0 }), // still in progress — activeCalls owns it
-          ev({ timeStart: T0 - 60_000, timeEnd: T0 - 30_000 }), // older than the hang
-          ev({ type: 'CALL_ALERT' }), // a page, not audio
-          ev({ type: 'CALL_DETECT' }),
-          ev({ type: 'CALL_END' }),
-          ev({ type: 'REGISTER' }),
-          ev({ type: 'GPS' }),
-        ],
-      }),
-    );
-    expect(w.callsFor('n1')).toHaveLength(0);
-  });
-
-  it('accepts the encrypted and unit-to-unit call variants', () => {
-    const { w } = mk();
-    w.observe(
-      'n1',
-      frame([], {
-        events: [
-          ev({ type: 'CALL_GROUP_ENCRYPTED', to: '12001' }),
-          ev({ type: 'CALL_UNIT_TO_UNIT', to: '12002' }),
-          ev({ type: 'CALL_PATCH_GROUP', to: '12003' }),
-        ],
-      }),
-    );
-    const rows = w.callsFor('n1');
-    expect(rows).toHaveLength(3);
-    expect(rows.find((r) => r.raw['to'] === '12001')!.raw['state']).toBe('ENCRYPTED');
-    expect(rows.find((r) => r.raw['to'] === '12002')!.raw['state']).toBe('CALL');
-  });
-
-  it('expires a recovered call on its own end time, not on when it arrived', () => {
-    const { w, tick } = mk();
-    w.observe('n1', frame([], { events: [ev({ timeStart: T0 - 2_000, timeEnd: T0 - 1_000 })] }));
-    expect(w.callsFor('n1')).toHaveLength(1);
-    tick(HANG - 1_000 + 100); // now past timeEnd + hang
-    expect(w.callsFor('n1')).toHaveLength(0);
   });
 });
 

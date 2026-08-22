@@ -117,11 +117,11 @@ function normaliseChannelName(name: string): string {
  * treat that as "nothing to show for this node", not an error.
  *
  * `windowCalls` is the node's rolling call window (nodeCallWindow). When given,
- * it REPLACES `status.activeCalls` as the source of call rows: the window is a
- * superset — every live call, plus ones that ended moments ago and ones
- * recovered from the event log — and it carries the timing the raw frame has
- * no room for. Omitting it falls back to shaping the bare frame, which is what
- * the unit tests exercise and what any future caller without a window gets.
+ * it REPLACES `status.activeCalls` as the source of call rows: it holds the
+ * same calls plus any still inside their grant age-out, and carries the timing
+ * the raw frame has no room for. Omitting it falls back to shaping the bare
+ * frame, which is what the unit tests exercise and what any future caller
+ * without a window gets.
  */
 export async function shapeNodeLive(
   nodeId: string,
@@ -213,7 +213,6 @@ export async function shapeNodeLive(
     startedAt: string | null;
     lastHeardAt: string | null;
     durationMs: number | null;
-    synthetic: boolean;
   }
   const NO_TIMING: CallTiming = {
     ended: false,
@@ -221,7 +220,6 @@ export async function shapeNodeLive(
     startedAt: null,
     lastHeardAt: null,
     durationMs: null,
-    synthetic: false,
   };
 
   const buildCall = (ac: Record<string, unknown>, timing: CallTiming): Record<string, unknown> => {
@@ -289,7 +287,6 @@ export async function shapeNodeLive(
           // than a second anyway, and if a node stops reporting the figure
           // correctly stops growing instead of inventing airtime.
           durationMs: Math.max(0, (wc.endedAt ?? wc.lastSeenAt) - wc.firstSeenAt),
-          synthetic: wc.fromEvent,
         }),
       );
     }

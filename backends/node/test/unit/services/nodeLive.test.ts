@@ -197,7 +197,6 @@ describe('shapeNodeLive: rows from the call window', () => {
         firstSeenAt: STARTED_AT,
         lastSeenAt: ENDED_AT,
         endedAt: ENDED_AT,
-        fromEvent: false,
       },
     ]);
     const row = slice!.calls[0]!;
@@ -205,7 +204,6 @@ describe('shapeNodeLive: rows from the call window', () => {
     expect(row['endedAt']).toBe(new Date(ENDED_AT).toISOString());
     expect(row['startedAt']).toBe(new Date(STARTED_AT).toISOString());
     expect(row['durationMs']).toBe(5_000);
-    expect(row['synthetic']).toBe(false);
   });
 
   it('still enriches an ended call with its site and talkgroup', async () => {
@@ -218,32 +216,12 @@ describe('shapeNodeLive: rows from the call window', () => {
         firstSeenAt: STARTED_AT,
         lastSeenAt: ENDED_AT,
         endedAt: ENDED_AT,
-        fromEvent: false,
       },
     ]);
     const row = slice!.calls[0]!;
     expect(row['site']).toBe('Knights Hill');
     expect(row['talkgroupLabel']).toBe('141 STHHG A');
     expect(row['agency']).toBe('Rural Fire Service');
-  });
-
-  it('marks a call recovered from the event log as synthetic', async () => {
-    const slice = await shapeWithWindow([
-      {
-        key: 'ev:1',
-        raw: { state: 'CALL', channelName: null, to: '30017', from: '7001' },
-        firstSeenAt: STARTED_AT,
-        lastSeenAt: ENDED_AT,
-        endedAt: ENDED_AT,
-        fromEvent: true,
-      },
-    ]);
-    const row = slice!.calls[0]!;
-    expect(row['synthetic']).toBe(true);
-    expect(row['ended']).toBe(true);
-    // No channel means no site to claim — honest rather than invented.
-    expect(row['site']).toBeNull();
-    expect(row['talkgroupLabel']).toBe('141 STHHG A');
   });
 
   it('takes calls ONLY from the window, ignoring the frame', async () => {
@@ -263,12 +241,11 @@ describe('shapeNodeLive: rows from the call window', () => {
         firstSeenAt: STARTED_AT,
         lastSeenAt: ENDED_AT,
         endedAt: null,
-        fromEvent: false,
       },
     ]);
     const without = await shape(STATUS);
     const strip = (r: Record<string, unknown>) => {
-      const { ended, endedAt, startedAt, lastHeardAt, durationMs, synthetic, ...rest } = r;
+      const { ended, endedAt, startedAt, lastHeardAt, durationMs, ...rest } = r;
       return rest;
     };
     expect(strip(withWindow!.calls[0]!)).toEqual(strip(without!.calls[0]!));

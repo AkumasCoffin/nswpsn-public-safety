@@ -2120,18 +2120,6 @@
     }
     .nd2-live-on i, .nd2-live-off i { margin-right: 0.25rem; font-size: 0.62rem; }
 
-    /* A call that has finished but is still held on screen. Recedes rather than
-       disappears, so the eye keeps its place while live rows stay dominant.
-       Never the ONLY signal that a call ended — it is paired with a chip, since
-       dimming alone is invisible to some viewers. */
-    .nd2-call-ended > td { opacity: 0.55; }
-    .nd2-call-chip {
-      background: rgba(148, 163, 184, 0.14);
-      color: #cbd5e1;
-      border-color: rgba(148, 163, 184, 0.3);
-      white-space: nowrap;
-    }
-    .nd2-call-chip i { margin-right: 0.2rem; font-size: 0.58rem; }
 
     /* Live view: two stacked cards (channels, then active calls). .nd2-card
        carries no margin of its own, so without this they sit flush and read as
@@ -6135,35 +6123,6 @@
       return nd2TgPill(o.talkgroup, o.talkgroupLabel, o.color);
     }
 
-    /** How long a call ran, for the ended chip. Sub-second overs are real and
-     *  common, so they get one decimal rather than rounding to "0s". */
-    function nd2CallDuration(ms) {
-      const n = Number(ms);
-      if (!Number.isFinite(n) || n <= 0) return '';
-      if (n < 10000) return (n / 1000).toFixed(1) + 's';
-      if (n < 60000) return Math.round(n / 1000) + 's';
-      return Math.floor(n / 60000) + 'm' + String(Math.round((n % 60000) / 1000)).padStart(2, '0') + 's';
-    }
-
-    /** The chip that distinguishes a call still on air from one being held.
-     *
-     *  Finished calls stay listed for a few seconds (the backend's call window)
-     *  so the table doesn't blink them out mid-read — but a held row must never
-     *  be mistaken for live traffic, hence an explicit marker rather than only
-     *  dimming, which a colour-blind or low-contrast viewer could miss.
-     *
-     *  "recovered" means the call was never caught on air: it was shorter than
-     *  the poll interval and was reconstructed from the node's decode-event
-     *  log, so it is a record that it happened, not a sighting. */
-    function nd2LiveCallState(c) {
-      if (!c.ended) return '';
-      const dur = nd2CallDuration(c.durationMs);
-      if (c.synthetic) {
-        return ` <span class="nd2-chip nd2-call-chip" title="Shorter than the poll interval — recovered from the node's decode-event log rather than seen live"><i class="fas fa-clock-rotate-left"></i>${dur ? ' ' + escapeHtml(dur) : ' recovered'}</span>`;
-      }
-      return ` <span class="nd2-chip nd2-call-chip" title="Call finished — held briefly so it doesn't vanish mid-read"><i class="fas fa-square"></i>${dur ? ' ' + escapeHtml(dur) : ' ended'}</span>`;
-    }
-
     // NB: distinct from nd2Pct — that one formats a plain percentage for the
     // site-detail tiles. This one colours a DECODE figure by health, and is
     // only for the Live tables.
@@ -6272,16 +6231,11 @@
       // control channel) would misreport the site as not being received.
       if (nd2HideEnc()) calls = calls.filter(c => !nd2IsEncCall(c));
       calls = nd2LinkLiveCalls(calls);
-      // On air first, then the most recently finished. Within each group the
-      // order is stable (talkgroup), so a row doesn't jump while you read it —
-      // the same reasoning as the channel table above. A call crossing from
-      // live to ended moves once, which is the one movement that means
-      // something.
-      calls.sort((x, y) => {
-        if (!!x.ended !== !!y.ended) return x.ended ? 1 : -1;
-        if (x.ended) return String(y.endedAt || '').localeCompare(String(x.endedAt || ''));
-        return String(x.talkgroup ?? '').localeCompare(String(y.talkgroup ?? ''));
-      });
+      // Stable order by talkgroup, same reasoning as the channel table: a row
+      // must not jump while you are reading it. Everything listed is on air —
+      // a finished call is dropped rather than held, matching vce's Live page
+      // with "Active only" on, which is the mode this view reproduces.
+      calls.sort((x, y) => String(x.talkgroup ?? '').localeCompare(String(y.talkgroup ?? '')));
 
       // Say which feed is driving this. The poll fallback is silent by design,
       // so without this a dropped socket looks identical to a working one —
@@ -6319,7 +6273,7 @@
         [{ label: 'Talkgroup' }, { label: 'Agency' }, { label: 'Source' }, { label: 'Sites' },
          { label: 'Freq', num: true }, { label: 'Decode', num: true }, { label: 'Node' }],
         calls.map(c => [
-          nd2LiveTgCell(c) + nd2LiveCallState(c),
+          nd2LiveTgCell(c),
           nd2AgencyCell(c.agency),
           c.talkerAlias || c.fromAlias
             ? `<span class="nd-strong">${escapeHtml(String(c.talkerAlias || c.fromAlias))}</span> <span class="nd-sub">${escapeHtml(String(c.from == null ? '' : c.from))}</span>`
@@ -6341,8 +6295,7 @@
             ? `<span class="nd2-live-nodes">${c.nodeList
                 .map(n => nd2NodeChip({ id: nd2ShortNode(n.id), name: n.name })).join('')}</span>`
             : nd2NodeChip(null),
-        ]), (ri) => (calls[ri] && calls[ri].ended ? 'nd2-call-ended' : ''))
-        : '<div class="nd2-empty">No calls in progress.</div>';
+        ])) : '<div class="nd2-empty">No calls in progress.</div>';
     }
 
     /** Snapshot load — first paint, and the fallback when the WS is down. */
