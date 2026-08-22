@@ -96,7 +96,6 @@ const ALERT_TYPES: readonly string[] = [
   'endeavour_current', 'endeavour_planned',
   'ausgrid',
   'essential_planned', 'essential_future',
-  'waze_hazard', 'waze_jam', 'waze_police', 'waze_roadwork',
   'user_incident',
   'radio_summary',
 ];

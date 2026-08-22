@@ -193,7 +193,7 @@ describe('/api/admin/db/stats', () => {
     const res = await app.request('/api/admin/db/stats', { headers: await ownerHeaders() });
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, Record<string, unknown>>;
-    expect(body['archive_waze']).toBeDefined();
+    expect(body['archive_traffic']).toBeDefined();
     expect(body['archive_traffic']).toBeDefined();
     expect(body['incidents']).toBeDefined();
   });

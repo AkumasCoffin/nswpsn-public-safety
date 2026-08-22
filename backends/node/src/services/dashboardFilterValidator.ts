@@ -41,7 +41,6 @@ const SUBTYPE_AWARE_TYPES: ReadonlySet<string> = new Set([
   'bom_land', 'bom_marine',
   'traffic_incident', 'traffic_roadwork', 'traffic_flood',
   'traffic_fire', 'traffic_majorevent',
-  'waze_hazard', 'waze_jam', 'waze_police', 'waze_roadwork',
   'user_incident',
 ]);
 

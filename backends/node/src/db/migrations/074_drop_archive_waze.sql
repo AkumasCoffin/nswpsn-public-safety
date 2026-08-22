@@ -1,0 +1,21 @@
+-- Drop the Waze archive and its sidecar.
+--
+-- Waze was removed as a data source: the ingest, the API surface, the map
+-- layers, the userscripts and the derived police-heatmap tables all went. What
+-- survived was the archive itself and the machinery that maintained it, which
+-- kept announcing itself at every boot:
+--
+--   archiveLatestBackfill: sidecar already populated, skipping {table: archive_waze}
+--
+-- and kept costing real work — the hourly cleanup pass ANALYZEd it, the sidecar
+-- backfills scanned it, and the index builder held CREATE INDEX / UPDATE steps
+-- against it. All of that maintained ~1.3 GB of parent partitions plus a 304 MB
+-- sidecar for a source nothing can query any more.
+--
+-- CASCADE because archive_waze is partitioned (archive_waze_2026_07 and later)
+-- and the sidecar carries FK-ish dependencies; dropping the parent takes its
+-- partitions with it.
+--
+-- Irreversible, and deliberately so — this is the last of the Waze data.
+DROP TABLE IF EXISTS archive_waze_latest CASCADE;
+DROP TABLE IF EXISTS archive_waze CASCADE;

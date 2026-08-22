@@ -30,7 +30,6 @@ import { log } from '../lib/log.js';
 import { getWriterPool } from '../db/pool.js';
 
 export type ArchiveTable =
-  | 'archive_waze'
   | 'archive_traffic'
   | 'archive_rfs'
   | 'archive_power'
@@ -415,9 +414,7 @@ export class ArchiveWriter {
     // archive_traffic: similar story for traffic_roadwork (391 rows).
     // archive_misc + archive_rfs stay at 500 — small per-flush volumes.
     const INSERT_CHUNK_SIZE =
-      table === 'archive_waze'
-        ? 250
-        : table === 'archive_power' || table === 'archive_traffic'
+      table === 'archive_power' || table === 'archive_traffic'
           ? 200
           : 500;
     const client = await pool.connect();
@@ -497,15 +494,7 @@ export class ArchiveWriter {
         // (so unchanged-row UPSERTs don't drift the change pointer).
         await this.upsertLatestSidecar(client, table, hashed);
 
-        // Incremental heatmap aggregation. Aggregates the rows we
-        // actually inserted (= changed rows) so the heatmap reflects
-        // real movement, not poll cadence.
-        if (table === 'archive_waze') {
-          await this.upsertPoliceHeatmapBinDaily(client, toInsert);
-        }
-        if (table !== 'archive_waze') {
-          await this.upsertFilterFacetsDaily(client, table, toInsert);
-        }
+        await this.upsertFilterFacetsDaily(client, table, toInsert);
         await client.query('COMMIT');
       } catch (err) {
         try { await client.query('ROLLBACK'); } catch { /* ignore */ }
@@ -771,68 +760,6 @@ export class ArchiveWriter {
     await client.query(sql, params);
   }
 
-  /**
-   * Aggregate the waze_police rows in this batch by
-   * (day, lat_bin, lng_bin, subcategory) and UPSERT one VALUES tuple
-   * per distinct cell into police_heatmap_bin_daily. Replaces the
-   * 30-day GROUP BY scan that ran every 10 min from the heatmap
-   * refresher and stalled the disk for half an hour at a time.
-   *
-   * subcategory normalisation mirrors the SQL the previous refresh
-   * used: COALESCE(NULLIF(subcategory, ''), data->>'subtype',
-   * 'POLICE_VISIBLE'). The indexBuilder backfills already populate the
-   * subcategory column on existing rows; this is the in-flight equivalent.
-   *
-   * UTC for the day-bucket so ISO date strings match what the
-   * indexBuilder backfill writes (which uses fetched_at AT TIME
-   * ZONE 'UTC'::date).
-   */
-  private async upsertPoliceHeatmapBinDaily(
-    client: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
-    rows: ArchiveRow[],
-  ): Promise<void> {
-    const BIN_DEG = 0.001;
-    type Cell = { day: string; lat_bin: number; lng_bin: number; sub: string; count: number };
-    const cells = new Map<string, Cell>();
-    for (const r of rows) {
-      if (r.source !== 'waze_police') continue;
-      if (r.lat == null || r.lng == null) continue;
-      const data = (r.data ?? {}) as Record<string, unknown>;
-      const sub =
-        r.subcategory && r.subcategory !== ''
-          ? r.subcategory
-          : typeof data['subtype'] === 'string' && data['subtype'] !== ''
-            ? (data['subtype'] as string)
-            : 'POLICE_VISIBLE';
-      const lat_bin = Math.floor(r.lat / BIN_DEG) * BIN_DEG;
-      const lng_bin = Math.floor(r.lng / BIN_DEG) * BIN_DEG;
-      const day = new Date(r.fetched_at * 1000).toISOString().slice(0, 10);
-      const key = `${day}|${lat_bin}|${lng_bin}|${sub}`;
-      const existing = cells.get(key);
-      if (existing) existing.count += 1;
-      else cells.set(key, { day, lat_bin, lng_bin, sub, count: 1 });
-    }
-    if (cells.size === 0) return;
-
-    // Multi-VALUES upsert. ON CONFLICT updates by adding incoming count
-    // to existing — additive semantics so multiple flushes per day
-    // accumulate correctly.
-    const placeholders: string[] = [];
-    const params: unknown[] = [];
-    let i = 0;
-    for (const c of cells.values()) {
-      placeholders.push(`($${i + 1}::date, $${i + 2}::float8, $${i + 3}::float8, $${i + 4}::text, $${i + 5}::int)`);
-      params.push(c.day, c.lat_bin, c.lng_bin, c.sub, c.count);
-      i += 5;
-    }
-    const sql = `
-      INSERT INTO police_heatmap_bin_daily (day, lat_bin, lng_bin, subcategory, count)
-      VALUES ${placeholders.join(',')}
-      ON CONFLICT (day, lat_bin, lng_bin, subcategory)
-      DO UPDATE SET count = police_heatmap_bin_daily.count + EXCLUDED.count
-    `;
-    await client.query(sql, params);
-  }
 
   /**
    * Aggregate this batch by (day, archive, source, category, subcategory)

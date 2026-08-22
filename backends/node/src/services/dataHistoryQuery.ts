@@ -32,11 +32,6 @@ import type { DecodedCursor } from './cursorPagination.js';
 // Unknown sources fall back to archive_misc (matches Python's catch-all
 // behaviour for unrecognised feeds, e.g. centralwatch / aviation).
 const SOURCE_TO_FAMILY: Record<string, ArchiveTable> = {
-  // Waze
-  waze_hazard: 'archive_waze',
-  waze_jam: 'archive_waze',
-  waze_police: 'archive_waze',
-  waze_roadwork: 'archive_waze',
   // LiveTraffic NSW
   traffic_incident: 'archive_traffic',
   traffic_roadwork: 'archive_traffic',
@@ -77,7 +72,6 @@ const SOURCE_TO_FAMILY: Record<string, ArchiveTable> = {
 };
 
 export const ALL_ARCHIVE_TABLES: ArchiveTable[] = [
-  'archive_waze',
   'archive_traffic',
   'archive_rfs',
   'archive_power',

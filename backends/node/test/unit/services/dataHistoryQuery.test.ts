@@ -52,12 +52,12 @@ describe('sourceFamilies', () => {
     expect(sourceFamilies([])).toEqual(ALL_ARCHIVE_TABLES);
   });
 
-  it('routes a single waze source to archive_waze only', () => {
-    expect(sourceFamilies(['waze_police'])).toEqual(['archive_waze']);
+  it('routes a single traffic source to archive_traffic only', () => {
+    expect(sourceFamilies(['traffic_incident'])).toEqual(['archive_traffic']);
   });
 
-  it('routes multiple waze sources to archive_waze only', () => {
-    expect(sourceFamilies(['waze_police', 'waze_hazard'])).toEqual(['archive_waze']);
+  it('routes multiple traffic sources to archive_traffic only', () => {
+    expect(sourceFamilies(['traffic_incident', 'traffic_flood'])).toEqual(['archive_traffic']);
   });
 
   it('routes mixed families to the union of their tables', () => {
@@ -72,16 +72,16 @@ describe('sourceFamilies', () => {
     expect(sourceFamilies(['nonsense_source'])).toEqual(['archive_misc']);
   });
 
-  it('returns tables in stable archive_waze->misc order', () => {
-    const fams = sourceFamilies(['pager', 'waze_police', 'rfs']);
-    expect(fams).toEqual(['archive_waze', 'archive_rfs', 'archive_misc']);
+  it('returns tables in stable archive_traffic->misc order', () => {
+    const fams = sourceFamilies(['pager', 'traffic_incident', 'rfs']);
+    expect(fams).toEqual(['archive_traffic', 'archive_rfs', 'archive_misc']);
   });
 });
 
 describe('buildSqlForTable — basics', () => {
   it('produces SELECT FROM <table> with only the implicit deprecated-source filter', () => {
-    const q = buildSqlForTable('archive_waze', defaultParams());
-    expect(q.sql).toContain('FROM archive_waze');
+    const q = buildSqlForTable('archive_traffic', defaultParams());
+    expect(q.sql).toContain('FROM archive_traffic');
     // Only the implicit deprecated-source NOT IN filter is present.
     expect(q.sql).toContain('source NOT IN');
     expect(q.sql).toMatch(/ORDER BY fetched_at DESC, id DESC/);
@@ -92,9 +92,9 @@ describe('buildSqlForTable — basics', () => {
   });
 
   it('honours include_data flag', () => {
-    const q1 = buildSqlForTable('archive_waze', defaultParams({ includeData: false }));
+    const q1 = buildSqlForTable('archive_traffic', defaultParams({ includeData: false }));
     expect(q1.sql).toContain("'{}'::jsonb AS data");
-    const q2 = buildSqlForTable('archive_waze', defaultParams({ includeData: true }));
+    const q2 = buildSqlForTable('archive_traffic', defaultParams({ includeData: true }));
     expect(q2.sql).not.toContain("'{}'::jsonb AS data");
     expect(q2.sql).toMatch(/lat, lng, category, subcategory,\s+data/);
   });
@@ -117,11 +117,11 @@ describe('buildSqlForTable — basics', () => {
 
   it('fans an `IN (...)` for a multi-value source filter', () => {
     const q = buildSqlForTable(
-      'archive_waze',
-      defaultParams({ sources: ['waze_police', 'waze_hazard'] }),
+      'archive_traffic',
+      defaultParams({ sources: ['traffic_incident', 'traffic_flood'] }),
     );
     expect(q.sql).toMatch(/source IN \(\$1,\$2\)/);
-    expect(q.params.slice(0, 2)).toEqual(['waze_police', 'waze_hazard']);
+    expect(q.params.slice(0, 2)).toEqual(['traffic_incident', 'traffic_flood']);
   });
 
   it('uses `=` for a single-value source filter', () => {
@@ -165,7 +165,7 @@ describe('buildSqlForTable — JSONB filters', () => {
 describe('buildSqlForTable — time, geo, cursor', () => {
   it('translates `since` into fetched_at >= to_timestamp($n)', () => {
     const q = buildSqlForTable(
-      'archive_waze',
+      'archive_traffic',
       defaultParams({ since: 1_700_000_000 }),
     );
     expect(q.sql).toContain('fetched_at >= to_timestamp(');
@@ -174,7 +174,7 @@ describe('buildSqlForTable — time, geo, cursor', () => {
 
   it('translates `until` into fetched_at <= to_timestamp($n)', () => {
     const q = buildSqlForTable(
-      'archive_waze',
+      'archive_traffic',
       defaultParams({ until: 1_700_000_999 }),
     );
     expect(q.sql).toContain('fetched_at <= to_timestamp(');
@@ -183,7 +183,7 @@ describe('buildSqlForTable — time, geo, cursor', () => {
 
   it('emits a bounding-box clause for lat/lng/radius', () => {
     const q = buildSqlForTable(
-      'archive_waze',
+      'archive_traffic',
       defaultParams({ lat: -33.86, lng: 151.21, radiusKm: 5 }),
     );
     expect(q.sql).toContain('lat BETWEEN');
@@ -195,7 +195,7 @@ describe('buildSqlForTable — time, geo, cursor', () => {
 
   it('cursor seek emits the (fetched_at < t OR (fetched_at = t AND id < id)) shape', () => {
     const q = buildSqlForTable(
-      'archive_waze',
+      'archive_traffic',
       defaultParams({ cursor: { fetchedAt: 1_700_000_000, rowId: 99 } }),
     );
     expect(q.sql).toMatch(
@@ -207,7 +207,7 @@ describe('buildSqlForTable — time, geo, cursor', () => {
 
   it('cursor seek flips comparator for ASC order', () => {
     const q = buildSqlForTable(
-      'archive_waze',
+      'archive_traffic',
       defaultParams({
         cursor: { fetchedAt: 1_700_000_000, rowId: 99 },
         order: 'ASC',
@@ -218,7 +218,7 @@ describe('buildSqlForTable — time, geo, cursor', () => {
 
   it('a table-less (single-family) cursor keeps the equal-rank row-value seek', () => {
     const q = buildSqlForTable(
-      'archive_waze',
+      'archive_traffic',
       defaultParams({ cursor: { fetchedAt: 1_700_000_000, rowId: 99 } }),
     );
     expect(q.sql).toMatch(
@@ -229,9 +229,9 @@ describe('buildSqlForTable — time, geo, cursor', () => {
 
 describe('buildSqlForTable — multi-family rank-aware cursor seek (DESC)', () => {
   // Global DESC order is (fetched_at DESC, table_rank DESC, id DESC).
-  // ALL_ARCHIVE_TABLES rank: waze=0, traffic=1, rfs=2, power=3, misc=4.
+  // ALL_ARCHIVE_TABLES rank: traffic=0, rfs=1, power=2, misc=3.
   // With the cursor's boundary row in archive_rfs (rank 2), at a tied
-  // second the lower-rank tables (waze/traffic) sort AFTER the cursor and
+  // second the lower-rank tables (traffic) sort AFTER the cursor and
   // must include that second; the higher-rank tables (power/misc) already
   // emitted it and must exclude it.
   const cursor = { fetchedAt: 1_700_000_000, rowId: 99, table: 'archive_rfs' };
@@ -245,7 +245,7 @@ describe('buildSqlForTable — multi-family rank-aware cursor seek (DESC)', () =
   });
 
   it('lower-rank table (sorts after cursor) → inclusive fetched_at <= seek, no id', () => {
-    const q = buildSqlForTable('archive_waze', defaultParams({ cursor }));
+    const q = buildSqlForTable('archive_traffic', defaultParams({ cursor }));
     expect(q.sql).toMatch(/fetched_at <= to_timestamp\(\$\d+\)/);
     expect(q.sql).not.toMatch(/AND id </); // no cross-table id comparison
     expect(q.params).not.toContain(99); // boundary id never applied here
@@ -261,7 +261,7 @@ describe('buildSqlForTable — multi-family rank-aware cursor seek (DESC)', () =
 
   it('ASC flips which side is inclusive (lower rank now sorts before)', () => {
     const q = buildSqlForTable(
-      'archive_waze',
+      'archive_traffic',
       defaultParams({ cursor, order: 'ASC' }),
     );
     // ASC global order = (fetched_at ASC, rank ASC, id ASC); waze(0) <
@@ -272,7 +272,7 @@ describe('buildSqlForTable — multi-family rank-aware cursor seek (DESC)', () =
 
   it('an unknown cursor table falls back to the equal-rank seek (graceful)', () => {
     const q = buildSqlForTable(
-      'archive_waze',
+      'archive_traffic',
       defaultParams({
         cursor: { fetchedAt: 1_700_000_000, rowId: 99, table: 'archive_bogus' },
       }),
@@ -291,17 +291,17 @@ describe('buildSqlForTable — unique=1', () => {
     // bounded-scan approach was replaced because it timed out at 30s
     // on archive_waze under ingest load.
     const q = buildSqlForTable(
-      'archive_waze',
-      defaultParams({ unique: true, sources: ['waze_police'] }),
+      'archive_traffic',
+      defaultParams({ unique: true, sources: ['traffic_incident'] }),
     );
-    expect(q.sql).toContain('archive_waze_latest');
+    expect(q.sql).toContain('archive_traffic_latest');
     expect(q.sql).toContain('top_keys');
     expect(q.sql).toContain('CROSS JOIN LATERAL');
   });
 
   it('non-unique queries do NOT use the sidecar', () => {
-    const q = buildSqlForTable('archive_waze', defaultParams());
-    expect(q.sql).not.toContain('archive_waze_latest');
+    const q = buildSqlForTable('archive_traffic', defaultParams());
+    expect(q.sql).not.toContain('archive_traffic_latest');
   });
 
   it('cursor bounds top_keys AND seeks on effective_ts (not fetched_at)', () => {
@@ -310,10 +310,10 @@ describe('buildSqlForTable — unique=1', () => {
     // their own timestamps — and top_keys ignored the cursor entirely,
     // so pagination dead-ended once the cursor passed cteLimit rows.
     const q = buildSqlForTable(
-      'archive_waze',
+      'archive_traffic',
       defaultParams({
         unique: true,
-        sources: ['waze_police'],
+        sources: ['traffic_incident'],
         cursor: { fetchedAt: 1_700_000_000, rowId: 42 },
       }),
     );
@@ -332,10 +332,10 @@ describe('buildSqlForTable — unique=1', () => {
 
   it('ASC cursor flips both the CTE bound and the seek direction', () => {
     const q = buildSqlForTable(
-      'archive_waze',
+      'archive_traffic',
       defaultParams({
         unique: true,
-        sources: ['waze_police'],
+        sources: ['traffic_incident'],
         order: 'ASC',
         cursor: { fetchedAt: 1_700_000_000, rowId: 42 },
       }),
@@ -349,20 +349,20 @@ describe('buildSqlForTable — unique=1', () => {
 
 describe('buildPlan', () => {
   it('produces 1 query for a single-family request', () => {
-    const plan = buildPlan(defaultParams({ sources: ['waze_police'] }));
+    const plan = buildPlan(defaultParams({ sources: ['traffic_incident'] }));
     expect(plan.queries).toHaveLength(1);
-    expect(plan.queries[0]?.table).toBe('archive_waze');
+    expect(plan.queries[0]?.table).toBe('archive_traffic');
   });
 
-  it('produces 5 queries when no source filter is set', () => {
+  it('produces 4 queries when no source filter is set', () => {
     const plan = buildPlan(defaultParams());
-    expect(plan.queries).toHaveLength(5);
+    expect(plan.queries).toHaveLength(4);
   });
 
   it('produces 2 queries for a 2-family request', () => {
-    const plan = buildPlan(defaultParams({ sources: ['waze_police', 'rfs'] }));
+    const plan = buildPlan(defaultParams({ sources: ['traffic_incident', 'rfs'] }));
     expect(plan.queries).toHaveLength(2);
-    expect(plan.queries.map((q) => q.table)).toEqual(['archive_waze', 'archive_rfs']);
+    expect(plan.queries.map((q) => q.table)).toEqual(['archive_traffic', 'archive_rfs']);
   });
 
   it('zeroes effectiveOffset when a cursor is set', () => {
@@ -407,17 +407,17 @@ describe('mergeAndPaginate', () => {
   it('breaks fetched_at ties by table rank before id (DESC: higher rank first)', () => {
     // Same second, but a low id in a high-rank family must still sort
     // ahead of a high id in a low-rank family — rank dominates id.
-    const a: ArchiveQueryRow = { ...row(5, 1000), _family: 'archive_waze' }; // rank 0
+    const a: ArchiveQueryRow = { ...row(5, 1000), _family: 'archive_traffic' }; // rank 0
     const b: ArchiveQueryRow = { ...row(1, 1000), _family: 'archive_misc' }; // rank 4
     const plan = buildPlan(defaultParams({ limit: 10 }));
     const out = mergeAndPaginate([a, b], plan);
     // DESC → rank 4 (misc, id 1) before rank 0 (waze, id 5).
-    expect(out.map((r) => r._family)).toEqual(['archive_misc', 'archive_waze']);
+    expect(out.map((r) => r._family)).toEqual(['archive_misc', 'archive_traffic']);
   });
 
   it('falls back to id tiebreak within the same family at a tie', () => {
-    const a: ArchiveQueryRow = { ...row(7, 1000), _family: 'archive_waze' };
-    const b: ArchiveQueryRow = { ...row(9, 1000), _family: 'archive_waze' };
+    const a: ArchiveQueryRow = { ...row(7, 1000), _family: 'archive_traffic' };
+    const b: ArchiveQueryRow = { ...row(9, 1000), _family: 'archive_traffic' };
     const plan = buildPlan(defaultParams({ limit: 10 }));
     const out = mergeAndPaginate([a, b], plan);
     expect(out.map((r) => r.id)).toEqual([9, 7]); // DESC by id
@@ -439,12 +439,12 @@ describe('mergeAndPaginate', () => {
     const a: ArchiveQueryRow = {
       ...row(1, 2000), // fetched recently...
       source_timestamp_unix: 500, // ...but published long ago
-      _family: 'archive_waze',
+      _family: 'archive_traffic',
     };
     const b: ArchiveQueryRow = {
       ...row(2, 1000),
       source_timestamp_unix: null, // falls back to fetched_at (1000)
-      _family: 'archive_waze',
+      _family: 'archive_traffic',
     };
     const plan = buildPlan(defaultParams({ unique: true, limit: 10 }));
     const out = mergeAndPaginate([a, b], plan);

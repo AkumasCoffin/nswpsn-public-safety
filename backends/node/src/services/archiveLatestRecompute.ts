@@ -38,7 +38,6 @@ const ARCHIVE_TABLES: ArchiveTable[] = [
   'archive_power',
   'archive_rfs',
   'archive_traffic',
-  'archive_waze',
 ];
 
 const MARKER = 'task:archive_latest_recompute';

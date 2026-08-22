@@ -30,15 +30,6 @@ interface IndexSpec {
 }
 
 const INDEXES: IndexSpec[] = [
-  // Composite (source, source_id, fetched_at DESC) — covering for the
-  // unique=1 path's DISTINCT ON. Plain (no INCLUDE) keeps the build
-  // faster + index smaller; the ~5% read-side perf loss vs INCLUDE is
-  // worth the deploy-time savings.
-  {
-    name: 'idx_archive_waze_src_sid_ts',
-    sql: `CREATE INDEX IF NOT EXISTS idx_archive_waze_src_sid_ts
-          ON archive_waze (source, source_id, fetched_at DESC)`,
-  },
   {
     name: 'idx_archive_traffic_src_sid_ts',
     sql: `CREATE INDEX IF NOT EXISTS idx_archive_traffic_src_sid_ts
@@ -59,15 +50,6 @@ const INDEXES: IndexSpec[] = [
     sql: `CREATE INDEX IF NOT EXISTS idx_archive_rfs_src_sid_ts
           ON archive_rfs (source, source_id, fetched_at DESC)`,
   },
-  // archive_waze heatmap helper: only index rows with non-null coords
-  // so the heatmap query's WHERE filter becomes implicit. Cheap WHERE
-  // (column null check) so write overhead is negligible.
-  {
-    name: 'idx_archive_waze_heatmap',
-    sql: `CREATE INDEX IF NOT EXISTS idx_archive_waze_heatmap
-          ON archive_waze (source, fetched_at DESC)
-          WHERE lat IS NOT NULL AND lng IS NOT NULL`,
-  },
 ];
 
 /**
@@ -81,7 +63,6 @@ const INDEXES: IndexSpec[] = [
  * anyway). Dropping them frees up write throughput.
  */
 const DROP_INDEXES = [
-  'idx_archive_waze_live',
   'idx_archive_traffic_live',
   'idx_archive_power_live',
   'idx_archive_misc_live',
@@ -89,12 +70,10 @@ const DROP_INDEXES = [
   // is_latest experiment fallout — migration 013 drops the columns,
   // but defensively drop the indexes too in case a partition kept
   // them after the column removal cascaded.
-  'idx_archive_waze_src_sid_latest',
   'idx_archive_traffic_src_sid_latest',
   'idx_archive_rfs_src_sid_latest',
   'idx_archive_power_src_sid_latest',
   'idx_archive_misc_src_sid_latest',
-  'idx_archive_waze_latest',
   'idx_archive_traffic_latest',
   'idx_archive_rfs_latest',
   'idx_archive_power_latest',
@@ -115,58 +94,6 @@ interface BackfillSpec {
 }
 
 const BACKFILLS: BackfillSpec[] = [
-  // waze_police: rows where subcategory is empty/null but data carries
-  // the subtype in the JSONB blob → promote it into the column. Mirrors
-  // python's normaliser which sometimes left subcategory empty even
-  // when the subtype was right there in `data->>'subtype'`.
-  {
-    name: 'archive_waze.subcategory ← data->>subtype (waze_police)',
-    countSql: `SELECT COUNT(*)::bigint AS n FROM archive_waze
-               WHERE source = 'waze_police'
-                 AND COALESCE(subcategory, '') = ''
-                 AND NULLIF(data->>'subtype', '') IS NOT NULL`,
-    updateSql: `UPDATE archive_waze
-                   SET subcategory = data->>'subtype'
-                 WHERE source = 'waze_police'
-                   AND COALESCE(subcategory, '') = ''
-                   AND NULLIF(data->>'subtype', '') IS NOT NULL`,
-  },
-  // waze_police: ALL remaining empty-subcategory rows default to
-  // POLICE_VISIBLE. Mirrors python's `eff = sub or 'POLICE_VISIBLE'`
-  // (external_api_proxy.py:10167) — Waze police alerts without an
-  // explicit subtype are treated as visible. User-confirmed policy
-  // ("any police without a subtype should be counted as visible
-  // police"). After this, every waze_police row has a non-empty
-  // subcategory and downstream filters (/api/data/history,
-  // filterCache, heatmap) all see the same value without needing
-  // COALESCE chains.
-  {
-    name: 'archive_waze.subcategory = POLICE_VISIBLE (waze_police default)',
-    countSql: `SELECT COUNT(*)::bigint AS n FROM archive_waze
-               WHERE source = 'waze_police'
-                 AND COALESCE(subcategory, '') = ''`,
-    updateSql: `UPDATE archive_waze
-                   SET subcategory = 'POLICE_VISIBLE'
-                 WHERE source = 'waze_police'
-                   AND COALESCE(subcategory, '') = ''`,
-  },
-  // Other waze types (hazard/roadwork/jam): promote data->>'subtype'
-  // into subcategory where the column is empty but JSONB has it. No
-  // default for these — leave subcategory empty when nothing is
-  // available, since hazard subtypes are too varied to assign a
-  // generic one.
-  {
-    name: 'archive_waze.subcategory ← data->>subtype (other waze)',
-    countSql: `SELECT COUNT(*)::bigint AS n FROM archive_waze
-               WHERE source IN ('waze_hazard','waze_roadwork','waze_jam')
-                 AND COALESCE(subcategory, '') = ''
-                 AND NULLIF(data->>'subtype', '') IS NOT NULL`,
-    updateSql: `UPDATE archive_waze
-                   SET subcategory = data->>'subtype'
-                 WHERE source IN ('waze_hazard','waze_roadwork','waze_jam')
-                   AND COALESCE(subcategory, '') = ''
-                   AND NULLIF(data->>'subtype', '') IS NOT NULL`,
-  },
   // One-shot population of filter_facets_daily from each archive_*
   // table (skipping archive_waze — see migration 016 header). Same
   // race-avoidance pattern as the police heatmap backfill: scope to

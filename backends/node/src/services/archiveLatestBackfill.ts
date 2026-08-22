@@ -22,7 +22,6 @@ import { log } from '../lib/log.js';
 import { SIDECAR_LOCK_NAMESPACE } from '../store/archive.js';
 
 const ARCHIVE_TABLES = [
-  'archive_waze',
   'archive_traffic',
   'archive_rfs',
   'archive_power',

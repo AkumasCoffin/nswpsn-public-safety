@@ -229,7 +229,6 @@ systemRouter.get('/api/admin/db/stats', requireRole(isOwner), async (c) => {
   if (!pool) return c.json({ error: 'database not configured' }, 503);
 
   const ARCHIVE_TABLES = [
-    'archive_waze',
     'archive_traffic',
     'archive_rfs',
     'archive_power',
@@ -312,7 +311,6 @@ systemRouter.post('/api/admin/db/vacuum', requireRole(isOwner), async (c) => {
   const pool = await getPool();
   if (!pool) return c.json({ error: 'database not configured' }, 503);
   const tables = [
-    'archive_waze',
     'archive_traffic',
     'archive_rfs',
     'archive_power',

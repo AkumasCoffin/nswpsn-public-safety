@@ -128,7 +128,7 @@ describe('GET /api/data/history', () => {
     expect(body['error']).toBe('invalid_cursor');
   });
 
-  it('routes a waze_police query to archive_waze only', async () => {
+  it('routes a retired waze source nowhere at all', async () => {
     queryMock.mockImplementation((sql: string) => {
       if (sql.includes('statement_timeout')) return { rows: [] };
       if (sql.includes('SELECT COUNT(*)')) return { rows: [{ n: 0 }] };
@@ -147,11 +147,15 @@ describe('GET /api/data/history', () => {
           s !== 'COMMIT' &&
           s !== 'ROLLBACK',
       );
+    // archive_waze is gone (migration 074). waze_* is now simply an
+    // unrecognised source, so it takes the documented catch-all to
+    // archive_misc and returns nothing — rather than naming a dropped table.
     expect(sqls).toHaveLength(1);
-    expect(sqls[0]).toContain('FROM archive_waze');
+    expect(sqls[0]).toContain('FROM archive_misc');
+    expect(sqls[0]).not.toContain('archive_waze');
   });
 
-  it('fans out across 5 family tables when no source filter is set', async () => {
+  it('fans out across 4 family tables when no source filter is set', async () => {
     queryMock.mockImplementation((sql: string) => {
       if (sql.includes('statement_timeout')) return { rows: [] };
       if (sql.includes('SELECT COUNT(*)')) return { rows: [{ n: 0 }] };
@@ -173,7 +177,7 @@ describe('GET /api/data/history', () => {
           s !== 'COMMIT' &&
           s !== 'ROLLBACK',
       );
-    expect(sqls).toHaveLength(5);
+    expect(sqls).toHaveLength(4);
     const targets = sqls.map((s) => {
       // Skip the `FROM fetched_at` inside `extract(epoch FROM fetched_at)`
       // by matching only the archive_* tables we actually care about.
@@ -182,7 +186,6 @@ describe('GET /api/data/history', () => {
     });
     expect(new Set(targets)).toEqual(
       new Set([
-        'archive_waze',
         'archive_traffic',
         'archive_rfs',
         'archive_power',
@@ -244,7 +247,7 @@ describe('GET /api/data/history', () => {
 });
 
 describe('GET /api/data/history/sources', () => {
-  it('aggregates source counts across all 5 tables', async () => {
+  it('aggregates source counts across all remaining tables', async () => {
     let selectCalls = 0;
     queryMock.mockImplementation((sql: string) => {
       // Skip transaction control + SET LOCAL — they're plumbing, not
@@ -258,11 +261,11 @@ describe('GET /api/data/history/sources', () => {
         return { rows: [] };
       }
       selectCalls += 1;
-      // Return different counts for waze and rfs; empty for the rest.
-      if (sql.includes('archive_waze')) {
+      // Return different counts for traffic and rfs; empty for the rest.
+      if (sql.includes('archive_traffic')) {
         return {
           rows: [
-            { source: 'waze_police', count: '10', oldest: new Date(1_700_000_000_000), newest: new Date(1_700_001_000_000) },
+            { source: 'traffic_incident', count: '10', oldest: new Date(1_700_000_000_000), newest: new Date(1_700_001_000_000) },
           ],
         };
       }
@@ -283,9 +286,9 @@ describe('GET /api/data/history/sources', () => {
     const sources = body['sources'] as Array<Record<string, unknown>>;
     expect(sources).toHaveLength(2);
     // Sorted by count DESC.
-    expect(sources[0]?.['source']).toBe('waze_police');
+    expect(sources[0]?.['source']).toBe('traffic_incident');
     expect(sources[0]?.['count']).toBe(10);
-    expect(selectCalls).toBe(5); // one SELECT per table
+    expect(selectCalls).toBe(4); // one SELECT per table (archive_waze dropped in 074)
   });
 });
 
@@ -293,7 +296,7 @@ describe('GET /api/data/history/stats', () => {
   it('returns total + tables breakdown', async () => {
     queryMock.mockImplementation((sql: string) => {
       if (sql.includes('statement_timeout')) return { rows: [] };
-      if (sql.includes('archive_waze')) {
+      if (sql.includes('archive_traffic')) {
         return {
           rows: [
             {
@@ -312,7 +315,7 @@ describe('GET /api/data/history/stats', () => {
     const body = (await res.json()) as Record<string, unknown>;
     expect(body['total_records']).toBe(100);
     const tables = body['tables'] as Record<string, unknown>;
-    expect(tables['archive_waze']).toBeDefined();
+    expect(tables['archive_traffic']).toBeDefined();
   });
 });
 

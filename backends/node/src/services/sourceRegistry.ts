@@ -17,7 +17,7 @@
  */
 import type { ArchiveRow, ArchiveTable } from '../store/archive.js';
 
-export type SourceFamily = 'waze' | 'traffic' | 'rfs' | 'power' | 'misc';
+export type SourceFamily = 'traffic' | 'rfs' | 'power' | 'misc';
 
 export interface SourceDefinition<T = unknown> {
   /** LiveStore key + log identifier. */
@@ -69,8 +69,6 @@ export function allSources(): SourceDefinition[] {
 /** Convenience for archive_<family> table name lookup. */
 export function familyTable(family: SourceFamily): ArchiveTable {
   switch (family) {
-    case 'waze':
-      return 'archive_waze';
     case 'traffic':
       return 'archive_traffic';
     case 'rfs':

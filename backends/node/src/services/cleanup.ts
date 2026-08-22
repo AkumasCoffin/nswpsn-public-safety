@@ -50,7 +50,6 @@ const DEFAULT_RETENTION_DAYS = (() => {
 })();
 
 const ARCHIVE_TABLES = [
-  'archive_waze',
   'archive_traffic',
   'archive_rfs',
   'archive_power',

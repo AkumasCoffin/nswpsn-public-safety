@@ -447,13 +447,6 @@ async function archiveFacetsFromSidecar(windowHours: number): Promise<{
     'archive_power',
     'archive_traffic',
     'archive_rfs',
-    // archive_waze included here too — the sidecar collapses 2.8M append
-    // rows to ~77k unique incidents (~36x smaller), so a windowed
-    // GROUP BY runs in ~100ms cold and sub-ms warm via the response
-    // cache. The previous "waze comes from LiveStore" model returned
-    // 786 active alerts; the sidecar returns the unique-alerts-in-window
-    // count that matches /api/data/history?unique=1.
-    'archive_waze',
   ];
 
   // Sidecar-only query — category + subcategory live on the sidecar
