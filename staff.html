@@ -2875,6 +2875,9 @@
                   <input type="text" id="nd2-rad-q" placeholder="Radio ID" inputmode="numeric" oninput="nd2RadInputChanged()">
                 </div>
                 <div class="filter-spacer"></div>
+                <button class="filter-btn" id="nd2-rad-named" aria-pressed="false"
+                        title="Show only radios that have transmitted an over-the-air alias"
+                        onclick="nd2RadToggleNamed()"><i class="fas fa-id-card"></i> Named only</button>
                 <div class="nd2-seg" role="group" aria-label="Sort radios by">
                   <button class="filter-btn active" data-nd2-radsort="calls" onclick="nd2RadSetSort('calls')">Calls</button>
                   <button class="filter-btn" data-nd2-radsort="lastSeen" onclick="nd2RadSetSort('lastSeen')">Last seen</button>
@@ -4010,7 +4013,7 @@
       sysExpanded: {},     // system id → bool: which folder rows are open (persisted)
       // Talkgroups / Radios sub-tabs (scoped to the open system): search + paging.
       tg: { q: '', sort: 'calls', offset: 0, limit: 50, total: 0 },
-      rad: { q: '', sort: 'calls', offset: 0, limit: 50, total: 0 },
+      rad: { q: '', sort: 'calls', named: false, offset: 0, limit: 50, total: 0 },
       // Over-the-air radio aliases, one row per radio. Unwindowed: an alias is
       // durable identity, so the interesting radio is often a quiet one.
       alias: { q: '', sort: 'lastSeen', offset: 0, limit: 100, total: 0 },
@@ -5756,6 +5759,7 @@
         limit: String(nd2.tg.limit), offset: String(nd2.tg.offset),
       });
       if (q) params.set('q', q);
+      if (nd2.rad.named) params.set('named', '1');
       // Scoped to the open system — and, one level down, to the open SITE.
       if (nd2.sys.system != null) params.set('system', String(nd2.sys.system));
       const level = nd2.sys.level;
@@ -5874,6 +5878,19 @@
     }
 
     function nd2RadInputChanged() { clearTimeout(_nd2RadDebounce); _nd2RadDebounce = setTimeout(() => { nd2.rad.offset = 0; nd2LoadRadios(); }, 400); }
+    /** Only radios that have transmitted an over-the-air alias. Most radios
+     *  never do, so this is the difference between a few hundred identifiable
+     *  units and a wall of bare ids. */
+    function nd2RadToggleNamed() {
+      nd2.rad.named = !nd2.rad.named;
+      nd2.rad.offset = 0;
+      const btn = document.getElementById('nd2-rad-named');
+      if (btn) {
+        btn.classList.toggle('active', nd2.rad.named);
+        btn.setAttribute('aria-pressed', nd2.rad.named ? 'true' : 'false');
+      }
+      nd2LoadRadios();
+    }
     function nd2RadSetSort(sort) {
       if (nd2.rad.sort === sort) return;
       nd2.rad.sort = sort; nd2.rad.offset = 0;
@@ -5910,7 +5927,9 @@
         nd2.rad.total = data.total || 0;
         const body = document.getElementById('nd2-rad-body');
         const rows = data.radios || [];
-        if (!rows.length) { body.innerHTML = '<tr><td colspan="7" class="nd2-empty">No radios match.</td></tr>'; }
+        if (!rows.length) { body.innerHTML = `<tr><td colspan="7" class="nd2-empty">${
+          nd2.rad.named ? 'No radio here has transmitted an alias.' : 'No radios match.'
+        }</td></tr>`; }
         else body.innerHTML = rows.map(r => {
           const topTgs = (r.topTalkgroups || []).map(t =>
             nd2TgPill(t.talkgroup, t.label, t.color) + ` <span class="nd-sub">${nd2Num(t.calls)}</span>`

@@ -2264,6 +2264,13 @@ nodeDataRouter.get(
       }
       const where = conds.join(' AND ');
       const orderCol = sort === 'lastSeen' ? 'last_seen' : 'calls';
+      // Only radios that have transmitted an over-the-air alias. Applied as a
+      // HAVING rather than a WHERE because the alias is an aggregate over the
+      // radio's calls — most calls from a named radio carry no alias, so
+      // filtering rows would drop nearly all of its traffic and wreck the
+      // counts alongside it.
+      const namedOnly = url.searchParams.get('named') === '1';
+      const having = namedOnly ? 'HAVING COUNT(source_alias) > 0' : '';
 
       const pageParams = [...params];
       pageParams.push(limit);
@@ -2273,8 +2280,12 @@ nodeDataRouter.get(
 
       const [countQ, pageQ] = await Promise.all([
         pool.query<{ n: unknown }>(
-          `SELECT COUNT(DISTINCT (wacn, system, source_unit))::int AS n
-             FROM node_radio_events WHERE ${where}`,
+          namedOnly
+            ? `SELECT COUNT(*)::int AS n FROM (
+                 SELECT 1 FROM node_radio_events WHERE ${where}
+                  GROUP BY wacn, system, source_unit ${having}) t`
+            : `SELECT COUNT(DISTINCT (wacn, system, source_unit))::int AS n
+                 FROM node_radio_events WHERE ${where}`,
           params,
         ),
         pool.query<{
@@ -2295,6 +2306,7 @@ nodeDataRouter.get(
              FROM node_radio_events
             WHERE ${where}
             GROUP BY wacn, system, source_unit
+            ${having}
             ORDER BY ${orderCol} DESC, radio ASC
             LIMIT $${limIdx} OFFSET $${offIdx}`,
           pageParams,
