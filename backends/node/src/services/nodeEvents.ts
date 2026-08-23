@@ -34,10 +34,24 @@ import { log } from '../lib/log.js';
 import { config } from '../config.js';
 import { rdioPatches, groupingTalkgroup } from './rdioPatches.js';
 
-/** Two receptions of the same call may carry timestamps a few seconds
- *  apart (queueing on the node, clock skew). ±4s matches the shortest
- *  realistic gap between two DISTINCT calls on one talkgroup. */
-const GROUP_WINDOW_SECONDS = 4;
+/**
+ * How far apart two receptions of ONE transmission may be stamped.
+ *
+ * Five seconds because that is vce's own answer to the same question:
+ * CrossSiteCallDeduplicator.SAME_CALL_WINDOW_MILLISECONDS = 5_000, applied to
+ * a key of scope + target + source radio, which is the key used here too. That
+ * class exists because several sites of one system observe the same call, and
+ * it counts the logical call once. It cannot help us — it is per vce instance,
+ * and it gates the SUMMARY buckets, not the detailed activity rows we consume
+ * — but its window is a measured property of this decoder, so matching it
+ * means our idea of "the same call, heard again" is vce's idea of it.
+ *
+ * One deliberate difference: vce re-anchors when the OWNING context re-observes
+ * a call, so a long call's later reports extend its window. We do not. Our
+ * observers are separate nodes rather than sites inside one instance, and
+ * re-anchoring per node is exactly the chaining this window exists to stop.
+ */
+const GROUP_WINDOW_SECONDS = 5;
 
 /**
  * The candidate logical call a new reception may join. Shared by both radio
