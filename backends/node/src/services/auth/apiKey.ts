@@ -73,6 +73,9 @@ export const PUBLIC_ENDPOINT_PREFIXES: readonly string[] = [
   // feeder token (X-Node-Token/X-Node-Install), verified inside the
   // handler — NOT the site NSWPSN_API_KEY — so it must skip this gate.
   '/api/node-ingest/',
+  // Scanner feed: a third-party rdio DOWNSTREAM cannot send custom headers, so
+  // it authenticates with its key as a form field, verified in the handler.
+  '/api/scanner-ingest/',
   // Node self-update manifest. Same story: the node authenticates with its
   // feeder token (X-Node-Token), verified inside the handler.
   '/api/node-updates/',

@@ -56,6 +56,9 @@ docs/*
 !docs/waze-userscript.user.js
 !docs/waze-userscript-manual.user.js
 !docs/uptime-kuma-monitors.md
+# Handed to an outside contributor setting up a scanner feed, so it ships with
+# the code that serves the endpoint it describes.
+!docs/scanner-feed-setup.md
 
 # Radio unit reference data (local operator data, not for the public
 # repo). Patterns match individual files rather than the whole dir so

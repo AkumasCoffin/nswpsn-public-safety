@@ -162,6 +162,25 @@ const Schema = z.object({
   // python's _rdio_is_configured() check.
   RDIO_DATABASE_URL: z.string().optional(),
 
+  // --- Scanner feed (api/scanner-ingest.ts) -------------------------------
+  // A contributor whose receiver is NOT part of the node system — a desktop
+  // scanner into their own rdio-scanner — forwards calls here by pointing one
+  // rdio DOWNSTREAM at /api/scanner-ingest with this key. Unset = endpoint off
+  // (404), which is the default: it exists for a named person, not the public.
+  SCANNER_INGEST_KEY: z.string().optional(),
+  // Display name for the nodes row their calls are attributed to.
+  SCANNER_INGEST_NAME: z.string().optional(),
+  // Alignment shift applied to a scanner call's timestamp before storing.
+  // A node's activity event stamps call SETUP (vce's observed_at_ms) while an
+  // rdio upload stamps AUDIO START, which runs ~1s later — so the same
+  // transmission heard by both would otherwise miss the grouping window and be
+  // counted twice. Negative shifts the scanner back onto the node's basis.
+  SCANNER_TIME_OFFSET_MS: z
+    .string()
+    .optional()
+    .transform((v) => (v === undefined ? -1000 : Number(v)))
+    .pipe(z.number().int().min(-60_000).max(60_000)),
+
   // Timezone for rdio summary windows + transcripts/search day-bounds.
   // Mirrors python's SUMMARY_TZ env var; default to Sydney since this
   // is an NSW-focused service.

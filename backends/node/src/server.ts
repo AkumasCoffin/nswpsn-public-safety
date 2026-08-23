@@ -59,6 +59,7 @@ import { nodesRouter } from './api/nodes.js';
 import { nodeUpdatesRouter } from './api/node-updates.js';
 import { feederRouter } from './api/feeder.js';
 import { nodeIngestRouter } from './api/node-ingest.js';
+import { scannerIngestRouter } from './api/scanner-ingest.js';
 import { nodeDataRouter } from './api/node-data.js';
 import { requireApiKey } from './services/auth/apiKey.js';
 import { optionalSupabaseJwt } from './services/auth/supabaseJwt.js';
@@ -336,6 +337,7 @@ export function createApp() {
   app.route('/', feederRouter);
   // Feeder node call relay
   app.route('/', nodeIngestRouter);
+  app.route('/', scannerIngestRouter);
   // Feeder node event analytics (staff Data tab, owner|dev only)
   app.route('/', nodeDataRouter);
 

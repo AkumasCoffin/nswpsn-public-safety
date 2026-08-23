@@ -29,8 +29,9 @@
  * must never affect the relay path.
  */
 import { createHash } from 'node:crypto';
-import { getWriterPool } from '../db/pool.js';
+import { getPool, getWriterPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
+import { config } from '../config.js';
 
 /** Two receptions of the same call may carry timestamps a few seconds
  *  apart (queueing on the node, clock skew). ±4s matches the shortest
@@ -916,5 +917,181 @@ export async function recordPagerEvent(ev: PagerEventInput): Promise<void> {
       { err: (err as Error).message, node: ev.nodeId.slice(0, 8) },
       'nodeEvents: recordPagerEvent failed',
     );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Scanner-feed calls (api/scanner-ingest.ts)
+// ---------------------------------------------------------------------------
+
+/** Cached P25 system id for scanner calls — see resolveScannerSystem(). */
+let _scannerSystemCache: { at: number; system: number | null } | null = null;
+
+/**
+ * The P25 system a scanner call belongs to.
+ *
+ * A third-party rdio numbers its systems its own way, so the `system` field on
+ * their upload is meaningless to us. Every node on this deployment decodes one
+ * P25 system, so the answer is simply "the system our own events are on" —
+ * resolved from the busiest one seen recently rather than hardcoded, so a
+ * different deployment needs no code change. Null when nothing has been
+ * observed yet; the row still stores fine, it just has no system attributed.
+ */
+async function resolveScannerSystem(): Promise<number | null> {
+  if (_scannerSystemCache && Date.now() - _scannerSystemCache.at < 300_000) {
+    return _scannerSystemCache.system;
+  }
+  let system: number | null = null;
+  try {
+    const pool = await getPool();
+    if (pool) {
+      const res = await pool.query<{ system: number }>(
+        `SELECT system FROM node_radio_events
+          WHERE received_at >= now() - interval '24 hours' AND system IS NOT NULL
+          GROUP BY system ORDER BY count(*) DESC LIMIT 1`,
+      );
+      system = res.rows[0]?.system ?? null;
+    }
+  } catch (err) {
+    log.warn({ err }, 'nodeEvents: resolveScannerSystem failed');
+  }
+  _scannerSystemCache = { at: Date.now(), system };
+  return system;
+}
+
+export interface ScannerCall {
+  nodeId: string;
+  /** rdio's `dateTime` — the call's own start, BEFORE the alignment offset. */
+  receivedAt: Date;
+  talkgroup: number;
+  sourceUnit: number | null;
+  frequency: number | null;
+  talkerAlias: string | null;
+  audioBytes: number;
+}
+
+/**
+ * Record one call from a scanner feed.
+ *
+ * Unlike the node path there is no activity feed to match against, so this
+ * CREATES the event rather than flagging one. It is a single reception with no
+ * site: a scanner has no control-channel view.
+ *
+ * TIME ALIGNMENT. The two sources stamp different moments. A node's activity
+ * event carries observed_at_ms — when vce's activity logger wrote the row, at
+ * call setup — while an rdio upload carries audioRecording.getStartTime(), when
+ * audio began. Measured against production the audio start runs ~1s later, so
+ * a scanner call is shifted back by SCANNER_TIME_OFFSET_MS before storing. That
+ * is what lets the same transmission heard by BOTH a node and the scanner land
+ * in one logical call instead of two, which is what makes the call counts
+ * complete rather than double.
+ */
+export async function recordScannerCall(call: ScannerCall): Promise<void> {
+  const pool = await getWriterPool();
+  if (!pool) return;
+
+  const shifted = new Date(call.receivedAt.getTime() + config.SCANNER_TIME_OFFSET_MS);
+  const receivedAt = clampReceivedAt(shifted);
+  const system = await resolveScannerSystem();
+  const alias =
+    call.talkerAlias && isRealTalkerAlias(call.talkerAlias, call.sourceUnit)
+      ? call.talkerAlias.trim().slice(0, 64)
+      : null;
+
+  // Dedupe key for the (node_id, stream_id, source_event_id) unique index: rdio
+  // retries a failed downstream, and a retry must not become a second call.
+  // Built from the call's own identity, so a retry hashes identically.
+  const sourceEventId = createHash('sha256')
+    .update(
+      [
+        Math.floor(call.receivedAt.getTime() / 1000),
+        call.talkgroup,
+        call.sourceUnit ?? '',
+        call.frequency ?? '',
+      ].join('|'),
+    )
+    .digest('hex')
+    .slice(0, 32);
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // Same advisory lock + grouping the activity path uses, so a scanner
+    // reception joins the logical call a node already opened for the same
+    // transmission rather than starting a rival one.
+    const lockKey = `nrc:${system ?? 0}:${call.talkgroup}`;
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [lockKey]);
+
+    const found = await client.query<{ logical_call_id: string }>(
+      `SELECT logical_call_id FROM node_radio_events
+        WHERE ($1::integer IS NULL OR system IS NULL OR system = $1::integer)
+          AND talkgroup = $2
+          AND received_at BETWEEN $3::timestamptz - interval '${GROUP_WINDOW_SECONDS} seconds'
+                             AND $3::timestamptz + interval '${GROUP_WINDOW_SECONDS} seconds'
+          AND ($4::integer IS NULL OR source_unit IS NULL OR source_unit = $4::integer)
+          AND logical_call_id IS NOT NULL
+        ORDER BY abs(extract(epoch FROM (received_at - $3::timestamptz)))
+        LIMIT 1`,
+      [system, call.talkgroup, receivedAt.toISOString(), call.sourceUnit],
+    );
+    const existingGroup = found.rows[0]?.logical_call_id ?? null;
+
+    const ins = await client.query<{ id: string }>(
+      `INSERT INTO node_radio_events
+         (node_id, received_at, stream_id, source_event_id,
+          action, event_type, system, talkgroup, source_unit,
+          frequency, encrypted, recorded, audio_bytes, source_alias)
+       VALUES ($1, $2::timestamptz, 'scanner', $3,
+               'CALL', 'CALL_GROUP', $4, $5, $6,
+               $7, false, true, $8, $9)
+       ON CONFLICT (node_id, stream_id, source_event_id) DO NOTHING
+       RETURNING id`,
+      [
+        call.nodeId,
+        receivedAt.toISOString(),
+        sourceEventId,
+        system,
+        call.talkgroup,
+        call.sourceUnit,
+        call.frequency,
+        call.audioBytes,
+        alias,
+      ],
+    );
+    const rowId = ins.rows[0]?.id;
+    if (rowId === undefined) {
+      // Retry of a call already stored — nothing to do, but commit to release
+      // the advisory lock cleanly.
+      await client.query('COMMIT');
+      return;
+    }
+    await client.query(`UPDATE node_radio_events SET logical_call_id = $1 WHERE id = $2`, [
+      existingGroup ?? rowId,
+      rowId,
+    ]);
+
+    // The scanner's own OTA is durable identity like any other.
+    if (alias && call.sourceUnit !== null) {
+      await client.query(
+        `INSERT INTO node_radio_aliases (system, radio_id, alias)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (system, radio_id) DO UPDATE
+           SET alias = EXCLUDED.alias,
+               last_seen = now(),
+               times_seen = node_radio_aliases.times_seen + 1`,
+        [system ?? 0, call.sourceUnit, alias],
+      );
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {
+      /* connection already gone */
+    }
+    log.error({ err, node: call.nodeId.slice(0, 8) }, 'nodeEvents: recordScannerCall failed');
+    throw err;
+  } finally {
+    client.release();
   }
 }
