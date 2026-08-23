@@ -40,12 +40,20 @@ async function appWith(key?: string, relay?: { url: string; key: string }) {
   return app;
 }
 
-/** The multipart shape rdio's downstream actually sends. */
-function upload(fields: Record<string, string>) {
+/**
+ * The multipart shape rdio's downstream actually sends.
+ *
+ * Content-Length included on purpose: rdio builds the whole body into a
+ * bytes.Buffer and hands it to http.NewRequest, which sets the header for it
+ * (server/downstream.go). undici's FormData would send chunked instead, and the
+ * route refuses a body it cannot size BEFORE reading it — so a chunked fixture
+ * would test a client that does not exist and miss the guard entirely.
+ */
+function upload(fields: Record<string, string>, bytes = 64) {
   const fd = new FormData();
   for (const [k, v] of Object.entries(fields)) fd.append(k, v);
-  fd.append('audio', new File([new Uint8Array(64)], 'audio.m4a'));
-  return { method: 'POST', body: fd };
+  fd.append('audio', new File([new Uint8Array(bytes)], 'audio.m4a'));
+  return { method: 'POST', body: fd, headers: { 'Content-Length': String(512 + bytes) } };
 }
 
 beforeEach(() => {
@@ -166,11 +174,17 @@ describe('GET /api/scanner-ingest/api/capabilities', () => {
 });
 
 describe('POST /api/scanner-ingest/api/call-transcript', () => {
-  const push = (body: unknown) => ({
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+  const push = (body: unknown) => {
+    const text = JSON.stringify(body);
+    return {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': String(Buffer.byteLength(text)),
+      },
+      body: text,
+    };
+  };
   const good = {
     key: 'right-key',
     system: 3,
@@ -221,5 +235,60 @@ describe('POST /api/scanner-ingest/api/call-transcript', () => {
     expect(res.status).toBe(200);
     expect(fetchMock).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Body size guard.
+//
+// hono buffers a whole body into RAM before any of our code sees it, and a
+// chunked request carries no length to check afterwards. This router is in
+// PUBLIC_ENDPOINT_PREFIXES — a third-party rdio downstream cannot send the site
+// API key — so without this an UNAUTHENTICATED caller could make the process
+// buffer arbitrary bytes and only then be told 401.
+// ---------------------------------------------------------------------------
+describe('body size guard', () => {
+  it('refuses an upload it cannot size, before reading it', async () => {
+    const app = await appWith('right-key');
+    const fd = new FormData();
+    fd.append('key', 'right-key');
+    const res = await app.request('/api/scanner-ingest/api/call-upload', {
+      method: 'POST',
+      body: fd, // no Content-Length: undici sends this chunked
+    });
+    expect(res.status).toBe(411);
+  });
+
+  it('refuses an oversize upload without buffering it', async () => {
+    const app = await appWith('right-key');
+    const res = await app.request('/api/scanner-ingest/api/call-upload', {
+      method: 'POST',
+      headers: { 'Content-Length': String(21 * 1024 * 1024) },
+      body: 'x',
+    });
+    expect(res.status).toBe(413);
+  });
+
+  it('refuses an oversize transcript push', async () => {
+    const app = await appWith('right-key');
+    const res = await app.request('/api/scanner-ingest/api/call-transcript', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': String(2 * 1024 * 1024) },
+      body: '{}',
+    });
+    expect(res.status).toBe(413);
+  });
+
+  it('rejects an oversize body BEFORE checking the key', async () => {
+    // The point of the guard: a caller with no key must not be able to spend
+    // our memory first and be rejected second.
+    const app = await appWith('right-key');
+    const res = await app.request('/api/scanner-ingest/api/call-upload', {
+      method: 'POST',
+      headers: { 'Content-Length': String(21 * 1024 * 1024) },
+      body: 'x',
+    });
+    expect(res.status).toBe(413);
+    expect(res.status).not.toBe(401);
   });
 });

@@ -30,6 +30,7 @@
  * carry a null site. That is a property of the source, not a gap to fix.
  */
 import { Hono } from 'hono';
+import type { Context } from 'hono';
 import { createHash } from 'node:crypto';
 import type { BodyData } from 'hono/utils/body';
 import { config } from '../config.js';
@@ -110,11 +111,43 @@ async function ensureScannerNode(key: string): Promise<{ id: string; enabled: bo
 // The path carries rdio's own /api/call-upload suffix so the contributor
 // configures the BASE url only, exactly like any other downstream target.
 // ---------------------------------------------------------------------------
+/**
+ * Refuse a body before reading it.
+ *
+ * hono's parseBody/json buffer the WHOLE body into RAM, and a chunked request
+ * carries no Content-Length to check afterwards — so the only safe order is to
+ * demand the length, check it, and only then read. node-ingest.ts:146 has done
+ * this from the start; these routes did not, which left an UNAUTHENTICATED
+ * caller able to make the process buffer arbitrary bytes and then be told 401.
+ * A handful of concurrent requests is an out-of-memory kill, and this router is
+ * in PUBLIC_ENDPOINT_PREFIXES (a third-party rdio downstream cannot send the
+ * site API key), so nothing upstream would have stopped it.
+ */
+function refuseOversizeBody(c: Context, max: number): Response | null {
+  const raw = c.req.header('content-length');
+  const len = Number(raw ?? '');
+  if (raw === undefined || !Number.isFinite(len)) {
+    return c.json({ error: 'length required' }, 411);
+  }
+  if (len > max) return c.json({ error: 'body too large' }, 413);
+  return null;
+}
+
+/** An audio upload. Matches node-ingest's MAX_CALL_BYTES. */
+const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+/** A transcript is text; a megabyte is already far past any real one. */
+const MAX_TRANSCRIPT_BYTES = 1024 * 1024;
+
 scannerIngestRouter.post('/api/scanner-ingest/api/call-upload', async (c) => {
   const expected = config.SCANNER_INGEST_KEY;
   // Unset key = feature off. A 404 rather than a 403 so an unconfigured
   // deployment gives nothing away about the endpoint existing.
   if (!expected) return c.notFound();
+
+  // BEFORE parseBody, and before the key check, because parseBody is what
+  // spends the memory.
+  const tooBig = refuseOversizeBody(c, MAX_UPLOAD_BYTES);
+  if (tooBig) return tooBig;
 
   let form: BodyData;
   try {
@@ -333,6 +366,9 @@ scannerIngestRouter.get('/api/scanner-ingest/api/capabilities', (c) => {
 scannerIngestRouter.post('/api/scanner-ingest/api/call-transcript', async (c) => {
   const expected = config.SCANNER_INGEST_KEY;
   if (!expected) return c.notFound();
+
+  const tooBig = refuseOversizeBody(c, MAX_TRANSCRIPT_BYTES);
+  if (tooBig) return tooBig;
 
   let body: Record<string, unknown>;
   try {
