@@ -152,3 +152,69 @@ export function groupingTalkgroup(lookup: PatchLookup, talkgroup: number): numbe
   const patch = lookup.byTalkgroup.get(talkgroup);
   return patch?.talkgroups[0] ?? talkgroup;
 }
+
+/**
+ * How a transmission is FILED, and which patch (if any) it belongs to.
+ *
+ * `home` is the talkgroup the row is shown under. For a patched transmission
+ * that is not simply "whichever reception we happened to pick": rdio files the
+ * surviving call under the HIGHEST-RANKED member that actually received a copy,
+ * and never claims a talkgroup without a real receipt (server/controller.go,
+ * Patch.homeRank). The member list in rdioScannerPatches IS the ranking, so the
+ * answer is the first entry of that list which appears in what we received.
+ * Doing anything else puts a call on a talkgroup rdio would never file it
+ * under, and the two records stop agreeing.
+ *
+ * The two kinds are genuinely different things and are labelled as such:
+ *
+ *   configured  an operator declared this patch in rdio's admin. Ranked, and
+ *               the same for every call until someone edits it. The members
+ *               here are the ones we really received, in rank order.
+ *
+ *   automatic   the trunking system announced the patch over the air, per
+ *               call, and vce reported the transmission as CALL_PATCH_GROUP.
+ *               There is no ranking to respect — the supergroup IS the home.
+ *
+ * A patch of one received member is not a patch: rdio's own displays read a
+ * transmission that reached a single member as unpatched, and so do we.
+ */
+export interface PatchView {
+  kind: 'configured' | 'automatic';
+  /** rdio's label for a configured patch; null for an automatic one. */
+  label: string | null;
+  /** Every talkgroup this transmission was carried on, in rank order. */
+  talkgroups: number[];
+}
+
+export function resolvePatch(
+  patches: PatchLookup,
+  representative: number | null,
+  received: readonly number[],
+  eventType: string | null,
+): { home: number | null; patch: PatchView | null } {
+  const members = received.filter((t) => Number.isInteger(t));
+
+  for (const tg of members) {
+    const patch = patches.byTalkgroup.get(tg);
+    if (!patch) continue;
+    // Rank order, restricted to members that really got a copy.
+    const ranked = patch.talkgroups.filter((t) => members.includes(t));
+    if (ranked.length < 2) break;
+    return {
+      home: ranked[0] ?? representative,
+      patch: { kind: 'configured', label: patch.label, talkgroups: ranked },
+    };
+  }
+
+  // An over-the-air patch: the supergroup is what was transmitted on, so it is
+  // both the home and the first entry. Its member talkgroups are recorded by
+  // vce per event (activity_event_talkgroup_member) but are not yet shipped by
+  // the control server, so today the list is the supergroup alone.
+  if ((eventType ?? '').toUpperCase().startsWith('CALL_PATCH_GROUP')) {
+    const home = representative ?? members[0] ?? null;
+    const talkgroups = home === null ? members : [home, ...members.filter((t) => t !== home)];
+    return { home, patch: { kind: 'automatic', label: null, talkgroups } };
+  }
+
+  return { home: representative, patch: null };
+}

@@ -2264,6 +2264,17 @@
     .nd2-badge i { font-size: 0.58rem; }
     .nd2-badge-enc { background: rgba(245, 158, 11, 0.14); color: #fcd34d; }
     .nd2-badge-rec { background: rgba(148, 163, 184, 0.12); color: #94a3b8; }
+    .nd2-badge-patch { background: rgba(56, 189, 248, 0.14); color: #7dd3fc; }
+    /* The other talkgroups a patched transmission was carried on. Its own
+       talkgroup is the row's pill, so this lists only the rest — on its own
+       line, because a patch of four members would otherwise push the identity
+       column far wider than every unpatched row beside it. */
+    .nd2-patch-members {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.2rem;
+      margin-top: 0.25rem;
+    }
     .nd2-detail-gap { margin-bottom: 1.75rem; }
 
     /* The sites hearing one live call, and the nodes that received it. Both wrap
@@ -5029,7 +5040,7 @@
         return `<tr>
           <td>${timeCell}</td>
           <td><span class="nd-sub">${escapeHtml(ev.systemLabel || String(ev.system != null ? ev.system : '—'))}</span></td>
-          <td>${tgLabel}${badges}</td>
+          <td>${tgLabel}${badges}${nd2PatchCell(ev.patch)}</td>
           <td>${nd2AgencyCell(ev.agency)}</td>
           <td>${ev.sourceUnit != null ? nd2RadioPill(ev.sourceUnit, ev.sourceColor) : '—'}</td>
           <td>${nd2NameCell(ev.sourceAlias)}</td>
@@ -5109,6 +5120,39 @@
       const c = escapeHtml(String(color));
       return `<span class="nd2-tgpill" style="background:${c}22;border-color:${c}88;">`
         + `<span class="nd2-tgpill-dot" style="background:${c}"></span>${body}</span>`;
+    }
+
+    /**
+     * A patched transmission, rendered under the talkgroup it is filed on.
+     *
+     * A patch is several talkgroups carrying ONE conversation, so the same
+     * transmission goes out on every member at once and only one call is kept.
+     * The row therefore has to say two things the talkgroup pill alone cannot:
+     * that this WAS a patch, and which other channels carried it.
+     *
+     * The two kinds are not the same fact and are not labelled the same way:
+     *
+     *   configured  an operator declared this patch in rdio's admin. Ranked,
+     *               and the same for every call until someone edits it, so the
+     *               patch has a name worth showing.
+     *   automatic   the trunking system announced it over the air for this
+     *               call alone. No name, no ranking — it is a property of the
+     *               transmission, not of the configuration.
+     *
+     * The first entry is the home talkgroup, which is already the row's own
+     * pill; repeating it would read as if the call went out on it twice.
+     */
+    function nd2PatchCell(patch) {
+      if (!patch) return '';
+      const members = Array.isArray(patch.talkgroups) ? patch.talkgroups : [];
+      const title = patch.kind === 'configured'
+        ? `Patch: ${patch.label || 'configured in rdio'}`
+        : 'Patch announced over the air for this transmission';
+      const badge = `<span class="nd2-badge nd2-badge-patch" title="${escapeHtml(title)}">`
+        + `<i class="fas fa-code-merge"></i>PATCH</span>`;
+      const others = members.slice(1)
+        .map(m => nd2TgPill(m.talkgroup, m.label, m.color)).join('');
+      return badge + (others ? `<div class="nd2-patch-members">${others}</div>` : '');
     }
 
     // The radio (unit) equivalent of nd2TgPill, and deliberately the same
@@ -6679,7 +6723,7 @@
     // the style attribute. Agency is a separate column, not appended here.
     function nd2LiveTgCell(o) {
       if (o.talkgroup == null) return '<span class="nd-sub">—</span>';
-      return nd2TgPill(o.talkgroup, o.talkgroupLabel, o.color);
+      return nd2TgPill(o.talkgroup, o.talkgroupLabel, o.color) + nd2PatchCell(o.patch);
     }
 
     // NB: distinct from nd2Pct — that one formats a plain percentage for the
@@ -6753,6 +6797,9 @@
         row.talkerAlias = row.talkerAlias || c.talkerAlias;
         row.fromAlias = row.fromAlias || c.fromAlias;
         row.talkgroupLabel = row.talkgroupLabel || c.talkgroupLabel;
+        // An over-the-air patch is a property of the TRANSMISSION, so any node
+        // that named its members speaks for the merged row.
+        row.patch = row.patch || c.patch;
         row.agency = row.agency || c.agency;
       }
       return [...byCall.values()].map(r => ({

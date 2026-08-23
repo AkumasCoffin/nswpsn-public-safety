@@ -95,12 +95,46 @@ function prettySiteName(name: string): string {
  * so that is the one to resolve.
  */
 function talkgroupIdOf(to: unknown): number {
-  if (to === null || to === undefined) return NaN;
+  return parsePatchTo(to).id;
+}
+
+/**
+ * Split a live call's TO field into the talkgroup spoken on and, when it is a
+ * patch, the talkgroups patched into it.
+ *
+ * vce renders a patched target with PatchGroup.toString(): "P:" and the
+ * supergroup, then the patched TALKGROUPS in brackets, then — only if there
+ * are any — the patched RADIOS in a second pair of brackets:
+ *
+ *     P:10128 [10120, 10125]            supergroup + two patched talkgroups
+ *     P:10128 [10120] [1234567]         …and a patched radio as well
+ *
+ * Only the FIRST bracket group is talkgroups. Reading both would put 7-digit
+ * radio ids in a talkgroup list, where they would resolve to no label and,
+ * worse, could group two unrelated calls together.
+ *
+ * This is the one place the automatic patch membership is available live —
+ * the activity feed reports a patched transmission as its supergroup alone —
+ * so it is kept rather than discarded.
+ */
+export function parsePatchTo(to: unknown): { id: number; patched: number[] } {
+  const none = { id: NaN, patched: [] as number[] };
+  if (to === null || to === undefined) return none;
   const raw = String(to).trim();
   const direct = Number(raw);
-  if (Number.isInteger(direct)) return direct;
-  const patch = /^P:\s*(\d+)/i.exec(raw);
-  return patch ? Number(patch[1]) : NaN;
+  if (Number.isInteger(direct)) return { id: direct, patched: [] };
+  const head = /^P:\s*(\d+)/i.exec(raw);
+  if (!head) return none;
+  const id = Number(head[1]);
+  const members = /\[([^\]]*)\]/.exec(raw);
+  const patched: number[] = [];
+  if (members) {
+    for (const part of (members[1] ?? '').split(',')) {
+      const n = Number(part.trim());
+      if (Number.isInteger(n) && n > 0 && n !== id && !patched.includes(n)) patched.push(n);
+    }
+  }
+  return { id, patched };
 }
 
 function normaliseChannelName(name: string): string {
@@ -224,7 +258,7 @@ export async function shapeNodeLive(
 
   const buildCall = (ac: Record<string, unknown>, timing: CallTiming): Record<string, unknown> => {
     const state = String(ac['state'] ?? '').toUpperCase();
-    const id = talkgroupIdOf(ac['to']);
+    const { id, patched } = parsePatchTo(ac['to']);
     // vce calls this `channelName`; `name` is kept only as a defensive
     // fallback for any build that reports it the other way.
     const chNameRaw = ac['channelName'] ?? ac['name'];
@@ -261,6 +295,24 @@ export async function shapeNodeLive(
       talkgroupLabel: Number.isInteger(id) ? tg.labels.get(id) ?? null : null,
       agency: Number.isInteger(id) ? tg.agencies.get(id) ?? null : null,
       color: Number.isInteger(id) ? tg.colors.get(id) ?? null : null,
+      // An over-the-air patch, as reported for THIS call. Null for an ordinary
+      // call. `talkgroups` is the supergroup first — which is the talkgroup
+      // being spoken on — then the members patched into it, each carrying its
+      // own label and colour so the row can render them like any talkgroup.
+      // A patch whose members vce did not name is still a patch: the flag is
+      // the supergroup form of the target, not the presence of a member list.
+      patch:
+        /^P:/i.test(String(ac['to'] ?? '').trim()) && Number.isInteger(id)
+          ? {
+              kind: 'automatic' as const,
+              label: null,
+              talkgroups: [id, ...patched].map((t) => ({
+                talkgroup: t,
+                label: tg.labels.get(t) ?? null,
+                color: tg.colors.get(t) ?? null,
+              })),
+            }
+          : null,
       // The call's own decode, never the control channel's (see ownQuality).
       syncPercent: ownQuality(ac['syncPercent']),
       signalDbfs: ownQuality(ac['signalDbfs']),
@@ -318,6 +370,6 @@ export async function shapeNodeLive(
  */
 export function sortLiveChannels(channels: Array<Record<string, unknown>>): void {
   const key = (r: Record<string, unknown>): string =>
-    `${String(r['nodeName'] ?? r['node'] ?? '')} ${String(r['name'] ?? '')}`;
+    `${String(r['nodeName'] ?? r['node'] ?? '')}\u0000${String(r['name'] ?? '')}`;
   channels.sort((x, y) => key(x).localeCompare(key(y)));
 }

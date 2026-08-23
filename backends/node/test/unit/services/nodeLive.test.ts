@@ -251,3 +251,53 @@ describe('shapeNodeLive: rows from the call window', () => {
     expect(strip(withWindow!.calls[0]!)).toEqual(strip(without!.calls[0]!));
   });
 });
+
+// ---------------------------------------------------------------------------
+// Patched calls.
+//
+// vce renders a patched target with PatchGroup.toString(): "P:" and the
+// supergroup, then the patched TALKGROUPS in brackets, then — only if there
+// are any — the patched RADIOS in a second pair of brackets. This is the one
+// place automatic patch membership is available live: the activity feed reports
+// a patched transmission as its supergroup alone.
+// ---------------------------------------------------------------------------
+describe('parsePatchTo', () => {
+  it('reads a plain talkgroup unchanged', async () => {
+    const { parsePatchTo } = await import('../../../src/services/nodeLive.js');
+    expect(parsePatchTo('30017')).toEqual({ id: 30017, patched: [] });
+  });
+
+  it('keeps the members of a patched target instead of discarding them', async () => {
+    const { parsePatchTo } = await import('../../../src/services/nodeLive.js');
+    expect(parsePatchTo('P:10128 [10120, 10125]')).toEqual({
+      id: 10128,
+      patched: [10120, 10125],
+    });
+  });
+
+  it('takes talkgroups from the FIRST bracket group only, never radios', async () => {
+    const { parsePatchTo } = await import('../../../src/services/nodeLive.js');
+    // The second group is patched RADIO ids. Reading them as talkgroups would
+    // put a 7-digit unit in a talkgroup list, where it resolves to no label —
+    // and could group two unrelated calls together.
+    expect(parsePatchTo('P:10128 [10120] [1234567]')).toEqual({
+      id: 10128,
+      patched: [10120],
+    });
+  });
+
+  it('handles a patch with no members, and junk', async () => {
+    const { parsePatchTo } = await import('../../../src/services/nodeLive.js');
+    expect(parsePatchTo('P:10128')).toEqual({ id: 10128, patched: [] });
+    expect(parsePatchTo(null).id).toBeNaN();
+    expect(parsePatchTo('not a talkgroup').id).toBeNaN();
+  });
+
+  it('never lists the supergroup as one of its own members', async () => {
+    const { parsePatchTo } = await import('../../../src/services/nodeLive.js');
+    expect(parsePatchTo('P:10128 [10128, 10120]')).toEqual({
+      id: 10128,
+      patched: [10120],
+    });
+  });
+});

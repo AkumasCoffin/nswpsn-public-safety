@@ -51,6 +51,7 @@ import {
 } from '../services/talkgroupCatalog.js';
 import { shapeNodeLive, sortLiveChannels } from '../services/nodeLive.js';
 import { liveCallWindow } from '../services/nodeCallWindow.js';
+import { rdioPatches, resolvePatch } from '../services/rdioPatches.js';
 
 /**
  * Talkgroup label / agency / colour lookups live in services/talkgroupCatalog
@@ -1061,6 +1062,7 @@ nodeDataRouter.get(
               encrypted: boolean;
               recorded: boolean;
               receptions: number;
+              talkgroups: number[] | null;
               sites: Array<{ rfss: number; site: number }>;
               nodes: Array<{ id: string; name: string }>;
             }>(
@@ -1091,6 +1093,14 @@ nodeDataRouter.get(
                       bool_or(e.encrypted) AS encrypted,
                       bool_or(e.recorded) AS recorded,
                       COUNT(*)::int AS receptions,
+                      -- Every talkgroup this transmission was actually
+                      -- received on. For a patch that is the whole received
+                      -- member set, which is both what decides the home
+                      -- talkgroup (rdio ranks, and only ever files under a
+                      -- member that really got a copy) and what the row lists
+                      -- as its patch members.
+                      array_agg(DISTINCT e.talkgroup)
+                        FILTER (WHERE e.talkgroup IS NOT NULL) AS talkgroups,
                       COALESCE(
                         jsonb_agg(DISTINCT jsonb_build_object('rfss', e.site_rfss, 'site', e.site_id))
                           FILTER (WHERE e.site_rfss IS NOT NULL AND e.site_id IS NOT NULL),
@@ -1133,6 +1143,10 @@ nodeDataRouter.get(
       const pagerMap = new Map((pagerDetail?.rows ?? []).map((r) => [r.id, r]));
       const labels = await talkgroupLabels();
       const tgColorMap = await talkgroupColors();
+      // Ranked patch membership, so a patched transmission is filed where
+      // rdio files it. ~60s cached; empty when central rdio is unreachable,
+      // which degrades to the representative talkgroup and no patch chip.
+      const patchLookup = radioIds.length > 0 ? await rdioPatches() : null;
       const agencies = await talkgroupAgencies();
       const colors = await talkgroupColors();
       const evAgencies = await talkgroupAgencies();
@@ -1145,18 +1159,38 @@ nodeDataRouter.get(
           if (row.type === 'radio') {
             const d = radioMap.get(row.id);
             if (!d) return null;
+            // The talkgroup this transmission is FILED under, plus the patch it
+            // belongs to — not simply the reception we happened to aggregate.
+            const { home, patch } = resolvePatch(
+              patchLookup ?? { byTalkgroup: new Map(), all: [] },
+              d.talkgroup,
+              d.talkgroups ?? [],
+              d.event_type,
+            );
             return {
               type: 'radio' as const,
               id: Number(d.id),
               at: iso(d.at),
               system: d.system,
-              talkgroup: d.talkgroup,
-              talkgroupLabel: d.talkgroup_label ?? (d.talkgroup !== null ? labels.get(d.talkgroup) ?? null : null),
-              talkgroupColor: d.talkgroup !== null ? tgColorMap.get(d.talkgroup) ?? null : null,
+              talkgroup: home,
+              talkgroupLabel: d.talkgroup_label ?? (home !== null ? labels.get(home) ?? null : null),
+              talkgroupColor: home !== null ? tgColorMap.get(home) ?? null : null,
+              // Null for an ordinary transmission; the display shows a PATCH
+              // chip and the member talkgroups when it is set.
+              patch: patch
+                ? {
+                    ...patch,
+                    talkgroups: patch.talkgroups.map((tg) => ({
+                      talkgroup: tg,
+                      label: labels.get(tg) ?? null,
+                      color: tgColorMap.get(tg) ?? null,
+                    })),
+                  }
+                : null,
               // Owning agency, from the talkgroup's SDR-Trunk alias group —
               // the events table shows it in its own column, same as every
               // other list that renders a talkgroup.
-              agency: d.talkgroup !== null ? evAgencies.get(d.talkgroup) ?? null : null,
+              agency: home !== null ? evAgencies.get(home) ?? null : null,
               systemLabel: d.system_label,
               sourceUnit: d.source_unit,
               // `sourceAlias` is the OTA the call carried; the other two are
