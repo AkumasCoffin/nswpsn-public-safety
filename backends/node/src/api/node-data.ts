@@ -480,6 +480,41 @@ const callGroup = (prefix = ''): string =>
   ` OR ${prefix}event_type LIKE 'CALL_PATCH_GROUP%')`;
 const CALL_GROUP = callGroup();
 
+/** Log phase timings only when the whole request was slow. Matches the request
+ *  logger's threshold closely enough that the two lines appear together. */
+const SLOW_PHASE_MS = 1000;
+
+/**
+ * Where a slow request actually spent its time.
+ *
+ * /talkgroups could not be explained from outside: its three queries measure
+ * ~400ms, ~600ms and ~380ms against production, yet the endpoint reports
+ * ~1800ms — and guessing at the difference produced an "optimisation" that
+ * measured three times WORSE than the LATERAL it would have replaced. A
+ * request that reports its own phases settles that in one deploy rather than
+ * another round of inference.
+ *
+ * Costs a Date.now() per phase, and nothing at all on a fast request.
+ */
+function phaseTimer(label: string) {
+  const t0 = Date.now();
+  let last = t0;
+  const marks: string[] = [];
+  return {
+    mark(name: string): void {
+      const now = Date.now();
+      marks.push(`${name}=${now - last}ms`);
+      last = now;
+    },
+    done(): void {
+      const total = Date.now() - t0;
+      if (total >= SLOW_PHASE_MS) {
+        log.info(`slow-phases ${label} total=${total}ms ${marks.join(' ')}`);
+      }
+    },
+  };
+}
+
 /** One entry per receiving site, keeping the first frequency any reception on
  *  that site named. See the sites aggregate in /events for why duplicates
  *  reach here at all. */
@@ -2436,6 +2471,7 @@ nodeDataRouter.get(
   '/api/node-data/talkgroups',
   requireRole(canViewNodeData),
   async (c) => {
+    const timer = phaseTimer('talkgroups');
     try {
       const pool = await getPool();
       if (!pool) return c.json({ error: 'database unavailable' }, 503);
@@ -2591,6 +2627,7 @@ nodeDataRouter.get(
           pageParams,
         ),
       ]);
+      timer.mark('main');
       const total = num(countQ.rows[0]?.n);
       const page = pageQ.rows;
 
@@ -2701,10 +2738,13 @@ nodeDataRouter.get(
         }
       }
 
+      timer.mark('enrich');
       const labels = await talkgroupLabels();
       const agencies = await talkgroupAgencies();
       const colors = await talkgroupColors();
       const siteMap = await siteNames(pool);
+      timer.mark('lookups');
+      timer.done();
       return c.json({
         window,
         total,
