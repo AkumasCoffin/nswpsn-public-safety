@@ -670,6 +670,99 @@ export async function markRecorded(
   }
 }
 
+/**
+ * Merge the logical calls of an AUTOMATIC patch, using the member list the
+ * decoder observed on the air.
+ *
+ * WHY THIS IS A SEPARATE, LATER STEP
+ * There are two kinds of patch and they arrive by different roads. An operator
+ * CONFIGURED patch is known up front, so `recordActivityEvents` groups on it
+ * the moment the event lands. An AUTOMATIC patch is detected over the air per
+ * transmission, and vce's activity feed does not carry it — ControlActivityLookup
+ * emits a fixed column set with no patch field. The only place it appears is the
+ * `patches` array on the audio upload, which arrives a second or two AFTER the
+ * events have already been grouped.
+ *
+ * So this cannot be a grouping decision; it is a correction. By the time we know
+ * the transmission was patched, each member talkgroup has usually opened its own
+ * logical call, and the job is to fold them into one.
+ *
+ * WHICH SURVIVES
+ * The numerically smallest id, which is the earliest row — the call that opened
+ * first. Arbitrary but stable: every member picks the same winner no matter
+ * which upload triggers the merge, so two uploads racing cannot swap them back
+ * and forth.
+ *
+ * Fire-safe: never throws. A failure leaves the calls unmerged, which is exactly
+ * the behaviour before automatic patches were honoured at all.
+ */
+export async function mergeAutomaticPatch(
+  nodeId: string,
+  /** Talkgroups the decoder saw carrying this transmission. */
+  members: number[],
+  atDate: Date,
+  sourceUnit: number | null = null,
+): Promise<void> {
+  // A patch of one is not a patch — the decoder reports the lone talkgroup this
+  // way constantly, and it means "not currently patched".
+  const unique = [...new Set(members.filter((m) => Number.isInteger(m) && m > 0))];
+  if (unique.length < 2) return;
+
+  const pool = await getWriterPool();
+  if (!pool) return;
+  const at = clampReceivedAt(atDate);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // Same lock family the grouping paths use, keyed on the lowest member so
+    // every talkgroup in this patch serialises against the same key.
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+      `nrc:auto:${Math.min(...unique)}`,
+    ]);
+
+    const found = await client.query<{ logical_call_id: string }>(
+      `SELECT DISTINCT logical_call_id FROM node_radio_events
+        WHERE talkgroup = ANY($1::int[])
+          AND received_at BETWEEN $2::timestamptz - interval '${GROUP_WINDOW_SECONDS} seconds'
+                             AND $2::timestamptz + interval '${GROUP_WINDOW_SECONDS} seconds'
+          AND ($3::integer IS NULL OR source_unit IS NULL OR source_unit = $3::integer)
+          AND logical_call_id IS NOT NULL`,
+      [unique, at.toISOString(), sourceUnit],
+    );
+    const ids = found.rows.map((r) => r.logical_call_id);
+    // Nothing to do unless the members really did fork into rival calls.
+    if (ids.length < 2) {
+      await client.query('COMMIT');
+      return;
+    }
+
+    const survivor = ids.reduce((a, b) => (BigInt(a) <= BigInt(b) ? a : b));
+    const losers = ids.filter((id) => id !== survivor);
+    const res = await client.query(
+      `UPDATE node_radio_events SET logical_call_id = $1
+        WHERE logical_call_id = ANY($2::bigint[])`,
+      [survivor, losers],
+    );
+    await client.query('COMMIT');
+    log.info(
+      { node: nodeId.slice(0, 8), members: unique, merged: losers.length, rows: res.rowCount },
+      'nodeEvents: automatic patch merged',
+    );
+  } catch (err) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {
+      /* connection already gone */
+    }
+    log.warn(
+      { err: (err as Error).message, node: nodeId.slice(0, 8) },
+      'nodeEvents: mergeAutomaticPatch failed',
+    );
+  } finally {
+    client.release();
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Radio: deep P25 site metadata (migration 047)
 // ---------------------------------------------------------------------------

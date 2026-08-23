@@ -44,6 +44,7 @@ import {
   markRecorded,
   recordPagerEvent,
   recordScannerCall,
+  mergeAutomaticPatch,
   safeInt,
   type ActivityEventInput,
 } from '../../../src/services/nodeEvents.js';
@@ -676,5 +677,80 @@ describe('recordScannerCall patch grouping', () => {
 
     expect(callWith('SELECT logical_call_id FROM node_radio_events')?.[1]).toEqual([20458]);
     expect(callWith('pg_advisory_xact_lock')?.[0]).toBe('nrc:-1:20458');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mergeAutomaticPatch — the correction step for patches nobody configured.
+//
+// An automatic patch is detected over the air PER TRANSMISSION and reaches us
+// only on the audio upload, a second or two after the activity events have
+// already been grouped. So each member has usually opened its own logical call
+// by then, and this folds them back into one.
+// ---------------------------------------------------------------------------
+describe('mergeAutomaticPatch', () => {
+  beforeEach(() => {
+    clientQuery.mockReset();
+    clientRelease.mockReset();
+  });
+
+  /** Arm the DISTINCT logical_call_id lookup with the ids it should find. */
+  function armMerge(ids: string[]) {
+    clientQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('SELECT DISTINCT logical_call_id')) {
+        return { rows: ids.map((logical_call_id) => ({ logical_call_id })) };
+      }
+      return { rows: [], rowCount: ids.length };
+    });
+  }
+
+  const at = new Date('2026-08-23T10:49:29.000Z');
+
+  it('a patch of one is not a patch — the decoder reports these constantly', async () => {
+    armMerge(['1']);
+    await mergeAutomaticPatch('node-a', [30003], at);
+    expect(clientQuery).not.toHaveBeenCalled();
+  });
+
+  it('ignores an empty or junk member list without touching the database', async () => {
+    armMerge([]);
+    await mergeAutomaticPatch('node-a', [], at);
+    await mergeAutomaticPatch('node-a', [0, -5], at);
+    expect(clientQuery).not.toHaveBeenCalled();
+  });
+
+  it('folds rival logical calls into the EARLIEST id', async () => {
+    // Ids are compared numerically, not lexically: '9' < '10' as bigints but
+    // not as strings, and picking the wrong one splits the call the other way.
+    armMerge(['10', '9', '11']);
+    await mergeAutomaticPatch('node-a', [30003, 30013], at);
+
+    const upd = callWith('SET logical_call_id');
+    expect(upd?.[0]).toBe('9');
+    expect(upd?.[1]).toEqual(['10', '11']);
+    expect(clientQuery.mock.calls.some((a) => a[0] === 'COMMIT')).toBe(true);
+  });
+
+  it('does nothing when the members already share one call', async () => {
+    armMerge(['7']);
+    await mergeAutomaticPatch('node-a', [30003, 30013], at);
+    expect(callWith('SET logical_call_id')).toBeUndefined();
+    expect(clientQuery.mock.calls.some((a) => a[0] === 'COMMIT')).toBe(true);
+  });
+
+  it('locks on the lowest member so every talkgroup serialises on one key', async () => {
+    armMerge(['4', '5']);
+    await mergeAutomaticPatch('node-a', [30013, 30003], at);
+    expect(callWith('pg_advisory_xact_lock')?.[0]).toBe('nrc:auto:30003');
+  });
+
+  it('never throws and rolls back when the database fails', async () => {
+    clientQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('SELECT DISTINCT logical_call_id')) throw new Error('boom');
+      return { rows: [] };
+    });
+    await expect(mergeAutomaticPatch('node-a', [30003, 30013], at)).resolves.toBeUndefined();
+    expect(clientQuery.mock.calls.some((a) => a[0] === 'ROLLBACK')).toBe(true);
+    expect(clientRelease).toHaveBeenCalled();
   });
 });

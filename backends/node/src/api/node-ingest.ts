@@ -32,6 +32,7 @@ import { hub } from '../services/nodes/hub.js';
 import {
   recordActivityEvents,
   markRecorded,
+  mergeAutomaticPatch,
   recordPagerEvent,
   upsertSiteSnapshots,
   safeInt,
@@ -63,6 +64,37 @@ function makeNodeRateLimiter(max: number, windowMs: number): (nodeId: string) =>
 // We check Content-Length manually rather than using hono's bodyLimit
 // middleware, which fully buffers chunked (no Content-Length) bodies in RAM.
 const MAX_CALL_BYTES = 20 * 1024 * 1024;
+
+/**
+ * The `patches` field on an audio upload: the talkgroups the decoder observed
+ * carrying this one transmission, as an AUTOMATIC patch.
+ *
+ * Sent as a JSON array of ids. Anything else — absent, empty, unparseable — is
+ * "not patched", which is overwhelmingly the common case and must stay silent.
+ */
+function parsePatchMembers(raw: string | null): number[] {
+  const text = (raw ?? '').trim();
+  if (!text || text === '[]') return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  const out: number[] = [];
+  for (const entry of parsed) {
+    // Tolerate both a bare id and an object carrying one, since the decoder's
+    // shape here is not something we control.
+    const raw2 =
+      entry !== null && typeof entry === 'object'
+        ? (entry as Record<string, unknown>)['id'] ?? (entry as Record<string, unknown>)['talkgroup']
+        : entry;
+    const n = Number(raw2);
+    if (Number.isInteger(n) && n > 0 && !out.includes(n)) out.push(n);
+  }
+  return out;
+}
 
 /** First STRING value of a multipart field parsed with { all: true }
  *  (repeated keys arrive as arrays; files are skipped). */
@@ -171,6 +203,19 @@ nodeIngestRouter.post('/api/node-ingest/call-upload', async (c) => {
         // every upload (FormField.TALKER_ALIAS) and previously discarded here,
         // which is why every radio showed as a bare id.
         formFirstString(form, 'talkerAlias') ?? null,
+      );
+      // AUTOMATIC patches. vce sends the talkgroups it saw carrying this
+      // transmission as `patches` (RdioScannerBroadcaster), and this upload is
+      // the ONLY place that reaches us — the activity feed the grouping runs on
+      // carries no patch field at all (ControlActivityLookup emits a fixed
+      // column set). By now each member has usually opened its own logical
+      // call, so this folds them back into one. Configured patches are handled
+      // earlier, at grouping time, from rdio's own patch table.
+      await mergeAutomaticPatch(
+        node.id,
+        parsePatchMembers(formFirstString(form, 'patches')),
+        startedAt,
+        safeInt(formFirstString(form, 'source')),
       );
     } catch (err) {
       log.warn({ err, node: node.id.slice(0, 8) }, 'node relay: recorded stamp failed');
