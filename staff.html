@@ -2888,6 +2888,22 @@
             <div class="stat-label">With Audio</div>
             <div class="nd2-stat-sub" id="nd2-stat-audio-sub"></div>
           </div>
+          <!-- What the grouping absorbed. A reception is one receiving
+               node+site hearing one call, so a call heard three ways is three
+               receptions and one call; these two say WHY the other two were
+               folded in. Together with Radio Calls they account for every
+               reception, which is what makes them worth a tile rather than a
+               footnote. -->
+          <div class="stat-card" id="nd2-tile-dpatch" style="border-color: rgba(56, 189, 248, 0.3);">
+            <div class="stat-value" id="nd2-stat-dpatch" style="color: #7dd3fc;">—</div>
+            <div class="stat-label">Merged by Patch</div>
+            <div class="nd2-stat-sub" id="nd2-stat-dpatch-sub"></div>
+          </div>
+          <div class="stat-card" id="nd2-tile-dsite">
+            <div class="stat-value" id="nd2-stat-dsite">—</div>
+            <div class="stat-label">Merged Across Sites</div>
+            <div class="nd2-stat-sub" id="nd2-stat-dsite-sub"></div>
+          </div>
           <div class="stat-card" id="nd2-tile-pages" style="border-color: rgba(249, 115, 22, 0.3);">
             <div class="stat-value" id="nd2-stat-pages" style="color: #fb923c;">—</div>
             <div class="stat-label">Pages</div>
@@ -4718,8 +4734,13 @@
       show('nd2-tile-tg', scope !== 'pager');
       show('nd2-tile-enc', scope !== 'pager');
       show('nd2-tile-audio', scope !== 'pager');
+      show('nd2-tile-dpatch', scope !== 'pager');
+      show('nd2-tile-dsite', scope !== 'pager');
 
       set('nd2-stat-calls', nd2Num(t.radioLogical));
+      // A reception is one receiving node+site hearing this call, NOT one
+      // stored row: vce emits a GRANT and a CALL for the same receipt and
+      // repeats the grant on a re-grant, so counting rows inflated this ~4x.
       set('nd2-stat-calls-sub', t.radioRaw != null ? `${nd2Num(t.radioRaw)} receptions` : '');
       // Encrypted / with-audio are shares of LOGICAL calls (the same base as
       // the Radio Calls tile), never of receptions — a call with 40 receptions
@@ -4732,6 +4753,20 @@
       set('nd2-stat-enc-sub', t.radioLogical ? `${nd2Num(enc)} of ${nd2Num(t.radioLogical)} calls` : '');
       set('nd2-stat-audio', t.radioLogical ? pct(rec) + '%' : '—');
       set('nd2-stat-audio-sub', t.radioLogical ? `${nd2Num(rec)} recorded in rdio` : '');
+      // These two are shares of RECEPTIONS, not of calls: they count receptions
+      // that were folded into a call already open, so the base has to be the
+      // thing being folded. Radio Calls + these two = every reception.
+      const dropPatch = t.radioDroppedPatch != null ? t.radioDroppedPatch : 0;
+      const dropSite = t.radioDroppedSite != null ? t.radioDroppedSite : 0;
+      const rpct = (n) => (t.radioRaw ? Math.round((n / t.radioRaw) * 100) : 0);
+      set('nd2-stat-dpatch', t.radioRaw ? nd2Num(dropPatch) : '—');
+      set('nd2-stat-dpatch-sub', t.radioRaw
+        ? `${rpct(dropPatch)}% of receptions ${EMD} heard on a patched talkgroup`
+        : '');
+      set('nd2-stat-dsite', t.radioRaw ? nd2Num(dropSite) : '—');
+      set('nd2-stat-dsite-sub', t.radioRaw
+        ? `${rpct(dropSite)}% of receptions — same call, another site or node`
+        : '');
       set('nd2-stat-pages', nd2Num(t.pagesLogical));
       set('nd2-stat-pages-sub', t.pages != null ? `${nd2Num(t.pages)} receptions` : '');
       set('nd2-stat-nodes', nd2Num(t.activeNodes));
