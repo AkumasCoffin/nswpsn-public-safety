@@ -827,6 +827,9 @@ export async function mergeAutomaticPatch(
   members: number[],
   atDate: Date,
   sourceUnit: number | null = null,
+  /** P25 system, when the caller knows it. Null widens the merge to any
+   *  system, which is only safe on a single-system deployment. */
+  system: number | null = null,
 ): Promise<void> {
   // A patch of one is not a patch — the decoder reports the lone talkgroup this
   // way constantly, and it means "not currently patched".
@@ -839,20 +842,31 @@ export async function mergeAutomaticPatch(
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    // Same lock family the grouping paths use, keyed on the lowest member so
-    // every talkgroup in this patch serialises against the same key.
-    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
-      `nrc:auto:${Math.min(...unique)}`,
-    ]);
+    // Keyed on the PATCH ITSELF — the sorted member set — not on the lowest
+    // member of the subset THIS upload happened to report.
+    //
+    // Two nodes decoding the same patch routinely report different subsets
+    // ({10125,10130} vs {10120,10125}); keyed on the minimum they computed
+    // different keys, took different locks, and raced on the very rows the
+    // lock exists to protect. Sorting first also makes the key independent of
+    // the order the decoder listed them in.
+    const patchKey = [...unique].sort((a, b) => a - b).join(',');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`nrc:auto:${patchKey}`]);
 
     const found = await client.query<{ logical_call_id: string }>(
+      // Scoped to the same system and to voice calls. Without the system this
+      // could merge two networks' calls that happen to share a talkgroup
+      // number; without the call-group filter it could pull in DATA_CALL and
+      // signalling rows, whose `talkgroup` column holds a RADIO id.
       `SELECT DISTINCT logical_call_id FROM node_radio_events
         WHERE talkgroup = ANY($1::int[])
           AND received_at BETWEEN $2::timestamptz - interval '${GROUP_WINDOW_SECONDS} seconds'
                              AND $2::timestamptz + interval '${GROUP_WINDOW_SECONDS} seconds'
           AND ($3::integer IS NULL OR source_unit IS NULL OR source_unit = $3::integer)
+          AND ($4::integer IS NULL OR system IS NOT DISTINCT FROM $4::integer)
+          AND (event_type LIKE 'CALL_GROUP%' OR event_type LIKE 'CALL_PATCH_GROUP%')
           AND logical_call_id IS NOT NULL`,
-      [unique, at.toISOString(), sourceUnit],
+      [unique, at.toISOString(), sourceUnit, system],
     );
     const ids = found.rows.map((r) => r.logical_call_id);
     // Nothing to do unless the members really did fork into rival calls.

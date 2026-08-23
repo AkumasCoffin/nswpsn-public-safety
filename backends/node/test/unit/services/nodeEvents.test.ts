@@ -976,10 +976,44 @@ describe('mergeAutomaticPatch', () => {
     expect(clientQuery.mock.calls.some((a) => a[0] === 'COMMIT')).toBe(true);
   });
 
-  it('locks on the lowest member so every talkgroup serialises on one key', async () => {
+  it('locks on the patch itself, so member ORDER cannot change the key', async () => {
     armMerge(['4', '5']);
     await mergeAutomaticPatch('node-a', [30013, 30003], at);
-    expect(callWith('pg_advisory_xact_lock')?.[0]).toBe('nrc:auto:30003');
+    expect(callWith('pg_advisory_xact_lock')?.[0]).toBe('nrc:auto:30003,30013');
+  });
+
+  it('gives two nodes reporting DIFFERENT subsets different locks', async () => {
+    // The reason the key is the member set and not its minimum: keyed on the
+    // lowest member these two would collide on 10120 and be treated as one
+    // patch, while keyed on the set they are correctly distinct — and two
+    // nodes reporting the SAME set still serialise, which is the case that
+    // matters.
+    armMerge(['4', '5']);
+    await mergeAutomaticPatch('node-a', [10125, 10120], at);
+    const a = callWith('pg_advisory_xact_lock')?.[0];
+    clientQuery.mockReset();
+    armMerge(['6', '7']);
+    await mergeAutomaticPatch('node-b', [10120, 10130], at);
+    const b = callWith('pg_advisory_xact_lock')?.[0];
+    expect(a).toBe('nrc:auto:10120,10125');
+    expect(b).toBe('nrc:auto:10120,10130');
+    expect(a).not.toBe(b);
+  });
+
+  it('scopes the merge to one system and to voice calls', async () => {
+    armMerge(['4', '5']);
+    await mergeAutomaticPatch('node-a', [30013, 30003], at, null, 721);
+    const sql = String(
+      clientQuery.mock.calls.find(
+        (c) => typeof c[0] === 'string' && (c[0] as string).includes('SELECT DISTINCT logical_call_id'),
+      )?.[0] ?? '',
+    );
+    // Without the system, two networks sharing a talkgroup number merge;
+    // without the call-group filter, signalling rows join, whose `talkgroup`
+    // column holds a RADIO id.
+    expect(sql).toContain('system IS NOT DISTINCT FROM $4::integer');
+    expect(sql).toContain("event_type LIKE 'CALL_GROUP%'");
+    expect(callWith('SELECT DISTINCT logical_call_id')?.[3]).toBe(721);
   });
 
   it('never throws and rolls back when the database fails', async () => {

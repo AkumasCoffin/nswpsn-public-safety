@@ -211,6 +211,14 @@ nodeIngestRouter.post('/api/node-ingest/call-upload', async (c) => {
       // column set). By now each member has usually opened its own logical
       // call, so this folds them back into one. Configured patches are handled
       // earlier, at grouping time, from rdio's own patch table.
+      //
+      // System is deliberately NOT passed. The upload's `system` field is the
+      // node's own rdio config number, while node_radio_events.system holds
+      // the P25 systemId the activity feed decodes (migration 044) — handing
+      // one to the other would scope the merge by a number that means nothing
+      // in that column. Null widens the merge to any system, which is correct
+      // here because this deployment decodes exactly one; a multi-system
+      // deployment must resolve the real systemId and pass it.
       await mergeAutomaticPatch(
         node.id,
         parsePatchMembers(formFirstString(form, 'patches')),
