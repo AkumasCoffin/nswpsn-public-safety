@@ -17,7 +17,7 @@ entry in your rdio admin page.
 
    | Field | Value |
    |---|---|
-   | **URL** | `https://nswpsn.forcequit.xyz/api/scanner-ingest` |
+   | **URL** | `https://api.forcequit.xyz/api/scanner-ingest` |
    | **API key** | *(the key you were sent)* |
    | **Systems** | `*` (all) — or just the systems you want to share |
    | **Disabled** | unchecked |
