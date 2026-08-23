@@ -312,11 +312,15 @@ export async function recordActivityEvents(
   nodeId: string,
   streamId: string,
   events: ActivityEventInput[],
-): Promise<number> {
+): Promise<{ accepted: number; failed: number }> {
   let accepted = 0;
+  let failed = 0;
   try {
     const pool = await getWriterPool();
-    if (!pool || events.length === 0) return 0;
+    if (events.length === 0) return { accepted: 0, failed: 0 };
+    // No writer pool = nothing was attempted; the whole batch failed and the
+    // route must refuse the ack so the agent retries.
+    if (!pool) return { accepted: 0, failed: events.length };
 
     // Once per batch, not per event: it is a ~60s-cached read of a two-row
     // table, and an empty lookup (central rdio down or unconfigured) simply
@@ -545,13 +549,19 @@ export async function recordActivityEvents(
         'nodeEvents: recordActivityEvents partial failure',
       );
     }
+    failed = failures;
   } catch (err) {
+    // A failure this early means NO event in the batch was attempted — the
+    // pool was unavailable or the connection never opened. Report the whole
+    // batch failed so the route refuses the ack and the agent retries, rather
+    // than the events silently ceasing to exist.
+    failed = events.length;
     log.warn(
       { err: (err as Error).message, node: nodeId.slice(0, 8) },
       'nodeEvents: recordActivityEvents failed',
     );
   }
-  return accepted;
+  return { accepted, failed };
 }
 
 /**
@@ -1250,9 +1260,9 @@ export interface ScannerCall {
  * in one logical call instead of two, which is what makes the call counts
  * complete rather than double.
  */
-export async function recordScannerCall(call: ScannerCall): Promise<void> {
+export async function recordScannerCall(call: ScannerCall): Promise<boolean> {
   const pool = await getWriterPool();
-  if (!pool) return;
+  if (!pool) return false;
 
   const shifted = new Date(call.receivedAt.getTime() + config.SCANNER_TIME_OFFSET_MS);
   const receivedAt = clampReceivedAt(shifted);
@@ -1360,7 +1370,7 @@ export async function recordScannerCall(call: ScannerCall): Promise<void> {
       // Retry of a call already stored — nothing to do, but commit to release
       // the advisory lock cleanly.
       await client.query('COMMIT');
-      return;
+      return true;
     }
     await client.query(`UPDATE node_radio_events SET logical_call_id = $1 WHERE id = $2`, [
       existingGroup ?? rowId,
@@ -1411,14 +1421,19 @@ export async function recordScannerCall(call: ScannerCall): Promise<void> {
     );
 
     await client.query('COMMIT');
+    return true;
   } catch (err) {
     try {
       await client.query('ROLLBACK');
     } catch {
       /* connection already gone */
     }
+    // Fire-safe like every other exported record-/mark- function in this
+    // module (see the header contract): the relay already delivered the
+    // audio, so a failed capture is a logged gap, never a thrown error — a
+    // 500 here caused rdio to retry a call it had successfully relayed.
     log.error({ err, node: call.nodeId.slice(0, 8) }, 'nodeEvents: recordScannerCall failed');
-    throw err;
+    return false;
   } finally {
     client.release();
   }

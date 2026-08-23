@@ -134,7 +134,7 @@ describe('recordActivityEvents', () => {
   it('starts a new group: logical_call_id = own id, logical_calls +1, accepted 1', async () => {
     armQueries({ foundRadio: null, insertIds: ['101'] });
     const accepted = await recordActivityEvents('node-aaaa', 'stream-1234', [{ ...baseEvent }]);
-    expect(accepted).toBe(1);
+    expect(accepted).toEqual({ accepted: 1, failed: 0 });
 
     // Advisory lock key uses systemId + target with -1 fallbacks.
     expect(callWith('pg_advisory_xact_lock')).toEqual([`nrc:${0x4a2}:${12345}`]);
@@ -197,7 +197,7 @@ describe('recordActivityEvents', () => {
     // Node A starts the group…
     armQueries({ foundRadio: null, insertIds: ['101'] });
     const a = await recordActivityEvents('node-aaaa', 'stream-aaaa', [{ ...baseEvent }]);
-    expect(a).toBe(1);
+    expect(a).toEqual({ accepted: 1, failed: 0 });
     expect(callWith('SET logical_call_id')).toEqual(['101', '101']);
     expect(callWith('node_radio_hourly_sys')?.[5]).toBe(1);
 
@@ -208,7 +208,7 @@ describe('recordActivityEvents', () => {
     const b = await recordActivityEvents('node-bbbb', 'stream-bbbb', [
       { ...baseEvent, id: 4, atMs: baseEvent.atMs + 2_000, rfss: 1, site: 12 },
     ]);
-    expect(b).toBe(1);
+    expect(b).toEqual({ accepted: 1, failed: 0 });
     expect(callWith('SET logical_call_id')).toEqual(['101', '102']);
     expect(callWith('node_radio_hourly_sys')?.[5]).toBe(0);
   });
@@ -216,7 +216,7 @@ describe('recordActivityEvents', () => {
   it('dedupes a re-sent event: accepted 0, no stamps, no bucket bumps', async () => {
     armQueries({ foundRadio: null, insertIds: [null] }); // ON CONFLICT → no row
     const accepted = await recordActivityEvents('node-aaaa', 'stream-1234', [{ ...baseEvent }]);
-    expect(accepted).toBe(0);
+    expect(accepted).toEqual({ accepted: 0, failed: 0 });
     expect(countCalls('SET logical_call_id')).toBe(0);
     expect(countCalls('node_radio_hourly')).toBe(0); // covers _sys too (substring)
     // The tx still completes cleanly (releases the advisory lock).
@@ -230,7 +230,7 @@ describe('recordActivityEvents', () => {
       { ...baseEvent, id: 2 }, // duplicate re-send
       { ...baseEvent, id: 3 },
     ]);
-    expect(accepted).toBe(2);
+    expect(accepted).toEqual({ accepted: 2, failed: 0 });
     expect(countCalls('SET logical_call_id')).toBe(2);
     expect(countCalls('node_radio_hourly_sys')).toBe(2);
   });
@@ -267,7 +267,9 @@ describe('recordActivityEvents', () => {
       { ...baseEvent, id: 1 },
       { ...baseEvent, id: 2 },
     ]);
-    expect(accepted).toBe(0);
+    // Every event failed, and the count is what the route needs to refuse
+    // the ack: acking a batch the agent then discards is silent data loss.
+    expect(accepted).toEqual({ accepted: 0, failed: 2 });
     // Both events attempted (per-event tx), both rolled back.
     expect(clientQuery.mock.calls.filter((a) => a[0] === 'ROLLBACK').length).toBe(2);
     expect(clientRelease).toHaveBeenCalled();
@@ -314,7 +316,7 @@ describe('recordActivityEvents claiming a parked upload', () => {
   it('flags the new row and folds the bytes in when an upload was waiting', async () => {
     armWithPending(90_000);
     const n = await recordActivityEvents('node-aaaa', 's1', [ev()]);
-    expect(n).toBe(1);
+    expect(n).toEqual({ accepted: 1, failed: 0 });
 
     const flag = callWith('SET recorded = true');
     expect(flag?.[0]).toBe(90_000);

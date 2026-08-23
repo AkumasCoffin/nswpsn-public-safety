@@ -417,8 +417,9 @@ nodeIngestRouter.post('/api/node-ingest/activity', async (c) => {
 
   // 6. Record. Fire-safe by contract (never throws); returns how many events
   //    were NEWLY inserted — deduped re-sends yield a smaller `accepted` and
-  //    that is success, not an error.
-  const accepted = await recordActivityEvents(
+  //    that is success, not an error. `failed` is different: those events
+  //    rolled back and exist nowhere.
+  const { accepted, failed } = await recordActivityEvents(
     node.id,
     parsed.streamId,
     parsed.events.map((ev) => ({
@@ -443,8 +444,17 @@ nodeIngestRouter.post('/api/node-ingest/activity', async (c) => {
     })),
   );
   log.info(
-    `activity ingest node=${node.id.slice(0, 8)} stream=${parsed.streamId.slice(0, 12)} events=${parsed.events.length} accepted=${accepted}`,
+    `activity ingest node=${node.id.slice(0, 8)} stream=${parsed.streamId.slice(0, 12)} events=${parsed.events.length} accepted=${accepted}${failed ? ` FAILED=${failed}` : ''}`,
   );
+  // Any failure refuses the whole ack. The agent advances its cursor on any
+  // 2xx, so acking a partial batch made the failed events cease to exist —
+  // they rolled back here and the agent never offered them again. A 503 makes
+  // it re-send the batch, and the (node_id, stream_id, source_event_id)
+  // unique index absorbs the events that DID land, so a retry can only fill
+  // the gap, never double-count.
+  if (failed > 0) {
+    return c.json({ ok: false, accepted, failed }, 503);
+  }
   return c.json({ ok: true, accepted });
 });
 
