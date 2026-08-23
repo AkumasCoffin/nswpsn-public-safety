@@ -26,10 +26,24 @@ vi.mock('../../../src/db/pool.js', () => ({
   closePool: vi.fn(async () => undefined),
 }));
 
+/** Operator-declared patches. Empty by default — the state every existing test
+ *  here already assumed, since an unconfigured central rdio yields no patches
+ *  and every talkgroup then groups as itself. `groupingTalkgroup` stays real:
+ *  it is a pure function and mocking it would test the mock. */
+const patchLookup: { byTalkgroup: Map<number, { talkgroups: number[] }>; all: unknown[] } = {
+  byTalkgroup: new Map(),
+  all: [],
+};
+vi.mock('../../../src/services/rdioPatches.js', async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return { ...actual, rdioPatches: vi.fn(async () => patchLookup) };
+});
+
 import {
   recordActivityEvents,
   markRecorded,
   recordPagerEvent,
+  recordScannerCall,
   safeInt,
   type ActivityEventInput,
 } from '../../../src/services/nodeEvents.js';
@@ -585,5 +599,82 @@ describe('isRealTalkerAlias', () => {
     expect(isRealTalkerAlias('P359', 2073252)).toBe(true);
     // No unit id to compare against — keep whatever was transmitted.
     expect(isRealTalkerAlias('anything', null)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// recordScannerCall — patch grouping.
+//
+// A patch is several talkgroups carrying ONE conversation. A scanner reports
+// it on whichever member it happened to be scanning, which is frequently not
+// the member a node reported it on, so without patch awareness the two
+// recordings of one conversation open rival logical calls — and the feed
+// inflates the very call count it exists to complete.
+// ---------------------------------------------------------------------------
+describe('recordScannerCall patch grouping', () => {
+  const call = {
+    nodeId: 'scanner-abc',
+    receivedAt: new Date('2026-08-23T04:26:12.000Z'),
+    talkgroup: 30003,
+    sourceUnit: 2319851,
+    frequency: 419362500,
+    talkerAlias: null,
+    audioBytes: 4096,
+  };
+
+  beforeEach(() => {
+    // callWith reads clientQuery.mock.calls, which accumulate across tests
+    // unless reset — without this every assertion here reads the FIRST test's
+    // queries and the later cases silently verify nothing.
+    clientQuery.mockReset();
+    clientRelease.mockReset();
+    patchLookup.byTalkgroup = new Map();
+    patchLookup.all = [];
+  });
+
+  it('searches EVERY member of the patch, so a sibling channel joins', async () => {
+    // Illawarra A Patch, ranked. 30003 is a member but not the highest.
+    const members = [10079, 30003, 20004, 30013, 10075];
+    patchLookup.byTalkgroup = new Map(members.map((t) => [t, { talkgroups: members }]));
+    armQueries({ foundRadio: null, insertIds: ['501'] });
+
+    await recordScannerCall(call);
+
+    const params = callWith('SELECT logical_call_id FROM node_radio_events');
+    expect(params?.[1]).toEqual(members);
+  });
+
+  it('locks on the patch home, not the reception talkgroup', async () => {
+    // Two members taking different locks would both find no group and fork.
+    const members = [10079, 30003, 20004, 30013, 10075];
+    patchLookup.byTalkgroup = new Map(members.map((t) => [t, { talkgroups: members }]));
+    armQueries({ foundRadio: null, insertIds: ['502'] });
+
+    await recordScannerCall(call);
+
+    const lock = callWith('pg_advisory_xact_lock');
+    expect(lock?.[0]).toBe('nrc:-1:10079');   // highest-ranked member, not 30003
+  });
+
+  it('joins the logical call a node already opened on a sibling talkgroup', async () => {
+    const members = [10079, 30003, 20004, 30013, 10075];
+    patchLookup.byTalkgroup = new Map(members.map((t) => [t, { talkgroups: members }]));
+    armQueries({ foundRadio: '900', insertIds: ['503'] });
+
+    await recordScannerCall(call);
+
+    // The new row is stamped with the EXISTING group, not its own id.
+    const upd = callWith('SET logical_call_id');
+    expect(upd?.[0]).toBe('900');
+    expect(upd?.[1]).toBe('503');
+  });
+
+  it('an unpatched talkgroup is a list of one and locks on itself', async () => {
+    armQueries({ foundRadio: null, insertIds: ['504'] });
+
+    await recordScannerCall({ ...call, talkgroup: 20458 });
+
+    expect(callWith('SELECT logical_call_id FROM node_radio_events')?.[1]).toEqual([20458]);
+    expect(callWith('pg_advisory_xact_lock')?.[0]).toBe('nrc:-1:20458');
   });
 });

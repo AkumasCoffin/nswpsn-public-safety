@@ -1045,26 +1045,45 @@ export async function recordScannerCall(call: ScannerCall): Promise<void> {
         .slice(0, 15),
   ).toString();
 
+  // PATCH GROUPING, identical to the activity path's. A patch is several
+  // talkgroups carrying ONE conversation, so a scanner that hears a patched
+  // transmission reports it on whichever member it was scanning — which is
+  // frequently NOT the member a node reported it on. Without this the two
+  // recordings of one conversation open rival logical calls, and the feed
+  // inflates the very call count it exists to complete.
+  //
+  // Cheap: a ~60s-cached read of a two-row table, and an empty lookup (central
+  // rdio down or unconfigured) degrades to "every talkgroup groups as itself",
+  // exactly as before patches existed.
+  const patches = await rdioPatches();
+  const groupTg = groupingTalkgroup(patches, call.talkgroup);
+  const groupMembers = patches.byTalkgroup.get(call.talkgroup)?.talkgroups ?? [call.talkgroup];
+
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     // Same advisory lock + grouping the activity path uses, so a scanner
     // reception joins the logical call a node already opened for the same
-    // transmission rather than starting a rival one.
-    const lockKey = `nrc:${system ?? 0}:${call.talkgroup}`;
+    // transmission rather than starting a rival one. Keyed on the GROUP
+    // talkgroup, not this reception's, or two members of one patch would take
+    // different locks and both find no group.
+    const lockKey = `nrc:${system ?? -1}:${groupTg}`;
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [lockKey]);
 
     const found = await client.query<{ logical_call_id: string }>(
       `SELECT logical_call_id FROM node_radio_events
         WHERE ($1::integer IS NULL OR system IS NULL OR system = $1::integer)
-          AND talkgroup = $2
+          AND talkgroup = ANY($2::int[])
           AND received_at BETWEEN $3::timestamptz - interval '${GROUP_WINDOW_SECONDS} seconds'
                              AND $3::timestamptz + interval '${GROUP_WINDOW_SECONDS} seconds'
           AND ($4::integer IS NULL OR source_unit IS NULL OR source_unit = $4::integer)
           AND logical_call_id IS NOT NULL
         ORDER BY abs(extract(epoch FROM (received_at - $3::timestamptz)))
         LIMIT 1`,
-      [system, call.talkgroup, receivedAt.toISOString(), call.sourceUnit],
+      // For a patch member this is EVERY member talkgroup, so a copy a node
+      // logged on a sibling channel is found and joined. Otherwise it is the
+      // single talkgroup, exactly as before.
+      [system, groupMembers, receivedAt.toISOString(), call.sourceUnit],
     );
     const existingGroup = found.rows[0]?.logical_call_id ?? null;
 
