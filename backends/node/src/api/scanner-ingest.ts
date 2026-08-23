@@ -285,3 +285,119 @@ scannerIngestRouter.post('/api/scanner-ingest/api/call-upload', async (c) => {
 scannerIngestRouter.get('/api/scanner-ingest/api/call-upload', (c) =>
   c.json({ ok: true, service: 'scanner-ingest' }),
 );
+
+// ---------------------------------------------------------------------------
+// Transcript forwarding — the second half of the downstream protocol.
+//
+// The contributor's rdio transcribes his own calls, and his transcripts are
+// worth more to us than our own right now: central's transcription plugin is
+// rate-limited across every key, so his fill gaps rather than duplicate work.
+//
+// This is NOT part of the call upload. The transcripts plugin pushes it
+// separately, and only after a capability handshake:
+//
+//   1. rdio GETs <downstream.url>/api/capabilities and looks for the feature
+//      named in the plugin's `requireFeature` (plugin_host.go:90-134).
+//   2. Only if it is advertised does it POST JSON to
+//      <downstream.url>/api/call-transcript.
+//
+// A downstream that 404s the probe is skipped SILENTLY — "does not support
+// transcript-forward" — so before these two routes existed no transcript was
+// ever attempted, and nothing appeared in our log to say so.
+// ---------------------------------------------------------------------------
+
+/**
+ * Capability probe. Deliberately unauthenticated: rdio sends no key on this
+ * request (plugin_host.go:107-111), and the answer reveals nothing beyond which
+ * server-to-server protocols we speak.
+ *
+ * Gated on the feature being configured — an unset key means the whole scanner
+ * feed is off, and advertising a capability we would then reject is worse than
+ * advertising nothing.
+ */
+scannerIngestRouter.get('/api/scanner-ingest/api/capabilities', (c) => {
+  if (!config.SCANNER_INGEST_KEY) return c.notFound();
+  return c.json({ features: ['transcript-forward'] });
+});
+
+/**
+ * POST /api/scanner-ingest/api/call-transcript
+ *
+ * JSON, not multipart, and the key travels in the BODY — the forwarder builds
+ * the payload then sets `payload["key"] = downstream.Apikey`
+ * (plugin_host.go:187). There is no header to authenticate on.
+ *
+ * We store nothing: transcripts live in rdio, which owns that schema, and this
+ * backend stays read-only against the rdio database. So this is a pure relay.
+ */
+scannerIngestRouter.post('/api/scanner-ingest/api/call-transcript', async (c) => {
+  const expected = config.SCANNER_INGEST_KEY;
+  if (!expected) return c.notFound();
+
+  let body: Record<string, unknown>;
+  try {
+    body = (await c.req.json()) as Record<string, unknown>;
+  } catch {
+    return c.json({ error: 'invalid json' }, 400);
+  }
+
+  if (typeof body['key'] !== 'string' || body['key'] !== expected) {
+    log.warn('scanner ingest: rejected transcript push with bad key');
+    return c.json({ error: 'unauthorised' }, 401);
+  }
+
+  // Same shape check central applies, so a malformed push fails here with a
+  // clear reason instead of being relayed and rejected one hop away.
+  const dateTime = typeof body['dateTime'] === 'string' ? body['dateTime'] : '';
+  if (!/^\d{4}-\d{2}-\d{2}T/.test(dateTime)) {
+    return c.json({ error: 'invalid dateTime' }, 400);
+  }
+
+  const transcript = typeof body['transcript'] === 'string' ? body['transcript'] : '';
+  if (!transcript.trim()) return c.json({ ok: true, forwarded: false, reason: 'empty' });
+
+  if (config.SCANNER_INGEST_DIAG) {
+    log.info(
+      {
+        system: body['system'],
+        talkgroup: body['talkgroup'],
+        dateTime,
+        chars: transcript.length,
+      },
+      'scanner ingest: transcript received',
+    );
+  }
+
+  const internalUrl = config.RDIO_INTERNAL_URL;
+  const internalKey = config.RDIO_INTERNAL_API_KEY;
+  if (!internalUrl || !internalKey) {
+    return c.json({ ok: true, forwarded: false, reason: 'relay not configured' });
+  }
+
+  try {
+    const resp = await fetch(`${internalUrl.replace(/\/$/, '')}/api/call-transcript`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      // dateTime is passed through UNCHANGED. Central matches the transcript to
+      // a stored call on (system, talkgroup, dateTime), and the call itself was
+      // relayed with the sender's own timestamp, so rewriting it here would
+      // orphan every transcript.
+      body: JSON.stringify({
+        system: body['system'],
+        talkgroup: body['talkgroup'],
+        dateTime,
+        transcript,
+        key: internalKey,
+      }),
+    });
+    if (!resp.ok) {
+      log.warn({ status: resp.status }, 'scanner ingest: central rdio rejected the transcript');
+      return c.json({ error: 'relay rejected' }, 502);
+    }
+  } catch (err) {
+    log.warn({ err }, 'scanner ingest: transcript relay failed');
+    return c.json({ error: 'relay failed' }, 502);
+  }
+
+  return c.json({ ok: true, forwarded: true });
+});

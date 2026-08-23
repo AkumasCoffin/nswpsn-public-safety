@@ -141,3 +141,85 @@ describe('relay to central rdio', () => {
     vi.unstubAllGlobals();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Transcript forwarding.
+//
+// The capability probe is the load-bearing part: rdio skips a downstream that
+// does not advertise the feature SILENTLY (plugin_host.go:90-134), so if the
+// probe regresses no transcript is ever attempted and nothing is logged to say
+// so. That failure mode is invisible in production, which is why it is pinned.
+// ---------------------------------------------------------------------------
+describe('GET /api/scanner-ingest/api/capabilities', () => {
+  it('advertises transcript-forward, unauthenticated — rdio probes with no key', async () => {
+    const app = await appWith('right-key');
+    const res = await app.request('/api/scanner-ingest/api/capabilities');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ features: ['transcript-forward'] });
+  });
+
+  it('404s when the feed is off, rather than advertising what we would reject', async () => {
+    const app = await appWith(undefined);
+    const res = await app.request('/api/scanner-ingest/api/capabilities');
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('POST /api/scanner-ingest/api/call-transcript', () => {
+  const push = (body: unknown) => ({
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const good = {
+    key: 'right-key',
+    system: 3,
+    talkgroup: 30302,
+    dateTime: '2026-08-23T04:26:12Z',
+    transcript: 'car 850 responding',
+  };
+
+  it('rejects a bad key — the key is in the BODY, not a header', async () => {
+    const app = await appWith('right-key');
+    const res = await app.request(
+      '/api/scanner-ingest/api/call-transcript', push({ ...good, key: 'wrong' }));
+    expect(res.status).toBe(401);
+  });
+
+  it('rejects an epoch dateTime: central requires RFC3339 and would 400 one hop later', async () => {
+    const app = await appWith('right-key', { url: 'http://rdio.internal', key: 'INTERNAL' });
+    const res = await app.request(
+      '/api/scanner-ingest/api/call-transcript', push({ ...good, dateTime: '1787000000' }));
+    expect(res.status).toBe(400);
+  });
+
+  it('relays with dateTime UNCHANGED and our own key', async () => {
+    // Central matches a transcript to its call on (system, talkgroup, dateTime).
+    // The call was relayed with the sender's own timestamp, so any rewrite here
+    // orphans every transcript.
+    const fetchMock = vi.fn(() => Promise.resolve(new Response('ok', { status: 200 })));
+    vi.stubGlobal('fetch', fetchMock);
+    const app = await appWith('right-key', { url: 'http://rdio.internal', key: 'INTERNAL' });
+    const res = await app.request('/api/scanner-ingest/api/call-transcript', push(good));
+    expect(res.status).toBe(200);
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('http://rdio.internal/api/call-transcript');
+    const sent = JSON.parse(init.body as string);
+    expect(sent.dateTime).toBe('2026-08-23T04:26:12Z');
+    expect(sent.key).toBe('INTERNAL');
+    expect(sent.transcript).toBe('car 850 responding');
+    vi.unstubAllGlobals();
+  });
+
+  it('drops an empty transcript without troubling central', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const app = await appWith('right-key', { url: 'http://rdio.internal', key: 'INTERNAL' });
+    const res = await app.request(
+      '/api/scanner-ingest/api/call-transcript', push({ ...good, transcript: '   ' }));
+    expect(res.status).toBe(200);
+    expect(fetchMock).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+});
