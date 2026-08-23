@@ -171,13 +171,10 @@ describe('recordActivityEvents', () => {
     expect(ins?.[16]).toBeNull();
     expect(ins?.[17]).toBeNull();
 
-    const sys = callWith('node_radio_hourly_sys');
-    // [receivedAt, system, talkgroup, site_rfss, site_id, logicalIncrement]
-    expect(sys?.[1]).toBe(0x4a2);
-    expect(sys?.[2]).toBe(12345);
-    expect(sys?.[3]).toBe(1);
-    expect(sys?.[4]).toBe(12);
-    expect(sys?.[5]).toBe(1); // new group → logical_calls +1
+    // The hourly rollups are DERIVED now (services/nodeHourlyRollup.ts), so
+    // ingest must not write them: a per-event counter cannot survive
+    // mergeAutomaticPatch folding calls together after the fact.
+    expect(countCalls('node_radio_hourly')).toBe(0);
 
     expect(clientQuery.mock.calls.some((a) => a[0] === 'COMMIT')).toBe(true);
     expect(clientRelease).toHaveBeenCalled();
@@ -199,7 +196,6 @@ describe('recordActivityEvents', () => {
     const a = await recordActivityEvents('node-aaaa', 'stream-aaaa', [{ ...baseEvent }]);
     expect(a).toEqual({ accepted: 1, failed: 0 });
     expect(callWith('SET logical_call_id')).toEqual(['101', '101']);
-    expect(callWith('node_radio_hourly_sys')?.[5]).toBe(1);
 
     // …node B's reception 2s later finds it and JOINS (no logical increment).
     clientQuery.mockReset();
@@ -210,10 +206,12 @@ describe('recordActivityEvents', () => {
     ]);
     expect(b).toEqual({ accepted: 1, failed: 0 });
     expect(callWith('SET logical_call_id')).toEqual(['101', '102']);
-    expect(callWith('node_radio_hourly_sys')?.[5]).toBe(0);
+    // Whether this reception started or joined a group is no longer recorded
+    // at ingest time — the rollup derives it from logical_call_id later.
+    expect(countCalls('node_radio_hourly')).toBe(0);
   });
 
-  it('dedupes a re-sent event: accepted 0, no stamps, no bucket bumps', async () => {
+  it('dedupes a re-sent event: accepted 0, no stamps', async () => {
     armQueries({ foundRadio: null, insertIds: [null] }); // ON CONFLICT → no row
     const accepted = await recordActivityEvents('node-aaaa', 'stream-1234', [{ ...baseEvent }]);
     expect(accepted).toEqual({ accepted: 0, failed: 0 });
@@ -232,20 +230,14 @@ describe('recordActivityEvents', () => {
     ]);
     expect(accepted).toEqual({ accepted: 2, failed: 0 });
     expect(countCalls('SET logical_call_id')).toBe(2);
-    expect(countCalls('node_radio_hourly_sys')).toBe(2);
   });
 
-  it('encodes unknown systemId/target as -1 in the lock key and unknown site as -1 in the sys bucket', async () => {
+  it('encodes unknown systemId/target as -1 in the lock key', async () => {
     armQueries({ foundRadio: null, insertIds: ['101'] });
     await recordActivityEvents('node-aaaa', 'stream-1234', [
       { ...baseEvent, systemId: null, target: null, rfss: null, site: null },
     ]);
     expect(callWith('pg_advisory_xact_lock')).toEqual(['nrc:-1:-1']);
-    const sys = callWith('node_radio_hourly_sys');
-    expect(sys?.[1]).toBe(0);
-    expect(sys?.[2]).toBe(0);
-    expect(sys?.[3]).toBe(-1);
-    expect(sys?.[4]).toBe(-1);
   });
 
   it('clamps a wildly wrong node clock to now', async () => {
@@ -321,18 +313,16 @@ describe('recordActivityEvents claiming a parked upload', () => {
     const flag = callWith('SET recorded = true');
     expect(flag?.[0]).toBe(90_000);
     expect(flag?.[1]).toBe('101');
-    // The pending row is consumed, so nothing will add these bytes later —
-    // the hourly bucket must count them HERE or they are lost.
-    const hourly = callWith('INSERT INTO node_radio_hourly ');
-    expect(hourly?.[4]).toBe(90_000);
+    // The bytes live on the detail row; the rollup sums them from there, so
+    // nothing needs to fold them into a bucket at claim time.
+    expect(countCalls('INSERT INTO node_radio_hourly ')).toBe(0);
   });
 
-  it('leaves the row unflagged and the bucket at zero bytes when none was waiting', async () => {
+  it('leaves the row unflagged when no upload was waiting', async () => {
     armWithPending(null);
     await recordActivityEvents('node-aaaa', 's1', [ev()]);
     expect(countCalls('SET recorded = true')).toBe(0);
-    const hourly = callWith('INSERT INTO node_radio_hourly ');
-    expect(hourly?.[4]).toBe(0);
+    expect(countCalls('INSERT INTO node_radio_hourly ')).toBe(0);
   });
 
   it('claims within a transaction, so a rollback returns the upload to the queue', async () => {
@@ -368,12 +358,9 @@ describe('markRecorded', () => {
     expect(upd?.[1]).toBe(12345);
     expect(upd?.[3]).toBe(90_000);
 
-    const hourly = callWith('INSERT INTO node_radio_hourly ');
-    // [hour source ts, nodeId, system, talkgroup, bytes]
-    expect(hourly?.[1]).toBe('node-aaaa');
-    expect(hourly?.[2]).toBe(0x4a2);
-    expect(hourly?.[3]).toBe(12345);
-    expect(hourly?.[4]).toBe(90_000);
+    // The bytes stay on the detail row; the hourly rollup sums them from
+    // there, so markRecorded no longer folds them into a bucket.
+    expect(countCalls('INSERT INTO node_radio_hourly ')).toBe(0);
     expect(clientQuery.mock.calls.some((a) => a[0] === 'COMMIT')).toBe(true);
   });
 

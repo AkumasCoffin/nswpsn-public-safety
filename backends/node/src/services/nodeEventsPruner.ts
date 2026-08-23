@@ -6,6 +6,12 @@
  * node_pager_hourly) are kept FOREVER and are deliberately not touched
  * here — bucketing keeps them small.
  *
+ * The radio pair is DERIVED from node_radio_events (services/
+ * nodeHourlyRollup.ts), so pruning is no longer independent of it: deleting an
+ * hour of detail before it has been rolled up destroys that history for good,
+ * because the detail table is the only thing it can be derived from. Radio
+ * pruning therefore stops at the rollup's high-water mark. See pruneTable.
+ *
  * Shape mirrors statsArchiver.ts: setInterval + re-entrancy guard +
  * start/stop exported, wired in src/index.ts. Deletes are batched
  * (5k ids per DELETE, looped until none remain) so a large backlog
@@ -13,6 +19,7 @@
  */
 import { getWriterPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
+import { rollupHighWater } from './nodeHourlyRollup.js';
 
 const PRUNE_INTERVAL_MS = 60 * 60_000; // hourly
 const RETENTION_DAYS = 30;
@@ -55,14 +62,34 @@ async function pruneTable(
   const age = pending
     ? `${PENDING_RECORDING_RETENTION_MINUTES} minutes`
     : `${samples ? DECODE_SAMPLE_RETENTION_DAYS : RETENTION_DAYS} days`;
+
+  // Radio detail is the ONLY source the hourly rollups can be derived from, so
+  // it must never be pruned past what the rollup has already summarised. In
+  // normal running the rollup is hours ahead of the 30-day line and this bound
+  // never binds; it matters when the rollup has been failing, where without it
+  // the pruner would quietly delete history nobody had summarised yet.
+  //
+  // A null high-water mark means the rollup has never run — nothing may go.
+  let ceiling: string | null = null;
+  if (table === 'node_radio_events') {
+    const water = await rollupHighWater();
+    if (water === null) {
+      log.warn({ table }, 'node events pruner: rollup has not run, skipping radio prune');
+      return 0;
+    }
+    ceiling = water.toISOString();
+  }
+
   let total = 0;
   for (;;) {
     const r = await pool.query(
       `DELETE FROM ${table} WHERE id IN (
          SELECT id FROM ${table}
           WHERE ${tsCol} < now() - interval '${age}'
+            ${ceiling === null ? '' : `AND ${tsCol} < $1::timestamptz`}
           LIMIT ${BATCH_SIZE}
        )`,
+      ceiling === null ? undefined : [ceiling],
     );
     const n = r.rowCount ?? 0;
     total += n;

@@ -605,6 +605,14 @@ nodeDataRouter.get(
         // signaling. Optional node scope ($1) applies via nAllAnd.
         const nAllAnd = nodeId !== null ? ` AND node_id = $1` : '';
         const nAllParams: unknown[] = nodeId !== null ? [nodeId] : [];
+        // The 30-day cap is now IN the predicate, not merely implied by
+        // retention. It was implied — the detail table is pruned at 30 days,
+        // so an unbounded scan read the same rows — but the planner could not
+        // know that, so every one of these was a full scan of the table with
+        // no usable time bound. Stating it costs nothing semantically
+        // (radioWindowCapped already tells the client) and lets the range
+        // index do its job.
+        const nAllFloor = `received_at >= now() - interval '30 days' AND `;
         const [radioTotQ, pagerTotQ, pnR, pnP, tg, un, si, sr, sp] =
           await Promise.all([
             wantRadio
@@ -624,7 +632,7 @@ nodeDataRouter.get(
                   // already reads node_radio_events (the hourly rollups have no
                   // event_type and would count signaling as calls), so the rows
                   // are being counted anyway.
-                  radioTotalsSql(`${CALL_GROUP}${nAllAnd}`),
+                  radioTotalsSql(`${nAllFloor}${CALL_GROUP}${nAllAnd}`),
                   nAllParams,
                 )
               : null,
@@ -640,7 +648,7 @@ nodeDataRouter.get(
                   `SELECT node_id, COUNT(*)::int AS calls,
                           COALESCE(SUM(audio_bytes), 0)::bigint AS bytes
                      FROM node_radio_events
-                    WHERE ${CALL_GROUP}${nAllAnd} GROUP BY node_id`,
+                    WHERE ${nAllFloor}${CALL_GROUP}${nAllAnd} GROUP BY node_id`,
                   nAllParams,
                 )
               : null,
@@ -671,7 +679,7 @@ nodeDataRouter.get(
                           COUNT(DISTINCT logical_call_id)::int AS logical,
                           NULL::text AS label
                      FROM node_radio_events
-                    WHERE ${CALL_GROUP} AND ${TG_VALID}${nAllAnd}
+                    WHERE ${nAllFloor}${CALL_GROUP} AND ${TG_VALID}${nAllAnd}
                     GROUP BY system, talkgroup
                     ORDER BY calls DESC LIMIT 15`,
                   nAllParams,
@@ -695,7 +703,7 @@ nodeDataRouter.get(
               ? pool.query<{ site_rfss: number; site_id: number; calls: unknown }>(
                   `SELECT site_rfss, site_id, COUNT(*)::int AS calls
                      FROM node_radio_events
-                    WHERE ${CALL_GROUP}
+                    WHERE ${nAllFloor}${CALL_GROUP}
                       AND site_rfss IS NOT NULL AND site_id IS NOT NULL${nAllAnd}
                     GROUP BY site_rfss, site_id ORDER BY calls DESC LIMIT 15`,
                   nAllParams,
@@ -705,7 +713,7 @@ nodeDataRouter.get(
               ? pool.query<{ bucket: Date; n: unknown }>(
                   `SELECT date_trunc('day', received_at) AS bucket, COUNT(*)::int AS n
                      FROM node_radio_events
-                    WHERE ${CALL_GROUP}${nAllAnd} GROUP BY 1 ORDER BY 1`,
+                    WHERE ${nAllFloor}${CALL_GROUP}${nAllAnd} GROUP BY 1 ORDER BY 1`,
                   nAllParams,
                 )
               : null,

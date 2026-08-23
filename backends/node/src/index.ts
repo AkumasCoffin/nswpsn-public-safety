@@ -81,6 +81,10 @@ import {
   stopNodeEventsPruner,
 } from './services/nodeEventsPruner.js';
 import {
+  startNodeHourlyRollup,
+  stopNodeHourlyRollup,
+} from './services/nodeHourlyRollup.js';
+import {
   startVideoProcessor,
   stopVideoProcessor,
 } from './services/videoProcessor.js';
@@ -130,6 +134,7 @@ async function preflight(): Promise<void> {
   scheduleArchiveLatestRecompute(); // one-shot recompute of latest_fetched_at to reflect actual change times
   startRdioIncidentAlertLoop(); // rdio burst → ntfy push (gated by RDIO_INCIDENT_ALERTS_ENABLED)
   startNodeEventsPruner(); // hourly 30-day prune of node_radio_events / node_pager_events
+  startNodeHourlyRollup(); // hourly rebuild of node_radio_hourly* from the detail table
   startVideoProcessor(); // ffmpeg pass over newly uploaded Wire videos
   startMemoryWatch(); // heap gauge — see services/memoryWatch.ts (post-OOM telemetry)
 
@@ -248,6 +253,7 @@ async function shutdown(signal: string) {
     stopRdioSummaryScheduler();
     stopRdioIncidentAlertLoop();
     stopNodeEventsPruner();
+    stopNodeHourlyRollup();
     stopVideoProcessor();
     stopMemoryWatch();
     // Centralwatch: stop the loops first so they don't enqueue more
