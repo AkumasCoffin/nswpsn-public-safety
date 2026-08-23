@@ -349,6 +349,12 @@ const ActivityEventSchema = z.object({
   // Both optional/nullable so older agents (which omit them) still validate.
   systemName: z.string().max(128).nullish(),
   sourceAlias: z.string().max(128).nullish(),
+  // The talkgroups patched into this call. A patched transmission carries the
+  // PATCH GROUP as its `target` — a supergroup nobody scans — so without these
+  // the real channels carrying the conversation are unknowable. Omitted by the
+  // agent when empty and absent entirely from control servers older than the
+  // change that added it, hence nullish. Capped well above any real patch.
+  patchMembers: z.array(z.number().int().positive()).max(64).nullish(),
 });
 
 const ActivityBodySchema = z.object({
@@ -433,6 +439,7 @@ nodeIngestRouter.post('/api/node-ingest/activity', async (c) => {
       channelName: ev.channelName ?? null,
       systemName: ev.systemName ?? null,
       sourceAlias: ev.sourceAlias ?? null,
+      patchMembers: ev.patchMembers ?? null,
     })),
   );
   log.info(

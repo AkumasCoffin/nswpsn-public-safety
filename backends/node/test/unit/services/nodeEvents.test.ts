@@ -46,6 +46,7 @@ vi.mock('../../../src/services/rdioPatches.js', async (importOriginal) => {
 });
 
 import {
+  patchMembersOf,
   recordActivityEvents,
   markRecorded,
   recordPagerEvent,
@@ -684,6 +685,69 @@ describe('recordScannerCall system identity', () => {
     expect(ins?.[5]).toBeNull();
     // The reception is still recorded — an unattributed call beats no call.
     expect(ins?.[6]).toBe(30003);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// patchMembersOf — the talkgroups an over-the-air patch put on a call.
+//
+// A patched transmission carries the PATCH GROUP as its target, so the member
+// talkgroups are the only record of what the conversation actually went out on.
+// They come from vce (activity_event_talkgroup_member) because a node hears the
+// patch on its supergroup alone.
+// ---------------------------------------------------------------------------
+describe('patchMembersOf', () => {
+  it('keeps the reported members, sorted and deduped', () => {
+    expect(patchMembersOf([10125, 10120, 10125], 10128)).toEqual([10120, 10125]);
+  });
+
+  it('never stores the call own talkgroup as one of its patch members', () => {
+    // The call is already filed there; listing it would read as the
+    // transmission going out on that channel twice.
+    expect(patchMembersOf([10128, 10120], 10128)).toEqual([10120]);
+  });
+
+  it('distinguishes "not reported" from "none"', () => {
+    // Null is an older control server saying nothing, which the column keeps
+    // as null. An empty list is a call that simply is not patched — a patch of
+    // nothing is not a patch, so it stores as null too rather than claiming
+    // the question was answered with an empty array.
+    expect(patchMembersOf(null, 10128)).toBeNull();
+    expect(patchMembersOf(undefined, 10128)).toBeNull();
+    expect(patchMembersOf([], 10128)).toBeNull();
+    expect(patchMembersOf([10128], 10128)).toBeNull();
+  });
+
+  it('drops junk without losing the rest', () => {
+    expect(patchMembersOf([0, -5, 10120, Number.NaN], 10128)).toEqual([10120]);
+  });
+
+  it('keeps every member when the talkgroup is unknown', () => {
+    expect(patchMembersOf([10128, 10120], null)).toEqual([10120, 10128]);
+  });
+});
+
+describe('recordActivityEvents patch members', () => {
+  beforeEach(() => {
+    clientQuery.mockReset();
+    clientRelease.mockReset();
+  });
+
+  it('stores what vce reported, minus the supergroup itself', async () => {
+    armQueries({ foundRadio: null, insertIds: ['101'] });
+    await recordActivityEvents('node-aaaa', 'stream-1', [
+      { ...baseEvent, target: 10128, eventType: 'CALL_PATCH_GROUP', patchMembers: [10128, 10120, 10125] },
+    ]);
+
+    const ins = callWith('INSERT INTO node_radio_events');
+    expect(ins?.[18]).toEqual([10120, 10125]);
+  });
+
+  it('leaves the column null for an ordinary call', async () => {
+    armQueries({ foundRadio: null, insertIds: ['102'] });
+    await recordActivityEvents('node-aaaa', 'stream-1', [baseEvent]);
+
+    expect(callWith('INSERT INTO node_radio_events')?.[18]).toBeNull();
   });
 });
 

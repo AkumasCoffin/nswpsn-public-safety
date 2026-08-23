@@ -188,3 +188,48 @@ describe('resolvePatch', () => {
     expect(r.patch).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// resolvePatch — members of an OVER-THE-AIR patch.
+//
+// A node hears a patched transmission on the supergroup alone, so no amount of
+// looking at our own receptions can name the channels it went out on. vce
+// records them per event (activity_event_talkgroup_member) and reports them as
+// patchMembers; a node on an older control server sends none.
+// ---------------------------------------------------------------------------
+describe('resolvePatch automatic members', () => {
+  const empty = { byTalkgroup: new Map(), all: [] };
+
+  async function resolve(...args: Parameters<typeof import('../../../src/services/rdioPatches.js')['resolvePatch']>) {
+    const { resolvePatch } = await import('../../../src/services/rdioPatches.js');
+    return resolvePatch(...args);
+  }
+
+  it('names the channels a patch went out on', async () => {
+    const r = await resolve(empty as never, 10128, [10128], 'CALL_PATCH_GROUP', [10120, 10125]);
+    // Supergroup first — it is the home and what was transmitted on.
+    expect(r.home).toBe(10128);
+    expect(r.patch?.talkgroups).toEqual([10128, 10120, 10125]);
+  });
+
+  it('never repeats the supergroup among its own members', async () => {
+    const r = await resolve(empty as never, 10128, [10128], 'CALL_PATCH_GROUP', [10128, 10120]);
+    expect(r.patch?.talkgroups).toEqual([10128, 10120]);
+  });
+
+  it('does not double-count a member we also received on', async () => {
+    const r = await resolve(empty as never, 10128, [10128, 10120], 'CALL_PATCH_GROUP', [10120, 10125]);
+    expect(r.patch?.talkgroups).toEqual([10128, 10120, 10125]);
+  });
+
+  it('still reads as a patch when the control server reports no members', async () => {
+    // An older node. Unnamed members is the honest answer, not "not a patch".
+    const r = await resolve(empty as never, 10128, [10128], 'CALL_PATCH_GROUP', null);
+    expect(r.patch).toEqual({ kind: 'automatic', label: null, talkgroups: [10128] });
+  });
+
+  it('ignores reported members on a call that is not patched', async () => {
+    const r = await resolve(empty as never, 20458, [20458], 'CALL_GROUP', [10120]);
+    expect(r).toEqual({ home: 20458, patch: null });
+  });
+});

@@ -413,6 +413,13 @@ type ActivityEvent struct {
 	// servers that don't emit them (backward compatible).
 	SystemName  *string `json:"systemName"`
 	SourceAlias *string `json:"sourceAlias"`
+	// PatchMembers are the talkgroups patched into this call. A patched
+	// transmission carries the PATCH GROUP as its target - a supergroup nobody
+	// scans - so without these the real channels carrying the conversation are
+	// unknowable downstream. Omitted when empty, which is the overwhelming
+	// majority of calls, and absent entirely from control servers older than
+	// the change that added it.
+	PatchMembers []int `json:"patchMembers,omitempty"`
 }
 
 // ActivityEvents GETs /activity/events?sinceId=..&limit=..&kinds=calls: the

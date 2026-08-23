@@ -191,6 +191,7 @@ export function resolvePatch(
   representative: number | null,
   received: readonly number[],
   eventType: string | null,
+  patchMembers: readonly number[] | null = null,
 ): { home: number | null; patch: PatchView | null } {
   const members = received.filter((t) => Number.isInteger(t));
 
@@ -207,12 +208,22 @@ export function resolvePatch(
   }
 
   // An over-the-air patch: the supergroup is what was transmitted on, so it is
-  // both the home and the first entry. Its member talkgroups are recorded by
-  // vce per event (activity_event_talkgroup_member) but are not yet shipped by
-  // the control server, so today the list is the supergroup alone.
+  // both the home and the first entry.
+  //
+  // Its members come from vce, not from us. A node hears a patched
+  // transmission on the supergroup alone, so no amount of looking at our own
+  // receptions can name the channels it went out on — vce records them per
+  // event in activity_event_talkgroup_member and reports them as patchMembers
+  // (migration 078). A node on an older control server sends none, and the
+  // call then reads as a patch with unnamed members, which is the honest
+  // answer rather than a guess.
   if ((eventType ?? '').toUpperCase().startsWith('CALL_PATCH_GROUP')) {
     const home = representative ?? members[0] ?? null;
-    const talkgroups = home === null ? members : [home, ...members.filter((t) => t !== home)];
+    const rest = [
+      ...members.filter((t) => t !== home),
+      ...(patchMembers ?? []).filter((t) => t !== home && !members.includes(t)),
+    ];
+    const talkgroups = home === null ? rest : [home, ...rest];
     return { home, patch: { kind: 'automatic', label: null, talkgroups } };
   }
 

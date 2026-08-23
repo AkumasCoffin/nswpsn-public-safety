@@ -184,6 +184,29 @@ const CLOCK_SANITY_MS = 48 * 60 * 60 * 1000;
 const DECODE_SAMPLE_MIN_INTERVAL_MS = 55_000;
 const _lastDecodeSampleAt = new Map<string, number>();
 
+/**
+ * The patch members worth storing for one reception.
+ *
+ * Null passes through as null — a control server that does not report members
+ * is saying "unknown", which is a different fact from a call having none, and
+ * the column keeps that distinction. An empty result also stores as null: a
+ * patch of nothing is not a patch, and a stored empty array would claim the
+ * question was answered.
+ */
+export function patchMembersOf(
+  members: number[] | null | undefined,
+  talkgroup: number | null,
+): number[] | null {
+  if (members === null || members === undefined) return null;
+  const out: number[] = [];
+  for (const m of members) {
+    if (!Number.isInteger(m) || m <= 0) continue;
+    if (talkgroup !== null && m === talkgroup) continue;
+    if (!out.includes(m)) out.push(m);
+  }
+  return out.length > 0 ? out.sort((a, b) => a - b) : null;
+}
+
 /** Parse anything → integer or null (NaN/Infinity/garbage → null). */
 export function safeInt(v: unknown): number | null {
   if (v === null || v === undefined || v === '') return null;
@@ -256,6 +279,16 @@ export interface ActivityEventInput {
    *  the `source_alias` column (migration 046). Optional/null: absent from
    *  older agents. */
   sourceAlias?: string | null;
+  /**
+   * The talkgroups patched into this call — stored in `patch_members`
+   * (migration 078).
+   *
+   * A patched transmission carries the PATCH GROUP as its `target`, so without
+   * these the real channels carrying the conversation are unknowable. Null
+   * from a control server that does not report them, which is a DIFFERENT fact
+   * from an empty list on a call that simply is not patched.
+   */
+  patchMembers?: number[] | null;
 }
 
 /**
@@ -347,9 +380,9 @@ export async function recordActivityEvents(
                 action, event_type, system, talkgroup, source_unit,
                 frequency, timeslot, encrypted,
                 site_rfss, site_id, site_nac, wacn,
-                system_label, source_alias)
+                system_label, source_alias, patch_members)
              VALUES ($1, $2::timestamptz, $3, $4, $5, $6, $7, $8, $9,
-                     $10, $11, $12, $13, $14, $15, $16, $17, $18)
+                     $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
              ON CONFLICT (node_id, stream_id, source_event_id) DO NOTHING
              RETURNING id`,
             [
@@ -371,6 +404,10 @@ export async function recordActivityEvents(
               safeInt(ev.wacn),
               ev.systemName ?? null,
               ev.sourceAlias ?? null,
+              // Never the talkgroup itself: the call is already filed there,
+              // and listing it as one of its own patch members would read as
+              // the transmission going out on it twice.
+              patchMembersOf(ev.patchMembers, talkgroup),
             ],
           );
           const rowId = ins.rows[0]?.id;

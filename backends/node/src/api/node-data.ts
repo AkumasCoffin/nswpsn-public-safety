@@ -1079,6 +1079,7 @@ nodeDataRouter.get(
               recorded: boolean;
               receptions: number;
               talkgroups: number[] | null;
+              patch_members: number[] | null;
               sites: Array<{ rfss: number; site: number; frequency: number | null }>;
               nodes: Array<{ id: string; name: string }>;
             }>(
@@ -1117,6 +1118,16 @@ nodeDataRouter.get(
                       -- as its patch members.
                       array_agg(DISTINCT e.talkgroup)
                         FILTER (WHERE e.talkgroup IS NOT NULL) AS talkgroups,
+                      -- The talkgroups an OVER-THE-AIR patch put on this call,
+                      -- as vce reported them per reception (migration 078).
+                      -- Unlike the aggregate above these are not talkgroups we
+                      -- received on — a node hears the patch on its supergroup
+                      -- — so they cannot be derived from our own rows.
+                      (SELECT array_agg(DISTINCT m)
+                         FROM node_radio_events pm,
+                              LATERAL unnest(pm.patch_members) AS m
+                        WHERE pm.logical_call_id = e.logical_call_id
+                          AND pm.patch_members IS NOT NULL) AS patch_members,
                       -- Each receiving site with the traffic channel IT used.
                       -- The LCN belongs per site, not on the call: one
                       -- transmission simulcast from two sites is granted a
@@ -1189,6 +1200,7 @@ nodeDataRouter.get(
               d.talkgroup,
               d.talkgroups ?? [],
               d.event_type,
+              d.patch_members ?? null,
             );
             return {
               type: 'radio' as const,
