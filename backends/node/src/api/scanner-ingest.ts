@@ -127,6 +127,60 @@ scannerIngestRouter.post('/api/scanner-ingest/api/call-upload', async (c) => {
     : audioField;
   const audioBytes = audioFile instanceof File ? audioFile.size : 0;
 
+  // The aligned timestamp, in rdio's own unit (whole epoch seconds). The offset
+  // is a whole second so this stays integral.
+  const alignedSecs = Math.floor((startedAt.getTime() + config.SCANNER_TIME_OFFSET_MS) / 1000);
+
+  // ---------------------------------------------------------------------
+  // Forward to central rdio, with the aligned dateTime.
+  //
+  // They point their EXISTING downstream here rather than adding a second one
+  // (two would upload every call twice), so this relay is what keeps their
+  // audio flowing into central rdio — same model as the node relay.
+  //
+  // The timestamp rewrite is the point of the whole exercise. rdio collapses
+  // the copies of a patched transmission with an EXACT dateTime equality —
+  // `where dateTime = ? and system = ? and talkgroup in (...)`, no window at
+  // all (Calls.GetPatchDuplicate). A patch is two or more talkgroups carrying
+  // the same transmission at the same instant, so if this feed's stamps sit a
+  // second off the nodes', copies of one patched transmission never match:
+  // rdio stores them as separate calls and the patch's member list is never
+  // assembled. Aligning here is what lets the patch collapse fire across both
+  // sources.
+  // ---------------------------------------------------------------------
+  const internalUrl = config.RDIO_INTERNAL_URL;
+  const internalKey = config.RDIO_INTERNAL_API_KEY;
+  if (internalUrl && internalKey) {
+    const fd = new FormData();
+    for (const [name, value] of Object.entries(form)) {
+      // Their key never reaches central rdio, and dateTime is re-set below.
+      if (name === 'key' || name === 'dateTime') continue;
+      const values = Array.isArray(value) ? value : [value];
+      for (const v of values) {
+        if (v instanceof File) fd.append(name, v, v.name);
+        else fd.append(name, v);
+      }
+    }
+    fd.set('key', internalKey);
+    fd.set('dateTime', String(alignedSecs));
+    try {
+      const resp = await fetch(`${internalUrl.replace(/\/$/, '')}/api/call-upload`, {
+        method: 'POST',
+        body: fd,
+      });
+      if (!resp.ok) {
+        // Surface it: rdio retries a failed downstream, and the retry is
+        // idempotent on our side, so a real upstream problem should not be
+        // silently swallowed into a 200.
+        log.warn({ status: resp.status }, 'scanner ingest: central rdio rejected the relay');
+        return c.json({ error: 'relay rejected' }, 502);
+      }
+    } catch (err) {
+      log.warn({ err }, 'scanner ingest: relay to central rdio failed');
+      return c.json({ error: 'relay failed' }, 502);
+    }
+  }
+
   try {
     await recordScannerCall({
       nodeId: node.id,

@@ -65,9 +65,21 @@ without you having to change your key.)
 
 ## Notes
 
-- Calls that both you and a network node hear are merged into one call with two
-  contributors, not counted twice. Your timestamps are shifted by one second to
-  line up with the nodes' clock basis — the two sources stamp slightly different
-  moments of the same transmission (audio start vs call setup).
+- **Your calls still reach the main rdio.** We pass every upload straight
+  through, which is why you repoint your existing downstream instead of adding
+  another one. Nothing you can see changes.
+- **Timestamps are shifted by one second** on the way through, to line up with
+  the network nodes' clock basis — the two sources stamp different moments of
+  the same transmission (your recorder stamps when audio starts; a node stamps
+  when the call is set up, about a second earlier).
+
+  This matters more than it sounds. rdio recognises a **patch** — two or more
+  talkgroups carrying one conversation — by the copies sharing an *exact*
+  timestamp. A second out and the copies never match, so a patched
+  transmission is stored as several separate calls and the patch is never
+  recognised. Aligning the clocks is what keeps patches working once your feed
+  and the nodes are both contributing.
+- Calls that both you and a node hear merge into one call with two
+  contributors, rather than being counted twice.
 - Retries are safe: if rdio re-sends a call after a failure, it is recognised as
   the same call and not stored twice.

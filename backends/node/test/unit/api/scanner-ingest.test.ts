@@ -23,10 +23,16 @@ vi.mock('../../../src/lib/log.js', () => ({
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
-async function appWith(key?: string) {
+async function appWith(key?: string, relay?: { url: string; key: string }) {
   vi.resetModules();
   vi.doMock('../../../src/config.js', () => ({
-    config: { SCANNER_INGEST_KEY: key, SCANNER_INGEST_NAME: 'Scanner feed' },
+    config: {
+      SCANNER_INGEST_KEY: key,
+      SCANNER_INGEST_NAME: 'Scanner feed',
+      SCANNER_TIME_OFFSET_MS: -1000,
+      RDIO_INTERNAL_URL: relay?.url,
+      RDIO_INTERNAL_API_KEY: relay?.key,
+    },
   }));
   const { scannerIngestRouter } = await import('../../../src/api/scanner-ingest.js');
   const app = new Hono();
@@ -95,5 +101,43 @@ describe('POST /api/scanner-ingest/api/call-upload', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, fed: false });
     expect(recordScannerCall).not.toHaveBeenCalled();
+  });
+});
+
+describe('relay to central rdio', () => {
+  it('shifts the forwarded dateTime by one second and swaps in the internal key', async () => {
+    // The point of the alignment: rdio collapses the copies of a PATCHED
+    // transmission on an exact dateTime equality (Calls.GetPatchDuplicate has
+    // no window at all). A scanner stamps audio start, a node stamps call
+    // setup ~1s earlier — so without this shift the copies of one patched
+    // transmission never match and the patch is never recognised.
+    const fetchMock = vi.fn(() => Promise.resolve(new Response('{}', { status: 200 })));
+    vi.stubGlobal('fetch', fetchMock);
+    const app = await appWith('right-key', { url: 'http://rdio.internal', key: 'INTERNAL' });
+
+    const res = await app.request('/api/scanner-ingest/api/call-upload',
+      upload({ key: 'right-key', talkgroup: '30013', source: '2073252', dateTime: '1787000000' }));
+    expect(res.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('http://rdio.internal/api/call-upload');
+    const sent = init.body as FormData;
+    expect(sent.get('dateTime')).toBe('1786999999');   // one second earlier
+    expect(sent.get('key')).toBe('INTERNAL');           // never their key
+    expect(sent.get('talkgroup')).toBe('30013');
+    vi.unstubAllGlobals();
+  });
+
+  it('surfaces a relay failure instead of swallowing it into a 200', async () => {
+    // rdio retries a failed downstream and our side is idempotent, so a real
+    // upstream problem must not be reported as success.
+    vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('down'))));
+    const app = await appWith('right-key', { url: 'http://rdio.internal', key: 'INTERNAL' });
+    const res = await app.request('/api/scanner-ingest/api/call-upload',
+      upload({ key: 'right-key', talkgroup: '30013', dateTime: '1787000000' }));
+    expect(res.status).toBe(502);
+    expect(recordScannerCall).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
   });
 });
