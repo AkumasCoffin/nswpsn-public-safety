@@ -2265,15 +2265,35 @@
     .nd2-badge-enc { background: rgba(245, 158, 11, 0.14); color: #fcd34d; }
     .nd2-badge-rec { background: rgba(148, 163, 184, 0.12); color: #94a3b8; }
     .nd2-badge-patch { background: rgba(56, 189, 248, 0.14); color: #7dd3fc; }
-    /* The other talkgroups a patched transmission was carried on. Its own
-       talkgroup is the row's pill, so this lists only the rest — on its own
-       line, because a patch of four members would otherwise push the identity
-       column far wider than every unpatched row beside it. */
-    .nd2-patch-members {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.2rem;
-      margin-top: 0.25rem;
+    /* A patched transmission and the other talkgroups that carried it, as
+       ONE chip. Full pills per member stacked three lines deep and looked
+       identical to the row's own talkgroup, so the home was
+       indistinguishable from what it was patched to; the ids alone keep it
+       to one line, with the names in the tooltip. */
+    .nd2-patch {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      padding: 0.12rem 0.4rem;
+      border-radius: 6px;
+      font-size: 0.58rem;
+      vertical-align: middle;
+      margin-left: 0.25rem;
+      background: rgba(56, 189, 248, 0.14);
+      color: #7dd3fc;
+    }
+    .nd2-patch i { font-size: 0.58rem; }
+    .nd2-patch-tg {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-variant-numeric: tabular-nums;
+      opacity: 0.85;
+    }
+    /* Talkgroup name and id as separate columns: the name reads as text,
+       the id is monospace and tabular so a column of them lines up. */
+    .nd2-tgname { display: inline-flex; align-items: center; gap: 0.3rem; }
+    .nd2-tgid {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-variant-numeric: tabular-nums;
     }
     .nd2-detail-gap { margin-bottom: 1.75rem; }
 
@@ -2813,7 +2833,7 @@
             <button class="filter-btn" data-nd2-view="nodes" onclick="nd2SetView('nodes')">Nodes</button>
             <span class="nd2-seg-div" aria-hidden="true"></span>
             <button class="filter-btn" data-nd2-view="talkgroups" onclick="nd2SetView('talkgroups')">Talkgroups</button>
-            <button class="filter-btn" data-nd2-view="aliases" onclick="nd2SetView('aliases')">Aliases</button>
+            <button class="filter-btn" data-nd2-view="aliases" onclick="nd2SetView('aliases')">Units</button>
           </div>
         </div>
         <div class="nd2-controls nd2-viewbar" id="nd2-viewbar-pager" style="display: none;">
@@ -2841,7 +2861,7 @@
               <button class="filter-btn" data-nd2-nodetab="live" onclick="nd2NodeSetTab('live')">Live</button>
               <button class="filter-btn" data-nd2-nodetab="events" onclick="nd2NodeSetTab('events')">Events</button>
               <button class="filter-btn" data-nd2-nodetab="talkgroups" onclick="nd2NodeSetTab('talkgroups')">Talkgroups</button>
-              <button class="filter-btn" data-nd2-nodetab="aliases" onclick="nd2NodeSetTab('aliases')">Aliases</button>
+              <button class="filter-btn" data-nd2-nodetab="aliases" onclick="nd2NodeSetTab('aliases')">Units</button>
             </div>
           </div>
         </div>
@@ -3066,7 +3086,7 @@
               <div class="filter-bar">
                 <div class="search-box" style="min-width: 150px;">
                   <i class="fas fa-search"></i>
-                  <input type="text" id="nd2-rad-q" placeholder="Radio ID" inputmode="numeric" oninput="nd2RadInputChanged()">
+                  <input type="text" id="nd2-rad-q" placeholder="RID" inputmode="numeric" oninput="nd2RadInputChanged()">
                 </div>
                 <select class="nd-input" id="nd2-rad-agency" data-nd2-agency
                         style="max-width: 190px;" aria-label="Filter radios by agency"
@@ -3082,13 +3102,14 @@
                   <thead>
                     <tr>
                       <!-- UID, OTA and Alias are three separate facts about one
-                           radio: the id it transmits, the name it transmits with
-                           that id (P25 talker alias), and the label the operator
-                           gave the id in the agency's unit list. A radio can have
-                           both aliases at once, so each gets its own column. -->
-                      <th class="nd2-sortable"><button type="button" class="nd2-sort-btn" data-nd2-sort="rad" data-nd2-key="radio" onclick="nd2RadSort('radio')">Radio <i class="fas fa-caret-down nd2-caret nd2-caret-off"></i></button></th>
-                      <th class="nd2-sortable" title="Over-the-air alias — the name the radio transmits with its UID"><button type="button" class="nd2-sort-btn" data-nd2-sort="rad" data-nd2-key="ota" onclick="nd2RadSort('ota')">OTA <i class="fas fa-caret-down nd2-caret nd2-caret-off"></i></button></th>
-                      <th title="Configured label from the agency's unit list">Alias</th>
+                           radio: the id it transmits, the short name it transmits
+                           with that id (P25 talker alias), and the label the
+                           operator gave the id in the agency's unit list. A radio
+                           can have both names at once, so each gets its own
+                           column. -->
+                      <th class="nd2-sortable"><button type="button" class="nd2-sort-btn" data-nd2-sort="rad" data-nd2-key="radio" onclick="nd2RadSort('radio')">RID <i class="fas fa-caret-down nd2-caret nd2-caret-off"></i></button></th>
+                      <th class="nd2-sortable" title="Over-the-air alias — the short name the radio transmits with its RID"><button type="button" class="nd2-sort-btn" data-nd2-sort="rad" data-nd2-key="ota" onclick="nd2RadSort('ota')">OTA <i class="fas fa-caret-down nd2-caret nd2-caret-off"></i></button></th>
+                      <th title="Configured label from the agency's unit list">Unit</th>
                       <th>Agency</th>
                       <th class="nd2-num nd2-sortable"><button type="button" class="nd2-sort-btn" data-nd2-sort="rad" data-nd2-key="calls" onclick="nd2RadSort('calls')">Calls <i class="fas fa-caret-down nd2-caret nd2-caret-off"></i></button></th>
                       <th class="nd2-sortable"><button type="button" class="nd2-sort-btn" data-nd2-sort="rad" data-nd2-key="lastSeen" onclick="nd2RadSort('lastSeen')">Last seen <i class="fas fa-caret-down nd2-caret nd2-caret-off"></i></button></th>
@@ -3225,7 +3246,7 @@
         <div id="nd2-view-aliases" style="display: none;">
           <div class="nd2-card">
             <div class="nd2-card-h">
-              <i class="fas fa-id-card"></i> Radio aliases
+              <i class="fas fa-id-card"></i> Units
               <span class="nd-sub" id="nd2-alias-count"></span>
             </div>
             <!-- Same search chrome as the Talkgroups panel's #nd2-tg-q box
@@ -3236,11 +3257,11 @@
               <div class="search-box" style="min-width: 200px;">
                 <i class="fas fa-search"></i>
                 <input type="search" id="nd2-alias-q"
-                       placeholder="Search alias or radio id…"
+                       placeholder="Search unit name or RID…"
                        oninput="nd2AliasInputChanged()" />
               </div>
               <select class="nd-input" id="nd2-alias-agency" data-nd2-agency
-                      style="max-width: 190px;" aria-label="Filter aliases by agency"
+                      style="max-width: 190px;" aria-label="Filter units by agency"
                       onchange="nd2AliasSetAgency(this.value)">
                 <option value="">All agencies</option>
               </select>
@@ -3252,15 +3273,17 @@
               <table class="nd-table">
                 <thead>
                   <tr>
-                    <!-- UID / OTA / Alias are three separate columns: the id, the
-                         name transmitted with it, and the configured unit label.
-                         A radio commonly has both aliases, and they differ.
+                    <!-- RID / OTA / Unit are three separate columns: the id, the
+                         short name transmitted with it, and the configured unit
+                         label. A radio commonly has both names, and they differ,
+                         so calling the configured one "Alias" collided with OTA,
+                         which is also an alias.
                          sort=ota orders by node_radio_aliases.alias, which IS
-                         the OTA — the configured Alias/Agency columns come from
-                         the config and have no server-side ordering. -->
-                    <th class="nd2-sortable"><button type="button" class="nd2-sort-btn" data-nd2-sort="alias" data-nd2-key="radio" onclick="nd2AliasSort('radio')">Radio <i class="fas fa-caret-down nd2-caret nd2-caret-off"></i></button></th>
-                    <th class="nd2-sortable" title="Over-the-air alias — the name this radio transmitted"><button type="button" class="nd2-sort-btn" data-nd2-sort="alias" data-nd2-key="ota" onclick="nd2AliasSort('ota')">OTA <i class="fas fa-caret-down nd2-caret nd2-caret-off"></i></button></th>
-                    <th title="Configured label from the agency's unit list">Alias</th>
+                         the OTA — the Unit/Agency columns come from the
+                         config and have no server-side ordering. -->
+                    <th class="nd2-sortable"><button type="button" class="nd2-sort-btn" data-nd2-sort="alias" data-nd2-key="radio" onclick="nd2AliasSort('radio')">RID <i class="fas fa-caret-down nd2-caret nd2-caret-off"></i></button></th>
+                    <th class="nd2-sortable" title="Over-the-air alias — the short name this radio transmitted"><button type="button" class="nd2-sort-btn" data-nd2-sort="alias" data-nd2-key="ota" onclick="nd2AliasSort('ota')">OTA <i class="fas fa-caret-down nd2-caret nd2-caret-off"></i></button></th>
+                    <th title="Configured label from the agency's unit list">Unit</th>
                     <th>Agency</th>
                     <th class="nd2-num nd2-sortable"><button type="button" class="nd2-sort-btn" data-nd2-sort="alias" data-nd2-key="timesSeen" onclick="nd2AliasSort('timesSeen')">Times heard <i class="fas fa-caret-down nd2-caret nd2-caret-off"></i></button></th>
                     <th class="nd2-sortable"><button type="button" class="nd2-sort-btn" data-nd2-sort="alias" data-nd2-key="firstSeen" onclick="nd2AliasSort('firstSeen')">First heard <i class="fas fa-caret-down nd2-caret nd2-caret-off"></i></button></th>
@@ -3290,7 +3313,7 @@
             <input type="text" id="nd2-ev-tg" placeholder="Talkgroup" oninput="nd2EvInputChanged()">
           </div>
           <div class="search-box" style="min-width: 100px;">
-            <input type="text" id="nd2-ev-unit" placeholder="Unit" oninput="nd2EvInputChanged()">
+            <input type="text" id="nd2-ev-unit" placeholder="RID" inputmode="numeric" oninput="nd2EvInputChanged()">
           </div>
           <div class="search-box" style="min-width: 100px;">
             <input type="text" id="nd2-ev-site" placeholder="rfss-site" oninput="nd2EvInputChanged()">
@@ -3300,19 +3323,23 @@
           <table class="nd-table">
             <thead>
               <tr>
+                <!-- Headings adapt to the scope pill: one table carries radio
+                     and pager rows, and a heading that has to name both ends
+                     up naming neither well. Set in nd2EvHeaders(). -->
                 <th>Time</th>
-                <th>System</th>
-                <th id="nd2-ev-tg-th">Talkgroup</th>
+                <th id="nd2-ev-th-sys">System</th>
+                <th id="nd2-ev-th-tg">Talkgroup</th>
+                <th id="nd2-ev-th-tgid">TGID</th>
                 <th>Agency</th>
-                <th>Unit / Message</th>
-                <th title="Over-the-air alias — the name the radio transmits with its UID">OTA</th>
-                <th title="Configured alias — what this UID is named in its agency's unit list">Alias</th>
+                <th id="nd2-ev-th-rid">RID</th>
+                <th id="nd2-ev-th-ota" title="Over-the-air alias — the short name the radio transmits with its RID">OTA</th>
+                <th id="nd2-ev-th-unit" title="Configured label — what this RID is named in its agency's unit list">Unit</th>
                 <th>Sites</th>
                 <th>Nodes</th>
               </tr>
             </thead>
             <tbody id="nd2-ev-body">
-              <tr><td colspan="9" class="nd2-empty">Loading…</td></tr>
+              <tr><td colspan="10" class="nd2-empty">Loading…</td></tr>
             </tbody>
           </table>
         </div>
@@ -4865,9 +4892,9 @@
           nd2Num(u.calls),
         ]);
         unitsEl.innerHTML = table(
-          [{ t: 'Unit' },
-           { t: 'OTA', title: 'Over-the-air alias — the name the radio transmits with its UID' },
-           { t: 'Alias', title: "Configured label from the agency's unit list" },
+          [{ t: 'RID' },
+           { t: 'OTA', title: 'Over-the-air alias — the short name the radio transmits with its RID' },
+           { t: 'Unit', title: "Configured label from the agency's unit list" },
            { t: 'Calls', num: true }], rows);
       }
       const unitsNote = document.getElementById('nd2-units-note');
@@ -4975,7 +5002,7 @@
           const msg = e.status === 404 ? 'Events API not available yet.'
             : (e.status === 401 || e.status === 403) ? 'Not authorised to view events.'
             : `Could not load events: ${e.message}`;
-          body.innerHTML = `<tr><td colspan="9" class="nd2-empty">${escapeHtml(msg)}</td></tr>`;
+          body.innerHTML = `<tr><td colspan="10" class="nd2-empty">${escapeHtml(msg)}</td></tr>`;
         }
         nd2UpdatePager(0);
       }
@@ -4991,11 +5018,34 @@
       return `${Math.floor(s / 86400)}d ago`;
     }
 
+    /**
+     * Name the shared columns for whichever kind of row is on screen.
+     *
+     * One table carries radio events and pager pages, and their columns are
+     * not the same fact: a radio row's identity column is a RID, a page's is
+     * its message. A heading that has to cover both ("Unit / Message") names
+     * neither well, so the scope pill picks the wording and only the mixed
+     * view has to compromise.
+     */
+    function nd2EvHeaders() {
+      const scope = nd2.scope === 'pager' ? 'pager' : (nd2.scope === 'radio' ? 'radio' : 'all');
+      const H = {
+        radio: { sys: 'System', tg: 'Talkgroup', tgid: 'TGID', rid: 'RID', ota: 'OTA', unit: 'Unit' },
+        pager: { sys: 'Frequency', tg: 'Alias', tgid: 'Capcode', rid: 'Message', ota: '—', unit: '—' },
+        all:   { sys: 'System', tg: 'Talkgroup', tgid: 'TGID / Capcode', rid: 'RID / Message', ota: 'OTA', unit: 'Unit' },
+      }[scope];
+      for (const [key, text] of Object.entries(H)) {
+        const el = document.getElementById(`nd2-ev-th-${key}`);
+        if (el) el.textContent = text;
+      }
+    }
+
     function nd2RenderEvents(events) {
       const body = document.getElementById('nd2-ev-body');
       if (!body) return;
+      nd2EvHeaders();
       if (!events.length) {
-        body.innerHTML = '<tr><td colspan="9" class="nd2-empty">No events match.</td></tr>';
+        body.innerHTML = '<tr><td colspan="10" class="nd2-empty">No events match.</td></tr>';
         nd2UpdatePager(0);
         return;
       }
@@ -5015,23 +5065,29 @@
           const freq = (ev.freqMhz != null && isFinite(ev.freqMhz))
             ? `${Number(ev.freqMhz).toFixed(4)} MHz` : '—';
           const msg = ev.message || '';
+          // Label and id in their own columns, the same split the radio row
+          // uses: a capcode is to a page what a talkgroup id is to a call.
+          // Ten cells, like the radio row. This was eight, so every pager
+          // row sat one column left of its heading and its nodes rendered
+          // under SITES.
           const capStr = ev.capcode != null ? String(ev.capcode) : '—';
-          const capCell = ev.capcodeAlias
-            ? `<span class="nd-strong">${escapeHtml(String(ev.capcodeAlias))}</span> <span class="nd-sub">${escapeHtml(capStr)}</span>`
-            : `<span class="nd-strong">${escapeHtml(capStr)}</span>`;
           return `<tr>
             <td>${timeCell}</td>
             <td><span class="nd-sub">${escapeHtml(freq)}</span></td>
-            <td>${capCell}</td>
+            <td>${nd2NameCell(ev.capcodeAlias)}</td>
+            <td><span class="nd-strong">${escapeHtml(capStr)}</span></td>
             <td>${nd2AgencyCell(ev.agency)}</td>
             <td><span class="nd2-msg" title="${escapeHtml(msg)}">${escapeHtml(msg) || '—'}</span></td>
             <td><span class="nd-sub">—</span></td>
-            <td>—</td>
+            <td><span class="nd-sub">—</span></td>
+            <td><span class="nd-sub">—</span></td>
             <td>${nodeCell || '—'}</td>
           </tr>`;
         }
 
-        const tgLabel = nd2TgPill(ev.talkgroup, ev.talkgroupLabel, ev.talkgroupColor);
+        // Name and number in separate columns. One pill carrying both made
+        // the identity column the widest on the page and left the number
+        // un-scannable, which is the one thing you sort and search on.
         // Encrypted / recorded badges — icon + title carry the meaning.
         const badges =
           (ev.encrypted ? `<span class="nd2-badge nd2-badge-enc" title="Encrypted call"><i class="fas fa-lock"></i>ENC</span>` : '') +
@@ -5040,7 +5096,8 @@
         return `<tr>
           <td>${timeCell}</td>
           <td><span class="nd-sub">${escapeHtml(ev.systemLabel || String(ev.system != null ? ev.system : '—'))}</span></td>
-          <td>${tgLabel}${badges}${nd2PatchCell(ev.patch)}</td>
+          <td>${nd2TgNameCell(ev.talkgroupLabel, ev.talkgroup, ev.talkgroupColor)}${badges}${nd2PatchCell(ev.patch)}</td>
+          <td>${nd2TgIdCell(ev.talkgroup)}</td>
           <td>${nd2AgencyCell(ev.agency)}</td>
           <td>${ev.sourceUnit != null ? nd2RadioPill(ev.sourceUnit, ev.sourceColor) : '—'}</td>
           <td>${nd2NameCell(ev.sourceAlias)}</td>
@@ -5132,6 +5189,30 @@
     }
 
     /**
+     * The NAME half of a talkgroup, for tables that give the id its own
+     * column. Falls back to the id when nothing has named it, because an
+     * empty name cell beside a populated id reads as a rendering fault
+     * rather than as "unnamed".
+     */
+    function nd2TgNameCell(label, tg, color) {
+      if (!label) {
+        return tg == null
+          ? '<span class="nd-sub">—</span>'
+          : `<span class="nd-sub">${escapeHtml(String(tg))}</span>`;
+      }
+      const dot = color
+        ? `<span class="nd2-tgpill-dot" style="background:${escapeHtml(String(color))}"></span>`
+        : '';
+      return `<span class="nd2-tgname">${dot}${escapeHtml(String(label))}</span>`;
+    }
+
+    /** The ID half: monospace and tabular so a column of them lines up. */
+    function nd2TgIdCell(tg) {
+      if (tg == null) return '<span class="nd-sub">—</span>';
+      return `<span class="nd2-tgid">${escapeHtml(String(tg))}</span>`;
+    }
+
+    /**
      * A patched transmission, rendered under the talkgroup it is filed on.
      *
      * A patch is several talkgroups carrying ONE conversation, so the same
@@ -5154,14 +5235,26 @@
     function nd2PatchCell(patch) {
       if (!patch) return '';
       const members = Array.isArray(patch.talkgroups) ? patch.talkgroups : [];
-      const title = patch.kind === 'configured'
+      // The first entry is the home talkgroup, already the row's own name
+      // and id; repeating it would read as the transmission going out on
+      // that channel twice.
+      const others = members.slice(1);
+      const kind = patch.kind === 'configured'
         ? `Patch: ${patch.label || 'configured in rdio'}`
         : 'Patch announced over the air for this transmission';
-      const badge = `<span class="nd2-badge nd2-badge-patch" title="${escapeHtml(title)}">`
-        + `<i class="fas fa-code-merge"></i>PATCH</span>`;
-      const others = members.slice(1)
-        .map(m => nd2TgPill(m.talkgroup, m.label, m.color)).join('');
-      return badge + (others ? `<div class="nd2-patch-members">${others}</div>` : '');
+      // Ids only, on one line. Full pills per member stacked three lines
+      // deep and looked exactly like the row's own talkgroup, so the home
+      // was indistinguishable from what it was patched to; the names live
+      // in the tooltip instead.
+      const ids = others.map(m => {
+        const name = m.label ? `${m.label} ${m.talkgroup}` : String(m.talkgroup);
+        return `<span class="nd2-patch-tg" title="${escapeHtml(name)}">${escapeHtml(String(m.talkgroup))}</span>`;
+      }).join('');
+      const title = others.length
+        ? `${kind} — also carried on ${others.map(m => m.label || m.talkgroup).join(', ')}`
+        : `${kind} — member talkgroups not reported by this node`;
+      return `<span class="nd2-patch" title="${escapeHtml(title)}">`
+        + `<i class="fas fa-code-merge"></i>PATCH${ids}</span>`;
     }
 
     // The radio (unit) equivalent of nd2TgPill, and deliberately the same
@@ -5788,11 +5881,11 @@
           [nd2TgCell(t), nd2AgencyCell(t.agency), nd2Num(t.calls), nd2LastSeen(t.lastSeen)]));
     }
     function nd2TopRadioHtml(list) {
-      // UID / OTA / Alias, same three-column split as every other radio table:
-      // the OTA is what the radio transmitted, the alias is its configured unit
-      // label, and the UID pill carries its agency's colour.
+      // RID / OTA / Unit, same three-column split as every other radio table:
+      // the OTA is what the radio transmitted, the unit label is what the
+      // config names it, and the RID pill carries its agency's colour.
       return nd2MiniTable(
-        [{ label: 'Radio' }, { label: 'OTA' }, { label: 'Alias' }, { label: 'Calls', num: true },
+        [{ label: 'RID' }, { label: 'OTA' }, { label: 'Unit' }, { label: 'Calls', num: true },
          { label: 'Last seen' }],
         (list || []).map(r => [
           nd2RadioPill(r.radio, r.color),
@@ -6333,7 +6426,7 @@
             </tr>`).join('');
         }
         const cnt = document.getElementById('nd2-alias-count');
-        if (cnt) cnt.textContent = nd2.alias.total ? `${nd2Num(nd2.alias.total)} radio(s)` : '';
+        if (cnt) cnt.textContent = nd2.alias.total ? `${nd2Num(nd2.alias.total)} unit(s)` : '';
         const range = document.getElementById('nd2-alias-range');
         if (range) {
           const from = nd2.alias.total ? nd2.alias.offset + 1 : 0;
@@ -6891,8 +6984,8 @@
           nd2LiveTgCell(c),
           nd2AgencyCell(c.agency),
           c.talkerAlias || c.fromAlias
-            ? `<span class="nd-strong">${escapeHtml(String(c.talkerAlias || c.fromAlias))}</span> <span class="nd-sub">${escapeHtml(String(c.from == null ? '' : c.from))}</span>`
-            : escapeHtml(String(c.from == null ? '—' : c.from)),
+            ? `<span class="nd-strong">${escapeHtml(String(c.talkerAlias || c.fromAlias))}</span> <span class="nd-sub">${escapeHtml(c.from == null ? '' : nd2Rid(c.from))}</span>`
+            : escapeHtml(c.from == null ? '—' : nd2Rid(c.from)),
           // Every site hearing this call, each as its own chip — same visual
           // language as the Events table. Listing ALL of them (rather than two
           // and a "+1") is the point of the column: which sites have it is the
@@ -7002,10 +7095,10 @@
         }
         // Listing RADIOS gets the same UID / OTA / Alias split as every other
         // radio table (and the agency-coloured pill); listing talkgroups has no
-        // UID to name, so those columns would be dead weight there.
+        // RID to name, so those columns would be dead weight there.
         body.innerHTML = nd2MiniTable(
-          [{ label: isRadio ? 'Talkgroup' : 'Radio' },
-           ...(isRadio ? [] : [{ label: 'OTA' }, { label: 'Alias' }]),
+          [{ label: isRadio ? 'Talkgroup' : 'RID' },
+           ...(isRadio ? [] : [{ label: 'OTA' }, { label: 'Unit' }]),
            { label: 'Calls', num: true },
            { label: 'Group', num: true }, { label: 'Private', num: true },
            { label: 'Enc', num: true }, { label: 'Audio', num: true }, { label: 'Last seen' }],
