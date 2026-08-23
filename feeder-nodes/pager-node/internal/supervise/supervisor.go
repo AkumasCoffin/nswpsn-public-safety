@@ -123,6 +123,19 @@ func (s *Supervisor) runComponent(ctx context.Context, c *component) {
 		// (bash + rtl_fm + multimon-ng + curl) can't leave the rtl_fm holding the
 		// SDR device open.
 		setProcessGroup(cmd)
+		// Bound Wait(), exactly as radio-node does. stdout/stderr go to a
+		// logWriter (NOT an *os.File), so os/exec wires real pipes and Wait
+		// blocks until every holder of the write end closes it. reader.sh is a
+		// bash + rtl_fm + multimon-ng + curl pipeline — precisely the case
+		// where one grandchild (a curl on a wedged socket, an rtl_fm in
+		// uninterruptible USB I/O) keeps that pipe open and parks this loop
+		// mid-iteration. The damage is silent: the last status written is
+		// StatusRunning, so the node reports healthy while nothing decodes or
+		// uploads, and Restart() only signals a channel this parked loop never
+		// reads, so the staff restart button does nothing either. With this,
+		// Wait returns exec.ErrWaitDelay and the loop carries on into
+		// recordExit/backoff as usual.
+		cmd.WaitDelay = 10 * time.Second
 		cmd.Cancel = func() error {
 			killProcessGroup(cmd)
 			return nil

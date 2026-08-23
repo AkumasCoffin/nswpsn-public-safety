@@ -20,8 +20,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"mime"
-	"mime/multipart"
 	"net/http"
 	"os"
 	"os/exec"
@@ -629,10 +627,6 @@ func (s *sender) send(contentType string, body []byte) queue.SendResult {
 	req.Header.Set("X-Node-Install", s.installID)
 	req.Header.Set("User-Agent", version.UserAgent())
 
-	// Best-effort P25 site enrichment: never delays a failed lookup into an
-	// upload failure, and never touches the forwarded body bytes.
-	s.addSiteHeaders(req, contentType, body)
-
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		log.Printf("sender: POST failed (will retry): %v", err)
@@ -668,116 +662,3 @@ func debugf(format string, args ...any) {
 	}
 }
 
-// callMeta is the metadata parsed from a queued rdio call-upload body.
-type callMeta struct {
-	talkgroup int
-	source    int
-	frequency int64 // Hz
-	tsMs      int64 // call start, epoch millis
-}
-
-// addSiteHeaders best-effort resolves the P25 RFSS/site the call was heard on
-// (via the sdrtrunk-vce control server's /activity/call-site) and attaches it
-// as X-Call-Site-* headers on the backend upload. The stored multipart body is
-// parsed from a read-only view — the forwarded bytes stay byte-identical. ANY
-// failure (parse error, control server down, not found) leaves the request
-// untouched; enrichment can never fail or retry an upload.
-func (s *sender) addSiteHeaders(req *http.Request, contentType string, body []byte) {
-	if s.sdr == nil {
-		return
-	}
-	meta, err := extractCallMeta(contentType, body)
-	if err != nil {
-		debugf("sender: call meta parse failed (no site enrichment): %v", err)
-		return
-	}
-	if meta.talkgroup <= 0 {
-		return
-	}
-
-	cs, err := s.sdr.CallSite(meta.talkgroup, meta.source, meta.frequency, meta.tsMs, 4000)
-	if err != nil {
-		debugf("sender: call-site lookup failed (no site enrichment): %v", err)
-		return
-	}
-	// Fresh call not matched yet (the activity log can lag the upload by a
-	// beat): wait once briefly and retry.
-	if !cs.Found && meta.tsMs > 0 && time.Since(time.UnixMilli(meta.tsMs)) < 30*time.Second {
-		time.Sleep(2 * time.Second)
-		cs2, err2 := s.sdr.CallSite(meta.talkgroup, meta.source, meta.frequency, meta.tsMs, 4000)
-		if err2 != nil {
-			debugf("sender: call-site retry failed (no site enrichment): %v", err2)
-			return
-		}
-		cs = cs2
-	}
-	if !cs.Found {
-		return
-	}
-
-	if cs.Rfss != nil {
-		req.Header.Set("X-Call-Site-Rfss", strconv.Itoa(*cs.Rfss))
-	}
-	if cs.Site != nil {
-		req.Header.Set("X-Call-Site-Id", strconv.Itoa(*cs.Site))
-	}
-	if cs.Nac != nil {
-		req.Header.Set("X-Call-Site-Nac", strconv.Itoa(*cs.Nac))
-	}
-	if cs.Source != "" {
-		req.Header.Set("X-Call-Site-Source", cs.Source)
-	}
-}
-
-// extractCallMeta parses the rdio call-upload form fields the enrichment needs
-// (dateTime / talkgroup / source / frequency) out of a stored multipart body.
-// It reads from a fresh reader over the stored bytes — the body itself is
-// never modified or re-serialized. Missing/unparseable numeric fields stay 0.
-func extractCallMeta(contentType string, body []byte) (callMeta, error) {
-	var meta callMeta
-
-	mediaType, params, err := mime.ParseMediaType(contentType)
-	if err != nil {
-		return meta, fmt.Errorf("parse content-type: %w", err)
-	}
-	if !strings.HasPrefix(mediaType, "multipart/") {
-		return meta, fmt.Errorf("not a multipart body: %s", mediaType)
-	}
-	boundary := params["boundary"]
-	if boundary == "" {
-		return meta, fmt.Errorf("multipart content-type without boundary")
-	}
-
-	mr := multipart.NewReader(bytes.NewReader(body), boundary)
-	for {
-		part, err := mr.NextPart()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return meta, fmt.Errorf("read multipart: %w", err)
-		}
-		name := part.FormName()
-		switch name {
-		case "dateTime", "talkgroup", "source", "frequency":
-			raw, _ := io.ReadAll(io.LimitReader(part, 64))
-			v := strings.TrimSpace(string(raw))
-			switch name {
-			case "dateTime":
-				// rdio sends the call start as epoch SECONDS (occasionally
-				// fractional); the control server wants millis.
-				if f, ferr := strconv.ParseFloat(v, 64); ferr == nil {
-					meta.tsMs = int64(f * 1000)
-				}
-			case "talkgroup":
-				meta.talkgroup, _ = strconv.Atoi(v)
-			case "source":
-				meta.source, _ = strconv.Atoi(v)
-			case "frequency":
-				meta.frequency, _ = strconv.ParseInt(v, 10, 64)
-			}
-		}
-		_ = part.Close()
-	}
-	return meta, nil
-}

@@ -1,7 +1,7 @@
 {
   "_comment": "Node self-update + component manifest. Everything is served as static files off the site webroot (NODE_DOWNLOADS_BASE, default https://nswpsn.forcequit.xyz/downloads). Deploy builds the agent binaries there; the SDR-Trunk runtime (from the feature/node-control branch) and the rdio binary are placed there once. Fill in the sha256 hex once the artifacts exist (leave empty to disable that entry — the agent treats empty sha256 as 'no update' and skips). The agent checks this on start, every 6h, and on cmd{action:'update'}: downloads to .pending, sha256-verifies, swaps the component dir / self-replaces via a detached helper, restarts.",
   "agent": {
-    "version": "0.2.24",
+    "version": "0.2.25",
     "urls": {
       "windows-amd64": "https://nswpsn.forcequit.xyz/downloads/nodeagent-windows-amd64.exe",
       "linux-amd64": "https://nswpsn.forcequit.xyz/downloads/nodeagent-linux-amd64",
@@ -15,7 +15,7 @@
   },
   "pager-agent": {
     "_comment": "The PAGER-node agent binary (Linux only, amd64/arm64). Served to pager nodes as component 'agent' by /api/node-updates/manifest (kind-aware remap); the pager agent has no sdrtrunk/rdio components.",
-    "version": "0.1.15",
+    "version": "0.1.16",
     "urls": {
       "linux-amd64": "https://nswpsn.forcequit.xyz/downloads/nodeagent-pager-linux-amd64",
       "linux-arm64": "https://nswpsn.forcequit.xyz/downloads/nodeagent-pager-linux-arm64"

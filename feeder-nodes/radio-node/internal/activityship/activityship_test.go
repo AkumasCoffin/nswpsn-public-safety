@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/sdrctl"
 )
@@ -97,18 +98,28 @@ func TestReconcileDBKey(t *testing.T) {
 		t.Fatalf("unknown key must not reset, got %+v", s.st)
 	}
 
-	// Changed key: fresh streamId, lastId back to 0, new key persisted.
+	// Changed key: the new key is stored, and the CURSOR IS KEPT.
+	//
+	// A changed key means the database file was replaced, which is not the
+	// same as the event ids restarting. vce's migrator installs an upgraded
+	// database with an atomic move — new inode, same path, ids preserved — so
+	// resetting here re-shipped the whole 7-day retention under a streamId the
+	// backend had never seen, which its (streamId, id) dedupe could not
+	// suppress. The real restart signal is lastId < cursor, in tick().
 	if !s.reconcileDBKey("keyB", true) {
 		t.Fatal("reconcile with changed key should succeed")
 	}
-	if s.st.StreamID == origStream {
-		t.Fatal("changed dbKey must generate a fresh streamId")
+	if s.st.StreamID != origStream {
+		t.Fatal("a replaced database file must not start a new stream")
 	}
-	if s.st.LastID != 0 || s.st.DBKey != "keyB" {
-		t.Fatalf("changed dbKey must reset lastId and store the new key, got %+v", s.st)
+	if s.st.LastID != 42 {
+		t.Fatalf("a replaced database file must not rewind the cursor, got %d", s.st.LastID)
+	}
+	if s.st.DBKey != "keyB" {
+		t.Fatalf("the new dbKey must be stored, got %q", s.st.DBKey)
 	}
 	if got := readCursor(t, dir); got != s.st {
-		t.Fatalf("reset not persisted: file %+v != state %+v", got, s.st)
+		t.Fatalf("dbKey update not persisted: file %+v != state %+v", got, s.st)
 	}
 }
 
@@ -214,6 +225,22 @@ func TestTickShipsAndAdvancesCursorOnlyOn2xx(t *testing.T) {
 		t.Fatalf("persisted cursor advanced despite backend 500: %+v", got)
 	}
 
+	// A failed ship now schedules a backoff, so the next tick is a deliberate
+	// no-op until it expires — that is the point of it, and without clearing
+	// it here the rest of this test would be measuring the backoff, not the
+	// cursor.
+	if s.shipFails != 1 {
+		t.Fatalf("expected one recorded ship failure, got %d", s.shipFails)
+	}
+	if !s.retryAfter.After(time.Now()) {
+		t.Fatalf("expected a backoff to be scheduled after a 500")
+	}
+	s.tick(context.Background())
+	if s.st.LastID != 0 {
+		t.Fatalf("tick during backoff must not ship: cursor moved to %d", s.st.LastID)
+	}
+	s.retryAfter = time.Time{}
+
 	// Backend healthy: same rows re-fetched and shipped, cursor advances.
 	backendOK = true
 	s.tick(context.Background())
@@ -223,6 +250,12 @@ func TestTickShipsAndAdvancesCursorOnlyOn2xx(t *testing.T) {
 	if got := readCursor(t, dir); got.LastID != 9 {
 		t.Fatalf("advanced cursor not persisted: %+v", got)
 	}
+	// A success clears the backoff, so an isolated blip cannot leave the
+	// shipper throttled once the backend is well again.
+	if s.shipFails != 0 || !s.retryAfter.IsZero() {
+		t.Fatalf("successful ship must clear backoff, got fails=%d retryAfter=%v",
+			s.shipFails, s.retryAfter)
+	}
 	if gotBody.StreamID != s.st.StreamID {
 		t.Fatalf("POST streamId %q != cursor streamId %q", gotBody.StreamID, s.st.StreamID)
 	}
@@ -231,5 +264,52 @@ func TestTickShipsAndAdvancesCursorOnlyOn2xx(t *testing.T) {
 	}
 	if calls != 2 {
 		t.Fatalf("expected 2 backend calls (one failed, one ok), got %d", calls)
+	}
+}
+
+// A single event the backend will never accept must not freeze the feed.
+//
+// ship() halves a too-large batch until one event remains, and then POSTs it
+// anyway. Treating the resulting 413 as retryable meant that event was re-sent
+// forever — and because the cursor only advances on success, every later event
+// queued behind it indefinitely. One dropped event beats a dead feed; the
+// audio send path already makes the same call.
+func TestShipDropsPermanentlyRejectedSingleEvent(t *testing.T) {
+	dir := t.TempDir()
+
+	var posts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		posts++
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+	}))
+	defer srv.Close()
+
+	s := New(Options{
+		DataDir:   dir,
+		DBPath:    filepath.Join(dir, "nonexistent.sqlite"),
+		ServerURL: srv.URL,
+		NodeToken: "tok",
+		InstallID: "inst",
+	})
+	if err := s.resetStream("keyA"); err != nil {
+		t.Fatalf("resetStream: %v", err)
+	}
+
+	one := []sdrctl.ActivityEvent{{ID: 7, AtMs: 1, Action: "CALL", EventType: "CALL_GROUP"}}
+	if err := s.ship(context.Background(), one); err != nil {
+		t.Fatalf("a permanently rejected single event must not be an error: %v", err)
+	}
+	if posts != 1 {
+		t.Fatalf("expected exactly one POST, got %d", posts)
+	}
+
+	// A 413 on a batch that CAN still be split stays retryable — the split is
+	// the fix there, not dropping half the batch.
+	two := []sdrctl.ActivityEvent{
+		{ID: 8, AtMs: 1, Action: "CALL", EventType: "CALL_GROUP"},
+		{ID: 9, AtMs: 1, Action: "CALL", EventType: "CALL_GROUP"},
+	}
+	if err := s.ship(context.Background(), two); err == nil {
+		t.Fatal("a 413 on a splittable batch must still surface as an error")
 	}
 }

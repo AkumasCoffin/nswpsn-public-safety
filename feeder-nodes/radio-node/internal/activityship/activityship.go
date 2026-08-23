@@ -46,6 +46,15 @@ const (
 	intervalJitter = 2 * time.Second
 	// warnEvery rate-limits the persistent-failure WARN log.
 	warnEvery = time.Minute
+	// shipBackoffMax caps the pause after consecutive ship failures. Only
+	// 401/403 had a cooldown; everything else — a 5xx during a backend deploy,
+	// the exact moment every node fails at once — kept the cursor and re-sent
+	// the same full batch on the next 4s tick, forever. That is ~15 requests a
+	// minute per node aimed at a backend already in trouble. The queue sender
+	// and the WS client have always backed off; this was the one path that
+	// hammered.
+	shipBackoffBase = 4 * time.Second
+	shipBackoffMax  = 5 * time.Minute
 	// authCooldown pauses shipping after a 401/403 so a bad/revoked node token
 	// doesn't hammer the backend every tick.
 	authCooldown = time.Minute
@@ -96,6 +105,11 @@ type Shipper struct {
 	shippedOnce bool
 	lastWarn    time.Time
 	authUntil   time.Time
+
+	// Consecutive ship failures, and the instant the next attempt is allowed.
+	// See shipBackoff: without these a 5xx was retried every 4s indefinitely.
+	shipFails  int
+	retryAfter time.Time
 }
 
 // New builds a Shipper. Call Run to start it.
@@ -139,6 +153,9 @@ func (s *Shipper) tick(ctx context.Context) {
 		s.warnf("activity: cursor reset failed after database change")
 		return
 	}
+	if time.Now().Before(s.retryAfter) {
+		return
+	}
 	if time.Now().Before(s.authUntil) {
 		return
 	}
@@ -176,14 +193,21 @@ func (s *Shipper) tick(ctx context.Context) {
 			if errors.Is(err, errAuth) {
 				s.authUntil = time.Now().Add(authCooldown)
 			}
-			// Keep the cursor: next tick re-fetches the same rows.
-			s.warnf("activity: ship failed (will retry): %v", err)
+			// Keep the cursor: next tick re-fetches the same rows — but not
+			// immediately, and not at a fixed rate. Exponential with jitter so
+			// a fleet that fails together does not retry together.
+			s.shipFails++
+			s.retryAfter = time.Now().Add(s.shipBackoff())
+			s.warnf("activity: ship failed (retry in %s): %v",
+				time.Until(s.retryAfter).Truncate(time.Second), err)
 			return
 		}
 
 		// Advance to the highest shipped id (never past what we actually sent)
 		// and persist only after the backend accepted.
 		s.st.LastID = events[len(events)-1].ID
+		s.shipFails = 0
+		s.retryAfter = time.Time{}
 		if err := s.persistState(); err != nil {
 			s.warnf("activity: cursor persist failed: %v", err)
 		}
@@ -246,9 +270,33 @@ func (s *Shipper) ship(ctx context.Context, events []sdrctl.ActivityEvent) error
 		return nil
 	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
 		return fmt.Errorf("%w (status %d)", errAuth, resp.StatusCode)
+	case (resp.StatusCode == http.StatusRequestEntityTooLarge ||
+		resp.StatusCode == http.StatusBadRequest) && len(events) == 1:
+		// Unsplittable and unacceptable. The split above stops at one event,
+		// so a single event the backend will never take was re-POSTed forever
+		// — and because the cursor only advances on success, EVERY later event
+		// queued behind it. One lost event beats a permanently frozen feed;
+		// the send path makes the same call (queue.SendDrop on 413).
+		log.Printf("activity: dropping event id=%d rejected with %d (permanent)",
+			events[0].ID, resp.StatusCode)
+		return nil
 	default:
 		return fmt.Errorf("backend returned %d", resp.StatusCode)
 	}
+}
+
+// shipBackoff is the pause after n consecutive ship failures: 4s, 8s, 16s …
+// capped at 5 minutes, each with up to 25% jitter so a fleet failing together
+// does not retry in lockstep.
+func (s *Shipper) shipBackoff() time.Duration {
+	d := shipBackoffBase
+	for i := 1; i < s.shipFails && d < shipBackoffMax; i++ {
+		d *= 2
+	}
+	if d > shipBackoffMax {
+		d = shipBackoffMax
+	}
+	return d + randDuration(d/4)
 }
 
 // ---- cursor state ------------------------------------------------------------
@@ -285,17 +333,34 @@ func (s *Shipper) persistState() error {
 	return os.Rename(tmp, path)
 }
 
-// reconcileDBKey resets the stream when a successfully-observed dbKey differs
-// from the persisted one (database recreated). Unknown observations (ok=false,
-// i.e. the DB file isn't statable yet) are ignored — absence is not a
-// generation change. It reports whether the cursor state is usable afterwards
-// (false only when a needed reset failed to persist).
+// reconcileDBKey records a changed dbKey WITHOUT resetting the cursor.
+//
+// The key is filesystem identity (dev+inode on Linux, creation time on
+// Windows), and that is not the same question as "did the event ids restart".
+// vce's own migrator installs an upgraded database with
+// Files.move(ATOMIC_MOVE, REPLACE_EXISTING) — a new inode at the same path,
+// with every event id preserved. Treating that as a new generation reset the
+// cursor to 0 under a brand-new streamId, so the backend's (streamId, id)
+// dedupe could not suppress anything and the node re-shipped its entire 7-day
+// retention as new events. That fires on every vce upgrade that runs a
+// migration, which the agent's own component self-update makes routine.
+//
+// The authoritative signal is the one the data itself gives: lastId < cursor,
+// checked in tick(), which means the ids really did restart. This just keeps
+// the stored key current so the log line fires once rather than every tick.
+//
+// Unknown observations (ok=false, the DB file isn't statable yet) are ignored:
+// absence is not a change.
 func (s *Shipper) reconcileDBKey(key string, ok bool) bool {
 	if !ok || key == s.st.DBKey {
 		return true
 	}
-	log.Printf("activity: sdrtrunk database changed; starting a fresh stream")
-	return s.resetStream(key) == nil
+	log.Printf("activity: sdrtrunk database file replaced (ids preserved; cursor kept at %d)", s.st.LastID)
+	s.st.DBKey = key
+	if err := s.persistState(); err != nil {
+		s.warnf("activity: dbKey persist failed: %v", err)
+	}
+	return true
 }
 
 // resetStream starts a fresh stream: new random streamId, lastId=0, the given
