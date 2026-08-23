@@ -32,6 +32,7 @@ import { createHash } from 'node:crypto';
 import { getPool, getWriterPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { config } from '../config.js';
+import { rdioPatches, groupingTalkgroup } from './rdioPatches.js';
 
 /** Two receptions of the same call may carry timestamps a few seconds
  *  apart (queueing on the node, clock skew). ±4s matches the shortest
@@ -213,6 +214,11 @@ export async function recordActivityEvents(
     const pool = await getWriterPool();
     if (!pool || events.length === 0) return 0;
 
+    // Once per batch, not per event: it is a ~60s-cached read of a two-row
+    // table, and an empty lookup (central rdio down or unconfigured) simply
+    // means every talkgroup groups as itself, exactly as before patches.
+    const patches = await rdioPatches();
+
     const client = await pool.connect();
     let failures = 0;
     let lastErr: unknown = null;
@@ -222,7 +228,20 @@ export async function recordActivityEvents(
         const system = safeInt(ev.systemId);
         const talkgroup = safeInt(ev.target);
         const sourceUnit = safeInt(ev.source);
-        const lockKey = `nrc:${system ?? -1}:${talkgroup ?? -1}`;
+        // PATCH GROUPING. A patch is several talkgroups carrying ONE
+        // conversation, so the same transmission arrives once per member and
+        // would otherwise open a rival logical call on each. Group on the
+        // patch's highest-ranked member — the talkgroup rdio files the
+        // surviving call under — so a patched transmission is one call here and
+        // one call there. A non-member resolves to itself, unchanged.
+        const groupTg = talkgroup === null ? null : groupingTalkgroup(patches, talkgroup);
+        // Every talkgroup whose receptions may join this group: the patch's
+        // members, or just this talkgroup.
+        const groupMembers =
+          talkgroup === null
+            ? []
+            : (patches.byTalkgroup.get(talkgroup)?.talkgroups ?? [talkgroup]);
+        const lockKey = `nrc:${system ?? -1}:${groupTg ?? -1}`;
         try {
           await client.query('BEGIN');
           // Serialise grouping per (systemId, target) so two nodes shipping
@@ -235,14 +254,17 @@ export async function recordActivityEvents(
           const found = await client.query<{ logical_call_id: string }>(
             `SELECT logical_call_id FROM node_radio_events
               WHERE system IS NOT DISTINCT FROM $1
-                AND talkgroup IS NOT DISTINCT FROM $2
+                AND talkgroup = ANY($2::int[])
                 AND received_at BETWEEN $3::timestamptz - interval '${GROUP_WINDOW_SECONDS} seconds'
                                    AND $3::timestamptz + interval '${GROUP_WINDOW_SECONDS} seconds'
                 AND ($4::integer IS NULL OR source_unit IS NULL OR source_unit = $4::integer)
                 AND logical_call_id IS NOT NULL
               ORDER BY abs(extract(epoch FROM (received_at - $3::timestamptz)))
               LIMIT 1`,
-            [system, talkgroup, receivedAt.toISOString(), sourceUnit],
+            // For a patch member this is EVERY member talkgroup, so a copy that
+            // arrived on a sibling channel is found and joined. For anything
+            // else it is the single talkgroup, exactly as before.
+            [system, groupMembers, receivedAt.toISOString(), sourceUnit],
           );
           const existingGroup = found.rows[0]?.logical_call_id ?? null;
 

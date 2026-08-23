@@ -117,10 +117,12 @@ describe('recordActivityEvents', () => {
     // Advisory lock key uses systemId + target with -1 fallbacks.
     expect(callWith('pg_advisory_xact_lock')).toEqual([`nrc:${0x4a2}:${12345}`]);
 
-    // Group find matched on system = systemId, talkgroup = target.
+    // Group find matched on system = systemId, talkgroup = target. The
+    // talkgroup is passed as a LIST because a patch member also matches its
+    // sibling channels; an unpatched talkgroup is simply a list of one.
     const find = callWith('SELECT logical_call_id FROM node_radio_events');
     expect(find?.[0]).toBe(0x4a2);
-    expect(find?.[1]).toBe(12345);
+    expect(find?.[1]).toEqual([12345]);
     expect(find?.[3]).toBe(777);
 
     expect(callWith('SET logical_call_id')).toEqual(['101', '101']);
