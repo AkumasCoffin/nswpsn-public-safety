@@ -53,6 +53,33 @@ function safeInt(v: string | null): number | null {
 }
 
 /**
+ * The call's own start time, as the sender stamped it.
+ *
+ * rdio's downstream sends this as RFC3339 — `call.DateTime.UTC().Format(
+ * time.RFC3339)`, server/downstream.go:172 — NOT epoch seconds. Reading it with
+ * Number() yields NaN, and the old fallback then used `new Date()`, silently
+ * replacing the sender's clock with OUR processing time. That discarded the one
+ * value the whole alignment depends on: the offset was applied to the wrong
+ * base, so the stored stamp drifted by however long the relay happened to take
+ * (measured 0.9-7s) instead of the intended fixed 1s, and every call the nodes
+ * also heard was stored twice because rdio's duplicate window is only 500ms.
+ *
+ * Accept both forms — rdio's own upload parser does the same
+ * (server/parsers.go:257-265) — and return null rather than a fabricated time
+ * so the caller can log a miss instead of burying it.
+ */
+function parseCallDateTime(raw: string | null): Date | null {
+  const text = (raw ?? '').trim();
+  if (!text) return null;
+  if (/^\d+$/.test(text)) {
+    const secs = Number(text);
+    return Number.isFinite(secs) && secs > 0 ? new Date(secs * 1000) : null;
+  }
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+/**
  * The nodes row every event must reference (node_radio_events.node_id is NOT
  * NULL and foreign-keyed). The contributor never sees or touches it — it is
  * created on the first upload and exists so the feed has somewhere to hang:
@@ -114,12 +141,19 @@ scannerIngestRouter.post('/api/scanner-ingest/api/call-upload', async (c) => {
   const talkgroup = safeInt(formFirstString(form, 'talkgroup'));
   if (talkgroup === null) return c.json({ error: 'talkgroup required' }, 400);
 
-  // The call's OWN start time (rdio's `dateTime`, seconds since epoch) — the
-  // same value rdio displays. Using it means a call shows the identical
-  // timestamp here and in rdio, and a delayed delivery still lands in the
-  // right place in the feed.
-  const epoch = Number(formFirstString(form, 'dateTime') ?? '');
-  const startedAt = Number.isFinite(epoch) && epoch > 0 ? new Date(epoch * 1000) : new Date();
+  // The call's OWN start time — the same value the sender's rdio displays.
+  // Using it means a call shows the identical timestamp here and there, and a
+  // delayed delivery still lands in the right place in the feed.
+  const sentAt = parseCallDateTime(formFirstString(form, 'dateTime'));
+  if (!sentAt) {
+    // Never silent: falling back to now() is what made the original bug
+    // invisible. A feed hitting this is mis-stamping every call it sends.
+    log.warn(
+      { dateTime: formFirstString(form, 'dateTime') },
+      'scanner ingest: unparseable dateTime, falling back to arrival time',
+    );
+  }
+  const startedAt = sentAt ?? new Date();
 
   const audioField = form['audio'];
   const audioFile = Array.isArray(audioField)
@@ -130,6 +164,38 @@ scannerIngestRouter.post('/api/scanner-ingest/api/call-upload', async (c) => {
   // The aligned timestamp, in rdio's own unit (whole epoch seconds). The offset
   // is a whole second so this stays integral.
   const alignedSecs = Math.floor((startedAt.getTime() + config.SCANNER_TIME_OFFSET_MS) / 1000);
+
+  // -----------------------------------------------------------------------
+  // Diagnostic: dump exactly what the sender put on the wire, before we touch
+  // anything. Set SCANNER_INGEST_DIAG=true to enable.
+  //
+  // This exists because the endpoint had no way to answer "what is actually
+  // arriving?" — every earlier theory about duplicate and mis-stamped calls
+  // was inferred from downstream effects. Log the raw fields, plus the parse
+  // and the exact value we are about to hand rdio, so the transformation is
+  // visible end to end in one line.
+  // -----------------------------------------------------------------------
+  if (config.SCANNER_INGEST_DIAG) {
+    const fields: Record<string, string> = {};
+    for (const [name, value] of Object.entries(form)) {
+      if (name === 'key') continue; // never log the shared secret
+      const first = Array.isArray(value) ? value[0] : value;
+      fields[name] =
+        first instanceof File
+          ? `<file ${first.name} ${first.size}B ${first.type || 'no-type'}>`
+          : String(first).slice(0, 120);
+    }
+    log.info(
+      {
+        fields,
+        parsedDateTime: sentAt ? sentAt.toISOString() : null,
+        offsetMs: config.SCANNER_TIME_OFFSET_MS,
+        relayedDateTime: new Date(alignedSecs * 1000).toISOString(),
+        arrivedAt: new Date().toISOString(),
+      },
+      'scanner ingest: received',
+    );
+  }
 
   // ---------------------------------------------------------------------
   // Forward to central rdio, with the aligned dateTime.
@@ -151,10 +217,17 @@ scannerIngestRouter.post('/api/scanner-ingest/api/call-upload', async (c) => {
   const internalUrl = config.RDIO_INTERNAL_URL;
   const internalKey = config.RDIO_INTERNAL_API_KEY;
   if (internalUrl && internalKey) {
+    // SCANNER_TIME_OFFSET_MS=0 means VERBATIM PASSTHROUGH: forward the
+    // sender's own dateTime byte-for-byte instead of re-deriving it. Use this
+    // to observe the feed's untouched behaviour — with any rewrite in play you
+    // cannot tell a sender-side problem from one we introduced.
+    const passthrough = config.SCANNER_TIME_OFFSET_MS === 0;
     const fd = new FormData();
     for (const [name, value] of Object.entries(form)) {
-      // Their key never reaches central rdio, and dateTime is re-set below.
-      if (name === 'key' || name === 'dateTime') continue;
+      // Their key never reaches central rdio. dateTime is re-set below unless
+      // we are passing it through untouched.
+      if (name === 'key') continue;
+      if (name === 'dateTime' && !passthrough) continue;
       const values = Array.isArray(value) ? value : [value];
       for (const v of values) {
         if (v instanceof File) fd.append(name, v, v.name);
@@ -162,7 +235,7 @@ scannerIngestRouter.post('/api/scanner-ingest/api/call-upload', async (c) => {
       }
     }
     fd.set('key', internalKey);
-    fd.set('dateTime', String(alignedSecs));
+    if (!passthrough) fd.set('dateTime', String(alignedSecs));
     try {
       const resp = await fetch(`${internalUrl.replace(/\/$/, '')}/api/call-upload`, {
         method: 'POST',

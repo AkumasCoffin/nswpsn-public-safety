@@ -170,6 +170,13 @@ const Schema = z.object({
   SCANNER_INGEST_KEY: z.string().optional(),
   // Display name for the nodes row their calls are attributed to.
   SCANNER_INGEST_NAME: z.string().optional(),
+  // Log every field of every scanner upload, before we transform anything.
+  // Off by default (one line per call). Turn on to see what a feed is actually
+  // sending rather than inferring it from downstream effects.
+  SCANNER_INGEST_DIAG: z
+    .string()
+    .optional()
+    .transform((v) => v === 'true'),
   // Alignment shift applied to a scanner call's timestamp before storing.
   // A node's activity event stamps call SETUP (vce's observed_at_ms) while an
   // rdio upload stamps AUDIO START, which runs ~1s later — so the same
