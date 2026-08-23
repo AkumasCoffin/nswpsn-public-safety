@@ -358,9 +358,46 @@
   // and #agencies-nav-mount is a stable, byte-identical anchor. Native <details>
   // gives the expand/collapse for free (chevron is CSS, see .wire-nav in
   // styles.css). Children deep-link to the two Wire tabs.
-  function renderWireNav() {
+  // Is The Wire visible to whoever is looking?
+  //
+  // While the soft-launch toggle is off the server gates the feed to
+  // contributors and moderators, but it answers 200 with an empty list rather
+  // than an error — so this asks and reads the explicit `visible` flag. The
+  // answer is cached briefly, because the nav renders on every sidebar page —
+  // but only briefly: signing in changes the answer, and a cache that lasted
+  // the tab would leave a contributor without the nav until they closed it.
+  async function wireVisible() {
+    const KEY = "wire_visible_v1";
+    const TTL_MS = 60000;
+    try {
+      const cached = JSON.parse(sessionStorage.getItem(KEY) || "null");
+      if (cached && Date.now() - cached.at < TTL_MS) return cached.visible;
+    } catch (e) { /* storage disabled or malformed — just ask */ }
+
+    const base = (typeof API_BASE_URL !== "undefined") ? API_BASE_URL : "https://api.forcequit.xyz";
+    let visible = false;
+    try {
+      const headers = (typeof userHeaders === "function") ? await userHeaders() : {};
+      const r = await fetch(`${base}/api/wire/media?limit=1`, { headers });
+      if (r.ok) {
+        const j = await r.json().catch(() => ({}));
+        // Anything but an explicit false counts as visible, so an older server
+        // (or a live but empty Wire) still shows the nav.
+        visible = j.visible !== false;
+      }
+    } catch (e) { /* offline — leave it hidden rather than linking to a gate */ }
+
+    try { sessionStorage.setItem(KEY, JSON.stringify({ visible, at: Date.now() })); } catch (e) { /* ignore */ }
+    return visible;
+  }
+
+  async function renderWireNav() {
     const mount = document.getElementById("agencies-nav-mount");
     if (!mount || document.getElementById("wire-nav")) return;
+    // The page itself shows a coming-soon panel when gated; the sidebar was
+    // advertising it to everyone regardless, which is how a private Wire ended
+    // up linked from every page on the site.
+    if (!(await wireVisible())) return;
     const path = location.pathname.replace(/\/$/, "");
     const onWire = path.endsWith("/wire") || path.endsWith("/wire.html");
     const tab = onWire ? new URLSearchParams(location.search).get("tab") || "media" : null;
@@ -382,7 +419,7 @@
 
   function initSidebarExtras() {
     render();
-    renderWireNav();
+    void renderWireNav();
   }
 
   if (document.readyState === "loading") {

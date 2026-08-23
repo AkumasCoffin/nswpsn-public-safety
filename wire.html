@@ -39,6 +39,8 @@
     .coming-soon h1 span { color: var(--accent); }
     .coming-soon p { color: var(--text-muted); font-size: 1rem; line-height: 1.65; margin: 0 auto; max-width: 460px; }
     .coming-soon .cs-tag { display: inline-block; margin-top: 1.5rem; font-family: var(--mono, ui-monospace, monospace); font-size: 0.72rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); background: var(--accent-soft); border: 1px solid var(--border-subtle); padding: 0.45rem 1rem; border-radius: 999px; }
+    .coming-soon .cs-cta { margin-top: 1.6rem; font-size: 0.92rem; }
+    .coming-soon .cs-cta a { color: var(--accent); font-weight: 600; }
     /* Mobile: clear the fixed 60px header (the base .main rule is overridden here). */
     @media (max-width: 900px) { .wire-main { padding-top: 5rem; } }
     .wire-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; flex-wrap: wrap; margin-bottom: 0.4rem; }
@@ -371,6 +373,8 @@
       <h1>The <span>Wire</span> is coming soon</h1>
       <p>An independent photo, video &amp; news feed from NSW emergency-services contributors — photographers, videographers and stringers. We're putting the finishing touches on it.</p>
       <div class="cs-tag">Launching soon</div>
+      <p class="cs-cta">Shoot for NSW emergency services? Contributors get in before launch.
+        <a href="signup.html">Request contributor access</a>.</p>
     </div>
 
     <div class="wire-head">
@@ -1342,7 +1346,13 @@
     async function feedVisibleToMe() {
       try {
         const r = await fetch(`${API_BASE}/api/wire/media?limit=1`, { headers: await userHeaders() });
-        return r.ok;
+        if (!r.ok) return false;
+        // The server answers 200 with an empty list when the Wire is gated, so
+        // r.ok alone said "visible" either way and the coming-soon page never
+        // showed. It now sends visible:false explicitly; anything else — an
+        // older server, or a live and simply empty Wire — counts as visible.
+        const j = await r.json().catch(() => ({}));
+        return j.visible !== false;
       } catch (e) { return false; }
     }
 

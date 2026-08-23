@@ -773,7 +773,13 @@ wireRouter.post('/api/wire/video-upload-url', requireRole(canFeedMedia), async (
 wireRouter.get('/api/wire/media', async (c) => {
   const pool = await getPool();
   if (!pool) return c.json(DB_UNAVAILABLE, 503);
-  if (!(await wireReadable(c))) return c.json({ posts: [] });
+  // `visible: false` is the SIGNAL, not the empty list. This answers 200 so a
+  // gated feed is not an error, but that left the client unable to tell "the
+  // Wire is not live for you" from "the Wire is live and empty" — it was
+  // testing response.ok, which is true either way, so the coming-soon page
+  // never appeared. Absent on the ungated path, so an older client reading
+  // only the list is unaffected.
+  if (!(await wireReadable(c))) return c.json({ posts: [], visible: false });
   try {
     const url = new URL(c.req.url);
     const mine = url.searchParams.get('mine') === '1';
@@ -1138,7 +1144,7 @@ wireRouter.post('/api/wire/media/:id/view', async (c) => {
 wireRouter.get('/api/wire/articles', async (c) => {
   const pool = await getPool();
   if (!pool) return c.json(DB_UNAVAILABLE, 503);
-  if (!(await wireReadable(c))) return c.json({ articles: [] });
+  if (!(await wireReadable(c))) return c.json({ articles: [], visible: false });
   try {
     const url = new URL(c.req.url);
     const mine = url.searchParams.get('mine') === '1';
