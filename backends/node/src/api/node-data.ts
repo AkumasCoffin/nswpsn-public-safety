@@ -380,6 +380,22 @@ const callGroup = (prefix = ''): string =>
   ` OR upper(${prefix}event_type) LIKE 'CALL_PATCH_GROUP%')`;
 const CALL_GROUP = callGroup();
 
+/** One entry per receiving site, keeping the first frequency any reception on
+ *  that site named. See the sites aggregate in /events for why duplicates
+ *  reach here at all. */
+function collapseSites(
+  rows: ReadonlyArray<{ rfss: number; site: number; frequency: number | null }>,
+): Array<{ rfss: number; site: number; frequency: number | null }> {
+  const out = new Map<string, { rfss: number; site: number; frequency: number | null }>();
+  for (const r of rows) {
+    const key = `${r.rfss}:${r.site}`;
+    const seen = out.get(key);
+    if (!seen) out.set(key, { rfss: r.rfss, site: r.site, frequency: r.frequency ?? null });
+    else if (seen.frequency === null && r.frequency !== null) seen.frequency = r.frequency;
+  }
+  return [...out.values()].sort((a, b) => a.rfss - b.rfss || a.site - b.site);
+}
+
 /**
  * How recently a scanner feed must have uploaded to count as present.
  *
@@ -1063,7 +1079,7 @@ nodeDataRouter.get(
               recorded: boolean;
               receptions: number;
               talkgroups: number[] | null;
-              sites: Array<{ rfss: number; site: number }>;
+              sites: Array<{ rfss: number; site: number; frequency: number | null }>;
               nodes: Array<{ id: string; name: string }>;
             }>(
               // ONE row per logical_call_id (a group call emits GRANT + CALL/
@@ -1101,8 +1117,15 @@ nodeDataRouter.get(
                       -- as its patch members.
                       array_agg(DISTINCT e.talkgroup)
                         FILTER (WHERE e.talkgroup IS NOT NULL) AS talkgroups,
+                      -- Each receiving site with the traffic channel IT used.
+                      -- The LCN belongs per site, not on the call: one
+                      -- transmission simulcast from two sites is granted a
+                      -- different channel at each. Mirrors vce's own
+                      -- activitySiteEntry, which carries frequency and lcn on
+                      -- every site of a merged row.
                       COALESCE(
-                        jsonb_agg(DISTINCT jsonb_build_object('rfss', e.site_rfss, 'site', e.site_id))
+                        jsonb_agg(DISTINCT jsonb_build_object(
+                            'rfss', e.site_rfss, 'site', e.site_id, 'frequency', e.frequency))
                           FILTER (WHERE e.site_rfss IS NOT NULL AND e.site_id IS NOT NULL),
                         '[]'::jsonb) AS sites,
                       jsonb_agg(DISTINCT jsonb_build_object('id', e.node_id, 'name', n.name)) AS nodes
@@ -1207,7 +1230,11 @@ nodeDataRouter.get(
               // A logical call is "encrypted"/"recorded" if ANY reception was.
               encrypted: d.encrypted === true,
               recorded: d.recorded === true,
-              sites: d.sites.map((s) => ({
+              // DISTINCT above is over the whole object, so a site whose
+              // receptions disagree on frequency (a grant and its call read a
+              // moment apart) arrives twice. Collapse to one entry per site,
+              // keeping the first frequency any of them named.
+              sites: collapseSites(d.sites).map((s) => ({
                 ...s,
                 name: siteMap ? siteNameFor(siteMap, d.system, s.rfss, s.site) : null,
               })),

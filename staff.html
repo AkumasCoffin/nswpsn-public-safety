@@ -5091,9 +5091,18 @@
     function nd2SiteChip(o) {
       if (!o) return '—';
       const id = `R${escapeHtml(String(o.rfss))} S${escapeHtml(String(o.site))}`;
+      // The traffic channel THIS site used, in the tooltip. One transmission
+      // simulcast from two sites is granted a different channel at each, so the
+      // frequency belongs on the site rather than on the call — the same place
+      // vce puts it, on each site of a merged activity row.
+      const parts = [o.name ? String(o.name) : `R${o.rfss} S${o.site}`];
+      if (o.frequency != null && isFinite(o.frequency)) {
+        parts.push(`${(Number(o.frequency) / 1e6).toFixed(4)} MHz`);
+      }
+      const title = ` title="${escapeHtml(parts.join(' · '))}"`;
       return o.name
-        ? `<span class="nd2-chip"><span class="nd-strong">${escapeHtml(String(o.name))}</span> <span class="nd-sub">${id}</span></span>`
-        : `<span class="nd2-chip">${id}</span>`;
+        ? `<span class="nd2-chip"${title}><span class="nd-strong">${escapeHtml(String(o.name))}</span> <span class="nd-sub">${id}</span></span>`
+        : `<span class="nd2-chip"${title}>${id}</span>`;
     }
     function nd2NodeChip(o) {
       return o ? `<span class="nd2-chip">${escapeHtml(o.name || String(o.id))}</span>` +
