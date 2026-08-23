@@ -379,6 +379,16 @@ const callGroup = (prefix = ''): string =>
   ` OR upper(${prefix}event_type) LIKE 'CALL_PATCH_GROUP%')`;
 const CALL_GROUP = callGroup();
 
+/**
+ * How recently a scanner feed must have uploaded to count as present.
+ *
+ * A radio node holds a websocket, so presence is simply "is it in the hub". A
+ * scanner never connects — it only POSTs uploads — so the equivalent signal is
+ * a recent upload. Generous enough that a quiet talkgroup does not flip it
+ * offline mid-conversation.
+ */
+const SCANNER_PRESENCE_MS = 5 * 60_000;
+
 /** Parse a query param as a non-negative int, else null. */
 function qpInt(url: URL, name: string): number | null {
   const raw = url.searchParams.get(name);
@@ -3293,24 +3303,45 @@ nodeDataRouter.get('/api/node-data/nodes', requireRole(canViewNodeData), async (
 
     // Every RADIO node, not just those with traffic: a node that heard nothing
     // is precisely the one worth seeing, and grouping the events alone would
-    // silently omit it.
-    const meta = await pool.query<{ id: string; name: string | null; kind: string | null }>(
-      'SELECT id, name, kind FROM nodes',
-    );
-    const online = new Set(hub.agentList().map((a) => a.nodeId));
+    // silently omit it. SCANNER feeds belong here too — they contribute calls,
+    // talkgroups and radios exactly like a node does, and this is the view that
+    // compares contributors. Only pager nodes are excluded, having no calls at
+    // all; a row of zeros there reads as a fault rather than a different kind.
+    const meta = await pool.query<{
+      id: string;
+      name: string | null;
+      kind: string | null;
+      last_seen_at: Date | null;
+    }>('SELECT id, name, kind, last_seen_at FROM nodes');
+    const connected = new Set(hub.agentList().map((a) => a.nodeId));
 
     const nodes = meta.rows
-      .filter((m) => (m.kind ?? 'radio') === 'radio')
+      .filter((m) => {
+        const kind = m.kind ?? 'radio';
+        return kind === 'radio' || kind === 'scanner';
+      })
       .map((m) => {
         const r = byId.get(m.id);
+        const kind = m.kind ?? 'radio';
+        const isScanner = kind === 'scanner';
         return {
           nodeId: m.id,
           name: m.name,
-          online: online.has(m.id),
+          kind,
+          // A scanner has no agent socket — it only ever POSTs uploads — so it
+          // is never in the hub and would always read "offline". Presence for
+          // it means "uploaded recently", which last_seen_at already tracks
+          // (ensureScannerNode bumps it on every accepted upload).
+          online: isScanner
+            ? m.last_seen_at !== null &&
+              Date.now() - m.last_seen_at.getTime() < SCANNER_PRESENCE_MS
+            : connected.has(m.id),
           calls: num(r?.calls),
           receptions: num(r?.receptions),
           talkgroups: num(r?.talkgroups),
-          sites: num(r?.sites),
+          // Null, not 0: a scanner cannot observe sites at all, and a zero
+          // reads as "heard none" rather than "cannot know".
+          sites: isScanner ? null : num(r?.sites),
           lastSeen: r?.last_seen ? iso(r.last_seen) : null,
         };
       })

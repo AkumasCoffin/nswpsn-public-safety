@@ -5572,14 +5572,19 @@
         }
         body.innerHTML = rows.map(nd => `
           <tr class="nd2-rowlink" onclick="nd2OpenNodeFromData(${nd2Arg(nd.nodeId)}, ${nd2Arg(nd.name || '')})" title="Open this node">
-            <td><span class="nd-strong">${escapeHtml(nd.name || nd2ShortNode(nd.nodeId))}</span></td>
+            <td><span class="nd-strong">${escapeHtml(nd.name || nd2ShortNode(nd.nodeId))}</span>${
+              nd.kind === 'scanner'
+                ? ' <span class="nd2-chip" title="A scanner feed: contributes calls only. It has no control-channel view, so it reports no sites.">scanner</span>'
+                : ''}</td>
             <td>${nd.online
               ? '<span class="nd2-chip nd2-live-on">online</span>'
               : '<span class="nd2-chip nd2-live-off">offline</span>'}</td>
             <td class="nd2-num">${nd2Num(nd.calls)}</td>
             <td class="nd2-num">${nd2Num(nd.receptions)}</td>
             <td class="nd2-num">${nd2Num(nd.talkgroups)}</td>
-            <td class="nd2-num">${nd2Num(nd.sites)}</td>
+            <td class="nd2-num">${nd.sites === null
+              ? '<span class="nd-sub" title="A scanner has no control-channel view, so sites cannot be observed">—</span>'
+              : nd2Num(nd.sites)}</td>
             <td>${nd.lastSeen ? nd2LastSeen(nd.lastSeen) : '<span class="nd-sub">never</span>'}</td>
           </tr>`).join('');
       } catch (e) {
@@ -7851,7 +7856,20 @@
           </div>`;
         return;
       }
-      grid.innerHTML = allNodes.map(_nodeCard).join('');
+      // Feeder nodes only. A scanner feed has no agent, no SDR-Trunk and no
+      // rdio of ours to report, so every chip on this card renders as "—" or
+      // "Offline" and the whole row reads as a broken node. It belongs in
+      // Data -> Nodes, which compares what contributors actually heard.
+      const feederNodes = allNodes.filter(n => (n.kind || 'radio') !== 'scanner');
+      if (!feederNodes.length) {
+        grid.innerHTML = `
+          <div class="empty-state" style="grid-column: 1 / -1;">
+            <i class="fas fa-satellite-dish"></i>
+            <p>No feeder nodes yet. Contributors appear here automatically when their node connects.</p>
+          </div>`;
+        return;
+      }
+      grid.innerHTML = feederNodes.map(_nodeCard).join('');
       // Keep the open drawer's moved controls in sync with the latest poll.
       if (typeof _ndRenderNodeControls === 'function'
           && document.getElementById('node-drawer')?.classList.contains('open')) {
