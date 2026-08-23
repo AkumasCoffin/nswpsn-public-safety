@@ -4761,7 +4761,7 @@
       const rpct = (n) => (t.radioRaw ? Math.round((n / t.radioRaw) * 100) : 0);
       set('nd2-stat-dpatch', t.radioRaw ? nd2Num(dropPatch) : '—');
       set('nd2-stat-dpatch-sub', t.radioRaw
-        ? `${rpct(dropPatch)}% of receptions ${EMD} heard on a patched talkgroup`
+        ? `${rpct(dropPatch)}% of receptions — heard on a patched talkgroup`
         : '');
       set('nd2-stat-dsite', t.radioRaw ? nd2Num(dropSite) : '—');
       set('nd2-stat-dsite-sub', t.radioRaw
