@@ -20,8 +20,14 @@ const clientQuery = vi.fn();
 const clientRelease = vi.fn();
 const connectMock = vi.fn(async () => ({ query: clientQuery, release: clientRelease }));
 
+/** The READ pool. Null by default — every existing test here predates
+ *  resolveScannerSystem needing one, and a null pool simply leaves a scanner
+ *  call with no system attributed. The scanner-identity tests below set it. */
+const poolQuery = vi.fn(async () => ({ rows: [] as unknown[] }));
+let readPool: unknown = null;
+
 vi.mock('../../../src/db/pool.js', () => ({
-  getPool: vi.fn(async () => null),
+  getPool: vi.fn(async () => readPool),
   getWriterPool: vi.fn(async () => ({ connect: connectMock })),
   closePool: vi.fn(async () => undefined),
 }));
@@ -60,7 +66,7 @@ function armQueries(opts: {
 }) {
   const insertQueue = [...(opts.insertIds ?? ['101'])];
   clientQuery.mockImplementation(async (sql: string) => {
-    if (sql.includes('SELECT logical_call_id FROM node_radio_events')) {
+    if (sql.includes('SELECT c.logical_call_id')) {
       const v = typeof opts.foundRadio === 'function' ? opts.foundRadio() : opts.foundRadio;
       return { rows: v ? [{ logical_call_id: v }] : [] };
     }
@@ -135,7 +141,7 @@ describe('recordActivityEvents', () => {
     // Group find matched on system = systemId, talkgroup = target. The
     // talkgroup is passed as a LIST because a patch member also matches its
     // sibling channels; an unpatched talkgroup is simply a list of one.
-    const find = callWith('SELECT logical_call_id FROM node_radio_events');
+    const find = callWith('SELECT c.logical_call_id');
     expect(find?.[0]).toBe(0x4a2);
     expect(find?.[1]).toEqual([12345]);
     expect(find?.[3]).toBe(777);
@@ -292,7 +298,7 @@ describe('recordActivityEvents claiming a parked upload', () => {
   /** Like armQueries but lets the pending-claim DELETE return a parked row. */
   function armWithPending(pendingBytes: number | null) {
     clientQuery.mockImplementation(async (sql: string) => {
-      if (sql.includes('SELECT logical_call_id FROM node_radio_events')) return { rows: [] };
+      if (sql.includes('SELECT c.logical_call_id')) return { rows: [] };
       if (sql.includes('DELETE FROM node_pending_recordings')) {
         return { rows: pendingBytes === null ? [] : [{ audio_bytes: String(pendingBytes) }] };
       }
@@ -604,6 +610,169 @@ describe('isRealTalkerAlias', () => {
 });
 
 // ---------------------------------------------------------------------------
+// recordScannerCall — the P25 identity a scanner call is filed under.
+//
+// Every rollup on the Data page groups by (wacn, system). A scanner row that
+// carried the right system number but a null wacn was therefore a DIFFERENT
+// group to a node row on the same system, and one P25 network rendered as two:
+// "NSWPSN 721" plus a nameless 721 beside it, with 53 of 402 talkgroups
+// doubled the same way.
+//
+// Dynamic import per test: resolveScannerSystem caches its answer for five
+// minutes, so a fresh module is the only way to observe a different one.
+// ---------------------------------------------------------------------------
+describe('recordScannerCall system identity', () => {
+  const call = {
+    nodeId: 'scanner-abc',
+    receivedAt: new Date('2026-08-23T04:26:12.000Z'),
+    talkgroup: 30003,
+    sourceUnit: 2319851,
+    frequency: 419362500,
+    talkerAlias: null,
+    audioBytes: 4096,
+  };
+
+  beforeEach(() => {
+    clientQuery.mockReset();
+    clientRelease.mockReset();
+    poolQuery.mockReset();
+    readPool = null;
+    vi.resetModules();
+  });
+
+  it('files under the same (wacn, system, label) the nodes are on', async () => {
+    poolQuery.mockResolvedValue({ rows: [{ system: 721, wacn: 781824, label: 'NSWPSN' }] });
+    readPool = { query: poolQuery };
+    armQueries({ foundRadio: null, insertIds: ['501'] });
+
+    const mod = await import('../../../src/services/nodeEvents.js');
+    await mod.recordScannerCall(call);
+
+    const ins = callWith('INSERT INTO node_radio_events');
+    // [nodeId, receivedAt, sourceEventId, system, wacn, systemLabel,
+    //  talkgroup, sourceUnit, frequency, audioBytes, alias]
+    expect(ins?.[3]).toBe(721);
+    expect(ins?.[4]).toBe(781824);
+    expect(ins?.[5]).toBe('NSWPSN');
+  });
+
+  it('resolves from NODE rows only, never from scanner rows', async () => {
+    poolQuery.mockResolvedValue({ rows: [{ system: 721, wacn: 781824, label: 'NSWPSN' }] });
+    readPool = { query: poolQuery };
+    armQueries({ foundRadio: null, insertIds: ['502'] });
+
+    const mod = await import('../../../src/services/nodeEvents.js');
+    await mod.recordScannerCall(call);
+
+    // Letting a scanner row teach the resolver what a system looks like would
+    // let the first wrong answer keep re-electing itself.
+    const sql = String(poolQuery.mock.calls[0]?.[0] ?? '');
+    expect(sql).toContain("stream_id <> 'scanner'");
+    expect(sql).toContain('GROUP BY wacn, system');
+  });
+
+  it('stores the call with nulls when no node has been heard from yet', async () => {
+    readPool = null;
+    armQueries({ foundRadio: null, insertIds: ['503'] });
+
+    const mod = await import('../../../src/services/nodeEvents.js');
+    await mod.recordScannerCall(call);
+
+    const ins = callWith('INSERT INTO node_radio_events');
+    expect(ins?.[3]).toBeNull();
+    expect(ins?.[4]).toBeNull();
+    expect(ins?.[5]).toBeNull();
+    // The reception is still recorded — an unattributed call beats no call.
+    expect(ins?.[6]).toBe(30003);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Logical grouping: the two rules that decide whether a reception JOINS an
+// existing call or starts a new one.
+//
+// Both exist because of measured damage in production, and both live in the
+// one SQL builder shared by the activity and scanner paths.
+// ---------------------------------------------------------------------------
+describe('logical grouping rules', () => {
+  beforeEach(() => {
+    clientQuery.mockReset();
+    clientRelease.mockReset();
+  });
+
+  function lookupSql(): string {
+    return String(
+      clientQuery.mock.calls.find(
+        (a) => typeof a[0] === 'string' && (a[0] as string).includes('SELECT c.logical_call_id'),
+      )?.[0] ?? '',
+    );
+  }
+
+  it('anchors the window at the group FIRST row, so groups cannot chain', async () => {
+    armQueries({ foundRadio: null, insertIds: ['101'] });
+    await recordActivityEvents('node-aaaa', 'stream-1', [baseEvent]);
+
+    const sql = lookupSql();
+    // logical_call_id IS the id of the group's first row, so the anchor is a
+    // join — and the anchor, not merely some member, must be inside the window.
+    expect(sql).toContain('JOIN node_radio_events anchor ON anchor.id = c.logical_call_id');
+    expect(sql).toContain('anchor.received_at BETWEEN');
+  });
+
+  it('refuses a group already holding THIS site on another frequency', async () => {
+    armQueries({ foundRadio: null, insertIds: ['101'] });
+    await recordActivityEvents('node-aaaa', 'stream-1', [baseEvent]);
+
+    const sql = lookupSql();
+    // One site grants one traffic channel per transmission, so a group already
+    // carrying this site on a different frequency is a different transmission.
+    expect(sql).toContain('x.site_rfss = $5::integer');
+    expect(sql).toContain('x.site_id = $6::integer');
+    expect(sql).toContain('x.frequency <> $7::bigint');
+
+    // Site and frequency reach the lookup as $5/$6/$7.
+    const find = callWith('SELECT c.logical_call_id');
+    expect(find?.[4]).toBe(1);
+    expect(find?.[5]).toBe(12);
+    expect(find?.[6]).toBe(420_662_500);
+  });
+
+  it('never compares frequencies across sites — a simulcast call stays whole', async () => {
+    armQueries({ foundRadio: null, insertIds: ['101'] });
+    await recordActivityEvents('node-aaaa', 'stream-1', [baseEvent]);
+
+    // The frequency test is reached ONLY through an equal (rfss, site). Two
+    // sites carrying one transmission use two different traffic channels, so an
+    // unscoped comparison would tear every multi-site call in half.
+    const sql = lookupSql();
+    const guard = sql.slice(sql.indexOf('NOT EXISTS'));
+    expect(guard.indexOf('x.site_rfss = $5::integer')).toBeLessThan(
+      guard.indexOf('x.frequency <> $7::bigint'),
+    );
+  });
+
+  it('a scanner sends no site, which switches the frequency split off', async () => {
+    armQueries({ foundRadio: null, insertIds: ['501'] });
+    await recordScannerCall({
+      nodeId: 'scanner-abc',
+      receivedAt: new Date('2026-08-23T04:26:12.000Z'),
+      talkgroup: 30003,
+      sourceUnit: 2319851,
+      frequency: 419362500,
+      talkerAlias: null,
+      audioBytes: 4096,
+    });
+
+    // A scanner has no control-channel view, so it cannot say WHICH site it
+    // heard. Null site means the NOT EXISTS never fires — the honest answer.
+    const find = callWith('SELECT c.logical_call_id');
+    expect(find?.[4]).toBeNull();
+    expect(find?.[5]).toBeNull();
+    expect(find?.[6]).toBe(419362500);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // recordScannerCall — patch grouping.
 //
 // A patch is several talkgroups carrying ONE conversation. A scanner reports
@@ -641,7 +810,7 @@ describe('recordScannerCall patch grouping', () => {
 
     await recordScannerCall(call);
 
-    const params = callWith('SELECT logical_call_id FROM node_radio_events');
+    const params = callWith('SELECT c.logical_call_id');
     expect(params?.[1]).toEqual(members);
   });
 
@@ -675,7 +844,7 @@ describe('recordScannerCall patch grouping', () => {
 
     await recordScannerCall({ ...call, talkgroup: 20458 });
 
-    expect(callWith('SELECT logical_call_id FROM node_radio_events')?.[1]).toEqual([20458]);
+    expect(callWith('SELECT c.logical_call_id')?.[1]).toEqual([20458]);
     expect(callWith('pg_advisory_xact_lock')?.[0]).toBe('nrc:-1:20458');
   });
 });

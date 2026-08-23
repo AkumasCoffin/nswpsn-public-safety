@@ -39,6 +39,63 @@ import { rdioPatches, groupingTalkgroup } from './rdioPatches.js';
  *  realistic gap between two DISTINCT calls on one talkgroup. */
 const GROUP_WINDOW_SECONDS = 4;
 
+/**
+ * The candidate logical call a new reception may join. Shared by both radio
+ * ingest paths so the activity feed and the scanner feed group identically.
+ *
+ * TWO RULES, and both exist because of measured damage:
+ *
+ * 1. THE WINDOW IS ANCHORED AT THE GROUP'S FIRST ROW, not at its nearest one.
+ *    Matching "within 4s of any member" chains: call A ends, call B starts 3s
+ *    later and joins A, call C 3s after B joins them both, and a busy talkgroup
+ *    grows one group without limit. Measured over 6h of production before this
+ *    was fixed: 96 groups spanning more than 30s, the worst 427 receptions over
+ *    2m10s filed as a single call. `logical_call_id` IS the id of the group's
+ *    first row, so the anchor is a plain join, and a group can now span at most
+ *    2x the window.
+ *
+ * 2. ONE SITE CANNOT CARRY ONE TRANSMISSION ON TWO CHANNELS. A transmission is
+ *    granted a single traffic channel per site, so a candidate group that
+ *    already holds a reception from THIS site on a DIFFERENT frequency is a
+ *    different transmission, whatever the clock says.
+ *
+ *    Site-scoped, deliberately: the same transmission simulcast from two sites
+ *    arrives on two different frequencies, and one node can hear several sites.
+ *    So the LCN may only ever SPLIT a group, never merge one — comparing
+ *    frequencies across sites would tear every multi-site call in half.
+ *
+ * Params (identical in both callers): $1 system, $2 candidate talkgroups,
+ * $3 this reception's time, $4 source unit, $5 site rfss, $6 site id,
+ * $7 frequency. `systemCond` differs only because the scanner feed tolerates a
+ * null system on either side while a node event does not.
+ */
+function groupLookupSql(systemCond: string): string {
+  return `SELECT c.logical_call_id
+            FROM node_radio_events c
+            JOIN node_radio_events anchor ON anchor.id = c.logical_call_id
+           WHERE ${systemCond}
+             AND c.talkgroup = ANY($2::int[])
+             AND c.received_at BETWEEN $3::timestamptz - interval '${GROUP_WINDOW_SECONDS} seconds'
+                                   AND $3::timestamptz + interval '${GROUP_WINDOW_SECONDS} seconds'
+             AND anchor.received_at BETWEEN $3::timestamptz - interval '${GROUP_WINDOW_SECONDS} seconds'
+                                        AND $3::timestamptz + interval '${GROUP_WINDOW_SECONDS} seconds'
+             AND ($4::integer IS NULL OR c.source_unit IS NULL OR c.source_unit = $4::integer)
+             AND c.logical_call_id IS NOT NULL
+             AND NOT EXISTS (
+                   SELECT 1
+                     FROM node_radio_events x
+                    WHERE x.logical_call_id = c.logical_call_id
+                      AND $5::integer IS NOT NULL
+                      AND $6::integer IS NOT NULL
+                      AND $7::bigint IS NOT NULL
+                      AND x.site_rfss = $5::integer
+                      AND x.site_id = $6::integer
+                      AND x.frequency IS NOT NULL
+                      AND x.frequency <> $7::bigint)
+           ORDER BY abs(extract(epoch FROM (c.received_at - $3::timestamptz)))
+           LIMIT 1`;
+}
+
 /** markRecorded's match window between an rdio call upload's dateTime and
  *  the activity event's received_at. Deliberately TIGHT: the upload's
  *  dateTime is the call's START, not some later finalise time — vce sends
@@ -252,19 +309,19 @@ export async function recordActivityEvents(
           // The unit check tolerates rows with unknown source_unit on either
           // side; a DIFFERENT known unit means a different call.
           const found = await client.query<{ logical_call_id: string }>(
-            `SELECT logical_call_id FROM node_radio_events
-              WHERE system IS NOT DISTINCT FROM $1
-                AND talkgroup = ANY($2::int[])
-                AND received_at BETWEEN $3::timestamptz - interval '${GROUP_WINDOW_SECONDS} seconds'
-                                   AND $3::timestamptz + interval '${GROUP_WINDOW_SECONDS} seconds'
-                AND ($4::integer IS NULL OR source_unit IS NULL OR source_unit = $4::integer)
-                AND logical_call_id IS NOT NULL
-              ORDER BY abs(extract(epoch FROM (received_at - $3::timestamptz)))
-              LIMIT 1`,
+            groupLookupSql('c.system IS NOT DISTINCT FROM $1::integer'),
             // For a patch member this is EVERY member talkgroup, so a copy that
             // arrived on a sibling channel is found and joined. For anything
             // else it is the single talkgroup, exactly as before.
-            [system, groupMembers, receivedAt.toISOString(), sourceUnit],
+            [
+              system,
+              groupMembers,
+              receivedAt.toISOString(),
+              sourceUnit,
+              safeInt(ev.rfss),
+              safeInt(ev.site),
+              safeInt(ev.frequencyHz),
+            ],
           );
           const existingGroup = found.rows[0]?.logical_call_id ?? null;
 
@@ -1039,39 +1096,73 @@ export async function recordPagerEvent(ev: PagerEventInput): Promise<void> {
 // Scanner-feed calls (api/scanner-ingest.ts)
 // ---------------------------------------------------------------------------
 
-/** Cached P25 system id for scanner calls — see resolveScannerSystem(). */
-let _scannerSystemCache: { at: number; system: number | null } | null = null;
+/** The P25 identity a scanner call is filed under — see resolveScannerSystem(). */
+interface ScannerSystem {
+  system: number | null;
+  wacn: number | null;
+  label: string | null;
+}
+let _scannerSystemCache: { at: number; value: ScannerSystem } | null = null;
 
 /**
- * The P25 system a scanner call belongs to.
+ * The P25 system a scanner call belongs to — id, WACN and friendly label.
  *
  * A third-party rdio numbers its systems its own way, so the `system` field on
  * their upload is meaningless to us. Every node on this deployment decodes one
  * P25 system, so the answer is simply "the system our own events are on" —
  * resolved from the busiest one seen recently rather than hardcoded, so a
- * different deployment needs no code change. Null when nothing has been
- * observed yet; the row still stores fine, it just has no system attributed.
+ * different deployment needs no code change.
+ *
+ * WHY ALL THREE, not just the number: every rollup on the Data page groups by
+ * (wacn, system) — systems, talkgroups and radios alike (api/node-data.ts).
+ * A scanner row carrying the right `system` but a NULL `wacn` is therefore a
+ * DIFFERENT group to a node row on the same system, and one P25 system renders
+ * as two: "NSWPSN 721" plus a nameless 721 beside it, with 53 of 402 talkgroups
+ * doubled the same way. The scanner hears the same network our nodes do; it has
+ * to say so in the same words.
+ *
+ * Resolved from NODE rows only — a scanner row must never be the thing that
+ * teaches the resolver what a system looks like, or the first wrong answer
+ * would keep re-electing itself.
+ *
+ * Nulls stay null when nothing has been observed yet: the row still stores, it
+ * just has no system attributed until a node has been heard from.
  */
-async function resolveScannerSystem(): Promise<number | null> {
+async function resolveScannerSystem(): Promise<ScannerSystem> {
   if (_scannerSystemCache && Date.now() - _scannerSystemCache.at < 300_000) {
-    return _scannerSystemCache.system;
+    return _scannerSystemCache.value;
   }
-  let system: number | null = null;
+  let value: ScannerSystem = { system: null, wacn: null, label: null };
   try {
     const pool = await getPool();
     if (pool) {
-      const res = await pool.query<{ system: number }>(
-        `SELECT system FROM node_radio_events
-          WHERE received_at >= now() - interval '24 hours' AND system IS NOT NULL
-          GROUP BY system ORDER BY count(*) DESC LIMIT 1`,
+      // The busiest (wacn, system) pair, with the most recent non-null label
+      // that pair carried — the same "most recent label wins" rule the systems
+      // rollup itself uses, so the two agree by construction.
+      const res = await pool.query<{
+        system: number;
+        wacn: number | null;
+        label: string | null;
+      }>(
+        `SELECT system, wacn,
+                (array_agg(system_label ORDER BY received_at DESC)
+                   FILTER (WHERE system_label IS NOT NULL))[1] AS label
+           FROM node_radio_events
+          WHERE received_at >= now() - interval '24 hours'
+            AND system IS NOT NULL
+            AND stream_id <> 'scanner'
+          GROUP BY wacn, system
+          ORDER BY count(*) DESC
+          LIMIT 1`,
       );
-      system = res.rows[0]?.system ?? null;
+      const row = res.rows[0];
+      if (row) value = { system: row.system, wacn: row.wacn ?? null, label: row.label ?? null };
     }
   } catch (err) {
     log.warn({ err }, 'nodeEvents: resolveScannerSystem failed');
   }
-  _scannerSystemCache = { at: Date.now(), system };
-  return system;
+  _scannerSystemCache = { at: Date.now(), value };
+  return value;
 }
 
 export interface ScannerCall {
@@ -1107,7 +1198,8 @@ export async function recordScannerCall(call: ScannerCall): Promise<void> {
 
   const shifted = new Date(call.receivedAt.getTime() + config.SCANNER_TIME_OFFSET_MS);
   const receivedAt = clampReceivedAt(shifted);
-  const system = await resolveScannerSystem();
+  const sys = await resolveScannerSystem();
+  const system = sys.system;
   const alias =
     call.talkerAlias && isRealTalkerAlias(call.talkerAlias, call.sourceUnit)
       ? call.talkerAlias.trim().slice(0, 64)
@@ -1164,30 +1256,28 @@ export async function recordScannerCall(call: ScannerCall): Promise<void> {
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [lockKey]);
 
     const found = await client.query<{ logical_call_id: string }>(
-      `SELECT logical_call_id FROM node_radio_events
-        WHERE ($1::integer IS NULL OR system IS NULL OR system = $1::integer)
-          AND talkgroup = ANY($2::int[])
-          AND received_at BETWEEN $3::timestamptz - interval '${GROUP_WINDOW_SECONDS} seconds'
-                             AND $3::timestamptz + interval '${GROUP_WINDOW_SECONDS} seconds'
-          AND ($4::integer IS NULL OR source_unit IS NULL OR source_unit = $4::integer)
-          AND logical_call_id IS NOT NULL
-        ORDER BY abs(extract(epoch FROM (received_at - $3::timestamptz)))
-        LIMIT 1`,
+      groupLookupSql('($1::integer IS NULL OR c.system IS NULL OR c.system = $1::integer)'),
       // For a patch member this is EVERY member talkgroup, so a copy a node
       // logged on a sibling channel is found and joined. Otherwise it is the
       // single talkgroup, exactly as before.
-      [system, groupMembers, receivedAt.toISOString(), call.sourceUnit],
+      //
+      // Site is null and stays null: a scanner has no control-channel view, so
+      // it can never say WHICH site it heard. That switches the LCN split off
+      // for this path, which is the honest answer rather than a guess.
+      [system, groupMembers, receivedAt.toISOString(), call.sourceUnit, null, null, call.frequency],
     );
     const existingGroup = found.rows[0]?.logical_call_id ?? null;
 
     const ins = await client.query<{ id: string }>(
       `INSERT INTO node_radio_events
          (node_id, received_at, stream_id, source_event_id,
-          action, event_type, system, talkgroup, source_unit,
+          action, event_type, system, wacn, system_label,
+          talkgroup, source_unit,
           frequency, encrypted, recorded, audio_bytes, source_alias)
        VALUES ($1, $2::timestamptz, 'scanner', $3,
                'CALL', 'CALL_GROUP', $4, $5, $6,
-               $7, false, true, $8, $9)
+               $7, $8,
+               $9, false, true, $10, $11)
        ON CONFLICT (node_id, stream_id, source_event_id) DO NOTHING
        RETURNING id`,
       [
@@ -1195,6 +1285,11 @@ export async function recordScannerCall(call: ScannerCall): Promise<void> {
         receivedAt.toISOString(),
         sourceEventId,
         system,
+        // The scanner hears the same network our nodes do, so it files under
+        // the same (wacn, system) identity. Without these two the Data page
+        // groups it as a second, nameless system. See resolveScannerSystem.
+        sys.wacn,
+        sys.label,
         call.talkgroup,
         call.sourceUnit,
         call.frequency,
