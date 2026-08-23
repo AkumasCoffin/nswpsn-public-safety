@@ -3013,6 +3013,26 @@
                   </tbody>
                 </table>
               </div>
+              <!-- The mirror-image question to Sites, so it is the same
+                   table: a site is WHERE the traffic was transmitted from,
+                   a node is WHO received it, and a system is only as
+                   covered as its nodes make it. -->
+              <div class="nd2-table-wrap nd2-detail-gap">
+                <table class="nd-table">
+                  <thead>
+                    <tr>
+                      <th>Node</th>
+                      <th class="nd2-num">Sites</th>
+                      <th class="nd2-num">Calls</th>
+                      <th>Top talkgroup</th>
+                      <th>Last seen</th>
+                    </tr>
+                  </thead>
+                  <tbody id="nd2-sys-nodes-body">
+                    <tr><td colspan="5" class="nd2-empty">Loading…</td></tr>
+                  </tbody>
+                </table>
+              </div>
               <div class="nd2-top-grid">
                 <div class="nd2-card">
                   <div class="nd2-card-h"><i class="fas fa-walkie-talkie"></i> Top Talkgroups</div>
@@ -3189,10 +3209,25 @@
                 <div class="nd2-card-h"><i class="fas fa-user-astronaut"></i> Top Radios</div>
                 <div id="nd2-site-top-radios"><div class="nd2-empty">—</div></div>
               </div>
-              <div class="nd2-card">
-                <div class="nd2-card-h"><i class="fas fa-server"></i> Receiving Nodes</div>
-                <div id="nd2-site-nodes"><div class="nd2-empty">—</div></div>
-              </div>
+            </div>
+            <!-- Which nodes receive this site, as the same table the system
+                 page lists its nodes in. This was a mini-table wedged into
+                 the card grid beside Top Talkgroups, where it had room for
+                 a name and a number and nothing else. -->
+            <div class="nd2-table-wrap nd2-detail-gap">
+              <table class="nd-table">
+                <thead>
+                  <tr>
+                    <th>Node</th>
+                    <th class="nd2-num">Calls</th>
+                    <th>Top talkgroup</th>
+                    <th>Last seen</th>
+                  </tr>
+                </thead>
+                <tbody id="nd2-site-nodes-body">
+                  <tr><td colspan="4" class="nd2-empty">Loading…</td></tr>
+                </tbody>
+              </table>
             </div>
             </div><!-- /nd2-sitetab-overview -->
             <!-- Freq/band plan: the site's RF layout — its channel list, the sites it
@@ -5924,11 +5959,46 @@
               <td>${nd2LastSeen(st.lastSeen)}</td>
             </tr>`).join('') : '<tr><td colspan="5" class="nd2-empty">No sites with attribution in this window.</td></tr>';
         }
+        nd2FillNodesTable('nd2-sys-nodes-body', data.nodes, true);
         document.getElementById('nd2-sys-top-tg').innerHTML = nd2TopTgHtml(data.topTalkgroups);
         document.getElementById('nd2-sys-top-radios').innerHTML = nd2TopRadioHtml(data.topRadios);
       } catch (e) {
         if (msgEl) { msgEl.textContent = e.status === 404 ? 'API not available yet.' : `Could not load system: ${e.message}`; msgEl.style.display = ''; }
       }
+    }
+
+    /**
+     * The nodes covering a system or a site, in the same table both times.
+     *
+     * Sites and nodes are the mirror image of each other and are read the
+     * same way, so they get the same columns rather than one being a proper
+     * table and the other a mini-table in a card. `withSites` is the site
+     * COUNT column, which only means anything at system level: at site
+     * level it would read 1 on every row.
+     *
+     * Rows open the node drill-down, matching the sites table, whose rows
+     * open the site.
+     */
+    function nd2FillNodesTable(bodyId, nodes, withSites) {
+      const body = document.getElementById(bodyId);
+      if (!body) return;
+      const cols = withSites ? 5 : 4;
+      const rows = nodes || [];
+      if (!rows.length) {
+        body.innerHTML = `<tr><td colspan="${cols}" class="nd2-empty">No node received this in the window.</td></tr>`;
+        return;
+      }
+      body.innerHTML = rows.map(n => {
+        const name = n.name || nd2ShortNode(n.id);
+        return `
+        <tr class="nd2-rowlink" onclick="nd2OpenNodeFromData(${nd2Arg(n.id)}, ${nd2Arg(name)}, ${nd2Arg(n.kind || 'radio')})"
+            title="Open this node">
+          <td><span class="nd-strong">${escapeHtml(String(name))}</span>${n.name ? ` <span class="nd-sub">${escapeHtml(nd2ShortNode(n.id))}</span>` : ''}</td>
+          ${withSites ? `<td class="nd2-num">${nd2Num(n.sites)}</td>` : ''}
+          <td class="nd2-num">${nd2Num(n.calls)}</td>
+          <td>${n.topTalkgroup ? `${nd2TgCell(n.topTalkgroup)} <span class="nd-sub">${nd2Num(n.topTalkgroup.calls)}</span>` : '—'}</td>
+          <td>${nd2LastSeen(n.lastSeen)}</td>
+        </tr>`; }).join('');
     }
 
     function nd2OpenSite(rfss, site, name) {
@@ -5968,9 +6038,7 @@
         nd2DrawDetailChart('nd2-site-chart', 'nd2-site-chart-empty', 'nd2-site-chart-note', data.series, 'site');
         document.getElementById('nd2-site-top-tg').innerHTML = nd2TopTgHtml(data.topTalkgroups);
         document.getElementById('nd2-site-top-radios').innerHTML = nd2TopRadioHtml(data.topRadios);
-        document.getElementById('nd2-site-nodes').innerHTML = nd2MiniTable(
-          [{ label: 'Node' }, { label: 'Calls', num: true }, { label: 'Last seen' }],
-          (data.nodes || []).map(n => [escapeHtml(n.name || String(n.id)), nd2Num(n.calls), nd2LastSeen(n.lastSeen)]));
+        nd2FillNodesTable('nd2-site-nodes-body', data.nodes, false);
       } catch (e) {
         if (msgEl) { msgEl.textContent = e.status === 404 ? 'API not available yet.' : `Could not load site: ${e.message}`; msgEl.style.display = ''; }
       }

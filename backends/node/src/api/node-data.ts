@@ -1862,7 +1862,7 @@ nodeDataRouter.get(
         (wacnIdx !== null ? ` AND ${p}wacn = $${wacnIdx}` : '') +
         (nodeIdx !== null ? ` AND ${p}node_id = $${nodeIdx}` : '');
 
-      const [detail, sitesQ, nameQ] = await Promise.all([
+      const [detail, sitesQ, sysNodesQ, nameQ] = await Promise.all([
         scopedRadioDetail(pool, scope, params),
         pool.query<{
           rfss: number;
@@ -1948,6 +1948,68 @@ nodeDataRouter.get(
             ORDER BY s.calls DESC, s.rfss ASC, s.site ASC`,
           params,
         ),
+        // Which feeder nodes cover this system, and how much of it each one
+        // carries. Deliberately the same shape as the sites rollup above and
+        // rendered as the same table: the two answer the mirror-image question
+        // — a site is WHERE the traffic was transmitted from, a node is WHO
+        // received it — and a system is only as covered as its nodes make it.
+        //
+        // Unlike sites there is no snapshot half to full-outer-join: a node
+        // that heard nothing in the window has nothing to report here, and the
+        // Nodes tab is where a silent node belongs.
+        pool.query<{
+          id: string;
+          name: string | null;
+          kind: string | null;
+          sites: unknown;
+          calls: unknown;
+          logical: unknown;
+          last_seen: Date;
+          top_tg: number | null;
+          top_tg_calls: unknown;
+        }>(
+// Two scans of the window, not one per node. The sites rollup above
+             // picks its top talkgroup with a LATERAL, which is fine for a
+             // handful of sites but re-scans the window once per row; DISTINCT ON
+             // over a single grouped pass answers it for every node at once, and
+             // measured on a live 24h window that is 677ms against 939ms.
+             //
+             // The two halves cannot share one scan: a node's logical-call count
+             // is a COUNT(DISTINCT) that does not sum from per-talkgroup groups,
+             // because a patched call spans several talkgroups.
+             `WITH agg AS (
+                SELECT e.node_id AS id,
+                       (COUNT(DISTINCT (e.site_rfss, e.site_id))
+                          FILTER (WHERE e.site_rfss IS NOT NULL
+                                    AND e.site_id IS NOT NULL))::int AS sites,
+                       COUNT(*)::int AS calls,
+                       COUNT(DISTINCT e.logical_call_id)::int AS logical,
+                       MAX(e.received_at) AS last_seen
+                  FROM node_radio_events e
+                 WHERE ${scope('e.')} AND ${callGroup('e.')}
+                 GROUP BY e.node_id
+              ), top AS (
+                SELECT DISTINCT ON (node_id) node_id, talkgroup, c
+                  FROM (
+                    SELECT e.node_id, e.talkgroup, COUNT(*)::int AS c
+                      FROM node_radio_events e
+                     WHERE ${scope('e.')} AND ${callGroup('e.')}
+                       AND ${await tgValidConfigured('e.')}
+                       ${siteEncSql}
+                     GROUP BY e.node_id, e.talkgroup
+                  ) t
+                 ORDER BY node_id, c DESC, talkgroup ASC
+              )
+              SELECT a.id, n.name, n.kind, a.sites, a.calls, a.logical, a.last_seen,
+                     t.talkgroup AS top_tg, t.c AS top_tg_calls
+                FROM agg a
+                -- Carried so the drill-down opens with the tabs this kind can
+                -- actually fill (a scanner has no sites and no live view).
+                LEFT JOIN nodes n ON n.id = a.id
+                LEFT JOIN top t ON t.node_id = a.id
+               ORDER BY a.calls DESC, a.id ASC`,
+          params,
+        ),
         // Friendly system name for the drill-down heading (most-recent
         // non-null system_label within the scope); null when none seen.
         pool.query<{ name: string | null }>(
@@ -1988,6 +2050,23 @@ nodeDataRouter.get(
           controlFrequencyMhz: r.control_frequency_mhz ?? null,
           channelCount: r.channel_count ?? null,
           neighborCount: r.neighbor_count ?? null,
+        })),
+        nodes: sysNodesQ.rows.map((r) => ({
+          id: r.id,
+          name: r.name,
+          kind: r.kind ?? 'radio',
+          sites: num(r.sites),
+          calls: num(r.calls),
+          logicalCalls: num(r.logical),
+          lastSeen: iso(r.last_seen),
+          topTalkgroup:
+            r.top_tg !== null
+              ? {
+                  talkgroup: r.top_tg,
+                  label: tgLabels.get(r.top_tg) ?? null,
+                  calls: num(r.top_tg_calls),
+                }
+              : null,
         })),
         topTalkgroups: detail.topTalkgroups,
         topRadios: detail.topRadios,
@@ -2038,14 +2117,43 @@ nodeDataRouter.get(
 
       const [detail, nodesQ, metaQ] = await Promise.all([
         scopedRadioDetail(pool, scope, params),
-        pool.query<{ id: string; name: string | null; calls: unknown; last_seen: Date }>(
-          `SELECT e.node_id AS id, n.name, COUNT(*)::int AS calls,
-                  MAX(e.received_at) AS last_seen
-             FROM node_radio_events e
-             LEFT JOIN nodes n ON n.id = e.node_id
-            WHERE ${scope('e.')} AND ${callGroup('e.')}
-            GROUP BY e.node_id, n.name
-            ORDER BY calls DESC, e.node_id ASC`,
+        // Which feeder nodes receive this site. Carries the same columns as
+        // the system-level nodes rollup so both render as one table; the site
+        // count is dropped because at this level it is always one.
+        pool.query<{
+          id: string;
+          name: string | null;
+          kind: string | null;
+          calls: unknown;
+          logical: unknown;
+          last_seen: Date;
+          top_tg: number | null;
+          top_tg_calls: unknown;
+        }>(
+          `SELECT nd.id, nd.name, nd.kind, nd.calls, nd.logical, nd.last_seen,
+                  tt.talkgroup AS top_tg, tt.calls AS top_tg_calls
+             FROM (
+               SELECT e.node_id AS id,
+                      MAX(n.name) AS name,
+                      MAX(n.kind) AS kind,
+                      COUNT(*)::int AS calls,
+                      COUNT(DISTINCT e.logical_call_id)::int AS logical,
+                      MAX(e.received_at) AS last_seen
+                 FROM node_radio_events e
+                 LEFT JOIN nodes n ON n.id = e.node_id
+                WHERE ${scope('e.')} AND ${callGroup('e.')}
+                GROUP BY e.node_id
+             ) nd
+             LEFT JOIN LATERAL (
+               SELECT e.talkgroup, COUNT(*)::int AS calls
+                 FROM node_radio_events e
+                WHERE ${scope('e.')} AND e.node_id = nd.id
+                  AND ${callGroup('e.')} AND ${await tgValidConfigured('e.')}
+                GROUP BY e.talkgroup
+                ORDER BY calls DESC, e.talkgroup ASC
+                LIMIT 1
+             ) tt ON true
+            ORDER BY nd.calls DESC, nd.id ASC`,
           params,
         ),
         // Deep P25 site metadata (migration 047): the latest node_site_snapshots
@@ -2112,6 +2220,8 @@ nodeDataRouter.get(
           }
         : null;
 
+      // Same ~60s-cached map the system drill-down uses for its own rollups.
+      const siteTgLabels = await talkgroupLabels();
       return c.json({
         window,
         system,
@@ -2126,8 +2236,18 @@ nodeDataRouter.get(
         nodes: nodesQ.rows.map((r) => ({
           id: r.id,
           name: r.name,
+          kind: r.kind ?? 'radio',
           calls: num(r.calls),
+          logicalCalls: num(r.logical),
           lastSeen: iso(r.last_seen),
+          topTalkgroup:
+            r.top_tg !== null
+              ? {
+                  talkgroup: r.top_tg,
+                  label: siteTgLabels.get(r.top_tg) ?? null,
+                  calls: num(r.top_tg_calls),
+                }
+              : null,
         })),
       });
     } catch (err) {
