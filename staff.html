@@ -2829,6 +2829,8 @@
               <button class="filter-btn" data-nd2-nodetab="systems" onclick="nd2NodeSetTab('systems')">Systems</button>
               <button class="filter-btn" data-nd2-nodetab="live" onclick="nd2NodeSetTab('live')">Live</button>
               <button class="filter-btn" data-nd2-nodetab="events" onclick="nd2NodeSetTab('events')">Events</button>
+              <button class="filter-btn" data-nd2-nodetab="talkgroups" onclick="nd2NodeSetTab('talkgroups')">Talkgroups</button>
+              <button class="filter-btn" data-nd2-nodetab="aliases" onclick="nd2NodeSetTab('aliases')">Aliases</button>
             </div>
           </div>
         </div>
@@ -4556,7 +4558,10 @@
     function nd2PopulateNodeScope() {
       const sel = document.getElementById('nd2-node');
       if (!sel) return;
-      const nodes = (nd2.nodeList || []).filter(n => n.kind === 'radio');
+      // Anything that contributes radio traffic can scope this tab. A scanner
+      // feed does, so excluding it made its calls unreachable from the scope
+      // selector even though every panel below honours the scope fine.
+      const nodes = (nd2.nodeList || []).filter(n => n.kind === 'radio' || n.kind === 'scanner');
       sel.innerHTML = '<option value="">All nodes</option>' + nodes.map(n =>
         `<option value="${escapeHtml(String(n.id))}">${escapeHtml(n.name || String(n.id))}</option>`).join('');
       // Preserve the current scope if that node still exists; else reset to All.
@@ -5571,7 +5576,7 @@
           return;
         }
         body.innerHTML = rows.map(nd => `
-          <tr class="nd2-rowlink" onclick="nd2OpenNodeFromData(${nd2Arg(nd.nodeId)}, ${nd2Arg(nd.name || '')})" title="Open this node">
+          <tr class="nd2-rowlink" onclick="nd2OpenNodeFromData(${nd2Arg(nd.nodeId)}, ${nd2Arg(nd.name || '')}, ${nd2Arg(nd.kind || 'radio')})" title="Open this node">
             <td><span class="nd-strong">${escapeHtml(nd.name || nd2ShortNode(nd.nodeId))}</span>${
               nd.kind === 'scanner'
                 ? ' <span class="nd2-chip" title="A scanner feed: contributes calls only. It has no control-channel view, so it reports no sites.">scanner</span>'
@@ -5600,14 +5605,34 @@
       systems: 'nd2-view-systems',
       live: 'nd2-view-live',
       events: 'nd2-view-events',
+      talkgroups: 'nd2-view-talkgroups',
+      aliases: 'nd2-view-aliases',
     };
 
+    /** Tabs a node kind can never fill, so they are not offered.
+     *
+     *  A scanner feed has no control channel: Systems is built from sites and
+     *  RFSS, and Live is fed by the websocket hub a scanner never joins. Both
+     *  would sit permanently empty, which reads as a fault rather than as
+     *  "this kind of feed does not carry that". */
+    const ND2_NODE_TAB_HIDDEN = { scanner: ['systems', 'live'] };
+
+    function nd2NodeTabHidden(tab) {
+      return (ND2_NODE_TAB_HIDDEN[nd2.nodes.kind] || []).includes(tab);
+    }
+
     /** Open one node's drill-down from anywhere in the Data tab. */
-    function nd2OpenNodeFromData(nodeId, name) {
+    function nd2OpenNodeFromData(nodeId, name, kind) {
       if (!nodeId) return;
       nd2.nodes.level = 'detail';
       nd2.nodes.nodeId = nodeId;
       nd2.nodes.name = name || null;
+      nd2.nodes.kind = kind || 'radio';
+      // Drop tabs this kind can never fill before choosing one, so the strip
+      // never offers a permanently empty panel.
+      document.querySelectorAll('[data-nd2-nodetab]').forEach(b => {
+        b.style.display = nd2NodeTabHidden(b.dataset.nd2Nodetab) ? 'none' : '';
+      });
       // Scoping through nd2.node is what makes every panel and every endpoint
       // below honour the node without any of them knowing about this view.
       nd2.node = nodeId;
@@ -5652,6 +5677,9 @@
     /** Show one of the reused view panels under the node chrome. */
     function nd2NodeSetTab(tab, force) {
       if (!ND2_NODE_TAB_VIEW[tab]) return;
+      // Guard the state, not just the buttons: a hidden tab is still reachable
+      // by whatever the previous node left in nd2.nodes.tab.
+      if (nd2NodeTabHidden(tab)) tab = 'overview';
       if (!force && nd2.nodes.tab === tab && nd2.nodes.level === 'detail') return;
       nd2.nodes.tab = tab;
       document.querySelectorAll('[data-nd2-nodetab]').forEach(b =>
@@ -5681,6 +5709,8 @@
         case 'systems': await nd2LoadSystemsView(); break;
         case 'live': await nd2LoadLive(); break;
         case 'events': await Promise.all([nd2LoadOverview(), nd2LoadEvents()]); break;
+        case 'talkgroups': await nd2LoadTalkgroups(); break;
+        case 'aliases': await nd2LoadAliases(); break;
       }
     }
 
