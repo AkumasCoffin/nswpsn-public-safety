@@ -1023,17 +1023,27 @@ export async function recordScannerCall(call: ScannerCall): Promise<void> {
   // Dedupe key for the (node_id, stream_id, source_event_id) unique index: rdio
   // retries a failed downstream, and a retry must not become a second call.
   // Built from the call's own identity, so a retry hashes identically.
-  const sourceEventId = createHash('sha256')
-    .update(
-      [
-        Math.floor(call.receivedAt.getTime() / 1000),
-        call.talkgroup,
-        call.sourceUnit ?? '',
-        call.frequency ?? '',
-      ].join('|'),
-    )
-    .digest('hex')
-    .slice(0, 32);
+  //
+  // The column is a BIGINT — a node event carries vce's own numeric event id —
+  // so the digest is folded into 60 bits rather than passed as hex, which
+  // Postgres rejects outright (22P02). 15 hex digits max out at ~1.15e18,
+  // comfortably inside the signed 64-bit range. Colliding with a node's real
+  // event id is harmless: the unique index is scoped by (node_id, stream_id),
+  // and the scanner feed has its own node and its own 'scanner' stream.
+  const sourceEventId = BigInt(
+    '0x' +
+      createHash('sha256')
+        .update(
+          [
+            Math.floor(call.receivedAt.getTime() / 1000),
+            call.talkgroup,
+            call.sourceUnit ?? '',
+            call.frequency ?? '',
+          ].join('|'),
+        )
+        .digest('hex')
+        .slice(0, 15),
+  ).toString();
 
   const client = await pool.connect();
   try {

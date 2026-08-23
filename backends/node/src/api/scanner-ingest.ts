@@ -194,11 +194,17 @@ scannerIngestRouter.post('/api/scanner-ingest/api/call-upload', async (c) => {
       audioBytes,
     });
   } catch (err) {
+    // NOT fatal. The relay above already delivered the audio to central rdio,
+    // which is this endpoint's actual job — the event row is our own
+    // bookkeeping. Returning 500 here told rdio the upload had failed, so it
+    // retried and relayed the SAME call again on every attempt, duplicating it
+    // upstream while never succeeding. Report success and carry the failure in
+    // the body instead.
     log.error({ err }, 'scanner ingest: failed to record call');
-    return c.json({ error: 'failed to record call' }, 500);
+    return c.json({ ok: true, recorded: false });
   }
 
-  return c.json({ ok: true });
+  return c.json({ ok: true, recorded: true });
 });
 
 // A downstream probe target, mirroring the node relay's. rdio checks the base
