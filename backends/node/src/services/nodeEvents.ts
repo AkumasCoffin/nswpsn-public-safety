@@ -495,13 +495,6 @@ export async function recordActivityEvents(
             );
           }
 
-          const isNewGroup = existingGroup === null;
-          // Per-node forever bucket. Bytes are normally 0 here and folded in
-          // later by markRecorded when the upload lands — except when we just
-          // claimed a parked upload above, in which case they are already
-          // known and must be counted here or they are lost entirely (the
-          // pending row is gone, so nothing will add them later).
-
           await client.query('COMMIT');
           accepted += 1;
         } catch (err) {
