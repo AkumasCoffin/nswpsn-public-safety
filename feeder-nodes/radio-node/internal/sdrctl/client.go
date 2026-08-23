@@ -431,10 +431,19 @@ func (c *Client) ActivityEvents(sinceID int64, limit int) ([]ActivityEvent, int6
 	var r struct {
 		Events []ActivityEvent `json:"events"`
 		LastID int64           `json:"lastId"`
+		// Set when the control server's activity database could not be read.
+		// Without it a locked or corrupt database looked exactly like a quiet
+		// network — a valid 200 carrying no events — and shipping stopped
+		// silently. Absent on control servers older than the change that
+		// added it, which is simply the old behaviour.
+		Error string `json:"error"`
 	}
 	path := fmt.Sprintf("/activity/events?sinceId=%d&limit=%d&kinds=calls", sinceID, limit)
 	if err := c.get(path, &r); err != nil {
 		return nil, 0, err
+	}
+	if r.Error != "" {
+		return nil, sinceID, fmt.Errorf("control server activity read failed: %s", r.Error)
 	}
 	return r.Events, r.LastID, nil
 }
