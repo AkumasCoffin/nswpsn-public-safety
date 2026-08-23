@@ -3460,7 +3460,7 @@
               <div class="nd2-card-h" style="display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap;">
                 <button class="nd2-back-icon" onclick="nd2CloseNodeView()" title="Back to overview"><i class="fas fa-arrow-left"></i></button>
                 <i class="fas fa-satellite-dish"></i>
-                <span id="nd2-node-title">Node</span>
+                <span id="nd2-pnode-title">Node</span>
                 <span class="nd-sub" id="nd2-node-sub" style="font-weight:400;text-transform:none;letter-spacing:0;"></span>
               </div>
 
@@ -4711,7 +4711,6 @@
       nd2RenderStats();
       nd2RenderChart();
       nd2RenderTops();
-      nd2PopulateNodeSelect();
     }
 
     const nd2Num = (v) => (v == null ? '—' : Number(v).toLocaleString());
@@ -4994,17 +4993,6 @@
 
     // Keep the events node-filter <select> in sync with overview.perNode,
     // preserving the current selection across refreshes.
-    function nd2PopulateNodeSelect() {
-      const sel = document.getElementById('nd2-ev-node');
-      if (!sel) return;
-      const prev = sel.value;
-      const nodes = (nd2.overview && nd2.overview.perNode) || [];
-      sel.innerHTML = '<option value="">All nodes</option>' + nodes.map(n =>
-        `<option value="${escapeHtml(String(n.nodeId))}">${escapeHtml(n.name || String(n.nodeId))}</option>`
-      ).join('');
-      if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
-    }
-
     // --- Recent events ---------------------------------------------------
 
     // Text inputs debounce 400ms; selects apply immediately.
@@ -5032,6 +5020,13 @@
 
     async function nd2LoadEvents() {
       const body = document.getElementById('nd2-ev-body');
+      // Two of these can be in flight at once — a filter keystroke racing a
+      // page click, or a fetch straddling the debounce — and whichever
+      // resolved LAST painted, not whichever was asked for last. reqSeq was
+      // being incremented on view switches and read by nothing; it now does
+      // the job its comment always claimed: the newest request owns the
+      // table, and anything staler throws its result away.
+      const seq = ++nd2.reqSeq;
       try {
         const params = new URLSearchParams({
           type: nd2.scope,
@@ -5067,6 +5062,7 @@
         });
         if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status });
         const data = await res.json();
+        if (seq !== nd2.reqSeq) return;   // a newer request owns the table
         nd2.evTotal = data.total || 0;
         nd2RenderEvents(data.events || []);
       } catch (e) {
@@ -5706,8 +5702,10 @@
         return;
       }
       host.innerHTML = systems.map(s => {
-        const sid = s.system;
-        const wacnArg = s.wacn == null ? 'null' : s.wacn;
+        // Number() at the source: every tree handler interpolates these
+        // bare, and they originate in OTA decodes.
+        const sid = Number(s.system);
+        const wacnArg = s.wacn == null ? 'null' : Number(s.wacn);
         const expanded = !!nd2.sysExpanded[sid];
         const sites = s.sites || [];
         const folder = `
@@ -5738,8 +5736,8 @@
               : `<span class="nd-strong">R${escapeHtml(String(st.rfss))} S${escapeHtml(String(st.site))}</span>`;
             return `
             <div class="nd2-tree-row nd2-tree-site" role="button" tabindex="0"
-              onclick="nd2TreeOpenSite(${sid}, ${wacnArg}, ${st.rfss}, ${st.site}, '${nameArg}')"
-              onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();nd2TreeOpenSite(${sid}, ${wacnArg}, ${st.rfss}, ${st.site}, '${nameArg}');}">
+              onclick="nd2TreeOpenSite(${sid}, ${wacnArg}, ${Number(st.rfss)}, ${Number(st.site)}, '${nameArg}')"
+              onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();nd2TreeOpenSite(${sid}, ${wacnArg}, ${Number(st.rfss)}, ${Number(st.site)}, '${nameArg}');}">
               <i class="fas fa-tower-cell nd2-tree-ico"></i>
               <span class="nd2-tree-name">${label}</span>
               <span class="nd2-tree-counts">
@@ -6008,7 +6006,7 @@
         const sites = data.sites || [];
         if (sitesBody) {
           sitesBody.innerHTML = sites.length ? sites.map(st => `
-            <tr class="nd2-rowlink" onclick="nd2OpenSite(${st.rfss}, ${st.site}, '${encodeURIComponent(st.name || '')}')">
+            <tr class="nd2-rowlink" onclick="nd2OpenSite(${Number(st.rfss)}, ${Number(st.site)}, '${encodeURIComponent(st.name || '')}')">
               <td>${st.name
                 ? `<span class="nd-strong">${escapeHtml(String(st.name))}</span> <span class="nd-sub">R${escapeHtml(String(st.rfss))} S${escapeHtml(String(st.site))}</span>`
                 : `<span class="nd-strong">R${escapeHtml(String(st.rfss))} S${escapeHtml(String(st.site))}</span>`}</td>
@@ -6459,7 +6457,7 @@
         const rows = data.talkgroups || [];
         if (!rows.length) { body.innerHTML = '<tr><td colspan="8" class="nd2-empty">No talkgroups match.</td></tr>'; }
         else body.innerHTML = rows.map(t => `
-          <tr class="nd2-rowlink" onclick="nd2JumpToEvents({talkgroup:${t.talkgroup}})" title="View events for this talkgroup">
+          <tr class="nd2-rowlink" onclick="nd2JumpToEvents({talkgroup:${Number(t.talkgroup)}})" title="View events for this talkgroup">
             <td>${nd2TgPill(t.talkgroup, t.label, t.color)}
               <button class="nd2-linkbtn" title="Radios heard on this talkgroup"
                 onclick="event.stopPropagation();nd2ShowRel('talkgroup',${t.talkgroup},${nd2Arg(t.label || ('TG ' + t.talkgroup))})">
@@ -6538,11 +6536,11 @@
           }</td></tr>`;
         } else {
           body.innerHTML = rows.map(r => `
-            <tr class="nd2-rowlink" onclick="nd2JumpToEvents({unit:${r.radio}})"
+            <tr class="nd2-rowlink" onclick="nd2JumpToEvents({unit:${Number(r.radio)}})"
                 title="View events for this radio">
               <td>${nd2RadioPill(r.radio, r.color)}
                 <button class="nd2-linkbtn" title="Talkgroups this radio has been heard on"
-                  onclick="event.stopPropagation();nd2ShowRel('radio',${r.radio},${nd2Arg(r.alias || r.ota || nd2Rid(r.radio))})">
+                  onclick="event.stopPropagation();nd2ShowRel('radio',${Number(r.radio)},${nd2Arg(r.alias || r.ota || nd2Rid(r.radio))})">
                   <i class="fas fa-diagram-project"></i></button></td>
               <td>${nd2NameCell(r.ota)}</td>
               <td>${nd2NameCell(r.alias)}</td>
@@ -6619,10 +6617,10 @@
             nd2TgPill(t.talkgroup, t.label, t.color) + ` <span class="nd-sub">${nd2Num(t.calls)}</span>`
           ).join(' ') || '—';
           return `
-          <tr class="nd2-rowlink" onclick="nd2JumpToEvents({unit:${r.radio}})" title="View events for this radio">
+          <tr class="nd2-rowlink" onclick="nd2JumpToEvents({unit:${Number(r.radio)}})" title="View events for this radio">
             <td>${nd2RadioPill(r.radio, r.color)}
               <button class="nd2-linkbtn" title="Talkgroups this radio has been heard on"
-                onclick="event.stopPropagation();nd2ShowRel('radio',${r.radio},${nd2Arg(r.alias || r.ota || nd2Rid(r.radio))})">
+                onclick="event.stopPropagation();nd2ShowRel('radio',${Number(r.radio)},${nd2Arg(r.alias || r.ota || nd2Rid(r.radio))})">
                 <i class="fas fa-diagram-project"></i></button></td>
             <td>${nd2NameCell(r.ota)}</td>
             <td>${nd2NameCell(r.alias)}</td>
@@ -7384,7 +7382,11 @@
     }
     function nd2RenderNodeView(d) {
       const t = (d && d.totals) || {};
-      const titleEl = document.getElementById('nd2-node-title');
+      // nd2-pnode-title, NOT nd2-node-title: that id also names the radio
+      // drill-down chrome heading defined earlier in the file, and
+      // getElementById returns the first match — so this wrote the pager
+      // node's name into a hidden radio panel while its own title said "Node".
+      const titleEl = document.getElementById('nd2-pnode-title');
       if (titleEl) titleEl.textContent = (d.node && (d.node.name || d.node.id)) || 'Node';
       const subEl = document.getElementById('nd2-node-sub');
       if (subEl) {
@@ -8341,25 +8343,6 @@
     function closeNodeLocation() {
       if (_locViewMap) { _locViewMap.remove(); _locViewMap = null; }
       const m = document.getElementById('loc-view-modal'); if (m) m.remove();
-    }
-
-    // Trigger an immediate (manual) update on one node. Manual updates always
-    // run, even when auto-update is paused.
-    async function updateNodeNow(id) {
-      try {
-        const res = await fetch(`${API_BASE_URL}/api/nodes/${id}/cmd`, {
-          method: 'POST',
-          headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'update' })
-        });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          throw new Error(err.error || `HTTP ${res.status}`);
-        }
-        showToast('Update triggered on node.', 'success');
-      } catch (e) {
-        showToast(`Update failed: ${e.message}`, 'error');
-      }
     }
 
     // Trigger a manual update on every online node. Manual updates always run,
@@ -10874,7 +10857,6 @@
       if (!await uiConfirm(`Restart the "${name}" component on this node?`)) return;
       _ndCmd('restartComponent', { name }, `Restart ${name}`);
     }
-    function _ndReloadPlaylist() { _ndCmd('reloadPlaylist', {}, 'Reload playlist'); }
     async function _ndUpdate() {
       if (!await uiConfirm('Trigger a software update on this node? Services may restart.')) return;
       _ndCmd('update', {}, 'Trigger update');
@@ -12244,7 +12226,7 @@
         const paramK = t.target_type === 'article' ? 'article' : 'post';
         const link = `wire?tab=${tab}&${paramK}=${encodeURIComponent(t.target_id)}`;
         const actions = t.status === 'pending'
-          ? `<div class="dc-actions"><button class="btn btn-danger btn-sm" onclick="tdAction('${t.id}', 'uphold')"><i class="fas fa-ban"></i> Uphold &amp; remove</button><button class="btn btn-success btn-sm" onclick="tdAction('${t.id}', 'reject')"><i class="fas fa-times"></i> Reject</button></div>`
+          ? `<div class="dc-actions"><button class="btn btn-danger btn-sm" onclick="tdAction('${jsArg(t.id)}', 'uphold')"><i class="fas fa-ban"></i> Uphold &amp; remove</button><button class="btn btn-success btn-sm" onclick="tdAction('${jsArg(t.id)}', 'reject')"><i class="fas fa-times"></i> Reject</button></div>`
           : `<div class="dc-status ${escapeHtml(t.status)}">${escapeHtml(t.status)}${t.reviewed_by_name ? ' · by ' + escapeHtml(t.reviewed_by_name) : ''}</div>`;
         return `<div class="dc-card">
           <div class="dc-head">
@@ -12437,8 +12419,8 @@
             </div>
           </div>
           <div class="dc-actions">
-            <button class="btn btn-success btn-sm" onclick="apAction('${base}','${p.id}','approve')"><i class="fas fa-check"></i> Approve &amp; publish</button>
-            <button class="btn btn-danger btn-sm" onclick="apAction('${base}','${p.id}','reject')"><i class="fas fa-times"></i> Reject</button>
+            <button class="btn btn-success btn-sm" onclick="apAction('${jsArg(base)}','${jsArg(p.id)}','approve')"><i class="fas fa-check"></i> Approve &amp; publish</button>
+            <button class="btn btn-danger btn-sm" onclick="apAction('${jsArg(base)}','${jsArg(p.id)}','reject')"><i class="fas fa-times"></i> Reject</button>
           </div>
         </div>`;
       }).join('');
@@ -12641,7 +12623,7 @@
       const held = new Set((tags || []).map(t => t.key));
       box.innerHTML = USER_TAG_DEFS.map(def => {
         const on = held.has(def.key);
-        return `<button type="button" onclick="toggleUserTag('${escapeHtml(def.key)}')"
+        return `<button type="button" onclick="toggleUserTag('${jsArg(def.key)}')"
           title="${escapeHtml(def.description || '')}"
           style="display:inline-flex;align-items:center;gap:0.35rem;font-size:0.76rem;font-weight:600;
                  padding:0.32rem 0.65rem;border-radius:999px;cursor:pointer;font-family:inherit;

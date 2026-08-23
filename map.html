@@ -32,7 +32,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js" integrity="sha384-948ahk4ZmxYVYOc+rxN1H2gM1EJ2Duhp7uHtZ4WSLkV4Vtx5MUqnV+l7u9B+jFv+" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
 
   <link rel="canonical" href="https://nswpsn.forcequit.xyz/map">
@@ -4727,6 +4727,41 @@
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
     }
+    /**
+     * Escape a value for interpolation inside a QUOTED string in an inline
+     * handler. escapeHtml is the wrong tool there: the browser decodes the
+     * entities back to their source characters BEFORE compiling the handler,
+     * so a quote survives the trip and terminates the string. Encoding every
+     * non-alphanumeric byte as a JS escape leaves nothing for either the HTML
+     * parser or the JS parser to misread. Same helper staff.html carries.
+     */
+    function jsArg(value) {
+      if (value == null) return '';
+      return String(value).replace(/[^a-zA-Z0-9]/g, (ch) => {
+        const c = ch.charCodeAt(0);
+        return c < 256
+          ? '\\x' + c.toString(16).padStart(2, '0')
+          : '\\u' + c.toString(16).padStart(4, '0');
+      });
+    }
+
+    /**
+     * An href that cannot become a script. escapeHtml stops attribute
+     * breakout but happily passes javascript: through; this admits only
+     * http(s) and returns an inert '#' for everything else. Same helper
+     * live.html carries.
+     */
+    function safeUrl(url) {
+      if (!url) return '#';
+      try {
+        const u = new URL(url, window.location.href);
+        if (u.protocol !== 'http:' && u.protocol !== 'https:') return '#';
+        return escapeHtml(url);
+      } catch {
+        return '#';
+      }
+    }
+
 
     // ----- Beach-style tooltip helpers (shared by hazard / jam / roadwork
     // / police / flood tooltips so they match the beach layer styling). -----
@@ -5947,7 +5982,7 @@ function initPagerHoursFromStorage() {
           ? `<span class="pill-meta">Incident ID: ${escapeHtml(incidentIdsText)}</span>`
           : '';
 
-        return `<div class="incident-list-item" onclick="panToItem('${item.id}')">
+        return `<div class="incident-list-item" onclick="panToItem('${jsArg(item.id)}')">
           <h4>${escapeHtml(item.title)}</h4>
           <div style="margin-bottom:0.4rem; display:flex; gap:4px; flex-wrap:wrap;">
             ${typeBadge}
@@ -5973,7 +6008,9 @@ function initPagerHoursFromStorage() {
         const isActive = filterState[cat][k];
         const label = mapping[k] || k;
         const count = counts[k] || 0;
-        return `<div class="filter-pill ${isActive ? 'active' : ''}" data-cat="${cat}" data-val="${k}" onclick="toggleFilter('${cat}', '${k}')">${label} <span class="count">(${count})</span></div>`;
+        // k and label originate in user-SUBMITTED incident fields — a quote
+        // in a type or agency name was executing for every map visitor.
+        return `<div class="filter-pill ${isActive ? 'active' : ''}" data-cat="${cat}" data-val="${escapeHtml(k)}" onclick="toggleFilter('${jsArg(cat)}', '${jsArg(k)}')">${escapeHtml(label)} <span class="count">(${count})</span></div>`;
       }).join('');
     }
 
@@ -10625,11 +10662,13 @@ function initPagerHoursFromStorage() {
           (it.agenciesList || []).forEach((a) => { agencyCounts[a] = (agencyCounts[a] || 0) + 1; });
           (it.typesList || []).forEach((t) => { typeCounts[t] = (typeCounts[t] || 0) + 1; });
         }
-        const esc = (s) => String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+        // jsArg, not a hand-rolled escaper: the old one covered \ and '
+        // but not " — and _ffPill puts this inside a double-quoted onclick
+        // attribute, so a " in a submitted type name broke out of it.
         const pillFor = (t) =>
-          _ffPill(filterState.type[t] !== false, `${escapeHtml(t)} (${typeCounts[t] || 0})`, `toggleUserTypePill('${esc(t)}')`);
+          _ffPill(filterState.type[t] !== false, `${escapeHtml(t)} (${typeCounts[t] || 0})`, `toggleUserTypePill('${jsArg(t)}')`);
         const agencyPills = USER_AGENCIES.map((a) =>
-          _ffPill(filterState.agency[a] !== false, `${escapeHtml(a)} (${agencyCounts[a] || 0})`, `toggleUserAgencyPill('${esc(a)}')`)
+          _ffPill(filterState.agency[a] !== false, `${escapeHtml(a)} (${agencyCounts[a] || 0})`, `toggleUserAgencyPill('${jsArg(a)}')`)
         ).join('');
         const groupsHtml = USER_INCIDENT_TYPE_GROUPS.map((g) => `
           <div class="ff-section-label" style="margin-top:6px;">${g.label}</div>
@@ -11558,7 +11597,7 @@ function initPagerHoursFromStorage() {
         const selected = _aisListSelectedId === id ? ' selected' : '';
         const detail = (_aisListSelectedId === id) ? aisListDetailHtml(v) : '';
         return `
-          <div class="ais-list-row${selected}" onclick="aisListClickRow('${escapeHtml(id)}', event)">
+          <div class="ais-list-row${selected}" onclick="aisListClickRow('${jsArg(id)}', event)">
             <div class="ais-list-glyph">${glyph}</div>
             <div class="ais-list-info">
               <div class="ais-list-name">${escapeHtml(name)}</div>
@@ -12498,7 +12537,7 @@ function initPagerHoursFromStorage() {
         const selected = _adsbPinnedHex === a.hex ? ' selected' : '';
         const detail = _adsbPinnedHex === a.hex ? adsbListDetailHtml(a) : '';
         return `
-          <div class="ais-list-row${selected}" onclick="adsbListClickRow('${escapeHtml(a.hex)}', event)">
+          <div class="ais-list-row${selected}" onclick="adsbListClickRow('${jsArg(a.hex)}', event)">
             <div class="ais-list-glyph">${adsbListGlyph(a)}</div>
             <div class="ais-list-info">
               <div class="ais-list-name">${escapeHtml(name)}</div>
@@ -14873,7 +14912,7 @@ function initPagerHoursFromStorage() {
               tooltip += `<br><span style="color:#cbd5e1 !important; font-size:10px;">📷 Click=fullscreen · Ctrl+Click=select multiple</span>`;
             }
             if (props.link) {
-              tooltip += `<br><a href="${escapeHtml(props.link)}" target="_blank" style="color:#67e8f9 !important; font-size:11px; text-decoration:underline;">View all cameras at this airport →</a>`;
+              tooltip += `<br><a href="${safeUrl(props.link)}" target="_blank" style="color:#67e8f9 !important; font-size:11px; text-decoration:underline;">View all cameras at this airport →</a>`;
             }
             tooltip += `</div>`;
             

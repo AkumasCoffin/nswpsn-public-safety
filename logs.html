@@ -3323,7 +3323,7 @@
                 else if (agencyLower.includes('ambulance')) agencyColor = '#3b82f6';
                 else if (agencyLower.includes('ses')) agencyColor = '#f97316';
                 
-                html += `<div onclick="scrollToIncident('${escapeHtml(pagerId)}', 'pager')" style="cursor:pointer; background:linear-gradient(135deg, ${agencyColor}10 0%, rgba(15,23,42,0.5) 100%); border-left:3px solid ${agencyColor}; border-radius:6px; padding:8px; margin-bottom:6px; transition:all 0.2s;" onmouseover="this.style.transform='translateX(2px)'" onmouseout="this.style.transform='translateX(0)'">
+                html += `<div onclick="scrollToIncident('${jsArg(pagerId)}', 'pager')" style="cursor:pointer; background:linear-gradient(135deg, ${agencyColor}10 0%, rgba(15,23,42,0.5) 100%); border-left:3px solid ${agencyColor}; border-radius:6px; padding:8px; margin-bottom:6px; transition:all 0.2s;" onmouseover="this.style.transform='translateX(2px)'" onmouseout="this.style.transform='translateX(0)'">
                   <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:3px;">
                     <span style="color:${agencyColor}; font-weight:600; font-size:10px;"><i class="fas fa-pager" style="margin-right:3px;"></i>${escapeHtml(alias)}</span>
                     ${timestamp ? `<span style="color:#64748b; font-size:9px;">${escapeHtml(timestamp)}</span>` : ''}
@@ -3359,7 +3359,7 @@
                   statusBadge += `<span style="background:${color}; color:#fff; font-size:8px; padding:1px 4px; border-radius:3px; margin-left:4px;">${escapeHtml(alertLevel)}</span>`;
                 }
                 
-                html += `<div onclick="scrollToIncident('${escapeHtml(incidentSourceId)}', '${incident.source}')" style="cursor:pointer; background:rgba(249,115,22,0.08); border-left:3px solid #f97316; border-radius:6px; padding:8px; margin-bottom:6px; transition:all 0.2s;" onmouseover="this.style.transform='translateX(2px)'" onmouseout="this.style.transform='translateX(0)'">
+                html += `<div onclick="scrollToIncident('${jsArg(incidentSourceId)}', '${jsArg(incident.source)}')" style="cursor:pointer; background:rgba(249,115,22,0.08); border-left:3px solid #f97316; border-radius:6px; padding:8px; margin-bottom:6px; transition:all 0.2s;" onmouseover="this.style.transform='translateX(2px)'" onmouseout="this.style.transform='translateX(0)'">
                   <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
                     <span style="font-size:10px;">${sourceIcon}</span>
                     <span style="color:#fb923c; font-weight:600; font-size:10px;">${escapeHtml(sourceName)}</span>
@@ -3430,7 +3430,7 @@
               const message = pagerData.message || pager.title || '';
               const timestamp = pager.source_timestamp || (pager.fetched_at_iso ? new Date(pager.fetched_at_iso).toLocaleString() : '');
               
-              html += `<div onclick="scrollToIncident('${escapeHtml(pagerSourceId)}', 'pager')" style="cursor:pointer; background:rgba(34,197,94,0.08); border-left:3px solid #22c55e; border-radius:6px; padding:8px; margin-bottom:6px; transition:all 0.2s;" onmouseover="this.style.transform='translateX(2px)'" onmouseout="this.style.transform='translateX(0)'">
+              html += `<div onclick="scrollToIncident('${jsArg(pagerSourceId)}', 'pager')" style="cursor:pointer; background:rgba(34,197,94,0.08); border-left:3px solid #22c55e; border-radius:6px; padding:8px; margin-bottom:6px; transition:all 0.2s;" onmouseover="this.style.transform='translateX(2px)'" onmouseout="this.style.transform='translateX(0)'">
                 <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
                   <span style="color:#4ade80; font-weight:600; font-size:10px;"><i class="fas fa-pager" style="margin-right:3px;"></i>${escapeHtml(alias)}</span>
                   <span style="color:#64748b; font-size:9px;">${escapeHtml(timestamp)}</span>
@@ -4273,6 +4273,24 @@
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
     }
+    /**
+     * Escape a value for interpolation inside a QUOTED string in an inline
+     * handler. escapeHtml is the wrong tool there: the browser decodes the
+     * entities back to their source characters BEFORE compiling the handler,
+     * so a quote survives the trip and terminates the string. Encoding every
+     * non-alphanumeric byte as a JS escape leaves nothing for either the HTML
+     * parser or the JS parser to misread. Same helper staff.html carries.
+     */
+    function jsArg(value) {
+      if (value == null) return '';
+      return String(value).replace(/[^a-zA-Z0-9]/g, (ch) => {
+        const c = ch.charCodeAt(0);
+        return c < 256
+          ? '\\x' + c.toString(16).padStart(2, '0')
+          : '\\u' + c.toString(16).padStart(4, '0');
+      });
+    }
+
     
     // === URL PARAMS ===
     async function applyUrlParams() {
@@ -4601,7 +4619,7 @@
               ${r.status ? ` &middot; ${esc(r.status)}` : ''}${typeStr ? ` &middot; ${esc(typeStr)}` : ''}${when ? ` &middot; ${esc(when)}` : ''}
             </div>
             <div id="archived-detail-${esc(r.id)}" style="display:none; margin-top:0.6rem;"></div>
-            <button class="action-btn secondary" style="margin-top:0.5rem; font-size:0.75rem;" onclick="toggleArchivedDetail('${esc(r.id)}')">
+            <button class="action-btn secondary" style="margin-top:0.5rem; font-size:0.75rem;" onclick="toggleArchivedDetail('${jsArg(r.id)}')">
               <i class="fas fa-list"></i> View logs
             </button>
           </div>
