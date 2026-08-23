@@ -38,14 +38,15 @@
     }
   },
   "rdio": {
-    "version": "6.13.1",
+    "_comment": "The operator's OWN fork (AkumasCoffin/rdio-scanner), not upstream — nodes must run the same rdio the central instance does, because that is where talkgroup PATCHES live (rdioScannerPatches, added after 6.13.1) and the backend reads them from central to group patched calls. The agent's 3-part numeric compare ignores the -beta.N suffix, so 6.14.1-beta.7 reads as 6.14.1 and wins over 6.13.1.",
+    "version": "6.14.1-beta.7",
     "urls": {
-      "windows-amd64": "https://github.com/AkumasCoffin/rdio-scanner/releases/download/v6.13.1/rdio-scanner-windows-amd64-v6.13.1.exe",
-      "linux-amd64": "https://github.com/AkumasCoffin/rdio-scanner/releases/download/v6.13.1/rdio-scanner-linux-amd64-v6.13.1"
+      "windows-amd64": "https://github.com/AkumasCoffin/rdio-scanner/releases/download/v6.14.1-beta.7/rdio-scanner-windows-amd64-v6.14.1-beta.7.exe",
+      "linux-amd64": "https://github.com/AkumasCoffin/rdio-scanner/releases/download/v6.14.1-beta.7/rdio-scanner-linux-amd64-v6.14.1-beta.7"
     },
     "sha256": {
-      "windows-amd64": "a71eb7bff5fa6a3b113a48122a9cb4c2173af8d00f43875930530c3c5f7d1f98",
-      "linux-amd64": "a166df42b6d559ca1550c1d1d1058a1a68595b0794c68dfd32637406d2ee5f59"
+      "windows-amd64": "e8b755fab2c253a17e6dc48abf47498f6c303cf1b33af3b11adf2be011f12f41",
+      "linux-amd64": "4ac3cdfe98163a03e70e979191ccd26d3ce982a54ef7b59c692ea9c20f99970d"
     }
   }
 }
