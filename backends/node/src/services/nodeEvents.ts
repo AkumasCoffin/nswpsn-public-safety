@@ -390,8 +390,15 @@ export async function recordActivityEvents(
               receivedAt.toISOString(),
               streamId,
               safeInt(ev.id),
-              ev.action,
-              ev.eventType,
+              // Normalised on the way in so the read path can match them
+              // directly. vce sends Java enum names, which are uppercase by
+              // convention rather than by contract, and every rollup filters
+              // on event_type — wrapping the COLUMN in upper() to be safe
+              // costs a function call on every row of the window and, worse,
+              // hides the column's statistics from the planner. Normalising
+              // the handful of bytes here buys both back.
+              ev.action.toUpperCase(),
+              ev.eventType.toUpperCase(),
               system,
               talkgroup,
               sourceUnit,

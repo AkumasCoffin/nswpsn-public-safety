@@ -157,7 +157,10 @@ describe('recordActivityEvents', () => {
     expect(ins?.[0]).toBe('node-aaaa');
     expect(ins?.[2]).toBe('stream-1234');
     expect(ins?.[3]).toBe(9001);
-    expect(ins?.[4]).toBe('call');
+    // Normalised on the way in. vce sends Java enum names, uppercase by
+    // convention rather than contract, and the read path matches them
+    // directly rather than wrapping every row in upper().
+    expect(ins?.[4]).toBe('CALL');
     expect(ins?.[5]).toBe('GROUP_VOICE_CHANNEL_GRANT');
     expect(ins?.[6]).toBe(0x4a2);
     expect(ins?.[7]).toBe(12345);

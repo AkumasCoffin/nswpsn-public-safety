@@ -363,6 +363,14 @@ async function tgValidConfigured(prefix = ''): Promise<string> {
  * table; `CALL_GROUP` is the bare (unprefixed) form. NULL event_type (none post
  * migration 044) is treated as not-a-call — LIKE over NULL is not true.
  *
+ * MATCHED DIRECTLY, not through upper(). The ingest path uppercases event_type
+ * on the way in, so the guard is redundant — and it was not free. Wrapping the
+ * column made the predicate opaque to the planner, which estimated 13 rows
+ * where 138,088 matched: a 10,000x miss that had it choosing plans built for a
+ * handful of rows, and left every rollup on this page picking a different plan
+ * from one minute to the next depending on which estimate happened to win. It
+ * also cost a function call and an allocation per row of the window.
+ *
  * CALL_PATCH_GROUP has to be spelled out separately: it does NOT start with
  * "CALL_GROUP", so a single prefix match silently dropped every patched call —
  * 34k events over 5.5k calls here, about a tenth of the voice traffic, missing
@@ -376,8 +384,8 @@ async function tgValidConfigured(prefix = ''): Promise<string> {
  * of them.
  */
 const callGroup = (prefix = ''): string =>
-  `(upper(${prefix}event_type) LIKE 'CALL_GROUP%'` +
-  ` OR upper(${prefix}event_type) LIKE 'CALL_PATCH_GROUP%')`;
+  `(${prefix}event_type LIKE 'CALL_GROUP%'` +
+  ` OR ${prefix}event_type LIKE 'CALL_PATCH_GROUP%')`;
 const CALL_GROUP = callGroup();
 
 /** One entry per receiving site, keeping the first frequency any reception on
@@ -1963,51 +1971,61 @@ nodeDataRouter.get(
           kind: string | null;
           sites: unknown;
           calls: unknown;
-          logical: unknown;
           last_seen: Date;
           top_tg: number | null;
           top_tg_calls: unknown;
         }>(
-// Two scans of the window, not one per node. The sites rollup above
-             // picks its top talkgroup with a LATERAL, which is fine for a
-             // handful of sites but re-scans the window once per row; DISTINCT ON
-             // over a single grouped pass answers it for every node at once, and
-             // measured on a live 24h window that is 677ms against 939ms.
+// ONE pass over the window, and no COUNT(DISTINCT).
              //
-             // The two halves cannot share one scan: a node's logical-call count
-             // is a COUNT(DISTINCT) that does not sum from per-talkgroup groups,
-             // because a patched call spans several talkgroups.
-             `WITH agg AS (
-                SELECT e.node_id AS id,
-                       (COUNT(DISTINCT (e.site_rfss, e.site_id))
-                          FILTER (WHERE e.site_rfss IS NOT NULL
-                                    AND e.site_id IS NOT NULL))::int AS sites,
-                       COUNT(*)::int AS calls,
-                       COUNT(DISTINCT e.logical_call_id)::int AS logical,
-                       MAX(e.received_at) AS last_seen
+             // The obvious shape — group by node, count sites with
+             // COUNT(DISTINCT (rfss, site)), pick the top talkgroup with a
+             // LATERAL — is three different ways of being slow at once. The
+             // LATERAL re-scans the window once per node; a COUNT(DISTINCT)
+             // forces a serial sort of every row in the window and blocks
+             // parallel aggregation entirely; and a DISTINCT over a ROW type is
+             // the dearest form of it.
+             //
+             // GROUPING SETS answers all three from a single scan: totals per
+             // node, per (node, talkgroup) for the top one, and per (node, site)
+             // so the site tally is a plain count of groups. Measured on a live
+             // 24h window: 303ms against 939ms.
+             `WITH g AS (
+                SELECT e.node_id,
+                       e.talkgroup,
+                       e.site_rfss,
+                       e.site_id,
+                       COUNT(*)::int AS c,
+                       MAX(e.received_at) AS last_seen,
+                       GROUPING(e.talkgroup) AS gt,
+                       GROUPING(e.site_rfss) AS gs
                   FROM node_radio_events e
                  WHERE ${scope('e.')} AND ${callGroup('e.')}
-                 GROUP BY e.node_id
-              ), top AS (
-                SELECT DISTINCT ON (node_id) node_id, talkgroup, c
-                  FROM (
-                    SELECT e.node_id, e.talkgroup, COUNT(*)::int AS c
-                      FROM node_radio_events e
-                     WHERE ${scope('e.')} AND ${callGroup('e.')}
-                       AND ${await tgValidConfigured('e.')}
-                       ${siteEncSql}
-                     GROUP BY e.node_id, e.talkgroup
-                  ) t
-                 ORDER BY node_id, c DESC, talkgroup ASC
+                 GROUP BY GROUPING SETS (
+                   (e.node_id),
+                   (e.node_id, e.talkgroup),
+                   (e.node_id, e.site_rfss, e.site_id))
               )
-              SELECT a.id, n.name, n.kind, a.sites, a.calls, a.logical, a.last_seen,
-                     t.talkgroup AS top_tg, t.c AS top_tg_calls
-                FROM agg a
+              SELECT tot.node_id AS id, n.name, n.kind,
+                     COALESCE(st.sites, 0) AS sites,
+                     tot.c AS calls, tot.last_seen,
+                     tg.talkgroup AS top_tg, tg.c AS top_tg_calls
+                FROM (SELECT node_id, c, last_seen FROM g WHERE gt = 1 AND gs = 1) tot
                 -- Carried so the drill-down opens with the tabs this kind can
                 -- actually fill (a scanner has no sites and no live view).
-                LEFT JOIN nodes n ON n.id = a.id
-                LEFT JOIN top t ON t.node_id = a.id
-               ORDER BY a.calls DESC, a.id ASC`,
+                LEFT JOIN nodes n ON n.id = tot.node_id
+                LEFT JOIN (
+                  SELECT node_id, COUNT(*)::int AS sites
+                    FROM g
+                   WHERE gs = 0 AND site_rfss IS NOT NULL AND site_id IS NOT NULL
+                   GROUP BY node_id
+                ) st ON st.node_id = tot.node_id
+                LEFT JOIN (
+                  SELECT DISTINCT ON (node_id) node_id, talkgroup, c
+                    FROM g
+                   WHERE gt = 0 AND talkgroup IS NOT NULL
+                   ORDER BY node_id, c DESC, talkgroup ASC
+                ) tg ON tg.node_id = tot.node_id
+               ORDER BY tot.c DESC, tot.node_id ASC`,
           params,
         ),
         // Friendly system name for the drill-down heading (most-recent
@@ -2057,7 +2075,6 @@ nodeDataRouter.get(
           kind: r.kind ?? 'radio',
           sites: num(r.sites),
           calls: num(r.calls),
-          logicalCalls: num(r.logical),
           lastSeen: iso(r.last_seen),
           topTalkgroup:
             r.top_tg !== null
