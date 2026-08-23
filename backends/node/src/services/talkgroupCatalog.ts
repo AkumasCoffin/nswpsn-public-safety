@@ -125,7 +125,14 @@ async function buildCatalog(): Promise<TalkgroupCatalog> {
       // Radios: the agency's unit list is the only unit → agency mapping there
       // is (a radio carries no talkgroup), so it drives the UID pill's colour.
       const agencyName = ag.name.trim();
-      const agencyColor = normaliseAliasColor(String(ag.color ?? '')) ?? ledHex(ag);
+      // displayColor first: it is the site's own choice and the only one an
+      // operator sets here now. The other two are fallbacks for agencies
+      // configured before it existed — SDR-Trunk's alias colour, then rdio's
+      // LED name — so nothing changes appearance until it is re-picked.
+      const agencyColor =
+        hexColor((ag as Record<string, unknown>)['displayColor']) ??
+        normaliseAliasColor(String(ag.color ?? '')) ??
+        ledHex(ag);
       for (const u of (ag.units ?? []) as Array<Record<string, unknown>>) {
         const uid = Number(u['id']);
         if (!Number.isInteger(uid) || unitAgencies.has(uid)) continue;
@@ -203,6 +210,14 @@ async function buildCatalog(): Promise<TalkgroupCatalog> {
   };
   _cache = { at: Date.now(), map };
   return map;
+}
+
+/** A `#rrggbb` string, or null if it isn't one. The colour wheel writes this
+ *  form; anything else is ignored rather than reaching a style attribute. */
+function hexColor(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const s = raw.trim();
+  return /^#[0-9a-fA-F]{6}$/.test(s) ? s.toLowerCase() : null;
 }
 
 /** rdio LED preset name → the same hex the staff editor shows, so an agency

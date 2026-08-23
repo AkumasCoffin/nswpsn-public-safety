@@ -125,6 +125,18 @@ export const AgencySchema = z
     // optional field must accept null (`.nullish()` = value | null | undefined) —
     // otherwise ONE null field drops the WHOLE agencies array on read.
     color: z.string().max(40).nullish(),
+    /**
+     * The colour THIS SITE shows for the agency — its talkgroup and radio pills
+     * on the Data page, and its dot in the settings editor.
+     *
+     * Display only, and deliberately separate from the two colours that are
+     * pushed to nodes: `led` is rdio's own field and `color` is SDR-Trunk's
+     * alias colour. Picking a colour here used to write both, so choosing how
+     * the site LOOKED reconfigured every radio node — rdio's colours are set
+     * by hand in rdio, and this should not fight that. A `#rrggbb` string,
+     * because it is chosen from a colour wheel rather than a preset list.
+     */
+    displayColor: z.string().max(9).nullish(),
     iconName: z.string().max(200).nullish(),
     // -1 = do-not-monitor, 1..99 = priority, undefined/100 = normal monitor.
     priority: z.number().int().nullish(),
@@ -212,6 +224,15 @@ export const GlobalConfigSchema = z
     rdioTags: z.array(LooseObj).max(4096).default([]),
     sdrtrunkConfig: SdrtrunkConfigSchema.default(EMPTY_SDRTRUNK),
     defaults: TalkgroupDefaultsSchema.default(EMPTY_DEFAULTS),
+    /**
+     * Swatches saved from the agency colour wheel, newest first.
+     *
+     * Kept in the config rather than in a browser so the palette an operator
+     * builds up is the same for everyone editing, and survives the machine
+     * they built it on. Display only, like displayColor itself — it is never
+     * pushed to a node.
+     */
+    colorPalette: z.array(z.string().max(9)).max(48).default([]),
   })
   .strict();
 export type GlobalConfigInput = z.infer<typeof GlobalConfigSchema>;
@@ -226,6 +247,7 @@ export const GlobalConfigPatchSchema = z
     rdioTags: z.array(LooseObj).max(4096),
     sdrtrunkConfig: SdrtrunkConfigSchema,
     defaults: TalkgroupDefaultsSchema,
+    colorPalette: z.array(z.string().max(9)).max(48),
   })
   .partial()
   .strict();
@@ -398,6 +420,8 @@ function agencyToSystem(a: Agency): Record<string, unknown> {
     systemId,
     name,
     color: _color,
+    // Site-only (see AgencySchema.displayColor) — never part of an rdio system.
+    displayColor: _displayColor,
     iconName: _iconName,
     priority: _priority,
     streamTalkgroupAlias: _sta,
@@ -607,6 +631,7 @@ function seedFromPresets(): GlobalConfigInput {
   const systems = asArr(rdio['systems']);
   return {
     agencies: buildAgencies(aliases, systems),
+    colorPalette: [],
     rdioGroups: asArr(rdio['groups']),
     rdioTags: asArr(rdio['tags']),
     // The sdrtrunk-vce alias lists/streams are imported by the operator, not seeded.
@@ -654,6 +679,7 @@ function salvageConfig(
 ): GlobalConfigInput {
   return {
     agencies: keepValid(AgencySchema, agencies),
+    colorPalette: [],
     // rdioGroups/rdioTags are the loose element type used in GlobalConfigSchema.
     rdioGroups: keepValid(LooseObj, rdioGroups),
     rdioTags: keepValid(LooseObj, rdioTags),
@@ -729,6 +755,7 @@ function rowToConfig(r: Row): GlobalConfig {
 
 const EMPTY: GlobalConfig = {
   agencies: [],
+  colorPalette: [],
   rdioGroups: [],
   rdioTags: [],
   sdrtrunkConfig: EMPTY_SDRTRUNK,

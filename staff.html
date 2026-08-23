@@ -1129,6 +1129,22 @@
     .gc-side-row:hover { background: rgba(255, 255, 255, 0.04); }
     .gc-side-row.sel { background: var(--accent-soft); border-color: var(--accent-border); }
     .gc-side-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; border: 1px solid var(--border-subtle); }
+    /* Agency colour: wheel, current value, save/clear, then the saved
+       swatches. Display only — see _gcAgencyColorSet. */
+    .gc-color { display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; }
+    .gc-color-wheel {
+      width: 34px; height: 26px; padding: 0; flex-shrink: 0; cursor: pointer;
+      background: none; border: 1px solid var(--border-subtle); border-radius: 6px;
+    }
+    .gc-color-wheel::-webkit-color-swatch-wrapper { padding: 2px; }
+    .gc-color-wheel::-webkit-color-swatch { border: none; border-radius: 4px; }
+    .gc-color-hex { font-size: 0.72rem; color: var(--text-soft); min-width: 6.5rem; }
+    .gc-sw-list { display: flex; align-items: center; gap: 0.25rem; flex-wrap: wrap; }
+    .gc-sw {
+      width: 18px; height: 18px; padding: 0; border-radius: 5px; cursor: pointer;
+      border: 1px solid var(--border-subtle);
+    }
+    .gc-sw.on { outline: 2px solid var(--accent); outline-offset: 1px; }
     .gc-side-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
     .gc-side-lock { font-size: 0.62rem; color: var(--text-soft); flex-shrink: 0; }
     .gc-side-tgn { font-size: 0.68rem; color: var(--text-soft); font-variant-numeric: tabular-nums; flex-shrink: 0; }
@@ -10908,10 +10924,38 @@
     const _gcOpenTg = new Set();   // keys "agencyIdx:tgIdx" — talkgroup rows with the "more" panel open
 
     // rdio LED = named-colour dropdown (NOT a colour picker). Alerts = None + 1..9.
-    const GC_LED_COLORS = ['blue', 'cyan', 'green', 'magenta', 'orange', 'red', 'white', 'yellow'];
-    // Swatch hues for the LED preset names (used for the agency colour dot).
+    // Hues for rdio's eight LED preset names. NOT a picker any more — the
+    // agency colour is chosen from a wheel and stored in displayColor. This
+    // stays only to colour an agency that was set up before that existed, so
+    // nothing loses its dot until someone re-picks it.
     const GC_LED_HEX = { blue: '#2563eb', cyan: '#06b6d4', green: '#22c55e', magenta: '#d946ef', orange: '#f97316', red: '#ef4444', white: '#e5e7eb', yellow: '#eab308' };
     function _gcLedHex(led) { return GC_LED_HEX[String(led || '').toLowerCase()] || null; }
+
+    /** A #rrggbb string, or null. */
+    function _gcHex(v) {
+      const t = String(v == null ? '' : v).trim();
+      return /^#[0-9a-fA-F]{6}$/.test(t) ? t.toLowerCase() : null;
+    }
+
+    /**
+     * The colour to SHOW for an agency, in the same order the backend resolves
+     * it (services/talkgroupCatalog.ts): the site's own displayColor first,
+     * then the two node-bound colours as legacy fallbacks — SDR-Trunk's alias
+     * colour, then rdio's LED name.
+     */
+    function _gcAgencyHex(a) {
+      if (!a) return null;
+      return _gcHex(a.displayColor) || (a.color ? _gcColorHex(a.color) : null) || _gcLedHex(a.led);
+    }
+
+    /** Saved swatches, newest first, deduped. Lives in the config so the
+     *  palette is shared and survives the machine it was built on. */
+    function _gcPalette() {
+      const p = _gcData && Array.isArray(_gcData.colorPalette) ? _gcData.colorPalette : [];
+      const out = [];
+      for (const c of p) { const h = _gcHex(c); if (h && !out.includes(h)) out.push(h); }
+      return out;
+    }
     const GC_ALERTS = ['alert1', 'alert2', 'alert3', 'alert4', 'alert5', 'alert6', 'alert7', 'alert8', 'alert9'];
 
     async function openGlobalConfig() {
@@ -10955,6 +10999,10 @@
           agencies: Array.isArray(cfg.agencies) ? cfg.agencies : [],
           rdioGroups: Array.isArray(cfg.rdioGroups) ? cfg.rdioGroups : [],
           rdioTags: Array.isArray(cfg.rdioTags) ? cfg.rdioTags : [],
+          // Saved agency-colour swatches. Display only — never pushed to a
+          // node — but stored with the config so the palette is shared and
+          // outlives the browser it was built in.
+          colorPalette: Array.isArray(cfg.colorPalette) ? cfg.colorPalette : [],
           // SDR-Trunk side (alias lists + aliases + streams). Edited only via the
           // .db import; carried through Save so the PATCH-style PUT preserves it.
           sdrtrunkConfig: (cfg.sdrtrunkConfig && typeof cfg.sdrtrunkConfig === 'object') ? cfg.sdrtrunkConfig : null,
@@ -11126,14 +11174,45 @@
     // One colour per agency, chosen from rdio's LED presets. We store the named
     // colour on `led` (rdio system) AND derive the SDR-Trunk alias colour (ARGB
     // int) so both systems render the same colour. Empty clears both.
-    function _gcAgencyLedSet(i, val) {
+    /**
+     * Set the agency's DISPLAY colour.
+     *
+     * Writes displayColor and nothing else. The old picker wrote rdio's `led`
+     * and derived SDR-Trunk's `color` from it, so choosing how this site looked
+     * pushed a colour to every radio node — rdio's colours are set by hand in
+     * rdio, and this has no business overwriting them. Both those fields are
+     * left exactly as they were found.
+     */
+    function _gcAgencyColorSet(i, val) {
       const a = _gcData.agencies[i];
       if (!a) return;
-      const v = String(val || '').trim();
-      if (v === '') { delete a.led; delete a.color; _gcRenderAgencies(); return; }
-      a.led = v;
-      const hex = _gcLedHex(v);
-      if (hex) { const rgb = parseInt(hex.slice(1), 16) & 0xFFFFFF; a.color = String(((0xFF << 24) | rgb) | 0); }
+      const hex = _gcHex(val);
+      if (!hex) { delete a.displayColor; _gcRenderAgencies(); return; }
+      a.displayColor = hex;
+      _gcRenderAgencies();
+    }
+
+    /** Clear it — the agency falls back to no colour (or its legacy one). */
+    function _gcAgencyColorClear(i) {
+      const a = _gcData.agencies[i];
+      if (!a) return;
+      delete a.displayColor;
+      _gcRenderAgencies();
+    }
+
+    /** Save the agency's current colour to the shared swatch list. */
+    function _gcPaletteSave(i) {
+      const a = _gcData.agencies[i];
+      const hex = a && _gcHex(a.displayColor);
+      if (!hex) { showToast('Pick a colour first.', 'error'); return; }
+      const next = [hex].concat(_gcPalette().filter((c) => c !== hex)).slice(0, 48);
+      _gcData.colorPalette = next;
+      _gcRenderAgencies();
+    }
+
+    /** Remove a swatch from the shared list. */
+    function _gcPaletteRemove(hex) {
+      _gcData.colorPalette = _gcPalette().filter((c) => c !== _gcHex(hex));
       _gcRenderAgencies();
     }
     // priority: undefined/100 = normal monitor, -1 = do-not-monitor, 1..99 = priority.
@@ -11248,7 +11327,7 @@
       if (!shown.length) { el.innerHTML = `<div class="gc-empty">No agencies${q ? ' match your search' : ' yet'}.</div>`; return; }
       el.innerHTML = shown.map(({ a, i }) => {
         const enc = unified && a.encrypted === true;
-        const hex = _gcLedHex(a.led) || (a.color ? _gcColorHex(a.color) : null);
+        const hex = _gcAgencyHex(a);
         const tgN = Array.isArray(a.talkgroups) ? a.talkgroups.length : 0;
         const sel = _gcView === 'agency' && i === _gcSelectedAgency;
         return `<div class="gc-side-row ${sel ? 'sel' : ''}" onclick="_gcSelectAgency(${i})">
@@ -11275,7 +11354,7 @@
       const tgs = Array.isArray(a.talkgroups) ? a.talkgroups : [];
       const units = Array.isArray(a.units) ? a.units : [];
       const transcribeOn = a.transcribe !== false; // default true
-      const swHex = _gcLedHex(a.led) || (a.color ? _gcColorHex(a.color) : null);
+      const swHex = _gcAgencyHex(a);
       const priVal = _gcAgencyPriorityVal(a);
       const prioOpts = [`<option value="default" ${priVal === 'default' ? 'selected' : ''}>Monitor (default)</option>`,
         `<option value="-1" ${priVal === '-1' ? 'selected' : ''}>Do not monitor</option>`]
@@ -11299,7 +11378,7 @@
           <div class="nd-fld"><label>System ID</label><input type="number" value="${escapeHtml(String(a.systemId == null ? '' : a.systemId))}" oninput="_gcAgencySet(${i},'systemId',this.value)"></div>
           <div class="nd-fld"><label>Name</label><input type="text" value="${escapeHtml(a.name || '')}" oninput="_gcAgencySet(${i},'name',this.value)"></div>
           <div class="nd-fld"><label>Icon</label><input type="text" list="gc-icon-names" value="${escapeHtml(a.iconName || '')}" oninput="_gcAgencySet(${i},'iconName',this.value)" placeholder="named icon"></div>
-          ${enc ? '' : `<div class="nd-fld"><label>Colour</label>${_gcLedSelect(a.led, `_gcAgencyLedSet(${i},this.value)`)}</div>`}
+          <div class="nd-fld gc-span2"><label>Colour <span class="nd-sub" style="font-weight:400;text-transform:none;letter-spacing:0;">— display only, not sent to nodes</span></label>${_gcColorPicker(i, a)}</div>
           <div class="nd-fld"><label>Priority</label><select onchange="_gcAgencyPrioritySet(${i},this.value)">${prioOpts}</select></div>
           ${unified ? `${enc ? '' : `<div class="nd-fld"><label>Default group</label><select onchange="_gcAgencyRefSet(${i},'defaultGroupId',this.value)">${_gcOptions(_gcData.rdioGroups, a.defaultGroupId)}</select></div>
           <div class="nd-fld"><label>Default tag</label><select onchange="_gcAgencyRefSet(${i},'defaultTagId',this.value)">${_gcOptions(_gcData.rdioTags, a.defaultTagId)}</select></div>`}
@@ -11625,15 +11704,34 @@
     // --- rdio led / alert selects (rdio never uses a colour picker — led is a
     // named-colour dropdown; alert is None + alert1..9). Empty = default, which we
     // drop from the object so it stays in its default state. ---
-    function _gcLedSelect(value, onchange) {
-      const cur = value == null ? '' : String(value);
-      const known = GC_LED_COLORS.includes(cur);
-      return `<select onchange="${onchange}">` +
-        `<option value="" ${cur === '' ? 'selected' : ''}>Default</option>` +
-        GC_LED_COLORS.map(c => `<option value="${c}" ${c === cur ? 'selected' : ''}>${c.charAt(0).toUpperCase() + c.slice(1)}</option>`).join('') +
-        ((cur && !known) ? `<option value="${escapeHtml(cur)}" selected>${escapeHtml(cur)}</option>` : '') +
-        `</select>`;
+    /**
+     * Agency colour: a wheel, the saved swatches, and save/clear.
+     *
+     * A wheel rather than a preset list because the colour is ours now — it is
+     * not constrained to the eight names rdio understands. The swatches are
+     * what make a wheel usable across dozens of agencies: pick once, save it,
+     * click it thereafter.
+     */
+    function _gcColorPicker(i, a) {
+      const hex = _gcHex(a.displayColor);
+      const shown = hex || _gcAgencyHex(a) || '#64748b';
+      const legacy = !hex && _gcAgencyHex(a);
+      const swatches = _gcPalette().map((c) => `
+        <button type="button" class="gc-sw${c === hex ? ' on' : ''}" style="background:${escapeHtml(c)}"
+          title="${escapeHtml(c)} — click to use, shift-click to remove"
+          onclick="if(event.shiftKey){_gcPaletteRemove(${nd2Arg(c)})}else{_gcAgencyColorSet(${i},${nd2Arg(c)})}"></button>`).join('');
+      return `<div class="gc-color">
+        <input type="color" class="gc-color-wheel" value="${escapeHtml(shown)}"
+          oninput="_gcAgencyColorSet(${i},this.value)" title="Pick a colour">
+        <code class="gc-color-hex">${escapeHtml(hex || (legacy ? shown + ' (inherited)' : 'none'))}</code>
+        <button type="button" class="nd2-linkbtn" title="Save this colour to the palette"
+          onclick="_gcPaletteSave(${i})"><i class="fas fa-bookmark"></i></button>
+        <button type="button" class="nd2-linkbtn" title="Clear this agency's colour"
+          onclick="_gcAgencyColorClear(${i})"><i class="fas fa-eraser"></i></button>
+        ${swatches ? `<span class="gc-sw-list">${swatches}</span>` : '<span class="nd-sub">no saved colours yet</span>'}
+      </div>`;
     }
+
     function _gcAlertSelect(value, onchange) {
       const cur = value == null ? '' : String(value);
       const known = GC_ALERTS.includes(cur);
@@ -11728,7 +11826,8 @@
             sdrtrunkConfig: _gcData.sdrtrunkConfig,
             // Fleet-wide talkgroup defaults (unified model): the inherited
             // monitor priority (colour is per agency).
-            defaults: _gcData.defaults || {}
+            defaults: _gcData.defaults || {},
+            colorPalette: _gcPalette()
           })
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -11736,6 +11835,7 @@
         if (data && data.config) {
           const cfg = data.config;
           if (Array.isArray(cfg.agencies)) _gcData.agencies = cfg.agencies;
+          if (Array.isArray(cfg.colorPalette)) _gcData.colorPalette = cfg.colorPalette;
           if (Array.isArray(cfg.rdioGroups)) _gcData.rdioGroups = cfg.rdioGroups;
           if (Array.isArray(cfg.rdioTags)) _gcData.rdioTags = cfg.rdioTags;
           if (cfg.sdrtrunkConfig && typeof cfg.sdrtrunkConfig === 'object') _gcData.sdrtrunkConfig = cfg.sdrtrunkConfig;
