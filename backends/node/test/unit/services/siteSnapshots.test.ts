@@ -34,8 +34,14 @@ vi.mock('../../../src/services/auth/roles.js', async (orig) => {
 });
 
 // Keep talkgroup-label resolution from touching the global config / DB.
+// deriveAliasesFromTalkgroups is imported by talkgroupCatalog and was missing
+// here, so building the catalog threw — and talkgroupCatalog's catch swallowed
+// it, leaving the suite green while the code under it did nothing. Mocking a
+// module means supplying everything its consumers import, not just what this
+// file calls.
 vi.mock('../../../src/services/nodes/globalConfig.js', () => ({
-  getGlobalConfig: vi.fn(async () => ({ sdrtrunkConfig: { aliases: [] } })),
+  getGlobalConfig: vi.fn(async () => ({ sdrtrunkConfig: { aliases: [] }, agencies: [] })),
+  deriveAliasesFromTalkgroups: vi.fn(() => []),
 }));
 
 import { upsertSiteSnapshots, type SiteSnapshotInput } from '../../../src/services/nodeEvents.js';

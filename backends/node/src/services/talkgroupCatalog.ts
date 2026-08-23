@@ -51,6 +51,9 @@ export interface TalkgroupCatalog {
 }
 
 let _cache: { at: number; map: TalkgroupCatalog } | null = null;
+/** In-flight rebuild, so a burst of concurrent misses reads the config once
+ *  rather than once each. */
+let _inflight: Promise<TalkgroupCatalog> | null = null;
 
 /**
  * Alias colour -> a CSS hex string, or null if it isn't one.
@@ -90,6 +93,17 @@ export function normaliseAliasColor(raw: string): string | null {
  */
 export async function talkgroupCatalog(): Promise<TalkgroupCatalog> {
   if (_cache && Date.now() - _cache.at < 60_000) return _cache.map;
+  // One rebuild at a time. Without this every request that arrived during a
+  // rebuild started its own, so a cold cache under load meant N concurrent
+  // reads of the same config.
+  if (_inflight) return _inflight;
+  _inflight = buildCatalog().finally(() => {
+    _inflight = null;
+  });
+  return _inflight;
+}
+
+async function buildCatalog(): Promise<TalkgroupCatalog> {
   const labels = new Map<number, string>();
   const shortLabels = new Map<number, string>();
   const agencies = new Map<number, string>();
@@ -175,6 +189,13 @@ export async function talkgroupCatalog(): Promise<TalkgroupCatalog> {
     }
   } catch (e) {
     log.warn({ err: e }, 'talkgroupCatalog: failed to load global config');
+    // Serve the last good catalog rather than caching an empty one for a
+    // minute. Empty is not a harmless default here: `encrypted` drives the
+    // Data page's hide-encrypted filter, so an empty set silently STOPS
+    // filtering and starts showing encrypted traffic, while every label,
+    // colour and agency vanishes at the same time — from a transient config
+    // read, with only a warn to say so. Same rule rdioPatches.ts follows.
+    if (_cache) return _cache.map;
   }
   const map = {
     labels, shortLabels, agencies, colors, encrypted, configuredTalkgroups,

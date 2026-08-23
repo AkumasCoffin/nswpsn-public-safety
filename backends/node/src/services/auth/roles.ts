@@ -110,6 +110,18 @@ interface CacheEntry {
 }
 const roleCache = new Map<string, CacheEntry>();
 
+/**
+ * Entries were only ever added and read — expiry was checked on read but the
+ * entry stayed, so the map grew with every distinct user the process ever saw
+ * and never shrank. Sweeping on write keeps it to the users actually active
+ * within the TTL, which is what it was always meant to hold.
+ */
+function evictExpired(now: number): void {
+  for (const [id, entry] of roleCache) {
+    if (now - entry.ts >= ROLE_CACHE_TTL_MS) roleCache.delete(id);
+  }
+}
+
 export function _resetRolesCacheForTests(): void {
   roleCache.clear();
 }
@@ -163,7 +175,9 @@ export async function getUserRoles(userId: string): Promise<string[]> {
   // Expand legacy<->current names so a check for either passes during the
   // migration-059 cutover (see ROLE_ALIASES).
   const roles = expandAliases(result.rows.map((r) => r.role));
-  roleCache.set(userId, { ts: Date.now(), roles });
+  const now = Date.now();
+  evictExpired(now);
+  roleCache.set(userId, { ts: now, roles });
   // Return a copy so callers can't mutate the array now held in cache.
   return [...roles];
 }

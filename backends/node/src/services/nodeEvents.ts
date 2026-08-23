@@ -17,7 +17,7 @@
  * node_radio_hourly_sys / node_pager_hourly) in the same transaction.
  *
  * Logical grouping: the same over-the-air transmission heard by N nodes
- * arrives as N events. Rows within ±4s on the same (system, talkgroup)
+ * arrives as N events. Rows within ±5s on the same (system, talkgroup)
  * [radio: (systemId, target)] or (capcode, sha256(message)) [pager] share
  * one logical id — the detail-row id of the FIRST member of the group.
  * Group assignment is serialised per key with
@@ -356,7 +356,7 @@ export async function recordActivityEvents(
           // the same call concurrently can't both "find no group" and fork.
           await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [lockKey]);
 
-          // Existing logical group within the ±4s window (closest first).
+          // Existing logical group within the ±5s window (closest first).
           // The unit check tolerates rows with unknown source_unit on either
           // side; a DIFFERENT known unit means a different call.
           const found = await client.query<{ logical_call_id: string }>(
@@ -1061,7 +1061,7 @@ export interface PagerEventInput {
 
 /**
  * Record one pager message reception: advisory-lock the (capcode,
- * message_hash) key, find a ±4s group, insert, stamp logical_id, bump
+ * message_hash) key, find a ±5s group, insert, stamp logical_id, bump
  * node_pager_hourly.
  */
 export async function recordPagerEvent(ev: PagerEventInput): Promise<void> {

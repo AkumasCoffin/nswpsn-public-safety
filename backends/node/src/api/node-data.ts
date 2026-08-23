@@ -1133,8 +1133,28 @@ nodeDataRouter.get(
           }
         }
         if (q !== null) {
+          // talkgroup_label is ALWAYS NULL on the radio side — migration 044
+          // says so outright ("Kept (always NULL from ingest for now)"), since
+          // the activity feed carries no labels and they resolve from the
+          // agencies config at read time. So searching a talkgroup by name
+          // matched nothing, silently, and read as "no such traffic".
+          //
+          // Resolve the name to ids through the same catalog the rows are
+          // rendered with, then match on the id. A query that names no
+          // talkgroup still matches system_label, and one that matches
+          // nothing yields an impossible id list rather than every row.
+          const labels = await talkgroupLabels();
+          const needle = q.toLowerCase();
+          const ids: number[] = [];
+          for (const [id, label] of labels) {
+            if (label.toLowerCase().includes(needle)) ids.push(id);
+          }
           const like = add(`%${q}%`);
-          rConds.push(`(talkgroup_label ILIKE ${like} OR system_label ILIKE ${like})`);
+          rConds.push(
+            ids.length > 0
+              ? `(talkgroup = ANY(${add(ids)}::int[]) OR system_label ILIKE ${like})`
+              : `(system_label ILIKE ${like})`,
+          );
         }
         if (from !== null) rConds.push(`received_at >= ${add(from.toISOString())}::timestamptz`);
         if (to !== null) rConds.push(`received_at <= ${add(to.toISOString())}::timestamptz`);

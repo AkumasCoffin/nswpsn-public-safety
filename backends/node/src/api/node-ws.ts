@@ -474,6 +474,15 @@ async function handleStaffMessage(
       // design — these are transient stream toggles, not durable node commands.
       const d = (data ?? {}) as { nodeId?: string };
       if (!d.nodeId) return;
+      // Still a WRITE, though: it makes the node start work and stream data
+      // back, and the agent shares one write mutex between a stream and its
+      // status heartbeat. A view-only feeder:monitor was able to start
+      // spectrum or audio on any node while being refused every 'cmd' two
+      // cases up — same gate as those.
+      if (!state.canManage) {
+        log.warn({ nodeId: d.nodeId, action: t, by: state.userId }, 'staff stream rejected: view-only role');
+        return;
+      }
       hub.sendToAgent(d.nodeId, t, data);
       return;
     }

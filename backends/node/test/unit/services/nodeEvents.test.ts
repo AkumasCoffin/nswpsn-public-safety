@@ -6,7 +6,7 @@
  * Covers (migration 044 model — radio rows come from vce activity events):
  *   - recordActivityEvents: new group / joined group logical_calls 1/0
  *   - dedupe: ON CONFLICT DO NOTHING re-send → accepted 0, no bucket bumps
- *   - grouping across two nodes' events with the same systemId+target ±4s
+ *   - grouping across two nodes' events with the same systemId+target ±5s
  *   - atMs clock sanity clamp (now±48h)
  *   - fire-safe contract: DB failure never throws, ROLLBACK is attempted
  *   - markRecorded: closest-row match stamps recorded+bytes (+hourly bytes),
@@ -190,7 +190,7 @@ describe('recordActivityEvents', () => {
     expect(ins?.[17]).toBe('NEWRAD08');
   });
 
-  it("groups two nodes' events with the same systemId+target within ±4s", async () => {
+  it("groups two nodes' events with the same systemId+target within ±5s", async () => {
     // Node A starts the group…
     armQueries({ foundRadio: null, insertIds: ['101'] });
     const a = await recordActivityEvents('node-aaaa', 'stream-aaaa', [{ ...baseEvent }]);

@@ -25,7 +25,7 @@
  * Cached for 5s in-process to absorb monitor + dev-tab refresh storms.
  */
 import { Hono } from 'hono';
-import { getPool } from '../db/pool.js';
+import { getPool, READ_POOL_MAX } from '../db/pool.js';
 import { liveStore } from '../store/live.js';
 import { archiveWriter } from '../store/archive.js';
 import { filterCacheLastRefreshAt } from '../store/filterCache.js';
@@ -149,7 +149,11 @@ async function checkDatabase(): Promise<{
         // dashboard panels render without aliasing.
         pool_in_use: Math.max(0, pool.totalCount - pool.idleCount),
         pool_idle: pool.idleCount,
-        pool_max: 20,
+        // From the pool itself: this was hardcoded at 20 while the read pool
+        // is 40 (PG_POOL_MAX), so the DB health panel reported the pool twice
+        // as busy as it was — the one number you look at to decide whether
+        // saturation is the problem.
+        pool_max: READ_POOL_MAX,
         pool_waiting: pool.waitingCount,
         error: null,
       },

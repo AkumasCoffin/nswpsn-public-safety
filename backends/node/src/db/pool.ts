@@ -37,7 +37,7 @@ const CONNECT_TIMEOUT_MS = Math.max(
   1000,
   Number(process.env['PG_CONNECT_TIMEOUT_MS'] ?? '15000') || 15000,
 );
-const READ_POOL_MAX = Math.max(2, Number(process.env['PG_POOL_MAX'] ?? '40') || 40);
+export const READ_POOL_MAX = Math.max(2, Number(process.env['PG_POOL_MAX'] ?? '40') || 40);
 const WRITER_POOL_MAX = Math.max(2, Number(process.env['PG_WRITER_POOL_MAX'] ?? '8') || 8);
 
 /**
