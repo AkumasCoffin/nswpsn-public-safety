@@ -71,6 +71,9 @@ type Queue struct {
 	// can only ever be stale by depthCacheTTL of no activity.
 	depthVal int
 	depthAt  time.Time
+	// Remembered tail of the last sortedFiles scan, consumed in order by
+	// oldest(); see there. Cleared by invalidateDepth.
+	oldestRun []string
 
 	// expired counts calls discarded for exceeding maxItemAge — undeliverable,
 	// not undeliverable-yet. Reported in the status heartbeat so a node losing
@@ -264,15 +267,43 @@ func (q *Queue) Depth() int {
 // own enqueue or send.
 func (q *Queue) invalidateDepth() {
 	q.depthAt = time.Time{}
+	// The directory changed, so a remembered run of "next oldest" names may
+	// no longer be in order (an Enqueue can land before them after a clock
+	// step, and a Purge can remove them).
+	q.oldestRun = nil
 }
 
 // oldest returns the oldest queued item's filename, or "" if empty.
+//
+// Returns a short RUN of names, cached, rather than re-scanning per item. The
+// underlying sortedFiles is os.ReadDir + sort over the whole queue directory
+// under q.mu, and RunSender called it once per item drained — so clearing a
+// 5000-item backlog cost 5000 scans of 5000 entries, serialised against every
+// Enqueue, exactly when throughput matters most. The cache is dropped whenever
+// the directory changes (invalidateDepth), and a name that has since been sent
+// simply fails to open and is skipped.
 func (q *Queue) oldest() string {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+
+	for len(q.oldestRun) > 0 {
+		name := q.oldestRun[0]
+		q.oldestRun = q.oldestRun[1:]
+		if _, err := os.Stat(filepath.Join(q.dir, name)); err == nil {
+			return name
+		}
+	}
+
 	files := q.sortedFiles()
 	if len(files) == 0 {
 		return ""
+	}
+	// Keep the next few so the common case — draining in order — does not
+	// re-scan for every one.
+	const runLen = 64
+	q.oldestRun = make([]string, 0, runLen)
+	for i := 1; i < len(files) && i < runLen; i++ {
+		q.oldestRun = append(q.oldestRun, files[i].name)
 	}
 	return files[0].name
 }

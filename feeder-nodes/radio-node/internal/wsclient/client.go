@@ -85,6 +85,22 @@ type Client struct {
 
 	applyMu     sync.Mutex // serializes config applies so two pushes can't race
 	lastApplyAt time.Time  // when the last apply finished (guarded by applyMu) — burst dedup only
+
+	// At most ONE apply running and ONE waiting, latest wins.
+	//
+	// Every configPush used to spawn a goroutine that then blocked on applyMu,
+	// so a backend fan-out burst queued N goroutines each pinning a full
+	// ConfigPayload plus its raw JSON — and the burst-dedup window below could
+	// not bound the pile-up, because it is only evaluated after the lock is
+	// won. An apply restarts sdrtrunk and bounces rdio, so that lock can be
+	// held for tens of seconds.
+	//
+	// Superseding the waiting push rather than queueing it is also just
+	// correct: applying a config that a newer one has already replaced only
+	// churns the node.
+	pushMu      sync.Mutex
+	pushRunning bool
+	pushPending []byte
 	updateMu    sync.Mutex // serializes update checks (manifest + component ensure + self-update)
 
 	swapScheduled atomic.Bool // one-shot guard: at most one self-update swap+restart in flight
@@ -606,9 +622,10 @@ const configReapplyDedupWindow = 15 * time.Second
 
 // handleConfigPush applies a pushed ConfigPayload. The apply runs on a
 // background goroutine so it never blocks the WS read loop, and applies are
-// serialized by applyMu so two overlapping pushes can't race. On success it
-// records + persists the applied config version and sends configApplied; on
-// failure it sends configError with the failing stage.
+// At most one apply runs at a time and at most one push waits behind it,
+// newest winning — see pushPending. On success the apply records + persists
+// the applied config version and sends configApplied; on failure it sends
+// configError with the failing stage.
 func (c *Client) handleConfigPush(env *protocol.Envelope) {
 	var payload configapply.ConfigPayload
 	if err := json.Unmarshal(env.Data, &payload); err != nil {
@@ -619,7 +636,54 @@ func (c *Client) handleConfigPush(env *protocol.Envelope) {
 		return
 	}
 
+	c.pushMu.Lock()
+	if c.pushRunning {
+		// An apply is in flight. Replace anything already waiting: the newest
+		// config is the only one worth applying next.
+		if c.pushPending != nil {
+			log.Printf("wsclient: superseding a queued config push")
+		}
+		c.pushPending = env.Data
+		c.pushMu.Unlock()
+		return
+	}
+	c.pushRunning = true
+	c.pushMu.Unlock()
+
 	go func() {
+		defer func() {
+			// Drain whatever arrived while this one ran, then clear the flag.
+			for {
+				c.pushMu.Lock()
+				next := c.pushPending
+				c.pushPending = nil
+				if next == nil {
+					c.pushRunning = false
+					c.pushMu.Unlock()
+					return
+				}
+				c.pushMu.Unlock()
+				c.applyConfigPayload(next)
+			}
+		}()
+		c.applyConfigPayload(env.Data)
+	}()
+}
+
+// applyConfigPayload runs one config apply to completion. Called only from the
+// single apply goroutine above, so applyMu now guards lastApplyAt rather than
+// concurrent applies — kept because nothing else should be able to interleave.
+func (c *Client) applyConfigPayload(data []byte) {
+	var payload configapply.ConfigPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		_ = c.sendMessage(protocol.TypeConfigError, protocol.ConfigError{
+			Stage:   "parse",
+			Message: "malformed configPush: " + err.Error(),
+		})
+		return
+	}
+
+	{
 		c.applyMu.Lock()
 		defer c.applyMu.Unlock()
 
@@ -653,7 +717,7 @@ func (c *Client) handleConfigPush(env *protocol.Envelope) {
 		// PLAYLIST stage succeeded — even if rdio failed — so SDR-Trunk always boots
 		// from the current config regardless of a flaky local rdio.
 		if !configapply.HasStage(applyErr, "playlist") && !configapply.HasStage(applyErr, "reload") {
-			if perr := c.persistAppliedPayload(env.Data); perr != nil {
+			if perr := c.persistAppliedPayload(data); perr != nil {
 				log.Printf("wsclient: persist applied config payload failed: %v", perr)
 			}
 		}
@@ -680,7 +744,7 @@ func (c *Client) handleConfigPush(env *protocol.Envelope) {
 		}
 		log.Printf("wsclient: config version %s applied", payload.ConfigVersion)
 		_ = c.sendMessage(protocol.TypeConfigApplied, protocol.ConfigApplied{ConfigVersion: payload.ConfigVersion})
-	}()
+	}
 }
 
 func (c *Client) handleCmd(conn *websocket.Conn, env *protocol.Envelope) {
