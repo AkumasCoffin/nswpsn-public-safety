@@ -2284,9 +2284,13 @@
     }
     .nd2-patch i { font-size: 0.58rem; }
     .nd2-patch-tg {
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-variant-numeric: tabular-nums;
       opacity: 0.85;
+      white-space: nowrap;
+    }
+    .nd2-patch-tg + .nd2-patch-tg::before {
+      content: ' b7';
+      opacity: 0.55;
+      margin-right: 0.3rem;
     }
     /* Talkgroup name and id as separate columns: the name reads as text,
        the id is monospace and tabular so a column of them lines up. */
@@ -5277,13 +5281,15 @@
       const kind = patch.kind === 'configured'
         ? `Patch: ${patch.label || 'configured in rdio'}`
         : 'Patch announced over the air for this transmission';
-      // Ids only, on one line. Full pills per member stacked three lines
-      // deep and looked exactly like the row's own talkgroup, so the home
-      // was indistinguishable from what it was patched to; the names live
-      // in the tooltip instead.
+      // Short names, on one line. Full pills per member stacked three lines
+      // deep and looked exactly like the row's own talkgroup, so the home was
+      // indistinguishable from what it was patched to; bare ids fixed the
+      // shape but made you look every member up. The short label ("SWS A") is
+      // what fits — the id and the long name go in the tooltip.
       const ids = others.map(m => {
-        const name = m.label ? `${m.label} ${m.talkgroup}` : String(m.talkgroup);
-        return `<span class="nd2-patch-tg" title="${escapeHtml(name)}">${escapeHtml(String(m.talkgroup))}</span>`;
+        const shown = m.label || String(m.talkgroup);
+        const tip = m.label ? `${m.label} ${m.talkgroup}` : String(m.talkgroup);
+        return `<span class="nd2-patch-tg" title="${escapeHtml(tip)}">${escapeHtml(shown)}</span>`;
       }).join('');
       const title = others.length
         ? `${kind} — also carried on ${others.map(m => m.label || m.talkgroup).join(', ')}`

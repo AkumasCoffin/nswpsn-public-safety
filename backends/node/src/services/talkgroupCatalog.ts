@@ -13,6 +13,14 @@ import { getGlobalConfig, deriveAliasesFromTalkgroups } from './nodes/globalConf
 
 export interface TalkgroupCatalog {
   labels: Map<number, string>;
+  /** Talkgroup id → its SHORT display name — `label` on the unified row
+   *  ("SWS A"), as against `name`, the long one ("South Western Slopes A")
+   *  that `labels` carries.
+   *
+   *  Both exist in the global config's talkgroup editor and both are worth
+   *  showing, in different places: a table cell has room for the long name,
+   *  a chip listing four patched talkgroups on one line does not. */
+  shortLabels: Map<number, string>;
   agencies: Map<number, string>;
   colors: Map<number, string>;
   /** Every talkgroup id the operator has configured, across all agencies.
@@ -83,6 +91,7 @@ export function normaliseAliasColor(raw: string): string | null {
 export async function talkgroupCatalog(): Promise<TalkgroupCatalog> {
   if (_cache && Date.now() - _cache.at < 60_000) return _cache.map;
   const labels = new Map<number, string>();
+  const shortLabels = new Map<number, string>();
   const agencies = new Map<number, string>();
   const colors = new Map<number, string>();
   const encrypted = new Set<number>();
@@ -131,6 +140,16 @@ export async function talkgroupCatalog(): Promise<TalkgroupCatalog> {
         // fills anything these don't cover (and every legacy config).
         const friendly = (tg.name ?? '').trim();
         if (friendly) labels.set(tg.id, friendly);
+        // The short one, kept separately rather than as a fallback: a caller
+        // that wants "SWS A" is not asking for "South Western Slopes A" when
+        // the short one is missing, it is asking for the shortest thing that
+        // names this talkgroup — which the alias pass below supplies.
+        const short = (
+          typeof (tg as Record<string, unknown>)['label'] === 'string'
+            ? ((tg as Record<string, unknown>)['label'] as string)
+            : ''
+        ).trim();
+        if (short) shortLabels.set(tg.id, short);
       }
     }
     for (const a of aliasList) {
@@ -143,6 +162,9 @@ export async function talkgroupCatalog(): Promise<TalkgroupCatalog> {
           const v = Number(id.attrs?.['value']);
           if (!Number.isInteger(v)) continue;
           if (!labels.has(v)) labels.set(v, name);
+          // An SDR-Trunk alias name IS the short label, so it fills the short
+          // map whether or not a long name already exists.
+          if (!shortLabels.has(v)) shortLabels.set(v, name);
           if (group && !agencies.has(v)) agencies.set(v, group);
           if (color && !colors.has(v)) {
             const hex = normaliseAliasColor(color);
@@ -155,7 +177,7 @@ export async function talkgroupCatalog(): Promise<TalkgroupCatalog> {
     log.warn({ err: e }, 'talkgroupCatalog: failed to load global config');
   }
   const map = {
-    labels, agencies, colors, encrypted, configuredTalkgroups,
+    labels, shortLabels, agencies, colors, encrypted, configuredTalkgroups,
     unitAgencies, unitColors, unitLabels,
   };
   _cache = { at: Date.now(), map };
@@ -210,6 +232,18 @@ export async function talkgroupLabels(): Promise<Map<number, string>> {
  * in a playlist), so this needs no new field anywhere — the mapping has been
  * sitting in the global config all along, just never read back out.
  */
+/**
+ * Talkgroup id → the SHORTEST name that identifies it: the configured short
+ * label, else whatever `labels` has, else nothing. Callers rendering a list of
+ * talkgroups in a confined space use this; a table cell uses talkgroupLabels.
+ */
+export async function talkgroupShortLabels(): Promise<Map<number, string>> {
+  const c = await talkgroupCatalog();
+  const out = new Map(c.labels);
+  for (const [id, short] of c.shortLabels) out.set(id, short);
+  return out;
+}
+
 export async function talkgroupAgencies(): Promise<Map<number, string>> {
   return (await talkgroupCatalog()).agencies;
 }

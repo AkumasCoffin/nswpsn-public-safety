@@ -19,7 +19,10 @@ vi.mock('../../../src/db/pool.js', () => ({
 
 vi.mock('../../../src/services/talkgroupCatalog.js', () => ({
   talkgroupCatalog: vi.fn(async () => ({
-    labels: new Map([[30017, '141 STHHG A']]),
+    labels: new Map([[30017, '141 STHHG A'], [10120, 'Metro South 1 - Illawarra']]),
+    // The SHORT name, which is what a patch chip shows: several members sit on
+    // one row, and the long name turns one call into a paragraph.
+    shortLabels: new Map([[10120, 'MS1 ILL']]),
     agencies: new Map([[30017, 'Rural Fire Service']]),
     colors: new Map([[30017, '#ff8800']]),
   })),
@@ -299,5 +302,27 @@ describe('parsePatchTo', () => {
       id: 10128,
       patched: [10120],
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A patched call's member talkgroups.
+//
+// They sit several-to-a-chip on one row, so they carry the SHORT name from the
+// global config's talkgroup editor ("MS1 ILL") rather than the long one
+// ("Metro South 1 - Illawarra") that a table cell has room for.
+// ---------------------------------------------------------------------------
+describe('patch member labels', () => {
+  it('prefers the short name, and falls back to the long one', async () => {
+    const { shapeNodeLive } = await import('../../../src/services/nodeLive.js');
+    queryMock.mockResolvedValue({ rows: [NODE_ROW] });
+    const out = await shapeNodeLive('n1', {
+      channels: [],
+      activeCalls: [{ state: 'CALL', channelName: 'Knights Hill', to: 'P:30017 [10120]' }],
+    } as never, new Date().toISOString());
+
+    const patch = out!.calls[0]!['patch'] as { talkgroups: Array<Record<string, unknown>> };
+    // 30017 is the supergroup and has only a long name; 10120 has both.
+    expect(patch.talkgroups.map((t) => t['label'])).toEqual(['141 STHHG A', 'MS1 ILL']);
   });
 });

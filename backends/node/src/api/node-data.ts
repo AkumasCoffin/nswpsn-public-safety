@@ -47,6 +47,7 @@ import {
   talkgroupLabels,
   talkgroupAgencies,
   talkgroupColors,
+  talkgroupShortLabels,
   radioDisplay,
 } from '../services/talkgroupCatalog.js';
 import { shapeNodeLive, sortLiveChannels } from '../services/nodeLive.js';
@@ -1189,6 +1190,9 @@ nodeDataRouter.get(
       // rdio files it. ~60s cached; empty when central rdio is unreachable,
       // which degrades to the representative talkgroup and no patch chip.
       const patchLookup = radioIds.length > 0 ? await rdioPatches() : null;
+      // Patch members are listed several-to-a-chip, so they carry the SHORT
+      // name — the long one turns one call into a paragraph.
+      const shortLabels = radioIds.length > 0 ? await talkgroupShortLabels() : null;
       const agencies = await talkgroupAgencies();
       const colors = await talkgroupColors();
       const evAgencies = await talkgroupAgencies();
@@ -1225,7 +1229,7 @@ nodeDataRouter.get(
                     ...patch,
                     talkgroups: patch.talkgroups.map((tg) => ({
                       talkgroup: tg,
-                      label: labels.get(tg) ?? null,
+                      label: shortLabels?.get(tg) ?? labels.get(tg) ?? null,
                       color: tgColorMap.get(tg) ?? null,
                     })),
                   }

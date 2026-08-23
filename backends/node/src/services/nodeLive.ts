@@ -308,7 +308,8 @@ export async function shapeNodeLive(
               label: null,
               talkgroups: [id, ...patched].map((t) => ({
                 talkgroup: t,
-                label: tg.labels.get(t) ?? null,
+                // Short name: these sit several-to-a-chip on one row.
+                label: tg.shortLabels?.get(t) ?? tg.labels.get(t) ?? null,
                 color: tg.colors.get(t) ?? null,
               })),
             }
