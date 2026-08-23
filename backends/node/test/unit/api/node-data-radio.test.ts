@@ -172,9 +172,11 @@ describe('GET /api/node-data/talkgroups', () => {
   });
 });
 
-// A real P25 talkgroup is 16-bit (1..65535); the ingest drops 7-digit RADIO
+// A talkgroup on this network sits in the range the agencies allocate, not the
+// full 16-bit P25 space: above 30500 is decode noise (and 65535 is the all-ones
+// null talkgroup). The ingest also drops 7-digit RADIO
 // IDs into the same column, so every talkgroup list/count must gate on
-// `talkgroup BETWEEN 10000 AND 65535`. The pg pool is mocked, so we emulate the DB
+// `talkgroup BETWEEN 10000 AND 30500`. The pg pool is mocked, so we emulate the DB
 // filter in the mock: it only drops the out-of-range row when the executed SQL
 // actually carries the predicate — proving BOTH the list query and the
 // distinct-talkgroup COUNT wire it in (a missing predicate keeps the bogus row
@@ -185,10 +187,10 @@ describe('talkgroup range filter (radio ids excluded)', () => {
     { wacn: null, system: 721, talkgroup: 10101, calls: 5, logical: 3, enc: 0, last_seen: LAST_SEEN },
     { wacn: null, system: 721, talkgroup: 2315291, calls: 2, logical: 1, enc: 0, last_seen: LAST_SEEN },
   ];
-  const TG_PREDICATE = 'talkgroup BETWEEN 10000 AND 65535';
+  const TG_PREDICATE = 'talkgroup BETWEEN 10000 AND 30500';
   const applyRange = (sql: string, rows: typeof CANDIDATE_TGS) =>
     sql.includes(TG_PREDICATE)
-      ? rows.filter((r) => r.talkgroup >= 10000 && r.talkgroup <= 65535)
+      ? rows.filter((r) => r.talkgroup >= 10000 && r.talkgroup <= 30500)
       : rows;
 
   it('/talkgroups drops out-of-range tgs from the list AND the distinct count, keeps a 5-digit tg', async () => {
@@ -222,12 +224,12 @@ describe('talkgroup range filter (radio ids excluded)', () => {
     expect(res.status).toBe(200);
     // The TALKGROUPS tile count must exclude out-of-range ids via FILTER.
     const totals = calls.find((c) => c.sql.includes('AS talkgroups'));
-    expect(totals?.sql).toContain('FILTER (WHERE talkgroup BETWEEN 10000 AND 65535)');
+    expect(totals?.sql).toContain('FILTER (WHERE talkgroup BETWEEN 10000 AND 30500)');
     // The scoped top-talkgroups list is gated too.
     const tgList = calls.find(
       (c) => c.sql.includes('GROUP BY talkgroup') && c.sql.includes('ORDER BY calls DESC, talkgroup ASC'),
     );
-    expect(tgList?.sql).toContain('talkgroup BETWEEN 10000 AND 65535');
+    expect(tgList?.sql).toContain('talkgroup BETWEEN 10000 AND 30500');
   });
 });
 

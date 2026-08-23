@@ -299,10 +299,14 @@ export async function shapeNodeLive(
       // call. `talkgroups` is the supergroup first — which is the talkgroup
       // being spoken on — then the members patched into it, each carrying its
       // own label and colour so the row can render them like any talkgroup.
-      // A patch whose members vce did not name is still a patch: the flag is
-      // the supergroup form of the target, not the presence of a member list.
+      // A patch of ONE talkgroup is not a patch. The decoder sometimes
+      // announces a patch group naming only the talkgroup the call is already
+      // on; that is a transmission over one channel however it was labelled,
+      // and rdio draws the same line (Patch.usable() wants more than one
+      // member). Requiring a named member is also the only honest test we
+      // have here — an unnamed patch cannot be told from a mislabelled one.
       patch:
-        /^P:/i.test(String(ac['to'] ?? '').trim()) && Number.isInteger(id)
+        patched.length > 0 && Number.isInteger(id)
           ? {
               kind: 'automatic' as const,
               label: null,

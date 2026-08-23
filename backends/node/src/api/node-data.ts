@@ -324,14 +324,48 @@ const WINDOW_INTERVAL: Record<Exclude<Windows, 'all'>, string> = {
 // A CALL talkgroup on this network is always 5 digits, so the floor is 10000
 // rather than 1 — 798 / 1085 / 40 are corrupted decodes, and without this they
 // leak into every embedded "top talkgroups" column even though the talkgroup
-// LIST filters them out. 65535 remains the 16-bit P25 ceiling.
-const tgValid = (prefix = ''): string => `${prefix}talkgroup BETWEEN 10000 AND 65535`;
+// LIST filters them out.
+//
+// The ceiling is the top of the range the agencies actually use, NOT 65535, the
+// 16-bit P25 maximum. Nothing on this network is allocated above TG_MAX, so
+// everything between it and 65535 is noise: 3,114 rows over 7 days across 112
+// distinct ids, of which 2,884 are 65535 itself — the all-ones value, which is
+// a null talkgroup rather than a talkgroup. The remaining 111 had 2 to 8
+// receptions each and were 111 phantom rows in the Talkgroups list.
+//
+// A configured talkgroup outside this band is still honoured — see
+// tgValidConfigured, which reads the agencies' own lists.
+const TG_MIN = 10000;
+const TG_MAX = 30500;
+const tgValid = (prefix = ''): string =>
+  `${prefix}talkgroup BETWEEN ${TG_MIN} AND ${TG_MAX}`;
 const TG_VALID = tgValid();
+
+/**
+ * "This is a real radio id." The RID half of tgValid, and it did not exist:
+ * every radio list gated on `source_unit IS NOT NULL` and nothing else, so a
+ * corrupted decode became a radio in the Units table, in Top Radios, and in the
+ * per-system radio tally.
+ *
+ * A RID on this network is 7 digits, except where the leading zero is stripped
+ * and it arrives as 6 (see nd2Rid, which pads it back for display). Measured
+ * over 7 days: 325,493 rows at 7 digits and 73,051 at 6 — against 58 rows at 1
+ * digit, 2 at 2, 4 at 5 and 54 at 8. The outliers are not radios, they are
+ * decode noise, and 118 rows of it was inventing 37 phantom units.
+ *
+ * Counts of CALLS stay unfiltered, exactly as tgValid's do: a call whose source
+ * decoded badly is still a call. This gates who appears in a list of radios.
+ */
+const ridValid = (prefix = ''): string =>
+  `${prefix}source_unit BETWEEN 100000 AND 9999999`;
+const RID_VALID = ridValid();
 
 /**
  * The same rule, plus the operator's deliberate exceptions: AirBand carries
  * aviation channels as low pseudo-talkgroups (id 5 today, more expected), so
- * anything CONFIGURED outside the 5-digit range is allowed back in.
+ * anything CONFIGURED outside the band is allowed back in — below TG_MIN or
+ * above TG_MAX alike. The agencies' own talkgroup lists are the authority on
+ * what exists; the band is only what to assume about everything else.
  *
  * The ids are inlined rather than parameterised because this predicate is
  * interpolated into queries that own their own parameter lists; they come from
@@ -341,7 +375,7 @@ const TG_VALID = tgValid();
 async function tgValidConfigured(prefix = ''): Promise<string> {
   const configured = (await talkgroupCatalog()).configuredTalkgroups;
   const extra = [...configured].filter(
-    (id) => Number.isSafeInteger(id) && (id < 10000 || id > 65535),
+    (id) => Number.isSafeInteger(id) && (id < TG_MIN || id > TG_MAX),
   );
   const base = tgValid(prefix);
   return extra.length === 0 ? base : `(${base} OR ${prefix}talkgroup IN (${extra.join(',')}))`;
@@ -595,7 +629,7 @@ nodeDataRouter.get(
                      FROM node_radio_events
                     WHERE received_at >= now() - interval '30 days'
                       AND ${CALL_GROUP}
-                      AND source_unit IS NOT NULL${nAllAnd}
+                      AND ${RID_VALID}${nAllAnd}
                     GROUP BY source_unit ORDER BY calls DESC LIMIT 15`,
                   nAllParams,
                 )
@@ -727,7 +761,7 @@ nodeDataRouter.get(
                            FILTER (WHERE source_alias IS NOT NULL AND source_alias <> source_unit::text))[1] AS alias,
                         COUNT(*)::int AS calls
                    FROM node_radio_events
-                  WHERE ${radioCond} AND ${CALL_GROUP} AND source_unit IS NOT NULL
+                  WHERE ${radioCond} AND ${CALL_GROUP} AND ${ridValid('')}
                   GROUP BY source_unit ORDER BY calls DESC LIMIT 15`,
                 radioParams,
               )
@@ -1447,7 +1481,7 @@ async function scopedRadioDetail(
               (COUNT(DISTINCT logical_call_id) FILTER (WHERE encrypted))::int AS enc,
               (COUNT(DISTINCT logical_call_id) FILTER (WHERE recorded))::int AS rec,
               (COUNT(DISTINCT talkgroup) FILTER (WHERE ${TG_VALID}))::int AS talkgroups,
-              COUNT(DISTINCT source_unit)::int AS radios,
+              (COUNT(DISTINCT source_unit) FILTER (WHERE ${RID_VALID}))::int AS radios,
               (COUNT(DISTINCT (site_rfss, site_id))
                  FILTER (WHERE site_rfss IS NOT NULL AND site_id IS NOT NULL))::int AS sites,
               COUNT(DISTINCT node_id)::int AS nodes
@@ -1481,7 +1515,7 @@ async function scopedRadioDetail(
               COUNT(*)::int AS calls,
               MAX(received_at) AS last_seen
          FROM node_radio_events
-        WHERE ${where('')} AND ${CALL_GROUP} AND source_unit IS NOT NULL
+        WHERE ${where('')} AND ${CALL_GROUP} AND ${RID_VALID}
         GROUP BY source_unit
         ORDER BY calls DESC, radio ASC
         LIMIT 20`,
@@ -1735,7 +1769,7 @@ nodeDataRouter.get(
                   (COUNT(DISTINCT (site_rfss, site_id))
                      FILTER (WHERE site_rfss IS NOT NULL AND site_id IS NOT NULL))::int AS sites,
                   (COUNT(DISTINCT talkgroup) FILTER (WHERE ${TG_VALID}))::int AS talkgroups,
-                  COUNT(DISTINCT source_unit)::int AS radios,
+                  (COUNT(DISTINCT source_unit) FILTER (WHERE ${RID_VALID}))::int AS radios,
                   MIN(received_at) AS first_seen,
                   MAX(received_at) AS last_seen
              FROM node_radio_events
@@ -2623,7 +2657,9 @@ nodeDataRouter.get(
       const params: unknown[] = [WINDOW_INTERVAL[window]];
       // CALL_GROUP: a radio here = a unit that made talkgroup voice calls
       // (source_unit of CALL_GROUP% events), not one merely seen in signaling.
-      const conds = ['received_at >= now() - $1::interval', CALL_GROUP, 'source_unit IS NOT NULL'];
+      // RID_VALID, not just NOT NULL: this is the Radios list itself, so a
+      // corrupted decode here becomes a row claiming to be a radio.
+      const conds = ['received_at >= now() - $1::interval', CALL_GROUP, RID_VALID];
       if (system !== null) {
         params.push(system);
         conds.push(`system = $${params.length}`);
@@ -3753,7 +3789,7 @@ nodeDataRouter.get('/api/node-data/radio-aliases', requireRole(canViewNodeData),
     // A node scope needs the events join even at window=all, which otherwise
     // skips it entirely and would answer fleet-wide.
     if (!lifetime || aliasNodeId) {
-      const heardConds = ['source_unit IS NOT NULL'];
+      const heardConds = [RID_VALID];
       if (!lifetime) {
         const iv =
           WINDOW_INTERVAL[(['24h', '7d', '30d'] as const).find((w) => w === windowRaw) ?? '7d'];

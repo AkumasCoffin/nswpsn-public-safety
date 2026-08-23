@@ -223,6 +223,13 @@ export function resolvePatch(
       ...members.filter((t) => t !== home),
       ...(patchMembers ?? []).filter((t) => t !== home && !members.includes(t)),
     ];
+    // A patch of one talkgroup is not a patch, whether that is because the
+    // decoder announced a patch group carrying only the talkgroup the call was
+    // already on, or because the node's control server is too old to report
+    // members. Both render as PATCH with nothing to show, which claims a call
+    // reached channels it never reached; rdio draws the same line in
+    // Patch.usable() and normalizeReportedPatches.
+    if (rest.length === 0) return { home, patch: null };
     const talkgroups = home === null ? rest : [home, ...rest];
     return { home, patch: { kind: 'automatic', label: null, talkgroups } };
   }

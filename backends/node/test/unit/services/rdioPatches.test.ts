@@ -152,10 +152,11 @@ describe('resolvePatch', () => {
     expect(r.patch).toBeNull();
   });
 
-  it('flags an over-the-air patch from the event type alone', async () => {
-    // CALL_PATCH_GROUP is vce saying the trunking system announced this patch
-    // for this call. The supergroup is what was transmitted on, so it is the
-    // home; its members are recorded by vce per event but not yet shipped.
+  it('is not a patch when the only talkgroup is the one it is filed on', async () => {
+    // CALL_PATCH_GROUP is vce saying the trunking system announced a patch,
+    // but a patch group carrying only the call's own talkgroup is a
+    // transmission over one channel however it was labelled. rdio draws the
+    // same line: Patch.usable() wants more than one member.
     const r = await resolve(
       { byTalkgroup: new Map(), all: [] } as never,
       10128,
@@ -163,7 +164,7 @@ describe('resolvePatch', () => {
       'CALL_PATCH_GROUP',
     );
     expect(r.home).toBe(10128);
-    expect(r.patch).toEqual({ kind: 'automatic', label: null, talkgroups: [10128] });
+    expect(r.patch).toBeNull();
   });
 
   it('never lists the supergroup twice among its own members', async () => {
@@ -222,10 +223,13 @@ describe('resolvePatch automatic members', () => {
     expect(r.patch?.talkgroups).toEqual([10128, 10120, 10125]);
   });
 
-  it('still reads as a patch when the control server reports no members', async () => {
-    // An older node. Unnamed members is the honest answer, not "not a patch".
+  it('shows no patch when the control server reports no members', async () => {
+    // An older node cannot name them, and a PATCH chip with nothing to show
+    // cannot be told apart from the decoder announcing a patch of one — both
+    // claim a call reached channels it never reached. Nodes on 0.7.14 report
+    // members and the chip comes back.
     const r = await resolve(empty as never, 10128, [10128], 'CALL_PATCH_GROUP', null);
-    expect(r.patch).toEqual({ kind: 'automatic', label: null, talkgroups: [10128] });
+    expect(r.patch).toBeNull();
   });
 
   it('ignores reported members on a call that is not patched', async () => {

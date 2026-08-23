@@ -2288,7 +2288,7 @@
       white-space: nowrap;
     }
     .nd2-patch-tg + .nd2-patch-tg::before {
-      content: ' b7';
+      content: '·';
       opacity: 0.55;
       margin-right: 0.3rem;
     }
@@ -5274,6 +5274,14 @@
     function nd2PatchCell(patch) {
       if (!patch) return '';
       const members = Array.isArray(patch.talkgroups) ? patch.talkgroups : [];
+      // A patch of one talkgroup is not a patch. The decoder sometimes
+      // announces a patch group carrying only the talkgroup the call is
+      // already on, which is a transmission over one channel however it was
+      // labelled — rdio draws the same line (Patch.usable() wants more than one
+      // member, and normalizeReportedPatches reduces a self-only list to no
+      // patch at all). Showing PATCH there says a call reached channels it
+      // never reached.
+      if (members.length < 2) return '';
       // The first entry is the home talkgroup, already the row's own name
       // and id; repeating it would read as the transmission going out on
       // that channel twice.
@@ -5381,10 +5389,20 @@
         (t.sub ? `<div class="nd2-stat-sub">${escapeHtml(t.sub)}</div>` : '') + `</div>`).join('');
     }
     // rowClass(rowIndex) → optional per-<tr> class (e.g. the channel type accent).
+    // `width` pins a column that has a known size (a frequency, a percentage)
+    // and `min` floors one whose content wraps (chips), so the slack goes to the
+    // columns that can use it instead of pooling in whichever one happens to be
+    // emptiest.
     function nd2MiniTable(headers, rows, rowClass) {
       if (!rows.length) return '<div class="nd2-empty">—</div>';
+      const sizeOf = (h) => {
+        const parts = [];
+        if (h.width) parts.push(`width:${h.width}px`);
+        if (h.min) parts.push(`min-width:${h.min}px`);
+        return parts.length ? ` style="${parts.join(';')}"` : '';
+      };
       return `<table class="nd-table"><thead><tr>${headers.map(h =>
-        `<th${h.num ? ' class="nd2-num"' : ''}>${escapeHtml(h.label)}</th>`).join('')}</tr></thead><tbody>` +
+        `<th${h.num ? ' class="nd2-num"' : ''}${sizeOf(h)}>${escapeHtml(h.label)}</th>`).join('')}</tr></thead><tbody>` +
         rows.map((r, ri) => {
           const cls = rowClass ? rowClass(ri) : '';
           return `<tr${cls ? ` class="${cls}"` : ''}>${r.map((c, i) =>
@@ -7051,9 +7069,17 @@
           nd2NodeChip(c.node ? { id: nd2ShortNode(c.node), name: c.nodeName } : null),
         ])) : '<div class="nd2-empty">No channels reporting. Nodes may be offline.</div>';
 
+      // Talkgroup carries a pill plus a patch chip naming every other channel
+      // the call went out on, and Node carries one chip per node that heard it.
+      // Both wrap, and both were being starved: the fixed-content columns took
+      // what they needed and the leftover pooled in Sites, leaving a lake of
+      // empty space in the middle of the row and the node chips crushed against
+      // the right edge.
       callHost.innerHTML = calls.length ? nd2MiniTable(
-        [{ label: 'Talkgroup' }, { label: 'Agency' }, { label: 'Source' }, { label: 'Sites' },
-         { label: 'Freq', num: true }, { label: 'Decode', num: true }, { label: 'Node' }],
+        [{ label: 'Talkgroup', min: 300 }, { label: 'Agency', width: 150 },
+         { label: 'Source', width: 190 }, { label: 'Sites', min: 170 },
+         { label: 'Freq', num: true, width: 110 }, { label: 'Decode', num: true, width: 90 },
+         { label: 'Node', min: 210 }],
         calls.map(c => [
           nd2LiveTgCell(c),
           nd2AgencyCell(c.agency),
