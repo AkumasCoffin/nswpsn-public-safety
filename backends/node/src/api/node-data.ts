@@ -1068,9 +1068,21 @@ nodeDataRouter.get(
           return c.json({ error: 'to must be an ISO timestamp' }, 400);
         }
       }
+      // `from` is optional, and the UI omits it for the "all" window — which
+      // made this aggregate the ENTIRE detail table by logical call, twice
+      // (the count and the page run the same CTE), to return fifty rows. The
+      // detail table only holds 30 days, so the floor changes no result; it
+      // just stops the planner scanning as if it might.
+      if (from === null) from = new Date(Date.now() - 30 * 24 * 3_600_000);
 
       const limit = Math.max(1, Math.min(200, Number(url.searchParams.get('limit') ?? 50) || 50));
-      const offset = Math.max(0, Number(url.searchParams.get('offset') ?? 0) || 0);
+      // Capped: OFFSET makes the database build and discard every preceding
+      // row, so a deep page costs the whole scan. Fifty pages is far past
+      // where anyone is reading rather than filtering.
+      const offset = Math.min(
+        10_000,
+        Math.max(0, Number(url.searchParams.get('offset') ?? 0) || 0),
+      );
 
       // Radio-only filters silently exclude the pager stream (a page has no
       // talkgroup/unit/site/system to match).
@@ -2252,35 +2264,37 @@ nodeDataRouter.get(
           name: string | null;
           kind: string | null;
           calls: unknown;
-          logical: unknown;
           last_seen: Date;
           top_tg: number | null;
           top_tg_calls: unknown;
         }>(
-          `SELECT nd.id, nd.name, nd.kind, nd.calls, nd.logical, nd.last_seen,
-                  tt.talkgroup AS top_tg, tt.calls AS top_tg_calls
-             FROM (
-               SELECT e.node_id AS id,
-                      MAX(n.name) AS name,
-                      MAX(n.kind) AS kind,
-                      COUNT(*)::int AS calls,
-                      COUNT(DISTINCT e.logical_call_id)::int AS logical,
-                      MAX(e.received_at) AS last_seen
-                 FROM node_radio_events e
-                 LEFT JOIN nodes n ON n.id = e.node_id
-                WHERE ${scope('e.')} AND ${callGroup('e.')}
-                GROUP BY e.node_id
-             ) nd
-             LEFT JOIN LATERAL (
-               SELECT e.talkgroup, COUNT(*)::int AS calls
-                 FROM node_radio_events e
-                WHERE ${scope('e.')} AND e.node_id = nd.id
-                  AND ${callGroup('e.')} AND ${await tgValidConfigured('e.')}
-                GROUP BY e.talkgroup
-                ORDER BY calls DESC, e.talkgroup ASC
-                LIMIT 1
-             ) tt ON true
-            ORDER BY nd.calls DESC, nd.id ASC`,
+          // GROUPING SETS, the same shape the system-level nodes rollup uses
+          // and for the same reason: the LATERAL this replaces re-scanned the
+          // window once per node to find its top talkgroup, and the
+          // COUNT(DISTINCT) forced a serial sort of every row. One pass gives
+          // both — totals per node, and per (node, talkgroup) for the top one.
+          `WITH g AS (
+             SELECT e.node_id,
+                    e.talkgroup,
+                    COUNT(*)::int AS c,
+                    MAX(e.received_at) AS last_seen,
+                    GROUPING(e.talkgroup) AS gt
+               FROM node_radio_events e
+              WHERE ${scope('e.')} AND ${callGroup('e.')}
+              GROUP BY GROUPING SETS ((e.node_id), (e.node_id, e.talkgroup))
+           )
+           SELECT tot.node_id AS id, n.name, n.kind,
+                  tot.c AS calls, tot.last_seen,
+                  tg.talkgroup AS top_tg, tg.c AS top_tg_calls
+             FROM (SELECT node_id, c, last_seen FROM g WHERE gt = 1) tot
+             LEFT JOIN nodes n ON n.id = tot.node_id
+             LEFT JOIN (
+               SELECT DISTINCT ON (node_id) node_id, talkgroup, c
+                 FROM g
+                WHERE gt = 0 AND talkgroup IS NOT NULL
+                ORDER BY node_id, c DESC, talkgroup ASC
+             ) tg ON tg.node_id = tot.node_id
+            ORDER BY tot.c DESC, tot.node_id ASC`,
           params,
         ),
         // Deep P25 site metadata (migration 047): the latest node_site_snapshots
@@ -2365,7 +2379,6 @@ nodeDataRouter.get(
           name: r.name,
           kind: r.kind ?? 'radio',
           calls: num(r.calls),
-          logicalCalls: num(r.logical),
           lastSeen: iso(r.last_seen),
           topTalkgroup:
             r.top_tg !== null
@@ -2493,7 +2506,11 @@ nodeDataRouter.get(
       } as const)[sort];
       // "Always encrypted" = no clear call at all. A talkgroup that carries
       // BOTH stays listed — hiding it would lose its clear traffic too.
-      const having = encHide ? 'HAVING COUNT(*) FILTER (WHERE encrypted) < COUNT(*)' : '';
+      // Applied to the OUTER aggregate of the two-level rollup below, where a
+      // reception's counts have already been folded per logical call.
+      const having = encHide ? 'HAVING SUM(g.enc) < SUM(g.calls)' : '';
+      // The count query groups per talkgroup only, so it keeps the flat form.
+      const countHaving = encHide ? 'HAVING COUNT(*) FILTER (WHERE encrypted) < COUNT(*)' : '';
 
       const pageParams = [...params];
       pageParams.push(limit);
@@ -2508,10 +2525,16 @@ nodeDataRouter.get(
           encHide
             ? `SELECT COUNT(*)::int AS n FROM (
                  SELECT 1 FROM node_radio_events WHERE ${where}
-                  GROUP BY wacn, system, talkgroup ${having}
+                  GROUP BY wacn, system, talkgroup ${countHaving}
                ) g`
-            : `SELECT COUNT(DISTINCT (wacn, system, talkgroup))::int AS n
-                 FROM node_radio_events WHERE ${where}`,
+            // Grouped subquery, NOT COUNT(DISTINCT (row)): a DISTINCT over a
+            // composite forces a sort of every row in the window, where the
+            // group-then-count hash-aggregates. Same answer; measured on a
+            // live 7-day window, 413ms against 1711ms.
+            : `SELECT COUNT(*)::int AS n FROM (
+                 SELECT 1 FROM node_radio_events WHERE ${where}
+                  GROUP BY wacn, system, talkgroup
+               ) g`,
           params,
         ),
         pool.query<{
@@ -2523,13 +2546,25 @@ nodeDataRouter.get(
           enc: unknown;
           last_seen: Date;
         }>(
+          // Two levels, so nothing has to sort the window. The inner group
+          // folds each logical call's receptions together; the outer one then
+          // gets `logical` as a plain COUNT(*) of those groups rather than a
+          // COUNT(DISTINCT), which was forcing a sort of all 567k rows.
+          // Measured on a live 7-day window: 759ms against 1138ms.
           `SELECT wacn, system, talkgroup,
-                  COUNT(*)::int AS calls,
-                  COUNT(DISTINCT logical_call_id)::int AS logical,
-                  (COUNT(*) FILTER (WHERE encrypted))::int AS enc,
-                  MAX(received_at) AS last_seen
-             FROM node_radio_events
-            WHERE ${where}
+                  SUM(g.calls)::int AS calls,
+                  COUNT(*)::int AS logical,
+                  SUM(g.enc)::int AS enc,
+                  MAX(g.last_seen) AS last_seen
+             FROM (
+               SELECT wacn, system, talkgroup, logical_call_id,
+                      COUNT(*)::int AS calls,
+                      (COUNT(*) FILTER (WHERE encrypted))::int AS enc,
+                      MAX(received_at) AS last_seen
+                 FROM node_radio_events
+                WHERE ${where}
+                GROUP BY wacn, system, talkgroup, logical_call_id
+             ) g
             GROUP BY wacn, system, talkgroup ${having}
             ORDER BY ${orderCol} ${dir}, talkgroup ASC
             LIMIT $${limIdx} OFFSET $${offIdx}`,

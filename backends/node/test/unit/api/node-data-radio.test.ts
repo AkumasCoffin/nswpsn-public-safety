@@ -154,13 +154,15 @@ describe('GET /api/node-data/talkgroups', () => {
     const app = await setupApp();
     const res = await app.request('/api/node-data/talkgroups?window=7d&enc=hide');
     expect(res.status).toBe(200);
-    const having = 'HAVING COUNT(*) FILTER (WHERE encrypted) < COUNT(*)';
+    // The page rolls up in two levels now, so its HAVING sums the inner
+    // group's counts rather than re-counting rows.
     const grouped = calls.find((c) => c.sql.includes('GROUP BY wacn, system, talkgroup') && !c.sql.includes('AS n'));
-    expect(grouped?.sql).toContain(having);
-    // The count can no longer be a plain COUNT(DISTINCT ...): the predicate is
-    // per-group, so it must group first and count the survivors.
+    expect(grouped?.sql).toContain('HAVING SUM(g.enc) < SUM(g.calls)');
+    // The count groups per talkgroup only, so it keeps the flat predicate —
+    // and either way it must group first and count the survivors, because the
+    // predicate is per-group.
     const count = calls.find((c) => c.sql.includes('AS n'));
-    expect(count?.sql).toContain(having);
+    expect(count?.sql).toContain('HAVING COUNT(*) FILTER (WHERE encrypted) < COUNT(*)');
     expect(count?.sql).not.toContain('COUNT(DISTINCT (wacn, system, talkgroup))');
   });
 
