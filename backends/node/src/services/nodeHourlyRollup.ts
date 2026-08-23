@@ -86,8 +86,13 @@ async function rollupRange(
     await client.query('BEGIN');
 
     // Per-node volume. `calls` is that node's receptions; `logical_calls` is
-    // the distinct calls it heard, which is NOT summable across nodes — two
-    // nodes hearing one call contribute 1 each.
+    // the distinct calls THAT NODE heard.
+    //
+    // Deliberately not summable across nodes — two nodes hearing one call
+    // contribute 1 each — because the question this table answers is "how much
+    // did this node hear", which is per node by definition. The network-wide
+    // count lives in node_radio_hourly_sys, where it is attributed so that it
+    // does sum. Anything totalling calls across the fleet must read that one.
     await client.query(
       `DELETE FROM node_radio_hourly WHERE hour >= $1::timestamptz AND hour < $2::timestamptz`,
       [from.toISOString(), to.toISOString()],
@@ -117,9 +122,27 @@ async function rollupRange(
       [from.toISOString(), to.toISOString()],
     );
 
-    // Network-wide volume. logical_calls counts each over-the-air call ONCE
-    // however many nodes or sites heard it, which is the number the all-time
-    // view exists to show.
+    // Network-wide volume.
+    //
+    // THE SUMMABILITY PROBLEM. This table is keyed per SITE, but a call is not
+    // a per-site thing — one transmission is simulcast from several, and the
+    // whole point of logical_calls is to count it ONCE. Counting distinct
+    // calls within each site row and then summing those rows double-counts
+    // every simulcast call: measured on one live hour, 406 calls reported as
+    // 822, which is the same 2x overcount the per-event counters used to have.
+    //
+    // So each call is ATTRIBUTED to exactly one of its rows — the lowest
+    // (system, talkgroup, rfss, site) it was heard on, picked by rn = 1 — and
+    // only that row counts it. The partition is the CALL alone, deliberately:
+    // partitioning by talkgroup as well counts a patched call once per member
+    // talkgroup, which on the same live hour read 407 against a true 406. Per row the figure then reads "calls whose first site was
+    // this one", and summing any set of rows is exact, which is what
+    // window=all needs. Receptions stay a plain COUNT(*): those really are
+    // per-site, and they already summed correctly.
+    //
+    // encrypted/recorded are properties of the CALL, so they are resolved
+    // across all of its receptions with a window before the attribution
+    // filter picks the row to count them in.
     await client.query(
       `DELETE FROM node_radio_hourly_sys WHERE hour >= $1::timestamptz AND hour < $2::timestamptz`,
       [from.toISOString(), to.toISOString()],
@@ -128,28 +151,38 @@ async function rollupRange(
       `INSERT INTO node_radio_hourly_sys
          (hour, system, talkgroup, site_rfss, site_id,
           calls, logical_calls, receptions, encrypted_calls, recorded_calls)
-       SELECT r.hour, r.system, r.talkgroup, r.rfss, r.site,
+       SELECT a.hour, a.system, a.talkgroup, a.rfss, a.site,
               COUNT(*)::int,
-              COUNT(DISTINCT r.logical_call_id)::int,
+              (COUNT(*) FILTER (WHERE a.rn = 1))::int,
               COUNT(*)::int,
-              COUNT(DISTINCT r.logical_call_id) FILTER (WHERE r.encrypted)::int,
-              COUNT(DISTINCT r.logical_call_id) FILTER (WHERE r.recorded)::int
+              (COUNT(*) FILTER (WHERE a.rn = 1 AND a.call_encrypted))::int,
+              (COUNT(*) FILTER (WHERE a.rn = 1 AND a.call_recorded))::int
          FROM (
-           SELECT date_trunc('hour', received_at) AS hour,
-                  COALESCE(system, 0) AS system,
-                  COALESCE(talkgroup, 0) AS talkgroup,
-                  COALESCE(site_rfss, -1) AS rfss,
-                  COALESCE(site_id, -1) AS site,
-                  logical_call_id,
-                  node_id,
-                  bool_or(encrypted) AS encrypted,
-                  bool_or(recorded) AS recorded
-             FROM node_radio_events
-            WHERE received_at >= $1::timestamptz AND received_at < $2::timestamptz
-              AND ${CALL_GROUP}
-            GROUP BY 1, 2, 3, 4, 5, 6, 7
-         ) r
-        GROUP BY r.hour, r.system, r.talkgroup, r.rfss, r.site`,
+           SELECT r.*,
+                  bool_or(r.encrypted) OVER w AS call_encrypted,
+                  bool_or(r.recorded) OVER w AS call_recorded,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY r.hour, r.logical_call_id
+                    ORDER BY r.system, r.talkgroup, r.rfss, r.site, r.node_id
+                  ) AS rn
+             FROM (
+               SELECT date_trunc('hour', received_at) AS hour,
+                      COALESCE(system, 0) AS system,
+                      COALESCE(talkgroup, 0) AS talkgroup,
+                      COALESCE(site_rfss, -1) AS rfss,
+                      COALESCE(site_id, -1) AS site,
+                      logical_call_id,
+                      node_id,
+                      bool_or(encrypted) AS encrypted,
+                      bool_or(recorded) AS recorded
+                 FROM node_radio_events
+                WHERE received_at >= $1::timestamptz AND received_at < $2::timestamptz
+                  AND ${CALL_GROUP}
+                GROUP BY 1, 2, 3, 4, 5, 6, 7
+             ) r
+             WINDOW w AS (PARTITION BY r.hour, r.logical_call_id)
+         ) a
+        GROUP BY a.hour, a.system, a.talkgroup, a.rfss, a.site`,
       [from.toISOString(), to.toISOString()],
     );
 

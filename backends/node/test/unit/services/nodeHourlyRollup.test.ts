@@ -82,16 +82,25 @@ describe('rollupNodeHourlyOnce', () => {
     expect(insSys).toBeGreaterThan(delSys);
   });
 
-  it('counts a call once however many nodes or sites heard it', async () => {
+  it('attributes each call to ONE row, so the site rows still sum correctly', async () => {
     armCursor('2026-08-24T10:00:00.000Z');
     await rollupNodeHourlyOnce(new Date('2026-08-24T11:30:00.000Z'));
 
     const sys = ran('INSERT INTO node_radio_hourly_sys')[0] ?? '';
-    // The inner query collapses to one row per (call, node, site) — a
-    // reception — and logical_calls is DISTINCT over the call id on top of
-    // that, so simulcast and multi-node reception cannot inflate it.
-    expect(sys).toContain('COUNT(DISTINCT r.logical_call_id)::int');
-    expect(sys).toContain('logical_call_id,\n                  node_id,');
+    // The table is keyed per SITE but a call is not a per-site thing, so
+    // counting distinct calls inside each site row and summing double-counts
+    // every simulcast call — 406 read as 822 on a live hour. Each call is
+    // attributed to exactly one row instead (rn = 1) and only that row counts
+    // it, which makes any sum of rows exact.
+    expect(sys).toContain('(COUNT(*) FILTER (WHERE a.rn = 1))::int');
+    expect(sys).not.toContain('COUNT(DISTINCT r.logical_call_id)');
+    // Partitioned by the CALL alone. Adding talkgroup counts a patched call
+    // once per member talkgroup — 407 against a true 406 on the same hour.
+    expect(sys).toContain('PARTITION BY r.hour, r.logical_call_id');
+    // encrypted/recorded belong to the CALL, so they are resolved across all
+    // of its receptions before the attribution filter picks the counting row.
+    expect(sys).toContain('bool_or(r.encrypted) OVER w');
+    expect(sys).toContain('WHERE a.rn = 1 AND a.call_encrypted');
     // Data and signalling are not calls.
     expect(sys).toContain("event_type LIKE 'CALL_GROUP%'");
   });
