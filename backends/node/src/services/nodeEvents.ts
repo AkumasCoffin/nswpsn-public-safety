@@ -1379,6 +1379,37 @@ export async function recordScannerCall(call: ScannerCall): Promise<void> {
         [system ?? 0, call.sourceUnit, alias],
       );
     }
+
+    // FOREVER BUCKETS. The detail table above is pruned at 30 days; these are
+    // the permanent record, and they are what window=all reads. The activity
+    // path has always rolled into them and this one never did, so every
+    // all-time rollup silently under-counted the scanner feed by its entire
+    // volume — thousands of calls a day that exist in the detail table, appear
+    // in every 24h/7d/30d view, and then vanish the moment the window is "all".
+    //
+    // Same two buckets, same meaning, as recordActivityEvents.
+    await client.query(
+      `INSERT INTO node_radio_hourly (hour, node_id, system, talkgroup, calls, audio_bytes)
+       VALUES (date_trunc('hour', $1::timestamptz), $2, $3, $4, 1, $5)
+       ON CONFLICT (hour, node_id, system, talkgroup) DO UPDATE
+         SET calls = node_radio_hourly.calls + 1,
+             audio_bytes = node_radio_hourly.audio_bytes + EXCLUDED.audio_bytes`,
+      [receivedAt.toISOString(), call.nodeId, system ?? 0, call.talkgroup, call.audioBytes],
+    );
+    // logical_calls +1 only when this reception STARTED a group, so a call the
+    // scanner and a node both heard is still one over-the-air call. Site is -1:
+    // a scanner has no control-channel view and cannot say which site carried
+    // it, and -1 is this table's "unknown" (a null cannot sit in the key).
+    await client.query(
+      `INSERT INTO node_radio_hourly_sys
+         (hour, system, talkgroup, site_rfss, site_id, calls, logical_calls)
+       VALUES (date_trunc('hour', $1::timestamptz), $2, $3, -1, -1, 1, $4)
+       ON CONFLICT (hour, system, talkgroup, site_rfss, site_id) DO UPDATE
+         SET calls = node_radio_hourly_sys.calls + 1,
+             logical_calls = node_radio_hourly_sys.logical_calls + EXCLUDED.logical_calls`,
+      [receivedAt.toISOString(), system ?? 0, call.talkgroup, existingGroup === null ? 1 : 0],
+    );
+
     await client.query('COMMIT');
   } catch (err) {
     try {
