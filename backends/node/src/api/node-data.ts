@@ -3531,10 +3531,25 @@ nodeDataRouter.get('/api/node-data/radio-aliases', requireRole(canViewNodeData),
     // all-time answer, and skipping the events scan keeps that case cheap.
     const windowRaw = (url.searchParams.get('window') ?? '').toLowerCase();
     const lifetime = windowRaw === 'all';
+    // Node scope. Membership is "which radios did THIS node hear", so it
+    // restricts the join, never the lifetime identity columns — a radio scoped
+    // to one node still shows the alias it announced anywhere.
+    const aliasNodeId = qpNode(url);
     let heardJoin = '';
-    if (!lifetime) {
-      const iv = WINDOW_INTERVAL[(['24h', '7d', '30d'] as const).find((w) => w === windowRaw) ?? '7d'];
-      params.push(iv);
+    // A node scope needs the events join even at window=all, which otherwise
+    // skips it entirely and would answer fleet-wide.
+    if (!lifetime || aliasNodeId) {
+      const heardConds = ['source_unit IS NOT NULL'];
+      if (!lifetime) {
+        const iv =
+          WINDOW_INTERVAL[(['24h', '7d', '30d'] as const).find((w) => w === windowRaw) ?? '7d'];
+        params.push(iv);
+        heardConds.push(`received_at >= now() - $${params.length}::interval`);
+      }
+      if (aliasNodeId) {
+        params.push(aliasNodeId);
+        heardConds.push(`node_id = $${params.length}`);
+      }
       // INNER join: no traffic in the window means not listed, but a radio WITH
       // traffic keeps its lifetime alias columns.
       heardJoin = `JOIN (
@@ -3542,8 +3557,7 @@ nodeDataRouter.get('/api/node-data/radio-aliases', requireRole(canViewNodeData),
                     MAX(received_at) AS heard_last,
                     COUNT(*)::int AS heard_times
                FROM node_radio_events
-              WHERE received_at >= now() - $${params.length}::interval
-                AND source_unit IS NOT NULL
+              WHERE ${heardConds.join(' AND ')}
               GROUP BY source_unit
            ) h ON h.radio_id = a.radio_id`;
     }

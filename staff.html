@@ -6155,7 +6155,13 @@
       // view, which is fleet-wide. nd2.sys.* is NOT cleared when a top-level
       // pill is clicked, so the scope must be keyed off the view, not off
       // whether a system happens to still be remembered.
-      const top = view === 'talkgroups';
+      // The NODE drill-down reuses this panel too, and its scope is the node —
+      // not a system or site. It runs with nd2.view still 'nodes', so without
+      // this it took the drill-down branch and applied whatever system/site the
+      // last Systems drill-down happened to leave in nd2.sys, filtering the
+      // table down to nothing. Treat it like the top-level view: no system or
+      // site params, and no nd2.sys.level staleness check.
+      const top = view === 'talkgroups' || nd2.nodes.level === 'detail';
       // Scoped to the open system — and, one level down, to the open SITE.
       if (!top && nd2.sys.system != null) params.set('system', String(nd2.sys.system));
       const level = nd2.sys.level;
@@ -6243,6 +6249,10 @@
       });
       if (nd2.alias.q) params.set('q', nd2.alias.q);
       if (nd2.alias.agency) params.set('agency', nd2.alias.agency);
+      // Honour the node scope like every other table here. Without it the node
+      // drill-down's Aliases tab showed the whole fleet's radios under one
+      // node's name, which is worse than showing nothing.
+      if (nd2.node) params.set('node', nd2.node);
       try {
         const data = await nd2Fetch('/api/node-data/radio-aliases?' + params);
         if (nd2.view !== view) return;   // navigated away mid-fetch
