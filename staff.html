@@ -3165,7 +3165,8 @@
                 <table class="nd-table">
                   <thead>
                     <tr>
-                      <th class="nd2-sortable"><button type="button" class="nd2-sort-btn" data-nd2-sort="tg" data-nd2-key="talkgroup" onclick="nd2TgSort('talkgroup')">Talkgroup <i class="fas fa-caret-down nd2-caret nd2-caret-off"></i></button></th>
+                      <th>Talkgroup</th>
+                      <th class="nd2-sortable"><button type="button" class="nd2-sort-btn" data-nd2-sort="tg" data-nd2-key="talkgroup" onclick="nd2TgSort('talkgroup')">TGID <i class="fas fa-caret-down nd2-caret nd2-caret-off"></i></button></th>
                       <th>Agency</th>
                       <th class="nd2-num nd2-sortable"><button type="button" class="nd2-sort-btn" data-nd2-sort="tg" data-nd2-key="calls" onclick="nd2TgSort('calls')">Calls <i class="fas fa-caret-down nd2-caret nd2-caret-off"></i></button></th>
                       <th class="nd2-num nd2-sortable"><button type="button" class="nd2-sort-btn" data-nd2-sort="tg" data-nd2-key="enc" onclick="nd2TgSort('enc')">Enc <i class="fas fa-caret-down nd2-caret nd2-caret-off"></i></button></th>
@@ -3176,7 +3177,7 @@
                     </tr>
                   </thead>
                   <tbody id="nd2-tg-body">
-                    <tr><td colspan="8" class="nd2-empty">Loading…</td></tr>
+                    <tr><td colspan="9" class="nd2-empty">Loading…</td></tr>
                   </tbody>
                 </table>
               </div>
@@ -6553,13 +6554,14 @@
         nd2.tg.total = data.total || 0;
         const body = document.getElementById('nd2-tg-body');
         const rows = data.talkgroups || [];
-        if (!rows.length) { body.innerHTML = '<tr><td colspan="8" class="nd2-empty">No talkgroups match.</td></tr>'; }
+        if (!rows.length) { body.innerHTML = '<tr><td colspan="9" class="nd2-empty">No talkgroups match.</td></tr>'; }
         else body.innerHTML = rows.map(t => `
           <tr class="nd2-rowlink" onclick="nd2JumpToEvents({talkgroup:${Number(t.talkgroup)}})" title="View events for this talkgroup">
-            <td>${nd2TgPill(t.talkgroup, t.label, t.color)}
+            <td>${nd2TgNameCell(t.label, t.talkgroup, t.color)}
               <button class="nd2-linkbtn" title="Radios heard on this talkgroup"
-                onclick="event.stopPropagation();nd2ShowRel('talkgroup',${t.talkgroup},${nd2Arg(t.label || ('TG ' + t.talkgroup))})">
+                onclick="event.stopPropagation();nd2ShowRel('talkgroup',${Number(t.talkgroup)},${nd2Arg(t.label || ('TG ' + t.talkgroup))})">
                 <i class="fas fa-diagram-project"></i></button></td>
+            <td>${nd2TgIdCell(t.talkgroup)}</td>
             <td>${nd2AgencyCell(t.agency)}</td>
             <td class="nd2-num">${nd2Num(t.logicalCalls)}<span class="nd-sub" title="receptions"> /${nd2Num(t.calls)}</span></td>
             <td class="nd2-num">${nd2Num(t.encryptedCalls)}</td>
@@ -6569,7 +6571,7 @@
             <td>${nd2NodeChip(t.topNode)}</td>
           </tr>`).join('');
         nd2PageBtns('tg', nd2.tg, rows.length);
-      } catch (e) { nd2TableMsg('nd2-tg-body', 8, e); nd2.tg.total = 0; nd2PageBtns('tg', nd2.tg, 0); }
+      } catch (e) { nd2TableMsg('nd2-tg-body', 9, e); nd2.tg.total = 0; nd2PageBtns('tg', nd2.tg, 0); }
     }
 
     // --- Radios view -----------------------------------------------------
