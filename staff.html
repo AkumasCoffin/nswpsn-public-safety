@@ -2934,36 +2934,46 @@
         <!-- ===== Overview view ===== -->
         <div id="nd2-view-overview">
         <div class="stats-bar">
-          <div class="stat-card" id="nd2-tile-calls">
-            <div class="stat-value" id="nd2-stat-calls">—</div>
-            <div class="stat-label">Radio Calls</div>
-            <div class="nd2-stat-sub" id="nd2-stat-calls-sub"></div>
+          <!-- One partition of the receptions. A reception is one
+               (node, site, talkgroup) that carried the transmission, so a
+               transmission heard three ways on two talkgroups is up to six
+               receptions and one ingest. Received = Ingested + every Dropped
+               tile, exactly — which is what makes them tiles rather than a
+               footnote, and what makes a wrong one visible. -->
+          <div class="stat-card" id="nd2-tile-recv">
+            <div class="stat-value" id="nd2-stat-recv">—</div>
+            <div class="stat-label">Receptions — Received</div>
+            <div class="nd2-stat-sub" id="nd2-stat-recv-sub"></div>
           </div>
-          <div class="stat-card" id="nd2-tile-enc" style="border-color: rgba(245, 158, 11, 0.3);">
-            <div class="stat-value" id="nd2-stat-enc" style="color: #fbbf24;">—</div>
-            <div class="stat-label">Encrypted</div>
-            <div class="nd2-stat-sub" id="nd2-stat-enc-sub"></div>
+          <div class="stat-card" id="nd2-tile-ingest" style="border-color: rgba(34, 197, 94, 0.3);">
+            <div class="stat-value" id="nd2-stat-ingest" style="color: #4ade80;">—</div>
+            <div class="stat-label">Receptions — Ingested</div>
+            <div class="nd2-stat-sub" id="nd2-stat-ingest-sub"></div>
           </div>
-          <div class="stat-card" id="nd2-tile-audio">
-            <div class="stat-value" id="nd2-stat-audio">—</div>
-            <div class="stat-label">With Audio</div>
-            <div class="nd2-stat-sub" id="nd2-stat-audio-sub"></div>
+          <div class="stat-card" id="nd2-tile-notrec" style="border-color: rgba(239, 68, 68, 0.3);">
+            <div class="stat-value" id="nd2-stat-notrec" style="color: #fca5a5;">—</div>
+            <div class="stat-label">Dropped — Not Recorded</div>
+            <div class="nd2-stat-sub" id="nd2-stat-notrec-sub"></div>
           </div>
-          <!-- What the grouping absorbed. A reception is one receiving
-               node+site hearing one call, so a call heard three ways is three
-               receptions and one call; these two say WHY the other two were
-               folded in. Together with Radio Calls they account for every
-               reception, which is what makes them worth a tile rather than a
-               footnote. -->
+          <div class="stat-card" id="nd2-tile-notgid">
+            <div class="stat-value" id="nd2-stat-notgid">—</div>
+            <div class="stat-label">Dropped — No TGID Programmed</div>
+            <div class="nd2-stat-sub" id="nd2-stat-notgid-sub"></div>
+          </div>
           <div class="stat-card" id="nd2-tile-dpatch" style="border-color: rgba(56, 189, 248, 0.3);">
             <div class="stat-value" id="nd2-stat-dpatch" style="color: #7dd3fc;">—</div>
-            <div class="stat-label">Merged by Patch</div>
+            <div class="stat-label">Dropped — Patch</div>
             <div class="nd2-stat-sub" id="nd2-stat-dpatch-sub"></div>
           </div>
           <div class="stat-card" id="nd2-tile-dsite">
             <div class="stat-value" id="nd2-stat-dsite">—</div>
-            <div class="stat-label">Merged Across Sites</div>
+            <div class="stat-label">Dropped — Cross Site</div>
             <div class="nd2-stat-sub" id="nd2-stat-dsite-sub"></div>
+          </div>
+          <div class="stat-card" id="nd2-tile-enc" style="border-color: rgba(245, 158, 11, 0.3);">
+            <div class="stat-value" id="nd2-stat-enc" style="color: #fbbf24;">—</div>
+            <div class="stat-label">Dropped — ENC</div>
+            <div class="nd2-stat-sub" id="nd2-stat-enc-sub"></div>
           </div>
           <div class="stat-card" id="nd2-tile-pages" style="border-color: rgba(249, 115, 22, 0.3);">
             <div class="stat-value" id="nd2-stat-pages" style="color: #fb923c;">—</div>
@@ -4757,6 +4767,10 @@
       try {
         const params = new URLSearchParams({ window: nd2.window, scope: nd2.scope });
         if (nd2.node) params.set('node', nd2.node);
+        // Hide encrypted has to reach the TOTALS, not just the lists. Without
+        // it the tiles stayed whole-network figures whichever way the switch
+        // was set, so the headline contradicted every list under it.
+        if (nd2HideEnc()) params.set('enc', 'hide');
         const res = await fetch(`${API_BASE_URL}/api/node-data/overview?${params}`, {
           headers: { 'Authorization': await authHeader() }
         });
@@ -4789,43 +4803,64 @@
       };
 
       // Tiles adapt to scope: pager scope has no radio tiles and vice versa.
-      show('nd2-tile-calls', scope !== 'pager');
+      const radio = scope !== 'pager';
+      show('nd2-tile-recv', radio);
+      show('nd2-tile-ingest', radio);
+      show('nd2-tile-notrec', radio);
+      show('nd2-tile-notgid', radio);
+      show('nd2-tile-dpatch', radio);
+      show('nd2-tile-dsite', radio);
+      // Nothing to say about encrypted traffic while it is being hidden, and a
+      // tile reading 0 would look like a claim that none exists.
+      show('nd2-tile-enc', radio && !nd2HideEnc());
+      show('nd2-tile-tg', radio);
       show('nd2-tile-pages', scope !== 'radio');
-      show('nd2-tile-tg', scope !== 'pager');
-      show('nd2-tile-enc', scope !== 'pager');
-      show('nd2-tile-audio', scope !== 'pager');
-      show('nd2-tile-dpatch', scope !== 'pager');
-      show('nd2-tile-dsite', scope !== 'pager');
 
-      set('nd2-stat-calls', nd2Num(t.radioLogical));
-      // A reception is one receiving node+site hearing this call, NOT one
-      // stored row: vce emits a GRANT and a CALL for the same receipt and
-      // repeats the grant on a re-grant, so counting rows inflated this ~4x.
-      set('nd2-stat-calls-sub', t.radioRaw != null ? `${nd2Num(t.radioRaw)} receptions` : '');
-      // Encrypted / with-audio are shares of LOGICAL calls (the same base as
-      // the Radio Calls tile), never of receptions — a call with 40 receptions
-      // must not outweigh one with 2. Both read 0 rather than blank when there
-      // is no traffic, so an idle window is distinguishable from a broken feed.
-      const pct = (n) => (t.radioLogical ? Math.round((n / t.radioLogical) * 100) : 0);
-      const enc = t.radioEncrypted != null ? t.radioEncrypted : 0;
-      const rec = t.radioRecorded != null ? t.radioRecorded : 0;
-      set('nd2-stat-enc', t.radioLogical ? pct(enc) + '%' : '—');
-      set('nd2-stat-enc-sub', t.radioLogical ? `${nd2Num(enc)} of ${nd2Num(t.radioLogical)} calls` : '');
-      set('nd2-stat-audio', t.radioLogical ? pct(rec) + '%' : '—');
-      set('nd2-stat-audio-sub', t.radioLogical ? `${nd2Num(rec)} recorded in rdio` : '');
-      // These two are shares of RECEPTIONS, not of calls: they count receptions
-      // that were folded into a call already open, so the base has to be the
-      // thing being folded. Radio Calls + these two = every reception.
-      const dropPatch = t.radioDroppedPatch != null ? t.radioDroppedPatch : 0;
-      const dropSite = t.radioDroppedSite != null ? t.radioDroppedSite : 0;
-      const rpct = (n) => (t.radioRaw ? Math.round((n / t.radioRaw) * 100) : 0);
-      set('nd2-stat-dpatch', t.radioRaw ? nd2Num(dropPatch) : '—');
-      set('nd2-stat-dpatch-sub', t.radioRaw
-        ? `${rpct(dropPatch)}% of receptions — heard on a patched talkgroup`
+      // Every Dropped tile is a slice of the SAME total, so they share one
+      // denominator: receptions. The old row had three different ones and no
+      // two tiles could be compared against each other.
+      const recv = t.receptionsReceived != null ? t.receptionsReceived : 0;
+      const val = (v) => (v != null ? v : 0);
+      const rpct = (v) => (recv ? Math.round((v / recv) * 100) : 0);
+      // 0 rather than blank when there is no traffic, so an idle window stays
+      // distinguishable from a broken feed.
+      const tx = val(t.transmissions);
+      const ingested = val(t.receptionsIngested);
+
+      set('nd2-stat-recv', nd2Num(recv));
+      set('nd2-stat-recv-sub', recv ? `${nd2Num(tx)} transmissions` : '');
+
+      // Ingested counts TRANSMISSIONS: rdio stores one row per transmission
+      // however many sites carried it, so its share is of transmissions. Every
+      // Dropped tile below is a share of receptions.
+      set('nd2-stat-ingest', recv ? nd2Num(ingested) : '—');
+      set('nd2-stat-ingest-sub', recv
+        ? `${tx ? Math.round((ingested / tx) * 100) : 0}% of transmissions — accepted by rdio`
         : '');
-      set('nd2-stat-dsite', t.radioRaw ? nd2Num(dropSite) : '—');
-      set('nd2-stat-dsite-sub', t.radioRaw
-        ? `${rpct(dropSite)}% of receptions — same call, another site or node`
+
+      set('nd2-stat-notrec', recv ? nd2Num(val(t.droppedNotRecorded)) : '—');
+      set('nd2-stat-notrec-sub', recv
+        ? `${rpct(val(t.droppedNotRecorded))}% — rdio could have taken these`
+        : '');
+
+      set('nd2-stat-notgid', recv ? nd2Num(val(t.droppedNoTgid)) : '—');
+      set('nd2-stat-notgid-sub', recv
+        ? `${rpct(val(t.droppedNoTgid))}% — talkgroup not programmed in rdio`
+        : '');
+
+      set('nd2-stat-dpatch', recv ? nd2Num(val(t.droppedPatch)) : '—');
+      set('nd2-stat-dpatch-sub', recv
+        ? `${rpct(val(t.droppedPatch))}% — another talkgroup of the same patch`
+        : '');
+
+      set('nd2-stat-dsite', recv ? nd2Num(val(t.droppedSite)) : '—');
+      set('nd2-stat-dsite-sub', recv
+        ? `${rpct(val(t.droppedSite))}% — same transmission, another site`
+        : '');
+
+      set('nd2-stat-enc', recv ? nd2Num(val(t.droppedEnc)) : '—');
+      set('nd2-stat-enc-sub', recv
+        ? `${rpct(val(t.droppedEnc))}% — encrypted, never routed to rdio`
         : '');
       set('nd2-stat-pages', nd2Num(t.pagesLogical));
       set('nd2-stat-pages-sub', t.pages != null ? `${nd2Num(t.pages)} receptions` : '');
@@ -4843,7 +4878,9 @@
         tgEl.textContent = label;
         tgEl.title = label;
       }
-      set('nd2-stat-tg-sub', tg ? `${nd2Num(tg.logicalCalls != null ? tg.logicalCalls : tg.calls)} calls` : '');
+      set('nd2-stat-tg-sub', tg
+        ? `${nd2Num(tg.logicalCalls != null ? tg.logicalCalls : tg.calls)} transmissions`
+        : '');
     }
 
     // Activity chart. Series colors are validated darker steps of the site
