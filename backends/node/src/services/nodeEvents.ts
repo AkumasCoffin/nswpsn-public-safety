@@ -465,12 +465,16 @@ export async function recordActivityEvents(
           // unit, then nearest in time. Deliberately identical, because the
           // two sides are choosing between the same candidates from opposite
           // directions and must not disagree about which pairing is right.
+          //
+          // That includes the patch widening: groupMembers is the same set
+          // markRecorded builds from rdioPatches, so a parked upload filed
+          // under one member is claimable by a reception announced on another.
           const claimed = await client.query<{ audio_bytes: string }>(
             `DELETE FROM node_pending_recordings
               WHERE id = (
                 SELECT id FROM node_pending_recordings
                  WHERE node_id = $1
-                   AND talkgroup IS NOT DISTINCT FROM $2
+                   AND ($2::int[] IS NULL OR talkgroup = ANY($2::int[]))
                    AND started_at BETWEEN $3::timestamptz - interval '${RECORDED_WINDOW_SECONDS} seconds'
                                       AND $3::timestamptz + interval '${RECORDED_WINDOW_SECONDS} seconds'
                  ORDER BY COALESCE(frequency IS NOT NULL AND frequency = $4::bigint, false) DESC,
@@ -481,7 +485,7 @@ export async function recordActivityEvents(
               RETURNING audio_bytes`,
             [
               nodeId,
-              talkgroup,
+              groupMembers.length > 0 ? groupMembers : null,
               receivedAt.toISOString(),
               safeInt(ev.frequencyHz),
               sourceUnit,
@@ -588,6 +592,23 @@ export async function markRecorded(
       return s === '' ? null : s.slice(0, 64);
     })();
 
+    // The talkgroups this upload may claim: the one it names, plus every other
+    // member of its patch.
+    //
+    // rdio files a patched call under the highest-ranked member that actually
+    // received a copy (Patch.homeRank), while our reception rows keep whichever
+    // talkgroup each site announced it on. Those disagree constantly, and an
+    // exact `talkgroup = $2` then matched nothing: measured over 24h, rdio held
+    // 202 calls on TG 20201 against 7 we had flagged, and 1,240 uploads
+    // network-wide found no row at all. Widening to the patch lets the upload
+    // claim the reception it belongs to whichever member either side picked.
+    //
+    // Deliberately NOT widened to the whole system: an unpatched talkgroup
+    // still resolves to exactly itself, so ordinary traffic is unaffected.
+    const patches = await rdioPatches();
+    const tgCandidates =
+      tg === null ? [] : (patches.byTalkgroup.get(tg)?.talkgroups ?? [tg]);
+
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -625,7 +646,7 @@ export async function markRecorded(
           WHERE id = (
             SELECT id FROM node_radio_events
              WHERE node_id = $1
-               AND talkgroup IS NOT DISTINCT FROM $2
+               AND ($2::int[] IS NULL OR talkgroup = ANY($2::int[]))
                AND recorded = false
                AND received_at BETWEEN $3::timestamptz - interval '${RECORDED_OUTER_SECONDS} seconds'
                                   AND $3::timestamptz + interval '${RECORDED_OUTER_SECONDS} seconds'
@@ -634,9 +655,10 @@ export async function markRecorded(
                  abs(extract(epoch FROM (received_at - $3::timestamptz)))
                    <= ${RECORDED_WINDOW_SECONDS}
                  -- Further out: only on a full identity match. Talkgroup is
-                 -- already fixed above, so agreeing on BOTH the calling unit
-                 -- and the traffic channel is the same call by any reasonable
-                 -- reading — and it is precisely what the clock cannot tell us.
+                 -- already constrained above, so agreeing on BOTH the calling
+                 -- unit and the traffic channel is the same call by any
+                 -- reasonable reading — and it is precisely what the clock
+                 -- cannot tell us.
                  OR ($5::bigint IS NOT NULL AND frequency = $5::bigint
                      AND $6::integer IS NOT NULL AND source_unit = $6::integer)
                )
@@ -646,7 +668,8 @@ export async function markRecorded(
              LIMIT 1
           )
           RETURNING received_at, system, talkgroup`,
-        [nodeId, tg, at.toISOString(), bytes, freq, unit, alias],
+        [nodeId, tgCandidates.length > 0 ? tgCandidates : null, at.toISOString(),
+         bytes, freq, unit, alias],
       );
       const row = upd.rows[0];
 

@@ -353,9 +353,11 @@ describe('markRecorded', () => {
     await markRecorded('node-aaaa', 12345, at, 90_000);
 
     const upd = callWith('UPDATE node_radio_events SET recorded = true');
-    // [nodeId, talkgroup, at, audioBytes]
+    // [nodeId, talkgroupCandidates, at, audioBytes]
     expect(upd?.[0]).toBe('node-aaaa');
-    expect(upd?.[1]).toBe(12345);
+    // An unpatched talkgroup resolves to exactly itself — the widening below
+    // must not change ordinary traffic.
+    expect(upd?.[1]).toEqual([12345]);
     expect(upd?.[3]).toBe(90_000);
 
     // The bytes stay on the detail row; the hourly rollup sums them from
@@ -517,6 +519,31 @@ describe('markRecorded', () => {
     expect(countCalls('UPDATE node_radio_events SET recorded = true')).toBe(1);
     expect(countCalls('INSERT INTO node_radio_hourly ')).toBe(0);
     expect(clientQuery.mock.calls.some((a) => a[0] === 'COMMIT')).toBe(true);
+  });
+
+  it('lets a patched upload claim a reception announced on another member', async () => {
+    // rdio files a patched call under the highest-ranked member that received
+    // a copy (Patch.homeRank); our reception rows keep whichever talkgroup the
+    // site announced it on. Those disagree constantly — measured over 24h, rdio
+    // held 202 calls on TG 20201 against 7 we had flagged, and 1,240 uploads
+    // network-wide matched no row at all. The upload may claim any member.
+    patchLookup.byTalkgroup.set(20201, { talkgroups: [20201, 10250, 20202] });
+    try {
+      armQueries({ updatedRow: { received_at: at.toISOString(), system: 0x4a2, talkgroup: 10250 } });
+      await markRecorded('node-aaaa', 20201, at, 90_000);
+
+      const upd = callWith('UPDATE node_radio_events SET recorded = true');
+      expect(upd?.[1]).toEqual([20201, 10250, 20202]);
+      const sql = clientQuery.mock.calls
+        .map((a) => String(a[0]))
+        .find((x) => x.includes('UPDATE node_radio_events SET recorded = true'));
+      // Set membership, not equality — and still bounded to the patch, never
+      // widened to the whole system.
+      expect(String(sql)).toContain('talkgroup = ANY($2::int[])');
+      expect(String(sql)).not.toContain('talkgroup IS NOT DISTINCT FROM $2');
+    } finally {
+      patchLookup.byTalkgroup.clear();
+    }
   });
 
   it('never throws when the DB fails', async () => {
