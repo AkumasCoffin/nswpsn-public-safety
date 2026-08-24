@@ -531,13 +531,12 @@ describe('CALL_GROUP filter (talkgroup voice calls only)', () => {
     expect(encEvt.encrypted).toBe(true);
   });
 
-  it('/overview radio calls totals count CALL_GROUP% only (DATA_CALL excluded)', async () => {
+  it('/overview reception totals count CALL_GROUP% only (DATA_CALL excluded)', async () => {
     queryMock.mockImplementation((sql: string) => {
       if (sql.includes('FROM nodes')) return { rows: [] };
-      // rTot: the raw + logical calls totals over node_radio_events.
-      if (sql.includes('AS raw') && sql.includes('AS logical') && sql.includes('node_radio_events')) {
+      if (sql.includes('AS received') && sql.includes('node_radio_events')) {
         const n = onlyCalls(sql).length;
-        return { rows: [{ raw: n, logical: n }] };
+        return { rows: [{ received: n, transmissions: n, ingested: n }] };
       }
       return { rows: [] };
     });
@@ -545,8 +544,54 @@ describe('CALL_GROUP filter (talkgroup voice calls only)', () => {
     const res = await app.request('/api/node-data/overview?window=7d&scope=radio');
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.totals.radioRaw).toBe(2);
-    expect(body.totals.radioLogical).toBe(2);
+    expect(body.totals.receptionsReceived).toBe(2);
+    expect(body.totals.transmissions).toBe(2);
+  });
+
+  it('/overview classifies an outcome ONCE, with encrypted beating unprogrammed', async () => {
+    let totalsSql = '';
+    queryMock.mockImplementation((sql: string) => {
+      if (sql.includes('FROM nodes')) return { rows: [] };
+      if (sql.includes('AS received') && sql.includes('node_radio_events')) {
+        totalsSql = sql;
+        return { rows: [{ received: 0 }] };
+      }
+      return { rows: [] };
+    });
+    const app = await setupApp();
+    await app.request('/api/node-data/overview?window=7d&scope=radio');
+    // Every encrypted talkgroup is ALSO unprogrammed in rdio, so testing
+    // "programmed" first would swallow the whole encrypted population and
+    // leave that tile reading zero. The enc arm must come first.
+    const encAt = totalsSql.indexOf("THEN 'enc'");
+    const noTgAt = totalsSql.indexOf("THEN 'no_tgid'");
+    expect(encAt).toBeGreaterThan(-1);
+    expect(noTgAt).toBeGreaterThan(encAt);
+    // An unreachable rdio yields an EMPTY programmed list, which must not
+    // condemn the whole network to no_tgid.
+    expect(totalsSql).toContain('cardinality(');
+    // The buckets partition receptions, so a drop is measured, never derived
+    // as a residual — the old shape subtracted patch drops from site drops.
+    expect(totalsSql).toContain('IS DISTINCT FROM t.home');
+    expect(totalsSql).toContain('IS NOT DISTINCT FROM t.home');
+  });
+
+  it('/overview enc=hide drops encrypted transmissions whole, not just their tile', async () => {
+    let totalsSql = '';
+    queryMock.mockImplementation((sql: string) => {
+      if (sql.includes('FROM nodes')) return { rows: [] };
+      if (sql.includes('AS received') && sql.includes('node_radio_events')) {
+        totalsSql = sql;
+        return { rows: [{ received: 0 }] };
+      }
+      return { rows: [] };
+    });
+    const app = await setupApp();
+    await app.request('/api/node-data/overview?window=7d&scope=radio&enc=hide');
+    // Filtered on the OUTCOME: dropping the rows instead would strand each
+    // encrypted transmission's patch and site drops in the totals and break
+    // the partition.
+    expect(totalsSql).toContain("WHERE outcome <> 'enc'");
   });
 
   it('/overview window=all re-sources radio from detail (CALL_GROUP) and flags radioWindowCapped', async () => {
@@ -554,8 +599,9 @@ describe('CALL_GROUP filter (talkgroup voice calls only)', () => {
     queryMock.mockImplementation((sql: string) => {
       seen.push(sql);
       if (sql.includes('FROM nodes')) return { rows: [] };
-      if (sql.includes('AS raw') && sql.includes('node_radio_events')) return { rows: [{ raw: 2 }] };
-      if (sql.includes('AS logical') && sql.includes('node_radio_events')) return { rows: [{ logical: 2 }] };
+      if (sql.includes('AS received') && sql.includes('node_radio_events')) {
+        return { rows: [{ received: 2 }] };
+      }
       return { rows: [] };
     });
     const app = await setupApp();
@@ -569,6 +615,6 @@ describe('CALL_GROUP filter (talkgroup voice calls only)', () => {
     expect(radioReads.length).toBeGreaterThan(0);
     expect(radioReads.every((s) => s.includes("LIKE 'CALL_GROUP%'"))).toBe(true);
     expect(body.radioWindowCapped).toBe(true);
-    expect(body.totals.radioRaw).toBe(2);
+    expect(body.totals.receptionsReceived).toBe(2);
   });
 });

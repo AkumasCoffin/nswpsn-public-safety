@@ -53,6 +53,7 @@ import {
 import { shapeNodeLive, sortLiveChannels } from '../services/nodeLive.js';
 import { liveCallWindow } from '../services/nodeCallWindow.js';
 import { rdioPatches, resolvePatch } from '../services/rdioPatches.js';
+import { programmedTalkgroupIds } from '../services/rdioTalkgroups.js';
 
 /**
  * Talkgroup label / agency / colour lookups live in services/talkgroupCatalog
@@ -384,58 +385,106 @@ async function tgValidConfigured(prefix = ''): Promise<string> {
 /**
  * Radio headline totals, from ONE definition of a reception.
  *
- * A RECEPTION is one receiving (node, site) getting one call — not one stored
- * row. vce emits a GRANT and a CALL for the same receipt, and repeats the grant
- * when the channel is re-granted, so a single call heard by one node at two
- * sites lands as six rows. Counting rows made "receptions" a number nobody
- * could act on; the top-talkgroups rollup already counted the honest way and
- * the headline tile did not, so the same page said two different things.
+ * A RECEPTION is one (node, site, talkgroup) that carried the transmission.
+ * Not one stored row — vce emits a GRANT and a CALL for the same receipt and
+ * repeats the grant on re-grant — and not a cross product either: a site that
+ * carried only the primary talkgroup contributes ONE reception, not one per
+ * talkgroup the patch spans.
  *
- * From that base, three of the four tiles fall out, and two more become
- * answerable:
+ * A patched transmission goes out on its own talkgroup AND on every member of
+ * the patch, so a CALL_PATCH_GROUP row contributes a reception for each. A
+ * "patch" whose only member is the primary is not a patch: patchMembersOf
+ * stores null for that case (the radio system announces it constantly), so it
+ * yields the single reception it really was.
  *
- *   dropped_patch  receptions that joined a call already open on a DIFFERENT
- *                  talkgroup — a patch, where one transmission goes out on
- *                  several channels at once. Without patch grouping each would
- *                  have been its own call.
- *   dropped_site   receptions of a call already heard somewhere else. The same
- *                  transmission simulcast from another site, or picked up by a
- *                  second node.
+ * From that base every tile is a partition of the receptions, so they always
+ * add up to `received` and cannot drift apart.
  *
- * The two are disjoint by construction: every reception past the first in a
- * group is one or the other, so dropped_patch + dropped_site + logical =
- * receptions. `home` is the talkgroup of the group's FIRST reception, which is
- * therefore never counted as dropped by patch.
+ * Each transmission is classified ONCE by outcome, in this precedence:
+ *   enc           its home talkgroup is declared encrypted. Checked FIRST:
+ *                 every encrypted talkgroup is also unprogrammed in rdio, so
+ *                 testing "programmed" first would swallow the entire encrypted
+ *                 population and leave that tile reading zero.
+ *   no_tgid       rdio has no such talkgroup programmed, so it refuses the
+ *                 upload. This never had a chance of being ingested.
+ *   ingested      rdio accepted it — one row in its call list.
+ *   not_recorded  everything else: rdio could have taken this and did not. The
+ *                 pipeline-health number, and the only one that should ever
+ *                 trend toward zero.
+ *
+ * Its EXTRA receptions are classified by why they are extra:
+ *   dropped_patch on another talkgroup of the same patch
+ *   dropped_site  on the home talkgroup, heard by another site or node
+ *
+ * `home` is the talkgroup of the group's FIRST reception, so it is never
+ * counted as a patch drop — see the tx CTE for why it must be read off the
+ * event rather than off the expanded pair set.
+ *
+ * The previous shape measured dropped_patch and then derived dropped_site as
+ * the residual `raw - logical - dropped_patch`. A patch drop is also a
+ * receiver, so that subtracted the same number twice and the cross-site tile
+ * was short by exactly the patch tile's value at every window and every node
+ * filter — an identity, not a rounding artefact. Both are measured
+ * independently now.
  */
-function radioTotalsSql(where: string): string {
-  return `WITH r AS (
-            SELECT logical_call_id,
-                   MIN(id) AS first_id,
-                   MIN(talkgroup) AS talkgroup,
-                   bool_or(encrypted) AS encrypted,
-                   bool_or(recorded) AS recorded
+function radioReceptionsSql(
+  where: string,
+  encParam: string,
+  progParam: string,
+  hideEnc: boolean,
+): string {
+  return `WITH ev AS MATERIALIZED (
+            SELECT id, logical_call_id, talkgroup, patch_members, node_id,
+                   COALESCE(site_rfss, -1) AS rfss, COALESCE(site_id, -1) AS site,
+                   recorded
               FROM node_radio_events
              WHERE ${where}
-             GROUP BY logical_call_id, node_id,
-                      COALESCE(site_rfss, -1), COALESCE(site_id, -1)
-          ), h AS (
+          ), tx AS (
+            -- Per-transmission facts, in ONE pass over the events. home is the
+            -- talkgroup of the EARLIEST event, taken from the event's own column
+            -- rather than from the expanded pair set: an unnested patch member
+            -- inherits its parent row's id, so ordering the expanded set by id
+            -- leaves ties that resolve arbitrarily, and home -- with it the
+            -- whole patch/site split -- would differ run to run.
             SELECT logical_call_id,
-                   (array_agg(talkgroup ORDER BY first_id))[1] AS home
-              FROM r GROUP BY logical_call_id
+                   bool_or(recorded) AS rec,
+                   (array_agg(talkgroup ORDER BY id))[1] AS home
+              FROM ev GROUP BY logical_call_id
+          ), expanded AS (
+            SELECT logical_call_id, node_id, rfss, site, talkgroup AS tg FROM ev
+            UNION ALL
+            SELECT logical_call_id, node_id, rfss, site, unnest(patch_members)
+              FROM ev WHERE patch_members IS NOT NULL
+          ), pairs AS (
+            SELECT DISTINCT logical_call_id, node_id, rfss, site, tg FROM expanded
+          ), agg AS (
+            SELECT p.logical_call_id,
+                   COUNT(*)::int AS receptions,
+                   (COUNT(*) FILTER (WHERE p.tg IS DISTINCT FROM t.home))::int AS d_patch,
+                   (COUNT(*) FILTER (WHERE p.tg IS NOT DISTINCT FROM t.home) - 1)::int AS d_site
+              FROM pairs p JOIN tx t USING (logical_call_id)
+             GROUP BY 1
+          ), k AS (
+            SELECT a.*, CASE
+                     WHEN t.home = ANY(${encParam}::int[]) THEN 'enc'
+                     -- An EMPTY programmed list means "rdio unreachable", not
+                     -- "nothing is programmed", so it must not condemn the whole
+                     -- network to no_tgid. cardinality() = 0 skips the test.
+                     WHEN cardinality(${progParam}::int[]) > 0
+                          AND t.home <> ALL(${progParam}::int[]) THEN 'no_tgid'
+                     WHEN t.rec THEN 'ingested'
+                     ELSE 'not_recorded' END AS outcome
+              FROM agg a JOIN tx t USING (logical_call_id)
           )
-          SELECT COUNT(*)::int AS raw,
-                 COUNT(DISTINCT r.logical_call_id)::int AS logical,
-                 (COUNT(DISTINCT r.logical_call_id)
-                    FILTER (WHERE r.encrypted))::int AS encrypted,
-                 (COUNT(DISTINCT r.logical_call_id)
-                    FILTER (WHERE r.recorded))::int AS recorded,
-                 (COUNT(*) FILTER (WHERE r.talkgroup IS DISTINCT FROM h.home))::int
-                   AS dropped_patch,
-                 (COUNT(*)
-                    - COUNT(DISTINCT r.logical_call_id)
-                    - COUNT(*) FILTER (WHERE r.talkgroup IS DISTINCT FROM h.home))::int
-                   AS dropped_site
-            FROM r JOIN h ON h.logical_call_id = r.logical_call_id`;
+          SELECT COALESCE(SUM(receptions), 0)::int AS received,
+                 COUNT(*)::int AS transmissions,
+                 (COUNT(*) FILTER (WHERE outcome = 'ingested'))::int AS ingested,
+                 (COUNT(*) FILTER (WHERE outcome = 'no_tgid'))::int AS no_tgid,
+                 (COUNT(*) FILTER (WHERE outcome = 'enc'))::int AS enc,
+                 (COUNT(*) FILTER (WHERE outcome = 'not_recorded'))::int AS not_recorded,
+                 COALESCE(SUM(d_patch), 0)::int AS dropped_patch,
+                 COALESCE(SUM(d_site), 0)::int AS dropped_site
+            FROM k${hideEnc ? ` WHERE outcome <> 'enc'` : ''}`;
 }
 
 /**
@@ -588,7 +637,7 @@ nodeDataRouter.get(
       const wantPager = scope !== 'radio';
       // Optional per-node scope (Radio mode). Applied to node_radio_events and
       // node_radio_hourly (both carry node_id); node_radio_hourly_sys has no
-      // node_id, so window=all's radioLogical + topSites stay fleet-wide. Pager
+      // node_id, so window=all's topSites stays fleet-wide. Pager
       // queries are never node-filtered (the selector is radio-only).
       const nodeId = qpNode(url);
 
@@ -598,17 +647,17 @@ nodeDataRouter.get(
       );
       const nodeMeta = new Map(nodesRes.rows.map((r) => [r.id, r]));
 
-      let radioRaw = 0;
-      let radioLogical = 0;
-      // Counted over DISTINCT logical calls, so both are directly comparable
-      // to radioLogical (never to the larger per-reception radioRaw).
-      let radioEncrypted = 0;
-      let radioRecorded = 0;
-      /** Receptions folded into a call already open: on another talkgroup of
-       *  the same patch, and on another site or node. Disjoint, and together
-       *  with radioLogical they account for every reception. */
-      let radioDroppedPatch = 0;
-      let radioDroppedSite = 0;
+      // Every one of these is a count of RECEPTIONS or of transmissions, and
+      // the six outcome/drop buckets partition `received` exactly — see
+      // radioReceptionsSql. "Calls" is not a concept on this page.
+      let receptionsReceived = 0;
+      let transmissions = 0;
+      let receptionsIngested = 0;
+      let droppedNoTgid = 0;
+      let droppedEnc = 0;
+      let droppedNotRecorded = 0;
+      let droppedPatch = 0;
+      let droppedSite = 0;
       let pages = 0;
       let pagesLogical = 0;
       let perNodeRadioRows: Array<{ node_id: string; calls: unknown; bytes: unknown }> = [];
@@ -624,6 +673,30 @@ nodeDataRouter.get(
       let topSiteRows: Array<{ site_rfss: number; site_id: number; calls: unknown }> = [];
       let seriesRadioRows: Array<{ bucket: Date; n: unknown }> = [];
       let seriesPagerRows: Array<{ bucket: Date; n: unknown }> = [];
+
+      // The two standing talkgroup facts the outcome split needs, both cached
+      // ~60s and read once for whichever window path runs.
+      //
+      // encTgIds is the AGENCY declaration, not the per-event decoder flag:
+      // that flag is not set at the instant a call starts, so an always-
+      // encrypted talkgroup still emits rows marked false — measured, it misses
+      // 21.6% of encrypted police traffic, which then counts as clear.
+      //
+      // progTgIds may legitimately be EMPTY when central rdio is unreachable.
+      // radioReceptionsSql treats empty as "cannot classify" rather than
+      // "nothing is programmed"; see the cardinality() guard there.
+      const [encTgIds, progTgIds] = wantRadio
+        ? await Promise.all([
+            encryptedTalkgroupIds(),
+            programmedTalkgroupIds().then((s) => [...s]),
+          ])
+        : [[] as number[], [] as number[]];
+
+      // Hiding encrypted traffic removes those transmissions from the totals
+      // entirely — receptions and drops alike — rather than zeroing one tile,
+      // so the buckets still partition `received`. Mirrors /talkgroups and
+      // /radios, which take the same parameter.
+      const hideEnc = (url.searchParams.get('enc') ?? '').toLowerCase() === 'hide';
 
       if (window === 'all') {
         // Forever path: hourly bucket tables (topUnits only exists in
@@ -652,23 +725,26 @@ nodeDataRouter.get(
           await Promise.all([
             wantRadio
               ? pool.query<{
-                  raw: unknown;
-                  logical: unknown;
-                  encrypted: unknown;
-                  recorded: unknown;
+                  received: unknown;
+                  transmissions: unknown;
+                  ingested: unknown;
+                  no_tgid: unknown;
+                  enc: unknown;
+                  not_recorded: unknown;
                   dropped_patch: unknown;
                   dropped_site: unknown;
                 }>(
-                  // Encrypted/recorded ride along on this scan, exactly as they
-                  // do on the detail path. Left out, they defaulted to 0 and the
-                  // tiles asserted "0% encrypted, 0 of N calls" for window=all —
-                  // stating that none of the fleet's traffic is encrypted when
-                  // most of it is. They cost nothing here: window=all radio
+                  // Every bucket rides along on this one scan. window=all radio
                   // already reads node_radio_events (the hourly rollups have no
-                  // event_type and would count signaling as calls), so the rows
-                  // are being counted anyway.
-                  radioTotalsSql(`${nAllFloor}${CALL_GROUP}${nAllAnd}`),
-                  nAllParams,
+                  // event_type and would count signaling as voice), so the rows
+                  // are being walked anyway and the extra FILTERs are free.
+                  radioReceptionsSql(
+                    `${nAllFloor}${CALL_GROUP}${nAllAnd}`,
+                    `$${nAllParams.length + 1}`,
+                    `$${nAllParams.length + 2}`,
+                    hideEnc,
+                  ),
+                  [...nAllParams, encTgIds, progTgIds],
                 )
               : null,
             wantPager
@@ -759,12 +835,14 @@ nodeDataRouter.get(
                 )
               : null,
           ]);
-        radioRaw = num(radioTotQ?.rows[0]?.raw);
-        radioLogical = num(radioTotQ?.rows[0]?.logical);
-        radioEncrypted = num(radioTotQ?.rows[0]?.encrypted);
-        radioRecorded = num(radioTotQ?.rows[0]?.recorded);
-        radioDroppedPatch = num(radioTotQ?.rows[0]?.dropped_patch);
-        radioDroppedSite = num(radioTotQ?.rows[0]?.dropped_site);
+        receptionsReceived = num(radioTotQ?.rows[0]?.received);
+        transmissions = num(radioTotQ?.rows[0]?.transmissions);
+        receptionsIngested = num(radioTotQ?.rows[0]?.ingested);
+        droppedNoTgid = num(radioTotQ?.rows[0]?.no_tgid);
+        droppedEnc = num(radioTotQ?.rows[0]?.enc);
+        droppedNotRecorded = num(radioTotQ?.rows[0]?.not_recorded);
+        droppedPatch = num(radioTotQ?.rows[0]?.dropped_patch);
+        droppedSite = num(radioTotQ?.rows[0]?.dropped_site);
         pages = num(pagerTotQ?.rows[0]?.raw);
         pagesLogical = num(pagerTotQ?.rows[0]?.logical);
         perNodeRadioRows = pnR?.rows ?? [];
@@ -785,27 +863,25 @@ nodeDataRouter.get(
         const [rTot, pTot, pnR, pnP, tg, un, si, sr, sp] = await Promise.all([
           wantRadio
             ? pool.query<{
-                raw: unknown;
-                logical: unknown;
-                encrypted: unknown;
-                recorded: unknown;
+                received: unknown;
+                transmissions: unknown;
+                ingested: unknown;
+                no_tgid: unknown;
+                enc: unknown;
+                not_recorded: unknown;
                 dropped_patch: unknown;
                 dropped_site: unknown;
               }>(
-                // raw = call-group receptions, logical = distinct calls. Both
-                // gated on CALL_GROUP so data/signaling isn't counted as calls.
-                // Encrypted/recorded ride along on the SAME scan rather than
-                // as extra queries: both are plain columns on the rows already
-                // being counted. Encrypted matters because an encrypted call is
-                // counted like any other yet is never listenable, so a bare
-                // call total overstates what the fleet actually captured;
-                // recorded is the audio-coverage counterpart (it drives the
-                // per-event speaker icon) and exposes traffic channels that
-                // aren't being followed. Both are DISTINCT over logical calls
-                // so they compare like-for-like against `logical`, not against
-                // the larger per-reception `raw`.
-                radioTotalsSql(`${radioCond} AND ${CALL_GROUP}`),
-                radioParams,
+                // Gated on CALL_GROUP so data/signaling is never counted as
+                // voice. Every bucket comes off this one scan — they are all
+                // FILTERs over rows already being walked.
+                radioReceptionsSql(
+                  `${radioCond} AND ${CALL_GROUP}`,
+                  `$${radioParams.length + 1}`,
+                  `$${radioParams.length + 2}`,
+                  hideEnc,
+                ),
+                [...radioParams, encTgIds, progTgIds],
               )
             : null,
           wantPager
@@ -895,12 +971,14 @@ nodeDataRouter.get(
               )
             : null,
         ]);
-        radioRaw = num(rTot?.rows[0]?.raw);
-        radioLogical = num(rTot?.rows[0]?.logical);
-        radioEncrypted = num(rTot?.rows[0]?.encrypted);
-        radioRecorded = num(rTot?.rows[0]?.recorded);
-        radioDroppedPatch = num(rTot?.rows[0]?.dropped_patch);
-        radioDroppedSite = num(rTot?.rows[0]?.dropped_site);
+        receptionsReceived = num(rTot?.rows[0]?.received);
+        transmissions = num(rTot?.rows[0]?.transmissions);
+        receptionsIngested = num(rTot?.rows[0]?.ingested);
+        droppedNoTgid = num(rTot?.rows[0]?.no_tgid);
+        droppedEnc = num(rTot?.rows[0]?.enc);
+        droppedNotRecorded = num(rTot?.rows[0]?.not_recorded);
+        droppedPatch = num(rTot?.rows[0]?.dropped_patch);
+        droppedSite = num(rTot?.rows[0]?.dropped_site);
         pages = num(pTot?.rows[0]?.raw);
         pagesLogical = num(pTot?.rows[0]?.logical);
         perNodeRadioRows = pnR?.rows ?? [];
@@ -976,12 +1054,14 @@ nodeDataRouter.get(
         scope,
         node: nodeId,
         totals: {
-          radioRaw,
-          radioLogical,
-          radioEncrypted,
-          radioRecorded,
-          radioDroppedPatch,
-          radioDroppedSite,
+          receptionsReceived,
+          transmissions,
+          receptionsIngested,
+          droppedNoTgid,
+          droppedEnc,
+          droppedNotRecorded,
+          droppedPatch,
+          droppedSite,
           pages,
           pagesLogical,
           activeNodes: perNodeMap.size,
