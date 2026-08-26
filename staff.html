@@ -4444,7 +4444,9 @@
         // Declared encrypted by its alias — goes regardless of the per-call
         // counts, which under-report for exactly these talkgroups.
         if (nd2IsEncLabel(t.label)) return false;
-        return !(Number(t.encryptedCalls) > 0 && Number(t.encryptedCalls) >= Number(t.calls));
+        // Overview rows carry `receptions`; drill-down rows still carry `calls`.
+        const total = t.receptions != null ? t.receptions : t.calls;
+        return !(Number(t.encryptedCalls) > 0 && Number(t.encryptedCalls) >= Number(total));
       });
     }
 
@@ -4880,7 +4882,9 @@
         tgEl.title = label;
       }
       set('nd2-stat-tg-sub', tg
-        ? `${nd2Num(tg.logicalCalls != null ? tg.logicalCalls : tg.calls)} transmissions`
+        ? (tg.logicalCalls != null
+            ? `${nd2Num(tg.logicalCalls)} transmissions`
+            : `${nd2Num(tg.receptions != null ? tg.receptions : tg.calls)} receptions`)
         : '');
     }
 
@@ -5042,14 +5046,12 @@
           ...(multiSys
             ? [`<span class="nd-sub">${escapeHtml(String(t.system != null ? t.system : '—'))}</span>`]
             : []),
-          nd2Num(t.logicalCalls != null ? t.logicalCalls : t.calls),
-          nd2Num(t.calls),
+          nd2Num(t.receptions != null ? t.receptions : t.calls),
         ]);
         tgEl.innerHTML = table(
           [{ t: 'Talkgroup' }, { t: 'Agency' },
            ...(multiSys ? [{ t: 'Sys' }] : []),
-           { t: 'Calls', num: true },
-           { t: 'Recept.', num: true, title: 'Distinct node + site receptions of this talkgroup — each call counted once per receiving node and site (de-duped, not raw event rows)' }], rows);
+           { t: 'Receptions', num: true, title: 'Distinct node + site receptions of this talkgroup — each call counted once per receiving node and site (de-duped, not raw event rows)' }], rows);
       }
 
       const unitsEl = document.getElementById('nd2-top-units');
@@ -5061,13 +5063,13 @@
           nd2RadioPill(u.unit, u.color),
           nd2NameCell(u.ota),
           nd2NameCell(u.alias),
-          nd2Num(u.calls),
+          nd2Num(u.receptions != null ? u.receptions : u.calls),
         ]);
         unitsEl.innerHTML = table(
           [{ t: 'RID' },
            { t: 'OTA', title: 'Over-the-air alias — the short name the radio transmits with its RID' },
            { t: 'Unit', title: "Configured label from the agency's unit list" },
-           { t: 'Calls', num: true }], rows);
+           { t: 'Recept.', num: true, title: 'Distinct node + site receptions of this radio’s transmissions (de-duped, not raw event rows)' }], rows);
       }
       const unitsNote = document.getElementById('nd2-units-note');
       if (unitsNote) unitsNote.style.display = (ov && ov.unitsWindowCapped) ? '' : 'none';
@@ -5078,9 +5080,10 @@
           s.name
             ? `<span class="nd-strong">${escapeHtml(String(s.name))}</span> <span class="nd-sub">R${escapeHtml(String(s.siteRfss))} S${escapeHtml(String(s.siteId))}</span>`
             : `<span class="nd-strong">R${escapeHtml(String(s.siteRfss))} S${escapeHtml(String(s.siteId))}</span>`,
-          nd2Num(s.calls),
+          nd2Num(s.receptions != null ? s.receptions : s.calls),
         ]);
-        sitesEl.innerHTML = table([{ t: 'Site' }, { t: 'Calls', num: true }], rows);
+        sitesEl.innerHTML = table([{ t: 'Site' },
+          { t: 'Receptions', num: true, title: 'Distinct (call, node, talkgroup) receptions this site carried (de-duped, not raw event rows)' }], rows);
       }
 
       // NOTE: there is deliberately no "Receiving Nodes" card here. The Nodes

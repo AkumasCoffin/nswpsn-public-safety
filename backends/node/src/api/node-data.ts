@@ -665,12 +665,12 @@ nodeDataRouter.get(
       let topTgRows: Array<{
         system: number | null;
         talkgroup: number | null;
-        calls: unknown;
+        receptions: unknown;
         logical: unknown;
         label: string | null;
       }> = [];
-      let topUnitRows: Array<{ unit: number; alias: string | null; calls: unknown }> = [];
-      let topSiteRows: Array<{ site_rfss: number; site_id: number; calls: unknown }> = [];
+      let topUnitRows: Array<{ unit: number; alias: string | null; receptions: unknown }> = [];
+      let topSiteRows: Array<{ site_rfss: number; site_id: number; receptions: unknown }> = [];
       let seriesRadioRows: Array<{ bucket: Date; n: unknown }> = [];
       let seriesPagerRows: Array<{ bucket: Date; n: unknown }> = [];
 
@@ -773,7 +773,7 @@ nodeDataRouter.get(
               ? pool.query<{
                   system: number;
                   talkgroup: number;
-                  calls: unknown;
+                  receptions: unknown;
                   logical: unknown;
                   label: string | null;
                 }>(
@@ -786,37 +786,42 @@ nodeDataRouter.get(
                   // labels (they'll resolve from the agencies config later).
                   `SELECT system, talkgroup,
                           COUNT(DISTINCT (logical_call_id, node_id,
-                            COALESCE(site_rfss, -1), COALESCE(site_id, -1)))::int AS calls,
+                            COALESCE(site_rfss, -1), COALESCE(site_id, -1)))::int AS receptions,
                           COUNT(DISTINCT logical_call_id)::int AS logical,
                           NULL::text AS label
                      FROM node_radio_events
                     WHERE ${nAllFloor}${CALL_GROUP} AND ${TG_VALID}${nAllAnd}
                     GROUP BY system, talkgroup
-                    ORDER BY calls DESC LIMIT 15`,
+                    ORDER BY receptions DESC LIMIT 15`,
                   nAllParams,
                 )
               : null,
             wantRadio
-              ? pool.query<{ unit: number; alias: string | null; calls: unknown }>(
+              ? pool.query<{ unit: number; alias: string | null; receptions: unknown }>(
+                  // Receptions, same tuple as the talkgroup card — see the
+                  // detail-path twin for why COUNT(*) was wrong here.
                   `SELECT source_unit AS unit,
                           (array_agg(source_alias ORDER BY received_at DESC)
                              FILTER (WHERE source_alias IS NOT NULL AND source_alias <> source_unit::text))[1] AS alias,
-                          COUNT(*)::int AS calls
+                          COUNT(DISTINCT (logical_call_id, node_id,
+                            COALESCE(site_rfss, -1), COALESCE(site_id, -1), talkgroup))::int AS receptions
                      FROM node_radio_events
                     WHERE received_at >= now() - interval '30 days'
                       AND ${CALL_GROUP}
                       AND ${RID_VALID}${nAllAnd}
-                    GROUP BY source_unit ORDER BY calls DESC LIMIT 15`,
+                    GROUP BY source_unit ORDER BY receptions DESC LIMIT 15`,
                   nAllParams,
                 )
               : null,
             wantRadio
-              ? pool.query<{ site_rfss: number; site_id: number; calls: unknown }>(
-                  `SELECT site_rfss, site_id, COUNT(*)::int AS calls
+              ? pool.query<{ site_rfss: number; site_id: number; receptions: unknown }>(
+                  // Receptions this site carried — see the detail-path twin.
+                  `SELECT site_rfss, site_id,
+                          COUNT(DISTINCT (logical_call_id, node_id, talkgroup))::int AS receptions
                      FROM node_radio_events
                     WHERE ${nAllFloor}${CALL_GROUP}
                       AND site_rfss IS NOT NULL AND site_id IS NOT NULL${nAllAnd}
-                    GROUP BY site_rfss, site_id ORDER BY calls DESC LIMIT 15`,
+                    GROUP BY site_rfss, site_id ORDER BY receptions DESC LIMIT 15`,
                   nAllParams,
                 )
               : null,
@@ -912,46 +917,54 @@ nodeDataRouter.get(
             ? pool.query<{
                 system: number | null;
                 talkgroup: number | null;
-                calls: unknown;
+                receptions: unknown;
                 logical: unknown;
                 label: string | null;
               }>(
-                // Receptions (calls) = distinct (logical call, node, site) that
-                // heard the call — de-dupes the vce GRANT+CALL double-emit and
+                // Receptions = distinct (logical call, node, site) that heard
+                // the call — de-dupes the vce GRANT+CALL double-emit and
                 // counts one per receiving node/site. logical = distinct calls.
                 // label deliberately NULL: activity-event ingest stores no
                 // labels (they'll resolve from the agencies config later).
                 `SELECT e.system, e.talkgroup,
                         COUNT(DISTINCT (e.logical_call_id, e.node_id,
-                          COALESCE(e.site_rfss, -1), COALESCE(e.site_id, -1)))::int AS calls,
+                          COALESCE(e.site_rfss, -1), COALESCE(e.site_id, -1)))::int AS receptions,
                         COUNT(DISTINCT e.logical_call_id)::int AS logical,
                         NULL::text AS label
                    FROM node_radio_events e
                   WHERE ${radioCond} AND ${callGroup('e.')} AND ${tgValid('e.')}
                   GROUP BY e.system, e.talkgroup
-                  ORDER BY calls DESC LIMIT 15`,
+                  ORDER BY receptions DESC LIMIT 15`,
                 radioParams,
               )
             : null,
           wantRadio
-            ? pool.query<{ unit: number; alias: string | null; calls: unknown }>(
+            ? pool.query<{ unit: number; alias: string | null; receptions: unknown }>(
+                // Receptions, same tuple as the talkgroup card — NOT COUNT(*),
+                // which tallied raw GRANT+CALL event rows and overstated the
+                // busiest radios ~10x against the tiles on the same screen.
                 `SELECT source_unit AS unit,
                         (array_agg(source_alias ORDER BY received_at DESC)
                            FILTER (WHERE source_alias IS NOT NULL AND source_alias <> source_unit::text))[1] AS alias,
-                        COUNT(*)::int AS calls
+                        COUNT(DISTINCT (logical_call_id, node_id,
+                          COALESCE(site_rfss, -1), COALESCE(site_id, -1), talkgroup))::int AS receptions
                    FROM node_radio_events
                   WHERE ${radioCond} AND ${CALL_GROUP} AND ${ridValid('')}
-                  GROUP BY source_unit ORDER BY calls DESC LIMIT 15`,
+                  GROUP BY source_unit ORDER BY receptions DESC LIMIT 15`,
                 radioParams,
               )
             : null,
           wantRadio
-            ? pool.query<{ site_rfss: number; site_id: number; calls: unknown }>(
-                `SELECT site_rfss, site_id, COUNT(*)::int AS calls
+            ? pool.query<{ site_rfss: number; site_id: number; receptions: unknown }>(
+                // Receptions this site carried: distinct (call, node, talkgroup)
+                // — the site itself is the group key. Raw COUNT(*) here made a
+                // single site read larger than the page's whole receptions total.
+                `SELECT site_rfss, site_id,
+                        COUNT(DISTINCT (logical_call_id, node_id, talkgroup))::int AS receptions
                    FROM node_radio_events
                   WHERE ${radioCond} AND ${CALL_GROUP}
                     AND site_rfss IS NOT NULL AND site_id IS NOT NULL
-                  GROUP BY site_rfss, site_id ORDER BY calls DESC LIMIT 15`,
+                  GROUP BY site_rfss, site_id ORDER BY receptions DESC LIMIT 15`,
                 radioParams,
               )
             : null,
@@ -1073,7 +1086,7 @@ nodeDataRouter.get(
           label: r.label ?? (r.talkgroup !== null ? tgLabels.get(r.talkgroup) ?? null : null),
           agency: r.talkgroup !== null ? tgAgencies.get(r.talkgroup) ?? null : null,
           color: r.talkgroup !== null ? tgColors.get(r.talkgroup) ?? null : null,
-          calls: num(r.calls),
+          receptions: num(r.receptions),
           logicalCalls: num(r.logical),
         })),
         topUnits: topUnitRows.map((r) => ({
@@ -1087,7 +1100,7 @@ nodeDataRouter.get(
           alias: radioDisp.labels.get(r.unit) ?? null,
           agency: radioDisp.agencies.get(r.unit) ?? null,
           color: radioDisp.colors.get(r.unit) ?? null,
-          calls: num(r.calls),
+          receptions: num(r.receptions),
         })),
         topSites: topSiteRows.map((r) => ({
           siteRfss: r.site_rfss,
@@ -1095,7 +1108,7 @@ nodeDataRouter.get(
           // These rollup rows carry no system id — resolve via the
           // "rfss:site" fallback key.
           name: siteNameFor(siteMap, null, r.site_rfss, r.site_id),
-          calls: num(r.calls),
+          receptions: num(r.receptions),
         })),
         series,
       };

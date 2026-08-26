@@ -408,10 +408,10 @@ describe('display enrichment (labels, site names, aliases)', () => {
     queryMock.mockImplementation((sql: string) => {
       if (sql.includes('DISTINCT ON (system_id, rfss, site_id)')) return { rows: [SNAPSHOT_ROW] };
       if (sql.includes('GROUP BY source_unit')) {
-        return { rows: [{ unit: 999, alias: 'CAR 1', calls: 9 }] };
+        return { rows: [{ unit: 999, alias: 'CAR 1', receptions: 9 }] };
       }
       if (sql.includes('GROUP BY site_rfss, site_id')) {
-        return { rows: [{ site_rfss: 4, site_id: 85, calls: 9 }] };
+        return { rows: [{ site_rfss: 4, site_id: 85, receptions: 9 }] };
       }
       return { rows: [] };
     });
@@ -420,7 +420,7 @@ describe('display enrichment (labels, site names, aliases)', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     // Overview topSites rows carry no system id — resolved via "rfss:site".
-    expect(body.topSites[0]).toEqual({ siteRfss: 4, siteId: 85, name: 'Cambewarra MT', calls: 9 });
+    expect(body.topSites[0]).toEqual({ siteRfss: 4, siteId: 85, name: 'Cambewarra MT', receptions: 9 });
     // A radio can carry BOTH aliases: `ota` is what it transmitted over the
     // air, `alias` is its configured unit label. agency/color come from the
     // agencies' unit lists — all null here, since this stubbed config has no
@@ -431,7 +431,7 @@ describe('display enrichment (labels, site names, aliases)', () => {
       alias: null,
       agency: null,
       color: null,
-      calls: 9,
+      receptions: 9,
     });
   });
 });
