@@ -1888,64 +1888,64 @@
           const size = data.SIZE || '';
           const council = data.COUNCIL_AREA || data.COUNCIL || '';
           const agency = data.RESPONSIBLE_AGENCY || '';
-          if (status) extraInfo += `<span class="meta-badge" style="background:${getStatusColor(status)};">${escapeHtml(status)}</span>`;
-          if (alertLevel) extraInfo += `<span class="meta-badge" style="background:${getAlertLevelColor(alertLevel)};">${escapeHtml(alertLevel)}</span>`;
+          if (status) extraInfo += `<span class="lg-badge" style="--badge:${getStatusColor(status)}">${escapeHtml(status)}</span>`;
+          if (alertLevel) extraInfo += `<span class="lg-badge" style="--badge:${getAlertLevelColor(alertLevel)}">${escapeHtml(alertLevel)}</span>`;
           // Only show fire type if it's different from status AND alert level (avoid duplicates like "Advice" showing twice)
           if (fireType && fireType !== status && fireType.toLowerCase() !== alertLevel.toLowerCase() && fireType !== 'Not Applicable') {
-            extraInfo += `<span class="meta-badge-outline" style="color:#fb923c; border-color:#fb923c;">${escapeHtml(fireType)}</span>`;
+            extraInfo += `<span class="lg-badge-o" style="--badge:#fb923c">${escapeHtml(fireType)}</span>`;
           }
           // Extra details
           let details = [];
-          if (size) details.push(`<span style="color:#94a3b8;"><i class="fas fa-expand-arrows-alt"></i> ${escapeHtml(size)}</span>`);
-          if (council) details.push(`<span style="color:#94a3b8;"><i class="fas fa-map"></i> ${escapeHtml(council)}</span>`);
-          if (agency) details.push(`<span style="color:#94a3b8;"><i class="fas fa-users"></i> ${escapeHtml(agency)}</span>`);
+          if (size) details.push(`<span class="lg-dim"><i class="fas fa-expand-arrows-alt"></i> ${escapeHtml(size)}</span>`);
+          if (council) details.push(`<span class="lg-dim"><i class="fas fa-map"></i> ${escapeHtml(council)}</span>`);
+          if (agency) details.push(`<span class="lg-dim"><i class="fas fa-users"></i> ${escapeHtml(agency)}</span>`);
           if (details.length) extraDetails = details.join(' · ');
         } else if (item.source === 'pager') {
           const agency = data.agency || item.category || '';
           const incidentId = data.incident_id || '';
           const message = data.message || '';
-          if (agency) extraInfo += `<span class="meta-badge" style="background:#22c55e;">${escapeHtml(agency)}</span>`;
-          if (incidentId && !incidentId.startsWith('noid-')) extraInfo += `<span class="meta-badge-outline" style="color:#4ade80; border-color:#4ade80;">${escapeHtml(incidentId)}</span>`;
+          if (agency) extraInfo += `<span class="lg-badge" style="--badge:#22c55e">${escapeHtml(agency)}</span>`;
+          if (incidentId && !incidentId.startsWith('noid-')) extraInfo += `<span class="lg-badge-o" style="--badge:#4ade80">${escapeHtml(incidentId)}</span>`;
           // Show full message (CSS will handle overflow)
-          if (message) extraDetails = `<span style="color:#86efac; font-style:italic; word-break:break-word;">"${escapeHtml(message)}"</span>`;
+          if (message) extraDetails = `<span class="lg-tint lg-quote" style="--c:#86efac">"${escapeHtml(message)}"</span>`;
         } else if (item.source === 'user_incident') {
           const status = data.status || item.status || '';
           const types = Array.isArray(data.type) ? data.type : [];
           const agencies = Array.isArray(data.responding_agencies) ? data.responding_agencies : [];
           const units = Array.isArray(data.units) ? data.units : [];
           const desc = data.description || '';
-          if (status) extraInfo += `<span class="meta-badge" style="background:#a855f7;">${escapeHtml(status)}</span>`;
+          if (status) extraInfo += `<span class="lg-badge" style="--badge:#a855f7">${escapeHtml(status)}</span>`;
           types.slice(0, 3).forEach(t => {
-            extraInfo += `<span class="meta-badge-outline" style="color:#c084fc; border-color:#c084fc;">${escapeHtml(t)}</span>`;
+            extraInfo += `<span class="lg-badge-o" style="--badge:#c084fc">${escapeHtml(t)}</span>`;
           });
           let details = [];
-          if (agencies.length) details.push(`<span style="color:#94a3b8;"><i class="fas fa-users"></i> ${escapeHtml(agencies.join(', '))}</span>`);
-          if (units.length) details.push(`<span style="color:#94a3b8;"><i class="fas fa-truck"></i> ${escapeHtml(units.join(', '))}</span>`);
+          if (agencies.length) details.push(`<span class="lg-dim"><i class="fas fa-users"></i> ${escapeHtml(agencies.join(', '))}</span>`);
+          if (units.length) details.push(`<span class="lg-dim"><i class="fas fa-truck"></i> ${escapeHtml(units.join(', '))}</span>`);
           const photoCount = Array.isArray(data.images) ? data.images.length : 0;
-          if (photoCount) details.push(`<span style="color:#94a3b8;"><i class="fas fa-camera"></i> ${photoCount} photo${photoCount === 1 ? '' : 's'}</span>`);
-          if (desc) details.push(`<span style="color:#c4b5fd; font-style:italic; word-break:break-word;">${escapeHtml(desc)}</span>`);
+          if (photoCount) details.push(`<span class="lg-dim"><i class="fas fa-camera"></i> ${photoCount} photo${photoCount === 1 ? '' : 's'}</span>`);
+          if (desc) details.push(`<span class="lg-tint lg-quote" style="--c:#c4b5fd">${escapeHtml(desc)}</span>`);
           if (details.length) extraDetails = details.join(' · ');
         } else if (item.source === 'traffic_incident') {
           const roads = data.roads ? (Array.isArray(data.roads) ? data.roads.join(', ') : data.roads) : '';
           const advice = data.advice || '';
-          if (item.category) extraInfo += `<span class="meta-badge" style="background:#f97316;">${escapeHtml(item.category)}</span>`;
-          if (item.status) extraInfo += `<span class="meta-badge-outline" style="color:#fb923c; border-color:#fb923c;">${escapeHtml(item.status)}</span>`;
+          if (item.category) extraInfo += `<span class="lg-badge" style="--badge:#f97316">${escapeHtml(item.category)}</span>`;
+          if (item.status) extraInfo += `<span class="lg-badge-o" style="--badge:#fb923c">${escapeHtml(item.status)}</span>`;
           let details = [];
-          if (roads) details.push(`<span style="color:#fdba74; word-break:break-word;"><i class="fas fa-road"></i> ${escapeHtml(roads)}</span>`);
-          if (advice) details.push(`<span style="color:#94a3b8; word-break:break-word;"><i class="fas fa-info-circle"></i> ${escapeHtml(advice)}</span>`);
+          if (roads) details.push(`<span class="lg-tint lg-wrap" style="--c:#fdba74"><i class="fas fa-road"></i> ${escapeHtml(roads)}</span>`);
+          if (advice) details.push(`<span class="lg-dim lg-wrap"><i class="fas fa-info-circle"></i> ${escapeHtml(advice)}</span>`);
           if (details.length) extraDetails = details.join(' · ');
         } else if (item.source === 'traffic_roadwork') {
-          if (item.category) extraInfo += `<span class="meta-badge" style="background:#d97706;">${escapeHtml(item.category)}</span>`;
-          if (item.status) extraInfo += `<span class="meta-badge-outline" style="color:#fbbf24; border-color:#fbbf24;">${escapeHtml(item.status)}</span>`;
+          if (item.category) extraInfo += `<span class="lg-badge" style="--badge:#d97706">${escapeHtml(item.category)}</span>`;
+          if (item.status) extraInfo += `<span class="lg-badge-o" style="--badge:#fbbf24">${escapeHtml(item.status)}</span>`;
         } else if (item.source === 'traffic_flood') {
-          if (item.category) extraInfo += `<span class="meta-badge" style="background:#3b82f6;">${escapeHtml(item.category)}</span>`;
-          if (item.status) extraInfo += `<span class="meta-badge-outline" style="color:#60a5fa; border-color:#60a5fa;">${escapeHtml(item.status)}</span>`;
+          if (item.category) extraInfo += `<span class="lg-badge" style="--badge:#3b82f6">${escapeHtml(item.category)}</span>`;
+          if (item.status) extraInfo += `<span class="lg-badge-o" style="--badge:#60a5fa">${escapeHtml(item.status)}</span>`;
         } else if (item.source === 'traffic_fire') {
-          if (item.category) extraInfo += `<span class="meta-badge" style="background:#ef4444;">${escapeHtml(item.category)}</span>`;
-          if (item.status) extraInfo += `<span class="meta-badge-outline" style="color:#f87171; border-color:#f87171;">${escapeHtml(item.status)}</span>`;
+          if (item.category) extraInfo += `<span class="lg-badge" style="--badge:#ef4444">${escapeHtml(item.category)}</span>`;
+          if (item.status) extraInfo += `<span class="lg-badge-o" style="--badge:#f87171">${escapeHtml(item.status)}</span>`;
         } else if (item.source === 'traffic_majorevent') {
-          if (item.category) extraInfo += `<span class="meta-badge" style="background:#8b5cf6;">${escapeHtml(item.category)}</span>`;
-          if (item.status) extraInfo += `<span class="meta-badge-outline" style="color:#a78bfa; border-color:#a78bfa;">${escapeHtml(item.status)}</span>`;
+          if (item.category) extraInfo += `<span class="lg-badge" style="--badge:#8b5cf6">${escapeHtml(item.category)}</span>`;
+          if (item.status) extraInfo += `<span class="lg-badge-o" style="--badge:#a78bfa">${escapeHtml(item.status)}</span>`;
         } else if (item.source === 'waze_hazard') {
           const street = data.street || '';
           const city = data.city || '';
@@ -1956,31 +1956,31 @@
           let badgeIcon = '';
           if (sub.startsWith('JAM')) {
             badgeColor = sub.includes('STAND_STILL') ? '#dc2626' : (sub.includes('HEAVY') ? '#ef4444' : '#f97316');
-            badgeIcon = '<i class="fas fa-car" style="margin-right:4px;"></i>';
+            badgeIcon = '<i class="fas fa-car"></i>';
           } else if (sub.startsWith('ACCIDENT')) {
             badgeColor = sub.includes('MAJOR') ? '#ef4444' : '#f97316';
-            badgeIcon = '<i class="fas fa-car-crash" style="margin-right:4px;"></i>';
+            badgeIcon = '<i class="fas fa-car-crash"></i>';
           } else if (sub.includes('WEATHER') || sub.includes('FOG') || sub.includes('ICE') || sub.includes('SNOW') || sub.includes('FLOOD') || sub.includes('HAIL')) {
             badgeColor = '#3b82f6';
-            if (sub.includes('FOG')) badgeIcon = '<i class="fas fa-smog" style="margin-right:4px;"></i>';
-            else if (sub.includes('ICE') || sub.includes('SNOW')) badgeIcon = '<i class="fas fa-snowflake" style="margin-right:4px;"></i>';
-            else if (sub.includes('FLOOD')) badgeIcon = '<i class="fas fa-water" style="margin-right:4px;"></i>';
-            else badgeIcon = '<i class="fas fa-cloud" style="margin-right:4px;"></i>';
+            if (sub.includes('FOG')) badgeIcon = '<i class="fas fa-smog"></i>';
+            else if (sub.includes('ICE') || sub.includes('SNOW')) badgeIcon = '<i class="fas fa-snowflake"></i>';
+            else if (sub.includes('FLOOD')) badgeIcon = '<i class="fas fa-water"></i>';
+            else badgeIcon = '<i class="fas fa-cloud"></i>';
           } else if (sub.includes('TRAFFIC_LIGHT')) {
             badgeColor = '#ef4444';
-            badgeIcon = '<i class="fas fa-traffic-light" style="margin-right:4px;"></i>';
+            badgeIcon = '<i class="fas fa-traffic-light"></i>';
           } else if (sub.includes('ROAD_KILL') || sub.includes('ANIMALS')) {
             badgeColor = '#a3a3a3';
-            badgeIcon = '<i class="fas fa-paw" style="margin-right:4px;"></i>';
+            badgeIcon = '<i class="fas fa-paw"></i>';
           } else if (sub.includes('POT_HOLE')) {
             badgeColor = '#f97316';
-            badgeIcon = '<i class="fas fa-circle-exclamation" style="margin-right:4px;"></i>';
+            badgeIcon = '<i class="fas fa-circle-exclamation"></i>';
           }
-          if (item.category) extraInfo += `<span class="meta-badge" style="background:${badgeColor};">${badgeIcon}${escapeHtml(item.category)}</span>`;
+          if (item.category) extraInfo += `<span class="lg-badge" style="--badge:${badgeColor}">${badgeIcon}${escapeHtml(item.category)}</span>`;
           let details = [];
-          if (street) details.push(`<span style="color:#fde047;"><i class="fas fa-road"></i> ${escapeHtml(street)}</span>`);
-          if (city) details.push(`<span style="color:#94a3b8;"><i class="fas fa-city"></i> ${escapeHtml(city)}</span>`);
-          if (thumbsUp > 0) details.push(`<span style="color:#22c55e;"><i class="fas fa-thumbs-up"></i> ${thumbsUp}</span>`);
+          if (street) details.push(`<span class="lg-tint" style="--c:#fde047"><i class="fas fa-road"></i> ${escapeHtml(street)}</span>`);
+          if (city) details.push(`<span class="lg-dim"><i class="fas fa-city"></i> ${escapeHtml(city)}</span>`);
+          if (thumbsUp > 0) details.push(`<span class="lg-tint" style="--c:#22c55e"><i class="fas fa-thumbs-up"></i> ${thumbsUp}</span>`);
           if (details.length) extraDetails = details.join(' · ');
         } else if (item.source === 'waze_police') {
           const street = data.street || '';
@@ -1988,32 +1988,32 @@
           const thumbsUp = data.nThumbsUp || 0;
           // Determine badge icon based on subcategory
           const sub = (item.subcategory || '').toUpperCase();
-          let badgeIcon = '<i class="fas fa-shield-halved" style="margin-right:4px;"></i>';
+          let badgeIcon = '<i class="fas fa-shield-halved"></i>';
           let badgeColor = '#3b82f6';
           if (sub.includes('HIDING')) {
-            badgeIcon = '<i class="fas fa-user-secret" style="margin-right:4px;"></i>';
+            badgeIcon = '<i class="fas fa-user-secret"></i>';
             badgeColor = '#6366f1';
           } else if (sub.includes('CAMERA')) {
-            badgeIcon = '<i class="fas fa-camera" style="margin-right:4px;"></i>';
+            badgeIcon = '<i class="fas fa-camera"></i>';
             badgeColor = '#8b5cf6';
           }
-          if (item.category) extraInfo += `<span class="meta-badge" style="background:${badgeColor};">${badgeIcon}${escapeHtml(item.category)}</span>`;
+          if (item.category) extraInfo += `<span class="lg-badge" style="--badge:${badgeColor}">${badgeIcon}${escapeHtml(item.category)}</span>`;
           let details = [];
-          if (street) details.push(`<span style="color:#93c5fd;"><i class="fas fa-road"></i> ${escapeHtml(street)}</span>`);
-          if (city) details.push(`<span style="color:#94a3b8;"><i class="fas fa-city"></i> ${escapeHtml(city)}</span>`);
-          if (thumbsUp > 0) details.push(`<span style="color:#22c55e;"><i class="fas fa-thumbs-up"></i> ${thumbsUp}</span>`);
+          if (street) details.push(`<span class="lg-tint" style="--c:#93c5fd"><i class="fas fa-road"></i> ${escapeHtml(street)}</span>`);
+          if (city) details.push(`<span class="lg-dim"><i class="fas fa-city"></i> ${escapeHtml(city)}</span>`);
+          if (thumbsUp > 0) details.push(`<span class="lg-tint" style="--c:#22c55e"><i class="fas fa-thumbs-up"></i> ${thumbsUp}</span>`);
           if (details.length) extraDetails = details.join(' · ');
         } else if (item.source === 'waze_roadwork') {
           const street = data.street || '';
           const city = data.city || '';
           const thumbsUp = data.nThumbsUp || 0;
           const delay = data.delay || 0;
-          if (item.category) extraInfo += `<span class="meta-badge" style="background:#f97316;">${escapeHtml(item.category)}</span>`;
+          if (item.category) extraInfo += `<span class="lg-badge" style="--badge:#f97316">${escapeHtml(item.category)}</span>`;
           let details = [];
-          if (street) details.push(`<span style="color:#fdba74;"><i class="fas fa-road"></i> ${escapeHtml(street)}</span>`);
-          if (city) details.push(`<span style="color:#94a3b8;"><i class="fas fa-city"></i> ${escapeHtml(city)}</span>`);
-          if (delay > 0) details.push(`<span style="color:#f87171;"><i class="fas fa-clock"></i> ${Math.round(delay / 60)}min delay</span>`);
-          if (thumbsUp > 0) details.push(`<span style="color:#22c55e;"><i class="fas fa-thumbs-up"></i> ${thumbsUp}</span>`);
+          if (street) details.push(`<span class="lg-tint" style="--c:#fdba74"><i class="fas fa-road"></i> ${escapeHtml(street)}</span>`);
+          if (city) details.push(`<span class="lg-dim"><i class="fas fa-city"></i> ${escapeHtml(city)}</span>`);
+          if (delay > 0) details.push(`<span class="lg-tint" style="--c:#f87171"><i class="fas fa-clock"></i> ${Math.round(delay / 60)}min delay</span>`);
+          if (thumbsUp > 0) details.push(`<span class="lg-tint" style="--c:#22c55e"><i class="fas fa-thumbs-up"></i> ${thumbsUp}</span>`);
           if (details.length) extraDetails = details.join(' · ');
         } else if (item.source === 'waze_jam') {
           const street = data.street || '';
@@ -2028,52 +2028,52 @@
           else if (sev.includes('heavy')) badgeColor = '#ef4444';
           else if (sev.includes('moderate')) badgeColor = '#f97316';
           else if (sev.includes('light')) badgeColor = '#eab308';
-          if (severity) extraInfo += `<span class="meta-badge" style="background:${badgeColor};"><i class="fas fa-car-side" style="margin-right:4px;"></i>${escapeHtml(severity)}</span>`;
+          if (severity) extraInfo += `<span class="lg-badge" style="--badge:${badgeColor}"><i class="fas fa-car-side"></i>${escapeHtml(severity)}</span>`;
           let details = [];
-          if (street) details.push(`<span style="color:#fca5a5;"><i class="fas fa-road"></i> ${escapeHtml(street)}</span>`);
-          if (city) details.push(`<span style="color:#94a3b8;"><i class="fas fa-city"></i> ${escapeHtml(city)}</span>`);
-          if (lengthKm > 0) details.push(`<span style="color:#fecaca;"><i class="fas fa-ruler-horizontal"></i> ${lengthKm} km</span>`);
-          if (delayMins > 0) details.push(`<span style="color:#f87171;"><i class="fas fa-clock"></i> ${delayMins}min delay</span>`);
+          if (street) details.push(`<span class="lg-tint" style="--c:#fca5a5"><i class="fas fa-road"></i> ${escapeHtml(street)}</span>`);
+          if (city) details.push(`<span class="lg-dim"><i class="fas fa-city"></i> ${escapeHtml(city)}</span>`);
+          if (lengthKm > 0) details.push(`<span class="lg-tint" style="--c:#fecaca"><i class="fas fa-ruler-horizontal"></i> ${lengthKm} km</span>`);
+          if (delayMins > 0) details.push(`<span class="lg-tint" style="--c:#f87171"><i class="fas fa-clock"></i> ${delayMins}min delay</span>`);
           if (details.length) extraDetails = details.join(' · ');
         } else if (item.source.includes('endeavour')) {
           const suburb = data.suburb || '';
           const postcode = data.postcode || '';
           const customers = data.customersAffected || '';
           const cause = data.cause || '';
-          if (item.category) extraInfo += `<span class="meta-badge" style="background:#ca8a04;">${escapeHtml(item.category)}</span>`;
-          if (item.status) extraInfo += `<span class="meta-badge" style="background:${getEndeavourStatusColor(item.status)};">${escapeHtml(item.status)}</span>`;
+          if (item.category) extraInfo += `<span class="lg-badge" style="--badge:#ca8a04">${escapeHtml(item.category)}</span>`;
+          if (item.status) extraInfo += `<span class="lg-badge" style="--badge:${getEndeavourStatusColor(item.status)}">${escapeHtml(item.status)}</span>`;
           let details = [];
-          if (suburb) details.push(`<span style="color:#fde047;"><i class="fas fa-map-marker"></i> ${escapeHtml(suburb)}${postcode ? ' ' + postcode : ''}</span>`);
-          if (customers) details.push(`<span style="color:#f87171;"><i class="fas fa-users"></i> ${escapeHtml(String(customers))} affected</span>`);
-          if (cause && cause !== 'MAINTENANCE WORK') details.push(`<span style="color:#94a3b8;">${escapeHtml(cause.substring(0, 30))}</span>`);
+          if (suburb) details.push(`<span class="lg-tint" style="--c:#fde047"><i class="fas fa-map-marker"></i> ${escapeHtml(suburb)}${postcode ? ' ' + postcode : ''}</span>`);
+          if (customers) details.push(`<span class="lg-tint" style="--c:#f87171"><i class="fas fa-users"></i> ${escapeHtml(String(customers))} affected</span>`);
+          if (cause && cause !== 'MAINTENANCE WORK') details.push(`<span class="lg-dim">${escapeHtml(cause.substring(0, 30))}</span>`);
           if (details.length) extraDetails = details.join(' · ');
         } else if (item.source.includes('essential')) {
           const reason = data.reason || '';
           const customers = data.customersAffected || '';
           const outageType = (data.type || item.category || '').toLowerCase();
-          if (item.category) extraInfo += `<span class="meta-badge" style="background:#0891b2;">${escapeHtml(item.category)}</span>`;
-          if (item.status) extraInfo += `<span class="meta-badge" style="background:${outageType === 'planned' ? '#a855f7' : '#ef4444'};">${escapeHtml(item.status)}</span>`;
+          if (item.category) extraInfo += `<span class="lg-badge" style="--badge:#0891b2">${escapeHtml(item.category)}</span>`;
+          if (item.status) extraInfo += `<span class="lg-badge" style="--badge:${outageType === 'planned' ? '#a855f7' : '#ef4444'}">${escapeHtml(item.status)}</span>`;
           let details = [];
-          if (reason) details.push(`<span style="color:#22d3ee;"><i class="fas fa-info-circle"></i> ${escapeHtml(reason.substring(0, 40))}</span>`);
-          if (customers) details.push(`<span style="color:#f87171;"><i class="fas fa-users"></i> ${escapeHtml(String(customers))} affected</span>`);
+          if (reason) details.push(`<span class="lg-tint" style="--c:#22d3ee"><i class="fas fa-info-circle"></i> ${escapeHtml(reason.substring(0, 40))}</span>`);
+          if (customers) details.push(`<span class="lg-tint" style="--c:#f87171"><i class="fas fa-users"></i> ${escapeHtml(String(customers))} affected</span>`);
           if (details.length) extraDetails = details.join(' · ');
         } else if (item.source === 'bom_warning' || item.source === 'bom_land' || item.source === 'bom_marine') {
           const phase = data.phase || '';
           const aac = data.aac || '';
           // Category badge with icon based on land/marine
           const isMarine = item.source === 'bom_marine' || item.category === 'marine';
-          const catIcon = isMarine ? '<i class="fas fa-water" style="margin-right:4px;"></i>' : '<i class="fas fa-mountain-sun" style="margin-right:4px;"></i>';
+          const catIcon = isMarine ? '<i class="fas fa-water"></i>' : '<i class="fas fa-mountain-sun"></i>';
           const catColor = isMarine ? '#0ea5e9' : '#22c55e';
-          if (item.category) extraInfo += `<span class="meta-badge" style="background:${catColor};">${catIcon}${escapeHtml(item.category)}</span>`;
-          if (item.severity) extraInfo += `<span class="meta-badge" style="background:${getBomSeverityColor(item.severity)};">${escapeHtml(item.severity)}</span>`;
+          if (item.category) extraInfo += `<span class="lg-badge" style="--badge:${catColor}">${catIcon}${escapeHtml(item.category)}</span>`;
+          if (item.severity) extraInfo += `<span class="lg-badge" style="--badge:${getBomSeverityColor(item.severity)}">${escapeHtml(item.severity)}</span>`;
           let details = [];
-          if (phase) details.push(`<span style="color:#7dd3fc;"><i class="fas fa-clock"></i> ${escapeHtml(phase)}</span>`);
-          if (aac) details.push(`<span style="color:#94a3b8;"><i class="fas fa-map"></i> ${escapeHtml(aac)}</span>`);
+          if (phase) details.push(`<span class="lg-tint" style="--c:#7dd3fc"><i class="fas fa-clock"></i> ${escapeHtml(phase)}</span>`);
+          if (aac) details.push(`<span class="lg-dim"><i class="fas fa-map"></i> ${escapeHtml(aac)}</span>`);
           if (details.length) extraDetails = details.join(' · ');
         } else {
           // Generic fallback
-          if (item.category) extraInfo += `<span class="meta-badge" style="background:${sourceColors.primary};">${escapeHtml(item.category)}</span>`;
-          if (item.status) extraInfo += `<span class="meta-badge-outline" style="color:${sourceColors.secondary}; border-color:${sourceColors.secondary};">${escapeHtml(item.status)}</span>`;
+          if (item.category) extraInfo += `<span class="lg-badge" style="--badge:${sourceColors.primary}">${escapeHtml(item.category)}</span>`;
+          if (item.status) extraInfo += `<span class="lg-badge-o" style="--badge:${sourceColors.secondary}">${escapeHtml(item.status)}</span>`;
         }
         
         html += `
@@ -2085,10 +2085,10 @@
               <div class="incident-meta">
                 <span><i class="fas fa-tag"></i> ${escapeHtml(sourceName)}</span>
                 ${subcat ? `<span><i class="fas fa-tags"></i> ${escapeHtml(subcat)}</span>` : ''}
-                ${showLocation ? `<span style="word-break:break-word;"><i class="fas fa-map-marker-alt"></i> ${escapeHtml(item.location_text)}</span>` : ''}
+                ${showLocation ? `<span class="lg-wrap"><i class="fas fa-map-marker-alt"></i> ${escapeHtml(item.location_text)}</span>` : ''}
               </div>
               ${extraInfo ? `<div class="incident-badges">${extraInfo}</div>` : ''}
-              ${extraDetails ? `<div class="incident-details" style="font-size:10px; margin-top:4px; line-height:1.4;">${extraDetails}</div>` : ''}
+              ${extraDetails ? `<div class="incident-details lg-details">${extraDetails}</div>` : ''}
             </div>
             <div class="incident-status">
               <span class="incident-time">${time}</span>
@@ -2295,7 +2295,7 @@
         
         let html = `<div style="border-top:1px solid rgba(148,163,184,0.2); padding-top:12px; margin-top:8px;">
           <div style="color:#a78bfa; font-weight:600; font-size:10px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px;">
-            <i class="fas fa-history" style="margin-right:4px;"></i>Previous Updates (${pastUpdates.length})
+            <i class="fas fa-history"></i>Previous Updates (${pastUpdates.length})
           </div>`;
         
         pastUpdates.forEach((snapshot, idx) => {
@@ -2578,7 +2578,7 @@
             // Show linked pager hits
             if (linkedPagers.length > 0) {
               html += `<div style="color:#22c55e; font-weight:600; font-size:10px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px;">
-                <i class="fas fa-pager" style="margin-right:4px;"></i>Related Pager Hits (${linkedPagers.length})
+                <i class="fas fa-pager"></i>Related Pager Hits (${linkedPagers.length})
               </div>`;
               
               linkedPagers.forEach(pager => {
@@ -2609,7 +2609,7 @@
             // Show linked incidents
             if (linkedIncidents.length > 0) {
               html += `<div style="color:#f97316; font-weight:600; font-size:10px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px; ${linkedPagers.length > 0 ? 'margin-top:12px;' : ''}">
-                <i class="fas fa-fire" style="margin-right:4px;"></i>Nearby Incidents (${linkedIncidents.length})
+                <i class="fas fa-fire"></i>Nearby Incidents (${linkedIncidents.length})
               </div>`;
               
               linkedIncidents.forEach(incident => {
@@ -2693,7 +2693,7 @@
           if (filteredPagers.length > 0) {
             html = `<div style="border-top:1px solid rgba(148,163,184,0.2); padding-top:12px; margin-top:8px;">
               <div style="color:#22c55e; font-weight:600; font-size:10px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px;">
-                <i class="fas fa-link" style="margin-right:4px;"></i>Linked Pager Messages (${filteredPagers.length})
+                <i class="fas fa-link"></i>Linked Pager Messages (${filteredPagers.length})
               </div>`;
             
             filteredPagers.forEach(pager => {
@@ -3205,7 +3205,7 @@
       // Location
       if (item.location_text) {
         html += `<div style="margin-bottom:8px;">
-          <div style="color:#f59e0b; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:2px;"><i class="fas fa-location-dot" style="margin-right:4px;"></i>Location</div>
+          <div style="color:#f59e0b; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:2px;"><i class="fas fa-location-dot"></i>Location</div>
           <div style="color:#e2e8f0; font-size:11px;">${escapeHtml(item.location_text)}</div>
         </div>`;
       }
@@ -3213,19 +3213,19 @@
       // Coordinates + closest address
       if (item.latitude && item.longitude) {
         html += `<div style="margin-bottom:8px;">
-          <div style="color:#64748b; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:2px;"><i class="fas fa-crosshairs" style="margin-right:4px;"></i>Coords</div>
+          <div style="color:#64748b; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:2px;"><i class="fas fa-crosshairs"></i>Coords</div>
           <div style="color:#94a3b8; font-size:11px;">${item.latitude.toFixed(5)}, ${item.longitude.toFixed(5)}</div>
         </div>`;
         html += `<div id="reverse-geocode-address" style="margin-bottom:8px;">
-          <div style="color:#38bdf8; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:2px;"><i class="fas fa-map-pin" style="margin-right:4px;"></i>Closest Address</div>
-          <div id="reverse-geocode-value" style="color:#e2e8f0; font-size:11px;"><i class="fas fa-spinner fa-spin" style="color:#64748b; margin-right:4px;"></i><span style="color:#64748b;">Looking up address...</span></div>
+          <div style="color:#38bdf8; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:2px;"><i class="fas fa-map-pin"></i>Closest Address</div>
+          <div id="reverse-geocode-value" style="color:#e2e8f0; font-size:11px;"><i class="fas fa-spinner fa-spin" style="color:#64748b; margin-right:4px;"></i><span class="lg-tint" style="--c:#64748b">Looking up address...</span></div>
         </div>`;
       }
       
       // Raw message for pager (show full message above timing)
       if (source === 'pager' && data.message) {
         html += `<div style="margin-bottom:8px;">
-          <div style="color:#22c55e; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;"><i class="fas fa-envelope" style="margin-right:4px;"></i>Raw Message</div>
+          <div style="color:#22c55e; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;"><i class="fas fa-envelope"></i>Raw Message</div>
           <div style="background:rgba(34,197,94,0.08); border:1px solid rgba(34,197,94,0.2); border-radius:6px; padding:8px;">
             <div style="color:#e2e8f0; font-size:10px; line-height:1.5; font-family:monospace; word-break:break-all; white-space:pre-wrap;">${escapeHtml(data.message)}</div>
           </div>
@@ -3244,7 +3244,7 @@
         
         if (extraFields.length > 0) {
           html += `<div style="margin-bottom:8px;">
-            <div style="color:#fb923c; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;"><i class="fas fa-info-circle" style="margin-right:4px;"></i>Details</div>
+            <div style="color:#fb923c; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;"><i class="fas fa-info-circle"></i>Details</div>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px;">`;
           extraFields.forEach(([label, value]) => {
             html += `<div style="color:#64748b; font-size:9px;">${escapeHtml(label)}:</div><div style="color:#e2e8f0; font-size:10px;">${escapeHtml(value)}</div>`;
@@ -3264,7 +3264,7 @@
         
         if (extraFields.length > 0) {
           html += `<div style="margin-bottom:8px;">
-            <div style="color:#f97316; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;"><i class="fas fa-info-circle" style="margin-right:4px;"></i>Details</div>`;
+            <div style="color:#f97316; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;"><i class="fas fa-info-circle"></i>Details</div>`;
           extraFields.forEach(([label, value]) => {
             html += `<div style="color:#64748b; font-size:9px; margin-bottom:2px;">${escapeHtml(label)}:</div>
               <div style="color:#e2e8f0; font-size:10px; margin-bottom:4px;">${escapeHtml(String(value).substring(0, 200))}${String(value).length > 200 ? '...' : ''}</div>`;
@@ -3300,7 +3300,7 @@
         
         if (extraFields.length > 0) {
           html += `<div style="margin-bottom:8px;">
-            <div style="color:${wazeColor}; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;"><i class="fas fa-info-circle" style="margin-right:4px;"></i>Details</div>
+            <div style="color:${wazeColor}; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;"><i class="fas fa-info-circle"></i>Details</div>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px;">`;
           extraFields.forEach(([label, value]) => {
             html += `<div style="color:#64748b; font-size:9px;">${escapeHtml(label)}:</div><div style="color:#e2e8f0; font-size:10px;">${escapeHtml(String(value))}</div>`;
@@ -3319,7 +3319,7 @@
         
         if (extraFields.length > 0) {
           html += `<div style="margin-bottom:8px;">
-            <div style="color:#facc15; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;"><i class="fas fa-info-circle" style="margin-right:4px;"></i>Details</div>
+            <div style="color:#facc15; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;"><i class="fas fa-info-circle"></i>Details</div>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px;">`;
           extraFields.forEach(([label, value]) => {
             html += `<div style="color:#64748b; font-size:9px;">${escapeHtml(label)}:</div><div style="color:#e2e8f0; font-size:10px;">${escapeHtml(String(value))}</div>`;
@@ -3338,7 +3338,7 @@
         
         if (extraFields.length > 0) {
           html += `<div style="margin-bottom:8px;">
-            <div style="color:#22d3ee; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;"><i class="fas fa-info-circle" style="margin-right:4px;"></i>Details</div>
+            <div style="color:#22d3ee; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;"><i class="fas fa-info-circle"></i>Details</div>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px;">`;
           extraFields.forEach(([label, value]) => {
             html += `<div style="color:#64748b; font-size:9px;">${escapeHtml(label)}:</div><div style="color:#e2e8f0; font-size:10px;">${escapeHtml(String(value))}</div>`;
@@ -3356,7 +3356,7 @@
         
         if (extraFields.length > 0) {
           html += `<div style="margin-bottom:8px;">
-            <div style="color:#0ea5e9; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;"><i class="fas fa-info-circle" style="margin-right:4px;"></i>Details</div>`;
+            <div style="color:#0ea5e9; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;"><i class="fas fa-info-circle"></i>Details</div>`;
           extraFields.forEach(([label, value]) => {
             const maxLen = label === 'Details' ? 500 : 100;
             html += `<div style="color:#64748b; font-size:9px; margin-bottom:2px;">${escapeHtml(label)}:</div>
@@ -4120,8 +4120,8 @@
         if (locText) h += '<div style="color:#94a3b8;font-size:0.7rem;margin-top:0.12rem;"><i class="fas fa-location-dot" style="color:#64748b;margin-right:0.3rem;"></i>' + esc(locText) + '</div>';
         h += '<div style="color:#e2e8f0;margin-top:0.15rem;">' + esc(inc.summary || '') + '</div>';
         const meta = [];
-        if (unitList) meta.push('<span><span style="color:#64748b;">Units:</span> ' + unitList + '</span>');
-        if (vehicles) meta.push('<span><span style="color:#64748b;">Vehicles:</span> ' + vehicles + '</span>');
+        if (unitList) meta.push('<span><span class="lg-tint" style="--c:#64748b">Units:</span> ' + unitList + '</span>');
+        if (vehicles) meta.push('<span><span class="lg-tint" style="--c:#64748b">Vehicles:</span> ' + vehicles + '</span>');
         if (people) meta.push('<span><i class="fas fa-user" style="color:#64748b;font-size:0.62rem;margin-right:0.25rem;"></i>' + people + '</span>');
         if (meta.length) h += '<div style="color:#94a3b8;font-size:0.68rem;margin-top:0.18rem;display:flex;flex-wrap:wrap;gap:0.55rem;">' + meta.join('') + '</div>';
 
@@ -4224,7 +4224,7 @@
         if (Array.isArray(structured.notable) && structured.notable.length) {
           h += '<div style="display:flex;gap:0.4rem;align-items:flex-start;margin-bottom:0.4rem;font-size:0.72rem;">';
           h += '<span style="color:#ef4444;text-transform:uppercase;letter-spacing:0.4px;font-weight:600;flex-shrink:0;"><i class="fas fa-triangle-exclamation"></i> Notable</span>';
-          h += '<span style="color:#cbd5e1;">' + structured.notable.map(n => esc(n)).join(' · ') + '</span>';
+          h += '<span class="lg-tint" style="--c:#cbd5e1">' + structured.notable.map(n => esc(n)).join(' · ') + '</span>';
           h += '</div>';
         }
         const incidents = Array.isArray(structured.incidents) ? structured.incidents : [];
