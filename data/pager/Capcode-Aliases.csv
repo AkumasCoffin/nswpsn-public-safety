@@ -234,6 +234,8 @@
 154,0290056,Macarthur - Wedderburn Brigade,RFS,fire-alt,orange,{},0
 155,0290064,Macarthur - Menangle Park Brigade,RFS,fire-alt,orange,{},0
 156,0290232,Macarthur Group 2,RFS,fire-alt,orange,{},0
+1152,0420624,Clarence Valley - Dilkoon Brigade,RFS,fire-alt,orange,{},0
+1153,0420656,Clarence Valley - Trenayr Brigade,RFS,fire-alt,orange,{},0
 157,0440160,Canobolas - Torrington Brigade,RFS,fire-alt,orange,{},0
 158,0440168,Canobolas - Woodstock Brigade,RFS,fire-alt,orange,{},0
 159,0440664,Canobolas - Koorawatha Brigade,RFS,fire-alt,orange,{},0
@@ -695,6 +697,7 @@
 613,0850424,Macarthur - Kemps Creek Brigade,RFS,fire-alt,orange,{},0
 614,0850504,Macarthur - Luddenham Brigade,RFS,fire-alt,orange,{},0
 615,0850600,Macarthur - Casula Brigade,RFS,fire-alt,orange,{},0
+1154,0871304,Clarence Valley - Woombah Brigade,RFS,fire-alt,orange,{},0
 1137,0950048,Hunter Valley - Kayuga Brigade,RFS,fire-alt,orange,{},0
 1135,0950056,Hunter Valley - Bulga Group Officers,RFS,fire-alt,orange,{},0
 1136,0950232,Hunter Valley - Edinglassie Brigade,RFS,fire-alt,orange,{},0
@@ -702,9 +705,18 @@
 616,0959008,Muswellbrook SES,SES,exclamation-triangle,yellow,{},0
 100,100,0210344,Faulconbridge Brigade,Blue Mountains,fire-alt,"""orange""",null
 1148,1010032,Clarence Valley - Glenugie Brigade,RFS,fire-alt,orange,{},0
+1155,1010120,Clarence Valley - Group Officer,RFS,fire-alt,orange,{},0
+1156,1010600,Clarence Valley - Braunstone Brigade,RFS,fire-alt,orange,{},0
+1157,1010624,Clarence Valley - Coutts Crossing Brigade,RFS,fire-alt,orange,{},0
+1158,1010632,Clarence Valley - Glenreagh Brigade,RFS,fire-alt,orange,{},0
 1147,1010640,Clarence Valley - Glenugie Brigade,RFS,fire-alt,orange,{},0
 1150,1010648,Clarence Valley - Grafton City Brigade,RFS,fire-alt,orange,{},0
+1159,1010656,Clarence Valley - Halfway Creek Brigade,RFS,fire-alt,orange,{},0
+1160,1010672,Clarence Valley - Jackadgery Brigade,RFS,fire-alt,orange,{},0
+1161,1010704,Clarence Valley - Mt Ramornie Brigade,RFS,fire-alt,orange,{},0
 1149,1010712,Clarence Valley - Nymboida Brigade,RFS,fire-alt,orange,{},0
+1162,1010736,Clarence Valley - Southhampton Brigade,RFS,fire-alt,orange,{},0
+1163,1010752,Clarence Valley - Ulmarra Brigade,RFS,fire-al,orange,{},0
 617,1020000,Chifley Lithgow - Chifley Broadcast Message,RFS,fire-alt,orange,{},0
 618,1020064,Chifley Lithgow - Back Creek Brigade Captain,RFS,fire-alt,orange,{},0
 619,1020072,Chifley Lithgow - Back Creek Brigade,RFS,fire-alt,orange,{},0

@@ -265,7 +265,7 @@
       
       <div class="filter-group wide">
         <label class="filter-label">Search</label>
-        <input type="text" id="filter-search" class="filter-input" placeholder="Search title or location...">
+        <input type="text" id="filter-search" class="filter-input" placeholder="Search name, capcode or location...">
       </div>
       
       <div class="filter-group">
@@ -1855,6 +1855,10 @@
         let subcat = item.subcategory ? formatSubcategory(item.subcategory) : (item.source === 'waze_police' ? 'Police Visible' : '');
         // Don't show subcat if it matches title (avoid duplicate info)
         if (subcat && title.toLowerCase().includes(subcat.toLowerCase())) subcat = '';
+        // Pager subcategory IS the capcode, which now renders as a labelled
+        // CAP badge below — a bare repeat of the number here reads as a
+        // second, unrelated field.
+        if (item.source === 'pager') subcat = '';
         
         // Don't show location if it matches title or title is start of location (RFS case: "Surry St, Coraki" vs "Surry St, Coraki, NSW 2471")
         const showLocation = item.location_text && 
@@ -1910,7 +1914,12 @@
           const agency = data.agency || item.category || '';
           const incidentId = data.incident_id || '';
           const message = data.message || '';
+          const capcode = data.capcode || item.subcategory || '';
           if (agency) extraInfo += `<span class="lg-badge" style="--badge:#22c55e">${escapeHtml(agency)}</span>`;
+          // Label the capcode so it reads as a pager address rather than an
+          // anonymous number, and keep it on the card even when it also
+          // appears in the meta row — it's the key people search by.
+          if (capcode) extraInfo += `<span class="lg-badge-o" style="--badge:#38bdf8" title="Pager capcode"><i class="fas fa-hashtag"></i>CAP ${escapeHtml(capcode)}</span>`;
           if (incidentId && !incidentId.startsWith('noid-')) extraInfo += `<span class="lg-badge-o" style="--badge:#4ade80">${escapeHtml(incidentId)}</span>`;
           // Show full message (CSS will handle overflow)
           if (message) extraDetails = `<span class="lg-tint lg-quote" style="--c:#86efac">"${escapeHtml(message)}"</span>`;
@@ -2363,6 +2372,7 @@
             const alias = snapData.alias || snapshot.title || 'Unknown';
             const message = snapData.message || '';
             const agency = snapData.agency || snapshot.category || '';
+            const capcode = snapData.capcode || snapshot.subcategory || '';
             
             // Color based on agency
             let agencyColor = '#22c55e'; // Default green for pager
@@ -2377,7 +2387,14 @@
                 <span class="lg-label" style="--c:${agencyColor}"><i class="fas fa-pager"></i>${escapeHtml(alias)}</span>
                 <span class="lg-meta">${escapeHtml(timeStr)}</span>
               </div>`;
-            
+
+            if (capcode) {
+              html += `<div class="lg-chips spaced">
+                <span class="lg-tag" style="--c:#38bdf8"><i class="fas fa-hashtag"></i>CAP ${escapeHtml(capcode)}</span>
+                ${agency ? `<span class="lg-tag" style="--c:${agencyColor}">${escapeHtml(agency)}</span>` : ''}
+              </div>`;
+            }
+
             if (message) {
               html += `<div class="lg-mono">${escapeHtml(message)}</div>`;
             }
@@ -2607,6 +2624,7 @@
                     <span class="lg-label" style="--c:${agencyColor}"><i class="fas fa-pager"></i>${escapeHtml(alias)}</span>
                     ${timestamp ? `<span class="lg-meta">${escapeHtml(timestamp)}</span>` : ''}
                   </div>
+                  ${props.capcode ? `<div class="lg-chips spaced"><span class="lg-tag" style="--c:#38bdf8"><i class="fas fa-hashtag"></i>CAP ${escapeHtml(props.capcode)}</span></div>` : ''}
                   ${message ? `<div class="lg-mono">${escapeHtml(message)}</div>` : ''}
                 </div>`;
               });

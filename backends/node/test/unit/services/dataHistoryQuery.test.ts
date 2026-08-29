@@ -160,6 +160,15 @@ describe('buildSqlForTable — JSONB filters', () => {
     expect(q.params).toContain('%hwy%');
   });
 
+  it('search also matches subcategory, so a pager capcode is findable', () => {
+    const q = buildSqlForTable(
+      'archive_misc',
+      defaultParams({ search: '1410016' }),
+    );
+    expect(q.sql).toMatch(/subcategory ILIKE/);
+    expect(q.params).toContain('%1410016%');
+  });
+
 });
 
 describe('buildSqlForTable — time, geo, cursor', () => {

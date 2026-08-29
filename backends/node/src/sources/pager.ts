@@ -21,6 +21,7 @@ import type { ArchiveRow } from '../store/archive.js';
 import { log } from '../lib/log.js';
 import { formatSydneyNaive } from '../lib/sydneyTime.js';
 import { learnAliasesFromMessages } from '../services/capcodeAliasSync.js';
+import { capcodeAliases, normalizeCapcode } from '../api/node-data.js';
 
 export interface PagerMessage {
   id: number | string;
@@ -343,7 +344,11 @@ export async function fetchPager(): Promise<PagerSnapshot> {
         id: typeof pagerMsgId === 'string' || typeof pagerMsgId === 'number' ? pagerMsgId : String(pagerMsgId),
         incident_id: incId,
         capcode: asString(m.address),
-        alias: asString(m.alias),
+        // Pagermon usually names the brigade itself. When it doesn't, fall
+        // back to the operator's exported capcode map so the message still
+        // carries a readable name — which is also what makes it findable by
+        // name in the logs search (title projects from alias).
+        alias: asString(m.alias) || capcodeAliasFor(asString(m.address)),
         agency: inferPagerAgency(body, asString(m.agency)),
         source: asString(m.source),
         message: body,
@@ -366,6 +371,20 @@ export async function fetchPager(): Promise<PagerSnapshot> {
   void learnAliasesFromMessages(out);
 
   return { messages: out, count: out.length };
+}
+
+/**
+ * Brigade/unit name for a capcode from the operator's exported alias CSV.
+ * Display-only fallback: returns '' when the capcode isn't in the export,
+ * leaving the existing type/agency fallback chain to label the row.
+ */
+function capcodeAliasFor(capcode: string): string {
+  if (!capcode) return '';
+  try {
+    return capcodeAliases().get(normalizeCapcode(capcode))?.alias ?? '';
+  } catch {
+    return '';
+  }
 }
 
 let _missingUrlLogged = false;

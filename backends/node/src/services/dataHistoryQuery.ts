@@ -401,7 +401,11 @@ function buildUniqueQuery(table: ArchiveTable, p: DataHistoryParams): BuiltQuery
   }
   if (p.search) {
     const ph = `$${sidecarAcc.params.length + 1}`;
-    sidecarAcc.parts.push(`(title ILIKE ${ph} OR location_text ILIKE ${ph})`);
+    // subcategory carries the pager capcode (and the traffic subtype), so
+    // a free-text search finds "1410016" as well as the brigade name.
+    sidecarAcc.parts.push(
+      `(title ILIKE ${ph} OR location_text ILIKE ${ph} OR subcategory ILIKE ${ph})`,
+    );
     sidecarAcc.params.push(`%${p.search}%`);
   }
   if (p.title) {
@@ -628,7 +632,10 @@ export function buildSqlForTable(table: ArchiveTable, p: DataHistoryParams): Bui
 
   if (p.search) {
     const ph = `$${acc.params.length + 1}`;
-    acc.parts.push(`((data->>'title') ILIKE ${ph} OR (data->>'location_text') ILIKE ${ph})`);
+    acc.parts.push(
+      `((data->>'title') ILIKE ${ph} OR (data->>'location_text') ILIKE ${ph}` +
+        ` OR subcategory ILIKE ${ph})`,
+    );
     acc.params.push(`%${p.search}%`);
   }
   if (p.title) {
@@ -811,7 +818,9 @@ export function buildCountSqlForTable(
   }
   if (p.search) {
     acc.parts.push(
-      `(data->>'title' ILIKE $${acc.params.length + 1} OR (data->>'location_text') ILIKE $${acc.params.length + 1})`,
+      `(data->>'title' ILIKE $${acc.params.length + 1}` +
+        ` OR (data->>'location_text') ILIKE $${acc.params.length + 1}` +
+        ` OR subcategory ILIKE $${acc.params.length + 1})`,
     );
     acc.params.push(`%${p.search}%`);
   }
@@ -947,7 +956,9 @@ export function buildCountSqlForTable(
     }
     if (p.search) {
       const ph = `$${sidecarAcc.params.length + 1}`;
-      sidecarAcc.parts.push(`(title ILIKE ${ph} OR location_text ILIKE ${ph})`);
+      sidecarAcc.parts.push(
+        `(title ILIKE ${ph} OR location_text ILIKE ${ph} OR subcategory ILIKE ${ph})`,
+      );
       sidecarAcc.params.push(`%${p.search}%`);
     }
     if (p.title) {
