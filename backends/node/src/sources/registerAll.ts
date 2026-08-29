@@ -13,6 +13,7 @@ import registerAviation from './aviation.js';
 import registerFirms from './firms.js';
 import registerAdsb from './adsb.js';
 import registerUserIncidents from './userIncidents.js';
+import registerActAmbulance from './actAmbulance.js';
 
 export function registerAllSources(): void {
   registerRfs();
@@ -25,4 +26,5 @@ export function registerAllSources(): void {
   registerFirms();
   registerAdsb();
   registerUserIncidents();
+  registerActAmbulance();
 }

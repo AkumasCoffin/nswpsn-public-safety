@@ -41,6 +41,8 @@ const SOURCE_TO_FAMILY: Record<string, ArchiveTable> = {
   livetraffic: 'archive_traffic',
   // RFS
   rfs: 'archive_rfs',
+  // ACT Ambulance Service (ESA feed)
+  act_ambulance: 'archive_misc',
   // Power
   endeavour: 'archive_power',
   endeavour_current: 'archive_power',

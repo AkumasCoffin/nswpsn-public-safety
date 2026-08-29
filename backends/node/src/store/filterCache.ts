@@ -38,6 +38,7 @@ const RAW_SOURCE_TO_ALERT_TYPE: Record<string, string> = {
   // python canonical source names (also what migration 006 + the
   // archiveSource overrides write into archive_*).
   rfs: 'rfs',
+  act_ambulance: 'act_ambulance',
   bom_marine: 'bom_marine',
   bom_land: 'bom_land',
   bom_warning: 'bom_land',
@@ -94,6 +95,7 @@ const ALERT_TYPE_PROVIDER: Record<string, [string, string]> = {
   pager: ['pager', 'Messages'],
   user_incident: ['user', 'User Incidents'],
   radio_summary: ['rdio', 'Hourly Summaries'],
+  act_ambulance: ['actas', 'Responses'],
 };
 
 const PROVIDER_DISPLAY: Record<string, { name: string; icon: string; color: string }> = {
@@ -107,6 +109,7 @@ const PROVIDER_DISPLAY: Record<string, { name: string; icon: string; color: stri
   pager: { name: 'Pager', icon: 'pager', color: '#8b5cf6' },
   user: { name: 'NSW PSN User Submissions', icon: 'user', color: '#a855f7' },
   rdio: { name: 'Radio Scanner', icon: 'radio', color: '#10b981' },
+  actas: { name: 'ACT Ambulance Service', icon: 'truck-medical', color: '#ec4899' },
 };
 
 const PROVIDER_ORDER = [
@@ -119,6 +122,7 @@ const PROVIDER_ORDER = [
   'pager',
   'user',
   'rdio',
+  'actas',
 ];
 
 const PROVIDER_TYPE_ORDER: Record<string, string[]> = {

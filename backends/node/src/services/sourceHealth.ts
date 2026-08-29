@@ -47,6 +47,7 @@ const SOURCE_THRESHOLDS: Record<string, ThresholdEntry> = {
   rdio:              { soft: 3900, hard: 12600, label: 'rdio-scanner' },
   // FIRMS NRT updates every few hours; loose thresholds match its cadence.
   firms_hotspots:    { soft: 3600, hard: 10800, label: 'NASA FIRMS hotspots' },
+  act_ambulance:     { soft: 600,  hard: 1800, label: 'ACT Ambulance responses' },
 };
 
 // Reference / static data sources that are polled for the live map but

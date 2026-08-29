@@ -15,6 +15,7 @@ import { healthRouter } from './api/health.js';
 import { configRouter } from './api/config.js';
 // Simple sources (W3).
 import { rfsRouter } from './api/rfs.js';
+import { actAmbulanceRouter } from './api/act-ambulance.js';
 import { bomRouter } from './api/bom.js';
 import { trafficRouter } from './api/traffic.js';
 import { beachRouter } from './api/beach.js';
@@ -288,6 +289,7 @@ export function createApp() {
   app.route('/', configRouter);
   // Simple sources
   app.route('/', rfsRouter);
+  app.route('/', actAmbulanceRouter);
   app.route('/', bomRouter);
   app.route('/', trafficRouter);
   app.route('/', beachRouter);
@@ -362,6 +364,7 @@ export function createApp() {
       endpoints: {
         live: [
           '/api/rfs/incidents',
+          '/api/act-ambulance/incidents',
           '/api/bom/warnings',
           '/api/traffic/{incidents,roadwork,flood,fire,majorevent,cameras}',
           '/api/endeavour/{current,planned,future}',

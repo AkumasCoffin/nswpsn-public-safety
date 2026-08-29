@@ -37,9 +37,9 @@ describe('filterCache', () => {
 
   it('returns the full provider list when LiveStore is empty', () => {
     const facets = getFilterFacetsLive();
-    // 9 providers: rfs, bom, livetraffic, endeavour, ausgrid, essential,
-    // pager, user, rdio. Waze was retired along with its ingest.
-    expect(facets.providers).toHaveLength(9);
+    // 10 providers: rfs, bom, livetraffic, endeavour, ausgrid, essential,
+    // pager, user, rdio, actas. Waze was retired along with its ingest.
+    expect(facets.providers).toHaveLength(10);
     for (const p of facets.providers) {
       expect(p.count).toBe(0);
     }
