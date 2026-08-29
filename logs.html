@@ -3121,12 +3121,19 @@
       } else if (source === 'pager') {
         // Pager specific display
         const councilArea = data.agency || item.category || '';
-        const incidentId = data.incident_id || item.subcategory || '';
-        
+        // incident_id only — item.subcategory is the capcode, which has its
+        // own box below and would otherwise masquerade as an incident id.
+        const incidentId = data.incident_id || '';
+        const pagerCapcode = data.capcode || item.subcategory || '';
+
         html += `<div class="lg-kv">
           <div class="lg-kv-box" style="--c:#22c55e">
             <div class="lg-kv-k" style="--c:#86efac">Council Area</div>
             <div class="lg-kv-v" style="--c:#4ade80">${escapeHtml(councilArea || 'Unknown')}</div>
+          </div>
+          <div class="lg-kv-box" style="--c:#38bdf8">
+            <div class="lg-kv-k" style="--c:#7dd3fc">Capcode</div>
+            <div class="lg-kv-v" style="--c:#38bdf8">${escapeHtml(pagerCapcode || 'N/A')}</div>
           </div>
           <div class="lg-kv-box" style="--c:#22c55e">
             <div class="lg-kv-k" style="--c:#86efac">Incident ID</div>
