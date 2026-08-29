@@ -559,7 +559,8 @@
           'Essential Energy': 'bolt',
           'Bureau of Meteorology': 'cloud',
           'Pager': 'pager',
-          'NSW PSN User Submissions': 'user'
+          'NSW PSN User Submissions': 'user',
+          'ACT Ambulance Service': 'truck-medical'
         };
         const providerColors = {
           'LiveTraffic NSW': '#f97316',
@@ -569,7 +570,8 @@
           'Essential Energy': '#06b6d4',
           'Bureau of Meteorology': '#3b82f6',
           'Pager': '#8b5cf6',
-          'NSW PSN User Submissions': '#a855f7'
+          'NSW PSN User Submissions': '#a855f7',
+          'ACT Ambulance Service': '#ec4899'
         };
 
         // Normalise providers from the new endpoint shape into the structure
@@ -1910,6 +1912,16 @@
           if (council) details.push(`<span class="lg-dim"><i class="fas fa-map"></i> ${escapeHtml(council)}</span>`);
           if (agency) details.push(`<span class="lg-dim"><i class="fas fa-users"></i> ${escapeHtml(agency)}</span>`);
           if (details.length) extraDetails = details.join(' · ');
+        } else if (item.source === 'act_ambulance') {
+          const status = data.status || item.status || '';
+          const suburb = data.location_text || item.location_text || '';
+          const called = data.time_of_call || '';
+          if (status) extraInfo += `<span class="lg-badge" style="--badge:${getActAmbulanceStatusColor(status)}">${escapeHtml(status)}</span>`;
+          extraInfo += `<span class="lg-badge-o" style="--badge:#f472b6">ACT</span>`;
+          let details = [];
+          if (suburb) details.push(`<span class="lg-tint" style="--c:#f9a8d4"><i class="fas fa-location-dot"></i> ${escapeHtml(suburb)}</span>`);
+          if (called) details.push(`<span class="lg-dim"><i class="fas fa-phone"></i> ${escapeHtml(called)}</span>`);
+          if (details.length) extraDetails = details.join(' · ');
         } else if (item.source === 'pager') {
           const agency = data.agency || item.category || '';
           const incidentId = data.incident_id || '';
@@ -2995,7 +3007,8 @@
         'essential': 'Essential Energy',
         'bom_warning': 'BOM Warnings',
         'bom_land': 'BOM Land',
-        'bom_marine': 'BOM Marine'
+        'bom_marine': 'BOM Marine',
+        'act_ambulance': 'ACT Ambulance'
       };
       return names[source] || source;
     }
@@ -3029,6 +3042,15 @@
       return '#94a3b8';
     }
     
+    // ACT ESA status vocabulary: pending -> en route -> on scene.
+    function getActAmbulanceStatusColor(status) {
+      const s = (status || '').toLowerCase();
+      if (s.includes('on scene')) return '#22c55e';
+      if (s.includes('route')) return '#f97316';
+      if (s.includes('pending')) return '#eab308';
+      return '#ec4899';
+    }
+
     function getSourceColors(source) {
       const colors = {
         'rfs': { primary: '#ef4444', secondary: '#f87171' },
@@ -3052,7 +3074,8 @@
         'bom_warning': { primary: '#0ea5e9', secondary: '#38bdf8' },
         'bom_land': { primary: '#22c55e', secondary: '#4ade80' },
         'bom_marine': { primary: '#0ea5e9', secondary: '#38bdf8' },
-        'ausgrid': { primary: '#eab308', secondary: '#facc15' }
+        'ausgrid': { primary: '#eab308', secondary: '#facc15' },
+        'act_ambulance': { primary: '#ec4899', secondary: '#f472b6' }
       };
       return colors[source] || { primary: '#64748b', secondary: '#94a3b8' };
     }
@@ -3484,7 +3507,8 @@
         'essential': '<i class="fas fa-bolt" style="color:#06b6d4"></i>',
         'bom_warning': '<i class="fas fa-cloud-bolt" style="color:#60a5fa"></i>',
         'bom_land': '<i class="fas fa-mountain-sun" style="color:#22c55e"></i>',
-        'bom_marine': '<i class="fas fa-water" style="color:#0ea5e9"></i>'
+        'bom_marine': '<i class="fas fa-water" style="color:#0ea5e9"></i>',
+        'act_ambulance': '<i class="fas fa-truck-medical" style="color:#ec4899"></i>'
       };
       return icons[source] || '<i class="fas fa-circle" style="color:#64748b"></i>';
     }

@@ -2478,6 +2478,7 @@
         <button id="btn-ais" class="btn-toggle" onclick="toggleMapLayer('ais')" title="AIS vessels"><i class="fa-solid fa-ship" style="color:#0284c7;"></i><span>Ships</span></button>
         <button id="btn-adsb" class="btn-toggle" onclick="toggleMapLayer('adsb')" title="Live aircraft"><i class="fa-solid fa-plane" style="color:#c084fc;"></i><span>Aircraft</span></button>
         <button id="btn-transport" class="btn-toggle" onclick="toggleMapLayer('transport')" title="Live public transport"><i class="fa-solid fa-bus" style="color:#f18500;"></i><span>Transport</span></button>
+        <button id="btn-actambulance" class="btn-toggle" onclick="toggleMapLayer('actambulance')" title="ACT Ambulance responses"><i class="fa-solid fa-truck-medical" style="color:#ec4899;"></i><span>ACT Ambo</span></button>
       </div>
       <!-- Mobile settings backdrop -->
       <div class="settings-backdrop" id="settings-backdrop"></div>
@@ -3192,7 +3193,8 @@
             // no longer exists and throw, taking the rest of init with it.
             roadwork: { layer: roadworkLayer, btn: 'btn-roadwork', loader: loadRoadworkData },
             floods: { layer: floodsLayer, btn: 'btn-floods', loader: loadFloodsData },
-            cameras: { layer: camerasLayer, btn: 'btn-cameras', loader: loadCamerasData }
+            cameras: { layer: camerasLayer, btn: 'btn-cameras', loader: loadCamerasData },
+            actambulance: { layer: actAmbulanceLayer, btn: 'btn-actambulance', loader: loadActAmbulanceData }
           };
           
           // Special handling for outages — opens the panel
@@ -3388,7 +3390,9 @@
       endeavour_future: { data: null, timestamp: 0 },
       essential_energy: { data: null, timestamp: 0 },
       // NASA FIRMS fire-hotspot polygons
-      firms_hotspots: { data: null, timestamp: 0 }
+      firms_hotspots: { data: null, timestamp: 0 },
+      // ACT Ambulance Service responses (ESA feed)
+      act_ambulance: { data: null, timestamp: 0 }
     };
     const LAYER_CACHE_TTL = 60000; // 1 minute - shorter since backend pre-warms data
     
@@ -3544,6 +3548,10 @@
     transportLayer.addLayer(transportAutoTracksLayer);
     transportLayer.addLayer(transportStopsLayer);
     const camerasLayer = L.layerGroup();
+    // ACT Ambulance responses. Not .addTo(map) — layer visibility has no
+    // localStorage persistence, so the default state IS whether it is added
+    // here, and this one starts off (the site's default view is NSW).
+    const actAmbulanceLayer = L.layerGroup();
     const weatherLayer = L.layerGroup();
     const beachwatchLayer = L.layerGroup();
     // ---------- AIS (vessel positions) ----------
@@ -4378,7 +4386,8 @@
         nswpsn: nswpsnLayer,
         ais: aisLayer,
         adsb: adsbLayer,
-        transport: transportLayer
+        transport: transportLayer,
+        actambulance: actAmbulanceLayer
       };
       const btnMap = {
         user: 'btn-user',
@@ -4393,7 +4402,8 @@
         nswpsn: 'btn-nswpsn',
         ais: 'btn-ais',
         adsb: 'btn-adsb',
-        transport: 'btn-transport'
+        transport: 'btn-transport',
+        actambulance: 'btn-actambulance'
       };
 
       const layer = layerMap[target];
@@ -4439,6 +4449,7 @@
         if (target === 'beachwatch' && beachwatchLayer.getLayers().length === 0) loadBeachwatchData();
         if (target === 'firms' && firmsLayer.getLayers().length === 0) loadFirmsHotspots();
         if (target === 'nswpsn' && nswpsnLayer.getLayers().length === 0) loadNswpsnData();
+        if (target === 'actambulance' && actAmbulanceLayer.getLayers().length === 0) loadActAmbulanceData();
         if (target === 'ais' && _aisVessels.length === 0) loadAisData();
         if (target === 'adsb') {
           if (_adsbAircraft.length === 0) loadAdsbData();
@@ -9596,6 +9607,79 @@ function initPagerHoursFromStorage() {
     }
 
     // Floods
+    // ACT Ambulance Service responses. The backend already strips the ESA
+    // feed's NSW-RFS re-publications and its ACT fire records, so everything
+    // here is a live ACT ambulance job. Locations are suburb-only — ESA
+    // publishes them coarse on purpose.
+    async function loadActAmbulanceData() {
+      actAmbulanceLayer.clearLayers();
+      try {
+        let data;
+        const cached = layerCache.act_ambulance;
+        if (cached.data && (Date.now() - cached.timestamp) < LAYER_CACHE_TTL) {
+          data = cached.data;
+        } else {
+          const res = await apiFetch(`${PROXY_BASE}/api/act-ambulance/incidents`);
+          data = await res.json();
+          layerCache.act_ambulance = { data, timestamp: Date.now() };
+        }
+        if (!data || !Array.isArray(data.features)) return;
+        data.features.forEach(feature => {
+          const coords = feature.geometry && feature.geometry.coordinates;
+          if (!coords) return;
+          const [lon, lat] = coords;
+          if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+          const props = feature.properties || {};
+          const colour = actAmbulanceStatusColour(props.status);
+          const icon = L.divIcon({
+            className: 'custom-pin',
+            html: `<div style="background:linear-gradient(135deg, ${colour}, #be185d); width:20px; height:20px; border-radius:50%; border:2px solid #fff; box-shadow:0 0 10px ${colour}; display:flex; align-items:center; justify-content:center; font-size:10px; color:#fff;"><i class="fa-solid fa-truck-medical"></i></div>`,
+            iconSize: [24, 24],
+            iconAnchor: [12, 12]
+          });
+          L.marker([lat, lon], { icon })
+            .addTo(actAmbulanceLayer)
+            .bindTooltip(buildActAmbulanceTooltip(props), {
+              direction: 'top',
+              offset: [0, -10],
+              opacity: 0.95
+            });
+        });
+      } catch (e) {
+        console.error('ACT Ambulance error', e);
+      }
+    }
+
+    // Pending -> en route -> on scene, matching the ESA status vocabulary.
+    function actAmbulanceStatusColour(status) {
+      const s = (status || '').toLowerCase();
+      if (s.includes('on scene')) return '#22c55e';
+      if (s.includes('route')) return '#f97316';
+      if (s.includes('pending')) return '#eab308';
+      return '#ec4899';
+    }
+
+    function buildActAmbulanceTooltip(props) {
+      const colour = actAmbulanceStatusColour(props.status);
+      let h = '<div style="min-width:210px; max-width:300px;">';
+      h += _ttHeader('fa-solid fa-truck-medical', props.title || 'Ambulance response', '#f9a8d4', '#ec489933', '#f9a8d4', 'ACT');
+      if (props.status) {
+        h += _ttSection('Status', colour, '236,72,153',
+          `<div style="color:${colour}; font-size:12px; font-weight:600;">${escapeHtml(props.status)}</div>`);
+      }
+      if (props.location_text) {
+        h += _ttSection('Suburb', '#f9a8d4', '236,72,153',
+          `<div style="color:#e2e8f0; font-size:12px;">${escapeHtml(props.location_text)}</div>`);
+      }
+      if (props.time_of_call || props.updated) {
+        let body = '';
+        if (props.time_of_call) body += `<div style="color:#94a3b8; font-size:11px;">Called: ${escapeHtml(props.time_of_call)}</div>`;
+        if (props.updated) body += `<div style="color:#94a3b8; font-size:11px;">Updated: ${escapeHtml(props.updated)}</div>`;
+        h += _ttSection('Timing', '#94a3b8', '148,163,184', body);
+      }
+      return h + '</div>';
+    }
+
     async function loadFloodsData() {
       floodsLayer.clearLayers();
       let floodCount = 0;
@@ -10781,6 +10865,30 @@ function initPagerHoursFromStorage() {
           <h4><i class="fa-solid fa-tower-broadcast" style="color:#14b8a6;"></i> Repeaters</h4>
           <div class="ff-section-label">Source</div>
           <div class="floating-filter-pills">${pills}</div>
+        `;
+      },
+    };
+
+    FILTER_REGISTRY.actambulance = {
+      icon: 'fa-truck-medical',
+      label: 'ACT Ambo',
+      color: '#ec4899',
+      render() {
+        const counts = {};
+        actAmbulanceLayer.eachLayer(() => {});
+        const feats = (layerCache.act_ambulance.data || {}).features || [];
+        for (const f of feats) {
+          const st = ((f.properties || {}).status || 'Unknown').trim();
+          counts[st] = (counts[st] || 0) + 1;
+        }
+        const pills = Object.keys(counts).sort().map((st) => {
+          const c = actAmbulanceStatusColour(st);
+          return `<button class="floating-filter-pill" style="border-color:${c}80;color:${c};">${escapeHtml(st)} (${counts[st].toLocaleString()})</button>`;
+        }).join('');
+        return `
+          <h4><i class="fa-solid fa-truck-medical" style="color:#ec4899;"></i> ACT Ambulance</h4>
+          <div class="ff-section-label">Status</div>
+          <div class="floating-filter-pills">${pills || '<span style="color:#94a3b8;font-size:11px;">No active responses</span>'}</div>
         `;
       },
     };
@@ -15965,6 +16073,7 @@ function initPagerHoursFromStorage() {
       // AIS vessels — refresh from the backend's prefetched cache so
       // the layer self-heals if markers were ever lost.
       if (map.hasLayer(aisLayer)) redrawTasks.push(loadAisData());
+      if (map.hasLayer(actAmbulanceLayer)) redrawTasks.push(loadActAmbulanceData());
 
       // Also refresh RFS data (always loaded)
       redrawTasks.push(loadAllData());

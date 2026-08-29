@@ -2370,6 +2370,24 @@
         </div>
       </article>
 
+      <article class="card card-wide" id="act-ambulance-card">
+        <div class="card-header">
+          <div class="card-title"><i class="fas fa-truck-medical"></i> ACT Ambulance Responses</div>
+          <div class="card-tag">Opt-in</div>
+        </div>
+        <div class="card-body">
+          <div class="radio-list-header">
+            <span><i class="fas fa-location-dot"></i> Current responses (ACT)</span>
+            <span class="radio-list-count" id="act-ambulance-count"></span>
+          </div>
+          <div id="act-ambulance-list" class="radio-list">
+            <button class="filter-btn" onclick="enableActAmbulance()">
+              <i class="fas fa-truck-medical"></i> Load ACT ambulance responses
+            </button>
+          </div>
+        </div>
+      </article>
+
       <article class="card card-wide" id="rfs-fdr-toban-card">
         <div class="card-header">
           <div class="card-title"><i class="fas fa-exclamation-triangle"></i> NSW Fire Danger Ratings & Fire Bans</div>
@@ -3189,6 +3207,8 @@
       dataRefreshTimers.push(setInterval(() => {
         loadRfsMajorIncidents();
         loadRfsFireDangerToban();
+        // No-op until the reader opts in — see enableActAmbulance().
+        loadActAmbulanceIncidents();
       }, SLOW_REFRESH));
 
       // News refresh (5 min) + summaries (5 min fallback) + a top-of-hour
@@ -5753,6 +5773,107 @@
           // Don't clobber an existing list on a transient re-fetch failure.
           if (!container.querySelector('.tt-item')) {
             container.innerHTML = '<span class="error-state">Unable to load RFS Feed.</span>';
+          }
+        });
+    }
+
+    // ACT Ambulance responses — opt-in.
+    //
+    // live.html has no per-source toggle UI, so "off by default" here means
+    // nothing is fetched until the reader asks for it. Once enabled it joins
+    // the normal refresh cycle for the rest of the session.
+    let actAmbulanceEnabled = false;
+
+    function enableActAmbulance() {
+      actAmbulanceEnabled = true;
+      loadActAmbulanceIncidents();
+    }
+
+    function actAmbulanceStatusClass(status) {
+      const s = (status || '').toLowerCase();
+      if (s.includes('on scene')) return 'pill-green';
+      if (s.includes('route')) return 'pill-orange';
+      if (s.includes('pending')) return 'pill-yellow';
+      return 'pill-gray';
+    }
+
+    function loadActAmbulanceIncidents() {
+      if (!actAmbulanceEnabled) return;
+      const container = document.getElementById('act-ambulance-list');
+      if (!container) return;
+
+      apiFetch(`${API_BASE}/api/act-ambulance/incidents`)
+        .then(r => r.json())
+        .then(data => {
+          const feats = Array.isArray(data.features) ? data.features : [];
+          const items = feats.map(f => {
+            const p = f.properties || {};
+            const c = (f.geometry && f.geometry.coordinates) || [];
+            return {
+              title: p.title || 'Ambulance response',
+              status: p.status || '',
+              suburb: p.location_text || '',
+              called: p.time_of_call || '',
+              updated: p.updated || '',
+              lng: c[0], lat: c[1]
+            };
+          });
+
+          const countEl = document.getElementById('act-ambulance-count');
+          if (countEl) countEl.textContent = items.length ? `${items.length} active` : '';
+
+          if (!items.length) {
+            container.innerHTML = '<span class="empty-state">No active ACT ambulance responses.</span>';
+            return;
+          }
+
+          const MAX_VISIBLE = 6;
+          let showingAll = false;
+          const render = () => {
+            const visible = showingAll ? items : items.slice(0, MAX_VISIBLE);
+            let html = visible.map(inc => {
+              const hasGPS = Number.isFinite(Number(inc.lat)) && Number.isFinite(Number(inc.lng));
+              return `
+                <div class="tt-item ${hasGPS ? 'map-clickable' : ''}"
+                     ${hasGPS ? `onclick="openMapAt(${Number(inc.lat)}, ${Number(inc.lng)}, '${mapLabelArg(inc.title)}', 'actambulance')"` : ''}>
+                  <div class="tt-header">
+                    <div class="tt-title">${escapeHtml(inc.title)}</div>
+                    ${hasGPS ? '<span class="map-view-btn"><i class="fas fa-map-marker-alt"></i> Map</span>' : ''}
+                  </div>
+                  <div class="tt-badges-row">
+                    ${inc.status ? `<span class="pill ${actAmbulanceStatusClass(inc.status)}">${escapeHtml(inc.status)}</span>` : ''}
+                    <span class="pill pill-sub pill-soft">ACT</span>
+                  </div>
+                  ${inc.suburb ? `<div class="tt-panel amber"><i class="fas fa-location-dot"></i> ${escapeHtml(inc.suburb)}</div>` : ''}
+                  <div class="tt-meta">
+                    ${inc.called ? `<span>Called ${escapeHtml(inc.called)}</span>` : ''}
+                    ${inc.updated ? `<span>Updated ${escapeHtml(inc.updated)}</span>` : ''}
+                  </div>
+                </div>`;
+            }).join('');
+
+            if (items.length > MAX_VISIBLE) {
+              html += `
+                <button class="show-more-btn" onclick="(function(){
+                  const c = document.getElementById('act-ambulance-list');
+                  c.showMore = !c.showMore; c._render();
+                })()">
+                  ${showingAll ? 'Show less' : `Show all ${items.length}`}
+                </button>`;
+            }
+            container.innerHTML = html;
+          };
+
+          // Same pattern as the RFS list: cache a local re-render so the
+          // show-more toggle never re-fetches.
+          container._render = () => { showingAll = container.showMore || false; render(); };
+          showingAll = container.showMore || false;
+          render();
+        })
+        .catch(err => {
+          console.error(err);
+          if (!container.querySelector('.tt-item')) {
+            container.innerHTML = '<span class="error-state">Unable to load ACT ambulance feed.</span>';
           }
         });
     }
