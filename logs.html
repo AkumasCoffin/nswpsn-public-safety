@@ -399,7 +399,7 @@
       if (useCursor) {
         params.set('cursor', nextCursor);
         params.set('order', 'desc');
-        return { reverseDisplay: false };
+        return { reverseDisplay: false, usedCursor: true };
       }
       const offsetDesc = Math.max(0, (page - 1) * pageSize);
       const offsetAsc = totalPages > 0
@@ -408,11 +408,11 @@
       if (offsetAsc < offsetDesc) {
         params.set('offset', offsetAsc);
         params.set('order', 'asc');
-        return { reverseDisplay: true };
+        return { reverseDisplay: true, usedCursor: false };
       }
       params.set('offset', offsetDesc);
       params.set('order', 'desc');
-      return { reverseDisplay: false };
+      return { reverseDisplay: false, usedCursor: false };
     }
     let map = null;
     let marker = null;
@@ -1606,7 +1606,7 @@
       const params = new URLSearchParams();
       params.set('limit', pageSize);
       params.set('unique', '1');
-      const { reverseDisplay } = applyPaginationParams(params, page);
+      const { reverseDisplay, usedCursor } = applyPaginationParams(params, page);
       // full=1 pulls the JSONB `data` column so list rows can render per-source
       // detail badges (pager message, waze street/city, endeavour suburb, etc.)
       params.set('full', '1');
@@ -1698,8 +1698,14 @@
         const data = await res.json();
         console.log('API response:', { total: data.total, recordCount: data.records?.length });
 
-        totalResults = data.total || 0;
-        totalPages = Math.ceil(totalResults / pageSize) || 1;
+        // The backend skips the COUNT on cursor pages and reports total=0
+        // there, so that 0 means "not counted", not "no results". Keep the
+        // last known count — trusting it would blank the stat tiles and
+        // hide the pager mid-browse.
+        if (!usedCursor) {
+          totalResults = data.total || 0;
+          totalPages = Math.ceil(totalResults / pageSize) || 1;
+        }
         let recs = data.records || [];
         if (reverseDisplay) {
           // Asc-order trick — server returned the chronologically oldest
@@ -3712,7 +3718,7 @@
         // field is `{}` and rendered records flip to "Unknown" titles
         // with no message body the moment auto-refresh fires.
         params.set('full', '1');
-        const { reverseDisplay: refreshReverseDisplay } = applyPaginationParams(params, currentPage);
+        const { reverseDisplay: refreshReverseDisplay, usedCursor: refreshUsedCursor } = applyPaginationParams(params, currentPage);
 
         // Apply current filters - source can come from type dropdown or be derived from provider
         let source = document.getElementById('filter-source')?.value || '';
@@ -3771,9 +3777,12 @@
 
         const data = await res.json();
 
-        // Update counts (these are full query counts from backend)
-        totalResults = data.total || 0;
-        totalPages = Math.ceil(totalResults / pageSize) || 1;
+        // Update counts (full query counts from backend). Cursor pages report
+        // total=0 because the COUNT is skipped — keep the previous count.
+        if (!refreshUsedCursor) {
+          totalResults = data.total || 0;
+          totalPages = Math.ceil(totalResults / pageSize) || 1;
+        }
 
         let newRecords = data.records || [];
         if (refreshReverseDisplay) {
