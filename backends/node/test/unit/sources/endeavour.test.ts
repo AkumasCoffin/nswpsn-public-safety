@@ -156,6 +156,108 @@ describe('fetchEndeavourSplit', () => {
     expect(split.current[0]?.suburb).toBe('Unknown');
   });
 
+  it('carries a dropped address forward instead of degrading to Unknown', async () => {
+    // Poll 1: upstream knows the address.
+    fetchJson.mockResolvedValueOnce([
+      { incident_id: 'E1', outage_type: 'UNPLANNED', incident_status: 'ACTIVE' },
+    ]);
+    fetchJson.mockResolvedValueOnce([
+      {
+        incident_id: 'E1',
+        cityname: 'BELLA VISTA',
+        street_name: '60B BELLA VISTA DR',
+        postcode: '2153',
+      },
+    ]);
+    const first = await fetchEndeavourSplit();
+    expect(first.current[0]).toMatchObject({
+      suburb: 'Bella Vista',
+      streets: '60B BELLA VISTA DR',
+      postcode: '2153',
+    });
+
+    // Poll 2: same live incident, enrichment now blank — the real
+    // upstream failure mode this guards against.
+    _resetEndeavourMemo();
+    fetchJson.mockResolvedValueOnce([
+      { incident_id: 'E1', outage_type: 'UNPLANNED', incident_status: 'ACTIVE' },
+    ]);
+    fetchJson.mockResolvedValueOnce([
+      { incident_id: 'E1', cityname: '', street_name: '', postcode: '' },
+    ]);
+    const second = await fetchEndeavourSplit();
+    expect(second.current[0]).toMatchObject({
+      suburb: 'Bella Vista',
+      streets: '60B BELLA VISTA DR',
+      postcode: '2153',
+    });
+  });
+
+  it('carries fields independently when only the street drops out', async () => {
+    fetchJson.mockResolvedValueOnce([
+      { incident_id: 'E2', outage_type: 'UNPLANNED' },
+    ]);
+    fetchJson.mockResolvedValueOnce([
+      { incident_id: 'E2', cityname: 'PENRITH', street_name: 'HIGH ST' },
+    ]);
+    await fetchEndeavourSplit();
+
+    _resetEndeavourMemo();
+    fetchJson.mockResolvedValueOnce([
+      { incident_id: 'E2', outage_type: 'UNPLANNED' },
+    ]);
+    // Suburb still present upstream, street gone: keep the known street,
+    // take the fresh suburb.
+    fetchJson.mockResolvedValueOnce([
+      { incident_id: 'E2', cityname: 'ST MARYS', street_name: '' },
+    ]);
+    const split = await fetchEndeavourSplit();
+    expect(split.current[0]).toMatchObject({
+      suburb: 'St Marys',
+      streets: 'HIGH ST',
+    });
+  });
+
+  it('forgets an address once the incident leaves the feed', async () => {
+    fetchJson.mockResolvedValueOnce([
+      { incident_id: 'E3', outage_type: 'UNPLANNED' },
+    ]);
+    fetchJson.mockResolvedValueOnce([
+      { incident_id: 'E3', cityname: 'KATOOMBA', street_name: 'MAIN ST' },
+    ]);
+    await fetchEndeavourSplit();
+
+    // E3 resolved and dropped out; an unrelated incident is live.
+    _resetEndeavourMemo();
+    fetchJson.mockResolvedValueOnce([
+      { incident_id: 'E9', outage_type: 'UNPLANNED' },
+    ]);
+    fetchJson.mockResolvedValueOnce([]);
+    await fetchEndeavourSplit();
+
+    // E3 comes back as a fresh id with no enrichment — the stale address
+    // must not reattach itself.
+    _resetEndeavourMemo();
+    fetchJson.mockResolvedValueOnce([
+      { incident_id: 'E3', outage_type: 'UNPLANNED' },
+    ]);
+    fetchJson.mockResolvedValueOnce([]);
+    const split = await fetchEndeavourSplit();
+    expect(split.current[0]?.suburb).toBe('Unknown');
+    expect(split.current[0]?.streets).toBe('');
+  });
+
+  it('treats an upstream "Unknown" suburb as no suburb at all', async () => {
+    fetchJson.mockResolvedValueOnce([
+      { incident_id: 'E4', outage_type: 'UNPLANNED' },
+    ]);
+    fetchJson.mockResolvedValueOnce([
+      { incident_id: 'E4', cityname: 'Unknown', street_name: '' },
+    ]);
+    const split = await fetchEndeavourSplit();
+    expect(split.current[0]?.suburb).toBe('Unknown');
+  });
+
   it('throws if get_outage_areas_fast returns non-array', async () => {
     fetchJson.mockResolvedValueOnce({ error: 'oops' });
     await expect(fetchEndeavourSplit()).rejects.toThrow(/non-array/);

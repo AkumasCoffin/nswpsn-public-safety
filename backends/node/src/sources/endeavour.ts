@@ -116,6 +116,115 @@ const ACTIVE_PLANNED_STATUSES = new Set([
 let _memo: { at: number; data: EndeavourSplit } | null = null;
 const MEMO_TTL_MS = 90_000;
 
+/**
+ * Last known address per incident id.
+ *
+ * Endeavour's /outage-points enrichment intermittently drops an
+ * incident's address partway through its life: the area record keeps
+ * reporting the same coordinates, status and customer count, but
+ * cityname/street_name/postcode come back empty. The old fallback wrote
+ * suburb "Unknown" + empty streets, and since the archive's `title` is
+ * derived from `streets || suburb` (services/archiveExtract.ts), that
+ * overwrote a perfectly good address with "Unknown" in the sidecar —
+ * 94% of current outages at the time this was written.
+ *
+ * So: remember the last real address we saw for each incident and reuse
+ * it when enrichment comes back empty. Upstream never re-uses an
+ * incident id for a different location, so a stale entry can't mislabel
+ * an outage; the worst case is keeping an address that upstream would
+ * have shown as "Unknown" anyway.
+ */
+interface KnownAddress {
+  suburb: string;
+  streets: string;
+  postcode: string;
+}
+const _addressCache = new Map<string, KnownAddress>();
+/** Seeded once from the archive so a restart doesn't re-degrade rows. */
+let _addressSeedDone = false;
+
+/** A suburb upstream actually knows — not its "Unknown" placeholder. */
+function isRealSuburb(s: string | null | undefined): boolean {
+  const v = (s ?? '').trim();
+  return v !== '' && v.toLowerCase() !== 'unknown';
+}
+
+/**
+ * Warm {@link _addressCache} from the most recent archived snapshot that
+ * still had an address. Best-effort: without it the cache just refills
+ * from live traffic, so a DB hiccup must not break the poll.
+ */
+async function seedAddressCache(): Promise<void> {
+  if (_addressSeedDone) return;
+  _addressSeedDone = true;
+  try {
+    const { getPool } = await import('../db/pool.js');
+    const pool = await getPool();
+    if (!pool) return;
+    const res = await pool.query<{
+      source_id: string;
+      suburb: string | null;
+      streets: string | null;
+      postcode: string | null;
+    }>(
+      `SELECT DISTINCT ON (source_id)
+              source_id,
+              data->>'suburb'   AS suburb,
+              data->>'streets'  AS streets,
+              data->>'postcode' AS postcode
+         FROM archive_power
+        WHERE source LIKE 'endeavour%'
+          AND fetched_at > now() - interval '14 days'
+          AND (COALESCE(data->>'streets', '') <> ''
+               OR COALESCE(data->>'suburb', 'Unknown') <> 'Unknown')
+        ORDER BY source_id, fetched_at DESC`,
+    );
+    for (const row of res.rows) {
+      if (!row.source_id) continue;
+      _addressCache.set(row.source_id, {
+        suburb: isRealSuburb(row.suburb) ? (row.suburb as string) : '',
+        streets: (row.streets ?? '').trim(),
+        postcode: (row.postcode ?? '').trim(),
+      });
+    }
+    log.info({ count: res.rows.length }, 'endeavour: seeded address cache from archive');
+  } catch (err) {
+    log.warn({ err }, 'endeavour: address cache seed failed; continuing with live data only');
+  }
+}
+
+/**
+ * Merge this poll's enrichment with what we already knew, remembering
+ * anything new. Each field is carried independently — upstream can drop
+ * the street while keeping the suburb.
+ */
+function resolveAddress(incidentId: string, enrich: SupabasePoint): KnownAddress {
+  const prev = incidentId ? _addressCache.get(incidentId) : undefined;
+  const fresh: KnownAddress = {
+    suburb: isRealSuburb(enrich.cityname) ? titleCase((enrich.cityname as string).trim()) : '',
+    streets: (enrich.street_name ?? '').trim(),
+    postcode: (enrich.postcode ?? '').trim(),
+  };
+  const merged: KnownAddress = {
+    suburb: fresh.suburb || prev?.suburb || '',
+    streets: fresh.streets || prev?.streets || '',
+    postcode: fresh.postcode || prev?.postcode || '',
+  };
+  if (incidentId && (merged.suburb || merged.streets || merged.postcode)) {
+    _addressCache.set(incidentId, merged);
+  }
+  return merged;
+}
+
+/**
+ * Reset the carry-forward cache — used by tests, which need each case to
+ * start from a clean slate.
+ */
+export function _resetEndeavourAddressCache(): void {
+  _addressCache.clear();
+  _addressSeedDone = false;
+}
+
 function titleCase(s: string): string {
   // Equivalent of Python's str.title() for the suburb field. Capitalises
   // the first letter of each word, lowercases the rest. Doesn't try to
@@ -218,6 +327,9 @@ export async function fetchEndeavourSplit(now: Date = new Date()): Promise<Endea
     }
   }
 
+  // Warm the carry-forward cache before the merge below reads it.
+  await seedAddressCache();
+
   const current: EndeavourOutage[] = [];
   const currentMaintenance: EndeavourOutage[] = [];
   const futureMaintenance: EndeavourOutage[] = [];
@@ -264,7 +376,11 @@ export async function fetchEndeavourSplit(now: Date = new Date()): Promise<Endea
       STATUS_MAP[statusRaw] ??
       statusRaw.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
 
-    const suburb = enrich.cityname ? titleCase(enrich.cityname) : 'Unknown';
+    // Falls back to the last address we saw for this incident when the
+    // enrichment row is missing or blank, so an outage keeps its street
+    // for its whole life instead of degrading to "Unknown" mid-flight.
+    const address = resolveAddress(incidentId, enrich);
+    const suburb = address.suburb || 'Unknown';
     const causePlannedDefault = isPlanned ? 'Planned maintenance' : '';
     const cause = enrich.cause || enrich.sub_cause || causePlannedDefault;
 
@@ -274,7 +390,7 @@ export async function fetchEndeavourSplit(now: Date = new Date()): Promise<Endea
     const outage: EndeavourOutage = {
       id: incidentId,
       suburb,
-      streets: enrich.street_name ?? '',
+      streets: address.streets,
       customersAffected: area.customers_affected ?? 0,
       status,
       cause,
@@ -284,7 +400,7 @@ export async function fetchEndeavourSplit(now: Date = new Date()): Promise<Endea
       lastUpdated: updated,
       latitude: lat,
       longitude: lng,
-      postcode: enrich.postcode ?? '',
+      postcode: address.postcode,
       hasGPS:
         lat != null && lng != null &&
         Number.isFinite(lat) && Number.isFinite(lng),
@@ -297,6 +413,17 @@ export async function fetchEndeavourSplit(now: Date = new Date()): Promise<Endea
       else futureMaintenance.push(outage);
     } else {
       current.push(outage);
+    }
+  }
+
+  // Drop cached addresses for incidents that have left the feed, so the
+  // map tracks the live outage set rather than growing forever. Skipped
+  // on an empty areas list — that reads as a bad fetch, not "everything
+  // was restored at once".
+  if (areas.length > 0) {
+    const live = new Set(areas.map((a) => a.incident_id ?? ''));
+    for (const id of _addressCache.keys()) {
+      if (!live.has(id)) _addressCache.delete(id);
     }
   }
 
