@@ -1151,6 +1151,145 @@ details.lg-panel[open] > summary .lg-panel-caret {
   margin-bottom: 0.6rem;
 }
 
+/* Summary incident rows (edge-tinted by severity via --c) */
+.lg-sum-inc {
+  background: var(--lg-well);
+  border: 1px solid var(--lg-border);
+  border-left: 3px solid var(--c, var(--text-soft));
+  border-radius: 8px;
+  padding: 0.4rem 0.55rem;
+  margin-bottom: 0.3rem;
+  line-height: 1.3;
+  font-size: 0.78rem;
+}
+
+.lg-sum-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.lg-sum-ico {
+  color: var(--c, var(--text-soft));
+  font-size: 0.82rem;
+}
+
+.lg-sum-title {
+  color: var(--text-main);
+  font-weight: 600;
+}
+
+.lg-sum-sub {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+}
+
+.lg-sum-status {
+  background: rgba(148, 163, 184, 0.18);
+  color: var(--text-main);
+  font-size: 0.62rem;
+  padding: 0.05rem 0.45rem;
+  border-radius: var(--radius-pill);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.lg-sum-time {
+  color: var(--text-soft);
+  font-size: 0.66rem;
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+}
+
+.lg-sum-loc {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  margin-top: 0.12rem;
+}
+
+.lg-sum-loc i {
+  color: var(--text-soft);
+  margin-right: 0.3rem;
+}
+
+.lg-sum-body {
+  color: var(--text-main);
+  margin-top: 0.15rem;
+}
+
+.lg-sum-meta {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  margin-top: 0.18rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.lg-sum-mico {
+  color: var(--text-soft);
+  font-size: 0.62rem;
+  margin-right: 0.25rem;
+}
+
+/* Transcript block inside a summary incident */
+.lg-tx {
+  margin-top: 0.2rem;
+  padding-left: 0.5rem;
+  border-left: 2px solid var(--c, var(--text-soft));
+  font-size: 0.68rem;
+  color: var(--text-main);
+}
+
+.lg-tx-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+}
+
+.lg-tx-time {
+  color: var(--text-soft);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  min-width: 4.5em;
+}
+
+.lg-tx-pill {
+  flex-shrink: 0;
+}
+
+.lg-tx-more {
+  color: var(--text-soft);
+  font-style: italic;
+  margin-top: 0.2rem;
+  font-size: 0.64rem;
+}
+
+/* Listen-to-call pill */
+.lg-call-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+  padding: 0.02rem 0.4rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.58rem;
+  text-decoration: none;
+  font-variant-numeric: tabular-nums;
+  margin-right: 0.3rem;
+  vertical-align: baseline;
+}
+
+.lg-call-pill:hover {
+  background: rgba(59, 130, 246, 0.28);
+}
+
+.lg-call-pill i {
+  font-size: 0.52rem;
+}
+
 /* Mini-pagination rows inside panels */
 .lg-pager-row {
   align-items: center;
