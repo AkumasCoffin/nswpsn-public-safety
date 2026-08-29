@@ -166,27 +166,6 @@ html, body {
   color: var(--text-main);
 }
 
-/* Stats Bar (legacy strip — replaced by .lg-stats tiles) */
-.stats-bar {
-  display: flex;
-  gap: 1.5rem;
-  padding: 0.6rem 0;
-  margin-bottom: 0.5rem;
-  font-size: 0.8rem;
-  color: var(--text-muted);
-  flex-wrap: wrap;
-}
-
-.stats-bar span {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-}
-
-.stats-bar strong {
-  color: var(--text-main);
-}
-
 /* Results Container */
 .results-container {
   display: flex;
@@ -819,6 +798,15 @@ html, body {
   padding: 0.85rem 1rem 1rem;
 }
 
+/* Filter row inside a panel body */
+.lg-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: flex-end;
+  margin-bottom: 0.9rem;
+}
+
 /* <details> variant: whole header row is the summary hit target */
 details.lg-panel > summary {
   cursor: pointer;
@@ -885,6 +873,11 @@ details.lg-panel[open] > summary .lg-panel-caret {
   display: flex;
   align-items: center;
   gap: 0.4rem;
+}
+
+.lg-stat-k .lg-dot-live {
+  color: #22c55e;
+  font-size: 0.5rem;
 }
 
 /* Semantic badge chips — colour flows in via --badge.

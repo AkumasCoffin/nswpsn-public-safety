@@ -100,18 +100,20 @@
   <main class="main">
     <header class="main-header">
       <div class="breadcrumb">Incident Logs</div>
-      <h1><i class="fas fa-history" style="color: #f97316;"></i> Incident Logs</h1>
+      <h1><i class="fas fa-history"></i> Incident Logs</h1>
       <p id="page-description">Search historical incident data stored for up to <span id="retention-days">31</span> days. Filter by source, type, date, and location.</p>
     </header>
 
     <!-- Radio Scanner Summaries -->
-    <details id="summaries" class="filter-bar" style="padding: 0.75rem 1rem; display: block;">
-      <summary style="cursor: pointer; font-weight: 600; color: #e2e8f0; display: flex; align-items: center; gap: 0.5rem;">
-        <i class="fas fa-robot" style="color:#a855f7;"></i>
+    <details id="summaries" class="lg-panel">
+      <summary class="lg-panel-h">
+        <i class="fas fa-robot"></i>
         Radio Scanner Summaries
-        <span style="font-size: 0.75rem; color: #64748b; font-weight: 400;">— Groq-generated hourly &amp; daily digests</span>
+        <span class="lg-panel-note">— Groq-generated hourly &amp; daily digests</span>
+        <i class="fa-solid fa-chevron-down lg-panel-caret"></i>
       </summary>
-      <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 0.75rem; align-items: flex-end;">
+      <div class="lg-panel-b">
+      <div class="lg-filter-row">
         <div class="filter-group">
           <label class="filter-label">Type</label>
           <select id="summary-type" class="filter-select">
@@ -133,25 +135,28 @@
           <button class="action-btn secondary" onclick="clearSummaryFilters()"><i class="fas fa-times"></i> Clear</button>
         </div>
       </div>
-      <div id="summaries-results" style="margin-top: 0.9rem;">
-        <div style="font-size: 0.8rem; color: #64748b;">Click Search to load summaries.</div>
+      <div id="summaries-results">
+        <div class="lg-note">Click Search to load summaries.</div>
       </div>
-      <div id="summaries-pagination" style="margin-top: 0.6rem; display: none; gap: 0.5rem; align-items: center; font-size: 0.8rem;">
+      <div id="summaries-pagination" class="lg-pager-row" style="display: none;">
         <button class="action-btn secondary" onclick="summariesGoPage(summariesPage - 1)"><i class="fas fa-angle-left"></i></button>
-        <span id="summaries-page-info" style="color:#94a3b8;"></span>
+        <span id="summaries-page-info" class="lg-dim"></span>
         <button class="action-btn secondary" onclick="summariesGoPage(summariesPage + 1)"><i class="fas fa-angle-right"></i></button>
+      </div>
       </div>
     </details>
 
     <!-- Archived Incidents (major incidents preserved forever) -->
-    <details id="archived-incidents" class="filter-bar" style="padding: 0.75rem 1rem; display: block;">
-      <summary style="cursor: pointer; font-weight: 600; color: #e2e8f0; display: flex; align-items: center; gap: 0.5rem;">
-        <i class="fas fa-box-archive" style="color:#f59e0b;"></i>
+    <details id="archived-incidents" class="lg-panel">
+      <summary class="lg-panel-h">
+        <i class="fas fa-box-archive"></i>
         Archived Incidents
-        <span style="font-size: 0.75rem; color: #64748b; font-weight: 400;">&mdash; major incidents preserved by staff, kept forever</span>
+        <span class="lg-panel-note">&mdash; major incidents preserved by staff, kept forever</span>
+        <i class="fa-solid fa-chevron-down lg-panel-caret"></i>
       </summary>
-      <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 0.75rem; align-items: flex-end;">
-        <div class="filter-group" style="flex:1; min-width: 220px;">
+      <div class="lg-panel-b">
+      <div class="lg-filter-row">
+        <div class="filter-group wide">
           <label class="filter-label">Search</label>
           <input type="text" id="archived-q" class="filter-input" placeholder="Title, location or description..." onkeydown="if(event.key==='Enter'){searchArchived(1);}">
         </div>
@@ -160,13 +165,14 @@
           <button class="action-btn secondary" onclick="clearArchivedFilters()"><i class="fas fa-times"></i> Clear</button>
         </div>
       </div>
-      <div id="archived-results" style="margin-top: 0.9rem;">
-        <div style="font-size: 0.8rem; color: #64748b;">Click Search to browse the archive.</div>
+      <div id="archived-results">
+        <div class="lg-note">Click Search to browse the archive.</div>
       </div>
-      <div id="archived-pagination" style="margin-top: 0.6rem; display: none; gap: 0.5rem; align-items: center; font-size: 0.8rem;">
+      <div id="archived-pagination" class="lg-pager-row" style="display: none;">
         <button class="action-btn secondary" onclick="archivedGoPage(archivedPage - 1)"><i class="fas fa-angle-left"></i></button>
-        <span id="archived-page-info" style="color:#94a3b8;"></span>
+        <span id="archived-page-info" class="lg-dim"></span>
         <button class="action-btn secondary" onclick="archivedGoPage(archivedPage + 1)"><i class="fas fa-angle-right"></i></button>
+      </div>
       </div>
     </details>
 
@@ -176,7 +182,7 @@
         <label class="filter-label">Data Source</label>
         <div class="custom-dropdown" id="provider-dropdown">
           <div class="custom-dropdown-selected" tabindex="0" onclick="toggleProviderDropdown()" onkeydown="handleProviderKeydown(event)">
-            <i class="fa-solid fa-database provider-icon" style="color: #64748b;"></i>
+            <i class="fa-solid fa-database provider-icon"></i>
             <span id="provider-selected-text">All Sources</span>
             <i class="fa-solid fa-chevron-down dropdown-arrow"></i>
           </div>
@@ -191,7 +197,7 @@
         <label class="filter-label">Type</label>
         <div class="custom-dropdown" id="type-dropdown">
           <div class="custom-dropdown-selected" tabindex="0" onclick="toggleTypeDropdown()" onkeydown="handleTypeKeydown(event)">
-            <i class="fa-solid fa-layer-group provider-icon" style="color: #64748b;"></i>
+            <i class="fa-solid fa-layer-group provider-icon"></i>
             <span id="type-selected-text">All Types</span>
             <i class="fa-solid fa-chevron-down dropdown-arrow"></i>
           </div>
@@ -206,7 +212,7 @@
         <label class="filter-label" id="type-filter-label">Category / Subtype</label>
         <div class="custom-dropdown" id="subcategory-dropdown">
           <div class="custom-dropdown-selected" tabindex="0" onclick="toggleSubcategoryDropdown()" onkeydown="handleSubcategoryKeydown(event)">
-            <i class="fa-solid fa-tags provider-icon" style="color: #64748b;"></i>
+            <i class="fa-solid fa-tags provider-icon"></i>
             <span id="subcategory-selected-text">All Categories</span>
             <i class="fa-solid fa-chevron-down dropdown-arrow"></i>
           </div>
@@ -221,7 +227,7 @@
         <label class="filter-label" id="incident-status-label">Status</label>
         <div class="custom-dropdown" id="status-dropdown">
           <div class="custom-dropdown-selected" tabindex="0" onclick="toggleStatusDropdown()" onkeydown="handleStatusKeydown(event)">
-            <i class="fa-solid fa-clipboard-list provider-icon" style="color: #64748b;"></i>
+            <i class="fa-solid fa-clipboard-list provider-icon"></i>
             <span id="status-selected-text">All Statuses</span>
             <i class="fa-solid fa-chevron-down dropdown-arrow"></i>
           </div>
@@ -236,7 +242,7 @@
         <label class="filter-label">Alert Level</label>
         <div class="custom-dropdown" id="alert-level-dropdown">
           <div class="custom-dropdown-selected" tabindex="0" onclick="toggleAlertLevelDropdown()" onkeydown="handleAlertLevelKeydown(event)">
-            <i class="fa-solid fa-bell provider-icon" style="color: #64748b;"></i>
+            <i class="fa-solid fa-bell provider-icon"></i>
             <span id="alert-level-selected-text">All Levels</span>
             <i class="fa-solid fa-chevron-down dropdown-arrow"></i>
           </div>
@@ -284,10 +290,20 @@
       </div>
     </div>
 
-    <!-- Stats Bar -->
-    <div class="stats-bar">
-      <span><i class="fas fa-database"></i> Total: <strong id="stats-total">--</strong></span>
-      <span class="refresh-indicator"><i class="fas fa-circle"></i> Last updated: <span id="last-refresh">--</span></span>
+    <!-- Stats Tiles -->
+    <div class="lg-stats">
+      <div class="lg-stat">
+        <div class="lg-stat-v" id="stats-total">--</div>
+        <div class="lg-stat-k"><i class="fas fa-database"></i> Total results</div>
+      </div>
+      <div class="lg-stat">
+        <div class="lg-stat-v" id="stats-shown">--</div>
+        <div class="lg-stat-k"><i class="fas fa-list"></i> Showing</div>
+      </div>
+      <div class="lg-stat">
+        <div class="lg-stat-v plain" id="last-refresh">--</div>
+        <div class="lg-stat-k"><i class="fas fa-circle lg-dot-live"></i> Last updated</div>
+      </div>
     </div>
 
     <!-- Results -->
@@ -771,7 +787,7 @@
       document.getElementById('filter-subcategory').value = '';
       const selectedEl = document.querySelector('#subcategory-dropdown .custom-dropdown-selected');
       if (selectedEl) {
-        selectedEl.innerHTML = `<i class="fa-solid fa-tags provider-icon" style="color: #64748b;"></i><span id="subcategory-selected-text">${labelText}</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
+        selectedEl.innerHTML = `<i class="fa-solid fa-tags provider-icon"></i><span id="subcategory-selected-text">${labelText}</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
       }
       const optionsContainer = document.getElementById('subcategory-options');
       if (optionsContainer) optionsContainer.innerHTML = '';
@@ -813,7 +829,7 @@
       document.getElementById('filter-incident-status').value = '';
       const selectedEl = document.querySelector('#status-dropdown .custom-dropdown-selected');
       if (selectedEl) {
-        selectedEl.innerHTML = `<i class="fa-solid fa-clipboard-list provider-icon" style="color: #64748b;"></i><span id="status-selected-text">All Statuses</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
+        selectedEl.innerHTML = `<i class="fa-solid fa-clipboard-list provider-icon"></i><span id="status-selected-text">All Statuses</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
       }
       const optionsContainer = document.getElementById('status-options');
       if (optionsContainer) optionsContainer.innerHTML = '';
@@ -855,7 +871,7 @@
       document.getElementById('filter-alert-level').value = '';
       const selectedEl = document.querySelector('#alert-level-dropdown .custom-dropdown-selected');
       if (selectedEl) {
-        selectedEl.innerHTML = `<i class="fa-solid fa-bell provider-icon" style="color: #64748b;"></i><span id="alert-level-selected-text">All Levels</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
+        selectedEl.innerHTML = `<i class="fa-solid fa-bell provider-icon"></i><span id="alert-level-selected-text">All Levels</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
       }
       const optionsContainer = document.getElementById('alert-level-options');
       if (optionsContainer) optionsContainer.innerHTML = '';
@@ -872,7 +888,7 @@
       // Reset type dropdown display
       const typeSelectedEl = document.querySelector('#type-dropdown .custom-dropdown-selected');
       if (typeSelectedEl) {
-        typeSelectedEl.innerHTML = `<i class="fa-solid fa-layer-group provider-icon" style="color: #64748b;"></i><span id="type-selected-text">All Types</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
+        typeSelectedEl.innerHTML = `<i class="fa-solid fa-layer-group provider-icon"></i><span id="type-selected-text">All Types</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
       }
       
       // Clear type options
@@ -1735,17 +1751,21 @@
       
       if (totalResults === 0) {
         container.style.display = 'none';
+        const shownEmptyEl = document.getElementById('stats-shown');
+        if (shownEmptyEl) shownEmptyEl.textContent = '--';
         return;
       }
-      
+
       container.style.display = 'flex';
-      
+
       // Update info
       const start = (currentPage - 1) * pageSize + 1;
       const end = Math.min(currentPage * pageSize, totalResults);
       document.getElementById('page-start').textContent = start.toLocaleString();
       document.getElementById('page-end').textContent = end.toLocaleString();
       document.getElementById('page-total').textContent = totalResults.toLocaleString();
+      const shownEl = document.getElementById('stats-shown');
+      if (shownEl) shownEl.textContent = `${start.toLocaleString()}–${end.toLocaleString()}`;
       
       // Update buttons
       document.getElementById('btn-first').disabled = currentPage === 1;
@@ -2843,7 +2863,7 @@
       document.getElementById('filter-source').value = '';
       const typeSelectedEl = document.querySelector('#type-dropdown .custom-dropdown-selected');
       if (typeSelectedEl) {
-        typeSelectedEl.innerHTML = `<i class="fa-solid fa-layer-group provider-icon" style="color: #64748b;"></i><span id="type-selected-text">All Types</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
+        typeSelectedEl.innerHTML = `<i class="fa-solid fa-layer-group provider-icon"></i><span id="type-selected-text">All Types</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
       }
       const typeOptionsContainer = document.getElementById('type-options');
       if (typeOptionsContainer) typeOptionsContainer.innerHTML = '';
