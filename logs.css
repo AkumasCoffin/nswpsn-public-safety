@@ -950,6 +950,108 @@ details.lg-panel[open] > summary .lg-panel-caret {
   background: linear-gradient(135deg, color-mix(in srgb, var(--c, #64748b) 6%, transparent), rgba(2, 6, 23, 0.5));
 }
 
+/* Clickable update entry (linked incidents) */
+.lg-update.is-click {
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+/* Detail-panel section header, tinted by --c */
+.lg-sec {
+  color: var(--c, var(--accent));
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 8px;
+}
+
+.lg-sec.spaced {
+  margin-top: 12px;
+}
+
+/* Small layout helpers used inside detail templates */
+.lg-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+  gap: 6px;
+}
+
+.lg-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.lg-chips.spaced {
+  margin-bottom: 4px;
+}
+
+.lg-sep {
+  border-top: 1px solid var(--lg-border);
+  padding-top: 12px;
+  margin-top: 8px;
+}
+
+/* Tag chips inside detail panels (tinted by --c) */
+.lg-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 9px;
+  padding: 2px 6px;
+  border-radius: var(--radius-pill);
+  color: var(--c, var(--text-muted));
+  background: rgba(148, 163, 184, 0.15);
+  background: color-mix(in srgb, var(--c, #94a3b8) 16%, transparent);
+}
+
+.lg-tag-s {
+  display: inline-flex;
+  align-items: center;
+  font-size: 8px;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  margin-left: 4px;
+  color: var(--c, var(--text-muted));
+  background: rgba(148, 163, 184, 0.15);
+  background: color-mix(in srgb, var(--c, #94a3b8) 20%, transparent);
+}
+
+/* Text scales inside detail panels */
+.lg-label {
+  color: var(--c, var(--text-muted));
+  font-weight: 600;
+  font-size: 10px;
+}
+
+.lg-body {
+  color: var(--text-main);
+  font-size: 10px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.lg-meta {
+  color: var(--text-soft);
+  font-size: 9px;
+}
+
+.lg-meta-10 {
+  color: var(--text-soft);
+  font-size: 10px;
+}
+
+.lg-mono {
+  color: var(--text-muted);
+  font-size: 9px;
+  line-height: 1.4;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  word-break: break-all;
+}
+
 /* Archived incidents */
 .lg-arch-item {
   border: 1px solid rgba(245, 158, 11, 0.25);
@@ -959,14 +1061,44 @@ details.lg-panel[open] > summary .lg-panel-caret {
   margin-bottom: 0.6rem;
 }
 
+.lg-arch-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
 .lg-arch-title {
   font-weight: 600;
   color: #fbbf24;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
 }
 
 .lg-arch-when {
   font-size: 0.72rem;
   color: var(--text-soft);
+}
+
+.lg-arch-meta {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin-top: 0.25rem;
+}
+
+.lg-arch-meta i {
+  margin-right: 0.3rem;
+}
+
+.lg-arch-detail {
+  margin-top: 0.6rem;
+}
+
+.lg-arch-btn {
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
 }
 
 .lg-log-row {
@@ -983,14 +1115,31 @@ details.lg-panel[open] > summary .lg-panel-caret {
 
 .lg-log-msg {
   color: var(--text-main);
+  font-size: 0.8rem;
+  white-space: pre-wrap;
 }
 
-.lg-photo {
-  max-width: 140px;
-  max-height: 100px;
+.lg-arch-desc {
+  font-size: 0.8rem;
+  color: var(--text-main);
+  white-space: pre-wrap;
+  margin-bottom: 0.5rem;
+}
+
+.lg-photos {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.6rem;
+}
+
+.archived-photo {
+  width: 96px;
+  height: 96px;
+  object-fit: cover;
   border-radius: 8px;
   border: 1px solid var(--lg-border-strong);
-  object-fit: cover;
+  display: block;
 }
 
 /* Summary digest cards */

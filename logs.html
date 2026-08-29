@@ -2293,8 +2293,8 @@
           return;
         }
         
-        let html = `<div style="border-top:1px solid rgba(148,163,184,0.2); padding-top:12px; margin-top:8px;">
-          <div style="color:#a78bfa; font-weight:600; font-size:10px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px;">
+        let html = `<div class="lg-sep">
+          <div class="lg-sec" style="--c:#a78bfa">
             <i class="fas fa-history"></i>Previous Updates (${pastUpdates.length})
           </div>`;
         
@@ -2316,11 +2316,11 @@
             let borderColor = alertColor;
             let bgColor = `${alertColor}10`; // 10 = ~6% opacity in hex
             
-            html += `<div style="background:linear-gradient(135deg, ${bgColor} 0%, rgba(15,23,42,0.5) 100%); border-left:3px solid ${borderColor}; border-radius:6px; padding:10px; margin-bottom:8px;">
+            html += `<div class="lg-update" style="--c:${borderColor}">
               <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
-                <span style="color:#64748b; font-size:10px;"><i class="far fa-clock" style="margin-right:3px;"></i>${escapeHtml(timeStr)}</span>
+                <span class="lg-meta-10"><i class="far fa-clock" style="margin-right:3px;"></i>${escapeHtml(timeStr)}</span>
               </div>
-              <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:4px;">`;
+              <div class="lg-chips spaced">`;
             
             if (alertLevel) {
               // Alert level emoji based on type
@@ -2347,7 +2347,7 @@
             html += `</div>`;
             
             if (updated) {
-              html += `<div style="color:#94a3b8; font-size:10px; margin-top:4px;"><i class="fas fa-sync-alt" style="margin-right:3px;"></i>RFS Updated: ${escapeHtml(updated)}</div>`;
+              html += `<div style="color:#94a3b8; font-size:10px; margin-top:4px;"><i class="fas fa-sync-alt"></i>RFS Updated: ${escapeHtml(updated)}</div>`;
             }
             
             html += `</div>`;
@@ -2366,14 +2366,14 @@
             else if (agencyLower.includes('ses')) agencyColor = '#f97316';
             else if (agencyLower.includes('police')) agencyColor = '#3b82f6';
             
-            html += `<div style="background:linear-gradient(135deg, ${agencyColor}10 0%, rgba(15,23,42,0.5) 100%); border-left:3px solid ${agencyColor}; border-radius:6px; padding:10px; margin-bottom:8px;">
-              <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
-                <span style="color:${agencyColor}; font-weight:600; font-size:10px;"><i class="fas fa-pager" style="margin-right:3px;"></i>${escapeHtml(alias)}</span>
-                <span style="color:#64748b; font-size:9px;">${escapeHtml(timeStr)}</span>
+            html += `<div class="lg-update" style="--c:${agencyColor}">
+              <div class="lg-row">
+                <span class="lg-label" style="--c:${agencyColor}"><i class="fas fa-pager"></i>${escapeHtml(alias)}</span>
+                <span class="lg-meta">${escapeHtml(timeStr)}</span>
               </div>`;
             
             if (message) {
-              html += `<div style="color:#94a3b8; font-size:9px; line-height:1.4; font-family:monospace; word-break:break-all;">${escapeHtml(message)}</div>`;
+              html += `<div class="lg-mono">${escapeHtml(message)}</div>`;
             }
             
             html += `</div>`;
@@ -2391,9 +2391,9 @@
             else if (item.source.includes('essential')) sourceColor = '#06b6d4';
             else if (item.source.includes('bom')) sourceColor = '#3b82f6';
             
-            html += `<div style="background:linear-gradient(135deg, ${sourceColor}10 0%, rgba(15,23,42,0.5) 100%); border-left:3px solid ${sourceColor}; border-radius:6px; padding:10px; margin-bottom:8px;">
+            html += `<div class="lg-update" style="--c:${sourceColor}">
               <div style="color:#64748b; font-size:10px; margin-bottom:4px;"><i class="far fa-clock" style="margin-right:3px;"></i>${escapeHtml(timeStr)}</div>
-              <div style="display:flex; flex-wrap:wrap; gap:6px;">`;
+              <div class="lg-chips">`;
             
             if (status) {
               html += `<span style="background:${sourceColor}; color:#fff; font-size:9px; padding:2px 6px; border-radius:3px;">${escapeHtml(status)}</span>`;
@@ -2573,11 +2573,11 @@
           
           // Build HTML
           if (linkedPagers.length > 0 || linkedIncidents.length > 0) {
-            html = `<div style="border-top:1px solid rgba(148,163,184,0.2); padding-top:12px; margin-top:8px;">`;
+            html = `<div class="lg-sep">`;
             
             // Show linked pager hits
             if (linkedPagers.length > 0) {
-              html += `<div style="color:#22c55e; font-weight:600; font-size:10px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px;">
+              html += `<div class="lg-sec" style="--c:#22c55e">
                 <i class="fas fa-pager"></i>Related Pager Hits (${linkedPagers.length})
               </div>`;
               
@@ -2596,19 +2596,19 @@
                 else if (agencyLower.includes('ambulance')) agencyColor = '#3b82f6';
                 else if (agencyLower.includes('ses')) agencyColor = '#f97316';
                 
-                html += `<div onclick="scrollToIncident('${jsArg(pagerId)}', 'pager')" style="cursor:pointer; background:linear-gradient(135deg, ${agencyColor}10 0%, rgba(15,23,42,0.5) 100%); border-left:3px solid ${agencyColor}; border-radius:6px; padding:8px; margin-bottom:6px; transition:all 0.2s;" onmouseover="this.style.transform='translateX(2px)'" onmouseout="this.style.transform='translateX(0)'">
+                html += `<div onclick="scrollToIncident('${jsArg(pagerId)}', 'pager')" class="lg-update is-click" style="--c:${agencyColor}" onmouseover="this.style.transform='translateX(2px)'" onmouseout="this.style.transform='translateX(0)'">
                   <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:3px;">
-                    <span style="color:${agencyColor}; font-weight:600; font-size:10px;"><i class="fas fa-pager" style="margin-right:3px;"></i>${escapeHtml(alias)}</span>
-                    ${timestamp ? `<span style="color:#64748b; font-size:9px;">${escapeHtml(timestamp)}</span>` : ''}
+                    <span class="lg-label" style="--c:${agencyColor}"><i class="fas fa-pager"></i>${escapeHtml(alias)}</span>
+                    ${timestamp ? `<span class="lg-meta">${escapeHtml(timestamp)}</span>` : ''}
                   </div>
-                  ${message ? `<div style="color:#94a3b8; font-size:9px; line-height:1.4; font-family:monospace; word-break:break-all;">${escapeHtml(message)}</div>` : ''}
+                  ${message ? `<div class="lg-mono">${escapeHtml(message)}</div>` : ''}
                 </div>`;
               });
             }
             
             // Show linked incidents
             if (linkedIncidents.length > 0) {
-              html += `<div style="color:#f97316; font-weight:600; font-size:10px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px; ${linkedPagers.length > 0 ? 'margin-top:12px;' : ''}">
+              html += `<div class="lg-sec ${linkedPagers.length > 0 ? 'spaced' : ''}" style="--c:#f97316">
                 <i class="fas fa-fire"></i>Nearby Incidents (${linkedIncidents.length})
               </div>`;
               
@@ -2625,20 +2625,20 @@
                 let statusBadge = '';
                 if (status) {
                   const color = getStatusColor(status);
-                  statusBadge = `<span style="background:${color}; color:#fff; font-size:8px; padding:1px 4px; border-radius:3px; margin-left:4px;">${escapeHtml(status)}</span>`;
+                  statusBadge = `<span class="lg-tag-s" style="--c:${color}">${escapeHtml(status)}</span>`;
                 }
                 if (alertLevel && incident.source === 'rfs') {
                   const color = getAlertLevelColor(alertLevel);
-                  statusBadge += `<span style="background:${color}; color:#fff; font-size:8px; padding:1px 4px; border-radius:3px; margin-left:4px;">${escapeHtml(alertLevel)}</span>`;
+                  statusBadge += `<span class="lg-tag-s" style="--c:${color}">${escapeHtml(alertLevel)}</span>`;
                 }
                 
-                html += `<div onclick="scrollToIncident('${jsArg(incidentSourceId)}', '${jsArg(incident.source)}')" style="cursor:pointer; background:rgba(249,115,22,0.08); border-left:3px solid #f97316; border-radius:6px; padding:8px; margin-bottom:6px; transition:all 0.2s;" onmouseover="this.style.transform='translateX(2px)'" onmouseout="this.style.transform='translateX(0)'">
+                html += `<div onclick="scrollToIncident('${jsArg(incidentSourceId)}', '${jsArg(incident.source)}')" class="lg-update is-click" style="--c:#f97316" onmouseover="this.style.transform='translateX(2px)'" onmouseout="this.style.transform='translateX(0)'">
                   <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
                     <span style="font-size:10px;">${sourceIcon}</span>
-                    <span style="color:#fb923c; font-weight:600; font-size:10px;">${escapeHtml(sourceName)}</span>
+                    <span class="lg-label" style="--c:#fb923c">${escapeHtml(sourceName)}</span>
                     ${statusBadge}
                   </div>
-                  <div style="color:#e2e8f0; font-size:10px; line-height:1.4; word-break:break-word;">${escapeHtml(title)}</div>
+                  <div class="lg-body">${escapeHtml(title)}</div>
                   <div style="color:#64748b; font-size:9px; margin-top:4px;">${escapeHtml(timestamp)}</div>
                 </div>`;
               });
@@ -2691,8 +2691,8 @@
             });
           
           if (filteredPagers.length > 0) {
-            html = `<div style="border-top:1px solid rgba(148,163,184,0.2); padding-top:12px; margin-top:8px;">
-              <div style="color:#22c55e; font-weight:600; font-size:10px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px;">
+            html = `<div class="lg-sep">
+              <div class="lg-sec" style="--c:#22c55e">
                 <i class="fas fa-link"></i>Linked Pager Messages (${filteredPagers.length})
               </div>`;
             
@@ -2703,12 +2703,12 @@
               const message = pagerData.message || pager.title || '';
               const timestamp = pager.source_timestamp || (pager.fetched_at_iso ? new Date(pager.fetched_at_iso).toLocaleString() : '');
               
-              html += `<div onclick="scrollToIncident('${jsArg(pagerSourceId)}', 'pager')" style="cursor:pointer; background:rgba(34,197,94,0.08); border-left:3px solid #22c55e; border-radius:6px; padding:8px; margin-bottom:6px; transition:all 0.2s;" onmouseover="this.style.transform='translateX(2px)'" onmouseout="this.style.transform='translateX(0)'">
-                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
-                  <span style="color:#4ade80; font-weight:600; font-size:10px;"><i class="fas fa-pager" style="margin-right:3px;"></i>${escapeHtml(alias)}</span>
-                  <span style="color:#64748b; font-size:9px;">${escapeHtml(timestamp)}</span>
+              html += `<div onclick="scrollToIncident('${jsArg(pagerSourceId)}', 'pager')" class="lg-update is-click" style="--c:#22c55e" onmouseover="this.style.transform='translateX(2px)'" onmouseout="this.style.transform='translateX(0)'">
+                <div class="lg-row">
+                  <span class="lg-label" style="--c:#4ade80"><i class="fas fa-pager"></i>${escapeHtml(alias)}</span>
+                  <span class="lg-meta">${escapeHtml(timestamp)}</span>
                 </div>
-                <div style="color:#94a3b8; font-size:9px; line-height:1.4; font-family:monospace; word-break:break-all;">${escapeHtml(message)}</div>
+                <div class="lg-mono">${escapeHtml(message)}</div>
               </div>`;
             });
             
@@ -3247,7 +3247,7 @@
             <div style="color:#fb923c; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;"><i class="fas fa-info-circle"></i>Details</div>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px;">`;
           extraFields.forEach(([label, value]) => {
-            html += `<div style="color:#64748b; font-size:9px;">${escapeHtml(label)}:</div><div style="color:#e2e8f0; font-size:10px;">${escapeHtml(value)}</div>`;
+            html += `<div class="lg-meta">${escapeHtml(label)}:</div><div style="color:#e2e8f0; font-size:10px;">${escapeHtml(value)}</div>`;
           });
           html += `</div></div>`;
         }
@@ -3303,7 +3303,7 @@
             <div style="color:${wazeColor}; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;"><i class="fas fa-info-circle"></i>Details</div>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px;">`;
           extraFields.forEach(([label, value]) => {
-            html += `<div style="color:#64748b; font-size:9px;">${escapeHtml(label)}:</div><div style="color:#e2e8f0; font-size:10px;">${escapeHtml(String(value))}</div>`;
+            html += `<div class="lg-meta">${escapeHtml(label)}:</div><div style="color:#e2e8f0; font-size:10px;">${escapeHtml(String(value))}</div>`;
           });
           html += `</div></div>`;
         }
@@ -3322,7 +3322,7 @@
             <div style="color:#facc15; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;"><i class="fas fa-info-circle"></i>Details</div>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px;">`;
           extraFields.forEach(([label, value]) => {
-            html += `<div style="color:#64748b; font-size:9px;">${escapeHtml(label)}:</div><div style="color:#e2e8f0; font-size:10px;">${escapeHtml(String(value))}</div>`;
+            html += `<div class="lg-meta">${escapeHtml(label)}:</div><div style="color:#e2e8f0; font-size:10px;">${escapeHtml(String(value))}</div>`;
           });
           html += `</div></div>`;
         }
@@ -3341,7 +3341,7 @@
             <div style="color:#22d3ee; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;"><i class="fas fa-info-circle"></i>Details</div>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px;">`;
           extraFields.forEach(([label, value]) => {
-            html += `<div style="color:#64748b; font-size:9px;">${escapeHtml(label)}:</div><div style="color:#e2e8f0; font-size:10px;">${escapeHtml(String(value))}</div>`;
+            html += `<div class="lg-meta">${escapeHtml(label)}:</div><div style="color:#e2e8f0; font-size:10px;">${escapeHtml(String(value))}</div>`;
           });
           html += `</div></div>`;
         }
@@ -3834,7 +3834,7 @@
     function clearArchivedFilters() {
       document.getElementById('archived-q').value = '';
       document.getElementById('archived-results').innerHTML =
-        '<div style="font-size: 0.8rem; color: #64748b;">Click Search to browse the archive.</div>';
+        '<div class="lg-note">Click Search to browse the archive.</div>';
       document.getElementById('archived-pagination').style.display = 'none';
     }
 
@@ -3845,7 +3845,7 @@
       if (q) p.q = q;
       const qs = new URLSearchParams(p).toString();
       const container = document.getElementById('archived-results');
-      container.innerHTML = '<div style="font-size: 0.8rem; color: #94a3b8;">Loading&hellip;</div>';
+      container.innerHTML = '<div class="lg-note">Loading&hellip;</div>';
       try {
         const res = await apiFetch(`${API_BASE}/api/incidents/archived?${qs}`);
         if (!res.ok) throw new Error(`status ${res.status}`);
@@ -3853,7 +3853,7 @@
         archivedTotal = data.total || 0;
         renderArchived(data.results || []);
       } catch (e) {
-        container.innerHTML = `<div style="color:#ef4444;">Error: ${e.message}</div>`;
+        container.innerHTML = `<div class="lg-err">Error: ${e.message}</div>`;
       }
     }
 
@@ -3870,7 +3870,7 @@
         ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
       if (!results.length) {
-        container.innerHTML = '<div style="font-size: 0.85rem; color: #94a3b8;">No archived incidents match.</div>';
+        container.innerHTML = '<div class="lg-note">No archived incidents match.</div>';
         pager.style.display = 'none';
         return;
       }
@@ -3882,17 +3882,17 @@
         const when = r.original_created_at ? new Date(r.original_created_at).toLocaleString() : '';
         const archived = r.archived_at ? new Date(r.archived_at).toLocaleDateString() : '';
         return `
-          <div style="border:1px solid rgba(245,158,11,0.25); background:rgba(245,158,11,0.04); border-radius:8px; padding:0.7rem 0.85rem; margin-bottom:0.6rem;">
-            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.4rem;">
-              <div style="font-weight:600; color:#fbbf24;"><i class="fas fa-box-archive" style="margin-right:0.4rem;"></i>${esc(r.title || 'Untitled incident')}</div>
-              <div style="font-size:0.72rem; color:#64748b;">archived ${esc(archived)}</div>
+          <div class="lg-arch-item">
+            <div class="lg-arch-head">
+              <div class="lg-arch-title"><i class="fas fa-box-archive"></i>${esc(r.title || 'Untitled incident')}</div>
+              <div class="lg-arch-when">archived ${esc(archived)}</div>
             </div>
-            <div style="font-size:0.78rem; color:#94a3b8; margin-top:0.25rem;">
-              ${r.location ? `<i class="fas fa-location-dot" style="margin-right:0.3rem;"></i>${esc(r.location)}` : ''}
+            <div class="lg-arch-meta">
+              ${r.location ? `<i class="fas fa-location-dot"></i>${esc(r.location)}` : ''}
               ${r.status ? ` &middot; ${esc(r.status)}` : ''}${typeStr ? ` &middot; ${esc(typeStr)}` : ''}${when ? ` &middot; ${esc(when)}` : ''}
             </div>
-            <div id="archived-detail-${esc(r.id)}" style="display:none; margin-top:0.6rem;"></div>
-            <button class="action-btn secondary" style="margin-top:0.5rem; font-size:0.75rem;" onclick="toggleArchivedDetail('${jsArg(r.id)}')">
+            <div id="archived-detail-${esc(r.id)}" class="lg-arch-detail" style="display:none;"></div>
+            <button class="action-btn secondary lg-arch-btn" onclick="toggleArchivedDetail('${jsArg(r.id)}')">
               <i class="fas fa-list"></i> View logs
             </button>
           </div>
@@ -3923,7 +3923,7 @@
         const inc = data.incident || {};
         const logs = Array.isArray(data.logs) ? data.logs : [];
         const desc = inc.description
-          ? `<div style="font-size:0.8rem; color:#cbd5e1; white-space:pre-wrap; margin-bottom:0.5rem;">${esc(inc.description)}</div>` : '';
+          ? `<div class="lg-arch-desc">${esc(inc.description)}</div>` : '';
         // Photos ride along inside the archived incident snapshot. Thumbs
         // go through Cloudflare's resizer, with the original as fallback.
         const IMAGE_ORIGIN = 'https://nswpsn.forcequit.xyz';
@@ -3937,24 +3937,24 @@
         // inline onerror: attribute values are HTML-decoded before the JS
         // in them is parsed, so esc() can't safely quote into a handler.
         const photosHtml = imgs.length ? `
-          <div style="display:flex; flex-wrap:wrap; gap:0.4rem; margin-bottom:0.6rem;">
+          <div class="lg-photos">
             ${imgs.map(i => `
               <a href="${esc(IMAGE_ORIGIN + i.file)}" target="_blank" rel="noopener noreferrer" title="Open full size">
                 <img src="${esc(IMAGE_ORIGIN + '/cdn-cgi/image/width=320,quality=78,format=auto' + i.file)}"
                      alt="Incident photo" loading="lazy" class="archived-photo"
                      data-orig="${esc(IMAGE_ORIGIN + i.file)}"
-                     style="width:96px; height:96px; object-fit:cover; border-radius:6px; border:1px solid rgba(148,163,184,0.3); display:block;">
+                    >
               </a>`).join('')}
           </div>` : '';
         const logsHtml = logs.length ? logs.map((l) => `
-          <div style="border-top:1px solid rgba(255,255,255,0.08); padding:0.4rem 0;">
-            <div style="font-size:0.68rem; color:#64748b;">${l.created_at ? esc(new Date(l.created_at).toLocaleString()) : ''}</div>
-            <div style="font-size:0.8rem; color:#e2e8f0; white-space:pre-wrap;">${esc(l.message || '')}</div>
+          <div class="lg-log-row">
+            <div class="lg-log-time">${l.created_at ? esc(new Date(l.created_at).toLocaleString()) : ''}</div>
+            <div class="lg-log-msg">${esc(l.message || '')}</div>
           </div>`).join('')
-          : '<div style="font-size:0.78rem; color:#64748b; font-style:italic;">No logs were recorded.</div>';
+          : '<div class="lg-note lg-quote">No logs were recorded.</div>';
         box.innerHTML = desc + photosHtml + logsHtml;
       } catch (e) {
-        box.innerHTML = `<div style="color:#ef4444; font-size:0.78rem;">Error loading detail: ${e.message}</div>`;
+        box.innerHTML = `<div class="lg-err">Error loading detail: ${e.message}</div>`;
       }
     }
 
@@ -3980,7 +3980,7 @@
       document.getElementById('summary-date').value = '';
       document.getElementById('summary-hour').value = '';
       document.getElementById('summaries-results').innerHTML =
-        '<div style="font-size: 0.8rem; color: #64748b;">Click Search to load summaries.</div>';
+        '<div class="lg-note">Click Search to load summaries.</div>';
       document.getElementById('summaries-pagination').style.display = 'none';
     }
 
@@ -4004,7 +4004,7 @@
       const p = { ...summariesLastParams, limit: summariesLimit, offset: (page - 1) * summariesLimit };
       const qs = new URLSearchParams(p).toString();
       const container = document.getElementById('summaries-results');
-      container.innerHTML = '<div style="font-size: 0.8rem; color: #94a3b8;">Loading…</div>';
+      container.innerHTML = '<div class="lg-note">Loading…</div>';
       try {
         const res = await apiFetch(`${API_BASE}/api/summaries?${qs}`);
         if (!res.ok) throw new Error(`status ${res.status}`);
@@ -4012,7 +4012,7 @@
         summariesTotal = data.total || 0;
         renderSummaries(data.results || []);
       } catch (e) {
-        container.innerHTML = `<div style="color:#ef4444;">Error: ${e.message}</div>`;
+        container.innerHTML = `<div class="lg-err">Error: ${e.message}</div>`;
       }
     }
 
@@ -4027,7 +4027,7 @@
       const pager = document.getElementById('summaries-pagination');
 
       if (!results.length) {
-        container.innerHTML = '<div style="font-size: 0.85rem; color: #94a3b8;">No summaries match.</div>';
+        container.innerHTML = '<div class="lg-note">No summaries match.</div>';
         pager.style.display = 'none';
         return;
       }
