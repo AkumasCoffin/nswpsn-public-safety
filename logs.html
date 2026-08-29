@@ -72,18 +72,18 @@
     <div class="sidebar-highlight">
       <div class="sidebar-highlight-title">NSW PSN Scanner</div>
       <div>Hosted by Forcequit</div>
-      <div style="margin-top:0.45rem;">
+      <div class="lg-mt7">
         <a class="listen-btn-wide" href="https://radio.forcequit.xyz/" target="_blank" rel="noopener noreferrer">
           Radio Feed
         </a>
       </div>
-      <div style="margin-top:0.45rem;">
+      <div class="lg-mt7">
         <a class="listen-btn-wide" href="https://pager.forcequit.xyz/" target="_blank" rel="noopener noreferrer">
           Pager Feed
         </a>
       </div>
     </div>
-    <div style="margin-top:0.45rem;">
+    <div class="lg-mt7">
       <a class="discord-btn-wide" href="https://discord.forcequit.xyz" target="_blank" rel="noopener noreferrer">
         Support Discord
       </a>
@@ -2218,8 +2218,8 @@
       
       // Show basic details first
       let detailsHtml = buildIncidentDetails(item);
-      detailsHtml += '<div id="incident-history-section" style="margin-top:16px;"><div style="color:#64748b; font-size:11px;">Loading history...</div></div>';
-      detailsHtml += '<div id="linked-incidents-section" style="margin-top:16px;"></div>';
+      detailsHtml += '<div id="incident-history-section" class="lg-mt16"><div style="color:#64748b; font-size:11px;">Loading history...</div></div>';
+      detailsHtml += '<div id="linked-incidents-section" class="lg-mt16"></div>';
       document.getElementById('map-details').innerHTML = detailsHtml;
       
       // Reverse geocode to get closest address
@@ -3056,7 +3056,7 @@
       const source = item.source || '';
       const data = item.data || {};
       
-      let html = '<div style="font-family: Inter, system-ui, sans-serif; line-height: 1.4;">';
+      let html = '<div class="lg-detail-root">';
       
       // Header with source icon and badge
       const sourceIcon = getSourceIcon(source);
@@ -3073,7 +3073,7 @@
         }
       }
       
-      html += `<div style="display:flex; align-items:center; gap:6px; margin-bottom:10px;">
+      html += `<div class="lg-hrow">
         <span style="font-size:13px; font-weight:600; color:#e2e8f0;">${sourceIcon} ${escapeHtml(sourceName)}</span>
         ${badge}
       </div>`;
@@ -3084,14 +3084,14 @@
         const type = data.TYPE || item.category || 'Fire';
         const statusColor = getStatusColor(status);
         
-        html += `<div style="display:flex; gap:8px; margin-bottom:10px;">
+        html += `<div class="lg-kv">
           <div style="background:rgba(74,222,128,0.12); padding:6px 10px; border-radius:6px; text-align:center; flex:1;">
-            <div style="color:#86efac; font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px;">Status</div>
-            <div style="color:${statusColor}; font-size:11px; font-weight:600;">${escapeHtml(status || 'Unknown')}</div>
+            <div class="lg-kv-k" style="--c:#86efac">Status</div>
+            <div class="lg-kv-v" style="--c:${statusColor}">${escapeHtml(status || 'Unknown')}</div>
           </div>
           <div style="background:rgba(251,146,60,0.12); padding:6px 10px; border-radius:6px; text-align:center; flex:1;">
-            <div style="color:#fdba74; font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px;">Type</div>
-            <div style="color:#fb923c; font-size:11px; font-weight:600;">${escapeHtml(type)}</div>
+            <div class="lg-kv-k" style="--c:#fdba74">Type</div>
+            <div class="lg-kv-v" style="--c:#fb923c">${escapeHtml(type)}</div>
           </div>
         </div>`;
       } else if (source === 'pager') {
@@ -3099,14 +3099,14 @@
         const councilArea = data.agency || item.category || '';
         const incidentId = data.incident_id || item.subcategory || '';
         
-        html += `<div style="display:flex; gap:8px; margin-bottom:10px;">
-          <div style="background:rgba(34,197,94,0.12); padding:6px 10px; border-radius:6px; text-align:center; flex:1;">
-            <div style="color:#86efac; font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px;">Council Area</div>
-            <div style="color:#4ade80; font-size:11px; font-weight:600;">${escapeHtml(councilArea || 'Unknown')}</div>
+        html += `<div class="lg-kv">
+          <div class="lg-kv-box" style="--c:#22c55e">
+            <div class="lg-kv-k" style="--c:#86efac">Council Area</div>
+            <div class="lg-kv-v" style="--c:#4ade80">${escapeHtml(councilArea || 'Unknown')}</div>
           </div>
-          <div style="background:rgba(34,197,94,0.12); padding:6px 10px; border-radius:6px; text-align:center; flex:1;">
-            <div style="color:#86efac; font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px;">Incident ID</div>
-            <div style="color:#4ade80; font-size:11px; font-weight:600;">${escapeHtml(incidentId || 'N/A')}</div>
+          <div class="lg-kv-box" style="--c:#22c55e">
+            <div class="lg-kv-k" style="--c:#86efac">Incident ID</div>
+            <div class="lg-kv-v" style="--c:#4ade80">${escapeHtml(incidentId || 'N/A')}</div>
           </div>
         </div>`;
       } else {
@@ -3161,11 +3161,11 @@
         }
         
         if (catValue || typeValue) {
-          html += `<div style="display:flex; gap:8px; margin-bottom:10px;">`;
+          html += `<div class="lg-kv">`;
           if (catValue) {
             html += `<div style="background:${primaryBg}; padding:6px 10px; border-radius:6px; text-align:center; flex:1;">
-              <div style="color:${sourceColors.secondary}; font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px;">${catLabel}</div>
-              <div style="color:${sourceColors.primary}; font-size:11px; font-weight:600;">${escapeHtml(catValue)}</div>
+              <div class="lg-kv-k" style="--c:${sourceColors.secondary}">${catLabel}</div>
+              <div class="lg-kv-v" style="--c:${sourceColors.primary}">${escapeHtml(catValue)}</div>
             </div>`;
           }
           if (typeValue) {
@@ -3178,8 +3178,8 @@
               typeColor = t.includes('planned') ? '#a855f7' : '#ef4444';
             }
             html += `<div style="background:${secondaryBg}; padding:6px 10px; border-radius:6px; text-align:center; flex:1;">
-              <div style="color:${sourceColors.secondary}; font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px;">${typeLabel}</div>
-              <div style="color:${typeColor}; font-size:11px; font-weight:600;">${escapeHtml(typeValue)}</div>
+              <div class="lg-kv-k" style="--c:${sourceColors.secondary}">${typeLabel}</div>
+              <div class="lg-kv-v" style="--c:${typeColor}">${escapeHtml(typeValue)}</div>
             </div>`;
           }
           html += `</div>`;
@@ -3195,36 +3195,36 @@
         const subtype = item.subcategory ? formatSubcategory(item.subcategory) : '';
         const titleMatchesSubtype = isWazeSource && item.title.toLowerCase() === subtype.toLowerCase();
         if (!titleMatchesSubtype) {
-          html += `<div style="margin-bottom:8px;">
-            <div style="color:#f59e0b; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:2px;"><i class="fas ${titleIcon}" style="margin-right:4px;"></i>${titleLabel}</div>
-            <div style="color:#e2e8f0; font-size:11px;">${escapeHtml(item.title)}</div>
+          html += `<div class="lg-mb8">
+            <div class="lg-kv-k" style="--c:#f59e0b"><i class="fas ${titleIcon}" style="margin-right:4px;"></i>${titleLabel}</div>
+            <div class="lg-t11">${escapeHtml(item.title)}</div>
           </div>`;
         }
       }
       
       // Location
       if (item.location_text) {
-        html += `<div style="margin-bottom:8px;">
-          <div style="color:#f59e0b; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:2px;"><i class="fas fa-location-dot"></i>Location</div>
-          <div style="color:#e2e8f0; font-size:11px;">${escapeHtml(item.location_text)}</div>
+        html += `<div class="lg-mb8">
+          <div class="lg-kv-k" style="--c:#f59e0b"><i class="fas fa-location-dot"></i>Location</div>
+          <div class="lg-t11">${escapeHtml(item.location_text)}</div>
         </div>`;
       }
       
       // Coordinates + closest address
       if (item.latitude && item.longitude) {
-        html += `<div style="margin-bottom:8px;">
-          <div style="color:#64748b; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:2px;"><i class="fas fa-crosshairs"></i>Coords</div>
+        html += `<div class="lg-mb8">
+          <div class="lg-kv-k" style="--c:#64748b"><i class="fas fa-crosshairs"></i>Coords</div>
           <div style="color:#94a3b8; font-size:11px;">${item.latitude.toFixed(5)}, ${item.longitude.toFixed(5)}</div>
         </div>`;
-        html += `<div id="reverse-geocode-address" style="margin-bottom:8px;">
-          <div style="color:#38bdf8; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:2px;"><i class="fas fa-map-pin"></i>Closest Address</div>
+        html += `<div id="reverse-geocode-address" class="lg-mb8">
+          <div class="lg-kv-k" style="--c:#38bdf8"><i class="fas fa-map-pin"></i>Closest Address</div>
           <div id="reverse-geocode-value" style="color:#e2e8f0; font-size:11px;"><i class="fas fa-spinner fa-spin" style="color:#64748b; margin-right:4px;"></i><span class="lg-tint" style="--c:#64748b">Looking up address...</span></div>
         </div>`;
       }
       
       // Raw message for pager (show full message above timing)
       if (source === 'pager' && data.message) {
-        html += `<div style="margin-bottom:8px;">
+        html += `<div class="lg-mb8">
           <div style="color:#22c55e; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;"><i class="fas fa-envelope"></i>Raw Message</div>
           <div style="background:rgba(34,197,94,0.08); border:1px solid rgba(34,197,94,0.2); border-radius:6px; padding:8px;">
             <div style="color:#e2e8f0; font-size:10px; line-height:1.5; font-family:monospace; word-break:break-all; white-space:pre-wrap;">${escapeHtml(data.message)}</div>
@@ -3243,11 +3243,11 @@
         if (data.FIRE_NUMBER) extraFields.push(['Fire #', data.FIRE_NUMBER]);
         
         if (extraFields.length > 0) {
-          html += `<div style="margin-bottom:8px;">
+          html += `<div class="lg-mb8">
             <div style="color:#fb923c; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;"><i class="fas fa-info-circle"></i>Details</div>
-            <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px;">`;
+            <div class="lg-grid2">`;
           extraFields.forEach(([label, value]) => {
-            html += `<div class="lg-meta">${escapeHtml(label)}:</div><div style="color:#e2e8f0; font-size:10px;">${escapeHtml(value)}</div>`;
+            html += `<div class="lg-meta">${escapeHtml(label)}:</div><div class="lg-t10">${escapeHtml(value)}</div>`;
           });
           html += `</div></div>`;
         }
@@ -3263,11 +3263,11 @@
         if (item.status && item.status !== item.category) extraFields.push(['Status', item.status]);
         
         if (extraFields.length > 0) {
-          html += `<div style="margin-bottom:8px;">
+          html += `<div class="lg-mb8">
             <div style="color:#f97316; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;"><i class="fas fa-info-circle"></i>Details</div>`;
           extraFields.forEach(([label, value]) => {
-            html += `<div style="color:#64748b; font-size:9px; margin-bottom:2px;">${escapeHtml(label)}:</div>
-              <div style="color:#e2e8f0; font-size:10px; margin-bottom:4px;">${escapeHtml(String(value).substring(0, 200))}${String(value).length > 200 ? '...' : ''}</div>`;
+            html += `<div class="lg-t9-soft">${escapeHtml(label)}:</div>
+              <div class="lg-t10 lg-mb4">${escapeHtml(String(value).substring(0, 200))}${String(value).length > 200 ? '...' : ''}</div>`;
           });
           html += `</div>`;
         }
@@ -3299,11 +3299,11 @@
         if (data.nComments) extraFields.push(['💬', data.nComments]);
         
         if (extraFields.length > 0) {
-          html += `<div style="margin-bottom:8px;">
-            <div style="color:${wazeColor}; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;"><i class="fas fa-info-circle"></i>Details</div>
-            <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px;">`;
+          html += `<div class="lg-mb8">
+            <div class="lg-kv-k" style="--c:${wazeColor}"><i class="fas fa-info-circle"></i>Details</div>
+            <div class="lg-grid2">`;
           extraFields.forEach(([label, value]) => {
-            html += `<div class="lg-meta">${escapeHtml(label)}:</div><div style="color:#e2e8f0; font-size:10px;">${escapeHtml(String(value))}</div>`;
+            html += `<div class="lg-meta">${escapeHtml(label)}:</div><div class="lg-t10">${escapeHtml(String(value))}</div>`;
           });
           html += `</div></div>`;
         }
@@ -3318,11 +3318,11 @@
         if (data.cause) extraFields.push(['Cause', data.cause]);
         
         if (extraFields.length > 0) {
-          html += `<div style="margin-bottom:8px;">
+          html += `<div class="lg-mb8">
             <div style="color:#facc15; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;"><i class="fas fa-info-circle"></i>Details</div>
-            <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px;">`;
+            <div class="lg-grid2">`;
           extraFields.forEach(([label, value]) => {
-            html += `<div class="lg-meta">${escapeHtml(label)}:</div><div style="color:#e2e8f0; font-size:10px;">${escapeHtml(String(value))}</div>`;
+            html += `<div class="lg-meta">${escapeHtml(label)}:</div><div class="lg-t10">${escapeHtml(String(value))}</div>`;
           });
           html += `</div></div>`;
         }
@@ -3337,11 +3337,11 @@
         if (data.postcode) extraFields.push(['Postcode', data.postcode]);
         
         if (extraFields.length > 0) {
-          html += `<div style="margin-bottom:8px;">
+          html += `<div class="lg-mb8">
             <div style="color:#22d3ee; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;"><i class="fas fa-info-circle"></i>Details</div>
-            <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px;">`;
+            <div class="lg-grid2">`;
           extraFields.forEach(([label, value]) => {
-            html += `<div class="lg-meta">${escapeHtml(label)}:</div><div style="color:#e2e8f0; font-size:10px;">${escapeHtml(String(value))}</div>`;
+            html += `<div class="lg-meta">${escapeHtml(label)}:</div><div class="lg-t10">${escapeHtml(String(value))}</div>`;
           });
           html += `</div></div>`;
         }
@@ -3355,12 +3355,12 @@
         if (data.text) extraFields.push(['Details', data.text]);
         
         if (extraFields.length > 0) {
-          html += `<div style="margin-bottom:8px;">
+          html += `<div class="lg-mb8">
             <div style="color:#0ea5e9; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;"><i class="fas fa-info-circle"></i>Details</div>`;
           extraFields.forEach(([label, value]) => {
             const maxLen = label === 'Details' ? 500 : 100;
-            html += `<div style="color:#64748b; font-size:9px; margin-bottom:2px;">${escapeHtml(label)}:</div>
-              <div style="color:#e2e8f0; font-size:10px; margin-bottom:4px;">${escapeHtml(String(value).substring(0, maxLen))}${String(value).length > maxLen ? '...' : ''}</div>`;
+            html += `<div class="lg-t9-soft">${escapeHtml(label)}:</div>
+              <div class="lg-t10 lg-mb4">${escapeHtml(String(value).substring(0, maxLen))}${String(value).length > maxLen ? '...' : ''}</div>`;
           });
           html += `</div>`;
         }
@@ -3391,7 +3391,7 @@
       
       // Source ID (for debugging/reference)
       if (item.source_id) {
-        html += `<div style="margin-top:6px; padding-top:6px; border-top:1px dashed rgba(148,163,184,0.15);">
+        html += `<div class="lg-dash-sep">
           <div style="color:#475569; font-size:8px; font-family:monospace;">ID: ${escapeHtml(item.source_id)}</div>
         </div>`;
       }

@@ -940,6 +940,47 @@ details.lg-panel[open] > summary .lg-panel-caret {
   font-variant-numeric: tabular-nums;
 }
 
+/* Detail-panel root + header */
+.lg-detail-root {
+  line-height: 1.4;
+}
+
+.lg-detail-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.lg-hrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.lg-grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+.lg-dash-sep {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--lg-border);
+}
+
+/* Text scales inside detail panels */
+.lg-t11 { color: var(--text-main); font-size: 11px; }
+.lg-t10 { color: var(--text-main); font-size: 10px; }
+.lg-t9-soft { color: var(--text-soft); font-size: 9px; margin-bottom: 2px; }
+
+/* Spacing helpers */
+.lg-mb4 { margin-bottom: 4px; }
+.lg-mb8 { margin-bottom: 8px; }
+.lg-mt7 { margin-top: 0.45rem; }
+.lg-mt16 { margin-top: 16px; }
+
 /* History / linked-incident update entries (edge-tinted by --c) */
 .lg-update {
   border-left: 3px solid var(--c, #64748b);
