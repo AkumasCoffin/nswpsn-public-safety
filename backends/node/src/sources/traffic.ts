@@ -59,6 +59,10 @@ export interface TrafficFeature {
     incidentType: string;
     mainCategory: string;
     subCategory: string;
+    /** Lowercase twin consumed by archiveExtract's facet promotion —
+     *  without it the archive's subcategory column only ever gets
+     *  incidentType, which is blank for 190 of 482 council rows. */
+    subcategory: string;
     incidentKind: string;
     title: string;
     headline: string;
@@ -337,6 +341,11 @@ export function parseTrafficItem(item: unknown, hazardType: string): TrafficFeat
         asString(props['subCategory']) ||
         asString(props['subCategoryA']) ||
         asString(props['subCategoryB']),
+      // The archive facet key. incidentType first (keeps the dashboard's
+      // existing CRASH/BREAKDOWN tokens stable), mainCategory as the
+      // fallback so items whose title has no known prefix — e.g. council
+      // 'SCHEDULED ROADWORK' rows — still land in the logs filter.
+      subcategory: incidentType || asString(props['mainCategory']),
       incidentKind: asString(props['incidentKind']),
       title: cleanTitle || rawTitle,
       headline: asString(props['headline']),
@@ -483,6 +492,11 @@ export async function fetchTrafficWorks(): Promise<TrafficSnapshot> {
     const key = cat.toLowerCase().replace(/[^a-z]/g, '');
     const kindKey = kind.toLowerCase().replace(/[^a-z]/g, '');
     if (WEB_FEED_SKIP.has(key) || WEB_FEED_SKIP.has(kindKey)) continue;
+    // eventType 'Fire' marks RFS incidents re-published into this
+    // aggregate (their categories are RFS alert levels: 'Not Applicable',
+    // 'Advice', 'Planned Burn'). Our own rfs source already ingests the
+    // same incidents, so keeping them here double-maps every fire.
+    if (kind === 'Fire') continue;
 
     const geom = it['geometry'] as Record<string, unknown> | undefined;
     if (!geom) continue;
@@ -513,6 +527,9 @@ export async function fetchTrafficWorks(): Promise<TrafficSnapshot> {
         mainCategory: cat,
         subCategory:
           asString(props['subCategoryA']) || asString(props['subCategoryB']),
+        // Facet key: the eventCategory is the only complete dimension this
+        // feed has, so it doubles as the logs-filter subcategory.
+        subcategory: cat || kind,
         incidentKind: kind,
         title: cleanTitle || title || displayName,
         headline: '',

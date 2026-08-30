@@ -307,3 +307,47 @@ describe('traffic works ids are stable across upstream rebuilds', () => {
     expect(new Set(snap.features.map((f) => f.properties.id)).size).toBe(2);
   });
 });
+
+describe('traffic archive facet (lowercase subcategory)', () => {
+  it('falls back to mainCategory when no incident-type prefix matches', async () => {
+    const { parseTrafficItem } = await import('../../../src/sources/traffic.js');
+    // Council rows title themselves 'SCHEDULED ROADWORK' with no known
+    // prefix, which used to leave 190 of 482 rows with no facet at all.
+    const f = parseTrafficItem({
+      id: 'lga-1',
+      geometry: { type: 'Point', coordinates: [151, -33] },
+      properties: { displayName: 'Miners Road, Captains Flat', mainCategory: 'SCHEDULED ROADWORK' },
+    }, 'Council');
+    expect(f?.properties.subcategory).toBe('SCHEDULED ROADWORK');
+  });
+
+  it('keeps the incident-type token when one is present', async () => {
+    const { parseTrafficItem } = await import('../../../src/sources/traffic.js');
+    const f = parseTrafficItem({
+      id: 'inc-1',
+      geometry: { type: 'Point', coordinates: [151, -33] },
+      properties: { displayName: 'CRASH Pacific Hwy', mainCategory: 'CRASH' },
+    }, 'Incident');
+    // Dashboard/bot subtype filters key on these tokens — must not change.
+    expect(f?.properties.subcategory).toBe('CRASH');
+  });
+});
+
+describe('traffic works drops RFS re-publications', () => {
+  beforeEach(() => fetchJsonMock.mockReset());
+
+  it("skips eventType 'Fire' items — the rfs source already has them", async () => {
+    const { fetchTrafficWorks } = await import('../../../src/sources/traffic.js');
+    fetchJsonMock.mockResolvedValueOnce([
+      { id: '1', eventCategory: 'Not Applicable', eventType: 'Fire',
+        geometry: { type: 'Point', coordinates: [151, -33] }, properties: { title: 'Grass fire' } },
+      { id: '2', eventCategory: 'Roadwork', eventType: 'Roadwork',
+        geometry: { type: 'Point', coordinates: [151, -33] }, properties: { title: 'Sewer works' } },
+    ]);
+    const snap = await fetchTrafficWorks();
+    expect(snap.count).toBe(1);
+    expect(snap.features[0]?.properties.upstreamId).toBe('2');
+    // and works' facet key is its category
+    expect(snap.features[0]?.properties.subcategory).toBe('Roadwork');
+  });
+});

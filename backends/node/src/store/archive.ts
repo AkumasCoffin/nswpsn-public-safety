@@ -101,6 +101,9 @@ const MAX_PER_TABLE_PER_FLUSH = Math.max(
  */
 const DEDUP_HASH_IGNORE = new Set<string>([
   'lastUpdated',     // endeavour upstream per-poll timestamp
+  'upstreamId',      // livetraffic works: upstream regenerates this key
+                     // on every rebuild (kept in data for reference only;
+                     // identity is the stable ltw: hash)
   'streets',         // endeavour upstream rotates among affected addresses
   'title',           // alias of streets / name / headline (derived)
   'location_text',   // alias of streets / suburb (derived)
