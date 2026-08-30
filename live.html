@@ -5111,7 +5111,10 @@
         processFeatures(floods, 'Flood', 'pill-blue', 'flood');
         processFeatures(majorEvents, 'Major Event', 'pill-red', 'majorevent');
         processFeatures(alpine, 'Alpine', 'pill-blue', 'alpine');
-        processFeatures(council, 'Council', 'pill-green', 'lga');
+        // Council records are labelled by their own category rather than a
+        // blanket 'Council' — most are roadwork, and the planned vs
+        // emergency split is the useful distinction.
+        processFeatures(council, 'Roadwork', 'pill-green', 'lga');
         processFeatures(works, 'Works', 'pill-orange', 'works');
         
         // Sort by: priority (major first), then unplanned before planned, then by time (newest first)

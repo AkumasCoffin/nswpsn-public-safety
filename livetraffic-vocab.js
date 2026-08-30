@@ -84,8 +84,9 @@
       color: '#a3e635',
       endpoint: '/api/traffic/lga',
       blurb:
-        'Local-road records submitted by councils. A separate reporting ' +
-        'stream from the state-road feeds — no overlap with them.',
+        'Local-road records submitted by councils. Not a layer of its own ' +
+        'on the map — roadwork joins the Roadwork layer and the rest join ' +
+        'Hazards, so planned and emergency work stay distinguishable.',
     },
     {
       id: 'works',

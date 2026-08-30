@@ -2479,7 +2479,6 @@
         <button id="btn-ais" class="btn-toggle" onclick="toggleMapLayer('ais')" title="AIS vessels"><i class="fa-solid fa-ship" style="color:#0284c7;"></i><span>Ships</span></button>
         <button id="btn-adsb" class="btn-toggle" onclick="toggleMapLayer('adsb')" title="Live aircraft"><i class="fa-solid fa-plane" style="color:#c084fc;"></i><span>Aircraft</span></button>
         <button id="btn-transport" class="btn-toggle" onclick="toggleMapLayer('transport')" title="Live public transport"><i class="fa-solid fa-bus" style="color:#f18500;"></i><span>Transport</span></button>
-        <button id="btn-lga" class="btn-toggle" onclick="toggleMapLayer('lga')" title="Council-submitted local road records"><i class="fa-solid fa-building-columns" style="color:#a3e635;"></i><span>Council</span></button>
         <button id="btn-works" class="btn-toggle" onclick="toggleMapLayer('works')" title="Works, utilities and ACT records"><i class="fa-solid fa-helmet-safety" style="color:#fb923c;"></i><span>Works</span></button>
         <button id="btn-actambulance" class="btn-toggle" onclick="toggleMapLayer('actambulance')" title="ACT Ambulance responses"><i class="fa-solid fa-truck-medical" style="color:#ec4899;"></i><span>ACT Ambo</span></button>
       </div>
@@ -3198,7 +3197,6 @@
             floods: { layer: floodsLayer, btn: 'btn-floods', loader: loadFloodsData },
             cameras: { layer: camerasLayer, btn: 'btn-cameras', loader: loadCamerasData },
             actambulance: { layer: actAmbulanceLayer, btn: 'btn-actambulance', loader: loadActAmbulanceData },
-            lga: { layer: lgaLayer, btn: 'btn-lga', loader: () => loadLiveTrafficFeed('lga') },
             works: { layer: worksLayer, btn: 'btn-works', loader: () => loadLiveTrafficFeed('works') }
           };
           
@@ -3406,7 +3404,11 @@
       // fire + major events). It needs its own slot: the startup
       // prefetch fills traffic_incidents with the raw incidents feed,
       // which would otherwise satisfy the cache check and skip the merge.
-      hazards_merged: { data: null, timestamp: 0 }
+      hazards_merged: { data: null, timestamp: 0 },
+      // Same reason as hazards_merged: the roadwork layer serves state
+      // roadwork PLUS council roadwork, and the prefetch/prewarm both
+      // fill traffic_roadwork with the raw state feed alone.
+      roadwork_merged: { data: null, timestamp: 0 }
     };
     const LAYER_CACHE_TTL = 60000; // 1 minute - shorter since backend pre-warms data
     
@@ -3582,7 +3584,6 @@
     // into count bubbles that hid where the works actually were. Volume is
     // handled the way the rest of the map handles it — viewport culling
     // (see _ltRebuildVisible below), so only pins in view are mounted.
-    const lgaLayer = L.layerGroup();
     const worksLayer = L.layerGroup();
     const weatherLayer = L.layerGroup();
     const beachwatchLayer = L.layerGroup();
@@ -4420,7 +4421,6 @@
         adsb: adsbLayer,
         transport: transportLayer,
         actambulance: actAmbulanceLayer,
-        lga: lgaLayer,
         works: worksLayer
       };
       const btnMap = {
@@ -4438,7 +4438,6 @@
         adsb: 'btn-adsb',
         transport: 'btn-transport',
         actambulance: 'btn-actambulance',
-        lga: 'btn-lga',
         works: 'btn-works'
       };
 
@@ -4486,7 +4485,6 @@
         if (target === 'firms' && firmsLayer.getLayers().length === 0) loadFirmsHotspots();
         if (target === 'nswpsn' && nswpsnLayer.getLayers().length === 0) loadNswpsnData();
         if (target === 'actambulance' && actAmbulanceLayer.getLayers().length === 0) loadActAmbulanceData();
-        if (target === 'lga' && lgaLayer.getLayers().length === 0) loadLiveTrafficFeed('lga');
         if (target === 'works' && worksLayer.getLayers().length === 0) loadLiveTrafficFeed('works');
         if (target === 'ais' && _aisVessels.length === 0) loadAisData();
         if (target === 'adsb') {
@@ -4562,7 +4560,7 @@
       // Council / Works / ACT Ambulance define FILTER_REGISTRY entries but
       // nothing ever registered a button for them, so their panels could
       // never be opened — the whole filter UI for those layers was dead.
-      for (const [key, lyr] of [['lga', lgaLayer], ['works', worksLayer], ['actambulance', actAmbulanceLayer]]) {
+      for (const [key, lyr] of [['works', worksLayer], ['actambulance', actAmbulanceLayer]]) {
         if (target !== key) continue;
         if (map.hasLayer(lyr)) addFilterButton(key);
         else removeFilterButton(key);
@@ -8794,11 +8792,12 @@ function initPagerHoursFromStorage() {
           const j = (path) => apiFetch(`${PROXY_BASE}${path}`)
             .then((r) => r.json())
             .catch(() => ({ features: [] }));
-          const [inc, alp, fir, maj] = await Promise.all([
+          const [inc, alp, fir, maj, lgaHz] = await Promise.all([
             j('/api/traffic/incidents'),
             j('/api/traffic/alpine'),
             j('/api/traffic/fire'),
             j('/api/traffic/majorevent'),
+            j('/api/traffic/lga'),
           ]);
           trafficData = {
             type: 'FeatureCollection',
@@ -8807,6 +8806,9 @@ function initPagerHoursFromStorage() {
               ...(alp.features || []),
               ...(fir.features || []),
               ...(maj.features || []),
+              // The council records that aren't roadwork: hazards, adverse
+              // weather, flooding, changed traffic conditions.
+              ...(lgaHz.features || []).filter((f) => !_isCouncilRoadwork(f.properties)),
             ],
           };
           layerCache.hazards_merged = { data: trafficData, timestamp: now };
@@ -9059,6 +9061,14 @@ function initPagerHoursFromStorage() {
             'Network impact', '#7dd3fc', '125,211,252',
             `<div style="color:#e2e8f0; font-size:11px;"><i class="fa-solid fa-road" style="margin-right:4px;"></i>${escapeHtml(props.impactingNetwork || props.arrangement)}</div>`
           );
+        }
+
+        // Council-submitted records merged into this layer keep their
+        // provenance — it is the one thing the LGA stream carries that the
+        // state-road feeds don't.
+        if (props.orgName) {
+          body += _ttSection('Submitted by', '#a3e635', '163,230,53',
+            `<div style="color:#e2e8f0; font-size:11px;">${escapeHtml(props.orgName)}</div>`);
         }
 
         body += _ttTimingSection(props.created, props.end, props.lastUpdated);
@@ -9400,13 +9410,27 @@ function initPagerHoursFromStorage() {
       let trafficData, wazeData;
       try {
         const now = Date.now();
-        const cached = layerCache.traffic_roadwork;
+        const cached = layerCache.roadwork_merged;
         if (cached.data && (now - cached.timestamp) < LAYER_CACHE_TTL) {
           trafficData = cached.data;
         } else {
-          const res = await apiFetch(`${PROXY_BASE}/api/traffic/roadwork`);
-          trafficData = await res.json();
-          layerCache.traffic_roadwork = { data: trafficData, timestamp: now };
+          // Council roadwork joins state-road roadwork here rather than
+          // sitting on a layer of its own.
+          const jr = (path) => apiFetch(`${PROXY_BASE}${path}`)
+            .then((r) => r.json())
+            .catch(() => ({ features: [] }));
+          const [rw, lgaRw] = await Promise.all([
+            jr('/api/traffic/roadwork'),
+            jr('/api/traffic/lga'),
+          ]);
+          trafficData = {
+            type: 'FeatureCollection',
+            features: [
+              ...(rw.features || []),
+              ...(lgaRw.features || []).filter((f) => _isCouncilRoadwork(f.properties)),
+            ],
+          };
+          layerCache.roadwork_merged = { data: trafficData, timestamp: now };
         }
         
         // Waze retired — LiveTraffic roadwork is unaffected. See the hazards
@@ -9449,11 +9473,17 @@ function initPagerHoursFromStorage() {
         // displayType. Some incidents only have a headline like
         // "Pavement maintenance" so fall through to that as a final
         // resort before the generic "Roadwork" bucket.
-        const t = norm(props.subCategory)
-          || norm(props.mainCategory)
-          || norm(props.incidentKind)
-          || norm(props.displayType)
-          || norm(props.headline);
+        // The feed ships the literal strings 'null'/'None' in subCategory,
+        // which used to bucket 237 of 500 records under a "Null" pill.
+        const real = (v) => {
+          const x = norm(v);
+          return /^(null|undefined|none|n\/a)$/i.test(x) ? '' : x;
+        };
+        const t = real(props.subCategory)
+          || real(props.mainCategory)
+          || real(props.incidentKind)
+          || real(props.displayType)
+          || real(props.headline);
         if (!t) return 'Roadwork';
         return titleCaseLocal(t);
       };
@@ -9544,6 +9574,14 @@ function initPagerHoursFromStorage() {
         }
 
         body += _ttTimingSection(props.start || props.created, props.end, props.lastUpdated);
+
+                // Council-submitted records merged into this layer keep their
+        // provenance — it is the one thing the LGA stream carries that the
+        // state-road feeds don't.
+        if (props.orgName) {
+          body += _ttSection('Submitted by', '#a3e635', '163,230,53',
+            `<div style="color:#e2e8f0; font-size:11px;">${escapeHtml(props.orgName)}</div>`);
+        }
 
         return _ttWrap(header, body);
       }
@@ -9689,16 +9727,26 @@ function initPagerHoursFromStorage() {
     // toolbar button and the filter pill can't drift apart — and match
     // what logs.html and live.html show for the same feed.
     // ---------------------------------------------------------------
-    const _ltLayers = { lga: () => lgaLayer, works: () => worksLayer };
+    const _ltLayers = { works: () => worksLayer };
     // EXCLUDED categories, not selected ones. An include-set read as
     // "all on when empty" made the first click on a seemingly-active pill
     // hide every other category, which is the opposite of what the pill
     // showed. Matches the hazards panel's _hazardExcludedCategories.
-    const _ltExcludedCats = { lga: new Set(), works: new Set() };
-    const _ltExcludedRegions = { lga: new Set(), works: new Set() };
+    const _ltExcludedCats = { works: new Set() };
+    const _ltExcludedRegions = { works: new Set() };
     // Flat marker lists, mirroring _hazardMarkers, so the filters and the
     // viewport culler can mount/unmount without re-fetching.
-    const _ltMarkers = { lga: [], works: [] };
+    const _ltMarkers = { works: [] };
+
+    // Council records aren't a category of their own — about a third are
+    // scheduled or emergency roadwork and belong with the roadwork layer,
+    // and the rest are hazards. Routing by category keeps the planned vs
+    // emergency distinction the roadwork panel already draws, instead of
+    // burying it under one "Council" toggle.
+    function _isCouncilRoadwork(props) {
+      const c = String((props && (props.mainCategory || props.subcategory)) || '').toUpperCase();
+      return c.includes('ROADWORK');
+    }
 
     // The works aggregate is national — roughly seven in ten records are
     // SA/QLD/VIC — so it gets a jurisdiction filter alongside category.
@@ -9779,7 +9827,7 @@ function initPagerHoursFromStorage() {
         else if (!want && m._shown) { layer.removeLayer(m.marker); m._shown = false; }
       }
     }
-    registerViewportCuller(() => { _ltRebuildVisible('lga'); _ltRebuildVisible('works'); });
+    registerViewportCuller(() => { _ltRebuildVisible('works'); });
 
     function buildLiveTrafficTooltip(props, meta) {
       let h = '<div style="min-width:220px; max-width:320px;">';
@@ -11204,10 +11252,6 @@ function initPagerHoursFromStorage() {
       `;
     }
 
-    FILTER_REGISTRY.lga = {
-      icon: 'fa-building-columns', label: 'Council', color: '#a3e635',
-      render() { return _ltPanel('lga'); },
-    };
     FILTER_REGISTRY.works = {
       icon: 'fa-helmet-safety', label: 'Works', color: '#fb923c',
       render() { return _ltPanel('works'); },
@@ -16418,7 +16462,6 @@ function initPagerHoursFromStorage() {
       // the layer self-heals if markers were ever lost.
       if (map.hasLayer(aisLayer)) redrawTasks.push(loadAisData());
       if (map.hasLayer(actAmbulanceLayer)) redrawTasks.push(loadActAmbulanceData());
-      if (map.hasLayer(lgaLayer)) redrawTasks.push(loadLiveTrafficFeed('lga'));
       if (map.hasLayer(worksLayer)) redrawTasks.push(loadLiveTrafficFeed('works'));
 
       // Also refresh RFS data (always loaded)
@@ -16896,7 +16939,6 @@ function initPagerHoursFromStorage() {
           roadwork: typeof roadworkLayer !== 'undefined' ? roadworkLayer : null,
           ais: typeof aisLayer !== 'undefined' ? aisLayer : null,
           nswpsn: typeof nswpsnLayer !== 'undefined' ? nswpsnLayer : null,
-          lga: typeof lgaLayer !== 'undefined' ? lgaLayer : null,
           works: typeof worksLayer !== 'undefined' ? worksLayer : null,
           actambulance: typeof actAmbulanceLayer !== 'undefined' ? actAmbulanceLayer : null,
         };
