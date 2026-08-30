@@ -152,31 +152,12 @@ function extractBoolField(data: unknown, key: string): boolean | null {
   return null;
 }
 
-/**
- * Per-source additions to DEDUP_HASH_IGNORE, for feeds whose upstream
- * ROTATES field values between rebuilds without anything real changing.
- *
- * traffic_works (all-feeds-web): the SA/QLD aggregates flip roads[0]
- * between the suburbs of one multi-suburb job and oscillate start/end
- * between scheduling periods on every rebuild. Hashing those fields was
- * re-writing ~40 rows per poll (~12k/day) that said nothing new. The
- * cost of ignoring them: a genuine change to only these fields on a
- * works record no longer creates a new history row — the sidecar still
- * refreshes last_seen, and the map reads the live API, not the archive.
- */
-const SOURCE_DEDUP_IGNORE: Record<string, ReadonlySet<string>> = {
-  traffic_works: new Set(['start', 'end', 'created', 'roads', 'duration']),
-};
-
 function hashRowData(row: ArchiveRow): string {
   let data: unknown = row.data;
-  const extra = SOURCE_DEDUP_IGNORE[row.source];
   if (data && typeof data === 'object' && !Array.isArray(data)) {
     const filtered: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(data as Record<string, unknown>)) {
-      if (DEDUP_HASH_IGNORE.has(k)) continue;
-      if (extra && extra.has(k)) continue;
-      filtered[k] = v;
+      if (!DEDUP_HASH_IGNORE.has(k)) filtered[k] = v;
     }
     data = filtered;
   }
