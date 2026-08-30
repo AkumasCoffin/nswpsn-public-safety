@@ -3332,16 +3332,7 @@
     // Waze layers - no clustering to keep different pin types separate
     const hazardsLayer = L.layerGroup(); // For all hazard markers and jam polylines
     const policeLayer = L.layerGroup(); // For all police markers
-    // Clustered ONLY when zoomed right out. Merging the national feeds
-    // put ~1,800 markers on this layer and ~2,700 across the map, which is
-    // past what Leaflet renders smoothly as individual DOM pins at
-    // continent zoom. disableClusteringAtZoom keeps real pins at every
-    // practical working zoom — clusters appear only below zoom 10.
-    const roadworkLayer = L.markerClusterGroup({
-      maxClusterRadius: 55, showCoverageOnHover: false,
-      zoomToBoundsOnClick: true, spiderfyOnMaxZoom: true,
-      disableClusteringAtZoom: 10, chunkedLoading: true
-    }); // For all roadwork markers
+    const roadworkLayer = L.layerGroup(); // For all roadwork markers
     // Waze ingest retired Aug 2026 (blocked at source; see
     // docs/waze-userscript.user.js). The police pin layer and the density
     // heatmap were Waze-only, so their controls are gone and their loaders
@@ -3549,11 +3540,7 @@
     };
     let cameraSubLayers = {};
     
-    const floodsLayer = L.markerClusterGroup({
-      maxClusterRadius: 55, showCoverageOnHover: false,
-      zoomToBoundsOnClick: true, spiderfyOnMaxZoom: true,
-      disableClusteringAtZoom: 10, chunkedLoading: true
-    });
+    const floodsLayer = L.layerGroup();
     // NASA FIRMS fire-hotspot polygons (off by default — niche layer that
     // only matters when bushfires are active).
     const firmsLayer = L.layerGroup();
@@ -8322,6 +8309,54 @@ function initPagerHoursFromStorage() {
     // are no-ops for layers whose flat list is empty (not yet loaded).
     const _viewportCullers = [];
     function registerViewportCuller(rebuildFn) { _viewportCullers.push(rebuildFn); }
+
+    // ---- Pin level-of-detail -------------------------------------------
+    // Merging the national feeds put ~2,600 markers on the map. As Leaflet
+    // divIcons that is ~2,700 DOM nodes, each with a gradient, a border and
+    // two box-shadows — measured at ~200ms per pan, which is the jank.
+    // The same points as canvas-rendered circles measure ~39ms.
+    //
+    // So below PIN_LOD_ZOOM every marker is drawn as a canvas dot in its
+    // own colour, and at or above it the full glyph pin comes back. Nothing
+    // is grouped and nothing is hidden — every record keeps its own
+    // position at every zoom; only the drawing is cheaper where a 24px
+    // glyph would be illegible anyway.
+    const PIN_LOD_ZOOM = 11;
+    const _lodRenderer = L.canvas({ padding: 0.5 });
+    const _lodDots = () => map.getZoom() < PIN_LOD_ZOOM;
+
+    /** Lazily build (and cache) the cheap canvas dot for a marker entry. */
+    function _lodDotFor(entry) {
+      if (entry._dot) return entry._dot;
+      const ll = entry.latlng || (entry.marker.getLatLng && entry.marker.getLatLng());
+      if (!ll) return null;
+      const dot = L.circleMarker(ll, {
+        renderer: _lodRenderer,
+        radius: 5,
+        weight: 1,
+        color: '#0f172a',
+        fillColor: entry.color || '#94a3b8',
+        fillOpacity: 0.95,
+      });
+      const tip = entry.marker.getTooltip && entry.marker.getTooltip();
+      if (tip) dot.bindTooltip(tip.getContent(), { direction: 'top', offset: [0, -6], opacity: 0.95 });
+      entry._dot = dot;
+      return dot;
+    }
+
+    /** Mount/unmount one entry on `layer`, honouring the current LOD. */
+    function _lodMount(layer, entry, want) {
+      const wantDot = want && _lodDots();
+      const wantPin = want && !wantDot;
+      if (entry._pinOn && !wantPin) { layer.removeLayer(entry.marker); entry._pinOn = false; }
+      if (entry._dotOn && !wantDot) { layer.removeLayer(entry._dot); entry._dotOn = false; }
+      if (wantPin && !entry._pinOn) { layer.addLayer(entry.marker); entry._pinOn = true; }
+      if (wantDot && !entry._dotOn) {
+        const d = _lodDotFor(entry);
+        if (d) { layer.addLayer(d); entry._dotOn = true; }
+      }
+      entry._shown = !!(entry._pinOn || entry._dotOn);
+    }
     map.on('moveend', () => { for (const fn of _viewportCullers) fn(); });
 
     /** Rebuild the per-type sub-layers from the flat hazards list,
@@ -8339,8 +8374,7 @@ function initPagerHoursFromStorage() {
           && _cullEntryInView(m, bounds);
         const sl = hazardSubLayers[m.type];
         if (!sl) continue;
-        if (desired && !m._shown) { sl.addLayer(m.marker); m._shown = true; }
-        else if (!desired && m._shown) { sl.removeLayer(m.marker); m._shown = false; }
+        _lodMount(sl, m, desired);
       }
     }
     registerViewportCuller(_rebuildHazardSubLayers);
@@ -8841,19 +8875,10 @@ function initPagerHoursFromStorage() {
       hazardsLayer.clearLayers();
 
       // Create sub-layers for each filter type
-      // Cluster each sub-layer rather than hazardsLayer itself, which has
-      // to stay a plain group because it also holds jam polylines. Same
-      // continent-only threshold as roadwork/floods: real pins at every
-      // practical zoom, clusters only below 10.
-      const _hzCluster = () => L.markerClusterGroup({
-        maxClusterRadius: 55, showCoverageOnHover: false,
-        zoomToBoundsOnClick: true, spiderfyOnMaxZoom: true,
-        disableClusteringAtZoom: 10, chunkedLoading: true
-      });
       hazardSubLayers = {
-        accident: _hzCluster(),
-        hazard: _hzCluster(),
-        closures: _hzCluster()  // Combines road closures + traffic jams
+        accident: L.layerGroup(),
+        hazard: L.layerGroup(),
+        closures: L.layerGroup()  // Combines road closures + traffic jams
       };
       // Reset the flat marker list — repopulated below.
       _hazardMarkers.length = 0;
@@ -9179,6 +9204,8 @@ function initPagerHoursFromStorage() {
                 opacity: 0.95
               });
               _hazardMarkers.push({ marker, type: category, source: 'livetraffic', subtypeLabel: null,
+                // Colour for the zoomed-out canvas dot, matching the bucket.
+                color: category === 'accident' ? '#ef4444' : category === 'closures' ? '#a855f7' : '#f97316',
                 // Canonical form: the merged feeds disagree on casing and
                 // word-splitting ('BREAKDOWN' vs 'Breakdown', 'SPECIAL EVENT'
                 // vs 'specialEvent'), which split one category across two
@@ -9656,6 +9683,8 @@ function initPagerHoursFromStorage() {
                 marker,
                 type: _roadworkClassify(props, false),
                 source: 'livetraffic',
+                // Colour for the zoomed-out canvas dot.
+                color: '#eab308',
                 latlng: L.latLng(lat, lon),
               });
               totalCount++;
@@ -9726,8 +9755,7 @@ function initPagerHoursFromStorage() {
           _roadworkSelectedTypes.has(m.type)
           && _roadworkSelectedSources.has(m.source)
           && _cullEntryInView(m, bounds);
-        if (desired && !m._shown) { roadworkLayer.addLayer(m.marker); m._shown = true; }
-        else if (!desired && m._shown) { roadworkLayer.removeLayer(m.marker); m._shown = false; }
+        _lodMount(roadworkLayer, m, desired);
       }
     }
     registerViewportCuller(_renderRoadworkVisible);
