@@ -25,9 +25,10 @@ const CAMERAS_URL = 'https://www.livetraffic.com/datajson/all-feeds-web.json';
 const WEB_FEED_URL = CAMERAS_URL;
 
 /** Categories served by their own dedicated source already, or that are
- *  facilities rather than road events. Rest areas are static amenities
- *  (850 of them) and belong on their own layer, not in a works feed. */
-const WEB_FEED_SKIP = new Set(['livecams', 'restareas']);
+ *  facilities rather than road events. Rest areas (850) and heavy vehicle
+ *  checking stations (7) are static infrastructure that never changes —
+ *  showing them as incident pins just adds permanent noise. */
+const WEB_FEED_SKIP = new Set(['livecams', 'restareas', 'hvcs']);
 
 /**
  * Last good batch of records per upstream `apiSource`.

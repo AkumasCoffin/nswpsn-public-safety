@@ -336,6 +336,22 @@ describe('traffic archive facet (lowercase subcategory)', () => {
 describe('traffic works drops RFS re-publications', () => {
   beforeEach(() => fetchJsonMock.mockReset());
 
+  it('skips static infrastructure — checking stations and rest areas', async () => {
+    const { fetchTrafficWorks } = await import('../../../src/sources/traffic.js');
+    fetchJsonMock.mockResolvedValueOnce([
+      { id: 'h1', eventCategory: 'hvcs', eventType: 'hvcs',
+        geometry: { type: 'Point', coordinates: [150.3, -33.5] },
+        properties: { heading: 'Heavy vehicle checking station' } },
+      { id: 'r1', eventCategory: 'restAreas', eventType: 'restAreas',
+        geometry: { type: 'Point', coordinates: [151, -33] }, properties: {} },
+      { id: 'w1', eventCategory: 'Roadwork', eventType: 'Roadwork',
+        geometry: { type: 'Point', coordinates: [151, -33] }, properties: { title: 'Sewer works' } },
+    ]);
+    const snap = await fetchTrafficWorks();
+    expect(snap.count).toBe(1);
+    expect(snap.features[0]?.properties.upstreamId).toBe('w1');
+  });
+
   it("skips eventType 'Fire' items — the rfs source already has them", async () => {
     const { fetchTrafficWorks } = await import('../../../src/sources/traffic.js');
     fetchJsonMock.mockResolvedValueOnce([

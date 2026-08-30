@@ -9838,8 +9838,13 @@ function initPagerHoursFromStorage() {
     // being given a layer of its own.
     function _worksTarget(props) {
       const c = String((props && (props.mainCategory || props.type)) || '').toLowerCase();
+      // Static infrastructure, not road events: heavy vehicle checking
+      // stations and rest areas never change and don't belong on any
+      // incident layer. The backend skips them at ingest too; this guard
+      // keeps them hidden even against an older API.
+      if (/hvcs|checking station|restarea|rest area/.test(c)) return null;
       if (c.includes('flood')) return 'flood';
-      if (/roadwork|construction|utilit|lightrail|light rail|telecommunication|hvcs|charitable/.test(c)) {
+      if (/roadwork|construction|utilit|lightrail|light rail|telecommunication|charitable/.test(c)) {
         return 'roadwork';
       }
       return 'hazard';
