@@ -547,82 +547,49 @@ export async function fetchTrafficWorks(): Promise<TrafficSnapshot> {
     const kindKey = kind.toLowerCase().replace(/[^a-z]/g, '');
     if (WEB_FEED_SKIP.has(key) || WEB_FEED_SKIP.has(kindKey)) continue;
     // eventType 'Fire' marks RFS incidents re-published into this
-    // aggregate (their categories are RFS alert levels: 'Not Applicable',
-    // 'Advice', 'Planned Burn'). Our own rfs source already ingests the
-    // same incidents, so keeping them here double-maps every fire.
+    // aggregate — our own rfs source already ingests the same incidents.
     if (kind === 'Fire') continue;
 
     const geom = it['geometry'] as Record<string, unknown> | undefined;
     if (!geom) continue;
     if (asString(geom['type']).toLowerCase() !== 'point') continue;
-    const coords = geom['coordinates'];
-    if (!Array.isArray(coords) || coords.length < 2) continue;
-    const lon = asNumber(coords[0]);
-    const lat = asNumber(coords[1]);
-    if (lon === null || lat === null) continue;
 
+    // This feed is Python-serialised: timestamps arrive as epoch millis
+    // (sometimes as numeric strings) where the hazard feeds use ISO text.
+    // Normalise them, then let parseTrafficItem do the real work — it is
+    // what knows how to unpack roads[] (street, suburb, region, delay),
+    // advice and polylines, all of which the old hand-rolled mapping
+    // dropped, leaving tooltips with nothing but a category name.
     const props = (it['properties'] as Record<string, unknown> | undefined) ?? {};
-    // 'ended' is the string 'False'/'None' here, never a real boolean.
     if (asString(props['ended']).toLowerCase() === 'true') continue;
-
-    const title = asString(props['title']) || asString(props['heading']);
-    const displayName = asString(props['displayName']);
-    const { incidentType, cleanTitle } = extractIncidentType(title || displayName);
-
-    features.push({
-      type: 'Feature',
-      geometry: { type: 'Point', coordinates: [lon, lat] },
+    const msToIso = (v: unknown): string => {
+      const n = typeof v === 'number' ? v : Number(asString(v));
+      if (!Number.isFinite(n) || n <= 0) return '';
+      return new Date(n).toISOString();
+    };
+    const normalised = {
+      ...it,
       properties: {
-        id: stableWorksId(lon, lat, title || displayName, cat),
-        /** Upstream's own key — kept for reference, but it is volatile. */
-        upstreamId: asString(it['id']),
-        type: cat || kind || 'Works',
-        incidentType,
-        mainCategory: cat,
-        subCategory:
-          asString(props['subCategoryA']) || asString(props['subCategoryB']),
-        // Facet key: the eventCategory is the only complete dimension this
-        // feed has, so it doubles as the logs-filter subcategory.
-        subcategory: cat || kind,
-        incidentKind: kind,
-        title: cleanTitle || title || displayName,
-        headline: '',
-        displayName,
-        subtitle: '',
-        otherAdvice: asProse(props['otherAdvice']),
-        adviceB: '',
-        roads: asString(props['road']) || asString(props['suburb']),
-        affectedDirection: '',
-        impactedLanes: [],
-        speedLimit: '',
-        expectedDelay: '',
-        diversions: '',
-        encodedPolyline: '',
-        encodedPolylines: [],
-        created: asString(props['created']) || asString(props['start']),
-        lastUpdated: asString(props['lastUpdated']),
-        start: asString(props['start']),
-        end: asString(props['end']),
-        isEnded: false,
-        isMajor: false,
-        arrangement: '',
-        periods: [],
-        isLocalRoad: '',
-        region: '',
-        crossStreet: '',
-        secondLocation: '',
-        locationQualifier: '',
-        queueLength: null,
-        duration: '',
-        adviceC: '',
-        webLinks: [],
-        orgName: '',
-        orgContact: '',
-        orgEmail: '',
-        orgWebsite: '',
-        source: 'livetraffic',
+        ...props,
+        start: msToIso(props['start']) || asString(props['start']),
+        end: msToIso(props['end']) || asString(props['end']),
+        created: msToIso(props['created']) || asString(props['created']),
+        lastUpdated: msToIso(props['lastUpdated']) || asString(props['lastUpdated']),
       },
-    });
+    };
+
+    const f = parseTrafficItem(normalised, cat || kind || 'Works');
+    if (!f) continue;
+    const [lon, lat] = f.geometry.coordinates;
+    const title = f.properties.title || f.properties.displayName;
+    f.properties.id = stableWorksId(lon, lat, title, cat);
+    f.properties.upstreamId = asString(it['id']);
+    f.properties.mainCategory = cat;
+    f.properties.incidentKind = kind;
+    // Facet key: eventCategory is the only complete dimension this feed
+    // has, so it doubles as the logs-filter subcategory.
+    f.properties.subcategory = cat || kind;
+    features.push(f);
   }
   return { type: 'FeatureCollection', features, count: features.length };
 }

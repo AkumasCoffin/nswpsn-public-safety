@@ -9059,7 +9059,7 @@ function initPagerHoursFromStorage() {
         // that isn't already captured by the title.
         const descText = isWaze
           ? (props.title && props.title !== props.displayType ? props.title : '')
-          : (props.adviceA || '');
+          : (props.adviceA || props.otherAdvice || '');
         const descExtra = isWaze ? '' : (props.adviceB && props.adviceB !== props.adviceA ? props.adviceB : '');
         if (descText || descExtra) {
           let descHtml = '';
@@ -9072,7 +9072,7 @@ function initPagerHoursFromStorage() {
         // street/city; LiveTraffic uses roads/suburb. Fall back to
         // props.location when Waze didn't include a structured street.
         const street = isWaze ? (props.street || props.location || '') : (props.roads || '');
-        const suburb = isWaze ? (props.city || '') : (props.suburb || '');
+        const suburb = isWaze ? (props.city || '') : (props.suburb || props.region || '');
         body += _ttLocationSection(street, suburb, lat, lon);
 
         // Type / Subtype — formatted for both feeds so the labels read
@@ -9082,8 +9082,8 @@ function initPagerHoursFromStorage() {
           typeLabel = formatWazeType(props.wazeType || '');
           subtypeLabel = formatWazeType(props.wazeSubtype || '');
         } else {
-          typeLabel = props.mainCategory || '';
-          subtypeLabel = props.subCategoryB || '';
+          typeLabel = _titleCaseCat(props.mainCategory || '');
+          subtypeLabel = props.subCategory || props.subCategoryB || '';
         }
         body += _ttTypeSection(typeLabel, subtypeLabel, '#fb923c', '251,146,60');
 
@@ -9545,7 +9545,16 @@ function initPagerHoursFromStorage() {
           if (x.length > 28 || /[.;:]/.test(x) || x.split(/\s+/).length > 4) return '';
           return x;
         };
+        // Try the title before the umbrella category: the works feeds put
+        // their real type there ('Asphalt Works', 'Shoulder Work', 'Junction
+        // Upgrade') and file everything under mainCategory 'Roadwork', which
+        // was collapsing 1,300 records into one meaningless pill. real()
+        // still rejects prose, so free-text titles fall through safely.
+        // Only works-aggregate records (identified by upstreamId) use the
+        // title: the state feed's titles are street names, which would
+        // turn the Type row into a list of roads.
         const t = real(props.subCategory)
+          || (props.upstreamId ? real(props.title) : '')
           || real(props.mainCategory)
           || real(props.incidentKind)
           || real(props.displayType)
@@ -9559,7 +9568,11 @@ function initPagerHoursFromStorage() {
       // LiveTraffic feed includes a periods[] array.
       function buildRoadworkTooltip(props, lat, lon) {
         const isWaze = props.source === 'waze';
-        const roadworkHeader = [props.displayType, props.headline, props.mainCategory].find(v => !isLowQualityText(v)) || 'Roadwork';
+        // Same header rule as hazards: the record's own title beats the
+        // raw category key, and the fallback is title-cased.
+        const _rwHeaderRaw = [props.displayType, props.headline, props.title, props.displayName, props.mainCategory]
+          .find(v => !isLowQualityText(v)) || 'Roadwork';
+        const roadworkHeader = _rwHeaderRaw === props.mainCategory ? _titleCaseCat(_rwHeaderRaw) : _rwHeaderRaw;
         const header = _ttHeader(
           'fa-solid fa-person-digging', roadworkHeader,
           isWaze ? '#f97316' : '#eab308',
@@ -9572,7 +9585,7 @@ function initPagerHoursFromStorage() {
 
         const descText = isWaze
           ? (props.title && props.title !== props.displayType ? props.title : '')
-          : (props.adviceA || '');
+          : (props.adviceA || props.otherAdvice || '');
         const descExtra = isWaze ? '' : (props.adviceB && props.adviceB !== props.adviceA ? props.adviceB : '');
         if (descText || descExtra) {
           let descHtml = '';
@@ -9582,7 +9595,7 @@ function initPagerHoursFromStorage() {
         }
 
         const street = isWaze ? (props.street || props.location || '') : (props.roads || '');
-        const suburb = isWaze ? (props.city || '') : (props.suburb || '');
+        const suburb = isWaze ? (props.city || '') : (props.suburb || props.region || '');
         body += _ttLocationSection(street, suburb, lat, lon);
 
         let typeLabel = '', subtypeLabel = '';
@@ -9590,8 +9603,8 @@ function initPagerHoursFromStorage() {
           typeLabel = formatWazeType(props.wazeType || '');
           subtypeLabel = formatWazeType(props.wazeSubtype || '');
         } else {
-          typeLabel = props.mainCategory || '';
-          subtypeLabel = props.subCategoryB || '';
+          typeLabel = _titleCaseCat(props.mainCategory || '');
+          subtypeLabel = props.subCategory || props.subCategoryB || '';
         }
         body += _ttTypeSection(typeLabel, subtypeLabel, '#fb923c', '251,146,60');
 
