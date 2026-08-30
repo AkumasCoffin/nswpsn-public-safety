@@ -9043,7 +9043,13 @@ function initPagerHoursFromStorage() {
       // marker so the Location section can include them.
       function buildHazardTooltip(props, lat, lon) {
         const isWaze = props.source === 'waze';
-        const hazardHeader = [props.displayType, props.headline, props.mainCategory].find(v => !isLowQualityText(v)) || 'Traffic Hazard';
+        // Prefer the record's own title ('Police incident', 'Hazard:
+        // Bridge or culvert damaged') over the raw category key
+        // ('generalHazards'), and title-case a category fallback so a
+        // camelCase key never shows raw.
+        const _hazHeaderRaw = [props.displayType, props.headline, props.title, props.displayName, props.mainCategory]
+          .find(v => !isLowQualityText(v)) || 'Traffic Hazard';
+        const hazardHeader = _hazHeaderRaw === props.mainCategory ? _titleCaseCat(_hazHeaderRaw) : _hazHeaderRaw;
         const header = _ttHeader(
           'fa-solid fa-triangle-exclamation',
           hazardHeader,
