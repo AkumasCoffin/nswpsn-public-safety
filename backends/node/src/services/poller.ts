@@ -45,6 +45,13 @@ const SKIP_ARCHIVE = new Set<string>([
   // Live-only aircraft positions — a 12 s cadence would flood
   // archive_misc with hundreds of rows per tick for zero incident value.
   'adsb_aircraft',
+  // Satellite fire detections. These never carried a source_id, so dedup
+  // could never collapse them: NSW-only they were already writing ~34k
+  // rows (16 MB) a day, and nothing surfaces them — there is no FIRMS
+  // provider in filterCache, so they never reached the logs page. The
+  // Australia-wide bbox would have taken that past half a million rows a
+  // day. The live layer reads the snapshot, not the archive.
+  'firms_hotspots',
 ]);
 
 interface SourceState {

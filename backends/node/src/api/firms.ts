@@ -1,7 +1,7 @@
 /**
  * NASA FIRMS fire-hotspot endpoint.
  *
- *   GET /api/firms/hotspots — last-24h hotspot detections over NSW as a
+ *   GET /api/firms/hotspots — last-24h hotspot detections over Australia as a
  *                              GeoJSON FeatureCollection. Each feature is
  *                              a Polygon representing the satellite pixel
  *                              footprint (scan × track in km).

@@ -10208,25 +10208,16 @@ function initPagerHoursFromStorage() {
       return dn ? `${left} · ${dn}` : left;
     }
     function firmsTooltip(props) {
-      // Cluster-aware tooltip — when N detections collapsed into one
-      // marker, surface the count + total FRP rather than pretending
-      // it's a single pixel.
-      const clusterCount = Number(props._clusterCount) || 1;
+      // One marker is one satellite detection — no aggregation — so this
+      // always describes a single pixel.
       const detectedAt = firmsFormatTime(props);
       const ago = firmsFormatAgo(props.acq_datetime);
-      const totalFrp = Number(props._totalFrp);
       const maxFrp = Number(props.frp);
-      const intensityLabel = firmsIntensityLabel(clusterCount > 1 ? totalFrp : maxFrp);
-      const intensityLine = clusterCount > 1
-        ? `${Number.isFinite(totalFrp) ? totalFrp.toFixed(1) : '—'} MW total <span style="color:#94a3b8;">(${intensityLabel}, max ${Number.isFinite(maxFrp) ? maxFrp.toFixed(1) : '—'} MW per pixel)</span>`
-        : `${Number.isFinite(maxFrp) ? maxFrp.toFixed(1) : '—'} MW <span style="color:#94a3b8;">(${intensityLabel})</span>`;
+      const intensityLabel = firmsIntensityLabel(maxFrp);
+      const intensityLine = `${Number.isFinite(maxFrp) ? maxFrp.toFixed(1) : '—'} MW <span style="color:#94a3b8;">(${intensityLabel})</span>`;
       const conf = firmsConfidenceTitleCase(props.confidence);
-      const headline = clusterCount > 1
-        ? `🔥 ${clusterCount} fire detections nearby`
-        : `🔥 NASA FIRMS Hotspot`;
-      const footnote = clusterCount > 1
-        ? `Zoom in for individual detections.`
-        : `Pixel footprint ${(Number(props.scan_km) || 0.375).toFixed(2)} × ${(Number(props.track_km) || 0.375).toFixed(2)} km.`;
+      const headline = `🔥 NASA FIRMS Hotspot`;
+      const footnote = `Pixel footprint ${(Number(props.scan_km) || 0.375).toFixed(2)} × ${(Number(props.track_km) || 0.375).toFixed(2)} km.`;
       const agoTag = ago ? ` <span style="color:#94a3b8;font-size:10px;">(${ago})</span>` : '';
       return `<div style="font-size:11px;line-height:1.5;">
         <div style="font-weight:600;color:#fdba74;margin-bottom:4px;">${headline}</div>
@@ -10238,135 +10229,6 @@ function initPagerHoursFromStorage() {
       </div>`;
     }
 
-    // Grid cell size in degrees, picked so adjacent VIIRS pixels collapse
-    // to one dot at low zoom but expand to individuals near street level.
-    // Aggressive at continental zoom — a fire region of 80 detections at
-    // NSW-wide view should read as one big dot, not 80 stacked ones.
-    function firmsClusterCellDeg(zoom) {
-      if (zoom >= 12) return 0;     // no clustering
-      if (zoom >= 11) return 0.02;  // ~2 km cells (city)
-      if (zoom >= 9)  return 0.08;  // ~9 km cells (region)
-      if (zoom >= 7)  return 0.25;  // ~28 km cells (state)
-      if (zoom >= 5)  return 0.60;  // ~67 km cells (national)
-      return 1.20;                   // continental
-    }
-
-    function firmsClusterFeatures(features, cellDeg) {
-      if (!cellDeg || cellDeg <= 0) {
-        // No clustering — return one cluster-of-one per detection.
-        return features.map((f) => {
-          const p = (f && f.properties) || {};
-          const frp = Number(p.frp) || 0;
-          return {
-            lat: Number(p.latitude),
-            lng: Number(p.longitude),
-            count: 1,
-            totalFrp: frp,
-            maxFrp: frp,
-            confidence: p.confidence,
-            acq_datetime: p.acq_datetime,
-            satellite: p.satellite,
-            satellite_tag: p.satellite_tag,
-            instrument: p.instrument,
-            daynight: p.daynight,
-            brightness: p.brightness,
-            scan_km: p.scan_km,
-            track_km: p.track_km,
-          };
-        });
-      }
-      const buckets = new Map();
-      const confRank = (c) => {
-        const s = String(c == null ? '' : c).toLowerCase();
-        if (s === 'h') return 3;
-        if (s === 'n') return 2;
-        if (s === 'l') return 1;
-        const num = Number(s);
-        if (Number.isFinite(num)) return num >= 80 ? 3 : num >= 50 ? 2 : 1;
-        return 0;
-      };
-      for (const f of features) {
-        const p = (f && f.properties) || {};
-        const lat = Number(p.latitude);
-        const lng = Number(p.longitude);
-        if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
-        const cy = Math.floor(lat / cellDeg);
-        const cx = Math.floor(lng / cellDeg);
-        const key = cy + '|' + cx;
-        let b = buckets.get(key);
-        if (!b) {
-          b = {
-            sumLat: 0, sumLng: 0, count: 0,
-            totalFrp: 0, maxFrp: 0,
-            confidence: '', _confRank: -1,
-            acq_datetime: '',
-            satellite: '', satellite_tag: '', instrument: '',
-            daynight: '', brightness: null,
-            scan_km: null, track_km: null,
-          };
-          buckets.set(key, b);
-        }
-        b.sumLat += lat;
-        b.sumLng += lng;
-        b.count += 1;
-        const frp = Number(p.frp) || 0;
-        b.totalFrp += frp;
-        if (frp > b.maxFrp) {
-          b.maxFrp = frp;
-          // Carry the brightest detection's metadata as the cluster's
-          // representative — that's what the fire-radius colour is keyed off.
-          b.satellite = p.satellite || b.satellite;
-          b.satellite_tag = p.satellite_tag || b.satellite_tag;
-          b.instrument = p.instrument || b.instrument;
-          b.daynight = p.daynight || b.daynight;
-          b.brightness = p.brightness ?? b.brightness;
-          b.scan_km = p.scan_km ?? b.scan_km;
-          b.track_km = p.track_km ?? b.track_km;
-        }
-        const r = confRank(p.confidence);
-        if (r > b._confRank) {
-          b._confRank = r;
-          b.confidence = p.confidence;
-        }
-        const t = p.acq_datetime || '';
-        if (t > b.acq_datetime) b.acq_datetime = t;
-      }
-      const out = [];
-      for (const b of buckets.values()) {
-        out.push({
-          lat: b.sumLat / b.count,
-          lng: b.sumLng / b.count,
-          count: b.count,
-          totalFrp: b.totalFrp,
-          maxFrp: b.maxFrp,
-          confidence: b.confidence,
-          acq_datetime: b.acq_datetime,
-          satellite: b.satellite,
-          satellite_tag: b.satellite_tag,
-          instrument: b.instrument,
-          daynight: b.daynight,
-          brightness: b.brightness,
-          scan_km: b.scan_km,
-          track_km: b.track_km,
-        });
-      }
-      return out;
-    }
-
-    function firmsClusterRadius(cluster) {
-      // Base radius from peak-FRP; bump for clusters so a fire region
-      // with 100+ pixels reads as a big dot at NSW-wide zoom rather
-      // than the same size as one isolated detection.
-      const base = firmsRadiusFor({ frp: cluster.maxFrp });
-      const c = cluster.count;
-      if (c >= 200) return base + 14;
-      if (c >= 100) return base + 11;
-      if (c >= 50)  return base + 8;
-      if (c >= 20)  return base + 5;
-      if (c >= 10)  return base + 3;
-      if (c >= 3)   return base + 1;
-      return base;
-    }
 
     // -------------------------------------------------------------------
     // Floating filter sidebar (desktop). Each layer with filter options
@@ -11365,46 +11227,50 @@ function initPagerHoursFromStorage() {
         `;
       },
     };
+    // Zoom-aware dot size. At continental zoom 9k detections at full
+    // radius merge into one orange smear, so scale them down until they
+    // read as individual satellite pixels rather than blobs; by street
+    // level they are back to full size.
+    function firmsZoomScale(zoom) {
+      if (zoom <= 4) return 0.26;
+      if (zoom <= 5) return 0.32;
+      if (zoom <= 6) return 0.42;
+      if (zoom <= 7) return 0.54;
+      if (zoom <= 8) return 0.66;
+      if (zoom <= 9) return 0.78;
+      if (zoom <= 10) return 0.88;
+      return 1;
+    }
+    // One shared canvas for the hotspot dots. 9k SVG paths is what made
+    // panning crawl; canvas draws the same set in a few milliseconds.
+    const _firmsRenderer = L.canvas({ padding: 0.5 });
+
     function _renderFirmsLayer() {
       firmsLayer.clearLayers();
       if (!_firmsFeatures.length) return;
-      const filtered = _firmsFeatures.filter((f) => {
-        const sat = (f.properties && f.properties.satellite_tag) || '';
-        return _firmsSelectedSats.has(sat);
-      });
-      if (!filtered.length) return;
       const zoom = map.getZoom();
-      const cellDeg = firmsClusterCellDeg(zoom);
-      const clusters = firmsClusterFeatures(filtered, cellDeg);
-      for (const c of clusters) {
-        if (!Number.isFinite(c.lat) || !Number.isFinite(c.lng)) continue;
-        const fill = firmsFillFor({ frp: c.maxFrp });
-        const op = firmsOpacityFor({ confidence: c.confidence });
-        const radius = firmsClusterRadius(c);
-        const props = {
-          frp: c.maxFrp,
-          _totalFrp: c.totalFrp,
-          _clusterCount: c.count,
-          confidence: c.confidence,
-          acq_datetime: c.acq_datetime,
-          satellite: c.satellite,
-          satellite_tag: c.satellite_tag,
-          instrument: c.instrument,
-          daynight: c.daynight,
-          brightness: c.brightness,
-          scan_km: c.scan_km,
-          track_km: c.track_km,
-        };
-        const dot = L.circleMarker([c.lat, c.lng], {
-          radius,
+      const scale = firmsZoomScale(zoom);
+      // Every detection draws its own dot — no aggregation. Culling to the
+      // padded viewport is what keeps that affordable now the feed covers
+      // the whole country.
+      const b = _viewportCullBounds();
+      for (const f of _firmsFeatures) {
+        const p = (f && f.properties) || {};
+        const lat = Number(p.latitude), lng = Number(p.longitude);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+        if (!_firmsSelectedSats.has(p.satellite_tag || '')) continue;
+        if (!b.contains([lat, lng])) continue;
+        const dot = L.circleMarker([lat, lng], {
+          renderer: _firmsRenderer,
+          radius: Math.max(1.5, firmsRadiusFor(p) * scale),
           color: '#7f1d1d',
-          weight: 1,
+          weight: zoom <= 7 ? 0 : 1,
           opacity: 0.9,
-          fillColor: fill,
-          fillOpacity: op,
+          fillColor: firmsFillFor(p),
+          fillOpacity: firmsOpacityFor(p),
           interactive: true
         }).addTo(firmsLayer);
-        dot.bindTooltip(firmsTooltip(props), { sticky: true, opacity: 0.95 });
+        dot.bindTooltip(firmsTooltip(p), { sticky: true, opacity: 0.95 });
       }
     }
     // ==================== AIS / VESSELS ====================
@@ -15206,6 +15072,10 @@ function initPagerHoursFromStorage() {
         if (!_firmsZoomHandlerWired) {
           // Re-cluster on zoom change so dense fire regions stay readable
           // without showing 50 stacked dots at NSW-wide view.
+          map.on('moveend', () => {
+            // Dots are culled to the viewport, so panning brings new ones in.
+            if (map.hasLayer(firmsLayer)) _renderFirmsLayer();
+          });
           map.on('zoomend', () => {
             if (map.hasLayer(firmsLayer)) _renderFirmsLayer();
           });

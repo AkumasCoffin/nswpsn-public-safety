@@ -14,8 +14,11 @@
  * (typically 3 h after acquisition). MODIS_NRT could be added but is 1 km
  * pixels, much chunkier on the map.
  *
- * Bbox covers NSW + a small buffer so border fires that affect NSW air
- * quality / RFS dispatches show up too.
+ * Bbox covers the Australian mainland plus Tasmania. It was NSW-only
+ * until the site went national; widening it multiplies detections by
+ * roughly 15x in the northern dry season (the savanna burning across
+ * NT/QLD dwarfs anything in the south-east), which is why this source is
+ * archive-skipped and the map clusters by zoom.
  */
 import { fetchText } from './shared/http.js';
 import { registerSource } from '../services/sourceRegistry.js';
@@ -23,12 +26,15 @@ import { liveStore } from '../store/live.js';
 import { config } from '../config.js';
 import { log } from '../lib/log.js';
 
-// NSW bbox + small Vic/Qld/SA fringe so cross-border fires near the
-// state line still render. Order: WEST,SOUTH,EAST,NORTH (matches FIRMS).
-const NSW_BBOX = '140.0,-38.0,154.0,-28.0';
+// Continental Australia: west of Shark Bay to east of Byron, Cape York
+// down past Tasmania. Order: WEST,SOUTH,EAST,NORTH (matches FIRMS).
+// Deliberately excludes the external territories (Christmas/Cocos,
+// Norfolk, Macquarie) — nobody is watching those for fire here and each
+// degree of empty ocean is bbox we pay for.
+const AU_BBOX = '112.0,-44.0,154.0,-9.0';
 
 // VIIRS sensor flies on three platforms (S-NPP, NOAA-20, NOAA-21), each
-// gives a separate ~12 h orbital pass over NSW. Polling all three
+// gives a separate ~12 h orbital pass overhead. Polling all three
 // roughly doubles the temporal coverage versus NOAA-20 alone, which is
 // the difference between catching a fire flare-up at hour 0 vs hour 12.
 // Each detection gets tagged with `source` so the frontend can offer
@@ -56,7 +62,7 @@ const FIRMS_API_BASE = 'https://firms.modaps.eosdis.nasa.gov/api/area/csv';
 const DEG_PER_KM_LAT = 1 / 111.0; // good across all latitudes for lat
 function degPerKmLon(latDeg: number): number {
   // 1 deg of longitude shrinks as cos(lat). Clamp at 70° so polygons
-  // near a pole don't explode (NSW is comfortably below 40°S anyway).
+  // near a pole don't explode (Australia tops out near 44°S anyway).
   const lat = Math.max(-70, Math.min(70, latDeg));
   return 1 / (111.0 * Math.cos((lat * Math.PI) / 180));
 }
@@ -128,7 +134,7 @@ const EMPTY_SNAPSHOT: FirmsSnapshot = {
     ok: false,
     count: 0,
   })),
-  bbox: NSW_BBOX,
+  bbox: AU_BBOX,
   fetched_at: new Date(0).toISOString(),
 };
 
@@ -271,7 +277,7 @@ async function fetchOneFirmsSource(
   key: string,
   src: FirmsSource,
 ): Promise<{ ok: true; features: FirmsFeature[] } | { ok: false; error: string }> {
-  const url = `${FIRMS_API_BASE}/${encodeURIComponent(key)}/${src.id}/${NSW_BBOX}/${DAY_RANGE}`;
+  const url = `${FIRMS_API_BASE}/${encodeURIComponent(key)}/${src.id}/${AU_BBOX}/${DAY_RANGE}`;
   // Progressive timeouts: each subsequent attempt gets longer headroom
   // because the failure mode is a slow upstream, not a fast 5xx.
   const attempts: Array<{ timeoutMs: number; sleepBeforeMs: number }> = [
@@ -389,7 +395,7 @@ export async function fetchFirmsHotspots(): Promise<FirmsSnapshot> {
     count: features.length,
     sources: FIRMS_SOURCES.map((s) => s.id),
     source_status: sourceStatus,
-    bbox: NSW_BBOX,
+    bbox: AU_BBOX,
     fetched_at: new Date().toISOString(),
   };
 }
