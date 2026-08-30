@@ -8328,7 +8328,9 @@ function initPagerHoursFromStorage() {
     // is grouped and nothing is hidden — every record keeps its own
     // position at every zoom; only the drawing is cheaper where a 24px
     // glyph would be illegible anyway.
-    const PIN_LOD_ZOOM = 11;
+    // Full-quality glyph pins from zoom 9 up (city-to-region scale);
+    // below that (state/continent scale) the cheap canvas dots take over.
+    const PIN_LOD_ZOOM = 9;
     const _lodRenderer = L.canvas({ padding: 0.5 });
     const _lodDots = () => map.getZoom() < PIN_LOD_ZOOM;
 
