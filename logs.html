@@ -36,6 +36,7 @@
   <link rel="icon" type="image/png" sizes="192x192" href="./assets/fqlogo.png">
 
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <script src="livetraffic-vocab.js?v=1"></script>
   <script src="auth-common.js"></script>
   <script src="ui-dialogs.js"></script>
 </head>
@@ -1973,6 +1974,19 @@
         } else if (item.source === 'traffic_majorevent') {
           if (item.category) extraInfo += `<span class="lg-badge" style="--badge:#8b5cf6">${escapeHtml(item.category)}</span>`;
           if (item.status) extraInfo += `<span class="lg-badge-o" style="--badge:#a78bfa">${escapeHtml(item.status)}</span>`;
+        } else if (item.source === 'traffic_alpine' || item.source === 'traffic_lga' || item.source === 'traffic_works') {
+          // The three feeds added later share a branch — colour comes from
+          // the shared Live Traffic vocab so the badge matches the map pin.
+          const lt = (window.LiveTrafficVocab && LiveTrafficVocab.get(item.source)) || { color: '#64748b', short: '' };
+          if (item.category) extraInfo += `<span class="lg-badge" style="--badge:${lt.color}">${escapeHtml(item.category)}</span>`;
+          if (item.subcategory) extraInfo += `<span class="lg-badge-o" style="--badge:${lt.color}">${escapeHtml(item.subcategory)}</span>`;
+          let details = [];
+          if (data.roads) details.push(`<span class="lg-tint lg-wrap" style="--c:${lt.color}"><i class="fas fa-road"></i> ${escapeHtml(data.roads)}</span>`);
+          if (data.region) details.push(`<span class="lg-dim"><i class="fas fa-map"></i> ${escapeHtml(data.region)}</span>`);
+          // Council attribution is the whole point of the LGA stream.
+          if (data.orgName) details.push(`<span class="lg-tint" style="--c:#a3e635"><i class="fas fa-building-columns"></i> ${escapeHtml(data.orgName)}</span>`);
+          if (data.otherAdvice) details.push(`<span class="lg-dim lg-wrap"><i class="fas fa-info-circle"></i> ${escapeHtml(String(data.otherAdvice).slice(0, 140))}</span>`);
+          if (details.length) extraDetails = details.join(' · ');
         } else if (item.source === 'waze_hazard') {
           const street = data.street || '';
           const city = data.city || '';
@@ -3008,7 +3022,10 @@
         'bom_warning': 'BOM Warnings',
         'bom_land': 'BOM Land',
         'bom_marine': 'BOM Marine',
-        'act_ambulance': 'ACT Ambulance'
+        'act_ambulance': 'ACT Ambulance',
+        'traffic_alpine': 'Alpine',
+        'traffic_lga': 'Council Roads',
+        'traffic_works': 'Works & ACT'
       };
       return names[source] || source;
     }
@@ -3075,7 +3092,10 @@
         'bom_land': { primary: '#22c55e', secondary: '#4ade80' },
         'bom_marine': { primary: '#0ea5e9', secondary: '#38bdf8' },
         'ausgrid': { primary: '#eab308', secondary: '#facc15' },
-        'act_ambulance': { primary: '#ec4899', secondary: '#f472b6' }
+        'act_ambulance': { primary: '#ec4899', secondary: '#f472b6' },
+        'traffic_alpine': { primary: '#7dd3fc', secondary: '#bae6fd' },
+        'traffic_lga': { primary: '#a3e635', secondary: '#bef264' },
+        'traffic_works': { primary: '#fb923c', secondary: '#fdba74' }
       };
       return colors[source] || { primary: '#64748b', secondary: '#94a3b8' };
     }
@@ -3510,6 +3530,12 @@
         'bom_marine': '<i class="fas fa-water" style="color:#0ea5e9"></i>',
         'act_ambulance': '<i class="fas fa-truck-medical" style="color:#ec4899"></i>'
       };
+      // Live Traffic feeds are described once in livetraffic-vocab.js;
+      // read from there instead of duplicating icon/colour per page.
+      const ltMeta = window.LiveTrafficVocab && LiveTrafficVocab.get(source);
+      if (ltMeta && !icons[source]) {
+        return `<i class="fa-solid ${ltMeta.icon}" style="color:${ltMeta.color}"></i>`;
+      }
       return icons[source] || '<i class="fas fa-circle" style="color:#64748b"></i>';
     }
     

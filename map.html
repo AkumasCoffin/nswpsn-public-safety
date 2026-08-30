@@ -32,6 +32,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <script src="livetraffic-vocab.js?v=1"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js" integrity="sha384-948ahk4ZmxYVYOc+rxN1H2gM1EJ2Duhp7uHtZ4WSLkV4Vtx5MUqnV+l7u9B+jFv+" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
 
@@ -2478,6 +2479,9 @@
         <button id="btn-ais" class="btn-toggle" onclick="toggleMapLayer('ais')" title="AIS vessels"><i class="fa-solid fa-ship" style="color:#0284c7;"></i><span>Ships</span></button>
         <button id="btn-adsb" class="btn-toggle" onclick="toggleMapLayer('adsb')" title="Live aircraft"><i class="fa-solid fa-plane" style="color:#c084fc;"></i><span>Aircraft</span></button>
         <button id="btn-transport" class="btn-toggle" onclick="toggleMapLayer('transport')" title="Live public transport"><i class="fa-solid fa-bus" style="color:#f18500;"></i><span>Transport</span></button>
+        <button id="btn-alpine" class="btn-toggle" onclick="toggleMapLayer('alpine')" title="Alpine road conditions"><i class="fa-solid fa-snowflake" style="color:#7dd3fc;"></i><span>Alpine</span></button>
+        <button id="btn-lga" class="btn-toggle" onclick="toggleMapLayer('lga')" title="Council-submitted local road records"><i class="fa-solid fa-building-columns" style="color:#a3e635;"></i><span>Council</span></button>
+        <button id="btn-works" class="btn-toggle" onclick="toggleMapLayer('works')" title="Works, utilities and ACT records"><i class="fa-solid fa-helmet-safety" style="color:#fb923c;"></i><span>Works</span></button>
         <button id="btn-actambulance" class="btn-toggle" onclick="toggleMapLayer('actambulance')" title="ACT Ambulance responses"><i class="fa-solid fa-truck-medical" style="color:#ec4899;"></i><span>ACT Ambo</span></button>
       </div>
       <!-- Mobile settings backdrop -->
@@ -3194,7 +3198,10 @@
             roadwork: { layer: roadworkLayer, btn: 'btn-roadwork', loader: loadRoadworkData },
             floods: { layer: floodsLayer, btn: 'btn-floods', loader: loadFloodsData },
             cameras: { layer: camerasLayer, btn: 'btn-cameras', loader: loadCamerasData },
-            actambulance: { layer: actAmbulanceLayer, btn: 'btn-actambulance', loader: loadActAmbulanceData }
+            actambulance: { layer: actAmbulanceLayer, btn: 'btn-actambulance', loader: loadActAmbulanceData },
+            alpine: { layer: alpineLayer, btn: 'btn-alpine', loader: () => loadLiveTrafficFeed('alpine') },
+            lga: { layer: lgaLayer, btn: 'btn-lga', loader: () => loadLiveTrafficFeed('lga') },
+            works: { layer: worksLayer, btn: 'btn-works', loader: () => loadLiveTrafficFeed('works') }
           };
           
           // Special handling for outages — opens the panel
@@ -3392,7 +3399,11 @@
       // NASA FIRMS fire-hotspot polygons
       firms_hotspots: { data: null, timestamp: 0 },
       // ACT Ambulance Service responses (ESA feed)
-      act_ambulance: { data: null, timestamp: 0 }
+      act_ambulance: { data: null, timestamp: 0 },
+      // Live Traffic feeds that were never ingested until now
+      traffic_alpine: { data: null, timestamp: 0 },
+      traffic_lga: { data: null, timestamp: 0 },
+      traffic_works: { data: null, timestamp: 0 }
     };
     const LAYER_CACHE_TTL = 60000; // 1 minute - shorter since backend pre-warms data
     
@@ -3552,6 +3563,18 @@
     // localStorage persistence, so the default state IS whether it is added
     // here, and this one starts off (the site's default view is NSW).
     const actAmbulanceLayer = L.layerGroup();
+    // Live Traffic feeds added alongside the original five. Council roads
+    // and Works are large (≈500 and ≈1,600 pins), so they start off and
+    // cluster once enabled.
+    const alpineLayer = L.layerGroup();
+    const lgaLayer = L.markerClusterGroup({
+      maxClusterRadius: 60, spiderfyOnMaxZoom: true, showCoverageOnHover: false,
+      zoomToBoundsOnClick: true, disableClusteringAtZoom: 13
+    });
+    const worksLayer = L.markerClusterGroup({
+      maxClusterRadius: 60, spiderfyOnMaxZoom: true, showCoverageOnHover: false,
+      zoomToBoundsOnClick: true, disableClusteringAtZoom: 13
+    });
     const weatherLayer = L.layerGroup();
     const beachwatchLayer = L.layerGroup();
     // ---------- AIS (vessel positions) ----------
@@ -4387,7 +4410,10 @@
         ais: aisLayer,
         adsb: adsbLayer,
         transport: transportLayer,
-        actambulance: actAmbulanceLayer
+        actambulance: actAmbulanceLayer,
+        alpine: alpineLayer,
+        lga: lgaLayer,
+        works: worksLayer
       };
       const btnMap = {
         user: 'btn-user',
@@ -4403,7 +4429,10 @@
         ais: 'btn-ais',
         adsb: 'btn-adsb',
         transport: 'btn-transport',
-        actambulance: 'btn-actambulance'
+        actambulance: 'btn-actambulance',
+        alpine: 'btn-alpine',
+        lga: 'btn-lga',
+        works: 'btn-works'
       };
 
       const layer = layerMap[target];
@@ -4450,6 +4479,9 @@
         if (target === 'firms' && firmsLayer.getLayers().length === 0) loadFirmsHotspots();
         if (target === 'nswpsn' && nswpsnLayer.getLayers().length === 0) loadNswpsnData();
         if (target === 'actambulance' && actAmbulanceLayer.getLayers().length === 0) loadActAmbulanceData();
+        if (target === 'alpine' && alpineLayer.getLayers().length === 0) loadLiveTrafficFeed('alpine');
+        if (target === 'lga' && lgaLayer.getLayers().length === 0) loadLiveTrafficFeed('lga');
+        if (target === 'works' && worksLayer.getLayers().length === 0) loadLiveTrafficFeed('works');
         if (target === 'ais' && _aisVessels.length === 0) loadAisData();
         if (target === 'adsb') {
           if (_adsbAircraft.length === 0) loadAdsbData();
@@ -9611,6 +9643,93 @@ function initPagerHoursFromStorage() {
     // feed's NSW-RFS re-publications and its ACT fire records, so everything
     // here is a live ACT ambulance job. Locations are suburb-only — ESA
     // publishes them coarse on purpose.
+    // ---------------------------------------------------------------
+    // Generic Live Traffic feed loader.
+    //
+    // The three feeds added alongside the original five (alpine, council
+    // roads, works/ACT) all share one upstream shape, so they share one
+    // loader and one tooltip rather than getting a bespoke copy each.
+    // Colour, icon and label come from LiveTrafficVocab so the pin, the
+    // toolbar button and the filter pill can't drift apart — and match
+    // what logs.html and live.html show for the same feed.
+    // ---------------------------------------------------------------
+    const _ltLayers = { alpine: () => alpineLayer, lga: () => lgaLayer, works: () => worksLayer };
+    const _ltSelectedCats = { alpine: null, lga: null, works: null };
+
+    async function loadLiveTrafficFeed(feedId) {
+      const meta = window.LiveTrafficVocab && LiveTrafficVocab.get(feedId);
+      const layer = _ltLayers[feedId] && _ltLayers[feedId]();
+      if (!meta || !layer) return;
+      layer.clearLayers();
+      try {
+        let data;
+        const slot = layerCache[meta.archiveSource];
+        if (slot && slot.data && (Date.now() - slot.timestamp) < LAYER_CACHE_TTL) {
+          data = slot.data;
+        } else {
+          const res = await apiFetch(`${PROXY_BASE}${meta.endpoint}`);
+          data = await res.json();
+          if (slot) layerCache[meta.archiveSource] = { data, timestamp: Date.now() };
+        }
+        if (!data || !Array.isArray(data.features)) return;
+
+        const selected = _ltSelectedCats[feedId];
+        for (const feature of data.features) {
+          const coords = feature.geometry && feature.geometry.coordinates;
+          if (!coords) continue;
+          const [lon, lat] = coords;
+          if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+          const props = feature.properties || {};
+          const cat = props.mainCategory || props.type || 'Other';
+          if (selected && selected.size && !selected.has(cat)) continue;
+
+          const icon = L.divIcon({
+            className: 'custom-pin',
+            html: `<div style="background:linear-gradient(135deg, ${meta.color}, ${meta.color}bb); width:20px; height:20px; border-radius:50%; border:2px solid #fff; box-shadow:0 0 10px ${meta.color}; display:flex; align-items:center; justify-content:center; font-size:10px; color:#0f172a;"><i class="fa-solid ${meta.icon}"></i></div>`,
+            iconSize: [24, 24],
+            iconAnchor: [12, 12]
+          });
+          L.marker([lat, lon], { icon })
+            .addTo(layer)
+            .bindTooltip(buildLiveTrafficTooltip(props, meta), {
+              direction: 'top', offset: [0, -10], opacity: 0.95
+            });
+        }
+        refreshActiveFilterPanel();
+      } catch (e) {
+        console.error(`Live Traffic ${feedId} error`, e);
+      }
+    }
+
+    function buildLiveTrafficTooltip(props, meta) {
+      let h = '<div style="min-width:220px; max-width:320px;">';
+      h += _ttHeader('fa-solid ' + meta.icon, props.title || meta.label, meta.color,
+                     meta.color + '33', meta.color, meta.short);
+      const cat = props.mainCategory || props.type || '';
+      const sub = props.subCategory || '';
+      if (cat || sub) {
+        h += _ttSection('Type', meta.color, '148,163,184',
+          `<div style="color:#e2e8f0; font-size:12px;">${escapeHtml(cat)}${sub ? ' · ' + escapeHtml(sub) : ''}</div>`);
+      }
+      if (props.roads || props.region) {
+        let body = '';
+        if (props.roads) body += `<div style="color:#e2e8f0; font-size:12px;">${escapeHtml(props.roads)}</div>`;
+        if (props.region) body += `<div style="color:#94a3b8; font-size:11px;">${escapeHtml(props.region)}</div>`;
+        h += _ttSection('Location', '#94a3b8', '148,163,184', body);
+      }
+      if (props.otherAdvice) {
+        h += _ttSection('Advice', '#94a3b8', '148,163,184',
+          `<div style="color:#cbd5e1; font-size:11px;">${escapeHtml(String(props.otherAdvice).slice(0, 220))}</div>`);
+      }
+      // Council attribution only exists on the LGA feed — showing who
+      // submitted the record is the point of that stream.
+      if (props.orgName) {
+        h += _ttSection('Submitted by', meta.color, '148,163,184',
+          `<div style="color:#e2e8f0; font-size:11px;">${escapeHtml(props.orgName)}</div>`);
+      }
+      return h + '</div>';
+    }
+
     async function loadActAmbulanceData() {
       actAmbulanceLayer.clearLayers();
       try {
@@ -10275,9 +10394,9 @@ function initPagerHoursFromStorage() {
       refreshActiveFilterPanel();
     };
     FILTER_REGISTRY.hazards = {
-      icon: 'fa-triangle-exclamation',
-      label: 'Traffic Hazards',
-      color: '#ef4444',
+      icon: 'fa-car-burst',
+      label: 'Incidents',
+      color: '#f97316',
       render() {
         const items = [
           { key: 'accident', label: 'Crashes',         color: '#ef4444' },
@@ -10342,7 +10461,7 @@ function initPagerHoursFromStorage() {
           }
         }
         return `
-          <h4><i class="fa-solid fa-triangle-exclamation" style="color:#ef4444;"></i> Traffic Hazards</h4>
+          ${LiveTrafficVocab.panelHeader('incident')}
           <div class="ff-section-label">Source</div>
           <div class="floating-filter-pills">${sourcePills}</div>
           <div class="ff-section-label">Type</div>
@@ -10557,7 +10676,7 @@ function initPagerHoursFromStorage() {
       render() {
         if (_roadworkAvailableTypes.length === 0) {
           return `
-            <h4><i class="fa-solid fa-road" style="color:#eab308;"></i> Roadwork</h4>
+            ${LiveTrafficVocab.panelHeader('roadwork')}
             <div style="font-size:11px;color:#94a3b8;font-style:italic;">Loading roadwork data…</div>
           `;
         }
@@ -10580,7 +10699,7 @@ function initPagerHoursFromStorage() {
           ${_ffPill(_roadworkSelectedSources.has('livetraffic'), `Live Traffic (${ltCount.toLocaleString()})`, "toggleRoadworkSourcePill('livetraffic')")}
         `;
         return `
-          <h4><i class="fa-solid fa-road" style="color:#eab308;"></i> Roadwork</h4>
+          ${LiveTrafficVocab.panelHeader('roadwork')}
           <div class="ff-section-label">Source</div>
           <div class="floating-filter-pills">${sourcePills}</div>
           <div class="ff-section-label">Type</div>
@@ -10867,6 +10986,69 @@ function initPagerHoursFromStorage() {
           <div class="floating-filter-pills">${pills}</div>
         `;
       },
+    };
+
+    // --- Live Traffic panels -------------------------------------------
+    // One builder for the three new feeds. Every Live Traffic panel now
+    // opens with the same vocab-driven header and a "Category" pill row,
+    // so the family reads consistently regardless of which feed you
+    // opened. Counts come from the cached payload, not the layer, so the
+    // numbers still show while a cluster group has collapsed its markers.
+    function _ltCategoryCounts(feedId) {
+      const meta = window.LiveTrafficVocab && LiveTrafficVocab.get(feedId);
+      const slot = meta && layerCache[meta.archiveSource];
+      const feats = (slot && slot.data && slot.data.features) || [];
+      const counts = {};
+      for (const f of feats) {
+        const c = (f.properties || {}).mainCategory || (f.properties || {}).type || 'Other';
+        counts[c] = (counts[c] || 0) + 1;
+      }
+      return counts;
+    }
+
+    function toggleLiveTrafficCat(feedId, cat) {
+      if (!_ltSelectedCats[feedId]) _ltSelectedCats[feedId] = new Set();
+      const sel = _ltSelectedCats[feedId];
+      if (sel.has(cat)) sel.delete(cat); else sel.add(cat);
+      loadLiveTrafficFeed(feedId);
+    }
+
+    function _ltPanel(feedId) {
+      const meta = window.LiveTrafficVocab && LiveTrafficVocab.get(feedId);
+      if (!meta) return '<h4>Live Traffic</h4>';
+      const counts = _ltCategoryCounts(feedId);
+      const cats = Object.keys(counts).sort();
+      const sel = _ltSelectedCats[feedId];
+      if (!cats.length) {
+        return LiveTrafficVocab.panelHeader(feedId) +
+          '<div style="font-size:11px;color:#94a3b8;font-style:italic;">Loading ' +
+          escapeHtml(meta.label.toLowerCase()) + ' data…</div>';
+      }
+      const pills = cats.map((c) => {
+        const on = !sel || !sel.size || sel.has(c);
+        const safe = escapeHtml(String(c).replace(/'/g, "\'"));
+        return _ffPillColored(on, meta.color, '', `${escapeHtml(c)} (${counts[c].toLocaleString()})`,
+          `toggleLiveTrafficCat('${feedId}', '${safe}')`);
+      }).join('');
+      return `
+        ${LiveTrafficVocab.panelHeader(feedId)}
+        <div class="ff-section-label">Category</div>
+        <div class="floating-filter-pills">${pills}</div>
+        <div style="font-size:10px;color:#64748b;margin-top:8px;line-height:1.4;">${escapeHtml(meta.blurb)}</div>
+      `;
+    }
+
+    FILTER_REGISTRY.alpine = {
+      icon: 'fa-snowflake', label: 'Alpine', color: '#7dd3fc',
+      render() { return _ltPanel('alpine'); },
+    };
+    FILTER_REGISTRY.lga = {
+      icon: 'fa-building-columns', label: 'Council', color: '#a3e635',
+      render() { return _ltPanel('lga'); },
+    };
+    FILTER_REGISTRY.works = {
+      icon: 'fa-helmet-safety', label: 'Works', color: '#fb923c',
+      render() { return _ltPanel('works'); },
     };
 
     FILTER_REGISTRY.actambulance = {
@@ -16074,6 +16256,9 @@ function initPagerHoursFromStorage() {
       // the layer self-heals if markers were ever lost.
       if (map.hasLayer(aisLayer)) redrawTasks.push(loadAisData());
       if (map.hasLayer(actAmbulanceLayer)) redrawTasks.push(loadActAmbulanceData());
+      if (map.hasLayer(alpineLayer)) redrawTasks.push(loadLiveTrafficFeed('alpine'));
+      if (map.hasLayer(lgaLayer)) redrawTasks.push(loadLiveTrafficFeed('lga'));
+      if (map.hasLayer(worksLayer)) redrawTasks.push(loadLiveTrafficFeed('works'));
 
       // Also refresh RFS data (always loaded)
       redrawTasks.push(loadAllData());

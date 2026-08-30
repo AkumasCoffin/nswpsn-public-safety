@@ -33,6 +33,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png">
   <link rel="icon" type="image/png" sizes="192x192" href="./assets/fqlogo.png">
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <script src="livetraffic-vocab.js?v=1"></script>
 
   <style>
     /* Prevent horizontal overflow */
@@ -4838,18 +4839,34 @@
         // Use cached data if available, otherwise fetch
         let incidents, fires, floods, majorEvents;
         
+        // alpine/council/works were added after the original four. They are
+        // separate reporting streams (council roads especially — it shares no
+        // records at all with the state-road feeds), so they widen this list
+        // rather than duplicating it.
+        let alpine, council, works;
         if (isCacheValid() && apiDataCache.traffic) {
           incidents = apiDataCache.traffic.incidents || { features: [] };
           fires = apiDataCache.traffic.fire || { features: [] };
           floods = apiDataCache.traffic.flood || { features: [] };
           majorEvents = apiDataCache.traffic.majorevent || { features: [] };
+          alpine = apiDataCache.traffic.alpine || { features: [] };
+          council = apiDataCache.traffic.lga || { features: [] };
+          works = apiDataCache.traffic.works || { features: [] };
         } else {
-          [incidents, fires, floods, majorEvents] = await Promise.all([
-            apiFetch(`${API_BASE}/api/traffic/incidents`).then(r => r.json()).catch(() => ({ features: [] })),
-            apiFetch(`${API_BASE}/api/traffic/fire`).then(r => r.json()).catch(() => ({ features: [] })),
-            apiFetch(`${API_BASE}/api/traffic/flood`).then(r => r.json()).catch(() => ({ features: [] })),
-            apiFetch(`${API_BASE}/api/traffic/majorevent`).then(r => r.json()).catch(() => ({ features: [] }))
+          const j = (path) => apiFetch(`${API_BASE}${path}`).then(r => r.json()).catch(() => ({ features: [] }));
+          [incidents, fires, floods, majorEvents, alpine, council, works] = await Promise.all([
+            j('/api/traffic/incidents'),
+            j('/api/traffic/fire'),
+            j('/api/traffic/flood'),
+            j('/api/traffic/majorevent'),
+            j('/api/traffic/alpine'),
+            j('/api/traffic/lga'),
+            j('/api/traffic/works')
           ]);
+          apiDataCache.traffic = apiDataCache.traffic || {};
+          apiDataCache.traffic.alpine = alpine;
+          apiDataCache.traffic.lga = council;
+          apiDataCache.traffic.works = works;
         }
         
         const items = [];
@@ -5058,6 +5075,9 @@
         processFeatures(fires, 'Fire', 'pill-orange');
         processFeatures(floods, 'Flood', 'pill-blue');
         processFeatures(majorEvents, 'Major Event', 'pill-red');
+        processFeatures(alpine, 'Alpine', 'pill-blue');
+        processFeatures(council, 'Council', 'pill-green');
+        processFeatures(works, 'Works', 'pill-orange');
         
         // Sort by: priority (major first), then unplanned before planned, then by time (newest first)
         items.sort((a, b) => {
