@@ -33,6 +33,8 @@ import {
 // page with camera locations and clog the archive tables.
 const SKIP_ARCHIVE = new Set<string>([
   'traffic_cameras',
+  'qld_cameras',
+  'qld_flood_cameras',
   'aviation_cameras',
   'centralwatch_cameras',
   'weather_current',

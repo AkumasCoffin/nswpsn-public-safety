@@ -62,6 +62,8 @@ const SOURCE_THRESHOLDS: Record<string, ThresholdEntry> = {
 // health panel owns its own display policy.
 const NON_INCIDENT_SOURCES = new Set<string>([
   'traffic_cameras',
+  'qld_cameras',
+  'qld_flood_cameras',
   'aviation_cameras',
   'centralwatch_cameras',
   'weather_current',

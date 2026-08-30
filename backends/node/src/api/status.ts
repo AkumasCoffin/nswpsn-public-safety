@@ -330,6 +330,8 @@ const SOURCE_LABELS: Record<string, string> = {
   traffic_fire: 'LiveTraffic — fire',
   traffic_majorevent: 'LiveTraffic — major events',
   traffic_cameras: 'LiveTraffic — cameras',
+  qld_cameras: 'QLD Traffic — cameras',
+  qld_flood_cameras: 'QLD Traffic — flood cameras',
   beachwatch: 'Beachwatch',
   beachsafe: 'BeachSafe',
   weather_current: 'BOM weather',

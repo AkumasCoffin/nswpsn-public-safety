@@ -2550,7 +2550,9 @@
       <!-- Cameras Filter Panel -->
       <div class="filter-panel" id="cameras-panel">
         <h4><i class="fa-solid fa-video"></i> Cameras</h4>
-        <label><input type="checkbox" id="chk-cam-traffic" checked onchange="toggleCameraFilter('traffic', this.checked)"><span class="filter-dot" style="background:#8b5cf6;"></span> Traffic Cameras</label>
+        <label><input type="checkbox" id="chk-cam-traffic" checked onchange="toggleCameraFilter('traffic', this.checked)"><span class="filter-dot" style="background:#8b5cf6;"></span> Traffic Cameras (NSW)</label>
+        <label><input type="checkbox" id="chk-cam-qld" checked onchange="toggleCameraFilter('qld', this.checked)"><span class="filter-dot" style="background:#22c55e;"></span> Traffic Cameras (QLD)</label>
+        <label><input type="checkbox" id="chk-cam-qldflood" checked onchange="toggleCameraFilter('qldflood', this.checked)"><span class="filter-dot" style="background:#3b82f6;"></span> Flood Cameras (QLD)</label>
         <label><input type="checkbox" id="chk-cam-aviation" checked onchange="toggleCameraFilter('aviation', this.checked)"><span class="filter-dot" style="background:#06b6d4;"></span> Airport Weather</label>
         <label><input type="checkbox" id="chk-cam-firetower" checked onchange="toggleCameraFilter('firetower', this.checked)"><span class="filter-dot" style="background:#f97316;"></span> Fire Towers</label>
       </div>
@@ -3377,6 +3379,8 @@
       // Traffic data
       traffic_incidents: { data: null, timestamp: 0 },
       traffic_cameras: { data: null, timestamp: 0 },
+      qld_cameras: { data: null, timestamp: 0 },
+      qld_flood_cameras: { data: null, timestamp: 0 },
       traffic_roadwork: { data: null, timestamp: 0 },
       traffic_flood: { data: null, timestamp: 0 },
       // Aviation
@@ -3538,6 +3542,8 @@
     // Camera filter states and sub-layers
     const cameraFilters = {
       traffic: true,
+      qld: true,
+      qldflood: true,
       aviation: true,
       firetower: true
     };
@@ -3702,9 +3708,24 @@
     // Camera image live refresh
     let cameraRefreshInterval = null;
     
-    // Fetch image with cache: no-store and set as blob URL — bypasses browser cache completely
+    // Fetch image with cache: no-store and set as blob URL — bypasses browser cache completely.
+    //
+    // The blob path needs CORS, and the state camera hosts don't send
+    // Access-Control-Allow-Origin (verified for both
+    // webcams.transport.nsw.gov.au and cameras.qldtraffic.qld.gov.au), so
+    // there the fetch rejects and the frame would silently freeze at
+    // whatever loaded first. On failure we mark the element and fall back
+    // to a plain cache-busted src, which needs no CORS at all — the query
+    // param alone defeats the cache. Hosts that DO allow CORS (the
+    // Central Watch proxy) keep the blob path and its no-store guarantee.
     function refreshImageNoCache(img, baseUrl) {
       const url = baseUrl + (baseUrl.includes('?') ? '&' : '?') + '_t=' + Date.now();
+      const swapSrc = () => {
+        img.dataset.direct = '1';
+        img.src = url;
+        img.style.opacity = '1';
+      };
+      if (img.dataset.direct === '1') { swapSrc(); return; }
       fetch(url, { cache: 'no-store', mode: 'cors' })
         .then(r => r.ok ? r.blob() : null)
         .then(blob => {
@@ -3718,7 +3739,7 @@
             if (retryMsg) retryMsg.remove();
           }
         })
-        .catch(() => {});
+        .catch(swapSrc);
     }
     
     function startCameraRefresh() {
@@ -10742,7 +10763,9 @@ function initPagerHoursFromStorage() {
       color: '#8b5cf6',
       render() {
         const items = [
-          { key: 'traffic',   label: 'Traffic' },
+          { key: 'traffic',   label: 'Traffic (NSW)' },
+          { key: 'qld',       label: 'Traffic (QLD)' },
+          { key: 'qldflood',  label: 'Flood (QLD)' },
           { key: 'aviation',  label: 'Airport Weather' },
           { key: 'firetower', label: 'Fire Towers' },
         ];
@@ -15213,36 +15236,121 @@ function initPagerHoursFromStorage() {
     }
 
     // Traffic Cameras + Airport Weather Cameras + Central Watch Fire Tower Cameras
+    // Per-jurisdiction look for the roadside camera layers. Same marker
+    // shape throughout; only the colour, glyph and label change.
+    const CAMERA_STYLES = {
+      traffic:  { color: '#8b5cf6', dark: '#7c3aed', icon: 'fa-video', fallbackTitle: 'Traffic Camera', direct: true },
+      qld:      { color: '#22c55e', dark: '#16a34a', icon: 'fa-video', fallbackTitle: 'QLD Traffic Camera', direct: true },
+      qldflood: { color: '#3b82f6', dark: '#2563eb', icon: 'fa-water', fallbackTitle: 'QLD Flood Camera', direct: true },
+    };
+
+    /**
+     * Render one roadside-camera FeatureCollection into a sub-layer.
+     *
+     * Shared by NSW LiveTraffic and both QLD feeds — the backend gives
+     * them the same property names on purpose. Returns how many markers
+     * were added.
+     *
+     * `style.direct` marks hosts that don't send CORS headers, so the 15 s
+     * refresher swaps the src instead of fetching a blob (see
+     * refreshImageNoCache).
+     */
+    function addRoadCameraMarkers(res, subLayer, style) {
+      if (!res || !Array.isArray(res.features) || !subLayer) return 0;
+      let count = 0;
+      res.features.forEach(feature => {
+        if (!feature.geometry || !feature.geometry.coordinates) return;
+        const [lon, lat] = feature.geometry.coordinates;
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+        const props = feature.properties || {};
+        const icon = L.divIcon({
+          className: 'custom-pin',
+          html: `<div style="background:linear-gradient(135deg, ${style.color}, ${style.dark}); width:22px; height:22px; border-radius:50%; border:2px solid #fff; box-shadow:0 0 10px ${style.color}; display:flex; align-items:center; justify-content:center; font-size:11px; color:#fff;"><i class="fa-solid ${style.icon}"></i></div>`,
+          iconSize: [26, 26],
+          iconAnchor: [13, 13]
+        });
+        const marker = L.marker([lat, lon], { icon }).addTo(subLayer);
+
+        // Build detailed camera tooltip with live image
+        let tooltip = `<div style="max-width:350px; color:#fff !important;">`;
+        tooltip += `<strong style="font-size:13px; color:#fff !important;">${escapeHtml(props.title || style.fallbackTitle)}</strong>`;
+        if (props.view) tooltip += `<br><span style="color:#e2e8f0 !important;">${escapeHtml(props.view)}</span>`;
+        if (props.direction) tooltip += `<br><span style="color:#fbbf24 !important;">🧭 Direction: ${escapeHtml(props.direction)}</span>`;
+        if (props.region) tooltip += `<br><span style="color:#a5f3fc !important;">📍 Region: ${escapeHtml(props.region)}</span>`;
+        if (props.imageUrl) {
+          // Add cache-busting timestamp for live updates
+          const imgUrl = props.imageUrl + (props.imageUrl.includes('?') ? '&' : '?') + '_t=' + Date.now();
+          const directAttr = style.direct ? ' data-direct="1"' : '';
+          tooltip += `<br><img class="camera-live-img" data-base-url="${escapeHtml(props.imageUrl)}"${directAttr} src="${escapeHtml(imgUrl)}" style="max-width:320px; margin-top:6px; border-radius:4px; border:1px solid #475569;" onerror="this.style.display='none'">`;
+          tooltip += `<br><span style="color:#cbd5e1 !important; font-size:10px;">📷 Click=fullscreen · Ctrl+Click=select multiple</span>`;
+        }
+        // Upstream tells us who supplies the image and how often it moves —
+        // worth saying, since some flood cameras only refresh every 30 min.
+        if (props.note) tooltip += `<br><span style="color:#94a3b8 !important; font-size:10px;">${escapeHtml(props.note)}</span>`;
+        if (props.credit) tooltip += `<br><span style="color:#94a3b8 !important; font-size:10px;">📸 ${escapeHtml(props.credit)}</span>`;
+        tooltip += `</div>`;
+
+        marker.bindTooltip(tooltip, {
+          direction: 'top',
+          offset: [0, -12],
+          opacity: 0.95
+        });
+
+        // Click to open fullscreen viewer, Ctrl+Click to select
+        marker.on('click', (e) => {
+          if (e.originalEvent.ctrlKey || e.originalEvent.metaKey) {
+            toggleCameraSelection(props, marker);
+          } else {
+            openCameraFullscreen(props);
+          }
+        });
+        count++;
+      });
+      return count;
+    }
+
     async function loadCamerasData() {
       camerasLayer.clearLayers();
       
       // Create fresh sub-layers
       cameraSubLayers = {
         traffic: L.layerGroup(),
+        qld: L.layerGroup(),
+        qldflood: L.layerGroup(),
         aviation: L.layerGroup(),
         firetower: L.layerGroup()
       };
       
       // Use cached data if available, otherwise fetch
-      let trafficRes, aviationRes, centralwatchRes;
+      let trafficRes, aviationRes, centralwatchRes, qldRes, qldFloodRes;
       const trafficCached = layerCache.traffic_cameras;
+      const qldCached = layerCache.qld_cameras;
+      const qldFloodCached = layerCache.qld_flood_cameras;
       const aviationCached = layerCache.aviation_cameras;
       const centralwatchCached = layerCache.centralwatch_cameras;
       const now = Date.now();
       
       const needTraffic = !trafficCached.data || (now - trafficCached.timestamp) >= LAYER_CACHE_TTL;
+      const needQld = !qldCached.data || (now - qldCached.timestamp) >= LAYER_CACHE_TTL;
+      const needQldFlood = !qldFloodCached.data || (now - qldFloodCached.timestamp) >= LAYER_CACHE_TTL;
       const needAviation = !aviationCached.data || (now - aviationCached.timestamp) >= LAYER_CACHE_TTL;
       const needCentralwatch = !centralwatchCached.data || (now - centralwatchCached.timestamp) >= LAYER_CACHE_TTL;
       
-      if (needTraffic || needAviation || needCentralwatch) {
+      if (needTraffic || needQld || needQldFlood || needAviation || needCentralwatch) {
         const fetches = await Promise.all([
           needTraffic ? apiFetch(`${PROXY_BASE}/api/traffic/cameras`).then(r => r.json()).catch(() => ({ features: [] })) : Promise.resolve(trafficCached.data),
           needAviation ? apiFetch(`${PROXY_BASE}/api/aviation/cameras`).then(r => r.json()).catch(() => ({ features: [] })) : Promise.resolve(aviationCached.data),
-          needCentralwatch ? apiFetch(`${PROXY_BASE}/api/centralwatch/cameras`).then(r => r.json()).catch(() => []) : Promise.resolve(centralwatchCached.data)
+          needCentralwatch ? apiFetch(`${PROXY_BASE}/api/centralwatch/cameras`).then(r => r.json()).catch(() => []) : Promise.resolve(centralwatchCached.data),
+          needQld ? apiFetch(`${PROXY_BASE}/api/qld/cameras`).then(r => r.json()).catch(() => ({ features: [] })) : Promise.resolve(qldCached.data),
+          needQldFlood ? apiFetch(`${PROXY_BASE}/api/qld/flood-cameras`).then(r => r.json()).catch(() => ({ features: [] })) : Promise.resolve(qldFloodCached.data)
         ]);
         trafficRes = fetches[0];
         aviationRes = fetches[1];
         centralwatchRes = fetches[2];
+        qldRes = fetches[3];
+        qldFloodRes = fetches[4];
+        if (needQld) layerCache.qld_cameras = { data: qldRes, timestamp: now };
+        if (needQldFlood) layerCache.qld_flood_cameras = { data: qldFloodRes, timestamp: now };
         if (needTraffic) layerCache.traffic_cameras = { data: trafficRes, timestamp: now };
         if (needAviation) layerCache.aviation_cameras = { data: aviationRes, timestamp: now };
         if (needCentralwatch) layerCache.centralwatch_cameras = { data: centralwatchRes, timestamp: now };
@@ -15250,61 +15358,20 @@ function initPagerHoursFromStorage() {
         trafficRes = trafficCached.data;
         aviationRes = aviationCached.data;
         centralwatchRes = centralwatchCached.data;
+        qldRes = qldCached.data;
+        qldFloodRes = qldFloodCached.data;
       }
       
       let trafficCount = 0;
       let aviationCount = 0;
-      
-      // Process traffic cameras
-      if (trafficRes && trafficRes.features) {
-        trafficRes.features.forEach(feature => {
-          if (feature.geometry && feature.geometry.coordinates) {
-            const [lon, lat] = feature.geometry.coordinates;
-            if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
-            const props = feature.properties || {};
-            const icon = L.divIcon({
-              className: 'custom-pin',
-              html: `<div style="background:linear-gradient(135deg, #8b5cf6, #7c3aed); width:22px; height:22px; border-radius:50%; border:2px solid #fff; box-shadow:0 0 10px #8b5cf6; display:flex; align-items:center; justify-content:center; font-size:11px; color:#fff;"><i class="fa-solid fa-video"></i></div>`,
-              iconSize: [26, 26],
-              iconAnchor: [13, 13]
-            });
-            const marker = L.marker([lat, lon], { icon }).addTo(cameraSubLayers.traffic);
-            
-            // Build detailed camera tooltip with live image
-            let tooltip = `<div style="max-width:350px; color:#fff !important;">`;
-            tooltip += `<strong style="font-size:13px; color:#fff !important;">${escapeHtml(props.title || 'Traffic Camera')}</strong>`;
-            if (props.view) tooltip += `<br><span style="color:#e2e8f0 !important;">${escapeHtml(props.view)}</span>`;
-            if (props.direction) tooltip += `<br><span style="color:#fbbf24 !important;">🧭 Direction: ${escapeHtml(props.direction)}</span>`;
-            if (props.region) tooltip += `<br><span style="color:#a5f3fc !important;">📍 Region: ${escapeHtml(props.region)}</span>`;
-            if (props.imageUrl) {
-              // Add cache-busting timestamp for live updates
-              const imgUrl = props.imageUrl + (props.imageUrl.includes('?') ? '&' : '?') + '_t=' + Date.now();
-              tooltip += `<br><img class="camera-live-img" data-base-url="${escapeHtml(props.imageUrl)}" src="${escapeHtml(imgUrl)}" style="max-width:320px; margin-top:6px; border-radius:4px; border:1px solid #475569;" onerror="this.style.display='none'">`;
-              tooltip += `<br><span style="color:#cbd5e1 !important; font-size:10px;">📷 Click=fullscreen · Ctrl+Click=select multiple</span>`;
-            }
-            tooltip += `</div>`;
-            
-            marker.bindTooltip(tooltip, {
-              direction: 'top',
-              offset: [0, -12],
-              opacity: 0.95
-            });
-            
-            // Click to open fullscreen viewer, Ctrl+Click to select
-            marker.on('click', (e) => {
-              if (e.originalEvent.ctrlKey || e.originalEvent.metaKey) {
-                // Multi-select mode
-                toggleCameraSelection(props, marker);
-              } else {
-                // Single view mode
-                openCameraFullscreen(props);
-              }
-            });
-            trafficCount++;
-          }
-        });
-      }
-      
+
+      // Roadside traffic cameras. NSW (LiveTraffic) and QLD Traffic are
+      // served in the same property shape, so they share one renderer and
+      // differ only in colour, icon and which sub-layer they land on.
+      trafficCount = addRoadCameraMarkers(trafficRes, cameraSubLayers.traffic, CAMERA_STYLES.traffic);
+      const qldCount = addRoadCameraMarkers(qldRes, cameraSubLayers.qld, CAMERA_STYLES.qld);
+      const qldFloodCount = addRoadCameraMarkers(qldFloodRes, cameraSubLayers.qldflood, CAMERA_STYLES.qldflood);
+
       // Process airport weather cameras (from Airservices Australia)
       if (aviationRes && aviationRes.features) {
         aviationRes.features.forEach(feature => {
@@ -15460,7 +15527,7 @@ function initPagerHoursFromStorage() {
         }
       });
       
-      console.log(`Loaded ${trafficCount} traffic cameras + ${aviationCount} airport weather cameras + ${centralwatchCount} Central Watch fire tower cameras = ${camerasLayer.getLayers().length} total`);
+      console.log(`Loaded ${trafficCount} NSW traffic + ${qldCount} QLD traffic + ${qldFloodCount} QLD flood + ${aviationCount} airport weather + ${centralwatchCount} fire tower cameras`);
     }
 
     // ==================== BEACHES LAYER (Beachwatch + BeachSafe merged) ====================
@@ -16271,6 +16338,8 @@ function initPagerHoursFromStorage() {
           { key: 'traffic_roadwork', url: '/api/traffic/roadwork' },
           { key: 'traffic_flood', url: '/api/traffic/flood' },
           { key: 'traffic_cameras', url: '/api/traffic/cameras' },
+            { key: 'qld_cameras', url: '/api/qld/cameras' },
+            { key: 'qld_flood_cameras', url: '/api/qld/flood-cameras' },
         ];
         totalLoaded += await fetchBatch(stage2, 'Stage 2');
         console.log(`📍 Stage 2: ${totalLoaded} layers loaded (${Date.now() - startTime}ms)`);

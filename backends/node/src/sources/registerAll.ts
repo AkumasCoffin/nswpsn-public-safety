@@ -14,6 +14,7 @@ import registerFirms from './firms.js';
 import registerAdsb from './adsb.js';
 import registerUserIncidents from './userIncidents.js';
 import registerActAmbulance from './actAmbulance.js';
+import registerQldCameras from './qldCameras.js';
 
 export function registerAllSources(): void {
   registerRfs();
@@ -27,4 +28,5 @@ export function registerAllSources(): void {
   registerAdsb();
   registerUserIncidents();
   registerActAmbulance();
+  registerQldCameras();
 }
