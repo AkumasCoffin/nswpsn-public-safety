@@ -251,3 +251,21 @@ describe('traffic.fetchTrafficWorks', () => {
     expect(snap.features.map((f) => f.properties.id)).toEqual(['b']);
   });
 });
+
+describe('traffic advice text', () => {
+  it('strips the HTML upstream embeds in advice fields', async () => {
+    const { parseTrafficItem } = await import('../../../src/sources/traffic.js');
+    const f = parseTrafficItem({
+      id: 'x',
+      geometry: { type: 'Point', coordinates: [151, -33] },
+      properties: {
+        displayName: 'Roadwork',
+        // Councils submit advice as HTML; it used to render as literal tags.
+        otherAdvice: '<p>A section of Miners&nbsp;Road is closed.<br/>Use Bungendore Rd &amp; detour.</p>',
+      },
+    }, 'Council');
+    expect(f?.properties.otherAdvice).toBe(
+      'A section of Miners Road is closed. Use Bungendore Rd & detour.',
+    );
+  });
+});

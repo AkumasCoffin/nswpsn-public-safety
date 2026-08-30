@@ -167,6 +167,24 @@ function asString(v: unknown): string {
   return '';
 }
 
+/**
+ * Advice fields come through with HTML markup embedded (`<p>`, `<br>`,
+ * `&nbsp;`). Consumers render them as text, so the tags showed up
+ * literally on the page. Strip to plain prose here rather than in each
+ * of the three frontends.
+ */
+function asProse(v: unknown): string {
+  return asString(v)
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function asArray(v: unknown): unknown[] {
   return Array.isArray(v) ? v : [];
 }
@@ -299,8 +317,8 @@ export function parseTrafficItem(item: unknown, hazardType: string): TrafficFeat
       displayName: asString(props['displayName']),
       subtitle: asString(props['subtitle']),
       otherAdvice:
-        asString(props['otherAdvice']) || asString(props['adviceA']),
-      adviceB: asString(props['adviceB']),
+        asProse(props['otherAdvice']) || asProse(props['adviceA']),
+      adviceB: asProse(props['adviceB']),
       roads: roadsStr,
       affectedDirection,
       // impactedLanes is nested under roads[], not top level.
@@ -333,7 +351,7 @@ export function parseTrafficItem(item: unknown, hazardType: string): TrafficFeat
       locationQualifier,
       queueLength,
       duration: asString(props['duration']),
-      adviceC: asString(props['adviceC']),
+      adviceC: asProse(props['adviceC']),
       webLinks: asArray(props['webLinks']),
       // Present only on the council-submitted LGA feed.
       orgName: asString(props['OrgName']),
@@ -472,7 +490,7 @@ export async function fetchTrafficWorks(): Promise<TrafficSnapshot> {
         headline: '',
         displayName,
         subtitle: '',
-        otherAdvice: asString(props['otherAdvice']),
+        otherAdvice: asProse(props['otherAdvice']),
         adviceB: '',
         roads: asString(props['road']) || asString(props['suburb']),
         affectedDirection: '',
