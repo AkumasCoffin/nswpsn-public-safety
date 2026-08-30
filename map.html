@@ -2479,7 +2479,6 @@
         <button id="btn-ais" class="btn-toggle" onclick="toggleMapLayer('ais')" title="AIS vessels"><i class="fa-solid fa-ship" style="color:#0284c7;"></i><span>Ships</span></button>
         <button id="btn-adsb" class="btn-toggle" onclick="toggleMapLayer('adsb')" title="Live aircraft"><i class="fa-solid fa-plane" style="color:#c084fc;"></i><span>Aircraft</span></button>
         <button id="btn-transport" class="btn-toggle" onclick="toggleMapLayer('transport')" title="Live public transport"><i class="fa-solid fa-bus" style="color:#f18500;"></i><span>Transport</span></button>
-        <button id="btn-alpine" class="btn-toggle" onclick="toggleMapLayer('alpine')" title="Alpine road conditions"><i class="fa-solid fa-snowflake" style="color:#7dd3fc;"></i><span>Alpine</span></button>
         <button id="btn-lga" class="btn-toggle" onclick="toggleMapLayer('lga')" title="Council-submitted local road records"><i class="fa-solid fa-building-columns" style="color:#a3e635;"></i><span>Council</span></button>
         <button id="btn-works" class="btn-toggle" onclick="toggleMapLayer('works')" title="Works, utilities and ACT records"><i class="fa-solid fa-helmet-safety" style="color:#fb923c;"></i><span>Works</span></button>
         <button id="btn-actambulance" class="btn-toggle" onclick="toggleMapLayer('actambulance')" title="ACT Ambulance responses"><i class="fa-solid fa-truck-medical" style="color:#ec4899;"></i><span>ACT Ambo</span></button>
@@ -3199,7 +3198,6 @@
             floods: { layer: floodsLayer, btn: 'btn-floods', loader: loadFloodsData },
             cameras: { layer: camerasLayer, btn: 'btn-cameras', loader: loadCamerasData },
             actambulance: { layer: actAmbulanceLayer, btn: 'btn-actambulance', loader: loadActAmbulanceData },
-            alpine: { layer: alpineLayer, btn: 'btn-alpine', loader: () => loadLiveTrafficFeed('alpine') },
             lga: { layer: lgaLayer, btn: 'btn-lga', loader: () => loadLiveTrafficFeed('lga') },
             works: { layer: worksLayer, btn: 'btn-works', loader: () => loadLiveTrafficFeed('works') }
           };
@@ -3500,7 +3498,14 @@
     // subtypeLabel is the human-readable label from formatWazeType()
     // for waze markers (null for livetraffic) — drives the per-subtype
     // pill filter under the Traffic Hazards floating menu.
-    const _hazardMarkers = []; // [{marker, type, source, subtypeLabel}]
+    const _hazardMarkers = []; // [{marker, type, source, subtypeLabel, mainCategory}]
+    // The three sub-layers above (accident / hazard / closures) are a coarse
+    // bucketing: the Live Traffic incident feed actually publishes eight
+    // categories, so BREAKDOWN, ADVERSE WEATHER, both TRAFFIC LIGHTS types
+    // and EMERGENCY ROADWORK all used to collapse into "Hazards" with no way
+    // to filter them apart. This tracks the real category per marker so the
+    // panel can offer one pill per category the data actually contains.
+    const _hazardExcludedCategories = new Set();
     // 'waze' dropped with the retired ingest. It also gates the Waze subtype
     // pill block below, which would otherwise render an empty section.
     const _hazardSelectedSources = new Set(['livetraffic']);
@@ -3564,8 +3569,9 @@
     // here, and this one starts off (the site's default view is NSW).
     const actAmbulanceLayer = L.layerGroup();
     // Live Traffic feeds added alongside the original five. Council roads
-    // and Works are large (≈500 and ≈1,600 pins), so they start off and
-    // cluster once enabled.
+    // and Works are large (≈500 and ≈2,000 pins), so they start off and
+    // cluster once enabled. Alpine has no toggle of its own — it is a
+    // hazard, so it rides the Hazards layer (see loadHazardsData).
     const alpineLayer = L.layerGroup();
     const lgaLayer = L.markerClusterGroup({
       maxClusterRadius: 60, spiderfyOnMaxZoom: true, showCoverageOnHover: false,
@@ -4411,7 +4417,6 @@
         adsb: adsbLayer,
         transport: transportLayer,
         actambulance: actAmbulanceLayer,
-        alpine: alpineLayer,
         lga: lgaLayer,
         works: worksLayer
       };
@@ -4430,7 +4435,6 @@
         adsb: 'btn-adsb',
         transport: 'btn-transport',
         actambulance: 'btn-actambulance',
-        alpine: 'btn-alpine',
         lga: 'btn-lga',
         works: 'btn-works'
       };
@@ -4465,6 +4469,7 @@
         if (target === 'rfs') { addFilterButton('rfs'); refreshMapAndList(); }
         // Load data when layer is first enabled
         if (target === 'hazards' && hazardsLayer.getLayers().length === 0) loadHazardsData();
+        if (target === 'hazards' && alpineLayer.getLayers().length === 0) loadLiveTrafficFeed('alpine');
         if (target === 'police' && policeLayer.getLayers().length === 0) loadPoliceData();
         // Roadwork: gate on the flat list — its markers mount directly on
         // the layer (no sub-groups), so a culled-empty viewport would
@@ -4479,7 +4484,6 @@
         if (target === 'firms' && firmsLayer.getLayers().length === 0) loadFirmsHotspots();
         if (target === 'nswpsn' && nswpsnLayer.getLayers().length === 0) loadNswpsnData();
         if (target === 'actambulance' && actAmbulanceLayer.getLayers().length === 0) loadActAmbulanceData();
-        if (target === 'alpine' && alpineLayer.getLayers().length === 0) loadLiveTrafficFeed('alpine');
         if (target === 'lga' && lgaLayer.getLayers().length === 0) loadLiveTrafficFeed('lga');
         if (target === 'works' && worksLayer.getLayers().length === 0) loadLiveTrafficFeed('works');
         if (target === 'ais' && _aisVessels.length === 0) loadAisData();
@@ -8319,6 +8323,7 @@ function initPagerHoursFromStorage() {
           _hazardSelectedSources.has(m.source)
           && !(m.source === 'waze' && m.subtypeLabel
                && _hazardExcludedSubtypes.has(m.subtypeLabel))
+          && !(m.mainCategory && _hazardExcludedCategories.has(m.mainCategory))
           && _cullEntryInView(m, bounds);
         const sl = hazardSubLayers[m.type];
         if (!sl) continue;
@@ -9116,7 +9121,7 @@ function initPagerHoursFromStorage() {
                 offset: [0, -10],
                 opacity: 0.95
               });
-              _hazardMarkers.push({ marker, type: category, source: 'livetraffic', subtypeLabel: null, latlng: L.latLng(lat, lon) });
+              _hazardMarkers.push({ marker, type: category, source: 'livetraffic', subtypeLabel: null, mainCategory: props.mainCategory || '', latlng: L.latLng(lat, lon) });
               totalCount++;
             }
           });
@@ -9203,6 +9208,11 @@ function initPagerHoursFromStorage() {
           hazardsLayer.addLayer(hazardSubLayers[type]);
         }
       });
+
+      // Alpine conditions are a hazard, just a seasonal one, so they ride
+      // the Hazards toggle rather than carrying their own button. Re-added
+      // here because the clearLayers() above drops every child layer.
+      hazardsLayer.addLayer(alpineLayer);
       
       console.log(`Loaded ${totalCount} traffic hazards + ${jamCount} jams (Live Traffic + Waze)`);
     }
@@ -10327,6 +10337,18 @@ function initPagerHoursFromStorage() {
     // keeps working unchanged, then refreshes the active panel.
     // -------------------------------------------------------------------
 
+    // Upstream publishes categories in caps ('CHANGED TRAFFIC CONDITIONS');
+    // title-case them so the pills read like the rest of the UI.
+    function _titleCaseCat(s) {
+      return String(s || '')
+        // Feed keys arrive both shouted ('SCHEDULED ROADWORK') and
+        // camelCased ('buildingConstruction'); split the latter first so
+        // both land as 'Scheduled Roadwork' / 'Building Construction'.
+        .replace(/([a-z])([A-Z])/g, '$1 $2')
+        .toLowerCase()
+        .replace(/\b\w/g, (c) => c.toUpperCase());
+    }
+
     function _ffSetCheckbox(id, on) {
       const el = document.getElementById(id);
       if (el) el.checked = !!on;
@@ -10393,6 +10415,15 @@ function initPagerHoursFromStorage() {
       toggleHazardFilter(key, hazardFilters[key]);
       refreshActiveFilterPanel();
     };
+    // One pill per category the Live Traffic feed actually publishes,
+    // rather than the three coarse buckets the sub-layers use.
+    window.toggleHazardCategoryPill = function (cat) {
+      if (_hazardExcludedCategories.has(cat)) _hazardExcludedCategories.delete(cat);
+      else _hazardExcludedCategories.add(cat);
+      _rebuildHazardSubLayers();
+      refreshActiveFilterPanel();
+    };
+
     FILTER_REGISTRY.hazards = {
       icon: 'fa-car-burst',
       label: 'Incidents',
@@ -10460,12 +10491,35 @@ function initPagerHoursFromStorage() {
             `;
           }
         }
+        // Real feed categories — the eight the incident feed publishes,
+        // counted from what's loaded so the list can't drift from the data.
+        const catCounts = {};
+        for (const m of _hazardMarkers) {
+          if (!m.mainCategory) continue;
+          if (!_hazardSelectedSources.has(m.source)) continue;
+          catCounts[m.mainCategory] = (catCounts[m.mainCategory] || 0) + 1;
+        }
+        const catKeys = Object.keys(catCounts).sort();
+        let categoryBlock = '';
+        if (catKeys.length) {
+          const catPills = catKeys.map((c) => {
+            const on = !_hazardExcludedCategories.has(c);
+            const safe = escapeHtml(String(c).replace(/\\/g, '\\\\').replace(/'/g, "\\'"));
+            return _ffPill(on, `${escapeHtml(_titleCaseCat(c))} (${catCounts[c].toLocaleString()})`,
+                           `toggleHazardCategoryPill('${safe}')`);
+          }).join('');
+          categoryBlock = `
+            <div class="ff-section-label">Category</div>
+            <div class="floating-filter-pills">${catPills}</div>
+          `;
+        }
         return `
           ${LiveTrafficVocab.panelHeader('incident')}
           <div class="ff-section-label">Source</div>
           <div class="floating-filter-pills">${sourcePills}</div>
           <div class="ff-section-label">Type</div>
           <div class="floating-filter-pills">${typePills}</div>
+          ${categoryBlock}
           ${subtypeBlock}
         `;
       },
@@ -11026,8 +11080,8 @@ function initPagerHoursFromStorage() {
       }
       const pills = cats.map((c) => {
         const on = !sel || !sel.size || sel.has(c);
-        const safe = escapeHtml(String(c).replace(/'/g, "\'"));
-        return _ffPillColored(on, meta.color, '', `${escapeHtml(c)} (${counts[c].toLocaleString()})`,
+        const safe = escapeHtml(String(c).replace(/'/g, "\\'"));
+        return _ffPillColored(on, meta.color, '', `${escapeHtml(_titleCaseCat(c))} (${counts[c].toLocaleString()})`,
           `toggleLiveTrafficCat('${feedId}', '${safe}')`);
       }).join('');
       return `
@@ -11038,10 +11092,6 @@ function initPagerHoursFromStorage() {
       `;
     }
 
-    FILTER_REGISTRY.alpine = {
-      icon: 'fa-snowflake', label: 'Alpine', color: '#7dd3fc',
-      render() { return _ltPanel('alpine'); },
-    };
     FILTER_REGISTRY.lga = {
       icon: 'fa-building-columns', label: 'Council', color: '#a3e635',
       render() { return _ltPanel('lga'); },
@@ -16256,7 +16306,7 @@ function initPagerHoursFromStorage() {
       // the layer self-heals if markers were ever lost.
       if (map.hasLayer(aisLayer)) redrawTasks.push(loadAisData());
       if (map.hasLayer(actAmbulanceLayer)) redrawTasks.push(loadActAmbulanceData());
-      if (map.hasLayer(alpineLayer)) redrawTasks.push(loadLiveTrafficFeed('alpine'));
+      if (map.hasLayer(hazardsLayer)) redrawTasks.push(loadLiveTrafficFeed('alpine'));
       if (map.hasLayer(lgaLayer)) redrawTasks.push(loadLiveTrafficFeed('lga'));
       if (map.hasLayer(worksLayer)) redrawTasks.push(loadLiveTrafficFeed('works'));
 
