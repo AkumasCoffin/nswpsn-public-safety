@@ -4,26 +4,26 @@
   <script defer src="https://analytics.forcequit.xyz/script.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
   <script defer src="https://analytics.forcequit.xyz/recorder.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
   <meta charset="UTF-8" />
-  <title>NSW PSN – Live Map</title>
+  <title>AusAware – Live Map</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#0f172a">
   
   <meta name="description" content="Interactive live map showing RFS fires, traffic incidents, power outages, pager hits, and more across NSW.">
-  <meta name="keywords" content="NSW PSN, Live Map, RFS Fires, Traffic, Power Outages, Emergency Services">
+  <meta name="keywords" content="AusAware, NSW PSN, Live Map, RFS Fires, Traffic, Power Outages, Emergency Services">
   <meta name="author" content="Forcequit">
 
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://nswpsn.forcequit.xyz/map.html">
-  <meta property="og:title" content="NSW PSN – Live Incident Map">
+  <meta property="og:title" content="AusAware – Live Incident Map">
   <meta property="og:description" content="Interactive live map showing RFS fires, traffic incidents, power outages, pager hits, and more across NSW.">
-  <meta property="og:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
-  <meta property="og:site_name" content="Forcequit NSW PSN">
+  <meta property="og:image" content="https://nswpsn.forcequit.xyz/assets/AusAware_filled_background.jpg">
+  <meta property="og:site_name" content="AusAware">
 
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/map.html">
-  <meta name="twitter:title" content="NSW PSN – Live Incident Map">
+  <meta name="twitter:title" content="AusAware – Live Incident Map">
   <meta name="twitter:description" content="Interactive live map showing RFS fires, traffic incidents, power outages, pager hits, and more across NSW.">
-  <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
+  <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/AusAware_filled_background.jpg">
 
   <script src="https://kit.fontawesome.com/5d58b9d240.js" crossorigin="anonymous"></script>
   <link rel="stylesheet" href="styles.css" />
@@ -38,7 +38,9 @@
 
   <link rel="canonical" href="https://nswpsn.forcequit.xyz/map">
   <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png">
-  <link rel="icon" type="image/png" sizes="192x192" href="./assets/fqlogo.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="./assets/ausaware-icon-192.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="./assets/ausaware-icon-180.png">
+  <link rel="manifest" href="./site.webmanifest">
 
   <style>
     /* LAYOUT OVERRIDES */
@@ -2407,8 +2409,9 @@
   <div class="menu-overlay" onclick="toggleSidebar()"></div>
 
   <aside class="sidebar" id="sidebar">
-    <div class="sidebar-logo">Forcequit <span>NSW PSN</span></div>
-    <div class="sidebar-subtitle">Quick reference handbook for NSW Public Safety Network monitoring.</div>
+    <div class="sidebar-logo"><img src="./assets/ausaware-icon-192.png" alt="" class="sidebar-logo-mark"><span class="sidebar-logo-text">Aus<span>Aware</span></span></div>
+    <div class="sidebar-byline">by Forcequit</div>
+    <div class="sidebar-subtitle">Live emergency awareness for Australia — incidents, radio and public safety data.</div>
     <div class="sidebar-section-label">Sections</div>
     <nav class="sidebar-nav">
       <a href="index.html">Home / Overview</a>
@@ -2447,7 +2450,7 @@
         Discord Bot
       </a>
     </div>
-    <div class="sidebar-footer">NSW PSN Reference · Forcequit</div>
+    <div class="sidebar-footer">AusAware · Run by Forcequit</div>
   </aside>
 
   <main class="main" id="map-layout-root">
@@ -2783,7 +2786,7 @@
   <script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.1.3/leaflet-maplibre-gl.js"></script>
   <script src="idle-guard.js"></script>
   <script>
-    // NSW PSN Map v2.3 - Updated for backend pre-warming cache system
+    // AusAware Map v2.3 - Updated for backend pre-warming cache system
     // Data is served from pre-warmed backend cache for instant loading
     // Frontend cache is only for UI responsiveness (layer toggle deduplication)
     

@@ -231,7 +231,7 @@ function linuxInstaller(token: string, kind: string): string {
   const K = shSingleQuote(kind);
   return [
     `#!/usr/bin/env bash`,
-    `# NSW PSN feeder node installer. Your node token is baked in below.`,
+    `# AusAware feeder node installer. Your node token is baked in below.`,
     `# Run:  sudo bash install-nswpsn-node.sh    (re-run any time to update)`,
     `set -euo pipefail`,
     `NODE_TOKEN=${T}`,
@@ -305,7 +305,7 @@ function linuxInstaller(token: string, kind: string): string {
     ``,
     `cat > /etc/systemd/system/nswpsn-node.service <<UNIT`,
     `[Unit]`,
-    `Description=NSW PSN radio feeder node agent`,
+    `Description=AusAware radio feeder node agent`,
     `After=network-online.target`,
     `Wants=network-online.target`,
     `[Service]`,
@@ -344,7 +344,7 @@ function pagerLinuxInstaller(token: string): string {
   const D = shSingleQuote(DOWNLOADS_BASE);
   return [
     `#!/usr/bin/env bash`,
-    `# NSW PSN PAGER feeder node installer. Your node token is baked in below.`,
+    `# AusAware PAGER feeder node installer. Your node token is baked in below.`,
     `# Run:  sudo bash install-nswpsn-node.sh    (re-run any time to update)`,
     `set -euo pipefail`,
     `NODE_TOKEN=${T}`,
@@ -427,7 +427,7 @@ function pagerLinuxInstaller(token: string): string {
     ``,
     `cat > /etc/systemd/system/nswpsn-node.service <<UNIT`,
     `[Unit]`,
-    `Description=NSW PSN pager feeder node agent`,
+    `Description=AusAware pager feeder node agent`,
     `After=network-online.target`,
     `Wants=network-online.target`,
     `[Service]`,
@@ -459,7 +459,7 @@ function windowsInstaller(token: string, kind: string): string {
   const D = psSingleQuote(DOWNLOADS_BASE);
   const K = psSingleQuote(kind);
   return [
-    `# NSW PSN radio feeder node installer. Your node token is baked in below.`,
+    `# AusAware radio feeder node installer. Your node token is baked in below.`,
     `# Right-click this file -> Run with PowerShell (it will elevate).`,
     `# Re-run any time to update.`,
     `$ErrorActionPreference = 'Stop'`,

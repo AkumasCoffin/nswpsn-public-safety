@@ -74,11 +74,11 @@ export default {
     }
 
     const canonical = og.url || url.toString();
-    const fullTitle = og.title ? `${og.title} — NSWPSN The Wire` : 'NSWPSN The Wire';
+    const fullTitle = og.title ? `${og.title} — AusAware The Wire` : 'AusAware The Wire';
     const desc = og.description || 'Independent photos & video from NSW emergency-services contributors.';
     const image = og.image || '';
     const tags = [
-      `<meta property="og:site_name" content="${esc(og.site_name || 'NSWPSN — The Wire')}">`,
+      `<meta property="og:site_name" content="${esc(og.site_name || 'AusAware — The Wire')}">`,
       `<meta property="og:type" content="${og.type === 'article' ? 'article' : 'website'}">`,
       `<meta property="og:title" content="${esc(fullTitle)}">`,
       `<meta property="og:description" content="${esc(desc)}">`,

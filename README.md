@@ -1,6 +1,6 @@
-# NSW PSN
+# AusAware
 
-Real-time NSW emergency services monitoring platform — aggregates government APIs, community-sourced data, and third-party feeds into interactive maps, live dashboards, and Discord alerts.
+Real-time Australian emergency services monitoring platform, deepest in NSW — aggregates government APIs, community-sourced data, and third-party feeds into interactive maps, live dashboards, and Discord alerts.
 
 **Website:** https://nswpsn.forcequit.xyz
 

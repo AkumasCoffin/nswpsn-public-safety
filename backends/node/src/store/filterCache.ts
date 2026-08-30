@@ -113,7 +113,7 @@ const PROVIDER_DISPLAY: Record<string, { name: string; icon: string; color: stri
   essential: { name: 'Essential Energy', icon: 'bolt', color: '#06b6d4' },
   waze: { name: 'Waze', icon: 'car', color: '#00d4ff' },
   pager: { name: 'Pager', icon: 'pager', color: '#8b5cf6' },
-  user: { name: 'NSW PSN User Submissions', icon: 'user', color: '#a855f7' },
+  user: { name: 'User Submissions', icon: 'user', color: '#a855f7' },
   rdio: { name: 'Radio Scanner', icon: 'radio', color: '#10b981' },
   actas: { name: 'ACT Ambulance Service', icon: 'truck-medical', color: '#ec4899' },
 };

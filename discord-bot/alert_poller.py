@@ -1,5 +1,5 @@
 """
-Alert Poller - Fetches alerts from the NSW PSN API and tracks new incidents.
+Alert Poller - Fetches alerts from the AusAware API and tracks new incidents.
 """
 
 import aiohttp
@@ -113,7 +113,7 @@ class AlertPoller:
         url = f"{self.api_base_url}{endpoint}"
         headers = {
             'Authorization': f'Bearer {self.api_key}',
-            'User-Agent': 'NSWPSNBot/1.0',
+            'User-Agent': 'AusAwareBot/1.0',
             'X-Client-Type': 'discord-bot'
         }
 
@@ -1067,7 +1067,7 @@ class AlertPoller:
         url = f"{self.api_base_url}/api/pager/hits"
         headers = {
             'Authorization': f'Bearer {self.api_key}',
-            'User-Agent': 'NSWPSNBot/1.0',
+            'User-Agent': 'AusAwareBot/1.0',
             'X-Client-Type': 'discord-bot'
         }
         

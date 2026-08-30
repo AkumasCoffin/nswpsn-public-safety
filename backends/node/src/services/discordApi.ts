@@ -52,7 +52,7 @@ async function botGetOnce<T>(path: string): Promise<BotApiResponse<T>> {
     res = await fetch(`${DISCORD_API_BASE}${path}`, {
       headers: {
         Authorization: `Bot ${token}`,
-        'User-Agent': 'NSWPSN-Dashboard (https://nswpsn.forcequit.xyz)',
+        'User-Agent': 'AusAware-Dashboard (https://nswpsn.forcequit.xyz)',
       },
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });

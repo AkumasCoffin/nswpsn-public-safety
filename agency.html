@@ -4,7 +4,7 @@
   <script defer src="https://analytics.forcequit.xyz/script.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
   <script defer src="https://analytics.forcequit.xyz/recorder.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
   <meta charset="UTF-8" />
-  <title>NSW PSN Quick Reference – Agency</title>
+  <title>AusAware – Agency</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0" />
   <meta name="theme-color" content="#0f172a">
 
@@ -13,7 +13,9 @@
 
   <link rel="canonical" href="https://nswpsn.forcequit.xyz/agency">
   <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png">
-  <link rel="icon" type="image/png" sizes="192x192" href="./assets/fqlogo.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="./assets/ausaware-icon-192.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="./assets/ausaware-icon-180.png">
+  <link rel="manifest" href="./site.webmanifest">
   <link rel="stylesheet" href="styles.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
@@ -32,8 +34,9 @@
   <div class="menu-overlay" onclick="toggleSidebar()"></div>
 
   <aside class="sidebar" id="sidebar">
-    <div class="sidebar-logo">Forcequit <span>NSW PSN</span></div>
-    <div class="sidebar-subtitle">Quick reference handbook for NSW Public Safety Network monitoring.</div>
+    <div class="sidebar-logo"><img src="./assets/ausaware-icon-192.png" alt="" class="sidebar-logo-mark"><span class="sidebar-logo-text">Aus<span>Aware</span></span></div>
+    <div class="sidebar-byline">by Forcequit</div>
+    <div class="sidebar-subtitle">Live emergency awareness for Australia — incidents, radio and public safety data.</div>
     <div class="sidebar-section-label">Sections</div>
     <nav class="sidebar-nav">
       <a href="index.html">Home / Overview</a>
@@ -62,7 +65,7 @@
     <div style="margin-top:0.45rem;">
       <a class="discord-btn-wide" href="https://discord.forcequit.xyz" target="_blank" rel="noopener noreferrer">Support Discord</a>
     </div>
-    <div class="sidebar-footer">NSW PSN Reference · Forcequit</div>
+    <div class="sidebar-footer">AusAware · Run by Forcequit</div>
   </aside>
 
   <main class="main">
@@ -86,7 +89,7 @@
     </section>
 
     <div class="main-footer-note">
-      NSW PSN reference (unofficial) · TGID data from <a href="data-sources.html">community sources</a> · <a href="terms.html">Terms</a> · <a href="privacy.html">Privacy</a>
+      AusAware (unofficial) · TGID data from <a href="data-sources.html">community sources</a> · <a href="terms.html">Terms</a> · <a href="privacy.html">Privacy</a>
     </div>
   </main>
 
@@ -408,7 +411,7 @@
       const agency = data.agencies && data.agencies[slug];
       if (!agency) { setNotFound(slug); return; }
 
-      document.title = `NSW PSN Quick Reference – ${agency.name}`;
+      document.title = `AusAware – ${agency.name}`;
 
       // Per-agency SEO: point the canonical at this slug and describe the page
       // by agency name so each of the 46 agency pages indexes distinctly.

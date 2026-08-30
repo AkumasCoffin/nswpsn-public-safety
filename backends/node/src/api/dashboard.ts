@@ -284,7 +284,7 @@ async function guildGuard(
   const botGuilds = await getBotGuildIds();
   if (!botGuilds.has(String(guildId))) {
     return {
-      err: dashErr(c, 'bot_not_in_guild', 'The NSW PSN bot is not configured in this guild yet.', 403),
+      err: dashErr(c, 'bot_not_in_guild', 'The AusAware bot is not configured in this guild yet.', 403),
     };
   }
   return { entry };

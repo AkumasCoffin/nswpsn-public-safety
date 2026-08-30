@@ -90,7 +90,7 @@ function createAuthModals() {
       <div style="background:#1e293b; border:1px solid rgba(148,163,184,0.2); border-radius:12px; padding:2.5rem; max-width:360px; width:90%; box-shadow:0 25px 50px -12px rgba(0,0,0,0.7);">
         <div style="text-align:center; margin-bottom:2rem;">
           <div style="font-size:1.5rem; font-weight:700; color:#fff; text-transform:uppercase; letter-spacing:0.1em;">Forcequit <span style="color:#f97316;">Login</span></div>
-          <div style="color:#94a3b8; font-size:0.9rem; margin-top:0.5rem;">NSW PSN Reference</div>
+          <div style="color:#94a3b8; font-size:0.9rem; margin-top:0.5rem;">AusAware</div>
         </div>
         <button onclick="doDiscordLogin()" id="discord-modal-btn" style="width:100%; padding:0.8rem; background:#5865F2; border:none; border-radius:8px; color:#fff; font-weight:700; cursor:pointer; font-size:0.9rem; font-family:inherit; display:flex; align-items:center; justify-content:center; gap:0.5rem; transition:background 0.2s;">
           <i class="fab fa-discord"></i> Continue with Discord

@@ -80,7 +80,7 @@ async function discordGetWithBearer<T>(path: string, accessToken: string, tokenT
     const res = await fetch(`${DISCORD_API_BASE}${path}`, {
       headers: {
         Authorization: `${tokenType} ${accessToken}`,
-        'User-Agent': 'NSWPSN-Dashboard',
+        'User-Agent': 'AusAware-Dashboard',
       },
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-NSW PSN Alert Discord Bot
+AusAware Alert Discord Bot
 Provides real-time alerts for emergency services, BOM warnings, traffic incidents, and pager messages.
 """
 
@@ -1289,7 +1289,7 @@ class NSWPSNBot(commands.Bot):
         for t in types_to_fetch:
             try:
                 if t == 'radio_summary':
-                    headers = {'Authorization': f'Bearer {API_KEY}', 'User-Agent': 'NSWPSNBot/1.0', 'X-Client-Type': 'discord-bot'}
+                    headers = {'Authorization': f'Bearer {API_KEY}', 'User-Agent': 'AusAwareBot/1.0', 'X-Client-Type': 'discord-bot'}
                     async with aiohttp.ClientSession() as session:
                         async with session.get(f"{API_BASE_URL}/api/summaries/latest", headers=headers, timeout=20) as resp:
                             if resp.status != 200:
@@ -2590,7 +2590,7 @@ async def unmute_command(
 async def status_command(interaction: discord.Interaction):
     """Show bot status"""
     embed = discord.Embed(
-        title="🤖 NSW PSN Alert Bot Status",
+        title="🤖 AusAware Alert Bot Status",
         color=0x3498db
     )
     
@@ -2639,7 +2639,7 @@ async def status_command(interaction: discord.Interaction):
         inline=False
     )
     
-    embed.set_footer(text=f"NSW PSN • {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    embed.set_footer(text=f"AusAware • {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
     await interaction.response.send_message(embed=embed)
 
@@ -3552,7 +3552,7 @@ _HELP_COLOR = 0x3498db
 # (command, description). Kept concise — one line per command where possible.
 _HELP_CATEGORIES: Dict[str, Dict[str, Any]] = {
     "intro": {
-        "title": "📚 NSW PSN Alert Bot",
+        "title": "📚 AusAware Alert Bot",
         "lines": [
             "Real-time alerts for NSW emergencies, traffic, weather warnings, "
             "and pager messages — sourced from RFS, BOM, TfNSW, Ausgrid, "
@@ -3664,7 +3664,7 @@ def build_help_embed(category: str) -> discord.Embed:
             color=_HELP_COLOR,
         )
         embed.set_footer(
-            text="NSW PSN • Pick a category from the menu below",
+            text="AusAware • Pick a category from the menu below",
         )
         return embed
 
@@ -3677,7 +3677,7 @@ def build_help_embed(category: str) -> discord.Embed:
     if data.get("footer"):
         embed.set_footer(text=data["footer"])
     else:
-        embed.set_footer(text="NSW PSN • /help to browse other categories")
+        embed.set_footer(text="AusAware • /help to browse other categories")
     return embed
 
 
@@ -3765,7 +3765,7 @@ async def _ts_fetch_page(query: str, date: Optional[str], offset: int) -> Option
         params['date'] = date
     headers = {
         'Authorization': f'Bearer {API_KEY}',
-        'User-Agent': 'NSWPSNBot/1.0',
+        'User-Agent': 'AusAwareBot/1.0',
         'X-Client-Type': 'discord-bot',
     }
     try:
@@ -4004,7 +4004,7 @@ async def _summary_fetch(date: Optional[str] = None) -> Optional[List[Dict[str, 
     import aiohttp
     headers = {
         'Authorization': f'Bearer {API_KEY}',
-        'User-Agent': 'NSWPSNBot/1.0',
+        'User-Agent': 'AusAwareBot/1.0',
         'X-Client-Type': 'discord-bot',
     }
     params = {'type': 'hourly', 'limit': '50' if date else str(_SUMMARY_HISTORY_LIMIT)}
@@ -4336,7 +4336,7 @@ async def overview_command(interaction: discord.Interaction):
 
     headers = {
         'Authorization': f'Bearer {API_KEY}',
-        'User-Agent': 'NSWPSNBot/1.0',
+        'User-Agent': 'AusAwareBot/1.0',
         'X-Client-Type': 'discord-bot'
     }
 
@@ -4415,7 +4415,7 @@ def main():
         logger.error("Please create a .env file with DISCORD_BOT_TOKEN=your_token_here")
         return
     
-    logger.info("Starting NSW PSN Alert Bot...")
+    logger.info("Starting AusAware Alert Bot...")
     bot.run(DISCORD_TOKEN)
 
 

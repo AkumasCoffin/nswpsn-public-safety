@@ -4,31 +4,33 @@
   <script defer src="https://analytics.forcequit.xyz/script.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
   <script defer src="https://analytics.forcequit.xyz/recorder.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
   <meta charset="UTF-8" />
-  <title>NSW PSN – About</title>
+  <title>AusAware – About</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0" />
   <meta name="theme-color" content="#0f172a">
 
-  <meta name="description" content="About NSW PSN by Forcequit — a free, ad-free hub for monitoring NSW public safety data. Why it exists, what it aims to do, and where it's headed.">
+  <meta name="description" content="About AusAware by Forcequit — a free, ad-free hub for monitoring NSW public safety data. Why it exists, what it aims to do, and where it's headed.">
   <meta name="author" content="Forcequit">
 
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://nswpsn.forcequit.xyz/about.html">
-  <meta property="og:title" content="NSW PSN – About">
-  <meta property="og:description" content="About NSW PSN by Forcequit — a free, ad-free hub for monitoring NSW public safety data.">
-  <meta property="og:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
-  <meta property="og:site_name" content="Forcequit NSW PSN">
+  <meta property="og:title" content="AusAware – About">
+  <meta property="og:description" content="About AusAware by Forcequit — a free, ad-free hub for monitoring NSW public safety data.">
+  <meta property="og:image" content="https://nswpsn.forcequit.xyz/assets/AusAware_filled_background.jpg">
+  <meta property="og:site_name" content="AusAware">
 
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/about.html">
-  <meta name="twitter:title" content="NSW PSN – About">
-  <meta name="twitter:description" content="About NSW PSN by Forcequit — a free, ad-free hub for monitoring NSW public safety data.">
-  <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
+  <meta name="twitter:title" content="AusAware – About">
+  <meta name="twitter:description" content="About AusAware by Forcequit — a free, ad-free hub for monitoring NSW public safety data.">
+  <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/AusAware_filled_background.jpg">
 
   <link rel="stylesheet" href="styles.css" />
 
   <link rel="canonical" href="https://nswpsn.forcequit.xyz/about">
   <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png">
-  <link rel="icon" type="image/png" sizes="192x192" href="./assets/fqlogo.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="./assets/ausaware-icon-192.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="./assets/ausaware-icon-180.png">
+  <link rel="manifest" href="./site.webmanifest">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="auth-common.js"></script>
@@ -45,8 +47,9 @@
   <div class="menu-overlay" onclick="toggleSidebar()"></div>
 
   <aside class="sidebar" id="sidebar">
-    <div class="sidebar-logo">Forcequit <span>NSW PSN</span></div>
-    <div class="sidebar-subtitle">Quick reference handbook for NSW Public Safety Network monitoring.</div>
+    <div class="sidebar-logo"><img src="./assets/ausaware-icon-192.png" alt="" class="sidebar-logo-mark"><span class="sidebar-logo-text">Aus<span>Aware</span></span></div>
+    <div class="sidebar-byline">by Forcequit</div>
+    <div class="sidebar-subtitle">Live emergency awareness for Australia — incidents, radio and public safety data.</div>
 
     <div class="sidebar-section-label">Sections</div>
     <nav class="sidebar-nav">
@@ -86,15 +89,15 @@
         Discord Bot
       </a>
     </div>
-    <div class="sidebar-footer">NSW PSN Reference · Forcequit</div>
+    <div class="sidebar-footer">AusAware · Run by Forcequit</div>
   </aside>
 
   <main class="main">
     <header class="main-header">
       <div class="breadcrumb">About</div>
-      <h1>ℹ️ About NSW PSN</h1>
+      <h1>ℹ️ About AusAware</h1>
       <p>
-        A free, ad-free hub for keeping an eye on what's happening across New South Wales —
+        A free, ad-free hub for keeping an eye on what's happening across Australia —
         built and run by an enthusiast, for the community.
       </p>
     </header>
@@ -111,15 +114,21 @@
         </div>
         <div class="card-body">
           <p>
-            First, the name. The <strong>NSW Public Safety Network (PSN)</strong> is the state-wide digital
-            radio network that NSW's emergency services and government agencies — police, fire, ambulance,
-            SES and many more — communicate over. This site is <strong>named after that network</strong>, but
-            it isn't the network itself and has no affiliation with it: it's an independent,
-            community-run hub for monitoring that network and the public-safety data around it.
+            First, the name. This site started life as <strong>NSW PSN</strong>, after the
+            <strong>NSW Public Safety Network</strong> — the state-wide digital radio network that NSW's
+            emergency services and government agencies (police, fire, ambulance, SES and many more)
+            communicate over, and the feed this site was originally built around. As the coverage grew
+            past that one network and past NSW, the name stopped fitting, so it's now
+            <strong>AusAware</strong>.
           </p>
           <p>
-            What you'll find here is a single place to watch what's unfolding across New South Wales in real
-            time — bush fires, traffic incidents, road hazards, power outages, weather warnings, beach
+            It is still an independent, community-run project with <strong>no affiliation</strong> with the
+            NSW Public Safety Network, any emergency service, or any government agency — it monitors those
+            networks and the public data around them, it isn't part of them.
+          </p>
+          <p>
+            What you'll find here is a single place to watch what's unfolding in real time — New South Wales
+            in the most depth, with coverage widening across Australia — bush fires, traffic incidents, road hazards, power outages, weather warnings, beach
             conditions, and more — pulled together from official and public sources onto one live map, live
             feed, and searchable log.
           </p>
@@ -331,7 +340,7 @@
               </p>
               <div style="border-top:1px solid rgba(148,163,184,0.18); margin:1.2rem 0; padding-top:1.2rem;">
                 <p>
-                  NSW PSN is funded out of pocket — servers, receivers, antennas and bandwidth. If you'd
+                  AusAware is funded out of pocket — servers, receivers, antennas and bandwidth. If you'd
                   like to chip in, you can donate through <strong>Ko-fi</strong>.
                 </p>
                 <p>
@@ -364,7 +373,7 @@
     </section>
 
     <div class="main-footer-note">
-      About NSW PSN · <a href="privacy.html">Privacy Policy</a> · <a href="terms.html">Terms &amp; Conditions</a>
+      About AusAware · <a href="privacy.html">Privacy Policy</a> · <a href="terms.html">Terms &amp; Conditions</a>
     </div>
   </main>
 

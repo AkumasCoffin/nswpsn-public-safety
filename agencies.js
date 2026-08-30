@@ -1,4 +1,4 @@
-/* NSW PSN agency directory — populates the sidebar Agencies dropdown.
+/* AusAware agency directory — populates the sidebar Agencies dropdown.
    Each agency links to agency.html?slug=<slug>; agency data is loaded from
    agency-data.json (TGIDs) and agency-extended.json (extended tables/codes/zones).
    The dropdown also hosts a global search box that filters across both data sets. */

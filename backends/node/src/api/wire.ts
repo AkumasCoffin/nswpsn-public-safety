@@ -932,7 +932,7 @@ wireRouter.get('/api/wire/og/:type/:key', async (c) => {
           'Independent photos & video from NSW emergency-services contributors.',
         image: image || null,
         url: canonical,
-        site_name: 'NSWPSN — The Wire',
+        site_name: 'AusAware — The Wire',
         author: row.author_name || null,
       },
     });

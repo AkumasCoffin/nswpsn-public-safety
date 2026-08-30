@@ -6,28 +6,32 @@
   <script defer src="https://analytics.forcequit.xyz/recorder.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Become an Editor | Forcequit NSW PSN</title>
+  <title>Become an Editor | AusAware</title>
   
   <!-- Open Graph / Facebook -->
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://nswpsn.forcequit.xyz/signup.html">
   <meta property="og:title" content="Become a Forcequit Editor">
-  <meta property="og:description" content="Request editor access to contribute to NSW PSN - the real-time emergency services map for New South Wales.">
-  <meta property="og:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
+  <meta property="og:site_name" content="AusAware">
+  <meta property="og:description" content="Request editor access to contribute to AusAware - real-time emergency services mapping for Australia.">
+  <meta property="og:image" content="https://nswpsn.forcequit.xyz/assets/AusAware_filled_background.jpg">
   
   <!-- Twitter -->
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/signup.html">
   <meta name="twitter:title" content="Become a Forcequit Editor">
-  <meta name="twitter:description" content="Request editor access to contribute to NSW PSN - the real-time emergency services map for New South Wales.">
-  <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
+  <meta name="twitter:description" content="Request editor access to contribute to AusAware - real-time emergency services mapping for Australia.">
+  <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/AusAware_filled_background.jpg">
   
   <!-- Standard Meta -->
-  <meta name="description" content="Request editor access to contribute to NSW PSN - the real-time emergency services map for New South Wales.">
+  <meta name="description" content="Request editor access to contribute to AusAware - real-time emergency services mapping for Australia.">
   <meta name="theme-color" content="#f97316">
   
   <link rel="canonical" href="https://nswpsn.forcequit.xyz/signup">
   <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="./assets/ausaware-icon-192.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="./assets/ausaware-icon-180.png">
+  <link rel="manifest" href="./site.webmanifest">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -323,10 +327,10 @@
   <div class="container">
     <div class="header">
       <div class="logo">
-        <img src="./assets/fqlogo.png" alt="Forcequit Logo">
+        <img src="./assets/ausaware-icon-192.png" alt="AusAware">
         <div class="logo-text">Forcequit <span>Editor</span></div>
       </div>
-      <p class="subtitle">NSW Public Safety Network</p>
+      <p class="subtitle">AusAware</p>
     </div>
     
     <div class="card">
@@ -339,7 +343,7 @@
           <span id="signup-card-title">Create an account</span>
         </div>
         <p class="card-description" id="signup-card-desc">
-          Join NSW PSN. Pick a plain account, or apply to contribute.
+          Join AusAware. Pick a plain account, or apply to contribute.
         </p>
 
         <!-- Step 0: account type. A plain User account is created immediately
@@ -734,7 +738,7 @@
       const title = document.getElementById('signup-card-title');
       if (title) title.textContent = 'Create an account';
       const desc = document.getElementById('signup-card-desc');
-      if (desc) desc.textContent = 'Join NSW PSN. Pick a plain account, or apply to contribute.';
+      if (desc) desc.textContent = 'Join AusAware. Pick a plain account, or apply to contribute.';
     }
     /** True when the visitor is creating a plain (roleless) User account. */
     function isPlainUserSignup() { return _accountType === 'user'; }

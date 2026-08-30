@@ -1,4 +1,4 @@
-/* NSW PSN Quick Reference — Forcequit
+/* AusAware — Forcequit
    Style: dark, professional, subtle tactical UI
    FINAL: Fixed Global Table Alignment + Map Module
 */
@@ -396,9 +396,13 @@ a:hover { text-decoration: underline; }
   transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.sidebar-logo { font-size: 1rem; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; }
+.sidebar-logo { display: flex; align-items: center; gap: 0.55rem; font-size: 1rem; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; }
 .sidebar-logo span { color: var(--accent); }
-.sidebar-subtitle { font-size: 0.8rem; color: var(--text-soft); margin-bottom: 1.2rem; }
+.sidebar-logo .sidebar-logo-text { color: var(--text-main); }
+.sidebar-logo-mark { width: 30px; height: 30px; flex: none; }
+/* Sits under the wordmark, so it stays quiet next to it. */
+.sidebar-byline { font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-soft); margin-top: 0.3rem; }
+.sidebar-subtitle { font-size: 0.8rem; color: var(--text-soft); margin-top: 0.5rem; margin-bottom: 1.2rem; }
 .sidebar-section-label { text-transform: uppercase; letter-spacing: 0.16em; font-size: 0.7rem; color: var(--text-soft); margin: 1.2rem 0 0.4rem; }
 
 .sidebar-nav { display: flex; flex-direction: column; gap: 0.25rem; }

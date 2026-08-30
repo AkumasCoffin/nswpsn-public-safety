@@ -1,5 +1,5 @@
 // ======== UMAMI EVENT TRACKING ========
-// Shared analytics helpers for NSW PSN site
+// Shared analytics helpers for the AusAware site
 // Requires: umami script loaded via <script defer> in <head>
 
 (function () {

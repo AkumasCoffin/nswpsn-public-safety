@@ -4,26 +4,26 @@
   <script defer src="https://analytics.forcequit.xyz/script.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
   <script defer src="https://analytics.forcequit.xyz/recorder.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
   <meta charset="UTF-8" />
-  <title>NSW PSN – Live Data & Statistics</title>
+  <title>AusAware – Live Data &amp; Statistics</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0" />
   <meta name="theme-color" content="#0f172a">
   
   <meta name="description" content="Real-time RFS incidents, Fire Danger Ratings, power outages, traffic incidents, weather warnings, and beach conditions for NSW.">
-  <meta name="keywords" content="NSW PSN, Live Data, RFS, Fire Danger, Traffic, Weather">
+  <meta name="keywords" content="AusAware, NSW PSN, Live Data, RFS, Fire Danger, Traffic, Weather">
   <meta name="author" content="Forcequit">
 
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://nswpsn.forcequit.xyz/live.html">
-  <meta property="og:title" content="NSW PSN – Live Data & Statistics">
+  <meta property="og:title" content="AusAware – Live Data &amp; Statistics">
   <meta property="og:description" content="Real-time RFS incidents, Fire Danger Ratings, power outages, traffic incidents, and weather warnings.">
-  <meta property="og:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
-  <meta property="og:site_name" content="Forcequit NSW PSN">
+  <meta property="og:image" content="https://nswpsn.forcequit.xyz/assets/AusAware_filled_background.jpg">
+  <meta property="og:site_name" content="AusAware">
 
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/live.html">
-  <meta name="twitter:title" content="NSW PSN – Live Data & Statistics">
+  <meta name="twitter:title" content="AusAware – Live Data &amp; Statistics">
   <meta name="twitter:description" content="Real-time RFS incidents, Fire Danger Ratings, power outages, traffic incidents, and weather warnings.">
-  <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
+  <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/AusAware_filled_background.jpg">
 
   <link rel="stylesheet" href="styles.css?v=20251230b" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" integrity="sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
@@ -31,7 +31,9 @@
 
   <link rel="canonical" href="https://nswpsn.forcequit.xyz/live">
   <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png">
-  <link rel="icon" type="image/png" sizes="192x192" href="./assets/fqlogo.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="./assets/ausaware-icon-192.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="./assets/ausaware-icon-180.png">
+  <link rel="manifest" href="./site.webmanifest">
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="livetraffic-vocab.js?v=1"></script>
 
@@ -1705,8 +1707,9 @@
   <div class="menu-overlay" onclick="toggleSidebar()"></div>
 
   <aside class="sidebar" id="sidebar">
-    <div class="sidebar-logo">Forcequit <span>NSW PSN</span></div>
-    <div class="sidebar-subtitle">Quick reference handbook for NSW Public Safety Network monitoring.</div>
+    <div class="sidebar-logo"><img src="./assets/ausaware-icon-192.png" alt="" class="sidebar-logo-mark"><span class="sidebar-logo-text">Aus<span>Aware</span></span></div>
+    <div class="sidebar-byline">by Forcequit</div>
+    <div class="sidebar-subtitle">Live emergency awareness for Australia — incidents, radio and public safety data.</div>
 
     <div class="sidebar-section-label">Sections</div>
     <nav class="sidebar-nav">
@@ -1746,7 +1749,7 @@
         Discord Bot
       </a>
     </div>
-    <div class="sidebar-footer">NSW PSN Reference · Forcequit</div>
+    <div class="sidebar-footer">AusAware · Run by Forcequit</div>
   </aside>
 
   <main class="main">
@@ -2523,7 +2526,7 @@
       }
     })();
 
-    // NSW PSN Live Dashboard v2.3 - Updated for backend pre-warming cache system
+    // AusAware Live Dashboard v2.3 - Updated for backend pre-warming cache system
     // Data is served from pre-warmed backend cache for instant loading
     // Frontend cache is only for within-page deduplication
     

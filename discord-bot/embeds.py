@@ -248,7 +248,7 @@ def format_timestamp(ts: str, use_discord_format: bool = True) -> Optional[str]:
 
 
 def build_map_url(lat: float, lon: float, label: str = "", layer: str = "incidents", zoom: int = 15) -> str:
-    """Build a URL to the NSW PSN map"""
+    """Build a URL to the AusAware map"""
     label_encoded = quote(label, safe='') if label else ''
     return f"{MAP_BASE_URL}/map.html?lat={lat}&lng={lon}&zoom={zoom}&label={label_encoded}&layer={layer}"
 
@@ -1315,7 +1315,7 @@ class EmbedBuilder:
         footer_c = discord.ui.Container(accent_colour=self._SUMMARY_FOOTER_COLOR)
         footer_c.add_item(discord.ui.TextDisplay(
             content=(
-                f"-# 🌐 [View the full live dashboard on nswpsn.forcequit.xyz]({MAP_BASE_URL}/) · "
+                f"-# 🌐 [View the full live dashboard on AusAware]({MAP_BASE_URL}/) · "
                 f"data refreshed {now_local.strftime('%I:%M %p').lstrip('0')}"
             )
         ))
@@ -2188,7 +2188,7 @@ class EmbedBuilder:
             footer_bits.append(
                 f"[📜 Previous ({prev_status})]({previous_message['message_url']})"
             )
-        self._append_container_footer(container, footer_bits, source="User-submitted (NSW PSN)")
+        self._append_container_footer(container, footer_bits, source="User-submitted (AusAware)")
         return container
 
     # ---- Pager -------------------------------------------------

@@ -4,26 +4,26 @@
   <script defer src="https://analytics.forcequit.xyz/script.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
   <script defer src="https://analytics.forcequit.xyz/recorder.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
   <meta charset="UTF-8" />
-  <title>NSW PSN – Incident Logs</title>
+  <title>AusAware – Incident Logs</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0" />
   <meta name="theme-color" content="#0f172a">
   
   <meta name="description" content="Search and filter historical NSW incident data with linked pager messages and incident updates.">
-  <meta name="keywords" content="NSW PSN, Incident Logs, Pager Messages, Emergency History, Scanner">
+  <meta name="keywords" content="AusAware, NSW PSN, Incident Logs, Pager Messages, Emergency History, Scanner">
   <meta name="author" content="Forcequit">
 
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://nswpsn.forcequit.xyz/logs.html">
-  <meta property="og:title" content="NSW PSN – Incident Logs">
+  <meta property="og:title" content="AusAware – Incident Logs">
   <meta property="og:description" content="Search and filter historical NSW incident data with linked pager messages and incident updates.">
-  <meta property="og:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
-  <meta property="og:site_name" content="Forcequit NSW PSN">
+  <meta property="og:image" content="https://nswpsn.forcequit.xyz/assets/AusAware_filled_background.jpg">
+  <meta property="og:site_name" content="AusAware">
 
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/logs.html">
-  <meta name="twitter:title" content="NSW PSN – Incident Logs">
+  <meta name="twitter:title" content="AusAware – Incident Logs">
   <meta name="twitter:description" content="Search and filter historical NSW incident data with linked pager messages and incident updates.">
-  <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
+  <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/AusAware_filled_background.jpg">
 
   <link rel="stylesheet" href="styles.css?v=20251230b" />
   <link rel="stylesheet" href="logs.css?v=1" />
@@ -33,7 +33,9 @@
 
   <link rel="canonical" href="https://nswpsn.forcequit.xyz/logs">
   <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png">
-  <link rel="icon" type="image/png" sizes="192x192" href="./assets/fqlogo.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="./assets/ausaware-icon-192.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="./assets/ausaware-icon-180.png">
+  <link rel="manifest" href="./site.webmanifest">
 
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="livetraffic-vocab.js?v=1"></script>
@@ -43,7 +45,7 @@
 <body>
   <!-- Mobile Header -->
   <div class="mobile-header">
-    <div class="mobile-logo">Forcequit <span>NSW PSN</span></div>
+    <div class="mobile-logo">Aus<span>Aware</span></div>
     <button class="mobile-menu-btn" onclick="toggleSidebar()">
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
     </button>
@@ -53,8 +55,9 @@
 
   <!-- Sidebar -->
   <aside class="sidebar" id="sidebar">
-    <div class="sidebar-logo">Forcequit <span>NSW PSN</span></div>
-    <div class="sidebar-subtitle">Quick reference handbook for NSW Public Safety Network monitoring.</div>
+    <div class="sidebar-logo"><img src="./assets/ausaware-icon-192.png" alt="" class="sidebar-logo-mark"><span class="sidebar-logo-text">Aus<span>Aware</span></span></div>
+    <div class="sidebar-byline">by Forcequit</div>
+    <div class="sidebar-subtitle">Live emergency awareness for Australia — incidents, radio and public safety data.</div>
 
     <div class="sidebar-section-label">Sections</div>
     <nav class="sidebar-nav">
@@ -94,7 +97,7 @@
         Discord Bot
       </a>
     </div>
-    <div class="sidebar-footer">NSW PSN Reference · Forcequit</div>
+    <div class="sidebar-footer">AusAware · Run by Forcequit</div>
   </aside>
 
   <!-- Main Content -->
@@ -564,6 +567,7 @@
           'Essential Energy': 'bolt',
           'Bureau of Meteorology': 'cloud',
           'Pager': 'pager',
+          'User Submissions': 'user',
           'NSW PSN User Submissions': 'user',
           'ACT Ambulance Service': 'truck-medical'
         };
@@ -575,6 +579,7 @@
           'Essential Energy': '#06b6d4',
           'Bureau of Meteorology': '#3b82f6',
           'Pager': '#8b5cf6',
+          'User Submissions': '#a855f7',
           'NSW PSN User Submissions': '#a855f7',
           'ACT Ambulance Service': '#ec4899'
         };

@@ -2,12 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>NSW PSN – Discord Bot Dashboard</title>
+  <title>AusAware – Discord Bot Dashboard</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#0f172a" />
-  <meta name="description" content="Manage alert presets for the NSW PSN Discord bot." />
+  <meta name="description" content="Manage alert presets for the AusAware Discord bot." />
   <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png" />
-  <link rel="icon" type="image/png" sizes="192x192" href="./assets/fqlogo.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="./assets/ausaware-icon-192.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="./assets/ausaware-icon-180.png" />
+  <link rel="manifest" href="./site.webmanifest" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -1486,7 +1488,7 @@
 <script src="ui-dialogs.js"></script>
 <script>
 /* =========================================================
-   NSW PSN Dashboard (preset-based)
+   AusAware Dashboard (preset-based)
    Single-file plain JS. No framework. ES2020.
    ========================================================= */
 
@@ -2098,7 +2100,7 @@ function renderAuthCard() {
   const card = el('div', { class: 'auth-card' });
   card.innerHTML = `
     <div class="auth-logo"><i class="fa-brands fa-discord"></i></div>
-    <h2>NSW PSN Dashboard</h2>
+    <h2>AusAware Dashboard</h2>
     <p>Sign in with Discord to manage alert presets for any server where you have <strong>Manage Channels</strong>.</p>
     <a class="btn btn-discord" href="${API}/api/dashboard/auth/login?next=${next}">
       <i class="fa-brands fa-discord"></i> Login with Discord
@@ -2115,7 +2117,7 @@ function renderShell() {
     // isn't in any, they can add it right from the dropdown at the top.
     const manageable = (state.guilds || []).filter(g => g.manage_channels);
     const msg = manageable.length > 0
-      ? 'The NSW PSN bot isn’t in any of your servers yet. Use the server menu at the top to add it to one of your servers, then refresh.'
+      ? 'The AusAware bot isn’t in any of your servers yet. Use the server menu at the top to add it to one of your servers, then refresh.'
       : 'You have no servers where you hold Manage Channels. Ask an admin to invite the bot, or contact support.';
     const wrap = el('div', { style: 'padding: 2rem 1.4rem' }, [
       el('div', { class: 'empty' }, msg),
@@ -5005,7 +5007,7 @@ const bcast = {
   loading: false,
   targets: [],          // [{guild_id, guild_name, channels:[{id,name}], selected_channel_id, include}]
   form: {
-    title: 'NSW PSN announcement',
+    title: 'AusAware announcement',
     description: '',
     color: '#f97316',
     footer: '',

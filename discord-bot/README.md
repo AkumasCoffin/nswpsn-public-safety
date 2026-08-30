@@ -1,4 +1,4 @@
-# NSW PSN Alert Discord Bot
+# AusAware Alert Discord Bot
 
 A Discord bot that provides real-time alerts for NSW emergency services, BOM warnings, traffic incidents, power outages, and pager messages.
 

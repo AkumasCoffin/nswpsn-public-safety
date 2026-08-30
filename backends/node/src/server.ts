@@ -83,7 +83,7 @@ const VERBOSE_REQUEST_LOG = process.env['NODE_ENV'] !== 'production';
 
 /**
  * Classify the request origin from headers. The discord bot sets
- * `User-Agent: NSWPSNBot/1.0` (and sometimes `X-Client-Type: discord-bot`)
+ * `User-Agent: AusAwareBot/1.0` (and sometimes `X-Client-Type: discord-bot`)
  * on every API call (see discord-bot/bot.py + alert_poller.py). Browsers
  * always carry a Mozilla/Chrome/Safari UA. Everything else is grouped
  * under "other" — curl, monitoring probes, server-to-server callers.
@@ -91,7 +91,9 @@ const VERBOSE_REQUEST_LOG = process.env['NODE_ENV'] !== 'production';
 function classifyClient(ua: string, xClient: string): 'bot' | 'browser' | 'other' {
   if (xClient.toLowerCase() === 'discord-bot') return 'bot';
   if (!ua) return 'other';
-  if (/^NSWPSNBot/i.test(ua) || /\bdiscord(?:bot)?\b/i.test(ua)) return 'bot';
+  // AusAwareBot is the current UA; NSWPSNBot is the pre-rebrand one, kept so a
+  // bot that hasn't restarted yet is still classified as a bot, not "other".
+  if (/^(?:AusAware|NSWPSN)Bot/i.test(ua) || /\bdiscord(?:bot)?\b/i.test(ua)) return 'bot';
   if (/Mozilla\/|Chrome\/|Safari\/|Firefox\/|Edge\/|Edg\//.test(ua)) return 'browser';
   return 'other';
 }
@@ -348,7 +350,7 @@ export function createApp() {
   // on the catalogue shape keeps working.
   app.get('/', (c) =>
     c.json({
-      name: 'NSW Public Safety Network API',
+      name: 'AusAware API',
       version: '2.0',
       runtime: 'node',
       mode: process.env['NODE_ENV'] === 'production' ? 'production' : 'dev',
