@@ -4830,6 +4830,17 @@
       }
     }
     
+    // Feed categories arrive both shouted ('SCHEDULED ROADWORK') and
+    // camelCased ('buildingConstruction'); split the latter before casing
+    // so it doesn't render as 'BUILDINGCONSTRUCTION'. Mirrors the same
+    // helper in map.html so both pages label a feed identically.
+    function formatTrafficType(v) {
+      return String(v || '')
+        .replace(/([a-z])([A-Z])/g, '$1 $2')
+        .toLowerCase()
+        .replace(/\b\w/g, (c) => c.toUpperCase());
+    }
+
     // Load latest traffic incidents with better filtering
     async function loadLatestTraffic() {
       const container = document.getElementById('latest-traffic-list');
@@ -4849,9 +4860,18 @@
           fires = apiDataCache.traffic.fire || { features: [] };
           floods = apiDataCache.traffic.flood || { features: [] };
           majorEvents = apiDataCache.traffic.majorevent || { features: [] };
-          alpine = apiDataCache.traffic.alpine || { features: [] };
-          council = apiDataCache.traffic.lga || { features: [] };
-          works = apiDataCache.traffic.works || { features: [] };
+          // loadAllStats() only ever primes the original four keys, so on a
+          // cache hit these three would be permanently empty. Fetch them on
+          // demand instead of inheriting a gap.
+          const jc = (path) => apiFetch(`${API_BASE}${path}`).then(r => r.json()).catch(() => ({ features: [] }));
+          [alpine, council, works] = await Promise.all([
+            apiDataCache.traffic.alpine || jc('/api/traffic/alpine'),
+            apiDataCache.traffic.lga || jc('/api/traffic/lga'),
+            apiDataCache.traffic.works || jc('/api/traffic/works')
+          ]);
+          apiDataCache.traffic.alpine = alpine;
+          apiDataCache.traffic.lga = council;
+          apiDataCache.traffic.works = works;
         } else {
           const j = (path) => apiFetch(`${API_BASE}${path}`).then(r => r.json()).catch(() => ({ features: [] }));
           [incidents, fires, floods, majorEvents, alpine, council, works] = await Promise.all([
@@ -4863,13 +4883,21 @@
             j('/api/traffic/lga'),
             j('/api/traffic/works')
           ]);
+          // Cache all seven, not just the new three: the branch above reads
+          // every key back, so a partial write here would make the next
+          // cached call render an empty list.
           apiDataCache.traffic = apiDataCache.traffic || {};
+          apiDataCache.traffic.incidents = incidents;
+          apiDataCache.traffic.fire = fires;
+          apiDataCache.traffic.flood = floods;
+          apiDataCache.traffic.majorevent = majorEvents;
           apiDataCache.traffic.alpine = alpine;
           apiDataCache.traffic.lga = council;
           apiDataCache.traffic.works = works;
         }
         
-        const items = [];
+        // `let`: the render below caps this to a top slice.
+        let items = [];
         // Dedup across the incidents/fires/floods/majorEvents feeds, which can
         // overlap, so the same item isn't rendered twice. Keyed by stable id,
         // falling back to coordinates.
@@ -5009,8 +5037,11 @@
               cleanTitle = extracted.cleanTitle;
             }
             
-            // Fallback to mainCategory if no incidentType
-            const mainCat = (p.mainCategory || '').toUpperCase();
+            // Fallback to mainCategory if no incidentType. Keep the raw
+            // casing for display — upper-casing it first turned camelCased
+            // feed keys ('specialEvent') into unreadable 'SPECIALEVENT'.
+            // Every downstream comparison upper-cases on its own.
+            const mainCat = p.mainCategory || '';
             const incidentKind = p.incidentKind || 'Unplanned';
             const subCat = p.subCategoryA || '';
             
@@ -5111,9 +5142,15 @@
         const showCount = 5;
         const withGPS = items.filter(i => i.lat && i.lng).length;
         
+        // Works alone is ~2,000 records; this card is a "latest" list, not
+        // the archive browser, so render the top slice after the sort above
+        // (major/unplanned first) and point at the logs page for the rest.
+        const TRAFFIC_RENDER_CAP = 300;
+        const totalItems = items.length;
+        if (items.length > TRAFFIC_RENDER_CAP) items = items.slice(0, TRAFFIC_RENDER_CAP);
         container.innerHTML = `
           <div class="tt-summary">
-            <span><strong>Total:</strong> ${items.length} active</span>
+            <span><strong>Total:</strong> ${totalItems} active</span>
             ${crashCount > 0 ? `<span style="color: #fca5a5;"><strong><i class="fas fa-car-crash"></i> Crashes:</strong> ${crashCount}</span>` : ''}
             ${hazardCount > 0 ? `<span style="color: #fdba74;"><strong><i class="fas fa-exclamation-triangle"></i> Hazards:</strong> ${hazardCount}</span>` : ''}
             ${breakdownCount > 0 ? `<span style="color: #fcd34d;"><strong><i class="fas fa-car"></i> Breakdowns:</strong> ${breakdownCount}</span>` : ''}
@@ -5138,7 +5175,7 @@
                   </div>
                   <div class="tt-badges">
                     ${i.lat && i.lng ? '<span class="map-view-btn"><i class="fas fa-map-marker-alt"></i> Map</span>' : ''}
-                    <span class="pill ${i.pillClass}">${escapeHtml(i.type)}</span>
+                    <span class="pill ${i.pillClass}">${escapeHtml(formatTrafficType(i.type))}</span>
                     ${i.incidentKind === 'Planned' ? '<span class="pill pill-sub pill-soft">PLANNED</span>' : ''}
                   </div>
                 </div>
