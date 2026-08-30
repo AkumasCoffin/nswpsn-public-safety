@@ -2479,7 +2479,6 @@
         <button id="btn-ais" class="btn-toggle" onclick="toggleMapLayer('ais')" title="AIS vessels"><i class="fa-solid fa-ship" style="color:#0284c7;"></i><span>Ships</span></button>
         <button id="btn-adsb" class="btn-toggle" onclick="toggleMapLayer('adsb')" title="Live aircraft"><i class="fa-solid fa-plane" style="color:#c084fc;"></i><span>Aircraft</span></button>
         <button id="btn-transport" class="btn-toggle" onclick="toggleMapLayer('transport')" title="Live public transport"><i class="fa-solid fa-bus" style="color:#f18500;"></i><span>Transport</span></button>
-        <button id="btn-works" class="btn-toggle" onclick="toggleMapLayer('works')" title="Works, utilities and ACT records"><i class="fa-solid fa-helmet-safety" style="color:#fb923c;"></i><span>Works</span></button>
         <button id="btn-actambulance" class="btn-toggle" onclick="toggleMapLayer('actambulance')" title="ACT Ambulance responses"><i class="fa-solid fa-truck-medical" style="color:#ec4899;"></i><span>ACT Ambo</span></button>
       </div>
       <!-- Mobile settings backdrop -->
@@ -3197,7 +3196,6 @@
             floods: { layer: floodsLayer, btn: 'btn-floods', loader: loadFloodsData },
             cameras: { layer: camerasLayer, btn: 'btn-cameras', loader: loadCamerasData },
             actambulance: { layer: actAmbulanceLayer, btn: 'btn-actambulance', loader: loadActAmbulanceData },
-            works: { layer: worksLayer, btn: 'btn-works', loader: () => loadLiveTrafficFeed('works') }
           };
           
           // Special handling for outages — opens the panel
@@ -3408,7 +3406,8 @@
       // Same reason as hazards_merged: the roadwork layer serves state
       // roadwork PLUS council roadwork, and the prefetch/prewarm both
       // fill traffic_roadwork with the raw state feed alone.
-      roadwork_merged: { data: null, timestamp: 0 }
+      roadwork_merged: { data: null, timestamp: 0 },
+      floods_merged: { data: null, timestamp: 0 }
     };
     const LAYER_CACHE_TTL = 60000; // 1 minute - shorter since backend pre-warms data
     
@@ -3580,11 +3579,6 @@
     // cluster once enabled. Alpine, fire and major events have no layer of
     // their own — loadHazardsData merges them into the Hazards feed so they
     // pick up its filters and culling.
-    // Plain layer groups, not marker clusters: clustering collapsed these
-    // into count bubbles that hid where the works actually were. Volume is
-    // handled the way the rest of the map handles it — viewport culling
-    // (see _ltRebuildVisible below), so only pins in view are mounted.
-    const worksLayer = L.layerGroup();
     const weatherLayer = L.layerGroup();
     const beachwatchLayer = L.layerGroup();
     // ---------- AIS (vessel positions) ----------
@@ -4420,8 +4414,7 @@
         ais: aisLayer,
         adsb: adsbLayer,
         transport: transportLayer,
-        actambulance: actAmbulanceLayer,
-        works: worksLayer
+        actambulance: actAmbulanceLayer
       };
       const btnMap = {
         user: 'btn-user',
@@ -4437,8 +4430,7 @@
         ais: 'btn-ais',
         adsb: 'btn-adsb',
         transport: 'btn-transport',
-        actambulance: 'btn-actambulance',
-        works: 'btn-works'
+        actambulance: 'btn-actambulance'
       };
 
       const layer = layerMap[target];
@@ -4485,7 +4477,6 @@
         if (target === 'firms' && firmsLayer.getLayers().length === 0) loadFirmsHotspots();
         if (target === 'nswpsn' && nswpsnLayer.getLayers().length === 0) loadNswpsnData();
         if (target === 'actambulance' && actAmbulanceLayer.getLayers().length === 0) loadActAmbulanceData();
-        if (target === 'works' && worksLayer.getLayers().length === 0) loadLiveTrafficFeed('works');
         if (target === 'ais' && _aisVessels.length === 0) loadAisData();
         if (target === 'adsb') {
           if (_adsbAircraft.length === 0) loadAdsbData();
@@ -4560,7 +4551,7 @@
       // Council / Works / ACT Ambulance define FILTER_REGISTRY entries but
       // nothing ever registered a button for them, so their panels could
       // never be opened — the whole filter UI for those layers was dead.
-      for (const [key, lyr] of [['works', worksLayer], ['actambulance', actAmbulanceLayer]]) {
+      for (const [key, lyr] of [['actambulance', actAmbulanceLayer]]) {
         if (target !== key) continue;
         if (map.hasLayer(lyr)) addFilterButton(key);
         else removeFilterButton(key);
@@ -8792,12 +8783,13 @@ function initPagerHoursFromStorage() {
           const j = (path) => apiFetch(`${PROXY_BASE}${path}`)
             .then((r) => r.json())
             .catch(() => ({ features: [] }));
-          const [inc, alp, fir, maj, lgaHz] = await Promise.all([
+          const [inc, alp, fir, maj, lgaHz, wrkHz] = await Promise.all([
             j('/api/traffic/incidents'),
             j('/api/traffic/alpine'),
             j('/api/traffic/fire'),
             j('/api/traffic/majorevent'),
             j('/api/traffic/lga'),
+            j('/api/traffic/works'),
           ]);
           trafficData = {
             type: 'FeatureCollection',
@@ -8809,6 +8801,8 @@ function initPagerHoursFromStorage() {
               // The council records that aren't roadwork: hazards, adverse
               // weather, flooding, changed traffic conditions.
               ...(lgaHz.features || []).filter((f) => !_isCouncilRoadwork(f.properties)),
+              // The works aggregate's hazard-ish share.
+              ...(wrkHz.features || []).filter((f) => _worksTarget(f.properties) === 'hazard'),
             ],
           };
           layerCache.hazards_merged = { data: trafficData, timestamp: now };
@@ -9162,7 +9156,12 @@ function initPagerHoursFromStorage() {
                 offset: [0, -10],
                 opacity: 0.95
               });
-              _hazardMarkers.push({ marker, type: category, source: 'livetraffic', subtypeLabel: null, mainCategory: props.mainCategory || '', latlng: L.latLng(lat, lon) });
+              _hazardMarkers.push({ marker, type: category, source: 'livetraffic', subtypeLabel: null,
+                // Canonical form: the merged feeds disagree on casing and
+                // word-splitting ('BREAKDOWN' vs 'Breakdown', 'SPECIAL EVENT'
+                // vs 'specialEvent'), which split one category across two
+                // pills. Split camelCase first, then fold case.
+                mainCategory: _canonCat(props.mainCategory), latlng: L.latLng(lat, lon) });
               totalCount++;
             }
           });
@@ -9419,15 +9418,18 @@ function initPagerHoursFromStorage() {
           const jr = (path) => apiFetch(`${PROXY_BASE}${path}`)
             .then((r) => r.json())
             .catch(() => ({ features: [] }));
-          const [rw, lgaRw] = await Promise.all([
+          const [rw, lgaRw, wrkRw] = await Promise.all([
             jr('/api/traffic/roadwork'),
             jr('/api/traffic/lga'),
+            jr('/api/traffic/works'),
           ]);
           trafficData = {
             type: 'FeatureCollection',
             features: [
               ...(rw.features || []),
               ...(lgaRw.features || []).filter((f) => _isCouncilRoadwork(f.properties)),
+              // Works: roadwork, construction, utilities, light rail.
+              ...(wrkRw.features || []).filter((f) => _worksTarget(f.properties) === 'roadwork'),
             ],
           };
           layerCache.roadwork_merged = { data: trafficData, timestamp: now };
@@ -9727,135 +9729,36 @@ function initPagerHoursFromStorage() {
     // toolbar button and the filter pill can't drift apart — and match
     // what logs.html and live.html show for the same feed.
     // ---------------------------------------------------------------
-    const _ltLayers = { works: () => worksLayer };
-    // EXCLUDED categories, not selected ones. An include-set read as
-    // "all on when empty" made the first click on a seemingly-active pill
-    // hide every other category, which is the opposite of what the pill
-    // showed. Matches the hazards panel's _hazardExcludedCategories.
-    const _ltExcludedCats = { works: new Set() };
-    const _ltExcludedRegions = { works: new Set() };
-    // Flat marker lists, mirroring _hazardMarkers, so the filters and the
-    // viewport culler can mount/unmount without re-fetching.
-    const _ltMarkers = { works: [] };
-
     // Council records aren't a category of their own — about a third are
     // scheduled or emergency roadwork and belong with the roadwork layer,
     // and the rest are hazards. Routing by category keeps the planned vs
-    // emergency distinction the roadwork panel already draws, instead of
-    // burying it under one "Council" toggle.
+    // emergency distinction the roadwork panel already draws.
+    /** One canonical key per category across feeds that disagree on
+     *  casing and camelCase. 'specialEvent' and 'SPECIAL EVENT' both
+     *  become 'SPECIAL EVENT'. */
+    function _canonCat(v) {
+      return String(v || '')
+        .replace(/([a-z])([A-Z])/g, '$1 $2')
+        .toUpperCase()
+        .trim();
+    }
+
     function _isCouncilRoadwork(props) {
       const c = String((props && (props.mainCategory || props.subcategory)) || '').toUpperCase();
       return c.includes('ROADWORK');
     }
 
-    // The works aggregate is national — roughly seven in ten records are
-    // SA/QLD/VIC — so it gets a jurisdiction filter alongside category.
-    function _ltRegionOf(lat, lon) {
-      if (lat > -35.95 && lat < -35.05 && lon > 148.7 && lon < 149.5) return 'ACT';
-      if (lat >= -37.7 && lat <= -28.15 && lon >= 140.9 && lon <= 153.7) return 'NSW';
-      if (lat > -28.15) return 'QLD / NT';
-      if (lat < -37.7) return 'VIC / TAS';
-      if (lon < 140.9) return 'SA / WA';
-      return 'Other';
-    }
-
-    async function loadLiveTrafficFeed(feedId) {
-      const meta = window.LiveTrafficVocab && LiveTrafficVocab.get(feedId);
-      const layer = _ltLayers[feedId] && _ltLayers[feedId]();
-      if (!meta || !layer) return;
-      layer.clearLayers();
-      try {
-        let data;
-        const slot = layerCache[meta.archiveSource];
-        if (slot && slot.data && (Date.now() - slot.timestamp) < LAYER_CACHE_TTL) {
-          data = slot.data;
-        } else {
-          const res = await apiFetch(`${PROXY_BASE}${meta.endpoint}`);
-          data = await res.json();
-          if (slot) layerCache[meta.archiveSource] = { data, timestamp: Date.now() };
-        }
-        if (!data || !Array.isArray(data.features)) return;
-
-        // Build every marker once into the flat list; which ones are
-        // actually mounted is decided by _ltRebuildVisible (filters +
-        // viewport), so panning never refetches and filtering never
-        // rebuilds the icons.
-        _ltMarkers[feedId] = [];
-        for (const feature of data.features) {
-          const coords = feature.geometry && feature.geometry.coordinates;
-          if (!coords) continue;
-          const [lon, lat] = coords;
-          if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
-          const props = feature.properties || {};
-          const cat = props.mainCategory || props.type || 'Other';
-
-          const icon = L.divIcon({
-            className: 'custom-pin',
-            html: `<div style="background:linear-gradient(135deg, ${meta.color}, ${meta.color}bb); width:20px; height:20px; border-radius:50%; border:2px solid #fff; box-shadow:0 0 10px ${meta.color}; display:flex; align-items:center; justify-content:center; font-size:10px; color:#0f172a;"><i class="fa-solid ${meta.icon}"></i></div>`,
-            iconSize: [24, 24],
-            iconAnchor: [12, 12]
-          });
-          const marker = L.marker([lat, lon], { icon });
-          marker.bindTooltip(buildLiveTrafficTooltip(props, meta), {
-            direction: 'top', offset: [0, -10], opacity: 0.95
-          });
-          _ltMarkers[feedId].push({
-            marker, cat, region: _ltRegionOf(lat, lon), latlng: L.latLng(lat, lon), _shown: false
-          });
-        }
-        _ltRebuildVisible(feedId);
-        refreshActiveFilterPanel();
-      } catch (e) {
-        console.error(`Live Traffic ${feedId} error`, e);
+    // Which existing layer a works-aggregate record belongs to. The feed
+    // is a mixed bag — roadwork, construction, utilities, light rail,
+    // hazards, flooding, events — so it is split by category rather than
+    // being given a layer of its own.
+    function _worksTarget(props) {
+      const c = String((props && (props.mainCategory || props.type)) || '').toLowerCase();
+      if (c.includes('flood')) return 'flood';
+      if (/roadwork|construction|utilit|lightrail|light rail|telecommunication|hvcs|charitable/.test(c)) {
+        return 'roadwork';
       }
-    }
-
-    /** Mount/unmount the feed's markers for the current filters and
-     *  viewport. Delta-based like _rebuildHazardSubLayers, so a pan only
-     *  touches the markers that actually crossed the boundary. */
-    function _ltRebuildVisible(feedId) {
-      const layer = _ltLayers[feedId] && _ltLayers[feedId]();
-      if (!layer) return;
-      const exCats = _ltExcludedCats[feedId] || new Set();
-      const exRegions = _ltExcludedRegions[feedId] || new Set();
-      const bounds = _viewportCullBounds();
-      for (const m of _ltMarkers[feedId] || []) {
-        const want = !exCats.has(m.cat)
-          && !exRegions.has(m.region)
-          && _cullEntryInView(m, bounds);
-        if (want && !m._shown) { layer.addLayer(m.marker); m._shown = true; }
-        else if (!want && m._shown) { layer.removeLayer(m.marker); m._shown = false; }
-      }
-    }
-    registerViewportCuller(() => { _ltRebuildVisible('works'); });
-
-    function buildLiveTrafficTooltip(props, meta) {
-      let h = '<div style="min-width:220px; max-width:320px;">';
-      h += _ttHeader('fa-solid ' + meta.icon, props.title || meta.label, meta.color,
-                     meta.color + '33', meta.color, meta.short);
-      const cat = props.mainCategory || props.type || '';
-      const sub = props.subCategory || '';
-      if (cat || sub) {
-        h += _ttSection('Type', meta.color, '148,163,184',
-          `<div style="color:#e2e8f0; font-size:12px;">${escapeHtml(cat)}${sub ? ' · ' + escapeHtml(sub) : ''}</div>`);
-      }
-      if (props.roads || props.region) {
-        let body = '';
-        if (props.roads) body += `<div style="color:#e2e8f0; font-size:12px;">${escapeHtml(props.roads)}</div>`;
-        if (props.region) body += `<div style="color:#94a3b8; font-size:11px;">${escapeHtml(props.region)}</div>`;
-        h += _ttSection('Location', '#94a3b8', '148,163,184', body);
-      }
-      if (props.otherAdvice) {
-        h += _ttSection('Advice', '#94a3b8', '148,163,184',
-          `<div style="color:#cbd5e1; font-size:11px;">${escapeHtml(String(props.otherAdvice).slice(0, 220))}</div>`);
-      }
-      // Council attribution only exists on the LGA feed — showing who
-      // submitted the record is the point of that stream.
-      if (props.orgName) {
-        h += _ttSection('Submitted by', meta.color, '148,163,184',
-          `<div style="color:#e2e8f0; font-size:11px;">${escapeHtml(props.orgName)}</div>`);
-      }
-      return h + '</div>';
+      return 'hazard';
     }
 
     async function loadActAmbulanceData() {
@@ -9935,13 +9838,28 @@ function initPagerHoursFromStorage() {
       try {
         // Use cached data if available, otherwise fetch
         let data;
-        const cached = layerCache.traffic_flood;
+        const cached = layerCache.floods_merged;
         if (cached.data && (Date.now() - cached.timestamp) < LAYER_CACHE_TTL) {
           data = cached.data;
         } else {
-          const res = await apiFetch(`${PROXY_BASE}/api/traffic/flood`);
-          data = await res.json();
-          layerCache.traffic_flood = { data, timestamp: Date.now() };
+          // The works aggregate carries its own flooding records (long-term
+          // flooding, heavy rain), so they join this layer rather than
+          // sitting under a separate Works toggle.
+          const jf = (path) => apiFetch(`${PROXY_BASE}${path}`)
+            .then((r) => r.json())
+            .catch(() => ({ features: [] }));
+          const [fl, wrkFl] = await Promise.all([
+            jf('/api/traffic/flood'),
+            jf('/api/traffic/works'),
+          ]);
+          data = {
+            type: 'FeatureCollection',
+            features: [
+              ...(fl.features || []),
+              ...(wrkFl.features || []).filter((f) => _worksTarget(f.properties) === 'flood'),
+            ],
+          };
+          layerCache.floods_merged = { data, timestamp: Date.now() };
         }
         if (data && data.features) {
           data.features.forEach(feature => {
@@ -11169,94 +11087,6 @@ function initPagerHoursFromStorage() {
     // so the family reads consistently regardless of which feed you
     // opened. Counts come from the cached payload, not the layer, so the
     // numbers still show while a cluster group has collapsed its markers.
-    function _ltCategoryCounts(feedId) {
-      const meta = window.LiveTrafficVocab && LiveTrafficVocab.get(feedId);
-      const slot = meta && layerCache[meta.archiveSource];
-      const feats = (slot && slot.data && slot.data.features) || [];
-      const counts = {};
-      for (const f of feats) {
-        const c = (f.properties || {}).mainCategory || (f.properties || {}).type || 'Other';
-        counts[c] = (counts[c] || 0) + 1;
-      }
-      return counts;
-    }
-
-    function _ltRegionCounts(feedId) {
-      const meta = window.LiveTrafficVocab && LiveTrafficVocab.get(feedId);
-      const slot = meta && layerCache[meta.archiveSource];
-      const feats = (slot && slot.data && slot.data.features) || [];
-      const counts = {};
-      for (const f of feats) {
-        const c = (f.geometry || {}).coordinates;
-        if (!c) continue;
-        const r = _ltRegionOf(c[1], c[0]);
-        counts[r] = (counts[r] || 0) + 1;
-      }
-      return counts;
-    }
-
-    window.toggleLiveTrafficCat = function (feedId, cat) {
-      const ex = _ltExcludedCats[feedId] || (_ltExcludedCats[feedId] = new Set());
-      if (ex.has(cat)) ex.delete(cat); else ex.add(cat);
-      _ltRebuildVisible(feedId);
-      refreshActiveFilterPanel();
-    };
-
-    window.toggleLiveTrafficRegion = function (feedId, region) {
-      const ex = _ltExcludedRegions[feedId] || (_ltExcludedRegions[feedId] = new Set());
-      if (ex.has(region)) ex.delete(region); else ex.add(region);
-      _ltRebuildVisible(feedId);
-      refreshActiveFilterPanel();
-    };
-
-    function _ltPanel(feedId) {
-      const meta = window.LiveTrafficVocab && LiveTrafficVocab.get(feedId);
-      if (!meta) return '<h4>Live Traffic</h4>';
-      const counts = _ltCategoryCounts(feedId);
-      const cats = Object.keys(counts).sort();
-      if (!cats.length) {
-        return LiveTrafficVocab.panelHeader(feedId) +
-          '<div style="font-size:11px;color:#94a3b8;font-style:italic;">Loading ' +
-          escapeHtml(meta.label.toLowerCase()) + ' data…</div>';
-      }
-      const exCats = _ltExcludedCats[feedId] || new Set();
-      const pills = cats.map((c) => {
-        const safe = escapeHtml(String(c).replace(/'/g, "\\'"));
-        return _ffPillColored(!exCats.has(c), meta.color, '', `${escapeHtml(_titleCaseCat(c))} (${counts[c].toLocaleString()})`,
-          `toggleLiveTrafficCat('${feedId}', '${safe}')`);
-      }).join('');
-      // The works aggregate spans the whole country, so it gets a
-      // jurisdiction row. NSW-only feeds render a single region and skip it.
-      let regionBlock = '';
-      const rCounts = _ltRegionCounts(feedId);
-      const regions = Object.keys(rCounts).sort();
-      if (regions.length > 1) {
-        const exRegions = _ltExcludedRegions[feedId] || new Set();
-        const rPills = regions.map((r) => {
-          const rsafe = escapeHtml(String(r).replace(/'/g, "\'"));
-          return _ffPillColored(!exRegions.has(r), meta.color, '', `${escapeHtml(r)} (${rCounts[r].toLocaleString()})`,
-            `toggleLiveTrafficRegion('${feedId}', '${rsafe}')`);
-        }).join('');
-        regionBlock = `
-          <div class="ff-section-label">Jurisdiction</div>
-          <div class="floating-filter-pills">${rPills}</div>
-        `;
-      }
-
-      return `
-        ${LiveTrafficVocab.panelHeader(feedId)}
-        ${regionBlock}
-        <div class="ff-section-label">Category</div>
-        <div class="floating-filter-pills">${pills}</div>
-        <div style="font-size:10px;color:#64748b;margin-top:8px;line-height:1.4;">${escapeHtml(meta.blurb)}</div>
-      `;
-    }
-
-    FILTER_REGISTRY.works = {
-      icon: 'fa-helmet-safety', label: 'Works', color: '#fb923c',
-      render() { return _ltPanel('works'); },
-    };
-
     FILTER_REGISTRY.actambulance = {
       icon: 'fa-truck-medical',
       label: 'ACT Ambo',
@@ -16462,7 +16292,6 @@ function initPagerHoursFromStorage() {
       // the layer self-heals if markers were ever lost.
       if (map.hasLayer(aisLayer)) redrawTasks.push(loadAisData());
       if (map.hasLayer(actAmbulanceLayer)) redrawTasks.push(loadActAmbulanceData());
-      if (map.hasLayer(worksLayer)) redrawTasks.push(loadLiveTrafficFeed('works'));
 
       // Also refresh RFS data (always loaded)
       redrawTasks.push(loadAllData());
@@ -16939,7 +16768,6 @@ function initPagerHoursFromStorage() {
           roadwork: typeof roadworkLayer !== 'undefined' ? roadworkLayer : null,
           ais: typeof aisLayer !== 'undefined' ? aisLayer : null,
           nswpsn: typeof nswpsnLayer !== 'undefined' ? nswpsnLayer : null,
-          works: typeof worksLayer !== 'undefined' ? worksLayer : null,
           actambulance: typeof actAmbulanceLayer !== 'undefined' ? actAmbulanceLayer : null,
         };
         for (const [key, layer] of Object.entries(_layerByKey)) {
