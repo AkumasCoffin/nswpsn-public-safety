@@ -172,6 +172,8 @@ export interface TypeFacets {
   subcategories: FacetEntry[];
   statuses: FacetEntry[];
   severities: FacetEntry[];
+  /** State/territory breakdown. Empty for sources with no placeable rows. */
+  states: FacetEntry[];
 }
 
 export interface ProviderFacets {
@@ -312,6 +314,7 @@ function dimSlotFor(
     subcategory: {},
     status: {},
     severity: {},
+    state: {},
   });
 }
 
@@ -401,6 +404,7 @@ interface ArchiveFacetRow {
   subcategory: string | null;
   status: string | null;
   severity: string | null;
+  state: string | null;
   cnt: string;
   oldest: number | null;
   newest: number | null;
@@ -484,6 +488,7 @@ async function archiveFacetsFromSidecar(windowHours: number): Promise<{
            COALESCE(subcategory, '') AS subcategory,
            COALESCE(status, '')      AS status,
            COALESCE(severity, '')    AS severity,
+           COALESCE(state, '')       AS state,
            COUNT(*)::text AS cnt,
            MIN(COALESCE(source_timestamp_unix,
                         EXTRACT(EPOCH FROM last_seen_at)::bigint))::bigint AS oldest,
@@ -493,7 +498,7 @@ async function archiveFacetsFromSidecar(windowHours: number): Promise<{
      WHERE COALESCE(source_timestamp_unix,
                     EXTRACT(EPOCH FROM last_seen_at)::bigint)
            >= EXTRACT(EPOCH FROM NOW() - ($1 || ' hours')::interval)::bigint
-     GROUP BY 1, 2, 3, 4, 5
+     GROUP BY 1, 2, 3, 4, 5, 6
   `;
 
   // Run the 5 per-table queries in parallel. Each takes its own pool
@@ -539,6 +544,9 @@ async function archiveFacetsFromSidecar(windowHours: number): Promise<{
             }
             if (row.status) {
               slot['status']![row.status] = (slot['status']![row.status] ?? 0) + cnt;
+            }
+            if (row.state) {
+              slot['state']![row.state] = (slot['state']![row.state] ?? 0) + cnt;
             }
             if (row.severity) {
               slot['severity']![row.severity] = (slot['severity']![row.severity] ?? 0) + cnt;
@@ -982,6 +990,7 @@ function buildResponse(
       const rawSubcategories = toSortedFacetList(dims['subcategory'] ?? {}, 100);
       const rawStatuses = toSortedFacetList(dims['status'] ?? {});
       const rawSeverities = toSortedFacetList(dims['severity'] ?? {});
+      const rawStates = toSortedFacetList(dims['state'] ?? {});
       typesOut.push({
         alert_type: alertType,
         name: typeName,
@@ -990,6 +999,10 @@ function buildResponse(
         subcategories: dropTrivialDim(rawSubcategories, cnt, alertType, typeName),
         statuses: dropTrivialDim(rawStatuses, cnt, alertType, typeName),
         severities: dropTrivialDim(rawSeverities, cnt, alertType, typeName),
+        // NOT passed through dropTrivialDim: a source that is 100% one
+        // state is the common case (most feeds are NSW-only), and that
+        // is exactly the fact the state filter needs to know.
+        states: rawStates,
       });
     }
     providersMap[provider] = typesOut;

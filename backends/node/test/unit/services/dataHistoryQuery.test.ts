@@ -25,6 +25,7 @@ function defaultParams(overrides: Partial<DataHistoryParams> = {}): DataHistoryP
     subcategory: null,
     status: null,
     severity: null,
+    state: null,
     since: null,
     until: null,
     sinceSource: null,
@@ -148,6 +149,32 @@ describe('buildSqlForTable — JSONB filters', () => {
       defaultParams({ severity: ['Major'] }),
     );
     expect(q.sql).toContain("(data->>'severity') = ");
+  });
+
+  it('reaches state through the sidecar, since the parent has no such column', () => {
+    // state is derived at write time and stored on _latest only, so a
+    // history query has to probe the sidecar by its primary key.
+    const q = buildSqlForTable(
+      'archive_traffic',
+      defaultParams({ state: ['NSW'] }),
+    );
+    expect(q.sql).toContain('EXISTS (SELECT 1 FROM archive_traffic_latest sl');
+    expect(q.sql).toContain('sl.source_id = archive_traffic.source_id');
+    expect(q.sql).toContain('sl.state IN');
+    expect(q.params).toContain('NSW');
+  });
+
+  it('accepts several states at once', () => {
+    const q = buildSqlForTable(
+      'archive_traffic',
+      defaultParams({ state: ['NSW', 'QLD', 'VIC'] }),
+    );
+    expect(q.params).toEqual(expect.arrayContaining(['NSW', 'QLD', 'VIC']));
+  });
+
+  it('adds no state predicate when none is asked for', () => {
+    const q = buildSqlForTable('archive_traffic', defaultParams({}));
+    expect(q.sql).not.toContain('sl.state');
   });
 
   it('search uses ILIKE on title and location_text JSONB fields', () => {

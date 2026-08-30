@@ -127,6 +127,8 @@ const DEDUP_HASH_IGNORE = new Set<string>([
  * which doesn't use indexes. Storing them top-level on the sidecar
  * lets WHERE clauses hit a real index.
  */
+import { stateForRow } from '../lib/stateMask.js';
+
 function extractStrField(data: unknown, key: string): string | null {
   if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
   const v = (data as Record<string, unknown>)[key];
@@ -598,6 +600,7 @@ export class ArchiveWriter {
         status: string | null;
         severity: string | null;
         is_active: boolean | null;
+        state: string | null;
       }
     >();
     for (const e of hashed) {
@@ -619,6 +622,9 @@ export class ArchiveWriter {
           status: extractStrField(e.row.data, 'status'),
           severity: extractStrField(e.row.data, 'severity'),
           is_active: extractBoolField(e.row.data, 'is_active'),
+          // Derived from the row's coordinate — nothing upstream says
+          // which jurisdiction a record belongs to. See lib/stateMask.ts.
+          state: stateForRow(e.row.data),
         });
       }
     }
@@ -644,10 +650,10 @@ export class ArchiveWriter {
           : 1,
     );
 
-    // 13 params per row: source, source_id, fetched_at (×2 — also
+    // 14 params per row: source, source_id, fetched_at (×2 — also
     // becomes last_seen_at on first insert), data_hash, source_ts_unix,
     // category, subcategory, title, location_text, status, severity,
-    // is_active.
+    // is_active, state.
     const placeholders: string[] = [];
     const params: unknown[] = [];
     let i = 0;
@@ -658,7 +664,7 @@ export class ArchiveWriter {
           `$${i + 5}::text, $${i + 6}::bigint, ` +
           `$${i + 7}::text, $${i + 8}::text, ` +
           `$${i + 9}::text, $${i + 10}::text, ` +
-          `$${i + 11}::text, $${i + 12}::text, $${i + 13}::boolean)`,
+          `$${i + 11}::text, $${i + 12}::text, $${i + 13}::boolean, $${i + 14}::text)`,
       );
       params.push(
         v.source,
@@ -674,8 +680,9 @@ export class ArchiveWriter {
         v.status,
         v.severity,
         v.is_active,
+        v.state,
       );
-      i += 13;
+      i += 14;
     }
     // last_seen_at always advances. data_hash + latest_fetched_at refresh
     // only when EXCLUDED.data_hash differs from the stored hash — i.e.
@@ -695,7 +702,7 @@ export class ArchiveWriter {
       INSERT INTO ${table}_latest
         (source, source_id, latest_fetched_at, last_seen_at, data_hash,
          source_timestamp_unix, category, subcategory,
-         title, location_text, status, severity, is_active)
+         title, location_text, status, severity, is_active, state)
       VALUES ${placeholders.join(',')}
       ON CONFLICT (source, source_id) DO UPDATE
         SET last_seen_at = GREATEST(${table}_latest.last_seen_at, EXCLUDED.last_seen_at),
@@ -752,6 +759,12 @@ export class ArchiveWriter {
                 OR EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
                 THEN EXCLUDED.severity
               ELSE ${table}_latest.severity
+            END,
+            state = CASE
+              WHEN ${table}_latest.state IS NULL
+                OR EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
+                THEN COALESCE(EXCLUDED.state, ${table}_latest.state)
+              ELSE ${table}_latest.state
             END,
             is_active = CASE
               WHEN ${table}_latest.is_active IS NULL

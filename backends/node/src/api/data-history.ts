@@ -19,6 +19,7 @@
  * legacy callers but capped at MAX_OFFSET=10_000.
  */
 import { Hono } from 'hono';
+import { AU_STATES } from '../lib/stateMask.js';
 import type { Pool, QueryResult, QueryResultRow } from 'pg';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
@@ -126,6 +127,13 @@ function parseQuery(url: URL): ParsedQuery | { error: string; status: number } {
   const subcategory = commaList(q.get('subcategory'));
   const status = commaList(q.get('status'));
   const severity = commaList(q.get('severity'));
+  // ?state=NSW,QLD — uppercased so the query string is forgiving, and
+  // validated against the known codes so a typo can't silently return
+  // nothing (an unknown code would match no rows at all).
+  const stateRaw = commaList(q.get('state'));
+  const state = stateRaw
+    ? stateRaw.map((v) => v.toUpperCase()).filter((v) => (AU_STATES as readonly string[]).includes(v))
+    : null;
 
   let since = intParam(q.get('since'));
   let until = intParam(q.get('until'));
@@ -173,6 +181,7 @@ function parseQuery(url: URL): ParsedQuery | { error: string; status: number } {
     subcategory,
     status,
     severity,
+    state: state && state.length > 0 ? state : null,
     since,
     until,
     sinceSource,
@@ -966,6 +975,7 @@ dataHistoryRouter.get('/api/data/history/incident/:source/:source_id', async (c)
       category: null,
       subcategory: null,
       status: null,
+      state: null,
       severity: null,
       since: null,
       until: null,

@@ -207,6 +207,8 @@ export interface DataHistoryParams {
   subcategory: string[] | null;
   status: string[] | null;
   severity: string[] | null;
+  /** State/territory codes (NSW, VIC, ...). Sidecar-only column. */
+  state: string[] | null;
 
   /** Time window — epoch seconds. */
   since: number | null;
@@ -300,6 +302,28 @@ function pushJsonbIn(acc: ConditionAcc, jsonField: string, values: string[]): vo
  * is wasted but each row is a tiny tuple, so the cost is negligible
  * (~100 rows of a 3-column table).
  */
+/**
+ * State lives only on the `_latest` sidecar — it is derived from the
+ * row's coordinate at write time, not published by any upstream — so a
+ * query over the parent history table reaches it through the sidecar's
+ * primary key. EXISTS keeps that a per-row index probe rather than a
+ * join that would multiply rows.
+ */
+function pushStateExists(
+  acc: ConditionAcc,
+  table: ArchiveTable,
+  values: string[],
+): void {
+  const placeholders = values.map((_, i) => `$${acc.params.length + i + 1}`);
+  acc.parts.push(
+    `EXISTS (SELECT 1 FROM ${table}_latest sl
+        WHERE sl.source = ${table}.source
+          AND sl.source_id = ${table}.source_id
+          AND sl.state IN (${placeholders.join(',')}))`,
+  );
+  for (const v of values) acc.params.push(v);
+}
+
 function buildUniqueQuery(table: ArchiveTable, p: DataHistoryParams): BuiltQuery {
   const sidecarAcc: ConditionAcc = { parts: [], params: [] };
   const parentAcc: ConditionAcc = { parts: [], params: [] };
@@ -397,6 +421,17 @@ function buildUniqueQuery(table: ArchiveTable, p: DataHistoryParams): BuiltQuery
         : `severity IN (${placeholders.join(',')})`,
     );
     for (const v of p.severity) sidecarAcc.params.push(v);
+  }
+  if (p.state && p.state.length > 0) {
+    const placeholders = p.state.map(
+      (_, i) => `$${sidecarAcc.params.length + i + 1}`,
+    );
+    sidecarAcc.parts.push(
+      p.state.length === 1
+        ? `state = ${placeholders[0]}`
+        : `state IN (${placeholders.join(',')})`,
+    );
+    for (const v of p.state) sidecarAcc.params.push(v);
   }
   if (p.activeOnly) {
     // Sidecar column. NULL means "writer hasn't backfilled yet" — treat
@@ -605,6 +640,9 @@ export function buildSqlForTable(table: ArchiveTable, p: DataHistoryParams): Bui
   if (p.severity && p.severity.length > 0) {
     pushJsonbIn(acc, 'severity', p.severity);
   }
+  if (p.state && p.state.length > 0) {
+    pushStateExists(acc, table, p.state);
+  }
 
   if (p.since !== null) {
     acc.parts.push(`fetched_at >= to_timestamp($${acc.params.length + 1})`);
@@ -791,6 +829,7 @@ export function buildCountSqlForTable(
   if (p.status && p.status.length > 0) pushJsonbIn(acc, 'status', p.status);
   if (p.severity && p.severity.length > 0)
     pushJsonbIn(acc, 'severity', p.severity);
+  if (p.state && p.state.length > 0) pushStateExists(acc, table, p.state);
 
   if (p.since !== null) {
     acc.parts.push(`fetched_at >= to_timestamp($${acc.params.length + 1})`);
@@ -955,6 +994,17 @@ export function buildCountSqlForTable(
           : `severity IN (${placeholders.join(',')})`,
       );
       for (const v of p.severity) sidecarAcc.params.push(v);
+    }
+    if (p.state && p.state.length > 0) {
+      const placeholders = p.state.map(
+        (_, i) => `$${sidecarAcc.params.length + i + 1}`,
+      );
+      sidecarAcc.parts.push(
+        p.state.length === 1
+          ? `state = ${placeholders[0]}`
+          : `state IN (${placeholders.join(',')})`,
+      );
+      for (const v of p.state) sidecarAcc.params.push(v);
     }
     if (p.activeOnly) {
       sidecarAcc.parts.push(`(is_active IS NULL OR is_active = true)`);

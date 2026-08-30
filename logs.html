@@ -227,6 +227,21 @@
         <input type="hidden" id="filter-subcategory" value="">
       </div>
       
+      <div class="filter-group" id="state-group">
+        <label class="filter-label">State</label>
+        <div class="custom-dropdown" id="state-dropdown">
+          <div class="custom-dropdown-selected" tabindex="0" onclick="toggleStateDropdown()" onkeydown="handleStateKeydown(event)">
+            <i class="fa-solid fa-map-location-dot provider-icon"></i>
+            <span id="state-selected-text">All States</span>
+            <i class="fa-solid fa-chevron-down dropdown-arrow"></i>
+          </div>
+          <div class="custom-dropdown-options" id="state-options">
+            <!-- Options populated by JS -->
+          </div>
+        </div>
+        <input type="hidden" id="filter-state" value="">
+      </div>
+
       <div class="filter-group" id="incident-status-group" style="display: none;">
         <label class="filter-label" id="incident-status-label">Status</label>
         <div class="custom-dropdown" id="status-dropdown">
@@ -608,9 +623,29 @@
             subcategories: t.subcategories || [],
             statuses:      t.statuses      || [],
             severities:    t.severities    || [],
+            states:        t.states        || [],
           })),
         }));
         
+        // "All Sources" state options: union the per-type facets, so the
+        // dropdown reflects everything currently loadable rather than one
+        // source's view.
+        const stateTotals = new Map();
+        for (const prov of providersData) {
+          for (const t of (prov.types || [])) {
+            for (const st of (t.states || [])) {
+              if (!st || !st.value) continue;
+              const code = String(st.value).toUpperCase();
+              stateTotals.set(code, (stateTotals.get(code) || 0) + (Number(st.count) || 0));
+            }
+          }
+        }
+        populateStateDropdown(
+          [...stateTotals.entries()]
+            .map(([value, count]) => ({ value, count }))
+            .sort((a, b) => b.count - a.count),
+        );
+
         // Populate custom provider dropdown
         const optionsContainer = document.getElementById('provider-options');
         optionsContainer.innerHTML = '';
@@ -805,6 +840,96 @@
       if (optionsContainer) optionsContainer.innerHTML = '';
     }
     
+    // State dropdown functions
+    function toggleStateDropdown() {
+      document.getElementById('state-dropdown').classList.toggle('open');
+    }
+
+    function closeStateDropdown() {
+      document.getElementById('state-dropdown').classList.remove('open');
+    }
+
+    function handleStateKeydown(e) {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        toggleStateDropdown();
+      } else if (e.key === 'Escape') {
+        closeStateDropdown();
+      }
+    }
+
+    function selectState(value, text) {
+      document.getElementById('filter-state').value = value;
+      const selectedEl = document.querySelector('#state-dropdown .custom-dropdown-selected');
+      selectedEl.innerHTML = `<i class="fa-solid fa-map-location-dot provider-icon" style="color: ${value ? '#f97316' : '#64748b'};"></i><span id="state-selected-text">${escapeHtml(text)}</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
+      document.querySelectorAll('#state-options .custom-dropdown-option').forEach(opt => {
+        opt.classList.toggle('selected', opt.dataset.value === value);
+      });
+      closeStateDropdown();
+      // Like the other dropdowns, selecting only sets the filter — the
+      // Search button (or a quick-filter chip) is what runs the query.
+      performSearch(1);
+    }
+
+    function resetStateDropdown() {
+      document.getElementById('filter-state').value = '';
+      const selectedEl = document.querySelector('#state-dropdown .custom-dropdown-selected');
+      if (selectedEl) {
+        selectedEl.innerHTML = `<i class="fa-solid fa-map-location-dot provider-icon"></i><span id="state-selected-text">All States</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
+      }
+    }
+
+    // Full names for the codes the API returns.
+    const STATE_NAMES = {
+      NSW: 'New South Wales', VIC: 'Victoria', QLD: 'Queensland',
+      SA: 'South Australia', WA: 'Western Australia', TAS: 'Tasmania',
+      NT: 'Northern Territory', ACT: 'Australian Capital Territory',
+    };
+
+    /**
+     * Build the State options from the `states` facet the filters
+     * endpoint returns per type. Populated from whatever the current
+     * provider/type selection covers, so a NSW-only source shows just
+     * NSW rather than seven dead options.
+     */
+    function populateStateDropdown(stateFacets) {
+      const container = document.getElementById('state-options');
+      const group = document.getElementById('state-group');
+      if (!container || !group) return;
+      container.innerHTML = '';
+      const entries = (stateFacets || []).filter(s => s && s.value);
+      // Nothing placeable (BOM warnings are areas, not points) — hide the
+      // control rather than offer a filter that would return nothing.
+      if (entries.length === 0) {
+        group.style.display = 'none';
+        if (document.getElementById('filter-state').value) resetStateDropdown();
+        return;
+      }
+      group.style.display = '';
+      const total = entries.reduce((n, e) => n + (Number(e.count) || 0), 0);
+      const allOpt = document.createElement('div');
+      allOpt.className = 'custom-dropdown-option';
+      allOpt.dataset.value = '';
+      allOpt.innerHTML = `<i class="fa-solid fa-map-location-dot" style="color:#64748b;"></i><span>All States</span><span class="option-count">${total.toLocaleString()}</span>`;
+      allOpt.onclick = () => selectState('', 'All States');
+      container.appendChild(allOpt);
+      for (const e of entries) {
+        const code = String(e.value).toUpperCase();
+        const label = STATE_NAMES[code] || code;
+        const opt = document.createElement('div');
+        opt.className = 'custom-dropdown-option';
+        opt.dataset.value = code;
+        opt.innerHTML = `<i class="fa-solid fa-location-dot" style="color:#f97316;"></i><span>${escapeHtml(label)}</span><span class="option-count">${(Number(e.count) || 0).toLocaleString()}</span>`;
+        opt.onclick = () => selectState(code, label);
+        container.appendChild(opt);
+      }
+      // Keep a selection that is still offered; drop one that isn't.
+      const current = document.getElementById('filter-state').value;
+      if (current && !entries.some(e => String(e.value).toUpperCase() === current)) {
+        resetStateDropdown();
+      }
+    }
+
     // Status dropdown functions
     function toggleStatusDropdown() {
       const dropdown = document.getElementById('status-dropdown');
@@ -1044,7 +1169,7 @@
         // single-source response (one provider, one type) into the flat shape
         // the rest of this function expects.
         const flattenFilterResponse = (d) => {
-          if (!d || typeof d !== 'object') return { categories: [], subcategories: [], statuses: [], severities: [] };
+          if (!d || typeof d !== 'object') return { categories: [], subcategories: [], statuses: [], severities: [], states: [] };
           // Backwards-compat: if the backend ever returns flat keys, prefer them.
           if (d.categories || d.subcategories || d.statuses || d.severities) {
             return {
@@ -1052,6 +1177,7 @@
               subcategories: d.subcategories || [],
               statuses:      d.statuses      || [],
               severities:    d.severities    || [],
+              states:        d.states        || [],
             };
           }
           const t = (d.providers && d.providers[0] && d.providers[0].types && d.providers[0].types[0]) || {};
@@ -1060,6 +1186,7 @@
             subcategories: t.subcategories || [],
             statuses:      t.statuses      || [],
             severities:    t.severities    || [],
+            states:        t.states        || [],
           };
         };
 
@@ -1122,6 +1249,9 @@
           data = flattenFilterResponse(await res.json());
         }
         
+        // State options for whatever this source actually covers.
+        populateStateDropdown(data.states || []);
+
         // Determine what to show in the Category dropdown
         let categoryOptions = [];
         const typeLabel = document.getElementById('type-filter-label');
@@ -1677,6 +1807,14 @@
       // Alert level filter (e.g., Advice, Watch and Act, Emergency Warning)
       if (alertLevel) {
         params.set('severity', alertLevel);
+      }
+
+      // State filter — a sidecar column derived from each record's
+      // coordinate, so it works across every source rather than only the
+      // ones whose upstream happens to name a jurisdiction.
+      const stateFilter = document.getElementById('filter-state')?.value || '';
+      if (stateFilter) {
+        params.set('state', stateFilter);
       }
       
       if (dateFrom) params.set('date_from', dateFrom);
