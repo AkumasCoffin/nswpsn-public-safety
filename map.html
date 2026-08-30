@@ -2551,7 +2551,7 @@
       <div class="filter-panel" id="cameras-panel">
         <h4><i class="fa-solid fa-video"></i> Cameras</h4>
         <label><input type="checkbox" id="chk-cam-traffic" checked onchange="toggleCameraFilter('traffic', this.checked)"><span class="filter-dot" style="background:#8b5cf6;"></span> Traffic Cameras (NSW)</label>
-        <label><input type="checkbox" id="chk-cam-qld" checked onchange="toggleCameraFilter('qld', this.checked)"><span class="filter-dot" style="background:#22c55e;"></span> Traffic Cameras (QLD)</label>
+        <label><input type="checkbox" id="chk-cam-qld" checked onchange="toggleCameraFilter('qld', this.checked)"><span class="filter-dot" style="background:#8b5cf6;"></span> Traffic Cameras (QLD)</label>
         <label><input type="checkbox" id="chk-cam-qldflood" checked onchange="toggleCameraFilter('qldflood', this.checked)"><span class="filter-dot" style="background:#3b82f6;"></span> Flood Cameras (QLD)</label>
         <label><input type="checkbox" id="chk-cam-aviation" checked onchange="toggleCameraFilter('aviation', this.checked)"><span class="filter-dot" style="background:#06b6d4;"></span> Airport Weather</label>
         <label><input type="checkbox" id="chk-cam-firetower" checked onchange="toggleCameraFilter('firetower', this.checked)"><span class="filter-dot" style="background:#f97316;"></span> Fire Towers</label>
@@ -15240,7 +15240,7 @@ function initPagerHoursFromStorage() {
     // shape throughout; only the colour, glyph and label change.
     const CAMERA_STYLES = {
       traffic:  { color: '#8b5cf6', dark: '#7c3aed', icon: 'fa-video', fallbackTitle: 'Traffic Camera', direct: true },
-      qld:      { color: '#22c55e', dark: '#16a34a', icon: 'fa-video', fallbackTitle: 'QLD Traffic Camera', direct: true },
+      qld:      { color: '#8b5cf6', dark: '#7c3aed', icon: 'fa-video', fallbackTitle: 'QLD Traffic Camera', direct: true },
       qldflood: { color: '#3b82f6', dark: '#2563eb', icon: 'fa-droplet', fallbackTitle: 'QLD Flood Camera', direct: true },
     };
 
