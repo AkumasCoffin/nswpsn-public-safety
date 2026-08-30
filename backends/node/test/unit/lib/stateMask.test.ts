@@ -48,6 +48,33 @@ describe('stateForPoint — borders', () => {
   });
 });
 
+describe('stateForPoint — real border rows that a coarse mask got wrong', () => {
+  // Every coordinate here is a real NSW RFS record. The first build
+  // queried the boundary service at ~1.1 km generalisation, which bulged
+  // the ACT east over Queanbeyan and pushed the Murray border north over
+  // the twin towns — so NSW incidents were filed under ACT and VIC.
+  it.each([
+    ['Henderson Rd, Queanbeyan', 149.2217, -35.3424, 'NSW'],
+    ['Kings Hwy, Carwoola', 149.3246, -35.3418, 'NSW'],
+    ['Cobb Hwy, Moama (north bank of the Murray)', 144.7546, -36.1202, 'NSW'],
+    ['Moulamein Rd, Barham (north bank)', 144.1313, -35.6210, 'NSW'],
+    ['Wirrah St, Mungindi', 148.9912, -28.9738, 'NSW'],
+  ] as Array<[string, number, number, string]>)('keeps %s in %s', (_n, lon, lat, want) => {
+    expect(stateForPoint(lon, lat)).toBe(want);
+  });
+
+  // These are genuinely not NSW, even though they arrive on a NSW feed:
+  // the RFS publishes ACT hazard-reduction burns, and the coordinates
+  // sit inside the ACT.
+  it.each([
+    ['Nadjung Mada Nature Reserve, Mitchell ACT', 149.1673, -35.2149],
+    ['Coombs Peninsula, ACT 2611', 149.0439, -35.3105],
+    ['Jerrabomberra West', 149.1577, -35.3755],
+  ] as Array<[string, number, number]>)('still reports %s as ACT', (_n, lon, lat) => {
+    expect(stateForPoint(lon, lat)).toBe('ACT');
+  });
+});
+
 describe('stateForPoint — islands', () => {
   it.each([
     ['Kangaroo Island', 137.200, -35.830, 'SA'],
