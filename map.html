@@ -4866,8 +4866,15 @@
     // (e.g. via formatWazeType) — this helper does no normalisation so
     // both Waze and LiveTraffic feeds slot in cleanly.
     function _ttTypeSection(typeLabel, subtypeLabel, accentColor, accentRgb) {
-      const t = typeLabel ? String(typeLabel).trim() : '';
-      const s = subtypeLabel ? String(subtypeLabel).trim() : '';
+      // The Python-serialised feeds ship the literal strings 'null'/'None'
+      // where a field is absent; those rendered as a Subtype tile reading
+      // "null". Treat them as empty for every caller.
+      const realVal = (v) => {
+        const x = v ? String(v).trim() : '';
+        return /^(null|undefined|none|n\/a)$/i.test(x) ? '' : x;
+      };
+      const t = realVal(typeLabel);
+      const s = realVal(subtypeLabel);
       if (!t && !s) return '';
       // Suppress duplicate subtype when it matches type exactly.
       const showSub = s && s.toLowerCase() !== t.toLowerCase();
