@@ -9517,56 +9517,47 @@ function initPagerHoursFromStorage() {
       // Waze ships ALL_CAPS_WITH_UNDERSCORES; Live Traffic ships free
       // text. The fallback bucket is "Roadwork" so anything we can't
       // classify still shows up under a sensible label.
+      // Fixed roadwork taxonomy. Order matters — first match wins, so the
+      // sharper patterns sit above the broader ones.
+      const _ROADWORK_TAXONOMY = [
+        ['Emergency Roadwork',     /emergency/],
+        ['Bridge Work',            /bridge/],
+        ['Light Rail',             /light ?rail|tram/],
+        ['Resurfacing & Sealing',  /resurfac|asphalt|bitumen|seal|paving|pavement/],
+        ['Utilities & Services',   /utilit|water main|sewer|gas |gas$|power|electric|telecom|storm ?water|drainage|pit work|pipeline|nbn|cable|stobie|services locating|hydrant/],
+        ['Maintenance',            /mainten|repair|patch|pothole|kerb|footpath|line ?marking|sign|light|mow|weed|tree|prun|vegetation|slash|sweep|clean/],
+        ['Traffic Management',     /traffic management|vms|traffic signal|detour|contra ?flow|lane closure|speed/],
+        ['Surveys & Investigation',/survey|investigat|bore|boring|testing|geotech|inspect/],
+        ['Construction & Upgrades',/construction|upgrade|widening|reconstruction|junction|intersection|building|develop|project|stage|works associated|installation|excavat|earthwork|demoli|crane|concrete/],
+        ['Events',                 /event|festival|parade|cruise|marathon|oval|ceremony/],
+        // Below the specific buckets: 'SCHEDULED ROADWORK' is the state
+        // and council feeds' umbrella mainCategory, so matching it earlier
+        // swallowed every record that also had a real type.
+        ['Scheduled Roadwork',     /scheduled/],
+      ];
+
       const _roadworkClassify = (props, isWaze) => {
         const norm = (s) => String(s || '').trim();
-        // Split camelCase first: the aggregate ships 'buildingConstruction'
-        // and 'lightRail', which otherwise render as 'Buildingconstruction'.
-        const titleCaseLocal = (s) => norm(s)
-          .replace(/([a-z])([A-Z])/g, '$1 $2')
-          .toLowerCase()
-          .replace(/(^|\s|-|\/)\w/g, c => c.toUpperCase());
         if (isWaze) {
           const sub = norm(props.wazeSubtype).replace(/^CONSTRUCTION_?/i, '').replace(/_/g, ' ').trim();
           if (sub.toUpperCase() === 'NONE' || !sub) return 'Construction';
-          return titleCaseLocal(sub);
+          return sub.toLowerCase().replace(/(^|\s)\w/g, c => c.toUpperCase());
         }
-        // Live Traffic: try subCategory (the backend doesn't expose
-        // subCategoryB), then mainCategory, then incidentKind, then
-        // displayType. Some incidents only have a headline like
-        // "Pavement maintenance" so fall through to that as a final
-        // resort before the generic "Roadwork" bucket.
-        // The feed ships the literal strings 'null'/'None' in subCategory,
-        // which used to bucket 237 of 500 records under a "Null" pill.
-        //
-        // The works aggregate also puts a full PROSE DESCRIPTION in
-        // subCategory ('Building construction works associated with the
-        // redevelopment of the former Phillip pool site.'), which turned
-        // the Type row into hundreds of one-item pills quoting individual
-        // job titles. A type is short and isn't a sentence, so anything
-        // long or sentence-punctuated is rejected and we fall through to
-        // the real category.
-        const real = (v) => {
-          const x = norm(v);
-          if (/^(null|undefined|none|n\/a)$/i.test(x)) return '';
-          if (x.length > 28 || /[.;:]/.test(x) || x.split(/\s+/).length > 4) return '';
-          return x;
-        };
-        // Try the title before the umbrella category: the works feeds put
-        // their real type there ('Asphalt Works', 'Shoulder Work', 'Junction
-        // Upgrade') and file everything under mainCategory 'Roadwork', which
-        // was collapsing 1,300 records into one meaningless pill. real()
-        // still rejects prose, so free-text titles fall through safely.
-        // Only works-aggregate records (identified by upstreamId) use the
-        // title: the state feed's titles are street names, which would
-        // turn the Type row into a list of roads.
-        const t = real(props.subCategory)
-          || (props.upstreamId ? real(props.title) : '')
-          || real(props.mainCategory)
-          || real(props.incidentKind)
-          || real(props.displayType)
-          || real(props.headline);
-        if (!t) return 'Roadwork';
-        return titleCaseLocal(t);
+        // The merged feeds describe the same work in wildly different
+        // vocabularies — the state feed uses ~15 curated types, the works
+        // aggregate free-texts everything from 'Asphalt Works' to '26
+        // Narellan Street, Canberra'. Left raw, that produced a Type row
+        // of 70+ pills, most counting 1. So every record is folded into a
+        // fixed taxonomy: whichever bucket's pattern matches first wins,
+        // and anything unrecognised lands in the generic bucket rather
+        // than minting a new pill for itself.
+        const hay = [props.subCategory, props.title, props.mainCategory,
+                     props.incidentKind, props.displayType, props.headline]
+          .map(norm).join(' | ').toLowerCase();
+        for (const [label, re] of _ROADWORK_TAXONOMY) {
+          if (re.test(hay)) return label;
+        }
+        return 'General Roadwork';
       };
       
       // Beach-style roadwork tooltip (Waze + LiveTraffic). Same layout
