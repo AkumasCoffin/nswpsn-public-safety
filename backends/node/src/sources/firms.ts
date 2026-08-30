@@ -14,24 +14,32 @@
  * (typically 3 h after acquisition). MODIS_NRT could be added but is 1 km
  * pixels, much chunkier on the map.
  *
- * Bbox covers the Australian mainland plus Tasmania. It was NSW-only
- * until the site went national; widening it multiplies detections by
- * roughly 15x in the northern dry season (the savanna burning across
- * NT/QLD dwarfs anything in the south-east), which is why this source is
- * archive-skipped and the map clusters by zoom.
+ * Coverage is the eight states and territories. It was NSW-only until
+ * the site went national; widening it multiplies detections by roughly
+ * 15x in the northern dry season (the savanna burning across NT/QLD
+ * dwarfs anything in the south-east), which is why this source is
+ * archive-skipped and the map culls to the viewport.
+ *
+ * Note the two-step geography: FIRMS only accepts a bounding box, and a
+ * box around Australia also contains southern PNG, Timor-Leste and the
+ * Indonesian and PNG islands north and east of it — all of which burn in
+ * the same season. The box is therefore just the query window, and every
+ * row is then tested against the real state boundaries (lib/australiaMask.ts).
  */
 import { fetchText } from './shared/http.js';
 import { registerSource } from '../services/sourceRegistry.js';
 import { liveStore } from '../store/live.js';
 import { config } from '../config.js';
 import { log } from '../lib/log.js';
+import { isInAustralia } from '../lib/australiaMask.js';
 
-// Continental Australia: west of Shark Bay to east of Byron, Cape York
-// down past Tasmania. Order: WEST,SOUTH,EAST,NORTH (matches FIRMS).
-// Deliberately excludes the external territories (Christmas/Cocos,
-// Norfolk, Macquarie) — nobody is watching those for fire here and each
-// degree of empty ocean is bbox we pay for.
-const AU_BBOX = '112.0,-44.0,154.0,-9.0';
+// Order: WEST,SOUTH,EAST,NORTH (matches FIRMS). This is only the coarse
+// upstream query window — a rectangle can't describe Australia, so every
+// row is then tested against the real state boundaries in
+// lib/australiaMask.ts. East edge reaches 159.5 to take in Lord Howe
+// Island, which is NSW; the Solomons that also fall in that strip are
+// dropped by the mask.
+const AU_BBOX = '112.0,-44.0,159.5,-9.0';
 
 // VIIRS sensor flies on three platforms (S-NPP, NOAA-20, NOAA-21), each
 // gives a separate ~12 h orbital pass overhead. Polling all three
@@ -210,6 +218,12 @@ export function parseFirmsCsv(
     const lat = Number(cells[iLat]);
     const lon = Number(cells[iLon]);
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+    // The bbox is a rectangle, so it also covers southern PNG,
+    // Timor-Leste, the Indonesian islands off the Top End and the PNG
+    // archipelagos east of Cape York — all of which burn in the same
+    // season. Keep only detections that land in one of the eight states
+    // and territories (plus a ~9 km coastal buffer).
+    if (!isInAustralia(lon, lat)) continue;
 
     const acqDate = (cells[iAcqDate] ?? '').trim();
     // Capture the raw value BEFORE padding — an empty acq_time padStart's
