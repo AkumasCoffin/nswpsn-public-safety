@@ -227,7 +227,7 @@ describe('traffic.fetchTrafficWorks', () => {
     ]);
     const snap = await fetchTrafficWorks();
     expect(snap.count).toBe(1);
-    expect(snap.features[0]?.properties.id).toBe('1');
+    expect(snap.features[0]?.properties.upstreamId).toBe('1');
     expect(snap.features[0]?.properties.mainCategory).toBe('lightRail');
   });
 
@@ -248,7 +248,7 @@ describe('traffic.fetchTrafficWorks', () => {
       { id: 'b', eventCategory: 'Roadwork', geometry: { type: 'Point', coordinates: [152, -34] }, properties: { title: 'y', ended: 'False' } },
     ]);
     const snap = await fetchTrafficWorks();
-    expect(snap.features.map((f) => f.properties.id)).toEqual(['b']);
+    expect(snap.features.map((f) => f.properties.upstreamId)).toEqual(['b']);
   });
 });
 
@@ -267,5 +267,43 @@ describe('traffic advice text', () => {
     expect(f?.properties.otherAdvice).toBe(
       'A section of Miners Road is closed. Use Bungendore Rd & detour.',
     );
+  });
+});
+
+describe('traffic works ids are stable across upstream rebuilds', () => {
+  beforeEach(() => fetchJsonMock.mockReset());
+
+  const work = (upstreamId) => ({
+    id: upstreamId,
+    eventCategory: 'Roadwork',
+    geometry: { type: 'Point', coordinates: [151.12345, -33.54321] },
+    properties: { title: 'Shoulder Work' },
+  });
+
+  it('derives the same id when upstream regenerates its surrogate key', async () => {
+    const { fetchTrafficWorks } = await import('../../../src/sources/traffic.js');
+    // Measured upstream behaviour: an unchanged work reappears under a new
+    // id on each rebuild, so archiving on it would fabricate a new incident
+    // every poll.
+    fetchJsonMock.mockResolvedValueOnce([work('3322871441')]);
+    const first = await fetchTrafficWorks();
+    fetchJsonMock.mockResolvedValueOnce([work('3322908764')]);
+    const second = await fetchTrafficWorks();
+
+    expect(first.features[0]?.properties.id).toBe(second.features[0]?.properties.id);
+    expect(first.features[0]?.properties.id).toMatch(/^ltw:[0-9a-f]{20}$/);
+    // The volatile key is kept, just not used as identity.
+    expect(first.features[0]?.properties.upstreamId).toBe('3322871441');
+    expect(second.features[0]?.properties.upstreamId).toBe('3322908764');
+  });
+
+  it('gives genuinely different works different ids', async () => {
+    const { fetchTrafficWorks } = await import('../../../src/sources/traffic.js');
+    fetchJsonMock.mockResolvedValueOnce([
+      work('1'),
+      { ...work('2'), geometry: { type: 'Point', coordinates: [152.0, -33.0] } },
+    ]);
+    const snap = await fetchTrafficWorks();
+    expect(new Set(snap.features.map((f) => f.properties.id)).size).toBe(2);
   });
 });

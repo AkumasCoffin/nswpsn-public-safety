@@ -10,6 +10,7 @@
  * Output shape mirrors the Python routes at external_api_proxy.py:7239
  * onwards — each is a GeoJSON FeatureCollection.
  */
+import { createHash } from 'node:crypto';
 import { fetchJson } from './shared/http.js';
 import { registerSource } from '../services/sourceRegistry.js';
 import { liveStore } from '../store/live.js';
@@ -26,6 +27,28 @@ const WEB_FEED_URL = CAMERAS_URL;
  *  facilities rather than road events. Rest areas are static amenities
  *  (850 of them) and belong on their own layer, not in a works feed. */
 const WEB_FEED_SKIP = new Set(['livecams', 'restareas']);
+
+/**
+ * Stable id for a works record.
+ *
+ * This feed's `id` is a surrogate key that upstream REGENERATES on each
+ * rebuild — measured across two snapshots ~90 min apart, 689 of 1,277
+ * unchanged works came back under a new id (3322871441 -> 3322908764).
+ * Archiving on it would treat every rebuild as ~1,700 brand-new
+ * incidents (~288k junk rows/day) and make the sidecar useless.
+ *
+ * Coordinates + title + category are stable across those rebuilds, so
+ * hash those instead. Same approach bom.ts uses for its id-less feed.
+ */
+function stableWorksId(lon: number, lat: number, title: string, cat: string): string {
+  return (
+    'ltw:' +
+    createHash('sha1')
+      .update(`${lon.toFixed(5)}|${lat.toFixed(5)}|${title}|${cat}`)
+      .digest('hex')
+      .slice(0, 20)
+  );
+}
 
 export interface TrafficFeature {
   type: 'Feature';
@@ -70,6 +93,9 @@ export interface TrafficFeature {
     duration: string;
     adviceC: string;
     webLinks: unknown[];
+    /** Upstream's own key. Volatile on the works feed — see
+     *  stableWorksId() — so never use it as an identity. */
+    upstreamId?: string;
     /** Council attribution — only the LGA feed carries these. */
     orgName: string;
     orgContact: string;
@@ -479,7 +505,9 @@ export async function fetchTrafficWorks(): Promise<TrafficSnapshot> {
       type: 'Feature',
       geometry: { type: 'Point', coordinates: [lon, lat] },
       properties: {
-        id: asString(it['id']),
+        id: stableWorksId(lon, lat, title || displayName, cat),
+        /** Upstream's own key — kept for reference, but it is volatile. */
+        upstreamId: asString(it['id']),
         type: cat || kind || 'Works',
         incidentType,
         mainCategory: cat,
