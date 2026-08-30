@@ -4996,7 +4996,10 @@
           return candidates.find(Boolean) || '';
         };
         
-        const processFeatures = (data, defaultType, defaultPillClass) => {
+        // `feedId` tags which Live Traffic feed an item came from, so the
+        // summary chips can count feeds whose type strings match none of
+        // the crash/hazard/flood buckets.
+        const processFeatures = (data, defaultType, defaultPillClass, feedId) => {
           (data.features || []).forEach(f => {
             const p = f.properties || {};
             const geom = f.geometry || {};
@@ -5084,6 +5087,7 @@
             
             items.push({
               title: displayTitle,
+              feed: feedId || '',
               type: type,
               pillClass: pillClass,
               roads: (displayTitle === roadInfo) ? '' : roadInfo, // Don't show road twice if we used it as title
@@ -5102,13 +5106,13 @@
           });
         };
         
-        processFeatures(incidents, 'Incident', 'pill-red');
-        processFeatures(fires, 'Fire', 'pill-orange');
-        processFeatures(floods, 'Flood', 'pill-blue');
-        processFeatures(majorEvents, 'Major Event', 'pill-red');
-        processFeatures(alpine, 'Alpine', 'pill-blue');
-        processFeatures(council, 'Council', 'pill-green');
-        processFeatures(works, 'Works', 'pill-orange');
+        processFeatures(incidents, 'Incident', 'pill-red', 'incident');
+        processFeatures(fires, 'Fire', 'pill-orange', 'fire');
+        processFeatures(floods, 'Flood', 'pill-blue', 'flood');
+        processFeatures(majorEvents, 'Major Event', 'pill-red', 'majorevent');
+        processFeatures(alpine, 'Alpine', 'pill-blue', 'alpine');
+        processFeatures(council, 'Council', 'pill-green', 'lga');
+        processFeatures(works, 'Works', 'pill-orange', 'works');
         
         // Sort by: priority (major first), then unplanned before planned, then by time (newest first)
         items.sort((a, b) => {
@@ -5139,6 +5143,14 @@
         const floodCount = items.filter(i => i.type.toUpperCase().includes('FLOOD') || i.type.toUpperCase().includes('ADVERSE WEATHER')).length;
         const majorCount = items.filter(i => i.isMajor || i.type.toUpperCase().includes('MAJOR EVENT') || i.type.toUpperCase().includes('SPECIAL')).length;
         
+        // Council, Works and Alpine matched none of the buckets above, so
+        // ~2,500 items counted toward Total while appearing in no chip.
+        // These are tagged by the label passed to processFeatures.
+        const councilCount = items.filter(i => i.feed === 'lga').length;
+        const worksCount = items.filter(i => i.feed === 'works').length;
+        const alpineCount = items.filter(i => i.feed === 'alpine').length;
+        const ltColor = (id) => (window.LiveTrafficVocab ? LiveTrafficVocab.color(id) : '#94a3b8');
+
         const showCount = 5;
         const withGPS = items.filter(i => i.lat && i.lng).length;
         
@@ -5157,6 +5169,9 @@
             ${fireCount > 0 ? `<span style="color: #fb923c;"><strong><i class="fas fa-fire"></i> Fires:</strong> ${fireCount}</span>` : ''}
             ${floodCount > 0 ? `<span style="color: #93c5fd;"><strong><i class="fas fa-water"></i> Floods:</strong> ${floodCount}</span>` : ''}
             ${majorCount > 0 ? `<span style="color: #ef4444;"><strong><i class="fas fa-exclamation-circle"></i> Major:</strong> ${majorCount}</span>` : ''}
+            ${alpineCount > 0 ? `<span style="color: ${ltColor('alpine')};"><strong><i class="fas fa-snowflake"></i> Alpine:</strong> ${alpineCount}</span>` : ''}
+            ${councilCount > 0 ? `<span style="color: ${ltColor('lga')};"><strong><i class="fas fa-building-columns"></i> Council:</strong> ${councilCount}</span>` : ''}
+            ${worksCount > 0 ? `<span style="color: ${ltColor('works')};"><strong><i class="fas fa-helmet-safety"></i> Works:</strong> ${worksCount}</span>` : ''}
             ${withGPS > 0 ? `<span style="color: #60a5fa;"><i class="fas fa-map-marker-alt"></i> ${withGPS} mappable</span>` : ''}
           </div>
           <div class="collapsible-list ${items.length > showCount ? 'collapsed' : ''}" id="traffic-list">

@@ -369,6 +369,10 @@
     let currentPage = 1;
     let totalPages = 1;
     let totalResults = 0;
+    // Which archive column the Category dropdown's values were counted
+    // from ('subcategory' | 'category'). Set when the dropdown is built so
+    // the search sends a param that matches the facet.
+    let categoryFacetField = 'subcategory';
     let isLoading = false;
     let selectedIncident = null;
     // Cursor returned by the backend with the previous page's response.
@@ -1196,6 +1200,11 @@
           // Default: use subcategories if available, otherwise categories
           const hasSubcategories = data.subcategories && data.subcategories.length > 0;
           categoryOptions = hasSubcategories ? data.subcategories : (data.categories || []);
+          // Remember which facet these values came from. The query param
+          // has to match the column they were counted from, or the filter
+          // matches nothing — which is exactly what a hardcoded source
+          // list used to get wrong for the traffic feeds.
+          categoryFacetField = hasSubcategories ? 'subcategory' : 'category';
           
           // Set appropriate label based on source type
           if (typeLabel) {
@@ -1203,6 +1212,10 @@
               typeLabel.textContent = 'Cap Code';
             } else if (sourceToQuery && sourceToQuery.includes('rfs')) {
               typeLabel.textContent = 'Fire Type';
+            } else if (sourceToQuery && /traffic_(alpine|lga|works)/.test(sourceToQuery)) {
+              // Council/Works/Alpine list conditions and work types, not
+              // incident types.
+              typeLabel.textContent = 'Category';
             } else if (sourceToQuery && sourceToQuery.includes('traffic')) {
               typeLabel.textContent = 'Incident Type';
             } else {
@@ -1640,13 +1653,10 @@
       
       // Type filter - depends on source
       if (typeFilter) {
-        // Sources where type = category (including Endeavour where it's PLANNED/UNPLANNED)
-        const categoryBasedSources = ['rfs', 'traffic_incident', 'traffic_roadwork', 'traffic_flood', 'traffic_fire', 'traffic_majorevent', 'user_incident'];
-        if (isEndeavour || (source && categoryBasedSources.includes(source))) {
-          params.set('category', typeFilter);
-        } else {
-          params.set('subcategory', typeFilter);
-        }
+        // Endeavour's Type dropdown is its category facet (PLANNED /
+        // UNPLANNED); everything else uses whichever facet actually
+        // populated the dropdown, tracked when it was built.
+        params.set(isEndeavour ? 'category' : categoryFacetField, typeFilter);
       }
       
       // Incident status filter
@@ -1978,8 +1988,8 @@
           // The three feeds added later share a branch — colour comes from
           // the shared Live Traffic vocab so the badge matches the map pin.
           const lt = (window.LiveTrafficVocab && LiveTrafficVocab.get(item.source)) || { color: '#64748b', short: '' };
-          if (item.category) extraInfo += `<span class="lg-badge" style="--badge:${lt.color}">${escapeHtml(item.category)}</span>`;
-          if (item.subcategory) extraInfo += `<span class="lg-badge-o" style="--badge:${lt.color}">${escapeHtml(item.subcategory)}</span>`;
+          if (item.category) extraInfo += `<span class="lg-badge" style="--badge:${lt.color}">${escapeHtml(formatSubcategory(item.category))}</span>`;
+          if (item.subcategory) extraInfo += `<span class="lg-badge-o" style="--badge:${lt.color}">${escapeHtml(formatSubcategory(item.subcategory))}</span>`;
           let details = [];
           if (data.roads) details.push(`<span class="lg-tint lg-wrap" style="--c:${lt.color}"><i class="fas fa-road"></i> ${escapeHtml(data.roads)}</span>`);
           if (data.region) details.push(`<span class="lg-dim"><i class="fas fa-map"></i> ${escapeHtml(data.region)}</span>`);
@@ -2999,6 +3009,9 @@
     
     // === UTILITIES ===
     function formatSourceName(source) {
+      // Live Traffic feeds are named once in livetraffic-vocab.js.
+      const lt = window.LiveTrafficVocab && LiveTrafficVocab.get(source);
+      if (lt) return lt.label;
       const names = {
         'rfs': 'RFS Fires',
         'traffic_incident': 'Traffic Incidents',
@@ -3033,8 +3046,12 @@
     function formatSubcategory(subcategory) {
       if (!subcategory) return '';
       // Convert HAZARD_ON_ROAD_CONSTRUCTION → Hazard On Road Construction
+      // Also split the aggregate feed's camelCase keys
+      // (buildingConstruction -> Building Construction); without this
+      // logs rendered 'Buildingconstruction' while map.html was right.
       return subcategory
         .replace(/_/g, ' ')
+        .replace(/([a-z])([A-Z])/g, '$1 $2')
         .toLowerCase()
         .replace(/\b\w/g, c => c.toUpperCase());
     }
@@ -3069,6 +3086,10 @@
     }
 
     function getSourceColors(source) {
+      // Vocab wins for Live Traffic feeds — the local copies below had
+      // already drifted (roadwork was #d97706 here vs #eab308 there).
+      const ltc = window.LiveTrafficVocab && LiveTrafficVocab.get(source);
+      if (ltc) return { primary: ltc.color, secondary: ltc.color };
       const colors = {
         'rfs': { primary: '#ef4444', secondary: '#f87171' },
         'pager': { primary: '#22c55e', secondary: '#4ade80' },
@@ -3228,6 +3249,14 @@
           catLabel = 'Work Type';
           typeLabel = 'Status';
           typeValue = item.status || '';
+        } else if (source === 'traffic_alpine' || source === 'traffic_lga' || source === 'traffic_works') {
+          // Council/Works/Alpine carry a category + a work/condition type
+          // rather than a status, and the council feed's whole point is
+          // the submitting organisation.
+          catLabel = source === 'traffic_lga' ? 'Council Record' : 'Feed';
+          typeLabel = 'Category';
+          typeValue = formatSubcategory(item.subcategory || item.category || '');
+          catValue = formatSubcategory(item.category || '');
         } else if (source === 'bom_warning' || source === 'bom_land' || source === 'bom_marine') {
           catLabel = 'Warning Type';
           typeLabel = 'Severity';

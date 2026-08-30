@@ -3570,9 +3570,9 @@
     const actAmbulanceLayer = L.layerGroup();
     // Live Traffic feeds added alongside the original five. Council roads
     // and Works are large (≈500 and ≈2,000 pins), so they start off and
-    // cluster once enabled. Alpine has no toggle of its own — it is a
-    // hazard, so it rides the Hazards layer (see loadHazardsData).
-    const alpineLayer = L.layerGroup();
+    // cluster once enabled. Alpine, fire and major events have no layer of
+    // their own — loadHazardsData merges them into the Hazards feed so they
+    // pick up its filters and culling.
     const lgaLayer = L.markerClusterGroup({
       maxClusterRadius: 60, spiderfyOnMaxZoom: true, showCoverageOnHover: false,
       zoomToBoundsOnClick: true, disableClusteringAtZoom: 13
@@ -4469,7 +4469,6 @@
         if (target === 'rfs') { addFilterButton('rfs'); refreshMapAndList(); }
         // Load data when layer is first enabled
         if (target === 'hazards' && hazardsLayer.getLayers().length === 0) loadHazardsData();
-        if (target === 'hazards' && alpineLayer.getLayers().length === 0) loadLiveTrafficFeed('alpine');
         if (target === 'police' && policeLayer.getLayers().length === 0) loadPoliceData();
         // Roadwork: gate on the flat list — its markers mount directly on
         // the layer (no sub-groups), so a culled-empty viewport would
@@ -4556,6 +4555,14 @@
         const enabled = map.hasLayer(roadworkLayer);
         if (enabled) addFilterButton('roadwork');
         else removeFilterButton('roadwork');
+      }
+      // Council / Works / ACT Ambulance define FILTER_REGISTRY entries but
+      // nothing ever registered a button for them, so their panels could
+      // never be opened — the whole filter UI for those layers was dead.
+      for (const [key, lyr] of [['lga', lgaLayer], ['works', worksLayer], ['actambulance', actAmbulanceLayer]]) {
+        if (target !== key) continue;
+        if (map.hasLayer(lyr)) addFilterButton(key);
+        else removeFilterButton(key);
       }
       refreshMapAndList();
     }
@@ -8776,8 +8783,29 @@ function initPagerHoursFromStorage() {
         if (cached.data && (now - cached.timestamp) < LAYER_CACHE_TTL) {
           trafficData = cached.data;
         } else {
-          const res = await apiFetch(`${PROXY_BASE}/api/traffic/incidents`);
-          trafficData = await res.json();
+          // Alpine, fire and major events are incident-like feeds the map
+          // never requested at all — 20-odd major-event pins existed
+          // upstream and rendered nowhere. They join the Hazards layer so
+          // they inherit its category filter, counts and viewport culling
+          // instead of needing three more toggles.
+          const j = (path) => apiFetch(`${PROXY_BASE}${path}`)
+            .then((r) => r.json())
+            .catch(() => ({ features: [] }));
+          const [inc, alp, fir, maj] = await Promise.all([
+            j('/api/traffic/incidents'),
+            j('/api/traffic/alpine'),
+            j('/api/traffic/fire'),
+            j('/api/traffic/majorevent'),
+          ]);
+          trafficData = {
+            type: 'FeatureCollection',
+            features: [
+              ...(inc.features || []),
+              ...(alp.features || []),
+              ...(fir.features || []),
+              ...(maj.features || []),
+            ],
+          };
           layerCache.traffic_incidents = { data: trafficData, timestamp: now };
         }
         
@@ -9208,11 +9236,6 @@ function initPagerHoursFromStorage() {
           hazardsLayer.addLayer(hazardSubLayers[type]);
         }
       });
-
-      // Alpine conditions are a hazard, just a seasonal one, so they ride
-      // the Hazards toggle rather than carrying their own button. Re-added
-      // here because the clearLayers() above drops every child layer.
-      hazardsLayer.addLayer(alpineLayer);
       
       console.log(`Loaded ${totalCount} traffic hazards + ${jamCount} jams (Live Traffic + Waze)`);
     }
@@ -9663,8 +9686,24 @@ function initPagerHoursFromStorage() {
     // toolbar button and the filter pill can't drift apart — and match
     // what logs.html and live.html show for the same feed.
     // ---------------------------------------------------------------
-    const _ltLayers = { alpine: () => alpineLayer, lga: () => lgaLayer, works: () => worksLayer };
-    const _ltSelectedCats = { alpine: null, lga: null, works: null };
+    const _ltLayers = { lga: () => lgaLayer, works: () => worksLayer };
+    // EXCLUDED categories, not selected ones. An include-set read as
+    // "all on when empty" made the first click on a seemingly-active pill
+    // hide every other category, which is the opposite of what the pill
+    // showed. Matches the hazards panel's _hazardExcludedCategories.
+    const _ltExcludedCats = { lga: new Set(), works: new Set() };
+    const _ltExcludedRegions = { lga: new Set(), works: new Set() };
+
+    // The works aggregate is national — roughly seven in ten records are
+    // SA/QLD/VIC — so it gets a jurisdiction filter alongside category.
+    function _ltRegionOf(lat, lon) {
+      if (lat > -35.95 && lat < -35.05 && lon > 148.7 && lon < 149.5) return 'ACT';
+      if (lat >= -37.7 && lat <= -28.15 && lon >= 140.9 && lon <= 153.7) return 'NSW';
+      if (lat > -28.15) return 'QLD / NT';
+      if (lat < -37.7) return 'VIC / TAS';
+      if (lon < 140.9) return 'SA / WA';
+      return 'Other';
+    }
 
     async function loadLiveTrafficFeed(feedId) {
       const meta = window.LiveTrafficVocab && LiveTrafficVocab.get(feedId);
@@ -9683,15 +9722,17 @@ function initPagerHoursFromStorage() {
         }
         if (!data || !Array.isArray(data.features)) return;
 
-        const selected = _ltSelectedCats[feedId];
+        const exCats = _ltExcludedCats[feedId] || new Set();
+        const exRegions = _ltExcludedRegions[feedId] || new Set();
         for (const feature of data.features) {
           const coords = feature.geometry && feature.geometry.coordinates;
           if (!coords) continue;
           const [lon, lat] = coords;
           if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+          if (exRegions.has(_ltRegionOf(lat, lon))) continue;
           const props = feature.properties || {};
           const cat = props.mainCategory || props.type || 'Other';
-          if (selected && selected.size && !selected.has(cat)) continue;
+          if (exCats.has(cat)) continue;
 
           const icon = L.divIcon({
             className: 'custom-pin',
@@ -10447,6 +10488,9 @@ function initPagerHoursFromStorage() {
           if (!_hazardSelectedSources.has(m.source)) continue;
           if (m.source === 'waze' && m.subtypeLabel
               && _hazardExcludedSubtypes.has(m.subtypeLabel)) continue;
+          // Respect the Category row too — otherwise excluding a category
+          // removed pins while these bucket counts stayed put.
+          if (m.mainCategory && _hazardExcludedCategories.has(m.mainCategory)) continue;
           if (typeCounts[m.type] !== undefined) typeCounts[m.type]++;
         }
         const typePills = items.map((it) => {
@@ -11060,32 +11104,69 @@ function initPagerHoursFromStorage() {
       return counts;
     }
 
-    function toggleLiveTrafficCat(feedId, cat) {
-      if (!_ltSelectedCats[feedId]) _ltSelectedCats[feedId] = new Set();
-      const sel = _ltSelectedCats[feedId];
-      if (sel.has(cat)) sel.delete(cat); else sel.add(cat);
-      loadLiveTrafficFeed(feedId);
+    function _ltRegionCounts(feedId) {
+      const meta = window.LiveTrafficVocab && LiveTrafficVocab.get(feedId);
+      const slot = meta && layerCache[meta.archiveSource];
+      const feats = (slot && slot.data && slot.data.features) || [];
+      const counts = {};
+      for (const f of feats) {
+        const c = (f.geometry || {}).coordinates;
+        if (!c) continue;
+        const r = _ltRegionOf(c[1], c[0]);
+        counts[r] = (counts[r] || 0) + 1;
+      }
+      return counts;
     }
+
+    window.toggleLiveTrafficCat = function (feedId, cat) {
+      const ex = _ltExcludedCats[feedId] || (_ltExcludedCats[feedId] = new Set());
+      if (ex.has(cat)) ex.delete(cat); else ex.add(cat);
+      loadLiveTrafficFeed(feedId).then(refreshActiveFilterPanel);
+    };
+
+    window.toggleLiveTrafficRegion = function (feedId, region) {
+      const ex = _ltExcludedRegions[feedId] || (_ltExcludedRegions[feedId] = new Set());
+      if (ex.has(region)) ex.delete(region); else ex.add(region);
+      loadLiveTrafficFeed(feedId).then(refreshActiveFilterPanel);
+    };
 
     function _ltPanel(feedId) {
       const meta = window.LiveTrafficVocab && LiveTrafficVocab.get(feedId);
       if (!meta) return '<h4>Live Traffic</h4>';
       const counts = _ltCategoryCounts(feedId);
       const cats = Object.keys(counts).sort();
-      const sel = _ltSelectedCats[feedId];
       if (!cats.length) {
         return LiveTrafficVocab.panelHeader(feedId) +
           '<div style="font-size:11px;color:#94a3b8;font-style:italic;">Loading ' +
           escapeHtml(meta.label.toLowerCase()) + ' data…</div>';
       }
+      const exCats = _ltExcludedCats[feedId] || new Set();
       const pills = cats.map((c) => {
-        const on = !sel || !sel.size || sel.has(c);
         const safe = escapeHtml(String(c).replace(/'/g, "\\'"));
-        return _ffPillColored(on, meta.color, '', `${escapeHtml(_titleCaseCat(c))} (${counts[c].toLocaleString()})`,
+        return _ffPillColored(!exCats.has(c), meta.color, '', `${escapeHtml(_titleCaseCat(c))} (${counts[c].toLocaleString()})`,
           `toggleLiveTrafficCat('${feedId}', '${safe}')`);
       }).join('');
+      // The works aggregate spans the whole country, so it gets a
+      // jurisdiction row. NSW-only feeds render a single region and skip it.
+      let regionBlock = '';
+      const rCounts = _ltRegionCounts(feedId);
+      const regions = Object.keys(rCounts).sort();
+      if (regions.length > 1) {
+        const exRegions = _ltExcludedRegions[feedId] || new Set();
+        const rPills = regions.map((r) => {
+          const rsafe = escapeHtml(String(r).replace(/'/g, "\'"));
+          return _ffPillColored(!exRegions.has(r), meta.color, '', `${escapeHtml(r)} (${rCounts[r].toLocaleString()})`,
+            `toggleLiveTrafficRegion('${feedId}', '${rsafe}')`);
+        }).join('');
+        regionBlock = `
+          <div class="ff-section-label">Jurisdiction</div>
+          <div class="floating-filter-pills">${rPills}</div>
+        `;
+      }
+
       return `
         ${LiveTrafficVocab.panelHeader(feedId)}
+        ${regionBlock}
         <div class="ff-section-label">Category</div>
         <div class="floating-filter-pills">${pills}</div>
         <div style="font-size:10px;color:#64748b;margin-top:8px;line-height:1.4;">${escapeHtml(meta.blurb)}</div>
@@ -16306,7 +16387,6 @@ function initPagerHoursFromStorage() {
       // the layer self-heals if markers were ever lost.
       if (map.hasLayer(aisLayer)) redrawTasks.push(loadAisData());
       if (map.hasLayer(actAmbulanceLayer)) redrawTasks.push(loadActAmbulanceData());
-      if (map.hasLayer(hazardsLayer)) redrawTasks.push(loadLiveTrafficFeed('alpine'));
       if (map.hasLayer(lgaLayer)) redrawTasks.push(loadLiveTrafficFeed('lga'));
       if (map.hasLayer(worksLayer)) redrawTasks.push(loadLiveTrafficFeed('works'));
 
@@ -16785,6 +16865,9 @@ function initPagerHoursFromStorage() {
           roadwork: typeof roadworkLayer !== 'undefined' ? roadworkLayer : null,
           ais: typeof aisLayer !== 'undefined' ? aisLayer : null,
           nswpsn: typeof nswpsnLayer !== 'undefined' ? nswpsnLayer : null,
+          lga: typeof lgaLayer !== 'undefined' ? lgaLayer : null,
+          works: typeof worksLayer !== 'undefined' ? worksLayer : null,
+          actambulance: typeof actAmbulanceLayer !== 'undefined' ? actAmbulanceLayer : null,
         };
         for (const [key, layer] of Object.entries(_layerByKey)) {
           if (layer && map.hasLayer(layer)) addFilterButton(key);
