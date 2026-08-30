@@ -38,6 +38,9 @@ const SOURCE_TO_FAMILY: Record<string, ArchiveTable> = {
   traffic_flood: 'archive_traffic',
   traffic_fire: 'archive_traffic',
   traffic_majorevent: 'archive_traffic',
+  traffic_alpine: 'archive_traffic',
+  traffic_lga: 'archive_traffic',
+  traffic_works: 'archive_traffic',
   livetraffic: 'archive_traffic',
   // RFS
   rfs: 'archive_rfs',

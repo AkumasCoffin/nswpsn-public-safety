@@ -11,6 +11,11 @@
  *   GET /api/traffic/fire/raw         — pass-through
  *   GET /api/traffic/majorevent       — parsed
  *   GET /api/traffic/majorevent/raw   — pass-through
+ *   GET /api/traffic/alpine           — parsed
+ *   GET /api/traffic/alpine/raw       — pass-through
+ *   GET /api/traffic/lga              — council-submitted local-road records
+ *   GET /api/traffic/works            — works + ACT records from all-feeds-web
+ *                                       (no /raw — see /api/traffic/all-feeds)
  *   GET /api/traffic/cameras          — camera FeatureCollection
  *
  * Mirrors python's routes at external_api_proxy.py:7239+. The /raw
@@ -44,6 +49,8 @@ const HAZARDS: Array<{ path: string; storeKey: string; rawEndpoint: string }> = 
   { path: 'flood', storeKey: 'traffic_flood', rawEndpoint: 'flood' },
   { path: 'fire', storeKey: 'traffic_fire', rawEndpoint: 'fire' },
   { path: 'majorevent', storeKey: 'traffic_majorevent', rawEndpoint: 'majorevent' },
+  { path: 'alpine', storeKey: 'traffic_alpine', rawEndpoint: 'alpine' },
+  { path: 'lga', storeKey: 'traffic_lga', rawEndpoint: 'regional/lga-incidents' },
 ];
 
 for (const h of HAZARDS) {
@@ -66,6 +73,14 @@ for (const h of HAZARDS) {
 
 trafficRouter.get('/api/traffic/cameras', (c) =>
   c.json(trafficCamerasSnapshot()),
+);
+
+// Works + ACT records lifted out of all-feeds-web.json. No /raw variant —
+// that whole file is already served verbatim by /api/traffic/all-feeds
+// below, and pointing a raw route at a hazards endpoint would return a
+// different feed entirely.
+trafficRouter.get('/api/traffic/works', (c) =>
+  c.json(trafficHazardSnapshot('traffic_works')),
 );
 
 // /api/traffic/lga-incidents — regional LGA incident feed. Mirrors python

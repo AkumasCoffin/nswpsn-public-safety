@@ -15,7 +15,17 @@ import { registerSource } from '../services/sourceRegistry.js';
 import { liveStore } from '../store/live.js';
 
 const HAZARD_BASE = 'https://www.livetraffic.com/traffic/hazards';
+// all-feeds-web.json is the site's own aggregate layer. We read it twice:
+// once for the live cameras, once for the works/hazard records that appear
+// nowhere else — including the ACT works, Canberra light-rail closures and
+// council roadworks that the five hazard feeds have no coverage of.
 const CAMERAS_URL = 'https://www.livetraffic.com/datajson/all-feeds-web.json';
+const WEB_FEED_URL = CAMERAS_URL;
+
+/** Categories served by their own dedicated source already, or that are
+ *  facilities rather than road events. Rest areas are static amenities
+ *  (850 of them) and belong on their own layer, not in a works feed. */
+const WEB_FEED_SKIP = new Set(['livecams', 'restareas']);
 
 export interface TrafficFeature {
   type: 'Feature';
@@ -40,6 +50,8 @@ export interface TrafficFeature {
     expectedDelay: string;
     diversions: string;
     encodedPolyline: string;
+    /** Every polyline the item carries, not just the first. */
+    encodedPolylines: { coords: string; direction: string }[];
     created: string;
     lastUpdated: string;
     start: string;
@@ -48,6 +60,21 @@ export interface TrafficFeature {
     isMajor: boolean;
     arrangement: string;
     periods: unknown[];
+    /** 'State road' | 'Local road' — upstream's road-ownership flag. */
+    isLocalRoad: string;
+    region: string;
+    crossStreet: string;
+    secondLocation: string;
+    locationQualifier: string;
+    queueLength: number | null;
+    duration: string;
+    adviceC: string;
+    webLinks: unknown[];
+    /** Council attribution — only the LGA feed carries these. */
+    orgName: string;
+    orgContact: string;
+    orgEmail: string;
+    orgWebsite: string;
     source: 'livetraffic';
   };
 }
@@ -148,6 +175,32 @@ function asBool(v: unknown): boolean {
   return v === true;
 }
 
+/**
+ * Upstream sends `encodedPolylines` as an ARRAY of
+ * `{ levels, direction, coords }`, never a bare string — a plain
+ * asString() on it yields '' and silently drops the road geometry.
+ * Roughly a fifth of incidents carry one.
+ */
+function parsePolylines(v: unknown): { coords: string; direction: string }[] {
+  const out: { coords: string; direction: string }[] = [];
+  if (typeof v === 'string' && v) {
+    out.push({ coords: v, direction: '' });
+    return out;
+  }
+  for (const el of asArray(v)) {
+    if (typeof el === 'string' && el) {
+      out.push({ coords: el, direction: '' });
+      continue;
+    }
+    if (el && typeof el === 'object') {
+      const o = el as Record<string, unknown>;
+      const coords = asString(o['coords']) || asString(o['encodedPolyline']);
+      if (coords) out.push({ coords, direction: asString(o['direction']) });
+    }
+  }
+  return out;
+}
+
 export function parseTrafficItem(item: unknown, hazardType: string): TrafficFeature | null {
   if (item === null || typeof item !== 'object') return null;
   const it = item as Record<string, unknown>;
@@ -178,19 +231,47 @@ export function parseTrafficItem(item: unknown, hazardType: string): TrafficFeat
     }
   }
 
+  // roads[] holds the useful location detail. Previous versions read only
+  // mainStreet/suburb off roads[0] and looked for an `affectedDirection`
+  // key that upstream does not have; the real keys are below.
   const roadsInfo = props['roads'];
   let roadsStr = '';
   let affectedDirection = '';
+  let impactedLanes: unknown[] = [];
+  let region = '';
+  let crossStreet = '';
+  let secondLocation = '';
+  let locationQualifier = '';
+  let queueLength: number | null = null;
   if (Array.isArray(roadsInfo) && roadsInfo.length > 0) {
+    // Join every road, not just the first — an incident can span several.
+    roadsStr = roadsInfo
+      .map((entry) => {
+        if (!entry || typeof entry !== 'object') return '';
+        const r = entry as Record<string, unknown>;
+        return `${asString(r['mainStreet'])} ${asString(r['suburb'])}`.trim();
+      })
+      .filter(Boolean)
+      .join('; ');
     const first = roadsInfo[0];
     if (first && typeof first === 'object') {
       const r = first as Record<string, unknown>;
-      roadsStr = `${asString(r['mainStreet'])} ${asString(r['suburb'])}`.trim();
-      affectedDirection = asString(r['affectedDirection']);
+      affectedDirection =
+        asString(r['affectedDirection']) || asString(r['conditionTendency']);
+      impactedLanes = asArray(r['impactedLanes']);
+      region = asString(r['region']);
+      crossStreet = asString(r['crossStreet']);
+      secondLocation = asString(r['secondLocation']);
+      locationQualifier = asString(r['locationQualifier']);
+      queueLength = asNumber(r['queueLength']);
     }
   } else if (roadsInfo) {
     roadsStr = asString(roadsInfo);
   }
+
+  const polylines = parsePolylines(
+    props['encodedPolylines'] ?? props['encodedPolyline'],
+  );
 
   const rawTitle =
     asString(props['headline']) ||
@@ -206,7 +287,12 @@ export function parseTrafficItem(item: unknown, hazardType: string): TrafficFeat
       type: hazardType,
       incidentType,
       mainCategory: asString(props['mainCategory']),
-      subCategory: asString(props['subCategory']),
+      // Upstream has subCategoryA/subCategoryB, never a plain
+      // `subCategory` — reading that key alone left this always empty.
+      subCategory:
+        asString(props['subCategory']) ||
+        asString(props['subCategoryA']) ||
+        asString(props['subCategoryB']),
       incidentKind: asString(props['incidentKind']),
       title: cleanTitle || rawTitle,
       headline: asString(props['headline']),
@@ -217,15 +303,17 @@ export function parseTrafficItem(item: unknown, hazardType: string): TrafficFeat
       adviceB: asString(props['adviceB']),
       roads: roadsStr,
       affectedDirection,
-      impactedLanes: asArray(props['impactedLanes']),
+      // impactedLanes is nested under roads[], not top level.
+      impactedLanes: impactedLanes.length
+        ? impactedLanes
+        : asArray(props['impactedLanes']),
       speedLimit: asString(props['speedLimit']),
       expectedDelay:
         asString(props['expectedDelay']) || asString(props['delay']),
       diversions:
         asString(props['diversions']) || asString(props['diversion']),
-      encodedPolyline:
-        asString(props['encodedPolyline']) ||
-        asString(props['encodedPolylines']),
+      encodedPolyline: polylines[0]?.coords ?? '',
+      encodedPolylines: polylines,
       created: asString(props['created']) || asString(props['start']),
       lastUpdated:
         asString(props['lastUpdated']) || asString(props['end']),
@@ -234,8 +322,24 @@ export function parseTrafficItem(item: unknown, hazardType: string): TrafficFeat
       isEnded:
         asBool(props['ended']) || asBool(props['isEnded']),
       isMajor: asBool(props['isMajor']),
-      arrangement: asString(props['arrangement']),
+      arrangement:
+        asString(props['arrangement']) ||
+        asString(props['arrangementElements']),
       periods: asArray(props['periods']),
+      isLocalRoad: asString(props['isLocalRoad']),
+      region,
+      crossStreet,
+      secondLocation,
+      locationQualifier,
+      queueLength,
+      duration: asString(props['duration']),
+      adviceC: asString(props['adviceC']),
+      webLinks: asArray(props['webLinks']),
+      // Present only on the council-submitted LGA feed.
+      orgName: asString(props['OrgName']),
+      orgContact: asString(props['OrgContact']),
+      orgEmail: asString(props['OrgEmail']),
+      orgWebsite: asString(props['OrgWebsite']),
       source: 'livetraffic',
     },
   };
@@ -258,6 +362,12 @@ const HAZARD_KINDS: HazardKind[] = [
   { storeKey: 'traffic_flood', archiveSource: 'traffic_flood', endpoint: 'flood', label: 'Flood', intervalMs: 300_000 },
   { storeKey: 'traffic_fire', archiveSource: 'traffic_fire', endpoint: 'fire', label: 'Fire', intervalMs: 300_000 },
   { storeKey: 'traffic_majorevent', archiveSource: 'traffic_majorevent', endpoint: 'majorevent', label: 'Major Event', intervalMs: 300_000 },
+  { storeKey: 'traffic_alpine', archiveSource: 'traffic_alpine', endpoint: 'alpine', label: 'Alpine', intervalMs: 300_000 },
+  // Council-submitted local-road records. A completely separate reporting
+  // stream from the five feeds above: verified zero overlap with them on
+  // id, coordinate AND street+suburb, and every row carries Org* council
+  // attribution that no other feed has.
+  { storeKey: 'traffic_lga', archiveSource: 'traffic_lga', endpoint: 'regional/lga-incidents', label: 'Council', intervalMs: 300_000 },
 ];
 
 async function fetchHazard(kind: HazardKind): Promise<TrafficSnapshot> {
@@ -301,6 +411,103 @@ export async function fetchHazardRaw(endpoint: string): Promise<unknown> {
   return fetchJson<unknown>(url, {
     headers: { 'User-Agent': 'Mozilla/5.0' },
   });
+}
+
+/**
+ * Works + hazards out of all-feeds-web.json.
+ *
+ * This file is Python-serialised: nested values arrive as `str()` output
+ * ("[{'suburb': 'MOLONGLO'}]", "False", epoch-millis as strings), so the
+ * generic parser can't read its `roads`. We take the flat fields it does
+ * expose and let `otherAdvice` carry the road description, which upstream
+ * writes as plain prose.
+ *
+ * Geometry casing is inconsistent here — 'Point', 'POINT' and '' all
+ * occur — so match case-insensitively rather than on the exact string.
+ */
+export async function fetchTrafficWorks(): Promise<TrafficSnapshot> {
+  const data = await fetchJson<unknown>(WEB_FEED_URL, {
+    headers: { 'User-Agent': 'Mozilla/5.0' },
+  });
+  const items = Array.isArray(data) ? data : [];
+  const features: TrafficFeature[] = [];
+  for (const item of items) {
+    if (!item || typeof item !== 'object') continue;
+    const it = item as Record<string, unknown>;
+    const cat = asString(it['eventCategory']);
+    const kind = asString(it['eventType']);
+    const key = cat.toLowerCase().replace(/[^a-z]/g, '');
+    const kindKey = kind.toLowerCase().replace(/[^a-z]/g, '');
+    if (WEB_FEED_SKIP.has(key) || WEB_FEED_SKIP.has(kindKey)) continue;
+
+    const geom = it['geometry'] as Record<string, unknown> | undefined;
+    if (!geom) continue;
+    if (asString(geom['type']).toLowerCase() !== 'point') continue;
+    const coords = geom['coordinates'];
+    if (!Array.isArray(coords) || coords.length < 2) continue;
+    const lon = asNumber(coords[0]);
+    const lat = asNumber(coords[1]);
+    if (lon === null || lat === null) continue;
+
+    const props = (it['properties'] as Record<string, unknown> | undefined) ?? {};
+    // 'ended' is the string 'False'/'None' here, never a real boolean.
+    if (asString(props['ended']).toLowerCase() === 'true') continue;
+
+    const title = asString(props['title']) || asString(props['heading']);
+    const displayName = asString(props['displayName']);
+    const { incidentType, cleanTitle } = extractIncidentType(title || displayName);
+
+    features.push({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [lon, lat] },
+      properties: {
+        id: asString(it['id']),
+        type: cat || kind || 'Works',
+        incidentType,
+        mainCategory: cat,
+        subCategory:
+          asString(props['subCategoryA']) || asString(props['subCategoryB']),
+        incidentKind: kind,
+        title: cleanTitle || title || displayName,
+        headline: '',
+        displayName,
+        subtitle: '',
+        otherAdvice: asString(props['otherAdvice']),
+        adviceB: '',
+        roads: asString(props['road']) || asString(props['suburb']),
+        affectedDirection: '',
+        impactedLanes: [],
+        speedLimit: '',
+        expectedDelay: '',
+        diversions: '',
+        encodedPolyline: '',
+        encodedPolylines: [],
+        created: asString(props['created']) || asString(props['start']),
+        lastUpdated: asString(props['lastUpdated']),
+        start: asString(props['start']),
+        end: asString(props['end']),
+        isEnded: false,
+        isMajor: false,
+        arrangement: '',
+        periods: [],
+        isLocalRoad: '',
+        region: '',
+        crossStreet: '',
+        secondLocation: '',
+        locationQualifier: '',
+        queueLength: null,
+        duration: '',
+        adviceC: '',
+        webLinks: [],
+        orgName: '',
+        orgContact: '',
+        orgEmail: '',
+        orgWebsite: '',
+        source: 'livetraffic',
+      },
+    });
+  }
+  return { type: 'FeatureCollection', features, count: features.length };
 }
 
 export async function fetchTrafficCameras(): Promise<TrafficCamerasSnapshot> {
@@ -363,6 +570,12 @@ export default function register(): void {
       fetch: () => fetchHazard(k),
     });
   }
+  registerSource<TrafficSnapshot>({
+    name: 'traffic_works',
+    family: 'traffic',
+    intervalMs: 300_000,
+    fetch: fetchTrafficWorks,
+  });
   registerSource<TrafficCamerasSnapshot>({
     name: 'traffic_cameras',
     family: 'traffic',
