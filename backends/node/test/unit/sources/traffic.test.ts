@@ -351,3 +351,58 @@ describe('traffic works drops RFS re-publications', () => {
     expect(snap.features[0]?.properties.subcategory).toBe('Roadwork');
   });
 });
+
+describe('traffic works survives an upstream apiSource dropout', () => {
+  beforeEach(async () => {
+    fetchJsonMock.mockReset();
+    const { _resetWorksCarryForward } = await import('../../../src/sources/traffic.js');
+    _resetWorksCarryForward();
+  });
+
+  const rec = (id, apiSource, lon) => ({
+    id, apiSource, eventCategory: 'Roadwork',
+    geometry: { type: 'POINT', coordinates: [lon, -35.28] },
+    properties: { title: 'Works ' + id },
+  });
+
+  it('carries a group forward when upstream drops it wholesale', async () => {
+    const { fetchTrafficWorks } = await import('../../../src/sources/traffic.js');
+    // Poll 1: both jurisdictions present.
+    fetchJsonMock.mockResolvedValueOnce([
+      rec('act-1', 'actRoadInfo', 149.12),
+      rec('nsw-1', 'nswRoadInfo', 151.2),
+    ]);
+    expect((await fetchTrafficWorks()).count).toBe(2);
+
+    // Poll 2: the ACT group has vanished entirely — the real upstream
+    // failure mode, which used to empty Canberra off the map.
+    fetchJsonMock.mockResolvedValueOnce([rec('nsw-1', 'nswRoadInfo', 151.2)]);
+    const second = await fetchTrafficWorks();
+    expect(second.count).toBe(2);
+    expect(second.features.some((f) => f.properties.upstreamId === 'act-1')).toBe(true);
+  });
+
+  it('lets a returning group replace what was carried', async () => {
+    const { fetchTrafficWorks } = await import('../../../src/sources/traffic.js');
+    fetchJsonMock.mockResolvedValueOnce([rec('act-1', 'actRoadInfo', 149.12)]);
+    await fetchTrafficWorks();
+    fetchJsonMock.mockResolvedValueOnce([]);              // dropout
+    await fetchTrafficWorks();
+    fetchJsonMock.mockResolvedValueOnce([rec('act-2', 'actRoadInfo', 149.13)]);
+    const third = await fetchTrafficWorks();
+    // The fresh batch wins; the stale record is not also kept.
+    expect(third.count).toBe(1);
+    expect(third.features[0]?.properties.upstreamId).toBe('act-2');
+  });
+
+  it('does not carry a group forward when it merely shrinks', async () => {
+    const { fetchTrafficWorks } = await import('../../../src/sources/traffic.js');
+    fetchJsonMock.mockResolvedValueOnce([
+      rec('a', 'actRoadInfo', 149.12), rec('b', 'actRoadInfo', 149.13),
+    ]);
+    await fetchTrafficWorks();
+    // One record is a legitimate update, not an outage — trust it.
+    fetchJsonMock.mockResolvedValueOnce([rec('a', 'actRoadInfo', 149.12)]);
+    expect((await fetchTrafficWorks()).count).toBe(1);
+  });
+});

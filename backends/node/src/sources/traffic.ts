@@ -14,6 +14,7 @@ import { createHash } from 'node:crypto';
 import { fetchJson } from './shared/http.js';
 import { registerSource } from '../services/sourceRegistry.js';
 import { liveStore } from '../store/live.js';
+import { log } from '../lib/log.js';
 
 const HAZARD_BASE = 'https://www.livetraffic.com/traffic/hazards';
 // all-feeds-web.json is the site's own aggregate layer. We read it twice:
@@ -27,6 +28,25 @@ const WEB_FEED_URL = CAMERAS_URL;
  *  facilities rather than road events. Rest areas are static amenities
  *  (850 of them) and belong on their own layer, not in a works feed. */
 const WEB_FEED_SKIP = new Set(['livecams', 'restareas']);
+
+/**
+ * Last good batch of records per upstream `apiSource`.
+ *
+ * all-feeds-web is an aggregate of per-jurisdiction APIs, and it drops
+ * whole groups intermittently: one poll carries 3,215 items including
+ * 135 `actRoadInfo` and 394 `vicRoadInfo`, the next carries 2,687 with
+ * BOTH of those groups entirely absent while every other group is
+ * byte-identical. Storing the short payload as-is is what empties
+ * Canberra off the map for minutes at a time.
+ *
+ * So remember each group's last good batch and splice it back in when
+ * the group vanishes wholesale. A group that returns even one record is
+ * trusted as current and replaces its remembered batch.
+ */
+const _worksBySource = new Map<string, { at: number; items: unknown[] }>();
+/** Forget a group that has been gone this long — it has probably been
+ *  retired upstream rather than being mid-outage. */
+const WORKS_CARRY_TTL_MS = 6 * 60 * 60_000;
 
 /**
  * Stable id for a works record.
@@ -478,11 +498,45 @@ export async function fetchHazardRaw(endpoint: string): Promise<unknown> {
  * Geometry casing is inconsistent here — 'Point', 'POINT' and '' all
  * occur — so match case-insensitively rather than on the exact string.
  */
+/** Clear the works carry-forward memory — tests need a clean slate. */
+export function _resetWorksCarryForward(): void {
+  _worksBySource.clear();
+}
+
 export async function fetchTrafficWorks(): Promise<TrafficSnapshot> {
   const data = await fetchJson<unknown>(WEB_FEED_URL, {
     headers: { 'User-Agent': 'Mozilla/5.0' },
   });
-  const items = Array.isArray(data) ? data : [];
+  const fetched = Array.isArray(data) ? data : [];
+
+  // Group this poll by apiSource, then restore any group that has gone
+  // missing entirely since the last poll (see _worksBySource).
+  const now = Date.now();
+  const seen = new Map<string, unknown[]>();
+  for (const it of fetched) {
+    if (!it || typeof it !== 'object') continue;
+    const key = asString((it as Record<string, unknown>)['apiSource']);
+    const bucket = seen.get(key);
+    if (bucket) bucket.push(it);
+    else seen.set(key, [it]);
+  }
+  for (const [key, group] of seen) {
+    if (group.length) _worksBySource.set(key, { at: now, items: group });
+  }
+  const items: unknown[] = [...fetched];
+  for (const [key, remembered] of _worksBySource) {
+    if (seen.has(key)) continue;
+    if (now - remembered.at > WORKS_CARRY_TTL_MS) {
+      _worksBySource.delete(key);
+      continue;
+    }
+    log.warn(
+      { apiSource: key, carried: remembered.items.length },
+      'traffic works: upstream dropped an apiSource group — carrying the last good batch',
+    );
+    items.push(...remembered.items);
+  }
+
   const features: TrafficFeature[] = [];
   for (const item of items) {
     if (!item || typeof item !== 'object') continue;

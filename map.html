@@ -3401,7 +3401,12 @@
       // Live Traffic feeds that were never ingested until now
       traffic_alpine: { data: null, timestamp: 0 },
       traffic_lga: { data: null, timestamp: 0 },
-      traffic_works: { data: null, timestamp: 0 }
+      traffic_works: { data: null, timestamp: 0 },
+      // The hazards layer serves a MERGED payload (incidents + alpine +
+      // fire + major events). It needs its own slot: the startup
+      // prefetch fills traffic_incidents with the raw incidents feed,
+      // which would otherwise satisfy the cache check and skip the merge.
+      hazards_merged: { data: null, timestamp: 0 }
     };
     const LAYER_CACHE_TTL = 60000; // 1 minute - shorter since backend pre-warms data
     
@@ -3573,14 +3578,12 @@
     // cluster once enabled. Alpine, fire and major events have no layer of
     // their own — loadHazardsData merges them into the Hazards feed so they
     // pick up its filters and culling.
-    const lgaLayer = L.markerClusterGroup({
-      maxClusterRadius: 60, spiderfyOnMaxZoom: true, showCoverageOnHover: false,
-      zoomToBoundsOnClick: true, disableClusteringAtZoom: 13
-    });
-    const worksLayer = L.markerClusterGroup({
-      maxClusterRadius: 60, spiderfyOnMaxZoom: true, showCoverageOnHover: false,
-      zoomToBoundsOnClick: true, disableClusteringAtZoom: 13
-    });
+    // Plain layer groups, not marker clusters: clustering collapsed these
+    // into count bubbles that hid where the works actually were. Volume is
+    // handled the way the rest of the map handles it — viewport culling
+    // (see _ltRebuildVisible below), so only pins in view are mounted.
+    const lgaLayer = L.layerGroup();
+    const worksLayer = L.layerGroup();
     const weatherLayer = L.layerGroup();
     const beachwatchLayer = L.layerGroup();
     // ---------- AIS (vessel positions) ----------
@@ -8778,7 +8781,7 @@ function initPagerHoursFromStorage() {
       // Fetch data first, then check if it changed before clearing
       let trafficData, wazeData;
       try {
-        const cached = layerCache.traffic_incidents;
+        const cached = layerCache.hazards_merged;
         const now = Date.now();
         if (cached.data && (now - cached.timestamp) < LAYER_CACHE_TTL) {
           trafficData = cached.data;
@@ -8806,7 +8809,7 @@ function initPagerHoursFromStorage() {
               ...(maj.features || []),
             ],
           };
-          layerCache.traffic_incidents = { data: trafficData, timestamp: now };
+          layerCache.hazards_merged = { data: trafficData, timestamp: now };
         }
         
         // Waze retired — this layer keeps its LiveTraffic half, which is the
@@ -9693,6 +9696,9 @@ function initPagerHoursFromStorage() {
     // showed. Matches the hazards panel's _hazardExcludedCategories.
     const _ltExcludedCats = { lga: new Set(), works: new Set() };
     const _ltExcludedRegions = { lga: new Set(), works: new Set() };
+    // Flat marker lists, mirroring _hazardMarkers, so the filters and the
+    // viewport culler can mount/unmount without re-fetching.
+    const _ltMarkers = { lga: [], works: [] };
 
     // The works aggregate is national — roughly seven in ten records are
     // SA/QLD/VIC — so it gets a jurisdiction filter alongside category.
@@ -9722,17 +9728,18 @@ function initPagerHoursFromStorage() {
         }
         if (!data || !Array.isArray(data.features)) return;
 
-        const exCats = _ltExcludedCats[feedId] || new Set();
-        const exRegions = _ltExcludedRegions[feedId] || new Set();
+        // Build every marker once into the flat list; which ones are
+        // actually mounted is decided by _ltRebuildVisible (filters +
+        // viewport), so panning never refetches and filtering never
+        // rebuilds the icons.
+        _ltMarkers[feedId] = [];
         for (const feature of data.features) {
           const coords = feature.geometry && feature.geometry.coordinates;
           if (!coords) continue;
           const [lon, lat] = coords;
           if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
-          if (exRegions.has(_ltRegionOf(lat, lon))) continue;
           const props = feature.properties || {};
           const cat = props.mainCategory || props.type || 'Other';
-          if (exCats.has(cat)) continue;
 
           const icon = L.divIcon({
             className: 'custom-pin',
@@ -9740,17 +9747,39 @@ function initPagerHoursFromStorage() {
             iconSize: [24, 24],
             iconAnchor: [12, 12]
           });
-          L.marker([lat, lon], { icon })
-            .addTo(layer)
-            .bindTooltip(buildLiveTrafficTooltip(props, meta), {
-              direction: 'top', offset: [0, -10], opacity: 0.95
-            });
+          const marker = L.marker([lat, lon], { icon });
+          marker.bindTooltip(buildLiveTrafficTooltip(props, meta), {
+            direction: 'top', offset: [0, -10], opacity: 0.95
+          });
+          _ltMarkers[feedId].push({
+            marker, cat, region: _ltRegionOf(lat, lon), latlng: L.latLng(lat, lon), _shown: false
+          });
         }
+        _ltRebuildVisible(feedId);
         refreshActiveFilterPanel();
       } catch (e) {
         console.error(`Live Traffic ${feedId} error`, e);
       }
     }
+
+    /** Mount/unmount the feed's markers for the current filters and
+     *  viewport. Delta-based like _rebuildHazardSubLayers, so a pan only
+     *  touches the markers that actually crossed the boundary. */
+    function _ltRebuildVisible(feedId) {
+      const layer = _ltLayers[feedId] && _ltLayers[feedId]();
+      if (!layer) return;
+      const exCats = _ltExcludedCats[feedId] || new Set();
+      const exRegions = _ltExcludedRegions[feedId] || new Set();
+      const bounds = _viewportCullBounds();
+      for (const m of _ltMarkers[feedId] || []) {
+        const want = !exCats.has(m.cat)
+          && !exRegions.has(m.region)
+          && _cullEntryInView(m, bounds);
+        if (want && !m._shown) { layer.addLayer(m.marker); m._shown = true; }
+        else if (!want && m._shown) { layer.removeLayer(m.marker); m._shown = false; }
+      }
+    }
+    registerViewportCuller(() => { _ltRebuildVisible('lga'); _ltRebuildVisible('works'); });
 
     function buildLiveTrafficTooltip(props, meta) {
       let h = '<div style="min-width:220px; max-width:320px;">';
@@ -11121,13 +11150,15 @@ function initPagerHoursFromStorage() {
     window.toggleLiveTrafficCat = function (feedId, cat) {
       const ex = _ltExcludedCats[feedId] || (_ltExcludedCats[feedId] = new Set());
       if (ex.has(cat)) ex.delete(cat); else ex.add(cat);
-      loadLiveTrafficFeed(feedId).then(refreshActiveFilterPanel);
+      _ltRebuildVisible(feedId);
+      refreshActiveFilterPanel();
     };
 
     window.toggleLiveTrafficRegion = function (feedId, region) {
       const ex = _ltExcludedRegions[feedId] || (_ltExcludedRegions[feedId] = new Set());
       if (ex.has(region)) ex.delete(region); else ex.add(region);
-      loadLiveTrafficFeed(feedId).then(refreshActiveFilterPanel);
+      _ltRebuildVisible(feedId);
+      refreshActiveFilterPanel();
     };
 
     function _ltPanel(feedId) {
