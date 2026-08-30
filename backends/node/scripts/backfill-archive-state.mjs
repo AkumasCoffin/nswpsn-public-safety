@@ -18,13 +18,52 @@
  * column is read or written, and a row that cannot be placed (BOM
  * warnings are areas, not points) is left NULL rather than guessed at.
  *
- * Usage:
+ * Usage (from backends/node):
  *   node scripts/backfill-archive-state.mjs            # report only
  *   node scripts/backfill-archive-state.mjs --apply    # write
  *   node scripts/backfill-archive-state.mjs --apply --batch 2000
+ *
+ * Reads DATABASE_URL from backends/.env. The rest of the project passes
+ * that in with `node --env-file-if-exists=../.env`, which also works
+ * here; when it isn't given, the file is loaded directly below so the
+ * script runs the same either way.
  */
 import pg from 'pg';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { stateForRow } from '../dist/lib/stateMask.js';
+
+/**
+ * Minimal .env reader — enough for KEY=value with optional quotes and
+ * trailing CR (the file is edited on both Windows and the server).
+ * Never overwrites a variable that is already set, so an explicit
+ * --env-file or a shell export still wins.
+ */
+function loadEnvFile(path) {
+  let text;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch {
+    return false;
+  }
+  for (const line of text.split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t || t.startsWith('#')) continue;
+    const eq = t.indexOf('=');
+    if (eq < 1) continue;
+    const key = t.slice(0, eq).trim();
+    let val = t.slice(eq + 1).trim().replace(/\r$/, '');
+    if (
+      (val.startsWith('"') && val.endsWith('"')) ||
+      (val.startsWith("'") && val.endsWith("'"))
+    ) {
+      val = val.slice(1, -1);
+    }
+    if (process.env[key] === undefined) process.env[key] = val;
+  }
+  return true;
+}
 
 const APPLY = process.argv.includes('--apply');
 const batchArg = process.argv.indexOf('--batch');
@@ -37,9 +76,14 @@ const PAIRS = [
   ['archive_misc', 'archive_misc_latest'],
 ];
 
+// backends/.env — one level above backends/node, resolved from this
+// file so the script works whatever directory it is invoked from.
+const ENV_PATH = join(dirname(dirname(fileURLToPath(import.meta.url))), '..', '.env');
+if (!process.env.DATABASE_URL) loadEnvFile(ENV_PATH);
+
 const url = process.env.DATABASE_URL;
 if (!url) {
-  console.error('DATABASE_URL is not set');
+  console.error(`DATABASE_URL is not set, and no usable value in ${ENV_PATH}`);
   process.exit(1);
 }
 
