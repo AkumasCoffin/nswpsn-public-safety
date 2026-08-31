@@ -2468,7 +2468,7 @@
            layer identity, the small caption keeps it unambiguous. -->
       <div class="layer-toggles" id="layer-toggles">
         <button id="btn-user" class="btn-toggle active" onclick="toggleMapLayer('user')" title="User incidents"><i class="fa-solid fa-user" style="color:#a855f7;"></i><span>User</span></button>
-        <button id="btn-rfs" class="btn-toggle active" onclick="toggleMapLayer('rfs')" title="RFS incidents"><i class="fa-solid fa-fire" style="color:#ef4444;"></i><span>RFS</span></button>
+        <button id="btn-rfs" class="btn-toggle active" onclick="toggleMapLayer('rfs')" title="Fire incidents — NSW RFS and NT Fire &amp; Rescue"><i class="fa-solid fa-fire" style="color:#ef4444;"></i><span>Fires</span></button>
         <button id="btn-pager" class="btn-toggle active" onclick="togglePagerPanel()" title="Pager hits"><i class="fa-solid fa-pager" style="color:#22c55e;"></i><span>Pager</span></button>
         <button id="btn-outages" class="btn-toggle" onclick="toggleOutagesPanel()" title="Power outages"><i class="fa-solid fa-bolt" style="color:#f97316;"></i><span>Outages</span></button>
         <button id="btn-hazards" class="btn-toggle" onclick="toggleHazardsPanel()" title="Traffic hazards"><i class="fa-solid fa-triangle-exclamation" style="color:#ef4444;"></i><span>Hazards</span></button>
@@ -5183,6 +5183,66 @@ function initPagerHoursFromStorage() {
         });
       } catch (e) { console.error("RFS API Error", e); }
 
+      // NT Fire & Rescue. The backend emits the same property names as
+      // the RFS feed, so these ride the same layer, tooltip and details
+      // panel — only the agency differs. Closed incidents are already
+      // filtered out server-side; road crashes are routed to Hazards
+      // instead of here.
+      try {
+        const res = await apiFetch(`${PROXY_BASE}/api/nt-fire/incidents`);
+        const data = await res.json();
+        (data.features || []).forEach((feature, idx) => {
+          const props = feature.properties || {};
+          if (props.layer === 'hazard') return; // road crashes -> Hazards layer
+          const geom = feature.geometry || {};
+          let lat = null, lng = null, polygonCoords = null;
+          if (geom.type === 'Point' && Array.isArray(geom.coordinates)) {
+            lng = geom.coordinates[0];
+            lat = geom.coordinates[1];
+          } else if (geom.type === 'Polygon' && Array.isArray(geom.coordinates?.[0])) {
+            // Fire ground: draw the ring, and pin at its centre.
+            const ring = geom.coordinates[0].filter(pt => Array.isArray(pt) && pt.length >= 2);
+            if (ring.length) {
+              polygonCoords = ring.map(pt => [pt[1], pt[0]]);
+              lat = ring.reduce((a, pt) => a + pt[1], 0) / ring.length;
+              lng = ring.reduce((a, pt) => a + pt[0], 0) / ring.length;
+            }
+          }
+          if (lat == null || lng == null || !Number.isFinite(lat) || !Number.isFinite(lng)) return;
+          const details = {
+            'ALERT LEVEL': props.alertLevel || '',
+            'LOCATION': props.location || '',
+            'COUNCIL AREA': '',
+            'STATUS': props.status || '',
+            'TYPE': props.fireType || '',
+            'SIZE': '',
+            'RESPONSIBLE AGENCY': props.responsibleAgency || 'NTFRS',
+            'UPDATED': props.updated || '',
+            'UPDATED_ISO': props.updatedISO || '',
+            'CURRENT SITUATION': props.currentSituation || '',
+            'RISKS': props.risks || '',
+            'WHAT TO DO': props.whatToDo || '',
+            'ADVICE TO THE PUBLIC': props.adviceToPublic || '',
+            title: props.title
+          };
+          rfsItems.push({
+            id: generateRfsId(props.guid || `ntf-${idx}`),
+            source: 'nt_fire',
+            title: props.title || 'NT Fire & Rescue incident',
+            rawDetails: details,
+            link: 'https://pfes.nt.gov.au/fire-and-rescue-service/fire-incident-map',
+            typeDisplay: details.TYPE || 'Fire',
+            typesList: [details.TYPE || 'Fire'],
+            agenciesList: ['NTFRS'],
+            lat: lat,
+            lng: lng,
+            alertLevel: (details['ALERT LEVEL'] || '').toLowerCase(),
+            polygonCoords: polygonCoords,
+            updatedISO: props.updatedISO || null
+          });
+        });
+      } catch (e) { console.error("NT Fire API Error", e); }
+
       // A newer loadAllData started while we fetched user/RFS data — bail before
       // resetting the shared array so we don't stomp the newer run's build.
       if (mySeq !== _loadAllSeq) return;
@@ -5460,9 +5520,9 @@ function initPagerHoursFromStorage() {
             const hasPagerLinked = item.pagerDetails && item.pagerDetails.hits && item.pagerDetails.hits.length;
             // If User is OFF but Pager is ON and this incident has pagerDetails, still keep it
             if (!showUser && !(showPager && hasPagerLinked)) return false;
-          } else if (item.source === 'rfs') {
+          } else if (isFireIncident(item)) {
             const hasPagerLinked = item.pagerDetails && item.pagerDetails.hits && item.pagerDetails.hits.length;
-            // If RFS is OFF but Pager is ON and this incident has pagerDetails, still keep it
+            // If Fires is OFF but Pager is ON and this incident has pagerDetails, still keep it
             if (!showRfs && !(showPager && hasPagerLinked)) return false;
           } else if (item.source === 'pager') {
             if (!showPager) return false;
@@ -5479,7 +5539,7 @@ function initPagerHoursFromStorage() {
 
         // RFS-specific filters (alert level + parsed incident type)
         // from the floating RFS filter panel.
-        if (!pagerVisible && item.source === 'rfs' && !_rfsPassesFilters(item)) return false;
+        if (!pagerVisible && isFireIncident(item) && !_rfsPassesFilters(item)) return false;
 
         if (item.source !== 'pager') {
           item.agenciesList.forEach(a => counts.agency[a] = (counts.agency[a] || 0) + 1);
@@ -6786,7 +6846,7 @@ function initPagerHoursFromStorage() {
       
       // Compact header row
       html += '<div style="display:flex; align-items:center; gap:6px; margin-bottom:8px;">';
-      html += '<span style="color:#f97316; font-size:13px; font-weight:600;"><i class="fa-solid fa-fire" style="margin-right:4px;"></i>RFS Incident</span>';
+      html += '<span style="color:#f97316; font-size:13px; font-weight:600;"><i class="fa-solid fa-fire" style="margin-right:4px;"></i>Fire Incident</span>';
       if (alertLevel) {
         html += '<span style="background:' + alertColor + '; color:#fff; font-size:9px; padding:2px 6px; border-radius:3px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px;">' + escapeHtml(alertLevel) + '</span>';
       }
@@ -6951,7 +7011,7 @@ function initPagerHoursFromStorage() {
       const pagerDetails = item.pagerDetails;
       // Public sessions get the right-dock details card (same chrome as
       // the vessels/transport panels), not the full incident sidebar.
-      const content = _openIncidentInfoPanel('fa-fire', '#ef4444', 'RFS incident',
+      const content = _openIncidentInfoPanel('fa-fire', '#ef4444', 'Fire incident',
         (item.rawDetails && item.rawDetails['ALERT LEVEL']) || '');
       if (!content) return;
 
@@ -8863,14 +8923,37 @@ function initPagerHoursFromStorage() {
           const j = (path) => apiFetch(`${PROXY_BASE}${path}`)
             .then((r) => r.json())
             .catch(() => ({ features: [] }));
-          const [inc, alp, fir, maj, lgaHz, wrkHz] = await Promise.all([
+          const [inc, alp, fir, maj, lgaHz, wrkHz, ntHz] = await Promise.all([
             j('/api/traffic/incidents'),
             j('/api/traffic/alpine'),
             j('/api/traffic/fire'),
             j('/api/traffic/majorevent'),
             j('/api/traffic/lga'),
             j('/api/traffic/works'),
+            j('/api/nt-fire/incidents'),
           ]);
+          // NT Fire & Rescue turns out to road crashes as well as fires.
+          // The crashes belong with the other road incidents, not on the
+          // Fires layer, so they're reshaped into the traffic property
+          // names the hazard renderer reads.
+          const ntCrashes = (ntHz.features || [])
+            .filter((f) => (f.properties || {}).layer === 'hazard')
+            .map((f) => ({
+              type: 'Feature',
+              geometry: f.geometry,
+              properties: {
+                id: f.properties.guid,
+                displayName: f.properties.title,
+                title: f.properties.title,
+                mainCategory: 'Crash',
+                subcategory: f.properties.fireType || 'Road Crash',
+                roads: f.properties.location || '',
+                region: 'Northern Territory',
+                orgName: f.properties.responsibleAgency || 'NTFRS',
+                created: f.properties.updatedISO || '',
+                lastUpdated: f.properties.updatedISO || '',
+              },
+            }));
           trafficData = {
             type: 'FeatureCollection',
             features: [
@@ -8883,6 +8966,7 @@ function initPagerHoursFromStorage() {
               ...(lgaHz.features || []).filter((f) => !_isCouncilRoadwork(f.properties)),
               // The works aggregate's hazard-ish share.
               ...(wrkHz.features || []).filter((f) => _worksTarget(f.properties) === 'hazard'),
+              ...ntCrashes,
             ],
           };
           layerCache.hazards_merged = { data: trafficData, timestamp: now };
@@ -10836,6 +10920,11 @@ function initPagerHoursFromStorage() {
     // dynamically — the feed's taxonomy (Bush Fire, Grass Fire, Hazard
     // Reduction, Burn off, MVA/Transport, Fire Alarm...) drifts, so a
     // hardcoded list would rot.
+    // The Fires layer carries more than one agency now, so anything that
+    // used to ask "is this RFS?" asks "is this a fire incident?" instead.
+    const FIRE_SOURCES = new Set(['rfs', 'nt_fire']);
+    function isFireIncident(item) { return !!item && FIRE_SOURCES.has(item.source); }
+
     const RFS_ALERT_BUCKETS = [
       { key: 'emergency', label: 'Emergency Warning', color: '#ef4444' },
       { key: 'watchact',  label: 'Watch and Act',     color: '#f97316' },
@@ -10855,12 +10944,26 @@ function initPagerHoursFromStorage() {
       return (((item.rawDetails && item.rawDetails['TYPE']) || 'Other') + '').trim().toLowerCase() || 'other';
     }
     function _rfsPassesFilters(item) {
+      if (fireAgencyFilter[fireAgencyKey(item)] === false) return false;
       if (!rfsAlertFilter[rfsAlertBucket(item)]) return false;
       if (rfsTypeFilter[rfsTypeKey(item)] === false) return false;
       return true;
     }
     window.toggleRfsAlertPill = function (key) {
       rfsAlertFilter[key] = !rfsAlertFilter[key];
+      refreshMapAndList();
+      refreshActiveFilterPanel();
+    };
+    // Which agencies' fires to show. Absent = on, so a new agency
+    // appears without needing to be registered here first.
+    const fireAgencyFilter = {};
+    function fireAgencyKey(item) { return item.source === 'nt_fire' ? 'nt_fire' : 'rfs'; }
+    const FIRE_AGENCIES = [
+      { key: 'rfs', label: 'NSW RFS' },
+      { key: 'nt_fire', label: 'NT Fire & Rescue' },
+    ];
+    window.toggleFireAgencyPill = function (key) {
+      fireAgencyFilter[key] = fireAgencyFilter[key] === false;
       refreshMapAndList();
       refreshActiveFilterPanel();
     };
@@ -10871,10 +10974,10 @@ function initPagerHoursFromStorage() {
     };
     FILTER_REGISTRY.rfs = {
       icon: 'fa-fire',
-      label: 'RFS Incidents',
+      label: 'Fires',
       color: '#ef4444',
       render() {
-        const rfsItems = unifiedIncidents.filter((i) => i.source === 'rfs');
+        const rfsItems = unifiedIncidents.filter(isFireIncident);
         const alertCounts = {};
         const typeCounts = {}; // key → { label, n }
         for (const it of rfsItems) {
@@ -10892,8 +10995,19 @@ function initPagerHoursFromStorage() {
         const typePills = Object.keys(typeCounts).sort().map((k) =>
           _ffPill(rfsTypeFilter[k] !== false, `${escapeHtml(typeCounts[k].label)} (${typeCounts[k].n})`, `toggleRfsTypePill('${k}')`)
         ).join('');
+        const agencyCounts = {};
+        for (const it of rfsItems) {
+          const k = fireAgencyKey(it);
+          agencyCounts[k] = (agencyCounts[k] || 0) + 1;
+        }
+        // Only offer an agency once it has something to show, so the row
+        // doesn't advertise a feed that happens to be empty or down.
+        const agencyPills = FIRE_AGENCIES.filter((a) => agencyCounts[a.key]).map((a) =>
+          _ffPill(fireAgencyFilter[a.key] !== false, `${a.label} (${agencyCounts[a.key]})`, `toggleFireAgencyPill('${a.key}')`)
+        ).join('');
         return `
-          <h4><i class="fa-solid fa-fire" style="color:#ef4444;"></i> RFS Incidents</h4>
+          <h4><i class="fa-solid fa-fire" style="color:#ef4444;"></i> Fires</h4>
+          ${agencyPills ? `<div class="ff-section-label">Agency</div><div class="floating-filter-pills">${agencyPills}</div>` : ''}
           <div class="ff-section-label">Alert level</div>
           <div class="floating-filter-pills">${alertPills}</div>
           <div class="ff-section-label">Incident type</div>

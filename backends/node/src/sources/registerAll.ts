@@ -15,6 +15,7 @@ import registerAdsb from './adsb.js';
 import registerUserIncidents from './userIncidents.js';
 import registerActAmbulance from './actAmbulance.js';
 import registerQldCameras from './qldCameras.js';
+import registerNtFire from './ntFire.js';
 
 export function registerAllSources(): void {
   registerRfs();
@@ -29,4 +30,5 @@ export function registerAllSources(): void {
   registerUserIncidents();
   registerActAmbulance();
   registerQldCameras();
+  registerNtFire();
 }

@@ -15,6 +15,8 @@ import { fetchJson } from './shared/http.js';
 import { registerSource } from '../services/sourceRegistry.js';
 import { liveStore } from '../store/live.js';
 import { log } from '../lib/log.js';
+import { defaultArchiveItems } from '../services/archiveExtract.js';
+import type { ArchiveRow } from '../store/archive.js';
 
 const HAZARD_BASE = 'https://www.livetraffic.com/traffic/hazards';
 // all-feeds-web.json is the site's own aggregate layer. We read it twice:
@@ -645,6 +647,52 @@ export async function fetchTrafficCameras(): Promise<TrafficCamerasSnapshot> {
   };
 }
 
+/**
+ * Which existing archive source a works record belongs to.
+ *
+ * The all-feeds-web aggregate is a mixed bag — roadwork, construction,
+ * utilities, light rail, hazards, flooding, events — and filing it all
+ * under one "Works" type meant the logs page offered a type whose
+ * contents were really Incidents, Roadwork, Flooding and Major Events
+ * wearing one label. These are the same buckets map.html's
+ * `_worksTarget()` uses to split the feed across its layers; keep the
+ * two in step.
+ *
+ * The LIVE snapshot is untouched — /api/traffic/works still serves the
+ * whole feed, which is what the map's merges read. Only the archive
+ * filing changes.
+ */
+export function worksArchiveSource(mainCategory: string): string {
+  const c = mainCategory.toLowerCase().replace(/[^a-z]/g, '');
+  if (c.includes('flood')) return 'traffic_flood';
+  if (/roadwork|construction|utilit|lightrail|telecommunication|charitable/.test(c)) {
+    return 'traffic_roadwork';
+  }
+  if (/majorevent|specialevent/.test(c)) return 'traffic_majorevent';
+  return 'traffic_incident';
+}
+
+/**
+ * Archive fan-out for the works feed: same rows defaultArchiveItems
+ * would produce, re-pointed per record.
+ *
+ * `archiveSource` on the registration is a single constant applied to
+ * every row, so splitting one feed across several sources needs this
+ * hook (sourceRegistry.ts). Ids stay `ltw:`-prefixed and so cannot
+ * collide with the state feeds' own upstream ids in the same tables.
+ */
+export function worksArchiveItems(
+  data: unknown,
+  fetched_at: number,
+  source: string,
+): ArchiveRow[] {
+  return defaultArchiveItems(source, data, fetched_at).map((row) => {
+    const d = (row.data ?? {}) as Record<string, unknown>;
+    const cat = asString(d['mainCategory']) || asString(row.category);
+    return { ...row, source: worksArchiveSource(cat) };
+  });
+}
+
 export default function register(): void {
   for (const k of HAZARD_KINDS) {
     registerSource<TrafficSnapshot>({
@@ -660,6 +708,9 @@ export default function register(): void {
     family: 'traffic',
     intervalMs: 300_000,
     fetch: fetchTrafficWorks,
+    // Archive each record under the type its category already implies,
+    // rather than a 'Works' bucket of its own. See worksArchiveItems.
+    archiveItems: worksArchiveItems,
   });
   registerSource<TrafficCamerasSnapshot>({
     name: 'traffic_cameras',

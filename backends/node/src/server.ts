@@ -41,6 +41,7 @@ import { dataHistoryRouter } from './api/data-history.js';
 // Aviation / news / summaries / transcripts (W7).
 import { aviationRouter } from './api/aviation.js';
 import { qldCamerasRouter } from './api/qld-cameras.js';
+import { ntFireRouter } from './api/nt-fire.js';
 import { agencyRouter } from './api/agency.js';
 import { marinetrafficRouter } from './api/marinetraffic.js';
 import { newsRouter } from './api/news.js';
@@ -318,6 +319,7 @@ export function createApp() {
   // Aviation cameras + news RSS + summaries (W7)
   app.route('/', aviationRouter);
   app.route('/', qldCamerasRouter);
+  app.route('/', ntFireRouter);
   app.route('/', agencyRouter);
   app.route('/', marinetrafficRouter);
   app.route('/', newsRouter);

@@ -576,6 +576,7 @@
         // Icon mappings for providers (Font Awesome icon names)
         const providerIcons = {
           'LiveTraffic NSW': 'road',
+          'Fires': 'fire',
           'NSW Rural Fire Service': 'fire',
           'Endeavour Energy': 'bolt',
           'Ausgrid': 'plug',
@@ -588,6 +589,7 @@
         };
         const providerColors = {
           'LiveTraffic NSW': '#f97316',
+          'Fires': '#ef4444',
           'NSW Rural Fire Service': '#ef4444',
           'Endeavour Energy': '#fbbf24',
           'Ausgrid': '#f59e0b',
@@ -1118,6 +1120,7 @@
         'Major Events': { icon: 'star', color: '#8b5cf6' },
         // RFS
         'Major Incidents': { icon: 'fire-flame-curved', color: '#ef4444' },
+        'NT Fire & Rescue': { icon: 'fire-flame-curved', color: '#f97316' },
         // Endeavour / Ausgrid / Essential
         'Current Outages': { icon: 'bolt', color: '#ef4444' },
         'Planned Outages': { icon: 'calendar-check', color: '#22c55e' },
@@ -1391,7 +1394,7 @@
               typeLabel.textContent = 'Cap Code';
             } else if (sourceToQuery && sourceToQuery.includes('rfs')) {
               typeLabel.textContent = 'Fire Type';
-            } else if (sourceToQuery && /traffic_(alpine|lga|works)/.test(sourceToQuery)) {
+            } else if (sourceToQuery && /traffic_(alpine|lga)/.test(sourceToQuery)) {
               // Council/Works/Alpine list conditions and work types, not
               // incident types.
               typeLabel.textContent = 'Category';
@@ -2097,13 +2100,18 @@
         let extraDetails = ''; // Additional details shown below badges
         const sourceColors = getSourceColors(item.source);
         
-        if (item.source === 'rfs') {
-          const status = data.STATUS || item.status || '';
-          const alertLevel = data.ALERT_LEVEL || item.severity || '';
-          const fireType = data.TYPE || item.category || '';
-          const size = data.SIZE || '';
-          const council = data.COUNCIL_AREA || data.COUNCIL || '';
-          const agency = data.RESPONSIBLE_AGENCY || '';
+        if (item.source === 'rfs' || item.source === 'nt_fire') {
+          // Both feeds publish camelCase. The old uppercase reads never
+          // matched, so alertLevel fell through to `severity` (always
+          // null for these) and fireType fell through to `category` —
+          // which IS the alert level, so every row showed "Not
+          // Applicable" as its fire type and no alert level at all.
+          const status = data.status || item.status || '';
+          const alertLevel = data.alertLevel || item.category || '';
+          const fireType = data.fireType || item.subcategory || '';
+          const size = data.size || '';
+          const council = data.councilArea || '';
+          const agency = data.responsibleAgency || data.agency || '';
           if (status) extraInfo += `<span class="lg-badge" style="--badge:${getStatusColor(status)}">${escapeHtml(status)}</span>`;
           if (alertLevel) extraInfo += `<span class="lg-badge" style="--badge:${getAlertLevelColor(alertLevel)}">${escapeHtml(alertLevel)}</span>`;
           // Only show fire type if it's different from status AND alert level (avoid duplicates like "Advice" showing twice)
@@ -2508,7 +2516,7 @@
       // Resource Allocation Pending -> Units On Route -> On Scene; user
       // incidents get edited. Everything else (traffic, pager, outages) is
       // point-in-time and a history would just repeat one row.
-      const HISTORY_SOURCES = new Set(['rfs', 'user_incident', 'act_ambulance']);
+      const HISTORY_SOURCES = new Set(['rfs', 'user_incident', 'act_ambulance', 'nt_fire']);
       if (!HISTORY_SOURCES.has(item.source)) {
         historySection.innerHTML = '';
         return;
@@ -2570,6 +2578,9 @@
         const TRACKED = {
           rfs: (d, r) => [d.status ?? r.status, d.alertLevel ?? r.severity, d.fireType ?? r.category, d.size, d.updated].join('|'),
           act_ambulance: (d, r) => [d.status ?? r.subcategory, d.type ?? r.category].join('|'),
+          // NT records move Going -> Closed and shift alert level;
+          // `updated` is theirs and only moves on a real revision.
+          nt_fire: (d, r) => [d.status ?? r.status, d.alertLevel ?? r.category, d.fireType ?? r.subcategory, d.updated].join('|'),
           user_incident: (d, r) => [d.status ?? r.status, d.category ?? r.category, d.description, d.title].join('|'),
         };
         const signature = TRACKED[item.source] || ((d, r) => JSON.stringify(d ?? r));
@@ -2604,8 +2615,9 @@
           const snapData = snapshot.data || {};
           const timeStr = snapshot.fetched_at_iso ? new Date(snapshot.fetched_at_iso).toLocaleString() : '';
           
-          if (item.source === 'rfs') {
-            // RFS specific display - like the Discord bot
+          if (item.source === 'rfs' || item.source === 'nt_fire') {
+            // Fire display, shared by NSW RFS and NT Fire & Rescue —
+            // the backend gives both the same property names.
             // The feed publishes camelCase (status / alertLevel / fireType /
             // updated). The old uppercase reads never matched, so every past
             // update rendered as "Unknown" with no alert level.
@@ -3298,6 +3310,7 @@
       if (lt) return lt.label;
       const names = {
         'rfs': 'RFS Fires',
+        'nt_fire': 'NT Fire & Rescue',
         'traffic_incident': 'Traffic Incidents',
         'traffic_roadwork': 'Roadwork',
         'traffic_flood': 'Floods',
@@ -3322,7 +3335,7 @@
         'act_ambulance': 'ACT Ambulance',
         'traffic_alpine': 'Alpine',
         'traffic_lga': 'Council Roads',
-        'traffic_works': 'Works & ACT'
+        'traffic_works': 'Roadwork & Works'
       };
       return names[source] || source;
     }
@@ -3376,6 +3389,7 @@
       if (ltc) return { primary: ltc.color, secondary: ltc.color };
       const colors = {
         'rfs': { primary: '#ef4444', secondary: '#f87171' },
+        'nt_fire': { primary: '#f97316', secondary: '#fb923c' },
         'pager': { primary: '#22c55e', secondary: '#4ade80' },
         'user_incident': { primary: '#a855f7', secondary: '#c084fc' },
         'traffic_incident': { primary: '#f97316', secondary: '#fb923c' },

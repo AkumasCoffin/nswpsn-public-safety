@@ -422,3 +422,83 @@ describe('traffic works survives an upstream apiSource dropout', () => {
     expect((await fetchTrafficWorks()).count).toBe(1);
   });
 });
+
+/**
+ * The works aggregate is filed by category rather than under a "Works"
+ * type of its own — the logs page was offering a type whose contents
+ * were really Incidents, Roadwork, Flooding and Major Events under one
+ * label. These buckets must stay in step with map.html's _worksTarget().
+ */
+describe('traffic.worksArchiveSource', () => {
+  it('files the construction family as roadwork', async () => {
+    const { worksArchiveSource } = await import('../../../src/sources/traffic.js');
+    for (const c of [
+      'Roadwork',
+      'roadWorks',
+      'buildingConstruction',
+      'lightRail',
+      'utilities',
+      'telecommunication',
+    ]) {
+      expect(worksArchiveSource(c)).toBe('traffic_roadwork');
+    }
+  });
+
+  it('files floods and events under their own types', async () => {
+    const { worksArchiveSource } = await import('../../../src/sources/traffic.js');
+    expect(worksArchiveSource('Flood')).toBe('traffic_flood');
+    expect(worksArchiveSource('MajorEvent')).toBe('traffic_majorevent');
+    expect(worksArchiveSource('specialEvent')).toBe('traffic_majorevent');
+  });
+
+  it('treats everything else as an incident', async () => {
+    const { worksArchiveSource } = await import('../../../src/sources/traffic.js');
+    for (const c of ['generalHazards', 'Breakdown', 'Crash', 'Advice', 'other', 'Not Applicable', '']) {
+      expect(worksArchiveSource(c)).toBe('traffic_incident');
+    }
+  });
+
+  it('is case- and punctuation-insensitive, since the feed is neither', async () => {
+    const { worksArchiveSource } = await import('../../../src/sources/traffic.js');
+    expect(worksArchiveSource('ROAD WORKS')).toBe('traffic_roadwork');
+    expect(worksArchiveSource('light rail')).toBe('traffic_roadwork');
+    expect(worksArchiveSource('major event')).toBe('traffic_majorevent');
+  });
+});
+
+describe('traffic.worksArchiveItems', () => {
+  it('re-points each row without disturbing anything else about it', async () => {
+    const { worksArchiveItems } = await import('../../../src/sources/traffic.js');
+    const snapshot = {
+      type: 'FeatureCollection',
+      features: [
+        {
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [151.2, -33.8] },
+          properties: { id: 'ltw:aaa', title: 'Pit works', mainCategory: 'Roadwork' },
+        },
+        {
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [151.3, -33.9] },
+          properties: { id: 'ltw:bbb', title: 'Water over road', mainCategory: 'Flood' },
+        },
+        {
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [151.4, -34.0] },
+          properties: { id: 'ltw:ccc', title: 'Debris', mainCategory: 'generalHazards' },
+        },
+      ],
+      count: 3,
+    };
+    const rows = worksArchiveItems(snapshot, 1_700_000_000, 'traffic_works');
+    expect(rows.map((r) => r.source)).toEqual([
+      'traffic_roadwork',
+      'traffic_flood',
+      'traffic_incident',
+    ]);
+    // ids stay ltw:-prefixed so they cannot collide with the state
+    // feeds' own upstream ids now sharing these sources
+    expect(rows.every((r) => String(r.source_id).startsWith('ltw:'))).toBe(true);
+    expect(rows[0]!.fetched_at).toBe(1_700_000_000);
+  });
+});

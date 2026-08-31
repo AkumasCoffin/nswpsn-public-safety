@@ -50,7 +50,6 @@ const RAW_SOURCE_TO_ALERT_TYPE: Record<string, string> = {
   traffic_majorevent: 'traffic_majorevent',
   traffic_alpine: 'traffic_alpine',
   traffic_lga: 'traffic_lga',
-  traffic_works: 'traffic_works',
   livetraffic: 'traffic_incident',
   endeavour_current: 'endeavour_current',
   endeavour_planned: 'endeavour_planned',
@@ -83,6 +82,10 @@ const RAW_SOURCE_TO_ALERT_TYPE: Record<string, string> = {
 
 const ALERT_TYPE_PROVIDER: Record<string, [string, string]> = {
   rfs: ['rfs', 'Major Incidents'],
+  // Same provider as NSW RFS — the logs page shows one "Fires" source
+  // covering both agencies. NOT named 'Fires' as a TYPE: traffic_fire
+  // already owns that label and the frontend keys its icons on the name.
+  nt_fire: ['rfs', 'NT Fire & Rescue'],
   bom_land: ['bom', 'Land Warnings'],
   bom_marine: ['bom', 'Marine Warnings'],
   traffic_incident: ['livetraffic', 'Incidents'],
@@ -92,7 +95,6 @@ const ALERT_TYPE_PROVIDER: Record<string, [string, string]> = {
   traffic_majorevent: ['livetraffic', 'Major Events'],
   traffic_alpine: ['livetraffic', 'Alpine'],
   traffic_lga: ['livetraffic', 'Council Roads'],
-  traffic_works: ['livetraffic', 'Works & ACT'],
   endeavour_current: ['endeavour', 'Current Outages'],
   endeavour_planned: ['endeavour', 'Planned Outages'],
   ausgrid: ['ausgrid', 'Outages'],
@@ -105,7 +107,8 @@ const ALERT_TYPE_PROVIDER: Record<string, [string, string]> = {
 };
 
 const PROVIDER_DISPLAY: Record<string, { name: string; icon: string; color: string }> = {
-  rfs: { name: 'NSW Rural Fire Service', icon: 'fire', color: '#ef4444' },
+  // Covers NSW RFS + NT Fire & Rescue, so no longer named for one of them.
+  rfs: { name: 'Fires', icon: 'fire', color: '#ef4444' },
   bom: { name: 'Bureau of Meteorology', icon: 'cloud', color: '#3b82f6' },
   livetraffic: { name: 'LiveTraffic NSW', icon: 'road', color: '#f97316' },
   endeavour: { name: 'Endeavour Energy', icon: 'bolt', color: '#fbbf24' },
@@ -132,6 +135,7 @@ const PROVIDER_ORDER = [
 ];
 
 const PROVIDER_TYPE_ORDER: Record<string, string[]> = {
+  rfs: ['rfs', 'nt_fire'],
   bom: ['bom_land', 'bom_marine'],
   livetraffic: [
     'traffic_incident',
@@ -141,7 +145,6 @@ const PROVIDER_TYPE_ORDER: Record<string, string[]> = {
     'traffic_majorevent',
     'traffic_alpine',
     'traffic_lga',
-    'traffic_works',
   ],
   endeavour: ['endeavour_current', 'endeavour_planned'],
   essential: ['essential_current', 'essential_future'],
