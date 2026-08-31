@@ -81,17 +81,20 @@ const RAW_SOURCE_TO_ALERT_TYPE: Record<string, string> = {
 };
 
 const ALERT_TYPE_PROVIDER: Record<string, [string, string]> = {
-  // 'Major Incidents' is what the RFS calls its feed file, not what the
-  // agency is called. Beside 'NT Fire & Rescue' and 'QLD Fire & Emergency'
-  // it read as a different kind of thing entirely.
-  rfs: ['rfs', 'NSW RFS'],
-  // Same provider as NSW RFS — the logs page shows one "Fires" source
-  // covering both agencies. NOT named 'Fires' as a TYPE: traffic_fire
-  // already owns that label and the frontend keys its icons on the name.
-  nt_fire: ['rfs', 'NT Fire & Rescue'],
-  qld_fire: ['rfs', 'QLD Fire & Emergency'],
-  qld_warning: ['rfs', 'QLD Warnings'],
-  vic_emergency: ['rfs', 'VIC Emergency'],
+  // A provider is an ORGANISATION and a type is one of its feeds — the
+  // same shape Endeavour Energy (Current / Planned Outages) and the ACT
+  // Ambulance Service (Responses) already have. The fire agencies used to
+  // be five types inside one provider called 'Fires', which put NSW,
+  // Northern Territory, Queensland and Victoria behind a single entry in
+  // a dropdown labelled "Data source" — a grouping, not a source.
+  //
+  // Queensland keeps two types because it genuinely publishes two feeds:
+  // what is burning, and what the public is being told about it.
+  rfs: ['rfs', 'Incidents'],
+  nt_fire: ['nt_fire', 'Incidents'],
+  qld_fire: ['qfd', 'Incidents'],
+  qld_warning: ['qfd', 'Warnings'],
+  vic_emergency: ['vic', 'Events'],
   bom_land: ['bom', 'Land Warnings'],
   bom_marine: ['bom', 'Marine Warnings'],
   traffic_incident: ['livetraffic', 'Incidents'],
@@ -113,8 +116,15 @@ const ALERT_TYPE_PROVIDER: Record<string, [string, string]> = {
 };
 
 const PROVIDER_DISPLAY: Record<string, { name: string; icon: string; color: string }> = {
-  // Covers NSW RFS + NT Fire & Rescue, so no longer named for one of them.
-  rfs: { name: 'Fires', icon: 'fire', color: '#ef4444' },
+  // The colours match the agency pills on the map and the incident cards,
+  // so an agency is the same colour wherever it appears.
+  rfs: { name: 'NSW RFS', icon: 'fire', color: '#ef4444' },
+  nt_fire: { name: 'NT Fire & Rescue', icon: 'fire', color: '#f97316' },
+  qfd: { name: 'QLD Fire Dept', icon: 'fire', color: '#dc2626' },
+  // Not 'fire': this feed carries Victoria's floods, storm damage and
+  // hazmat as well, and two national agencies relay earthquake and
+  // severe-weather warnings through it.
+  vic: { name: 'VIC Emergency', icon: 'triangle-exclamation', color: '#6366f1' },
   bom: { name: 'Bureau of Meteorology', icon: 'cloud', color: '#3b82f6' },
   livetraffic: { name: 'LiveTraffic NSW', icon: 'road', color: '#f97316' },
   endeavour: { name: 'Endeavour Energy', icon: 'bolt', color: '#fbbf24' },
@@ -129,6 +139,9 @@ const PROVIDER_DISPLAY: Record<string, { name: string; icon: string; color: stri
 
 const PROVIDER_ORDER = [
   'rfs',
+  'nt_fire',
+  'qfd',
+  'vic',
   'bom',
   'livetraffic',
   'endeavour',
@@ -141,7 +154,10 @@ const PROVIDER_ORDER = [
 ];
 
 const PROVIDER_TYPE_ORDER: Record<string, string[]> = {
-  rfs: ['rfs', 'nt_fire', 'qld_fire', 'qld_warning', 'vic_emergency'],
+  rfs: ['rfs'],
+  nt_fire: ['nt_fire'],
+  qfd: ['qld_fire', 'qld_warning'],
+  vic: ['vic_emergency'],
   bom: ['bom_land', 'bom_marine'],
   livetraffic: [
     'traffic_incident',

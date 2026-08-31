@@ -37,9 +37,10 @@ describe('filterCache', () => {
 
   it('returns the full provider list when LiveStore is empty', () => {
     const facets = getFilterFacetsLive();
-    // 10 providers: rfs, bom, livetraffic, endeavour, ausgrid, essential,
-    // pager, user, rdio, actas. Waze was retired along with its ingest.
-    expect(facets.providers).toHaveLength(10);
+    // 13 providers: the four fire agencies (rfs, nt_fire, qfd, vic) plus
+    // bom, livetraffic, endeavour, ausgrid, essential, pager, user, rdio,
+    // actas. Waze was retired along with its ingest.
+    expect(facets.providers).toHaveLength(13);
     for (const p of facets.providers) {
       expect(p.count).toBe(0);
     }
@@ -170,10 +171,47 @@ describe('filterCache', () => {
     expect(rfsType?.subcategories.length).toBe(2);
   });
 
-  it('names the RFS type after the agency, not after its feed file', () => {
+  it('gives each fire agency its own provider rather than one "Fires" group', () => {
+    // A provider is an organisation and a type is one of its feeds, the
+    // same shape Endeavour Energy and the ACT Ambulance Service have.
     liveStore.set('rfs', [{ category: 'Advice', status: 'Under control' }]);
-    const rfsType = findType(findProvider(getFilterFacetsLive(), 'rfs'), 'rfs');
-    expect(rfsType?.name).toBe('NSW RFS');
+    liveStore.set('nt_fire', [{ status: 'Going' }]);
+    liveStore.set('qld_fire', [{ status: 'Going' }]);
+    liveStore.set('qld_warning', [{ category: 'Advice' }]);
+    liveStore.set('vic_emergency', [{ category: 'Advice' }]);
+    const facets = getFilterFacetsLive();
+
+    const named = (key: string) => findProvider(facets, key)?.name;
+    expect(named('rfs')).toBe('NSW RFS');
+    expect(named('nt_fire')).toBe('NT Fire & Rescue');
+    expect(named('qfd')).toBe('QLD Fire Dept');
+    expect(named('vic')).toBe('VIC Emergency');
+    // The old catch-all is gone, not merely renamed.
+    expect(facets.providers.some((p) => p.name === 'Fires')).toBe(false);
+
+    // Queensland keeps two feeds under the one agency; the others have one.
+    expect(findProvider(facets, 'qfd')?.types.map((t) => t.name)).toEqual(['Incidents', 'Warnings']);
+    expect(findProvider(facets, 'rfs')?.types.map((t) => t.alert_type)).toEqual(['rfs']);
+    expect(findProvider(facets, 'vic')?.types.map((t) => t.name)).toEqual(['Events']);
+  });
+
+  it('counts each fire agency against its own provider', () => {
+    liveStore.set('rfs', [{ status: 'Going' }, { status: 'Going' }]);
+    liveStore.set('qld_fire', [{ status: 'Going' }]);
+    liveStore.set('qld_warning', [{ status: 'Stay Informed' }]);
+    const facets = getFilterFacetsLive();
+    expect(findProvider(facets, 'rfs')?.count).toBe(2);
+    // Both Queensland feeds roll up to the one agency.
+    expect(findProvider(facets, 'qfd')?.count).toBe(2);
+    expect(findProvider(facets, 'nt_fire')?.count).toBe(0);
+  });
+
+  it('scopes to the agency when filtered by one of its alert types', () => {
+    liveStore.set('qld_fire', [{ status: 'Going' }]);
+    liveStore.set('rfs', [{ status: 'Going' }]);
+    const facets = getFilterFacetsLive('qld_fire');
+    expect(facets.providers.map((p) => p.key)).toEqual(['qfd']);
+    expect(facets.providers[0]?.types.map((t) => t.alert_type)).toEqual(['qld_fire']);
   });
 
   it('canonicalAlertType folds legacy source names', () => {

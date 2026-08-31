@@ -573,33 +573,14 @@
         const data = await res.json();
 
         // Add provider options (icon from API is just the name like 'car', we add 'fa-' prefix)
-        // Icon mappings for providers (Font Awesome icon names)
-        const providerIcons = {
-          'LiveTraffic NSW': 'road',
-          'Fires': 'fire',
-          'NSW Rural Fire Service': 'fire',
-          'Endeavour Energy': 'bolt',
-          'Ausgrid': 'plug',
-          'Essential Energy': 'bolt',
-          'Bureau of Meteorology': 'cloud',
-          'Pager': 'pager',
-          'User Submissions': 'user',
-          'NSW PSN User Submissions': 'user',
-          'ACT Ambulance Service': 'truck-medical'
-        };
-        const providerColors = {
-          'LiveTraffic NSW': '#f97316',
-          'Fires': '#ef4444',
-          'NSW Rural Fire Service': '#ef4444',
-          'Endeavour Energy': '#fbbf24',
-          'Ausgrid': '#f59e0b',
-          'Essential Energy': '#06b6d4',
-          'Bureau of Meteorology': '#3b82f6',
-          'Pager': '#8b5cf6',
-          'User Submissions': '#a855f7',
-          'NSW PSN User Submissions': '#a855f7',
-          'ACT Ambulance Service': '#ec4899'
-        };
+        // Providers used to be matched against a hardcoded name->icon map
+        // here, and any provider missing from it was dropped from the list
+        // entirely — silently, so a new source simply never appeared.
+        // "Radio Scanner" had been invisible that way for as long as it has
+        // existed, and splitting the fire agencies out of the old "Fires"
+        // grouping would have hidden all four of them the same way. The API
+        // sends an icon and a colour with every provider, so that is what
+        // is used; nothing here has to know the list.
 
         // Normalise providers from the new endpoint shape into the structure
         // the rest of this page expects. The new contract returns:
@@ -613,9 +594,7 @@
         // subcategories / statuses / severities are kept on the normalised
         // shape so onSourceChange / source-filtered calls can read them
         // without a second backend round-trip.
-        const rawProviders = (data.providers || []).filter(
-          p => providerIcons[p.name] || providerColors[p.name]
-        );
+        const rawProviders = data.providers || [];
         providersData = rawProviders.map(p => ({
           ...p,
           types: (p.types || []).map(t => ({
@@ -666,9 +645,8 @@
           const opt = document.createElement('div');
           opt.className = 'custom-dropdown-option';
           opt.dataset.value = p.name;
-          // Use local icon mapping as fallback if API doesn't provide valid icon
-          const iconName = providerIcons[p.name] || p.icon || 'circle';
-          const iconColor = providerColors[p.name] || p.color || '#64748b';
+          const iconName = p.icon || 'circle';
+          const iconColor = p.color || '#64748b';
           opt.dataset.icon = iconName;
           opt.dataset.color = iconColor;
           opt.innerHTML = `<i class="fa-solid fa-${iconName}" style="color: ${iconColor};"></i><span>${escapeHtml(p.name)}</span><span class="option-count">${p.count.toLocaleString()}</span>`;
@@ -1063,8 +1041,12 @@
       if (optionsContainer) optionsContainer.innerHTML = '';
     }
     
-    // Type icon mappings — keyed on the `name` field returned by the
-    // /api/data/history/filters endpoint per provider.types[*].name.
+    // Type icons, keyed on `alert_type` — the stable identifier — rather
+    // than on the display name. Names are not unique across providers and
+    // never were: LiveTraffic's incident feed is called "Incidents" and so
+    // is the RFS's, and its fire feed is called "Fires" just as the old
+    // fire grouping was. Keyed on the label, whichever entry was written
+    // last decided the icon for both.
     //
     // Module scope because two functions need it: the TYPE dropdown
     // builder and the deep-link handler. Those used to keep separate
@@ -1072,46 +1054,39 @@
     // BOM and pager entries, so a shared ?provider=&source= link
     // rendered grey circles for types the UI itself drew correctly.
     const typeIcons = {
-      // Waze
-      'Hazards': { icon: 'triangle-exclamation', color: '#eab308' },
-      'Traffic Jams': { icon: 'car', color: '#ef4444' },
-      'Police': { icon: 'shield-halved', color: '#3b82f6' },
-      'Roadwork': { icon: 'person-digging', color: '#f97316' },
+      // Fire agencies — one feed each, except Queensland's two.
+      'rfs': { icon: 'fire-flame-curved', color: '#ef4444' },
+      'nt_fire': { icon: 'fire-flame-curved', color: '#f97316' },
+      'qld_fire': { icon: 'fire-flame-curved', color: '#dc2626' },
+      'qld_warning': { icon: 'triangle-exclamation', color: '#f59e0b' },
+      'vic_emergency': { icon: 'triangle-exclamation', color: '#6366f1' },
       // LiveTraffic NSW
-      'Incidents': { icon: 'car-burst', color: '#ef4444' },
-      'Flooding': { icon: 'water', color: '#3b82f6' },
-      'Fires': { icon: 'fire', color: '#ef4444' },
-      'Major Events': { icon: 'star', color: '#8b5cf6' },
-      // RFS
-      'NSW RFS': { icon: 'fire-flame-curved', color: '#ef4444' },
-      'NT Fire & Rescue': { icon: 'fire-flame-curved', color: '#f97316' },
-      'QLD Fire & Emergency': { icon: 'fire-flame-curved', color: '#dc2626' },
-      'QLD Warnings': { icon: 'triangle-exclamation', color: '#f59e0b' },
-      'VIC Emergency': { icon: 'fire-flame-curved', color: '#6366f1' },
-      // ACT Ambulance's only type, and the two Live Traffic feeds that
-      // report conditions rather than incidents.
-      'Responses': { icon: 'truck-medical', color: '#ec4899' },
-      'Alpine': { icon: 'snowflake', color: '#38bdf8' },
-      'Council Roads': { icon: 'building-columns', color: '#a3e635' },
-      // Endeavour / Ausgrid / Essential
-      'Current Outages': { icon: 'bolt', color: '#ef4444' },
-      'Planned Outages': { icon: 'calendar-check', color: '#22c55e' },
-      'Future Outages': { icon: 'calendar-plus', color: '#06b6d4' },
-      'Outages': { icon: 'bolt', color: '#fbbf24' },
+      'traffic_incident': { icon: 'car-burst', color: '#ef4444' },
+      'traffic_roadwork': { icon: 'person-digging', color: '#f97316' },
+      'traffic_flood': { icon: 'water', color: '#3b82f6' },
+      'traffic_fire': { icon: 'fire', color: '#ef4444' },
+      'traffic_majorevent': { icon: 'star', color: '#8b5cf6' },
+      'traffic_alpine': { icon: 'snowflake', color: '#38bdf8' },
+      'traffic_lga': { icon: 'building-columns', color: '#a3e635' },
+      // Power
+      'endeavour_current': { icon: 'bolt', color: '#ef4444' },
+      'endeavour_planned': { icon: 'calendar-check', color: '#22c55e' },
+      'essential_current': { icon: 'bolt', color: '#ef4444' },
+      'essential_future': { icon: 'calendar-plus', color: '#06b6d4' },
+      'essential_planned': { icon: 'calendar-check', color: '#22c55e' },
+      'ausgrid': { icon: 'bolt', color: '#fbbf24' },
       // BOM
-      'All Warnings': { icon: 'cloud-bolt', color: '#3b82f6' },
-      'Land Warnings': { icon: 'mountain-sun', color: '#22c55e' },
-      'Marine Warnings': { icon: 'water', color: '#0ea5e9' },
-      // legacy short keys (kept for any caller still passing them)
-      'Land': { icon: 'mountain-sun', color: '#22c55e' },
-      'Marine': { icon: 'water', color: '#0ea5e9' },
-      'Warnings': { icon: 'cloud-bolt', color: '#3b82f6' },
-      // Pager
-      'Messages': { icon: 'comment-dots', color: '#8b5cf6' },
-      // User submissions
-      'User Incidents': { icon: 'user-plus', color: '#a855f7' },
-      // Radio scanner summaries
-      'Hourly Summaries': { icon: 'microphone-lines', color: '#10b981' },
+      'bom_land': { icon: 'mountain-sun', color: '#22c55e' },
+      'bom_marine': { icon: 'water', color: '#0ea5e9' },
+      // The rest
+      'act_ambulance': { icon: 'truck-medical', color: '#ec4899' },
+      'pager': { icon: 'comment-dots', color: '#8b5cf6' },
+      'user_incident': { icon: 'user-plus', color: '#a855f7' },
+      'radio_summary': { icon: 'microphone-lines', color: '#10b981' },
+      // Waze, retired with its ingest but harmless to keep.
+      'waze_hazard': { icon: 'triangle-exclamation', color: '#eab308' },
+      'waze_jam': { icon: 'car', color: '#ef4444' },
+      'waze_police': { icon: 'shield-halved', color: '#3b82f6' },
     };
 
     function onProviderChange(skipAutoSelect = false) {
@@ -1172,7 +1147,7 @@
       
       // Add type options
       provider.types.forEach(t => {
-        const typeInfo = typeIcons[t.name] || { icon: 'circle-dot', color: '#94a3b8' };
+        const typeInfo = typeIcons[t.source] || { icon: 'circle-dot', color: '#94a3b8' };
         const opt = document.createElement('div');
         opt.className = 'custom-dropdown-option';
         opt.dataset.value = t.source;
@@ -1186,7 +1161,7 @@
       // If only one type, auto-select it (unless loading from URL params)
       if (provider.types.length === 1 && !skipAutoSelect) {
         const t = provider.types[0];
-        const typeInfo = typeIcons[t.name] || { icon: 'circle-dot', color: '#94a3b8' };
+        const typeInfo = typeIcons[t.source] || { icon: 'circle-dot', color: '#94a3b8' };
         selectType(t.source, t.name, typeInfo.icon, typeInfo.color);
       }
     }
@@ -1431,7 +1406,7 @@
           if (typeLabel) {
             if (sourceToQuery && sourceToQuery.includes('pager')) {
               typeLabel.textContent = 'Cap Code';
-            } else if (sourceToQuery && sourceToQuery.includes('rfs')) {
+            } else if (sourceToQuery && sourceToQuery.split(',').some((x) => FIRE_LOG_SOURCES.has(x.trim()))) {
               typeLabel.textContent = 'Fire Type';
             } else if (sourceToQuery && /traffic_(alpine|lga)/.test(sourceToQuery)) {
               // Council/Works/Alpine list conditions and work types, not
@@ -4148,7 +4123,12 @@
       
       
       if (params.has('provider')) {
-        const providerName = params.get('provider');
+        // 'Fires' was one provider covering four agencies until they were
+        // split out. Links shared before that still name it, and the
+        // lookup below would simply find nothing and silently apply no
+        // filter at all — so send them to the agency that grouping was
+        // mostly about.
+        const providerName = params.get('provider') === 'Fires' ? 'NSW RFS' : params.get('provider');
         const provider = providersData.find(p => p.name === providerName);
         if (provider) {
           // Get icon from the option element which has the correct local mapping
@@ -4166,7 +4146,7 @@
           // Find the matching type for this source
           const matchingType = provider.types.find(t => t.source === sourceParam);
           if (matchingType) {
-            const typeInfo = typeIcons[matchingType.name] || { icon: 'circle-dot', color: '#94a3b8' };
+            const typeInfo = typeIcons[matchingType.source] || { icon: 'circle-dot', color: '#94a3b8' };
             // Use skipTrigger=true to prevent immediate onSourceChange
             selectType(sourceParam, matchingType.name, typeInfo.icon, typeInfo.color, true);
           }
@@ -4196,7 +4176,7 @@
             onProviderChange(true);
             
             // Also select the type
-            const typeInfo = typeIcons[matchingType.name] || { icon: 'circle-dot', color: '#94a3b8' };
+            const typeInfo = typeIcons[matchingType.source] || { icon: 'circle-dot', color: '#94a3b8' };
             selectType(sourceParam, matchingType.name, typeInfo.icon, typeInfo.color, true);
             break;
           }

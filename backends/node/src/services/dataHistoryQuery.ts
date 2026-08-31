@@ -42,8 +42,18 @@ const SOURCE_TO_FAMILY: Record<string, ArchiveTable> = {
   traffic_lga: 'archive_traffic',
   traffic_works: 'archive_traffic',
   livetraffic: 'archive_traffic',
-  // RFS
+  // Fire agencies — all four archive into archive_rfs (see each source's
+  // `family: 'rfs'`). Only `rfs` was listed here, and an unlisted source
+  // falls through to archive_misc, so asking for nt_fire / qld_fire /
+  // qld_warning / vic_emergency on their own searched the wrong table and
+  // came back empty. It went unnoticed because the logs page only ever
+  // asked for them alongside `rfs` — one grouped "Fires" source expanding
+  // to all five — which pulled archive_rfs into the family set anyway.
   rfs: 'archive_rfs',
+  nt_fire: 'archive_rfs',
+  qld_fire: 'archive_rfs',
+  qld_warning: 'archive_rfs',
+  vic_emergency: 'archive_rfs',
   // ACT Ambulance Service (ESA feed)
   act_ambulance: 'archive_misc',
   // Power

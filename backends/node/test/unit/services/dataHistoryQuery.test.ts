@@ -69,6 +69,17 @@ describe('sourceFamilies', () => {
     expect(sourceFamilies(['endeavour_current', 'ausgrid'])).toEqual(['archive_power']);
   });
 
+  it('routes every fire agency to archive_rfs, not just NSW', () => {
+    // These are archived into archive_rfs (each source sets family:'rfs')
+    // but only `rfs` was mapped, so on their own they searched
+    // archive_misc and returned nothing. The logs page hid it by always
+    // asking for them together with `rfs`.
+    for (const s of ['nt_fire', 'qld_fire', 'qld_warning', 'vic_emergency']) {
+      expect(sourceFamilies([s])).toEqual(['archive_rfs']);
+    }
+    expect(sourceFamilies(['nt_fire', 'qld_warning'])).toEqual(['archive_rfs']);
+  });
+
   it('falls back unknown sources to archive_misc', () => {
     expect(sourceFamilies(['nonsense_source'])).toEqual(['archive_misc']);
   });
