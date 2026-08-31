@@ -26,6 +26,15 @@
  * tolerance and the detail comes back. The database keeps the precise
  * geometry — boundaryForPoint needs it, and a border that decides which
  * state an incident is in must not be the simplified one.
+ *
+ * CACHING. The table changes only when someone re-runs the import, so a
+ * viewport asked for twice has the same answer both times — and viewports
+ * repeat constantly, because the map rounds its own key to a twentieth of
+ * a degree and because everyone looking at Sydney asks for Sydney. The
+ * finished response body is kept in memory against that same rounded key,
+ * which skips the database read, the parse, the simplify and the
+ * serialise — the whole cost — and the browser is told it may reuse the
+ * response for an hour as well.
  */
 import { Hono } from 'hono';
 import { getPool } from '../db/pool.js';
@@ -124,6 +133,50 @@ export function simplifyRing(ring: number[][], tol: number): number[][] {
   return out;
 }
 
+/**
+ * Coordinate decimals worth keeping for a given tolerance.
+ *
+ * The stored geometry has five (about a metre). Printing five when the
+ * view can only resolve a kilometre spends three characters per number
+ * on noise, twice per point, across hundreds of thousands of points. One
+ * decimal finer than the tolerance keeps the rounding error under a
+ * tenth of what the simplifier is already allowed to move a point by, so
+ * it cannot be the thing that shows.
+ */
+export function decimalsFor(tol: number): number {
+  if (tol <= 0) return 5;
+  const d = Math.ceil(-Math.log10(tol)) + 1;
+  return Math.min(6, Math.max(3, d));
+}
+
+/**
+ * Round a ring to `decimals` and drop points that land on the one
+ * before. Rounding is what makes them collide, and a repeated point
+ * draws nothing — at a wide zoom this is a real share of the payload.
+ * The closing point is preserved so the ring stays closed.
+ */
+export function roundRing(ring: number[][], decimals: number): number[][] {
+  const f = 10 ** decimals;
+  const out: number[][] = [];
+  let px = NaN;
+  let py = NaN;
+  for (const p of ring) {
+    if (!Array.isArray(p) || p.length < 2) continue;
+    const x = Math.round(p[0]! * f) / f;
+    const y = Math.round(p[1]! * f) / f;
+    if (x === px && y === py) continue;
+    out.push([x, y]);
+    px = x;
+    py = y;
+  }
+  // Rounding can pull the last point onto the first; a ring of three
+  // distinct corners still needs its explicit close.
+  const first = out[0];
+  const last = out[out.length - 1];
+  if (first && last && (first[0] !== last[0] || first[1] !== last[1])) out.push([first[0]!, first[1]!]);
+  return out;
+}
+
 /** A ring needs three distinct corners plus the repeated closing point. */
 function usableRing(ring: number[][]): boolean {
   return ring.length >= 4;
@@ -158,13 +211,14 @@ function polygonVisible(rings: unknown, tol: number): boolean {
 export function simplifyGeometry(geom: unknown, tol: number): unknown {
   if (tol <= 0 || !geom || typeof geom !== 'object') return geom;
   const g = geom as { type?: string; coordinates?: unknown };
+  const decimals = decimalsFor(tol);
   const doPolygon = (rings: unknown): number[][][] | null => {
     if (!Array.isArray(rings) || !rings.length) return null;
     if (!polygonVisible(rings, tol)) return null;
     const out: number[][][] = [];
     for (const r of rings) {
       if (!Array.isArray(r)) continue;
-      const simplified = simplifyRing(r as number[][], tol);
+      const simplified = roundRing(simplifyRing(r as number[][], tol), decimals);
       // A hole that collapses is simply gone; an outer ring that
       // collapses takes the polygon with it.
       if (usableRing(simplified)) out.push(simplified);
@@ -190,6 +244,79 @@ export function simplifyGeometry(geom: unknown, tol: number): unknown {
       : { type: 'MultiPolygon', coordinates: polys };
   }
   return geom;
+}
+
+/**
+ * Finished response bodies, newest-wins with a byte ceiling.
+ *
+ * Bounded by bytes rather than entries because the entries differ by
+ * three orders of magnitude — a street view is 60 kB and a national one
+ * is 5 MB, and counting them equally would either waste the cache or
+ * blow the heap. A Map iterates in insertion order, so the oldest key is
+ * simply the first one.
+ */
+const CACHE_MAX_BYTES = 96 * 1024 * 1024;
+const CACHE_TTL_MS = 60 * 60 * 1000;
+const cache = new Map<string, { body: string; at: number }>();
+let cacheBytes = 0;
+
+function cacheGet(key: string): string | null {
+  const hit = cache.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.at > CACHE_TTL_MS) {
+    cache.delete(key);
+    cacheBytes -= hit.body.length;
+    return null;
+  }
+  // Re-insert so the busiest viewports are the last to be evicted.
+  cache.delete(key);
+  cache.set(key, hit);
+  return hit.body;
+}
+
+function cachePut(key: string, body: string): void {
+  // A single response larger than the whole budget would evict everything
+  // and then not fit; skip it rather than thrash.
+  if (body.length > CACHE_MAX_BYTES) return;
+  const existing = cache.get(key);
+  if (existing) cacheBytes -= existing.body.length;
+  cache.set(key, { body, at: Date.now() });
+  cacheBytes += body.length;
+  while (cacheBytes > CACHE_MAX_BYTES) {
+    const oldest = cache.keys().next();
+    if (oldest.done) break;
+    const evicted = cache.get(oldest.value)!;
+    cache.delete(oldest.value);
+    cacheBytes -= evicted.body.length;
+  }
+}
+
+/** Re-import invalidates everything; exported so a reload can say so. */
+export function clearBoundaryCache(): void {
+  cache.clear();
+  cacheBytes = 0;
+}
+
+/** Test seam: the cache is module state and has no other way in. */
+export const __cache = {
+  get: cacheGet,
+  put: cachePut,
+  size: () => cache.size,
+  bytes: () => cacheBytes,
+  maxBytes: CACHE_MAX_BYTES,
+};
+
+/**
+ * The cache key. The bbox is rounded to a twentieth of a degree — the
+ * same granularity the map already rounds its own refetch key to, so
+ * nudging the view by a street reuses the answer instead of asking again.
+ * The rounded box is also what the query and the tolerance are derived
+ * from, so the key cannot describe a different response than it holds.
+ */
+export function viewKey(kind: string, bbox: [number, number, number, number] | null, limit: number): string {
+  if (!bbox) return `${kind}:all:${limit}`;
+  const r = (n: number) => Math.round(n * 20) / 20;
+  return `${kind}:${r(bbox[0])},${r(bbox[1])},${r(bbox[2])},${r(bbox[3])}:${limit}`;
 }
 
 interface BoundaryRow {
@@ -242,6 +369,27 @@ boundariesRouter.get('/api/boundaries/:kind', async (c) => {
     ? Math.min(Math.max(1, Math.floor(limitRaw)), MAX_LIMIT)
     : DEFAULT_LIMIT;
 
+  // Snap the viewport to the cache's own grid, so a request that differs
+  // by metres is answered from memory rather than re-queried. Snapping
+  // outwards keeps the answer a superset of what was asked for.
+  const snapped: [number, number, number, number] | null = bbox
+    ? [
+        Math.floor(bbox[0] * 20) / 20,
+        Math.floor(bbox[1] * 20) / 20,
+        Math.ceil(bbox[2] * 20) / 20,
+        Math.ceil(bbox[3] * 20) / 20,
+      ]
+    : null;
+  const key = viewKey(kind, snapped, limit);
+  const cached = cacheGet(key);
+  if (cached) {
+    return c.body(cached, 200, {
+      'Content-Type': 'application/json; charset=UTF-8',
+      'Cache-Control': 'private, max-age=3600',
+      'X-Cache': 'hit',
+    });
+  }
+
   const pool = await getPool();
   if (!pool) return c.json({ error: 'database unavailable' }, 503);
 
@@ -250,8 +398,8 @@ boundariesRouter.get('/api/boundaries/:kind', async (c) => {
     // without a second COUNT.
     const params: unknown[] = [kind, limit + 1];
     let where = 'kind = $1';
-    if (bbox) {
-      const [w, s, e, n] = bbox;
+    if (snapped) {
+      const [w, s, e, n] = snapped;
       // Standard box overlap: two boxes miss only if one is wholly left,
       // right, above or below the other.
       where += ' AND min_lon <= $3 AND max_lon >= $4 AND min_lat <= $5 AND max_lat >= $6';
@@ -269,20 +417,30 @@ boundariesRouter.get('/api/boundaries/:kind', async (c) => {
     const truncated = rows.length > limit;
     const kept = truncated ? rows.slice(0, limit) : rows;
     // Drawn at the view's own resolution — see the note at the top. A
-    // shape that simplifies away entirely was too small to see.
-    const tol = toleranceFor(bbox);
+    // shape that simplifies away entirely was too small to see. The
+    // tolerance comes off the snapped box for the same reason the query
+    // does: the cached body has to match its key.
+    const tol = toleranceFor(snapped);
     const features = [];
     for (const r of kept) {
       const geom = simplifyGeometry(r.geom, tol);
       if (geom) features.push(toFeature(r, kind, geom));
     }
-    return c.json({
+    const body = JSON.stringify({
       type: 'FeatureCollection',
       features,
       count: features.length,
       // Largest-first ordering means a truncated response still shows the
       // shapes that dominate the view, and the caller can say so.
       truncated,
+    });
+    cachePut(key, body);
+    return c.body(body, 200, {
+      'Content-Type': 'application/json; charset=UTF-8',
+      // The data only moves when the import is re-run, so let the browser
+      // keep it rather than re-asking on every pan back.
+      'Cache-Control': 'private, max-age=3600',
+      'X-Cache': 'miss',
     });
   } catch (err) {
     log.warn({ err: (err as Error).message, kind }, 'boundaries query failed');

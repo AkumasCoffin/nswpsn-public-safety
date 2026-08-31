@@ -7,13 +7,16 @@
  * ignores holes — which for these datasets means the ACT reading as
  * NSW, since the ACT is a hole in it.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import {
   parseBbox,
   geometryContains,
   simplifyRing,
   simplifyGeometry,
   toleranceFor,
+  viewKey,
+  clearBoundaryCache,
+  __cache,
 } from '../../../src/api/boundaries.js';
 
 /** A closed square ring with `per` evenly spaced points along each side. */
@@ -222,5 +225,63 @@ describe('simplifyGeometry', () => {
     const out = simplifyGeometry(g, 0.02);
     expect(geometryContains(out, 0.5, 0.5)).toBe(true);
     expect(geometryContains(out, 1.5, 0.5)).toBe(false);
+  });
+});
+
+describe('viewKey', () => {
+  it('rounds the viewport, so nudging the map by a street reuses the answer', () => {
+    // The map rounds its own refetch key to the same twentieth of a
+    // degree; matching that is what makes the cache hit at all.
+    expect(viewKey('locality', [150.501, -34.201, 151.499, -33.499], 800))
+      .toBe(viewKey('locality', [150.502, -34.202, 151.498, -33.498], 800));
+  });
+
+  it('separates viewports that really are different', () => {
+    expect(viewKey('locality', [150.5, -34.2, 151.5, -33.5], 800))
+      .not.toBe(viewKey('locality', [150.5, -34.2, 152.5, -33.5], 800));
+  });
+
+  it('separates kinds and limits — same box, different response', () => {
+    const box: [number, number, number, number] = [150.5, -34.2, 151.5, -33.5];
+    expect(viewKey('locality', box, 800)).not.toBe(viewKey('lga', box, 800));
+    expect(viewKey('locality', box, 800)).not.toBe(viewKey('locality', box, 200));
+  });
+});
+
+describe('boundary response cache', () => {
+  beforeEach(() => clearBoundaryCache());
+
+  it('returns what it was given', () => {
+    __cache.put('k', '{"a":1}');
+    expect(__cache.get('k')).toBe('{"a":1}');
+    expect(__cache.get('other')).toBeNull();
+  });
+
+  it('tracks bytes and replaces rather than double-counting', () => {
+    __cache.put('k', 'x'.repeat(100));
+    expect(__cache.bytes()).toBe(100);
+    __cache.put('k', 'y'.repeat(10));
+    expect(__cache.bytes()).toBe(10);
+    expect(__cache.size()).toBe(1);
+  });
+
+  it('evicts the least recently used once the budget is spent', () => {
+    const big = 'x'.repeat(Math.floor(__cache.maxBytes / 3) + 1);
+    __cache.put('a', big);
+    __cache.put('b', big);
+    // Touching 'a' makes 'b' the oldest.
+    __cache.get('a');
+    __cache.put('c', big);
+    expect(__cache.get('b')).toBeNull();
+    expect(__cache.get('a')).not.toBeNull();
+    expect(__cache.get('c')).not.toBeNull();
+    expect(__cache.bytes()).toBeLessThanOrEqual(__cache.maxBytes);
+  });
+
+  it('declines a response bigger than the whole budget', () => {
+    // Storing it would evict everything and then still not fit.
+    __cache.put('huge', 'x'.repeat(__cache.maxBytes + 1));
+    expect(__cache.get('huge')).toBeNull();
+    expect(__cache.bytes()).toBe(0);
   });
 });
