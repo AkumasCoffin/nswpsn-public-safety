@@ -1063,6 +1063,57 @@
       if (optionsContainer) optionsContainer.innerHTML = '';
     }
     
+    // Type icon mappings — keyed on the `name` field returned by the
+    // /api/data/history/filters endpoint per provider.types[*].name.
+    //
+    // Module scope because two functions need it: the TYPE dropdown
+    // builder and the deep-link handler. Those used to keep separate
+    // copies, and the second had drifted — it was missing the RFS,
+    // BOM and pager entries, so a shared ?provider=&source= link
+    // rendered grey circles for types the UI itself drew correctly.
+    const typeIcons = {
+      // Waze
+      'Hazards': { icon: 'triangle-exclamation', color: '#eab308' },
+      'Traffic Jams': { icon: 'car', color: '#ef4444' },
+      'Police': { icon: 'shield-halved', color: '#3b82f6' },
+      'Roadwork': { icon: 'person-digging', color: '#f97316' },
+      // LiveTraffic NSW
+      'Incidents': { icon: 'car-burst', color: '#ef4444' },
+      'Flooding': { icon: 'water', color: '#3b82f6' },
+      'Fires': { icon: 'fire', color: '#ef4444' },
+      'Major Events': { icon: 'star', color: '#8b5cf6' },
+      // RFS
+      'NSW RFS': { icon: 'fire-flame-curved', color: '#ef4444' },
+      'NT Fire & Rescue': { icon: 'fire-flame-curved', color: '#f97316' },
+      'QLD Fire & Emergency': { icon: 'fire-flame-curved', color: '#dc2626' },
+      'QLD Warnings': { icon: 'triangle-exclamation', color: '#f59e0b' },
+      'VIC Emergency': { icon: 'fire-flame-curved', color: '#6366f1' },
+      // ACT Ambulance's only type, and the two Live Traffic feeds that
+      // report conditions rather than incidents.
+      'Responses': { icon: 'truck-medical', color: '#ec4899' },
+      'Alpine': { icon: 'snowflake', color: '#38bdf8' },
+      'Council Roads': { icon: 'building-columns', color: '#a3e635' },
+      // Endeavour / Ausgrid / Essential
+      'Current Outages': { icon: 'bolt', color: '#ef4444' },
+      'Planned Outages': { icon: 'calendar-check', color: '#22c55e' },
+      'Future Outages': { icon: 'calendar-plus', color: '#06b6d4' },
+      'Outages': { icon: 'bolt', color: '#fbbf24' },
+      // BOM
+      'All Warnings': { icon: 'cloud-bolt', color: '#3b82f6' },
+      'Land Warnings': { icon: 'mountain-sun', color: '#22c55e' },
+      'Marine Warnings': { icon: 'water', color: '#0ea5e9' },
+      // legacy short keys (kept for any caller still passing them)
+      'Land': { icon: 'mountain-sun', color: '#22c55e' },
+      'Marine': { icon: 'water', color: '#0ea5e9' },
+      'Warnings': { icon: 'cloud-bolt', color: '#3b82f6' },
+      // Pager
+      'Messages': { icon: 'comment-dots', color: '#8b5cf6' },
+      // User submissions
+      'User Incidents': { icon: 'user-plus', color: '#a855f7' },
+      // Radio scanner summaries
+      'Hourly Summaries': { icon: 'microphone-lines', color: '#10b981' },
+    };
+
     function onProviderChange(skipAutoSelect = false) {
       const providerName = document.getElementById('filter-provider').value;
       const typeGroup = document.getElementById('type-group');
@@ -1108,44 +1159,6 @@
       // Show type group and populate types
       typeGroup.style.display = 'flex';
       
-      // Type icon mappings — keyed on the `name` field returned by the
-      // /api/data/history/filters endpoint per provider.types[*].name.
-      const typeIcons = {
-        // Waze
-        'Hazards': { icon: 'triangle-exclamation', color: '#eab308' },
-        'Traffic Jams': { icon: 'car', color: '#ef4444' },
-        'Police': { icon: 'shield-halved', color: '#3b82f6' },
-        'Roadwork': { icon: 'person-digging', color: '#f97316' },
-        // LiveTraffic NSW
-        'Incidents': { icon: 'car-burst', color: '#ef4444' },
-        'Flooding': { icon: 'water', color: '#3b82f6' },
-        'Fires': { icon: 'fire', color: '#ef4444' },
-        'Major Events': { icon: 'star', color: '#8b5cf6' },
-        // RFS
-        'Major Incidents': { icon: 'fire-flame-curved', color: '#ef4444' },
-        'NT Fire & Rescue': { icon: 'fire-flame-curved', color: '#f97316' },
-        'QLD Fire & Emergency': { icon: 'fire-flame-curved', color: '#dc2626' },
-        'QLD Warnings': { icon: 'triangle-exclamation', color: '#f59e0b' },
-        // Endeavour / Ausgrid / Essential
-        'Current Outages': { icon: 'bolt', color: '#ef4444' },
-        'Planned Outages': { icon: 'calendar-check', color: '#22c55e' },
-        'Future Outages': { icon: 'calendar-plus', color: '#06b6d4' },
-        'Outages': { icon: 'bolt', color: '#fbbf24' },
-        // BOM
-        'All Warnings': { icon: 'cloud-bolt', color: '#3b82f6' },
-        'Land Warnings': { icon: 'mountain-sun', color: '#22c55e' },
-        'Marine Warnings': { icon: 'water', color: '#0ea5e9' },
-        // legacy short keys (kept for any caller still passing them)
-        'Land': { icon: 'mountain-sun', color: '#22c55e' },
-        'Marine': { icon: 'water', color: '#0ea5e9' },
-        'Warnings': { icon: 'cloud-bolt', color: '#3b82f6' },
-        // Pager
-        'Messages': { icon: 'comment-dots', color: '#8b5cf6' },
-        // User submissions
-        'User Incidents': { icon: 'user-plus', color: '#a855f7' },
-        // Radio scanner summaries
-        'Hourly Summaries': { icon: 'microphone-lines', color: '#10b981' },
-      };
       
       // Add "All Types" option
       const allOption = document.createElement('div');
@@ -1334,6 +1347,27 @@
           'Active': { icon: 'circle-exclamation', color: '#ef4444' },
           'Cleared': { icon: 'circle-check', color: '#22c55e' },
           'In Progress': { icon: 'spinner', color: '#f97316' },
+          // ACT Ambulance — a response moves pending -> on route -> on scene.
+          'Resource Allocation Pending': { icon: 'hourglass-half', color: '#eab308' },
+          'Units On Route': { icon: 'truck-medical', color: '#f97316' },
+          'On Scene': { icon: 'location-dot', color: '#22c55e' },
+          // NT Fire & Rescue
+          'Going': { icon: 'fire-flame-simple', color: '#ef4444' },
+          'Closed': { icon: 'circle-check', color: '#64748b' },
+          // QLD Fire Department
+          'Patrolled': { icon: 'binoculars', color: '#3b82f6' },
+          // QLD public warnings — the call to action, not a control state.
+          'Stay Informed': { icon: 'circle-info', color: '#3b82f6' },
+          'Avoid Smoke': { icon: 'smog', color: '#a78bfa' },
+          'Avoid Smoke (Hazard Reduction Burn)': { icon: 'smog', color: '#a78bfa' },
+          'Prepare to Leave': { icon: 'triangle-exclamation', color: '#f97316' },
+          'Leave Immediately': { icon: 'person-running', color: '#ef4444' },
+          // Victoria
+          'Minor': { icon: 'circle-info', color: '#38bdf8' },
+          'Warning': { icon: 'triangle-exclamation', color: '#f59e0b' },
+          'Request For Assistance': { icon: 'hand', color: '#eab308' },
+          'Safe': { icon: 'circle-check', color: '#22c55e' },
+          'Responding': { icon: 'fire-flame-simple', color: '#ef4444' },
         };
         
         const isEssential = sourceToQuery.includes('essential');
@@ -2063,6 +2097,11 @@
         let subcat = item.subcategory ? formatSubcategory(item.subcategory) : (item.source === 'waze_police' ? 'Police Visible' : '');
         // Don't show subcat if it matches title (avoid duplicate info)
         if (subcat && title.toLowerCase().includes(subcat.toLowerCase())) subcat = '';
+        // ...nor when it only repeats the source's own name. The roadwork
+        // feed files every record under "Roadwork", so the meta row read
+        // "Roadwork · Roadwork" on all of them. Same test the badge row
+        // below already applies to its category/subcategory pair.
+        if (subcat && sourceName && subcat.toLowerCase() === sourceName.toLowerCase()) subcat = '';
         // Pager subcategory IS the capcode, which now renders as a labelled
         // CAP badge below — a bare repeat of the number here reads as a
         // second, unrelated field.
@@ -2091,8 +2130,7 @@
           }
         }
         
-        // Format relative time from fetched_at
-        const time = formatRelativeTime(item.fetched_at);
+        const time = formatRelativeTime(incidentTime(item));
         
         // Extra info based on source type - with color coding
         // Every incident carries the state it happened in, derived from
@@ -2116,7 +2154,8 @@
           const fireType = data.fireType || item.subcategory || '';
           const size = data.size || '';
           const council = data.councilArea || '';
-          const agency = data.responsibleAgency || data.agency || '';
+          const agency = agencyBadge(data.responsibleAgency || data.agency || '');
+          if (agency) extraInfo += `<span class="lg-badge" style="--badge:${agency.color}">${escapeHtml(agency.label)}</span>`;
           if (status) extraInfo += `<span class="lg-badge" style="--badge:${getStatusColor(status)}">${escapeHtml(status)}</span>`;
           if (alertLevel) extraInfo += `<span class="lg-badge" style="--badge:${getAlertLevelColor(alertLevel)}">${escapeHtml(alertLevel)}</span>`;
           // Only show fire type if it's different from status AND alert level (avoid duplicates like "Advice" showing twice)
@@ -2127,7 +2166,6 @@
           let details = [];
           if (size) details.push(`<span class="lg-dim"><i class="fas fa-expand-arrows-alt"></i> ${escapeHtml(size)}</span>`);
           if (council) details.push(`<span class="lg-dim"><i class="fas fa-map"></i> ${escapeHtml(council)}</span>`);
-          if (agency) details.push(`<span class="lg-dim"><i class="fas fa-users"></i> ${escapeHtml(agency)}</span>`);
           if (details.length) extraDetails = details.join(' · ');
         } else if (item.source === 'act_ambulance') {
           const status = data.status || item.status || '';
@@ -2340,6 +2378,14 @@
           if (item.status) extraInfo += `<span class="lg-badge-o" style="--badge:${sourceColors.secondary}">${escapeHtml(item.status)}</span>`;
         }
         
+        // The badges below carry the incident's own type — "Grass Fire",
+        // "Roadwork" — and the meta row's subcategory is very often the
+        // same string, so the card said it twice in two styles. The
+        // badge is the richer of the two (it is coloured by meaning), so
+        // the plain repeat is the one that goes.
+        const badgeText = extraInfo.replace(/<[^>]*>/g, ' ').toLowerCase();
+        const metaSubcat = subcat && !badgeText.includes(subcat.toLowerCase()) ? subcat : '';
+
         html += `
           <div class="incident-card ${viewed ? 'viewed' : ''} ${selectedIncident?.source_id != null && selectedIncident.source_id === item.source_id ? 'selected' : ''}"
                onclick="selectIncident(${idx})" data-idx="${idx}" data-source-id="${escapeHtml(item.source_id || '')}">
@@ -2348,7 +2394,7 @@
               <div class="incident-title">${escapeHtml(title)}</div>
               <div class="incident-meta">
                 <span><i class="fas fa-tag"></i> ${escapeHtml(sourceName)}</span>
-                ${subcat ? `<span><i class="fas fa-tags"></i> ${escapeHtml(subcat)}</span>` : ''}
+                ${metaSubcat ? `<span><i class="fas fa-tags"></i> ${escapeHtml(metaSubcat)}</span>` : ''}
                 ${showLocation ? `<span class="lg-wrap"><i class="fas fa-map-marker-alt"></i> ${escapeHtml(item.location_text)}</span>` : ''}
               </div>
               ${(statePill || extraInfo) ? `<div class="incident-badges">${statePill}${extraInfo}</div>` : ''}
@@ -3885,15 +3931,79 @@
       return icons[source] || '<i class="fas fa-circle" style="color:#64748b"></i>';
     }
     
+    /**
+     * The moment a record is filed under.
+     *
+     * This is the API's sort key verbatim — COALESCE(source_timestamp_unix,
+     * latest_fetched_at) — and the card has to print the same thing the
+     * list is ordered by or the two disagree in front of the reader. It
+     * used to print fetched_at while the server sorted on the agency's
+     * own timestamp, which is why a 2h-old record sat above a 1h-old one.
+     */
+    function incidentTime(item) {
+      return item.source_timestamp_unix ?? item.fetched_at;
+    }
+
+    /**
+     * The responding agency, as a badge.
+     *
+     * The Fires provider now covers five agencies and they name
+     * themselves inconsistently in the feeds - the RFS says "Rural Fire
+     * Service", Queensland says "QFD", Victoria sends a bare "CFA". These
+     * are the same short labels map.html shows on its agency filter, so
+     * an agency reads the same on both pages.
+     *
+     * Anything unrecognised keeps its own text rather than being dropped:
+     * a new agency should show up as itself.
+     */
+    const AGENCY_BADGES = {
+      'RFS': { label: 'NSW RFS', color: '#ef4444' },
+      'NSW RFS': { label: 'NSW RFS', color: '#ef4444' },
+      'RURAL FIRE SERVICE': { label: 'NSW RFS', color: '#ef4444' },
+      'NSW RURAL FIRE SERVICE': { label: 'NSW RFS', color: '#ef4444' },
+      'FRNSW': { label: 'Fire & Rescue NSW', color: '#dc2626' },
+      'FIRE AND RESCUE NSW': { label: 'Fire & Rescue NSW', color: '#dc2626' },
+      'NTFRS': { label: 'NT Fire & Rescue', color: '#f97316' },
+      'NT FIRE AND RESCUE SERVICE': { label: 'NT Fire & Rescue', color: '#f97316' },
+      'BUSHFIRES NT': { label: 'Bushfires NT', color: '#fb923c' },
+      'QFD': { label: 'QLD Fire Dept', color: '#dc2626' },
+      'CFA': { label: 'CFA (Vic)', color: '#6366f1' },
+      'DEECA': { label: 'DEECA (Vic)', color: '#84cc16' },
+      'EMV': { label: 'EMV (Vic)', color: '#818cf8' },
+      'ESTA': { label: 'Triple Zero (Vic)', color: '#a78bfa' },
+      'SES': { label: 'SES', color: '#f59e0b' },
+    };
+    function agencyBadge(raw) {
+      const t = String(raw || '').trim();
+      if (!t) return null;
+      const hit = AGENCY_BADGES[t.toUpperCase()];
+      return hit || { label: t, color: '#94a3b8' };
+    }
+
     function formatRelativeTime(timestamp) {
       if (!timestamp) return '';
       const date = new Date(timestamp * 1000);
       const now = Date.now();
       const diff = now - date.getTime();
+
+      // Roadwork publishes its scheduled start, which is routinely hours
+      // ahead of when we fetched it. A negative difference used to fall
+      // through every branch below and read "just now", quietly dating a
+      // works order that has not begun.
+      if (diff < 0) {
+        const ahead = -diff;
+        const m = Math.floor(ahead / 60000);
+        if (m < 1) return 'just now';
+        if (m < 60) return `in ${m}m`;
+        const h = Math.floor(ahead / 3600000);
+        if (h < 24) return `in ${h}h`;
+        return `in ${Math.floor(ahead / 86400000)}d`;
+      }
+
       const mins = Math.floor(diff / 60000);
       const hours = Math.floor(diff / 3600000);
       const days = Math.floor(diff / 86400000);
-      
+
       if (mins < 1) return 'just now';
       if (mins < 60) return `${mins}m ago`;
       if (hours < 24) return `${hours}h ago`;
@@ -3996,24 +4106,6 @@
     async function applyUrlParams() {
       const params = new URLSearchParams(window.location.search);
       
-      // Type icon mappings (also used here for URL param handling)
-      const typeIcons = {
-        'Hazards': { icon: 'triangle-exclamation', color: '#eab308' },
-        'Police': { icon: 'shield-halved', color: '#3b82f6' },
-        'Roadwork': { icon: 'person-digging', color: '#f97316' },
-        'Incidents': { icon: 'car-burst', color: '#ef4444' },
-        'Flooding': { icon: 'water', color: '#3b82f6' },
-        'Fires': { icon: 'fire', color: '#ef4444' },
-        'Major Events': { icon: 'star', color: '#8b5cf6' },
-        'Current Outages': { icon: 'bolt', color: '#ef4444' },
-        'Planned Outages': { icon: 'calendar-check', color: '#22c55e' },
-        'Outages': { icon: 'bolt', color: '#fbbf24' },
-        'All Warnings': { icon: 'cloud-bolt', color: '#3b82f6' },
-        'Land': { icon: 'mountain-sun', color: '#22c55e' },
-        'Marine': { icon: 'water', color: '#0ea5e9' },
-        'Warnings': { icon: 'cloud-bolt', color: '#3b82f6' },
-        'Messages': { icon: 'comment-dots', color: '#8b5cf6' },
-      };
       
       if (params.has('provider')) {
         const providerName = params.get('provider');

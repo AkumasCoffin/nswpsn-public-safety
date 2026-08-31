@@ -81,7 +81,10 @@ const RAW_SOURCE_TO_ALERT_TYPE: Record<string, string> = {
 };
 
 const ALERT_TYPE_PROVIDER: Record<string, [string, string]> = {
-  rfs: ['rfs', 'Major Incidents'],
+  // 'Major Incidents' is what the RFS calls its feed file, not what the
+  // agency is called. Beside 'NT Fire & Rescue' and 'QLD Fire & Emergency'
+  // it read as a different kind of thing entirely.
+  rfs: ['rfs', 'NSW RFS'],
   // Same provider as NSW RFS — the logs page shows one "Fires" source
   // covering both agencies. NOT named 'Fires' as a TYPE: traffic_fire
   // already owns that label and the frontend keys its icons on the name.
@@ -946,6 +949,33 @@ function dropTrivialDim(
   return dim;
 }
 
+/**
+ * Drop a subcategory list that is just the status list wearing a
+ * different label.
+ *
+ * ACT Ambulance writes its status into `subcategory` as well as `status`
+ * (sources/actAmbulance.ts), so the logs page drew the same three values
+ * twice — once under "Category / Subtype" and once under "Status" —
+ * where picking either did the same thing. Status is the accurate name
+ * for what those values are, so that is the one that survives.
+ *
+ * Compared as a set of values, not counts: the two columns are populated
+ * by separate paths and a row that is missing one of them would
+ * otherwise defeat the check. Sources whose two columns genuinely differ
+ * (RFS alert level vs control state, LiveTraffic incident type vs
+ * status, Endeavour planned/unplanned vs crew state) are untouched.
+ */
+function dropSubcategoriesMirroringStatus(
+  subcategories: FacetEntry[],
+  statuses: FacetEntry[],
+): FacetEntry[] {
+  if (!subcategories.length || subcategories.length !== statuses.length) {
+    return subcategories;
+  }
+  const statusValues = new Set(statuses.map((e) => e.value));
+  return subcategories.every((e) => statusValues.has(e.value)) ? [] : subcategories;
+}
+
 function resolveFilterTarget(
   sourceFilter: string | null | undefined,
 ): { alertType: string; provider: string } | null {
@@ -997,13 +1027,17 @@ function buildResponse(
       const rawStatuses = toSortedFacetList(dims['status'] ?? {});
       const rawSeverities = toSortedFacetList(dims['severity'] ?? {});
       const rawStates = toSortedFacetList(dims['state'] ?? {});
+      const statuses = dropTrivialDim(rawStatuses, cnt, alertType, typeName);
       typesOut.push({
         alert_type: alertType,
         name: typeName,
         count: cnt,
         categories: dropTrivialDim(rawCategories, cnt, alertType, typeName),
-        subcategories: dropTrivialDim(rawSubcategories, cnt, alertType, typeName),
-        statuses: dropTrivialDim(rawStatuses, cnt, alertType, typeName),
+        subcategories: dropSubcategoriesMirroringStatus(
+          dropTrivialDim(rawSubcategories, cnt, alertType, typeName),
+          statuses,
+        ),
+        statuses,
         severities: dropTrivialDim(rawSeverities, cnt, alertType, typeName),
         // NOT passed through dropTrivialDim: a source that is 100% one
         // state is the common case (most feeds are NSW-only), and that

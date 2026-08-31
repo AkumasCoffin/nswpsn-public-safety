@@ -133,6 +133,49 @@ describe('filterCache', () => {
     expect(facets.date_range.oldest).not.toBeNull();
   });
 
+  it('drops a subcategory list that only mirrors the status list', () => {
+    // ACT Ambulance writes its status into `subcategory` as well as
+    // `status`, so the logs page drew the same three values under
+    // "Category / Subtype" and under "Status", where picking either did
+    // the same thing.
+    liveStore.set('act_ambulance', [
+      { category: 'Ambulance', subcategory: 'On Scene', status: 'On Scene' },
+      { category: 'Ambulance', subcategory: 'On Scene', status: 'On Scene' },
+      { category: 'Ambulance', subcategory: 'Units On Route', status: 'Units On Route' },
+    ]);
+    const actas = findType(findProvider(getFilterFacetsLive(), 'actas'), 'act_ambulance');
+    expect(actas?.statuses.map((e) => e.value).sort()).toEqual(['On Scene', 'Units On Route']);
+    expect(actas?.subcategories).toEqual([]);
+  });
+
+  it('keeps subcategories when they say something the statuses do not', () => {
+    // RFS: subcategory is the fire type, status is the control state.
+    // Two genuinely different dimensions that must both stay filterable.
+    liveStore.set('rfs', [
+      { category: 'Advice', subcategory: 'Bush Fire', status: 'Under control' },
+      { category: 'Advice', subcategory: 'Grass Fire', status: 'Out of control' },
+    ]);
+    const rfsType = findType(findProvider(getFilterFacetsLive(), 'rfs'), 'rfs');
+    expect(rfsType?.subcategories.map((e) => e.value).sort()).toEqual(['Bush Fire', 'Grass Fire']);
+    expect(rfsType?.statuses.map((e) => e.value).sort()).toEqual(['Out of control', 'Under control']);
+  });
+
+  it('keeps a subcategory list that overlaps the statuses without matching them', () => {
+    // Same length, one value shared — not a mirror, so nothing is dropped.
+    liveStore.set('rfs', [
+      { subcategory: 'Going', status: 'Going' },
+      { subcategory: 'Bush Fire', status: 'Patrolled' },
+    ]);
+    const rfsType = findType(findProvider(getFilterFacetsLive(), 'rfs'), 'rfs');
+    expect(rfsType?.subcategories.length).toBe(2);
+  });
+
+  it('names the RFS type after the agency, not after its feed file', () => {
+    liveStore.set('rfs', [{ category: 'Advice', status: 'Under control' }]);
+    const rfsType = findType(findProvider(getFilterFacetsLive(), 'rfs'), 'rfs');
+    expect(rfsType?.name).toBe('NSW RFS');
+  });
+
   it('canonicalAlertType folds legacy source names', () => {
     expect(canonicalAlertType('livetraffic')).toBe('traffic_incident');
     expect(canonicalAlertType('bom_warning')).toBe('bom_land');
