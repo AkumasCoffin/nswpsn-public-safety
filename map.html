@@ -17291,8 +17291,6 @@ function initPagerHoursFromStorage() {
       state: {
         shortLabel: 'State',
         subtitle: 'State / territory',
-        // Served whole — it is the one set that is wanted zoomed out.
-        wholeCountry: true,
         style: { color: '#f59e0b', weight: 2, opacity: 0.9, fill: false, lineJoin: 'round' },
         highlight: { weight: 3, color: '#fbbf24', opacity: 1, fill: true, fillColor: '#f59e0b', fillOpacity: 0.10 },
       },
@@ -17309,20 +17307,19 @@ function initPagerHoursFromStorage() {
     // A coarse key for the current view, so panning a street doesn't
     // refetch. Rounded to about a twentieth of a degree.
     function _boundaryViewKey(kind) {
-      if (_boundaryCfg[kind].wholeCountry) return kind + ':all';
       const b = map.getBounds().pad(0.2);
       const r = (n) => Math.round(n * 20) / 20;
-      return [kind, r(b.getWest()), r(b.getSouth()), r(b.getEast()), r(b.getNorth())].join(',');
+      // The zoom belongs in the key as well as the box. The server draws
+      // to the resolution of the view it was asked about, so the same
+      // rounded box at a different zoom is a different answer.
+      return [kind, map.getZoom(), r(b.getWest()), r(b.getSouth()), r(b.getEast()), r(b.getNorth())].join(',');
     }
 
     async function _fetchBoundaries(kind) {
-      const cfg = _boundaryCfg[kind];
-      let url = PROXY_BASE + '/api/boundaries/' + kind;
-      if (!cfg.wholeCountry) {
-        const b = map.getBounds().pad(0.2);
-        url += '?bbox=' + b.getWest().toFixed(4) + ',' + b.getSouth().toFixed(4) +
-               ',' + b.getEast().toFixed(4) + ',' + b.getNorth().toFixed(4);
-      }
+      const b = map.getBounds().pad(0.2);
+      const url = PROXY_BASE + '/api/boundaries/' + kind +
+        '?bbox=' + b.getWest().toFixed(4) + ',' + b.getSouth().toFixed(4) +
+        ',' + b.getEast().toFixed(4) + ',' + b.getNorth().toFixed(4);
       const res = await apiFetch(url);
       if (!res.ok) throw new Error('HTTP ' + res.status);
       return res.json();
@@ -17332,10 +17329,12 @@ function initPagerHoursFromStorage() {
     async function _refreshBoundaryLayer(kind, force) {
       const cfg = _boundaryCfg[kind];
       if (!cfg) return;
-      // No zoom gate. Asking for borders should draw borders, at any
-      // zoom — the server caps the response and returns the largest
-      // shapes first, so a state-wide view shows the big outlines and a
-      // street-level one shows every suburb in frame.
+      // No zoom gate, and no count cap either: everything in the
+      // viewport is drawn at every zoom. The server keeps that
+      // affordable by simplifying to the resolution of the view it was
+      // asked about rather than by sending fewer shapes — a state-wide
+      // view of 4,000 suburbs used to arrive as the largest 800, which
+      // read as holes in the mesh.
       const key = _boundaryViewKey(kind);
       if (!force && key === _boundaryLastKey) return;
 
