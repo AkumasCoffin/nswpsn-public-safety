@@ -927,16 +927,24 @@
       const _ab1 = document.getElementById('btn-archive');
       if (_ab1) _ab1.style.display = 'none';
 
-      // Units ARE editable on RFS incidents — they persist immediately
-      // against the shared RFS stub row (no Save button in this view).
+      // Which agency's fire this is. NSW RFS and NT Fire & Rescue share
+      // this panel, so nothing here should read "RFS" unconditionally.
+      // Feeds identify themselves by code; people don't read codes.
+      const FIRE_AGENCY_NAMES = { RFS: 'NSW RFS', NTFRS: 'NT Fire & Rescue' };
+      const _fireAgencyRaw = data.agency || 'RFS';
+      const _fireAgency = FIRE_AGENCY_NAMES[_fireAgencyRaw] || _fireAgencyRaw;
+      const _isNswRfs = data.source !== 'nt_fire';
+
+      // Units ARE editable on fire incidents — they persist immediately
+      // against the shared stub row (no Save button in this view).
       {
         const pt = (data.point || '').split(' ').map(Number);
         _unitsStub = {
           id: data.id,
-          title: 'RFS Incident Log',
+          title: _fireAgency + ' Incident Log',
           lat: Number.isFinite(pt[0]) ? pt[0] : 0,
           lng: Number.isFinite(pt[1]) ? pt[1] : 0,
-          tag: 'RFS'
+          tag: _fireAgencyRaw
         };
         currentUnits = [];
         renderUnitChips();
@@ -960,12 +968,12 @@
       document.getElementById('selection-editor').style.display = 'block';
       document.getElementById('instruction-text').style.display = 'none';
       document.getElementById('edit-id').value = data.id;
-      document.getElementById('edit-id-display').textContent = "RFS Log ID: " + data.id.slice(0, 8);
+      document.getElementById('edit-id-display').textContent = "Log ID: " + data.id.slice(0, 8);
       // Header is shared across the user/RFS/pager views — always set
       // it, or the previous view's title (e.g. "Pager hits at this
       // location") leaks into this one.
       const rfsHeader = document.querySelector('#edit-header h4');
-      if (rfsHeader) { rfsHeader.textContent = 'RFS Incident'; rfsHeader.style.color = '#ef4444'; }
+      if (rfsHeader) { rfsHeader.textContent = _fireAgency + ' Incident'; rfsHeader.style.color = '#ef4444'; }
 
       const customRFSBlock = document.createElement('div');
       customRFSBlock.id = 'rfs-read-only-data';
@@ -973,11 +981,11 @@
 
       customRFSBlock.innerHTML = `
         <div style="background:rgba(148,163,184,0.07); border:1px solid rgba(148,163,184,0.25); padding:0.8rem; border-radius:6px; margin-bottom:1rem; font-size:0.85rem;">
-          <h5 style="margin-top:0.3rem; margin-bottom:0.5rem; color:#ef4444;">RFS Incident Details (Read Only)</h5>
+          <h5 style="margin-top:0.3rem; margin-bottom:0.5rem; color:#ef4444;">${escapeHtml(_fireAgency)} Incident Details (Read Only)</h5>
           <strong>Title:</strong> ${escapeHtml(data.title || 'N/A')}<br>
           <strong>Status:</strong> ${escapeHtml(data.STATUS || 'Unknown')}<br>
           <strong>Location:</strong> ${escapeHtml(data.LOCATION || 'N/A')}<br>
-          <a href="${data.link}" target="_blank" style="font-size:0.8rem; margin-top:0.5rem; display:inline-block; color:#7dd3fc;">View on Fires Near Me →</a>
+          <a href="${data.link}" target="_blank" style="font-size:0.8rem; margin-top:0.5rem; display:inline-block; color:#7dd3fc;">${_isNswRfs ? 'View on Fires Near Me' : 'View on the ' + escapeHtml(_fireAgency) + ' incident map'} →</a>
         </div>
       `;
       const editorPanel = document.getElementById('selection-editor');
@@ -2520,11 +2528,17 @@
         openRfs(item) {
           try {
             const d = item.rawDetails || {};
+            // The fire layer carries more than one agency now, so the
+            // panel is labelled from the record rather than assuming RFS.
+            const agency = (item.agenciesList && item.agenciesList[0])
+              || d['RESPONSIBLE AGENCY'] || 'RFS';
             selectRfsIncident({
               id: item.id,
               title: item.title,
               STATUS: d.STATUS || d.status || 'Unknown',
               LOCATION: d.LOCATION || d.location || '',
+              agency,
+              source: item.source || 'rfs',
               link: item.link || 'https://www.rfs.nsw.gov.au/fire-information/fires-near-me',
               point: `${item.lat} ${item.lng}`,
             }, item.pagerDetails);

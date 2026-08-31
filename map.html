@@ -7219,7 +7219,7 @@ function initPagerHoursFromStorage() {
           <strong style="color:#a78bfa;">Last Updated:</strong> ${escapeHtml(item.updatedISO ? new Date(item.updatedISO).toLocaleString() : (data['UPDATED'] || 'Recently'))}
         </div>
         ${rfsLinkSafe ? `<a href="${escapeHtml(rfsLinkSafe)}" target="_blank" class="btn btn-primary" style="display:inline-block; width:100%; text-align:center; margin-bottom:1.5rem;">
-          View on Fires Near Me
+          ${item.source === 'nt_fire' ? 'View on the NT incident map' : 'View on Fires Near Me'}
         </a>` : ''}
         <hr style="border:0; border-top:1px solid var(--border-subtle); margin:0 0 1.5rem 0;">
         <h3 style="font-size:0.85rem; text-transform:uppercase; color:var(--text-soft); letter-spacing:0.1em; margin-bottom:0.5rem;">User Incident Log (External)</h3>
@@ -17243,6 +17243,6 @@ function initPagerHoursFromStorage() {
   <script src="ui-dialogs.js"></script>
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
-  <script src="map-editor-module.js?v=24"></script>
+  <script src="map-editor-module.js?v=25"></script>
 </body>
 </html>
