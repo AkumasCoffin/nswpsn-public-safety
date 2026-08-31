@@ -3729,6 +3729,35 @@
       advice: 'assets/rfs-advice.svg'
     };
     function alertIconFor(level) { return ALERT_ICONS[alertBucketFor(level)] || null; }
+
+    // What a pin shows when the agency published no warning level.
+    //
+    // That is the common case, not the edge one: "Not Applicable" is the
+    // single most frequent value in the feed, so most fires were drawn as
+    // the same red circle with the same flame — a hazard reduction burn
+    // that someone lit on purpose looked exactly like a structure fire.
+    // The kind of fire is the next most useful thing to know, so that is
+    // what the pin falls back to, keyed on the same canonical types the
+    // filter pills use so a pill and a pin can never disagree.
+    //
+    // Colour carries the same meaning as the icon rather than repeating
+    // "fire" seven times: a planned burn is green because it is meant to
+    // be burning, and an automatic alarm is blue because most of them
+    // turn out to be nothing.
+    const FIRE_TYPE_PINS = {
+      'Bush Fire':      { icon: 'fa-tree',              ring: '#f87171', a: '#ff6b6b', b: '#cc2a2a' },
+      'Grass Fire':     { icon: 'fa-seedling',          ring: '#fdba74', a: '#fdba74', b: '#ea580c' },
+      'Structure Fire': { icon: 'fa-house-fire',        ring: '#fca5a5', a: '#f87171', b: '#991b1b' },
+      'Vehicle Fire':   { icon: 'fa-car-burst',         ring: '#fdba74', a: '#fb923c', b: '#c2410c' },
+      'Planned Burn':   { icon: 'fa-fire-flame-simple', ring: '#bef264', a: '#a3e635', b: '#4d7c0f' },
+      'Fire Alarm':     { icon: 'fa-bell',              ring: '#7dd3fc', a: '#7dd3fc', b: '#0369a1' },
+      'Other Fire':     { icon: 'fa-fire',              ring: '#f87171', a: '#ff6b6b', b: '#cc2a2a' }
+    };
+    const FIRE_PIN_DEFAULT = { icon: 'fa-fire', ring: '#f87171', a: '#ff6b6b', b: '#cc2a2a' };
+    function fireTypePin(item) {
+      const raw = (item && item.rawDetails && item.rawDetails['TYPE']) || '';
+      return FIRE_TYPE_PINS[canonFireType(raw)] || FIRE_PIN_DEFAULT;
+    }
     // The triangles' own fills. A pin's halo has to read as the same
     // alert as the icon inside it - the layer's blue-for-advice would put
     // a blue glow around a yellow triangle. Only the halo uses these; the
@@ -6340,8 +6369,11 @@ function initPagerHoursFromStorage() {
           
           // Colors are NOT inverted anymore - overlays keep their original colors
           const alertBucket = alertBucketFor(al);
-          let alertColor = '#ffffff';  // White ring for default/unknown
-          let alertGlow = '0 0 15px #ffffff, 0 0 30px #ffffff66';
+          // No published level: the ring and glow take the colour of the
+          // kind of fire instead of the white they used to share.
+          const typePin = fireTypePin(item);
+          let alertColor = typePin.ring;
+          let alertGlow = `0 0 13px ${typePin.ring}, 0 0 26px ${typePin.ring}55`;
           if (alertBucket === 'emergency') {
             alertColor = '#ef4444';  // Red for emergency
             alertGlow = '0 0 20px #ef4444, 0 0 40px #ef444488, 0 0 60px #ef444444';
@@ -6374,7 +6406,7 @@ function initPagerHoursFromStorage() {
             <img src="${alertIcon}" alt="" width="34" height="32" style="position:relative; display:block; filter:drop-shadow(0 0 3px ${triColor}) drop-shadow(0 0 7px ${triColor}bb) drop-shadow(0 1px 2px rgba(0,0,0,0.85));">
           ` : `
             <div style="position:absolute; width:28px; height:28px; border-radius:50%; border:2px solid ${alertColor}; box-shadow:${alertGlow}; background:transparent;"></div>
-            <div style="background:linear-gradient(145deg, #ff6b6b, #ee4444, #cc2a2a); width:20px; height:20px; border-radius:50%; border:2px solid #fff; box-shadow:inset 0 -2px 4px rgba(0,0,0,0.3), inset 0 2px 4px rgba(255,255,255,0.2); display:flex; align-items:center; justify-content:center; font-size:10px; color:#fff;"><i class="fa-solid fa-fire"></i></div>
+            <div style="background:linear-gradient(145deg, ${typePin.a}, ${typePin.b}); width:20px; height:20px; border-radius:50%; border:2px solid #fff; box-shadow:inset 0 -2px 4px rgba(0,0,0,0.3), inset 0 2px 4px rgba(255,255,255,0.2); display:flex; align-items:center; justify-content:center; font-size:10px; color:#fff;"><i class="fa-solid ${typePin.icon}"></i></div>
           `;
 
           let iconHtml;
