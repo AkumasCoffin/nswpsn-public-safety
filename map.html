@@ -2695,19 +2695,29 @@
           </label>
           <span class="w3w-switch-label">W3W</span>
         </div>
-        <div class="w3w-switch-wrap" onclick="document.getElementById('region-toggle').click()" title="Show NSW planning region borders">
+        <!-- Boundary overlays. One at a time: they stack into an
+             unreadable mesh together, and each is a viewport query, so
+             running three at once triples the work for a worse map. -->
+        <div class="w3w-switch-wrap boundary-switch" onclick="document.getElementById('locality-toggle').click()" title="Show suburb / locality borders">
           <label class="w3w-switch" onclick="event.stopPropagation()">
-            <input type="checkbox" id="region-toggle" onchange="toggleBoundary('region')">
+            <input type="checkbox" id="locality-toggle" onchange="toggleBoundary('locality')">
             <span class="w3w-switch-slider"></span>
           </label>
-          <span class="w3w-switch-label" id="region-toggle-label">Region</span>
+          <span class="w3w-switch-label" id="locality-toggle-label">Suburbs</span>
         </div>
-        <div class="w3w-switch-wrap" onclick="document.getElementById('lga-toggle').click()" title="Show Local Government Area borders">
+        <div class="w3w-switch-wrap boundary-switch" onclick="document.getElementById('lga-toggle').click()" title="Show Local Government Area borders">
           <label class="w3w-switch" onclick="event.stopPropagation()">
             <input type="checkbox" id="lga-toggle" onchange="toggleBoundary('lga')">
             <span class="w3w-switch-slider"></span>
           </label>
           <span class="w3w-switch-label" id="lga-toggle-label">LGA</span>
+        </div>
+        <div class="w3w-switch-wrap boundary-switch" onclick="document.getElementById('state-toggle').click()" title="Show state and territory borders">
+          <label class="w3w-switch" onclick="event.stopPropagation()">
+            <input type="checkbox" id="state-toggle" onchange="toggleBoundary('state')">
+            <span class="w3w-switch-slider"></span>
+          </label>
+          <span class="w3w-switch-label" id="state-toggle-label">State</span>
         </div>
       </div>
       
@@ -16582,60 +16592,125 @@ function initPagerHoursFromStorage() {
       updateW3WCursor();
     }
 
-    // ---- Region / LGA boundary overlays -------------------------------------
-    // Two independent toggles next to W3W. The GeoJSON is fetched lazily the
-    // first time a toggle is switched on (kept in the repo under
-    // data/boundaries/), simplified so the payload is small, then cached.
+    // ---- Boundary overlays: suburbs / LGA / state ---------------------------
+    //
+    // These come from the backend by viewport, not as whole files. The
+    // national datasets are 15,785 localities, 2,210 LGAs and 12,844
+    // state polygons; the old NSW-only GeoJSONs could be shipped entire
+    // because they were 142 shapes between them, but downloading the
+    // country to draw a dozen suburbs is not the same trade.
+    //
+    // Only one may be on at a time. Stacked they read as a mesh, and
+    // each is a live query, so three at once is triple the work for a
+    // worse map.
     const _boundaryCfg = {
-      region: {
-        url: 'data/boundaries/nsw-regions.geojson',
-        labelId: 'region-toggle-label',
-        style: { color: '#f59e0b', weight: 2, opacity: 0.9, fill: false, lineJoin: 'round' },
+      locality: {
+        labelId: 'locality-toggle-label',
+        subtitle: 'Suburb / locality',
+        // Suburb outlines are meaningless at state zoom and there are
+        // thousands of them, so they wait until the view is town-sized.
+        minZoom: 11,
+        style: { color: '#a78bfa', weight: 1, opacity: 0.65, fill: false, lineJoin: 'round' },
+        highlight: { weight: 2.5, color: '#c4b5fd', opacity: 1, fill: true, fillColor: '#a78bfa', fillOpacity: 0.12 },
       },
       lga: {
-        url: 'data/boundaries/nsw-lga.geojson',
         labelId: 'lga-toggle-label',
+        subtitle: 'Local Government Area',
+        minZoom: 7,
         style: { color: '#38bdf8', weight: 1, opacity: 0.7, fill: false, lineJoin: 'round' },
+        highlight: { weight: 2.5, color: '#7dd3fc', opacity: 1, fill: true, fillColor: '#38bdf8', fillOpacity: 0.12 },
+      },
+      state: {
+        labelId: 'state-toggle-label',
+        subtitle: 'State / territory',
+        // Served whole — it is the one set that is wanted zoomed out.
+        minZoom: 0,
+        wholeCountry: true,
+        style: { color: '#f59e0b', weight: 2, opacity: 0.9, fill: false, lineJoin: 'round' },
+        highlight: { weight: 3, color: '#fbbf24', opacity: 1, fill: true, fillColor: '#f59e0b', fillOpacity: 0.10 },
       },
     };
-    const _boundaryLayers = { region: null, lga: null };
-    const _boundaryPending = { region: null, lga: null };
-    // Canvas renderer — far smoother than SVG for the 132 LGA polygons on mobile.
+    const BOUNDARY_KINDS = Object.keys(_boundaryCfg);
+    const _boundaryLayers = { locality: null, lga: null, state: null };
+    let _boundaryActive = null;      // the one kind currently switched on
+    let _boundaryFetchSeq = 0;       // stale-response guard
+    let _boundaryLastKey = null;     // viewport already drawn
+    // Canvas renderer — far smoother than SVG for a few hundred polygons
+    // on mobile.
     let _boundaryRenderer = null;
 
-    async function _ensureBoundaryLayer(kind) {
-      if (_boundaryLayers[kind]) return _boundaryLayers[kind];
-      if (_boundaryPending[kind]) return _boundaryPending[kind];
-      const cfg = _boundaryCfg[kind];
-      _boundaryPending[kind] = (async () => {
-        const res = await fetch(cfg.url, { cache: 'force-cache' });
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const geo = await res.json();
-        if (!_boundaryRenderer) _boundaryRenderer = L.canvas({ pane: 'boundaryPane' });
-        const layer = L.geoJSON(geo, {
-          pane: 'boundaryPane',
-          renderer: _boundaryRenderer,
-          interactive: true,
-          style: cfg.style,
-          onEachFeature: (feature, lyr) => { lyr.on('click', (e) => _onBoundaryClick(kind, e)); },
-        });
-        _boundaryLayers[kind] = layer;
-        _boundaryPending[kind] = null;
-        return layer;
-      })();
-      return _boundaryPending[kind];
+    // A coarse key for the current view, so panning a street doesn't
+    // refetch. Rounded to about a twentieth of a degree.
+    function _boundaryViewKey(kind) {
+      if (_boundaryCfg[kind].wholeCountry) return kind + ':all';
+      const b = map.getBounds().pad(0.2);
+      const r = (n) => Math.round(n * 20) / 20;
+      return [kind, r(b.getWest()), r(b.getSouth()), r(b.getEast()), r(b.getNorth())].join(',');
     }
 
-    // Click a region / LGA: highlight it and show its name (bottom card on
-    // touch, popup on desktop). LGA names come UPPERCASE, so title-case them.
+    async function _fetchBoundaries(kind) {
+      const cfg = _boundaryCfg[kind];
+      let url = PROXY_BASE + '/api/boundaries/' + kind;
+      if (!cfg.wholeCountry) {
+        const b = map.getBounds().pad(0.2);
+        url += '?bbox=' + b.getWest().toFixed(4) + ',' + b.getSouth().toFixed(4) +
+               ',' + b.getEast().toFixed(4) + ',' + b.getNorth().toFixed(4);
+      }
+      const res = await apiFetch(url);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    }
+
+    // Draw (or redraw) the active layer for the current viewport.
+    async function _refreshBoundaryLayer(kind, force) {
+      const cfg = _boundaryCfg[kind];
+      if (!cfg) return;
+      if (map.getZoom() < cfg.minZoom) {
+        // Too far out to be readable. Drop what's drawn and say why,
+        // rather than fetching thousands of shapes nobody can see.
+        if (_boundaryLayers[kind]) { map.removeLayer(_boundaryLayers[kind]); _boundaryLayers[kind] = null; }
+        _boundaryLastKey = null;
+        if (typeof showW3WToast === 'function') showW3WToast('Zoom in to see ' + cfg.subtitle.toLowerCase() + ' borders');
+        return;
+      }
+      const key = _boundaryViewKey(kind);
+      if (!force && key === _boundaryLastKey) return;
+
+      const seq = ++_boundaryFetchSeq;
+      const geo = await _fetchBoundaries(kind);
+      // A newer request (or a toggle-off) started while this was in
+      // flight — that one's result is the one that should win.
+      if (seq !== _boundaryFetchSeq || _boundaryActive !== kind) return;
+
+      if (!_boundaryRenderer) _boundaryRenderer = L.canvas({ pane: 'boundaryPane' });
+      if (_boundaryLayers[kind]) map.removeLayer(_boundaryLayers[kind]);
+      _clearBoundaryHi();
+      const layer = L.geoJSON(geo, {
+        pane: 'boundaryPane',
+        renderer: _boundaryRenderer,
+        interactive: true,
+        style: cfg.style,
+        onEachFeature: (feature, lyr) => { lyr.on('click', (e) => _onBoundaryClick(kind, e)); },
+      });
+      _boundaryLayers[kind] = layer;
+      _boundaryLastKey = key;
+      map.addLayer(layer);
+      if (geo.truncated && typeof showW3WToast === 'function') {
+        showW3WToast('Too many borders here - showing the largest. Zoom in for the rest.');
+      }
+    }
+
+    // Panning or zooming changes what should be drawn, but only while a
+    // boundary is actually on.
+    map.on('moveend', () => {
+      if (_boundaryActive) _refreshBoundaryLayer(_boundaryActive).catch(() => {});
+    });
+
     let _boundaryHi = null;
-    // A boundary click also bubbles to a map 'click'; this guards that one echo
-    // so it doesn't immediately clear the highlight we just set.
     let _suppressBoundaryClear = false;
     function _clearBoundaryHi() {
-      if (_boundaryHi && _boundaryHi.layer) {
-        try { _boundaryHi.layer.setStyle(_boundaryCfg[_boundaryHi.kind].style); } catch (_) { /* ignore */ }
-      }
+      if (!_boundaryHi) return;
+      try { _boundaryHi.layer.setStyle(_boundaryCfg[_boundaryHi.kind].style); } catch (_) { /* ignore */ }
       _boundaryHi = null;
     }
     function _titleCaseName(s) {
@@ -16646,20 +16721,19 @@ function initPagerHoursFromStorage() {
       const props = (lyr && lyr.feature && lyr.feature.properties) || {};
       const raw = props.name || '';
       if (!raw) return;
-      const name = kind === 'lga' ? _titleCaseName(raw) : raw;
-      const sub = kind === 'lga' ? 'Local Government Area' : 'NSW planning region';
+      const cfg = _boundaryCfg[kind];
+      // Upstream shouts some locality and LGA names; states come cased.
+      const name = raw === raw.toUpperCase() ? _titleCaseName(raw) : raw;
+      const sub = props.state && kind !== 'state' ? cfg.subtitle + ' · ' + props.state : cfg.subtitle;
       _clearBoundaryHi();
-      const hi = kind === 'lga'
-        ? { weight: 2.5, color: '#7dd3fc', opacity: 1, fill: true, fillColor: '#38bdf8', fillOpacity: 0.12 }
-        : { weight: 3, color: '#fbbf24', opacity: 1, fill: true, fillColor: '#f59e0b', fillOpacity: 0.10 };
-      try { lyr.setStyle(hi); } catch (_) { /* ignore */ }
+      try { lyr.setStyle(cfg.highlight); } catch (_) { /* ignore */ }
       _boundaryHi = { kind, layer: lyr };
       // Swallow the map 'click' that this same tap fires next, then re-arm.
       _suppressBoundaryClear = true;
       setTimeout(() => { _suppressBoundaryClear = false; }, 0);
       const html =
         '<div style="font-weight:600; font-size:0.98em;">' + escapeHtml(name) + '</div>' +
-        '<div style="font-size:0.78em; color:#94a3b8; margin-top:2px;">' + sub + '</div>';
+        '<div style="font-size:0.78em; color:#94a3b8; margin-top:2px;">' + escapeHtml(sub) + '</div>';
       if (isMobile) {
         showMobileTipCard(html);
       } else {
@@ -16677,29 +16751,53 @@ function initPagerHoursFromStorage() {
       }
     });
 
+    // Switch every boundary off, without touching the one named.
+    function _clearOtherBoundaries(except) {
+      for (const k of BOUNDARY_KINDS) {
+        if (k === except) continue;
+        const box = document.getElementById(k + '-toggle');
+        if (box) box.checked = false;
+        const lbl = document.getElementById(_boundaryCfg[k].labelId);
+        if (lbl) lbl.classList.remove('active');
+        if (_boundaryLayers[k]) { map.removeLayer(_boundaryLayers[k]); _boundaryLayers[k] = null; }
+      }
+    }
+
     async function toggleBoundary(kind) {
       const cfg = _boundaryCfg[kind];
       const checkbox = document.getElementById(kind + '-toggle');
       const label = cfg ? document.getElementById(cfg.labelId) : null;
       if (!cfg || !checkbox) return;
+
       if (checkbox.checked) {
+        // One at a time - the same clear-all-then-set-one shape setMapType uses.
+        _clearOtherBoundaries(kind);
+        _boundaryActive = kind;
+        _boundaryLastKey = null;
         if (label) label.classList.add('active');
         try {
-          const layer = await _ensureBoundaryLayer(kind);
-          // The user may have toggled off again while the file was loading.
-          if (document.getElementById(kind + '-toggle').checked) map.addLayer(layer);
+          await _refreshBoundaryLayer(kind, true);
         } catch (e) {
           console.warn('[boundary] failed to load', kind, e);
-          checkbox.checked = false;
-          if (label) label.classList.remove('active');
-          if (typeof showW3WToast === 'function') showW3WToast('Could not load ' + (kind === 'lga' ? 'LGA' : 'region') + ' borders');
+          // Only back out if the user hasn't already moved on.
+          if (_boundaryActive === kind) {
+            checkbox.checked = false;
+            if (label) label.classList.remove('active');
+            _boundaryActive = null;
+            if (typeof showW3WToast === 'function') showW3WToast('Could not load ' + cfg.subtitle.toLowerCase() + ' borders');
+          }
         }
       } else {
         if (label) label.classList.remove('active');
-        if (_boundaryLayers[kind]) map.removeLayer(_boundaryLayers[kind]);
+        if (_boundaryLayers[kind]) { map.removeLayer(_boundaryLayers[kind]); _boundaryLayers[kind] = null; }
         if (_boundaryHi && _boundaryHi.kind === kind) _clearBoundaryHi();
+        if (_boundaryActive === kind) _boundaryActive = null;
+        _boundaryLastKey = null;
+        // Any in-flight fetch for this kind is now stale.
+        _boundaryFetchSeq += 1;
       }
     }
+
 
     function onW3WZoomStart() {
       // Nothing to invalidate — chunks are zoom-independent and Leaflet

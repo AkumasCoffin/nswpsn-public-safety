@@ -92,3 +92,7 @@ uploads/*
 # Node-agent binaries + feeder components served at nswpsn.forcequit.xyz/downloads/
 # (built by deploy.sh / placed by hand; never committed)
 /downloads/
+
+# Cached ArcGIS pages for scripts/import-boundaries.mjs. Tens of MB,
+# re-downloadable, and the DB is the copy that matters.
+data/boundaries/source/

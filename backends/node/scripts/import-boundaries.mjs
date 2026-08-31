@@ -1,0 +1,278 @@
+#!/usr/bin/env node
+/**
+ * Import administrative boundaries from ArcGIS into the `boundaries`
+ * table (migration 083).
+ *
+ * Three datasets, all national:
+ *   locality  15,785  suburbs and gazetted localities
+ *   lga        2,210  councils
+ *   state     12,844  state/territory polygons (islands are separate rows)
+ *
+ * WHY maxAllowableOffset=0.0005. The service generalises server-side
+ * before it sends, and whatever detail it drops there cannot be
+ * recovered afterwards. An earlier build of the state mask queried at
+ * 0.01 (~1.1 km) and the ACT came back as a 20-point blob that swallowed
+ * Queanbeyan, while the Murray border drifted over Moama and Barham.
+ * 0.0005 (~55 m) is fine enough that borders land in the right place and
+ * still keeps the whole import to tens of MB rather than hundreds.
+ *
+ * Re-running is safe and cheap: pages are cached under
+ * data/boundaries/source/ (gitignored) so a repeat run doesn't hit their
+ * servers again, and rows upsert on (kind, ext_id).
+ *
+ * Usage (from backends/node):
+ *   node scripts/import-boundaries.mjs                   # report only
+ *   node scripts/import-boundaries.mjs --apply
+ *   node scripts/import-boundaries.mjs --apply --kind=lga
+ *   node scripts/import-boundaries.mjs --apply --refetch  # ignore the cache
+ */
+import pg from 'pg';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const NODE_DIR = dirname(HERE);
+const REPO_ROOT = join(NODE_DIR, '..', '..');
+const CACHE_DIR = join(REPO_ROOT, 'data', 'boundaries', 'source');
+
+const APPLY = process.argv.includes('--apply');
+const REFETCH = process.argv.includes('--refetch');
+const kindArg = process.argv.find((a) => a.startsWith('--kind='));
+const ONLY_KIND = kindArg ? kindArg.slice('--kind='.length) : null;
+
+const BASE = 'https://services-ap1.arcgis.com/ypkPEy1AmwPKGNNv/arcgis/rest/services';
+
+/**
+ * Which upstream field fills each column. `ext_id` must be upstream's
+ * own persistent id, not objectid — objectid is per-release and would
+ * duplicate every row on the next import.
+ */
+const DATASETS = [
+  {
+    kind: 'locality',
+    url: `${BASE}/Localities/FeatureServer/0`,
+    fields: 'loc_pid,loc_name,loc_class,state',
+    map: (a) => ({
+      ext_id: a.loc_pid,
+      name: a.loc_name,
+      short_name: null,
+      state: a.state,
+      class: a.loc_class,
+    }),
+  },
+  {
+    kind: 'lga',
+    url: `${BASE}/LGA/FeatureServer/9`,
+    fields: 'lga_pid,lga_name,abb_name,state',
+    map: (a) => ({
+      ext_id: a.lga_pid,
+      name: a.lga_name,
+      short_name: a.abb_name,
+      state: a.state,
+      class: null,
+    }),
+  },
+  {
+    kind: 'state',
+    url: `${BASE}/State/FeatureServer/11`,
+    fields: 'state_pid,state_name,state_abbrev',
+    map: (a) => ({
+      ext_id: a.state_pid,
+      name: a.state_name,
+      short_name: a.state_abbrev,
+      state: a.state_abbrev,
+      class: null,
+    }),
+  },
+];
+
+const PAGE = 1000; // the services' maxRecordCount
+const OFFSET = 0.0005;
+const PRECISION = 5;
+
+function loadEnvFile(path) {
+  let text;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch {
+    return false;
+  }
+  for (const line of text.split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t || t.startsWith('#')) continue;
+    const eq = t.indexOf('=');
+    if (eq < 1) continue;
+    const key = t.slice(0, eq).trim();
+    let val = t.slice(eq + 1).trim().replace(/\r$/, '');
+    if (
+      (val.startsWith('"') && val.endsWith('"')) ||
+      (val.startsWith("'") && val.endsWith("'"))
+    ) {
+      val = val.slice(1, -1);
+    }
+    if (process.env[key] === undefined) process.env[key] = val;
+  }
+  return true;
+}
+
+const ENV_PATH = join(NODE_DIR, '..', '.env');
+if (!process.env.DATABASE_URL) loadEnvFile(ENV_PATH);
+
+const url = process.env.DATABASE_URL;
+if (!url) {
+  console.error(`DATABASE_URL is not set, and no usable value in ${ENV_PATH}`);
+  process.exit(1);
+}
+
+const pool = new pg.Pool({ connectionString: url, max: 4 });
+
+async function countRemote(ds) {
+  const q = `${ds.url}/query?where=1%3D1&returnCountOnly=true&f=json`;
+  const r = await fetch(q);
+  if (!r.ok) throw new Error(`count ${ds.kind}: HTTP ${r.status}`);
+  return (await r.json()).count;
+}
+
+/** One page, from the cache when we already have it. */
+async function fetchPage(ds, offset) {
+  const file = join(CACHE_DIR, `${ds.kind}_${offset}.json`);
+  if (!REFETCH && existsSync(file)) {
+    return JSON.parse(readFileSync(file, 'utf8'));
+  }
+  const q =
+    `${ds.url}/query?where=1%3D1&outFields=${encodeURIComponent(ds.fields)}` +
+    `&outSR=4326&maxAllowableOffset=${OFFSET}&geometryPrecision=${PRECISION}` +
+    `&resultOffset=${offset}&resultRecordCount=${PAGE}&f=geojson`;
+  const r = await fetch(q);
+  if (!r.ok) throw new Error(`${ds.kind} @${offset}: HTTP ${r.status}`);
+  const body = await r.json();
+  mkdirSync(CACHE_DIR, { recursive: true });
+  writeFileSync(file, JSON.stringify(body));
+  return body;
+}
+
+/** Bounding box of a GeoJSON Polygon / MultiPolygon. */
+function bboxOf(geom) {
+  let minLat = Infinity, minLon = Infinity, maxLat = -Infinity, maxLon = -Infinity;
+  const ring = (r) => {
+    for (const pt of r) {
+      if (!Array.isArray(pt) || pt.length < 2) continue;
+      const [x, y] = pt;
+      if (typeof x !== 'number' || typeof y !== 'number') continue;
+      if (x < minLon) minLon = x;
+      if (x > maxLon) maxLon = x;
+      if (y < minLat) minLat = y;
+      if (y > maxLat) maxLat = y;
+    }
+  };
+  if (!geom) return null;
+  if (geom.type === 'Polygon') (geom.coordinates || []).forEach(ring);
+  else if (geom.type === 'MultiPolygon') {
+    for (const poly of geom.coordinates || []) (poly || []).forEach(ring);
+  } else return null;
+  if (!Number.isFinite(minLat) || !Number.isFinite(minLon)) return null;
+  return { minLat, minLon, maxLat, maxLon };
+}
+
+async function importDataset(ds) {
+  const remote = await countRemote(ds);
+  console.log(`\n${ds.kind}: ${remote} features upstream`);
+
+  const rows = [];
+  let skipped = 0;
+  for (let offset = 0; offset < remote; offset += PAGE) {
+    const page = await fetchPage(ds, offset);
+    for (const f of page.features || []) {
+      const a = f.properties || {};
+      const m = ds.map(a);
+      const bb = bboxOf(f.geometry);
+      // No id or no usable geometry means nothing can be drawn or
+      // matched — count it rather than storing an unusable row.
+      if (!m.ext_id || !m.name || !bb) {
+        skipped += 1;
+        continue;
+      }
+      rows.push({ ...m, bb, geom: f.geometry });
+    }
+    process.stdout.write(`\r  fetched ${Math.min(offset + PAGE, remote)}/${remote}`);
+  }
+  process.stdout.write('\n');
+
+  const byState = {};
+  for (const r of rows) byState[r.state || '?'] = (byState[r.state || '?'] ?? 0) + 1;
+  console.log(`  usable: ${rows.length}${skipped ? `, skipped ${skipped}` : ''}`);
+  console.log(`  by state: ${JSON.stringify(byState)}`);
+  if (!APPLY) return rows.length;
+
+  // Insert with UNNEST rather than a built-up VALUES list: one array per
+  // column keeps the parameter count at 11 whatever the chunk size, so
+  // the column list and the placeholders cannot drift apart.
+  const CHUNK = 500;
+  let written = 0;
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    const chunk = rows.slice(i, i + CHUNK);
+    await pool.query(
+      `INSERT INTO boundaries
+         (kind, ext_id, name, short_name, state, class,
+          min_lat, min_lon, max_lat, max_lon, geom)
+       SELECT * FROM UNNEST(
+         $1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[],
+         $7::float8[], $8::float8[], $9::float8[], $10::float8[], $11::jsonb[]
+       )
+       ON CONFLICT (kind, ext_id) DO UPDATE SET
+         name = EXCLUDED.name,
+         short_name = EXCLUDED.short_name,
+         state = EXCLUDED.state,
+         class = EXCLUDED.class,
+         min_lat = EXCLUDED.min_lat,
+         min_lon = EXCLUDED.min_lon,
+         max_lat = EXCLUDED.max_lat,
+         max_lon = EXCLUDED.max_lon,
+         geom = EXCLUDED.geom,
+         imported_at = now()`,
+      [
+        chunk.map(() => ds.kind),
+        chunk.map((r) => r.ext_id),
+        chunk.map((r) => r.name),
+        chunk.map((r) => r.short_name),
+        chunk.map((r) => r.state),
+        chunk.map((r) => r.class),
+        chunk.map((r) => r.bb.minLat),
+        chunk.map((r) => r.bb.minLon),
+        chunk.map((r) => r.bb.maxLat),
+        chunk.map((r) => r.bb.maxLon),
+        chunk.map((r) => JSON.stringify(r.geom)),
+      ],
+    );
+    written += chunk.length;
+    process.stdout.write(`  written ${written}/${rows.length}`);
+  }
+  process.stdout.write('\n');
+  return rows.length;
+}
+
+async function run() {
+  const sets = ONLY_KIND ? DATASETS.filter((d) => d.kind === ONLY_KIND) : DATASETS;
+  if (!sets.length) {
+    console.error(`unknown --kind. Use one of: ${DATASETS.map((d) => d.kind).join(', ')}`);
+    process.exit(1);
+  }
+  for (const ds of sets) await importDataset(ds);
+
+  if (APPLY) {
+    const { rows } = await pool.query(
+      `SELECT kind, count(*)::int AS n FROM boundaries GROUP BY kind ORDER BY kind`,
+    );
+    console.log('\nstored:', JSON.stringify(Object.fromEntries(rows.map((r) => [r.kind, r.n]))));
+  } else {
+    console.log('\nDry run — re-run with --apply to write.');
+  }
+}
+
+run()
+  .catch((err) => {
+    console.error(err);
+    process.exitCode = 1;
+  })
+  .finally(() => pool.end());
