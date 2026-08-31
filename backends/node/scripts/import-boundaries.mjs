@@ -8,6 +8,17 @@
  *   lga        2,210  councils
  *   state     12,844  state/territory polygons (islands are separate rows)
  *
+ * ONE ROW PER PART, NOT PER PLACE. Upstream stores a multipart boundary
+ * as several features sharing one persistent id: 15,785 locality features
+ * cover 15,667 localities, 2,210 LGA features cover 564 councils, and the
+ * 12,844 state features are 9 states - Tasmania alone is 5,887 polygons,
+ * nearly all of them islets. Keeping the parts separate is what the API
+ * wants (it filters by bounding box and ships the largest first), so the
+ * pid alone cannot be the key: parts of one place would collide on
+ * (kind, ext_id) and Postgres rejects the whole batch with "ON CONFLICT
+ * DO UPDATE command cannot affect row a second time". partKeys() below
+ * hands each part its own id.
+ *
  * WHY maxAllowableOffset=0.0005. The service generalises server-side
  * before it sends, and whatever detail it drops there cannot be
  * recovered afterwards. An earlier build of the state mask queried at
@@ -175,6 +186,42 @@ function bboxOf(geom) {
   return { minLat, minLon, maxLat, maxLon };
 }
 
+/**
+ * Give every feature a key of its own.
+ *
+ * A place with a single part keeps its bare upstream pid, which is the
+ * overwhelming majority of rows and keeps them traceable. The parts of a
+ * multipart place are ordered largest first and suffixed - so `#0` is the
+ * mainland and the islets follow. Ordering by size rather than by the
+ * order upstream happened to send them means the suffixes stay put across
+ * re-imports even if that ordering changes.
+ */
+function partKeys(rows) {
+  const byPid = new Map();
+  for (const r of rows) {
+    const list = byPid.get(r.ext_id);
+    if (list) list.push(r);
+    else byPid.set(r.ext_id, [r]);
+  }
+  let multipart = 0;
+  for (const [pid, parts] of byPid) {
+    if (parts.length === 1) continue;
+    multipart += 1;
+    const area = (r) => (r.bb.maxLat - r.bb.minLat) * (r.bb.maxLon - r.bb.minLon);
+    // Ties broken on the box itself so the order is fully determined.
+    parts.sort(
+      (a, b) =>
+        area(b) - area(a) ||
+        a.bb.minLat - b.bb.minLat ||
+        a.bb.minLon - b.bb.minLon,
+    );
+    parts.forEach((r, i) => {
+      r.ext_id = `${pid}#${i}`;
+    });
+  }
+  return { places: byPid.size, multipart };
+}
+
 async function importDataset(ds) {
   const remote = await countRemote(ds);
   console.log(`\n${ds.kind}: ${remote} features upstream`);
@@ -201,52 +248,70 @@ async function importDataset(ds) {
 
   const byState = {};
   for (const r of rows) byState[r.state || '?'] = (byState[r.state || '?'] ?? 0) + 1;
+  const { places, multipart } = partKeys(rows);
   console.log(`  usable: ${rows.length}${skipped ? `, skipped ${skipped}` : ''}`);
+  console.log(`  places: ${places}${multipart ? ` (${multipart} multipart, split into their parts)` : ''}`);
   console.log(`  by state: ${JSON.stringify(byState)}`);
   if (!APPLY) return rows.length;
 
   // Insert with UNNEST rather than a built-up VALUES list: one array per
   // column keeps the parameter count at 11 whatever the chunk size, so
   // the column list and the placeholders cannot drift apart.
+  // Replace the kind wholesale inside one transaction. An upsert alone
+  // would leave behind any row whose key changed since the last import -
+  // including the ones a half-finished earlier run wrote under the old
+  // scheme - and a failure partway through would leave the table holding
+  // a mix of both. Either the new set lands complete or nothing moves.
   const CHUNK = 500;
   let written = 0;
-  for (let i = 0; i < rows.length; i += CHUNK) {
-    const chunk = rows.slice(i, i + CHUNK);
-    await pool.query(
-      `INSERT INTO boundaries
-         (kind, ext_id, name, short_name, state, class,
-          min_lat, min_lon, max_lat, max_lon, geom)
-       SELECT * FROM UNNEST(
-         $1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[],
-         $7::float8[], $8::float8[], $9::float8[], $10::float8[], $11::jsonb[]
-       )
-       ON CONFLICT (kind, ext_id) DO UPDATE SET
-         name = EXCLUDED.name,
-         short_name = EXCLUDED.short_name,
-         state = EXCLUDED.state,
-         class = EXCLUDED.class,
-         min_lat = EXCLUDED.min_lat,
-         min_lon = EXCLUDED.min_lon,
-         max_lat = EXCLUDED.max_lat,
-         max_lon = EXCLUDED.max_lon,
-         geom = EXCLUDED.geom,
-         imported_at = now()`,
-      [
-        chunk.map(() => ds.kind),
-        chunk.map((r) => r.ext_id),
-        chunk.map((r) => r.name),
-        chunk.map((r) => r.short_name),
-        chunk.map((r) => r.state),
-        chunk.map((r) => r.class),
-        chunk.map((r) => r.bb.minLat),
-        chunk.map((r) => r.bb.minLon),
-        chunk.map((r) => r.bb.maxLat),
-        chunk.map((r) => r.bb.maxLon),
-        chunk.map((r) => JSON.stringify(r.geom)),
-      ],
-    );
-    written += chunk.length;
-    process.stdout.write(`  written ${written}/${rows.length}`);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM boundaries WHERE kind = $1', [ds.kind]);
+    for (let i = 0; i < rows.length; i += CHUNK) {
+      const chunk = rows.slice(i, i + CHUNK);
+      await client.query(
+        `INSERT INTO boundaries
+           (kind, ext_id, name, short_name, state, class,
+            min_lat, min_lon, max_lat, max_lon, geom)
+         SELECT * FROM UNNEST(
+           $1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[],
+           $7::float8[], $8::float8[], $9::float8[], $10::float8[], $11::jsonb[]
+         )
+         ON CONFLICT (kind, ext_id) DO UPDATE SET
+           name = EXCLUDED.name,
+           short_name = EXCLUDED.short_name,
+           state = EXCLUDED.state,
+           class = EXCLUDED.class,
+           min_lat = EXCLUDED.min_lat,
+           min_lon = EXCLUDED.min_lon,
+           max_lat = EXCLUDED.max_lat,
+           max_lon = EXCLUDED.max_lon,
+           geom = EXCLUDED.geom,
+           imported_at = now()`,
+        [
+          chunk.map(() => ds.kind),
+          chunk.map((r) => r.ext_id),
+          chunk.map((r) => r.name),
+          chunk.map((r) => r.short_name),
+          chunk.map((r) => r.state),
+          chunk.map((r) => r.class),
+          chunk.map((r) => r.bb.minLat),
+          chunk.map((r) => r.bb.minLon),
+          chunk.map((r) => r.bb.maxLat),
+          chunk.map((r) => r.bb.maxLon),
+          chunk.map((r) => JSON.stringify(r.geom)),
+        ],
+      );
+      written += chunk.length;
+      process.stdout.write(`  written ${written}/${rows.length}`);
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
   }
   process.stdout.write('\n');
   return rows.length;
