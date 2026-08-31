@@ -255,7 +255,10 @@ export function simplifyGeometry(geom: unknown, tol: number): unknown {
  * blow the heap. A Map iterates in insertion order, so the oldest key is
  * simply the first one.
  */
-const CACHE_MAX_BYTES = 96 * 1024 * 1024;
+// 48 MB holds every viewport a session actually visits several times
+// over — the whole national locality response is 5 MB and a street one
+// is 60 kB — while leaving the live source snapshots the heap they need.
+const CACHE_MAX_BYTES = 48 * 1024 * 1024;
 const CACHE_TTL_MS = 60 * 60 * 1000;
 const cache = new Map<string, { body: string; at: number }>();
 let cacheBytes = 0;
