@@ -3730,33 +3730,53 @@
     };
     function alertIconFor(level) { return ALERT_ICONS[alertBucketFor(level)] || null; }
 
-    // What a pin shows when the agency published no warning level.
+    // A pin says two things, and each gets its own channel: the SHAPE
+    // says what kind of fire it is, the COLOUR says how far from
+    // controlled it is. Mixing them — colouring by type — meant the map
+    // had no way to show the one thing that changes minute to minute.
     //
-    // That is the common case, not the edge one: "Not Applicable" is the
-    // single most frequent value in the feed, so most fires were drawn as
-    // the same red circle with the same flame — a hazard reduction burn
-    // that someone lit on purpose looked exactly like a structure fire.
-    // The kind of fire is the next most useful thing to know, so that is
-    // what the pin falls back to, keyed on the same canonical types the
-    // filter pills use so a pill and a pin can never disagree.
-    //
-    // Colour carries the same meaning as the icon rather than repeating
-    // "fire" seven times: a planned burn is green because it is meant to
-    // be burning, and an automatic alarm is blue because most of them
-    // turn out to be nothing.
-    const FIRE_TYPE_PINS = {
-      'Bush Fire':      { icon: 'fa-tree',              ring: '#f87171', a: '#ff6b6b', b: '#cc2a2a' },
-      'Grass Fire':     { icon: 'fa-seedling',          ring: '#fdba74', a: '#fdba74', b: '#ea580c' },
-      'Structure Fire': { icon: 'fa-house-fire',        ring: '#fca5a5', a: '#f87171', b: '#991b1b' },
-      'Vehicle Fire':   { icon: 'fa-car-burst',         ring: '#fdba74', a: '#fb923c', b: '#c2410c' },
-      'Planned Burn':   { icon: 'fa-fire-flame-simple', ring: '#bef264', a: '#a3e635', b: '#4d7c0f' },
-      'Fire Alarm':     { icon: 'fa-bell',              ring: '#7dd3fc', a: '#7dd3fc', b: '#0369a1' },
-      'Other Fire':     { icon: 'fa-fire',              ring: '#f87171', a: '#ff6b6b', b: '#cc2a2a' }
+    // Icons are keyed on the same canonical types the filter pills use,
+    // so a pill and a pin can never disagree.
+    const FIRE_TYPE_ICONS = {
+      'Bush Fire': 'fa-tree',
+      'Grass Fire': 'fa-seedling',
+      'Structure Fire': 'fa-house-fire',
+      'Vehicle Fire': 'fa-car-burst',
+      'Planned Burn': 'fa-fire-flame-simple',
+      'Fire Alarm': 'fa-bell',
+      'Other Fire': 'fa-fire'
     };
-    const FIRE_PIN_DEFAULT = { icon: 'fa-fire', ring: '#f87171', a: '#ff6b6b', b: '#cc2a2a' };
-    function fireTypePin(item) {
+    function fireTypeIcon(item) {
       const raw = (item && item.rawDetails && item.rawDetails['TYPE']) || '';
-      return FIRE_TYPE_PINS[canonFireType(raw)] || FIRE_PIN_DEFAULT;
+      return FIRE_TYPE_ICONS[canonFireType(raw)] || 'fa-fire';
+    }
+
+    /**
+     * How far from controlled, across every agency's wording.
+     *
+     * Seventeen distinct status strings in the live feeds for four real
+     * states. Order matters here: "Not Yet Under Control" contains
+     * "under control" and "Out of control" contains "out", so the worst
+     * cases have to be tested before the calmer ones they read like.
+     */
+    function fireStatusBucket(status) {
+      const t = String(status || '').toLowerCase().trim();
+      if (!t) return 'unknown';
+      if (/out of control|not yet (under )?control|going|^active$|responding|spreading|^warning$/.test(t)) return 'uncontained';
+      if (/being controlled|contained|in progress|under investigation/.test(t)) return 'containing';
+      if (/under control|patrolled|^safe$|^out$|extinguish/.test(t)) return 'controlled';
+      if (/closed|complete|finalis|inactive|stay informed|avoid smoke|^minor$/.test(t)) return 'closed';
+      return 'unknown';
+    }
+    const FIRE_STATUS_COLORS = {
+      uncontained: { ring: '#f87171', a: '#ff6b6b', b: '#b91c1c' },
+      containing:  { ring: '#fdba74', a: '#fb923c', b: '#c2410c' },
+      controlled:  { ring: '#86efac', a: '#4ade80', b: '#15803d' },
+      closed:      { ring: '#cbd5e1', a: '#94a3b8', b: '#475569' },
+      unknown:     { ring: '#cbd5e1', a: '#94a3b8', b: '#475569' }
+    };
+    function fireStatusColor(status) {
+      return FIRE_STATUS_COLORS[fireStatusBucket(status)] || FIRE_STATUS_COLORS.unknown;
     }
     // The triangles' own fills. A pin's halo has to read as the same
     // alert as the icon inside it - the layer's blue-for-advice would put
@@ -6369,44 +6389,30 @@ function initPagerHoursFromStorage() {
           
           // Colors are NOT inverted anymore - overlays keep their original colors
           const alertBucket = alertBucketFor(al);
-          // No published level: the ring and glow take the colour of the
-          // kind of fire instead of the white they used to share.
-          const typePin = fireTypePin(item);
-          let alertColor = typePin.ring;
-          let alertGlow = `0 0 13px ${typePin.ring}, 0 0 26px ${typePin.ring}55`;
-          if (alertBucket === 'emergency') {
-            alertColor = '#ef4444';  // Red for emergency
-            alertGlow = '0 0 20px #ef4444, 0 0 40px #ef444488, 0 0 60px #ef444444';
-          } else if (alertBucket === 'watchact') {
-            alertColor = '#f97316';  // Orange for watch & act
-            alertGlow = '0 0 20px #f97316, 0 0 40px #f9731688';
-          } else if (alertBucket === 'advice') {
-            alertColor = '#3b82f6';  // Blue for advice
-            alertGlow = '0 0 15px #3b82f6, 0 0 30px #3b82f666';
-          }
+          // No published level: the pin is coloured by how contained the
+          // fire is and shaped by what kind of fire it is.
+          const statusHue = fireStatusColor((item.rawDetails && item.rawDetails['STATUS']) || '');
+          const typeIcon = fireTypeIcon(item);
 
           const hasPagerVisible = showPagerFlag && hasPagerLinked;
 
           // A record that carries an alert level wears the Australian
           // Warning System triangle for that level - the same sign the
           // agencies themselves put on roadside boards and in their apps,
-          // so it needs no legend. Everything else keeps the red fire
-          // circle, because a record with no published level has no
-          // severity to claim.
+          // so it needs no legend. Everything else gets the circle, which
+          // says the same two things in its own way: colour for how
+          // contained, glyph for what kind.
           //
-          // The halo is drawn with drop-shadow rather than the circular
-          // box-shadow the round pins use. A round glow behind a triangle
-          // reads as a smudge with a dark shape sitting in it; drop-shadow
-          // follows the alpha, so the glow is triangle-shaped and the sign
-          // stays the thing you see. The dark shadow underneath it is what
-          // separates the yellow Advice triangle from a pale basemap.
+          // No coloured glow on either. It read as a smudge around every
+          // pin and, on a map where a dozen fires sit close together, the
+          // halos merged into one another before the pins did. A plain
+          // dark shadow is enough to lift a pin off the basemap.
           const alertIcon = alertIconFor(al);
-          const triColor = ALERT_ICON_COLORS[alertBucket] || alertColor;
           const rfsInnerHtml = alertIcon ? `
-            <img src="${alertIcon}" alt="" width="34" height="32" style="position:relative; display:block; filter:drop-shadow(0 0 3px ${triColor}) drop-shadow(0 0 7px ${triColor}bb) drop-shadow(0 1px 2px rgba(0,0,0,0.85));">
+            <img src="${alertIcon}" alt="" width="34" height="32" style="position:relative; display:block; filter:drop-shadow(0 1px 2px rgba(0,0,0,0.85));">
           ` : `
-            <div style="position:absolute; width:28px; height:28px; border-radius:50%; border:2px solid ${alertColor}; box-shadow:${alertGlow}; background:transparent;"></div>
-            <div style="background:linear-gradient(145deg, ${typePin.a}, ${typePin.b}); width:20px; height:20px; border-radius:50%; border:2px solid #fff; box-shadow:inset 0 -2px 4px rgba(0,0,0,0.3), inset 0 2px 4px rgba(255,255,255,0.2); display:flex; align-items:center; justify-content:center; font-size:10px; color:#fff;"><i class="fa-solid ${typePin.icon}"></i></div>
+            <div style="position:absolute; width:28px; height:28px; border-radius:50%; border:2px solid ${statusHue.ring}; background:transparent;"></div>
+            <div style="background:linear-gradient(145deg, ${statusHue.a}, ${statusHue.b}); width:20px; height:20px; border-radius:50%; border:2px solid #fff; box-shadow:0 1px 3px rgba(0,0,0,0.55), inset 0 -2px 4px rgba(0,0,0,0.3), inset 0 2px 4px rgba(255,255,255,0.2); display:flex; align-items:center; justify-content:center; font-size:10px; color:#fff;"><i class="fa-solid ${typeIcon}"></i></div>
           `;
 
           let iconHtml;
@@ -7289,9 +7295,12 @@ function initPagerHoursFromStorage() {
       html += '<div style="color:' + alertColor + 'cc; font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px;">Warning Level</div>';
       html += '<div style="color:' + alertColor + '; font-size:12px; font-weight:700;">' + escapeHtml(alertLevel) + '</div>';
       html += '</div>';
-      html += '<div style="background:rgba(74,222,128,0.12); padding:6px 10px; border-radius:5px; text-align:center; flex:1;">';
-      html += '<div style="color:#86efac; font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px;">Status</div>';
-      html += '<div style="color:#4ade80; font-size:12px; font-weight:600;">' + escapeHtml(status) + '</div>';
+      // Same containment scale as the pin — a red pin with a green
+      // status card would be the map disagreeing with itself.
+      const statusHue = fireStatusColor(status);
+      html += '<div style="background:' + statusHue.ring + '1f; padding:6px 10px; border-radius:5px; text-align:center; flex:1;">';
+      html += '<div style="color:' + statusHue.ring + 'cc; font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px;">Status</div>';
+      html += '<div style="color:' + statusHue.ring + '; font-size:12px; font-weight:600;">' + escapeHtml(status) + '</div>';
       html += '</div>';
       html += '<div style="background:rgba(251,146,60,0.12); padding:6px 10px; border-radius:5px; text-align:center; flex:1;">';
       html += '<div style="color:#fdba74; font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px;">Type</div>';
@@ -17799,6 +17808,6 @@ function initPagerHoursFromStorage() {
   <script src="ui-dialogs.js"></script>
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
-  <script src="map-editor-module.js?v=29"></script>
+  <script src="map-editor-module.js?v=30"></script>
 </body>
 </html>

@@ -11,8 +11,9 @@
    Depends on globals provided by map.html + auth-common.js:
      map, L, sb, PROXY_BASE, API_BASE_URL, API_KEY, escapeHtml,
      haversineMeters, buildUserIncidentTooltip, isWithinMinutes,
-     alertBucketFor, ALERT_ICON_COLORS (so a fire's warning level is the
-     same colour here as on its pin and in its tooltip),
+     alertBucketFor, ALERT_ICON_COLORS, fireStatusColor (so a fire's
+     warning level and containment read the same colour here as on its
+     pin and in its tooltip),
      marked, DOMPurify, userLayer (public user-incident layer).
    All editor internals stay private to this IIFE; only the functions
    referenced by inline on* handlers are exported onto window.
@@ -999,6 +1000,11 @@
       const _lvlColor = (typeof alertBucketFor === 'function' && typeof ALERT_ICON_COLORS === 'object')
         ? (ALERT_ICON_COLORS[alertBucketFor(_lvlRaw)] || '#94a3b8')
         : '#94a3b8';
+      // The same containment scale the pin is coloured by, so the card
+      // and the marker cannot say different things about one fire.
+      const _statusColor = (typeof fireStatusColor === 'function')
+        ? fireStatusColor(data.STATUS || '').ring
+        : '#4ade80';
       // word-break:break-word would split inside a word — this panel is
       // barely 90px per card, and "Emergency Warning" came out as
       // "Emergenc y Warning". overflow-wrap breaks between words first
@@ -1014,7 +1020,7 @@
           <h5 style="margin-top:0.3rem; margin-bottom:0.6rem; color:#ef4444;">${escapeHtml(_fireAgency)} Incident Details (Read Only)</h5>
           <div style="display:flex; gap:6px; margin-bottom:0.7rem;">
             ${_card('Warning Level', _lvlRaw || 'Not Applicable', _lvlColor)}
-            ${_card('Status', data.STATUS || 'Unknown', '#4ade80')}
+            ${_card('Status', data.STATUS || 'Unknown', _statusColor)}
             ${_card('Type', data.TYPE || 'Fire', '#fb923c')}
           </div>
           <strong>Title:</strong> ${escapeHtml(data.title || 'N/A')}<br>
