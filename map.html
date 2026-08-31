@@ -816,6 +816,117 @@
     .btn-toggle.active#btn-pager { border: 1px solid #22c55e; color: #bbf7d0; }
     .btn-toggle.active#btn-outages { border: 1px solid #f97316; color: #fdba74; }
 
+    /* ---- Boundary cycle button -------------------------------------------
+       One control that steps Off -> Suburbs -> LGA -> State. Everything
+       animates off a single custom property, --bb, which JS sets to the
+       colour of whichever boundary is showing: the dot, the glow, the
+       border and the ripple all read from it, so a new boundary kind
+       needs a colour and nothing else.
+
+       The width transition is what makes it feel like a bubble rather
+       than a button — the pill grows and shrinks around the label as the
+       word changes length. */
+    .boundary-bubble {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 4px 12px 4px 9px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.14);
+      background: rgba(15,23,42,0.75);
+      color: #94a3b8;
+      font: inherit;
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      cursor: pointer;
+      overflow: hidden;
+      isolation: isolate;
+      user-select: none;
+      -webkit-user-select: none;
+      --bb: #64748b;
+      transition:
+        color 0.28s ease,
+        border-color 0.28s ease,
+        background 0.28s ease,
+        box-shadow 0.28s ease;
+    }
+    .boundary-bubble:hover { background: rgba(30,41,59,0.9); }
+    .boundary-bubble:active { transform: translateY(0.5px); }
+    .boundary-bubble:focus-visible {
+      outline: 2px solid var(--bb);
+      outline-offset: 2px;
+    }
+    /* Lit state: the pill takes on the layer's colour. */
+    .boundary-bubble.on {
+      color: #e2e8f0;
+      border-color: color-mix(in srgb, var(--bb) 70%, transparent);
+      background: color-mix(in srgb, var(--bb) 16%, rgba(15,23,42,0.85));
+      box-shadow: 0 0 12px color-mix(in srgb, var(--bb) 35%, transparent);
+    }
+
+    /* The dot is the bubble: it inflates when a layer comes on and
+       deflates back to a dim speck when you cycle past the end. */
+    .boundary-bubble .bb-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex: none;
+      background: var(--bb);
+      box-shadow: 0 0 0 0 color-mix(in srgb, var(--bb) 60%, transparent);
+      transform: scale(0.7);
+      opacity: 0.55;
+      transition: transform 0.32s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.28s ease, background 0.28s ease;
+    }
+    .boundary-bubble.on .bb-dot {
+      transform: scale(1);
+      opacity: 1;
+      animation: bbPulse 2.4s ease-out infinite;
+    }
+    @keyframes bbPulse {
+      0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--bb) 55%, transparent); }
+      70%  { box-shadow: 0 0 0 7px color-mix(in srgb, var(--bb) 0%, transparent); }
+      100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--bb) 0%, transparent); }
+    }
+
+    /* The label swaps by sliding out and the next one sliding in, so the
+       cycle reads as movement in one direction rather than a flicker. */
+    .boundary-bubble .bb-label {
+      display: inline-block;
+      white-space: nowrap;
+      transition: transform 0.18s ease, opacity 0.18s ease;
+    }
+    .boundary-bubble.swapping .bb-label {
+      transform: translateY(-8px);
+      opacity: 0;
+    }
+
+    /* Ripple: a bubble expanding from where the click landed. Sized and
+       positioned by JS, removed when it finishes. */
+    .boundary-bubble .bb-ripple {
+      position: absolute;
+      border-radius: 50%;
+      background: color-mix(in srgb, var(--bb) 45%, transparent);
+      transform: scale(0);
+      opacity: 0.65;
+      pointer-events: none;
+      z-index: -1;
+      animation: bbRipple 0.5s ease-out forwards;
+    }
+    @keyframes bbRipple {
+      to { transform: scale(1); opacity: 0; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .boundary-bubble,
+      .boundary-bubble .bb-dot,
+      .boundary-bubble .bb-label { transition: none; }
+      .boundary-bubble.on .bb-dot { animation: none; }
+      .boundary-bubble .bb-ripple { display: none; }
+    }
+
     /* W3W switch toggle (inside map-type-controls) */
     .w3w-switch-divider {
       width: 1px;
@@ -2695,29 +2806,19 @@
           </label>
           <span class="w3w-switch-label">W3W</span>
         </div>
-        <!-- Boundary overlays. One at a time: they stack into an
-             unreadable mesh together, and each is a viewport query, so
-             running three at once triples the work for a worse map. -->
-        <div class="w3w-switch-wrap boundary-switch" onclick="document.getElementById('locality-toggle').click()" title="Show suburb / locality borders">
-          <label class="w3w-switch" onclick="event.stopPropagation()">
-            <input type="checkbox" id="locality-toggle" onchange="toggleBoundary('locality')">
-            <span class="w3w-switch-slider"></span>
-          </label>
-          <span class="w3w-switch-label" id="locality-toggle-label">Suburbs</span>
-        </div>
-        <div class="w3w-switch-wrap boundary-switch" onclick="document.getElementById('lga-toggle').click()" title="Show Local Government Area borders">
-          <label class="w3w-switch" onclick="event.stopPropagation()">
-            <input type="checkbox" id="lga-toggle" onchange="toggleBoundary('lga')">
-            <span class="w3w-switch-slider"></span>
-          </label>
-          <span class="w3w-switch-label" id="lga-toggle-label">LGA</span>
-        </div>
-        <div class="w3w-switch-wrap boundary-switch" onclick="document.getElementById('state-toggle').click()" title="Show state and territory borders">
-          <label class="w3w-switch" onclick="event.stopPropagation()">
-            <input type="checkbox" id="state-toggle" onchange="toggleBoundary('state')">
-            <span class="w3w-switch-slider"></span>
-          </label>
-          <span class="w3w-switch-label" id="state-toggle-label">State</span>
+        <!-- Boundary overlays: one button that cycles Off -> Suburbs ->
+             LGA -> State. They stack into an unreadable mesh together and
+             each is a viewport query, so only one is ever on; a cycling
+             control says that in its shape rather than relying on three
+             switches to police each other. -->
+        <!-- A div, not a <button>: Chrome gives a button's contents an
+             anonymous box and never lays out an absolutely-positioned
+             child, so the ripple would be invisible inside one. -->
+        <div class="boundary-bubble" id="boundary-cycle" role="button" tabindex="0"
+             onclick="cycleBoundary(event)" onkeydown="onBoundaryKey(event)"
+             title="Borders: click to cycle">
+          <span class="bb-dot"></span>
+          <span class="bb-label" id="boundary-cycle-label">Borders</span>
         </div>
       </div>
       
@@ -16605,7 +16706,7 @@ function initPagerHoursFromStorage() {
     // worse map.
     const _boundaryCfg = {
       locality: {
-        labelId: 'locality-toggle-label',
+        shortLabel: 'Suburbs',
         subtitle: 'Suburb / locality',
         // Suburb outlines are meaningless at state zoom and there are
         // thousands of them, so they wait until the view is town-sized.
@@ -16614,14 +16715,14 @@ function initPagerHoursFromStorage() {
         highlight: { weight: 2.5, color: '#c4b5fd', opacity: 1, fill: true, fillColor: '#a78bfa', fillOpacity: 0.12 },
       },
       lga: {
-        labelId: 'lga-toggle-label',
+        shortLabel: 'LGA',
         subtitle: 'Local Government Area',
         minZoom: 7,
         style: { color: '#38bdf8', weight: 1, opacity: 0.7, fill: false, lineJoin: 'round' },
         highlight: { weight: 2.5, color: '#7dd3fc', opacity: 1, fill: true, fillColor: '#38bdf8', fillOpacity: 0.12 },
       },
       state: {
-        labelId: 'state-toggle-label',
+        shortLabel: 'State',
         subtitle: 'State / territory',
         // Served whole — it is the one set that is wanted zoomed out.
         minZoom: 0,
@@ -16630,7 +16731,6 @@ function initPagerHoursFromStorage() {
         highlight: { weight: 3, color: '#fbbf24', opacity: 1, fill: true, fillColor: '#f59e0b', fillOpacity: 0.10 },
       },
     };
-    const BOUNDARY_KINDS = Object.keys(_boundaryCfg);
     const _boundaryLayers = { locality: null, lga: null, state: null };
     let _boundaryActive = null;      // the one kind currently switched on
     let _boundaryFetchSeq = 0;       // stale-response guard
@@ -16751,51 +16851,129 @@ function initPagerHoursFromStorage() {
       }
     });
 
-    // Switch every boundary off, without touching the one named.
-    function _clearOtherBoundaries(except) {
-      for (const k of BOUNDARY_KINDS) {
-        if (k === except) continue;
-        const box = document.getElementById(k + '-toggle');
-        if (box) box.checked = false;
-        const lbl = document.getElementById(_boundaryCfg[k].labelId);
-        if (lbl) lbl.classList.remove('active');
-        if (_boundaryLayers[k]) { map.removeLayer(_boundaryLayers[k]); _boundaryLayers[k] = null; }
+    // The cycle order. `null` is the off state, and it is first so the
+    // map starts with no borders and one click gets you suburbs.
+    const BOUNDARY_CYCLE = [null, 'locality', 'lga', 'state'];
+
+    // Colours the button borrows from each layer, so the pill always
+    // matches the lines it drew.
+    const BOUNDARY_BUBBLE_COLOR = {
+      locality: '#a78bfa',
+      lga: '#38bdf8',
+      state: '#f59e0b',
+    };
+
+    /**
+     * Paint the button for whichever boundary is showing.
+     *
+     * The label swap is two-step on purpose: fade the old word out,
+     * change the text while it is invisible, fade the new one in. Doing
+     * it in one go reads as a flicker; this reads as movement.
+     */
+    function _paintBoundaryBubble(kind, animate) {
+      const btn = document.getElementById('boundary-cycle');
+      const label = document.getElementById('boundary-cycle-label');
+      if (!btn || !label) return;
+      const text = kind ? _boundaryCfg[kind].shortLabel : 'Borders';
+      const color = kind ? BOUNDARY_BUBBLE_COLOR[kind] : '#64748b';
+      const apply = () => {
+        btn.style.setProperty('--bb', color);
+        btn.classList.toggle('on', !!kind);
+        label.textContent = text;
+        btn.title = kind
+          ? _boundaryCfg[kind].subtitle + ' borders — click for the next'
+          : 'Borders: click to cycle';
+      };
+      if (!animate) { apply(); return; }
+      btn.classList.add('swapping');
+      setTimeout(() => {
+        apply();
+        btn.classList.remove('swapping');
+      }, 180);
+    }
+
+    /** A bubble expanding from the click, sized to cover the button. */
+    function _boundaryRipple(btn, ev) {
+      if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+      const r = btn.getBoundingClientRect();
+      const size = Math.max(r.width, r.height) * 2.2;
+      const x = (ev && ev.clientX ? ev.clientX - r.left : r.width / 2) - size / 2;
+      const y = (ev && ev.clientY ? ev.clientY - r.top : r.height / 2) - size / 2;
+      const dot = document.createElement('span');
+      dot.className = 'bb-ripple';
+      dot.style.width = dot.style.height = size + 'px';
+      dot.style.left = x + 'px';
+      dot.style.top = y + 'px';
+      btn.appendChild(dot);
+      // animationend normally does it; the timeout is insurance. A tab
+      // that never paints (backgrounded, or a browser that suspends
+      // animations) never fires the event, and without this the nodes
+      // would pile up one per click.
+      let done = false;
+      const drop = () => { if (done) return; done = true; dot.remove(); };
+      dot.addEventListener('animationend', drop);
+      setTimeout(drop, 800);
+    }
+
+    /**
+     * Step to the next boundary in the cycle.
+     *
+     * One control rather than three switches: only one boundary can be
+     * on anyway, and a cycling button says that in its shape instead of
+     * leaving three toggles to police each other.
+     */
+    // Enter/Space, since a div doesn't get that for free.
+    function onBoundaryKey(ev) {
+      if (ev.key === 'Enter' || ev.key === ' ' || ev.key === 'Spacebar') {
+        ev.preventDefault();
+        cycleBoundary(ev);
       }
     }
 
-    async function toggleBoundary(kind) {
-      const cfg = _boundaryCfg[kind];
-      const checkbox = document.getElementById(kind + '-toggle');
-      const label = cfg ? document.getElementById(cfg.labelId) : null;
-      if (!cfg || !checkbox) return;
+    async function cycleBoundary(ev) {
+      const btn = document.getElementById('boundary-cycle');
+      if (!btn) return;
+      _boundaryRipple(btn, ev);
 
-      if (checkbox.checked) {
-        // One at a time - the same clear-all-then-set-one shape setMapType uses.
-        _clearOtherBoundaries(kind);
-        _boundaryActive = kind;
-        _boundaryLastKey = null;
-        if (label) label.classList.add('active');
-        try {
-          await _refreshBoundaryLayer(kind, true);
-        } catch (e) {
-          console.warn('[boundary] failed to load', kind, e);
-          // Only back out if the user hasn't already moved on.
-          if (_boundaryActive === kind) {
-            checkbox.checked = false;
-            if (label) label.classList.remove('active');
-            _boundaryActive = null;
-            if (typeof showW3WToast === 'function') showW3WToast('Could not load ' + cfg.subtitle.toLowerCase() + ' borders');
+      const current = _boundaryActive;
+      const idx = BOUNDARY_CYCLE.indexOf(current);
+      const next = BOUNDARY_CYCLE[(idx + 1) % BOUNDARY_CYCLE.length];
+
+      // Paint immediately so the button responds to the click even while
+      // the layer is still loading.
+      _paintBoundaryBubble(next, true);
+
+      if (current) _hideBoundary(current);
+      if (!next) { _boundaryActive = null; return; }
+
+      _boundaryActive = next;
+      _boundaryLastKey = null;
+      try {
+        await _refreshBoundaryLayer(next, true);
+      } catch (e) {
+        console.warn('[boundary] failed to load', next, e);
+        // Only back out if the user hasn't clicked on past this one.
+        if (_boundaryActive === next) {
+          _hideBoundary(next);
+          _boundaryActive = null;
+          _paintBoundaryBubble(null, true);
+          if (typeof showW3WToast === 'function') {
+            showW3WToast('Could not load ' + _boundaryCfg[next].subtitle.toLowerCase() + ' borders');
           }
         }
-      } else {
-        if (label) label.classList.remove('active');
-        if (_boundaryLayers[kind]) { map.removeLayer(_boundaryLayers[kind]); _boundaryLayers[kind] = null; }
-        if (_boundaryHi && _boundaryHi.kind === kind) _clearBoundaryHi();
-        if (_boundaryActive === kind) _boundaryActive = null;
-        _boundaryLastKey = null;
-        // Any in-flight fetch for this kind is now stale.
-        _boundaryFetchSeq += 1;
       }
+    }
+
+    /** Take one boundary off the map without touching the cycle state. */
+    function _hideBoundary(kind) {
+      if (_boundaryLayers[kind]) {
+        map.removeLayer(_boundaryLayers[kind]);
+        _boundaryLayers[kind] = null;
+      }
+      if (_boundaryHi && _boundaryHi.kind === kind) _clearBoundaryHi();
+      _boundaryLastKey = null;
+      // Any in-flight fetch for this kind is now stale.
+      _boundaryFetchSeq += 1;
     }
 
 
