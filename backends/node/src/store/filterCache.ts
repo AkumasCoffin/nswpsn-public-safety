@@ -88,6 +88,7 @@ const ALERT_TYPE_PROVIDER: Record<string, [string, string]> = {
   nt_fire: ['rfs', 'NT Fire & Rescue'],
   qld_fire: ['rfs', 'QLD Fire & Emergency'],
   qld_warning: ['rfs', 'QLD Warnings'],
+  vic_emergency: ['rfs', 'VIC Emergency'],
   bom_land: ['bom', 'Land Warnings'],
   bom_marine: ['bom', 'Marine Warnings'],
   traffic_incident: ['livetraffic', 'Incidents'],
@@ -137,7 +138,7 @@ const PROVIDER_ORDER = [
 ];
 
 const PROVIDER_TYPE_ORDER: Record<string, string[]> = {
-  rfs: ['rfs', 'nt_fire', 'qld_fire', 'qld_warning'],
+  rfs: ['rfs', 'nt_fire', 'qld_fire', 'qld_warning', 'vic_emergency'],
   bom: ['bom_land', 'bom_marine'],
   livetraffic: [
     'traffic_incident',

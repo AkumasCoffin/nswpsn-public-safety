@@ -922,7 +922,7 @@
     // One colour per jurisdiction, so the pill on each incident is
     // recognisable without reading it.
     // Every agency on the Fires layer renders through one branch.
-    const FIRE_LOG_SOURCES = new Set(['rfs', 'nt_fire', 'qld_fire', 'qld_warning']);
+    const FIRE_LOG_SOURCES = new Set(['rfs', 'nt_fire', 'qld_fire', 'qld_warning', 'vic_emergency']);
 
     const STATE_COLORS = {
       NSW: '#38bdf8', VIC: '#818cf8', QLD: '#f59e0b', SA: '#f43f5e',
@@ -2521,7 +2521,7 @@
       // Resource Allocation Pending -> Units On Route -> On Scene; user
       // incidents get edited. Everything else (traffic, pager, outages) is
       // point-in-time and a history would just repeat one row.
-      const HISTORY_SOURCES = new Set(['rfs', 'user_incident', 'act_ambulance', 'nt_fire', 'qld_fire', 'qld_warning']);
+      const HISTORY_SOURCES = new Set(['rfs', 'user_incident', 'act_ambulance', 'nt_fire', 'qld_fire', 'qld_warning', 'vic_emergency']);
       if (!HISTORY_SOURCES.has(item.source)) {
         historySection.innerHTML = '';
         return;
@@ -2590,6 +2590,10 @@
           // move up and down the alert levels.
           qld_fire: (d, r) => [d.status ?? r.status, d.fireType ?? r.subcategory].join('|'),
           qld_warning: (d, r) => [d.alertLevel ?? r.category, d.status ?? r.status].join('|'),
+          // Victorian incidents move through dispatch states; its warnings
+          // move up and down the alert levels and rewrite their advice
+          // text, which is the part a reader actually came for.
+          vic_emergency: (d, r) => [d.status ?? r.status, d.alertLevel ?? r.category, d.fireType ?? r.subcategory, d.text].join('|'),
           user_incident: (d, r) => [d.status ?? r.status, d.category ?? r.category, d.description, d.title].join('|'),
         };
         const signature = TRACKED[item.source] || ((d, r) => JSON.stringify(d ?? r));
@@ -3322,6 +3326,7 @@
         'nt_fire': 'NT Fire & Rescue',
         'qld_fire': 'QLD Fire & Emergency',
         'qld_warning': 'QLD Warnings',
+        'vic_emergency': 'VIC Emergency',
         'traffic_incident': 'Traffic Incidents',
         'traffic_roadwork': 'Roadwork',
         'traffic_flood': 'Floods',
@@ -3403,6 +3408,7 @@
         'nt_fire': { primary: '#f97316', secondary: '#fb923c' },
         'qld_fire': { primary: '#dc2626', secondary: '#ef4444' },
         'qld_warning': { primary: '#f59e0b', secondary: '#fbbf24' },
+        'vic_emergency': { primary: '#6366f1', secondary: '#818cf8' },
         'pager': { primary: '#22c55e', secondary: '#4ade80' },
         'user_incident': { primary: '#a855f7', secondary: '#c084fc' },
         'traffic_incident': { primary: '#f97316', secondary: '#fb923c' },

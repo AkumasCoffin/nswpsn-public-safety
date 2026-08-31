@@ -3685,6 +3685,16 @@
     // to filter them apart. This tracks the real category per marker so the
     // panel can offer one pill per category the data actually contains.
     const _hazardExcludedCategories = new Set();
+    // Responding agencies the user has switched off. Only records that
+    // name one are affected - see the note where hazard markers are built.
+    const _hazardExcludedAgencies = new Set();
+
+    // Floods was a single-source layer until Victoria's SES warnings
+    // arrived on it, so it had no marker registry and no panel at all.
+    // Same shape as the hazard one: keep the markers flat, rebuild
+    // membership when a pill flips.
+    const _floodMarkers = []; // [{marker, agency}]
+    const _floodExcludedAgencies = new Set();
     // 'waze' dropped with the retired ingest. It also gates the Waze subtype
     // pill block below, which would otherwise render an empty section.
     const _hazardSelectedSources = new Set(['livetraffic']);
@@ -3692,6 +3702,73 @@
     // OFF. Empty = everything visible. Livetraffic markers ignore this
     // set — they have no subtypeLabel and pass through unconditionally.
     const _hazardExcludedSubtypes = new Set();
+
+    // ---------- Alert levels and agencies, shared across layers ----------
+    // Every Australian agency publishes the same three warning levels, in
+    // slightly different words - QFD says "Leave Immediately" where RFS
+    // says "Emergency Warning", and a CFA warning's call to action reads
+    // "Stay Informed" for an Advice. Folding the wordings here means one
+    // bucket drives the pill row, the pin and the colour, and a new
+    // agency's phrasing is one line to add rather than four to chase.
+    function alertBucketFor(level) {
+      const l = String(level || '').toLowerCase();
+      if (!l) return 'other';
+      if (l.includes('emergency') || l.includes('leave immediately') || l.includes('evacuate')) return 'emergency';
+      if (l.includes('watch') || l.includes('prepare')) return 'watchact';
+      if (l.includes('advice') || l.includes('stay informed')) return 'advice';
+      return 'other';
+    }
+    // The standard Australian Warning System triangles. Using the one set
+    // for every agency is the point: an Advice from CFA has to read as the
+    // same thing as an Advice from the RFS. Records with no level keep the
+    // plain circle, because inventing a triangle for them would claim a
+    // severity the agency never published.
+    const ALERT_ICONS = {
+      emergency: 'assets/rfs-emergency.svg',
+      watchact: 'assets/rfs-watch-and-act.svg',
+      advice: 'assets/rfs-advice.svg'
+    };
+    function alertIconFor(level) { return ALERT_ICONS[alertBucketFor(level)] || null; }
+    // The triangles' own fills. A pin's halo has to read as the same
+    // alert as the icon inside it - the layer's blue-for-advice would put
+    // a blue glow around a yellow triangle. Only the halo uses these; the
+    // pill row and the tooltip badge keep the layer's palette.
+    const ALERT_ICON_COLORS = {
+      emergency: '#D32027',
+      watchact: '#F17131',
+      advice: '#FFD44F'
+    };
+
+    // One label per agency short code. The Fires, Hazards and Floods
+    // agency rows all read this, so a pill means the same agency wherever
+    // its records happened to land - which matters because routing is by
+    // event: a CFA hazmat call is on Hazards and an SES flood warning is
+    // on Floods.
+    const AGENCY_LABELS = {
+      rfs: 'NSW RFS',
+      nt_fire: 'NT Fire & Rescue',
+      NTFRS: 'NT Fire & Rescue',
+      qld: 'QLD Fire Dept',
+      QFD: 'QLD Fire Dept',
+      CFA: 'CFA (Vic)',
+      DEECA: 'DEECA (Vic)',
+      EMV: 'EMV (Vic)',
+      ESTA: 'Triple Zero (Vic)',
+      SES: 'SES'
+    };
+    function agencyLabel(key) { return AGENCY_LABELS[key] || String(key); }
+
+    // Victorian warning areas arrive as GeoJSON rings ([lon, lat]); the
+    // fire layer draws polygons as Leaflet [lat, lng]. Returns null when
+    // there is nothing worth drawing, which is what polygonCoords expects.
+    function vicPolygonRings(props) {
+      const rings = (props.polygons || [])
+        .map((r) => (Array.isArray(r) ? r
+          .filter((pt) => Array.isArray(pt) && pt.length >= 2)
+          .map((pt) => [pt[1], pt[0]]) : []))
+        .filter((r) => r.length >= 3);
+      return rings.length ? rings : null;
+    }
 
     // Roadwork — filtered by classified type rather than by source. The
     // raw feeds carry inconsistent type labels (mainCategory /
@@ -4633,6 +4710,7 @@
         btn.classList.remove('active');
         if (target === 'user') { removeFilterButton('user'); refreshMapAndList(); }
         if (target === 'rfs') { removeFilterButton('rfs'); refreshMapAndList(); }
+        if (target === 'floods') removeFilterButton('floods');
         // If turning off the pager layer, clear selection state
         if (target === 'pager') {
           document.querySelectorAll('.pager-pin-dot.pin-selected').forEach(el => {
@@ -4651,6 +4729,7 @@
         btn.classList.add('active');
         if (target === 'user') { addFilterButton('user'); refreshMapAndList(); }
         if (target === 'rfs') { addFilterButton('rfs'); refreshMapAndList(); }
+        if (target === 'floods') addFilterButton('floods');
         // Load data when layer is first enabled
         if (target === 'hazards' && hazardsLayer.getLayers().length === 0) loadHazardsData();
         if (target === 'police' && policeLayer.getLayers().length === 0) loadPoliceData();
@@ -4658,7 +4737,7 @@
         // the layer (no sub-groups), so a culled-empty viewport would
         // otherwise re-trigger the loader on every toggle.
         if (target === 'roadwork' && _roadworkMarkers.length === 0) loadRoadworkData();
-        if (target === 'floods' && floodsLayer.getLayers().length === 0) loadFloodsData();
+        if (target === 'floods' && _floodMarkers.length === 0) loadFloodsData();
         if (target === 'cameras') {
           if (camerasLayer.getLayers().length === 0) loadCamerasData();
           startCameraRefresh(); // Start live refresh when cameras enabled
@@ -5490,6 +5569,64 @@ function initPagerHoursFromStorage() {
         });
       } catch (e) { console.error("QLD Fire API Error", e); }
 
+      // Victoria: one endpoint, several agencies (CFA, DEECA, SES, the EMV
+      // warning layer, and the state's triple-zero dispatcher). The backend
+      // routes each record by EVENT rather than by publisher, so only what
+      // it marked 'fire' arrives here - CFA's road accidents and hazmat go
+      // to Hazards, EMV's riverine flood warnings to Floods. It also drops
+      // the NSW/RFS records Victoria re-publishes, which we already ingest
+      // straight from the RFS.
+      try {
+        const res = await apiFetch(`${PROXY_BASE}/api/vic-emergency/events`);
+        const data = await res.json();
+        (data.features || []).forEach((feature, idx) => {
+          const props = feature.properties || {};
+          if (props.layer !== 'fire') return;
+          const geom = feature.geometry || {};
+          if (geom.type !== 'Point' || !Array.isArray(geom.coordinates)) return;
+          const [lng, lat] = geom.coordinates;
+          if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+          const details = {
+            'ALERT LEVEL': props.alertLevel || '',
+            'LOCATION': props.location || '',
+            'COUNCIL AREA': '',
+            'STATUS': props.status || '',
+            'TYPE': props.fireType || '',
+            'SIZE': props.sizeFmt || '',
+            'RESPONSIBLE AGENCY': props.agency || 'VIC',
+            'UPDATED': props.updated || '',
+            'UPDATED_ISO': props.updatedISO || '',
+            'CURRENT SITUATION': props.text || '',
+            'RISKS': '',
+            'WHAT TO DO': props.action || '',
+            'ADVICE TO THE PUBLIC': props.capResponseType || '',
+            title: props.title
+          };
+          if (props.resources) details['RESOURCES'] = `${props.resources} responding`;
+          rfsItems.push({
+            id: generateRfsId(props.guid || `vic-${idx}`),
+            source: 'vic_emergency',
+            // Victoria is the one feed carrying more than one agency, so
+            // the record names its own filter key instead of the source
+            // standing in for it.
+            agencyKey: props.agency || 'VIC',
+            title: props.title || 'Victorian incident',
+            rawDetails: details,
+            link: props.url || 'https://emergency.vic.gov.au/respond/',
+            typeDisplay: details.TYPE || 'Fire',
+            typesList: [details.TYPE || 'Fire'],
+            agenciesList: [props.agency || 'VIC'],
+            lat: lat,
+            lng: lng,
+            alertLevel: (details['ALERT LEVEL'] || '').toLowerCase(),
+            // Warnings carry their area as rings; the fire layer already
+            // draws these for RFS fire grounds.
+            polygonCoords: vicPolygonRings(props),
+            updatedISO: props.updatedISO || null
+          });
+        });
+      } catch (e) { console.error("VIC Emergency API Error", e); }
+
       // A newer loadAllData started while we fetched user/RFS data — bail before
       // resetting the shared array so we don't stomp the newer run's build.
       if (mySeq !== _loadAllSeq) return;
@@ -6200,25 +6337,36 @@ function initPagerHoursFromStorage() {
           let pulseClass = '';
           const al = item.alertLevel || '';
           
-          // All RFS pins are red with fire icon - fancy layered design with alert-colored outer ring
           // Colors are NOT inverted anymore - overlays keep their original colors
+          const alertBucket = alertBucketFor(al);
           let alertColor = '#ffffff';  // White ring for default/unknown
           let alertGlow = '0 0 15px #ffffff, 0 0 30px #ffffff66';
-          if (al.includes('emergency')) { 
+          if (alertBucket === 'emergency') {
             alertColor = '#ef4444';  // Red for emergency
             alertGlow = '0 0 20px #ef4444, 0 0 40px #ef444488, 0 0 60px #ef444444';
-          } else if (al.includes('watch')) { 
+          } else if (alertBucket === 'watchact') {
             alertColor = '#f97316';  // Orange for watch & act
             alertGlow = '0 0 20px #f97316, 0 0 40px #f9731688';
-          } else if (al.includes('advice')) { 
+          } else if (alertBucket === 'advice') {
             alertColor = '#3b82f6';  // Blue for advice
             alertGlow = '0 0 15px #3b82f6, 0 0 30px #3b82f666';
           }
-          
+
           const hasPagerVisible = showPagerFlag && hasPagerLinked;
 
-          // Inner RFS elements (ring + center)
-          const rfsInnerHtml = `
+          // A record that carries an alert level wears the Australian
+          // Warning System triangle for that level - the same sign the
+          // agencies themselves put on roadside boards and in their apps,
+          // so it needs no legend. Everything else keeps the red fire
+          // circle, because a record with no published level has no
+          // severity to claim. The glow stays either way: it is what makes
+          // an emergency findable at state-wide zoom.
+          const alertIcon = alertIconFor(al);
+          const triColor = ALERT_ICON_COLORS[alertBucket] || alertColor;
+          const rfsInnerHtml = alertIcon ? `
+            <div style="position:absolute; width:26px; height:26px; border-radius:50%; box-shadow:0 0 16px ${triColor}, 0 0 32px ${triColor}66;"></div>
+            <img src="${alertIcon}" alt="" width="26" height="25" style="position:relative; display:block; filter:drop-shadow(0 1px 2px rgba(0,0,0,0.6));">
+          ` : `
             <div style="position:absolute; width:28px; height:28px; border-radius:50%; border:2px solid ${alertColor}; box-shadow:${alertGlow}; background:transparent;"></div>
             <div style="background:linear-gradient(145deg, #ff6b6b, #ee4444, #cc2a2a); width:20px; height:20px; border-radius:50%; border:2px solid #fff; box-shadow:inset 0 -2px 4px rgba(0,0,0,0.3), inset 0 2px 4px rgba(255,255,255,0.2); display:flex; align-items:center; justify-content:center; font-size:10px; color:#fff;"><i class="fa-solid fa-fire"></i></div>
           `;
@@ -8711,6 +8859,7 @@ function initPagerHoursFromStorage() {
           && !(m.source === 'waze' && m.subtypeLabel
                && _hazardExcludedSubtypes.has(m.subtypeLabel))
           && !(m.mainCategory && _hazardExcludedCategories.has(m.mainCategory))
+          && !(m.agency && _hazardExcludedAgencies.has(m.agency))
           && _cullEntryInView(m, bounds);
         const sl = hazardSubLayers[m.type];
         if (!sl) continue;
@@ -9170,7 +9319,7 @@ function initPagerHoursFromStorage() {
           const j = (path) => apiFetch(`${PROXY_BASE}${path}`)
             .then((r) => r.json())
             .catch(() => ({ features: [] }));
-          const [inc, alp, fir, maj, lgaHz, wrkHz, ntHz, qldHz] = await Promise.all([
+          const [inc, alp, fir, maj, lgaHz, wrkHz, ntHz, qldHz, vicHz] = await Promise.all([
             j('/api/traffic/incidents'),
             j('/api/traffic/alpine'),
             j('/api/traffic/fire'),
@@ -9179,6 +9328,7 @@ function initPagerHoursFromStorage() {
             j('/api/traffic/works'),
             j('/api/nt-fire/incidents'),
             j('/api/qld-fire/incidents'),
+            j('/api/vic-emergency/events'),
           ]);
           // NT Fire & Rescue turns out to road crashes as well as fires.
           // The crashes belong with the other road incidents, not on the
@@ -9199,6 +9349,33 @@ function initPagerHoursFromStorage() {
                 roads: f.properties.location || '',
                 region: 'Queensland',
                 orgName: 'QFD',
+                responderAgency: 'QFD',
+                created: f.properties.updatedISO || '',
+                lastUpdated: f.properties.updatedISO || '',
+              },
+            }));
+          // Victoria's non-fire, non-flood share: CFA road accidents,
+          // washaways and hazmat, SES building damage and rescues. Routing
+          // is by event, so these leave the Fires layer their agencies
+          // would otherwise put them on - and they carry orgName so the
+          // agency survives the move and can still be filtered here.
+          const vicHazards = (vicHz.features || [])
+            .filter((f) => (f.properties || {}).layer === 'hazard')
+            .map((f) => ({
+              type: 'Feature',
+              geometry: f.geometry,
+              properties: {
+                id: f.properties.guid,
+                displayName: f.properties.title,
+                title: f.properties.title,
+                mainCategory: /accident|crash|collision/i.test(f.properties.fireType || '')
+                  ? 'Crash' : 'Hazard',
+                subcategory: f.properties.fireType || 'Incident',
+                roads: f.properties.location || '',
+                region: 'Victoria',
+                orgName: f.properties.agency || 'VIC',
+                responderAgency: f.properties.agency || 'VIC',
+                alertLevel: f.properties.alertLevel || '',
                 created: f.properties.updatedISO || '',
                 lastUpdated: f.properties.updatedISO || '',
               },
@@ -9217,6 +9394,7 @@ function initPagerHoursFromStorage() {
                 roads: f.properties.location || '',
                 region: 'Northern Territory',
                 orgName: f.properties.responsibleAgency || 'NTFRS',
+                responderAgency: 'NTFRS',
                 created: f.properties.updatedISO || '',
                 lastUpdated: f.properties.updatedISO || '',
               },
@@ -9235,6 +9413,7 @@ function initPagerHoursFromStorage() {
               ...(wrkHz.features || []).filter((f) => _worksTarget(f.properties) === 'hazard'),
               ...ntCrashes,
               ...qldCrashes,
+              ...vicHazards,
             ],
           };
           layerCache.hazards_merged = { data: trafficData, timestamp: now };
@@ -9595,6 +9774,12 @@ function initPagerHoursFromStorage() {
                 opacity: 0.95
               });
               _hazardMarkers.push({ marker, type: category, source: 'livetraffic', subtypeLabel: null,
+                // Only the emergency-service records carry this. The road
+                // authority and council records deliberately do not: their
+                // OrgName is the reporting council, and 128 of those would
+                // bury the handful of agencies the row exists to filter.
+                // Markers without one are never hidden by the agency row.
+                agency: props.responderAgency || null,
                 // Colour for the zoomed-out canvas dot, matching the bucket.
                 color: category === 'accident' ? '#ef4444' : category === 'closures' ? '#a855f7' : '#f97316',
                 // Canonical form: the merged feeds disagree on casing and
@@ -10311,6 +10496,7 @@ function initPagerHoursFromStorage() {
 
     async function loadFloodsData() {
       floodsLayer.clearLayers();
+      _floodMarkers.length = 0;
       let floodCount = 0;
       
       // --- Live Traffic NSW flood data ---
@@ -10327,15 +10513,43 @@ function initPagerHoursFromStorage() {
           const jf = (path) => apiFetch(`${PROXY_BASE}${path}`)
             .then((r) => r.json())
             .catch(() => ({ features: [] }));
-          const [fl, wrkFl] = await Promise.all([
+          const [fl, wrkFl, vicFl] = await Promise.all([
             jf('/api/traffic/flood'),
             jf('/api/traffic/works'),
+            jf('/api/vic-emergency/events'),
           ]);
+          // Victoria's water: the EMV warning layer is mostly riverine
+          // flood advices issued for the SES, and routing is by event, so
+          // they belong here rather than on the Fires layer their feed
+          // shares with CFA.
+          const vicFloods = (vicFl.features || [])
+            .filter((f) => (f.properties || {}).layer === 'flood')
+            .map((f) => ({
+              type: 'Feature',
+              geometry: f.geometry,
+              properties: {
+                id: f.properties.guid,
+                displayName: f.properties.title,
+                title: f.properties.title,
+                mainCategory: 'Flooding',
+                subcategory: f.properties.fireType || 'Flood',
+                roads: f.properties.location || '',
+                region: 'Victoria',
+                orgName: f.properties.capSender || f.properties.agency || 'VIC',
+                responderAgency: f.properties.agency || 'VIC',
+                alertLevel: f.properties.alertLevel || '',
+                adviceText: f.properties.text || '',
+                created: f.properties.updatedISO || '',
+                lastUpdated: f.properties.updatedISO || '',
+                polygons: f.properties.polygons || [],
+              },
+            }));
           data = {
             type: 'FeatureCollection',
             features: [
               ...(fl.features || []),
               ...(wrkFl.features || []).filter((f) => _worksTarget(f.properties) === 'flood'),
+              ...vicFloods,
             ],
           };
           layerCache.floods_merged = { data, timestamp: Date.now() };
@@ -10383,6 +10597,24 @@ function initPagerHoursFromStorage() {
                 offset: [0, -10],
                 opacity: 0.95
               });
+              // Only the emergency-service records name a responding
+              // agency; the road-authority ones pass the agency row
+              // untouched, the same way they do on Hazards.
+              _floodMarkers.push({ marker, agency: props.responderAgency || null });
+              // A warning area, where the agency published one - the same
+              // rings the Fires layer draws around a fire ground.
+              for (const ring of (props.polygons || [])) {
+                if (!Array.isArray(ring) || ring.length < 3) continue;
+                const latlngs = ring
+                  .filter((pt) => Array.isArray(pt) && pt.length >= 2)
+                  .map((pt) => [pt[1], pt[0]]);
+                if (latlngs.length < 3) continue;
+                const area = L.polygon(latlngs, {
+                  color: '#06b6d4', weight: 2, fillColor: '#06b6d4', fillOpacity: 0.12
+                }).addTo(floodsLayer);
+                area.bindTooltip(tooltip, { sticky: true, opacity: 0.95 });
+                _floodMarkers.push({ marker: area, agency: props.responderAgency || null });
+              }
               floodCount++;
             }
           });
@@ -10792,6 +11024,14 @@ function initPagerHoursFromStorage() {
       toggleHazardFilter(key, hazardFilters[key]);
       refreshActiveFilterPanel();
     };
+    // Which responding agency's records to show. Only the emergency
+    // services tag themselves, so this can never hide a road-authority pin.
+    window.toggleHazardAgencyPill = function (key) {
+      if (_hazardExcludedAgencies.has(key)) _hazardExcludedAgencies.delete(key);
+      else _hazardExcludedAgencies.add(key);
+      _rebuildHazardSubLayers();
+      refreshActiveFilterPanel();
+    };
     // One pill per category the Live Traffic feed actually publishes,
     // rather than the three coarse buckets the sub-layers use.
     window.toggleHazardCategoryPill = function (cat) {
@@ -10882,6 +11122,30 @@ function initPagerHoursFromStorage() {
         // Busiest first, same as the roadwork Type row.
         const catKeys = Object.keys(catCounts)
           .sort((a, b) => catCounts[b] - catCounts[a] || a.localeCompare(b));
+        // Responding agency. Routing is by event, so a CFA hazmat call
+        // and an SES rescue land here rather than on Fires - without this
+        // row they would be the only records with no way to filter by who
+        // is attending.
+        const agencyCounts = {};
+        for (const m of _hazardMarkers) {
+          if (!m.agency) continue;
+          if (!_hazardSelectedSources.has(m.source)) continue;
+          agencyCounts[m.agency] = (agencyCounts[m.agency] || 0) + 1;
+        }
+        const agencyKeys = Object.keys(agencyCounts)
+          .sort((a, b) => agencyCounts[b] - agencyCounts[a] || a.localeCompare(b));
+        let agencyBlock = '';
+        if (agencyKeys.length) {
+          const agencyPills = agencyKeys.map((k) => {
+            const on = !_hazardExcludedAgencies.has(k);
+            return _ffPill(on, `${escapeHtml(agencyLabel(k))} (${agencyCounts[k].toLocaleString()})`,
+                           `toggleHazardAgencyPill('${jsArg(k)}')`);
+          }).join('');
+          agencyBlock = `
+            <div class="ff-section-label">Agency</div>
+            <div class="floating-filter-pills">${agencyPills}</div>
+          `;
+        }
         let categoryBlock = '';
         if (catKeys.length) {
           const catPills = catKeys.map((c) => {
@@ -10901,6 +11165,7 @@ function initPagerHoursFromStorage() {
           ${LiveTrafficVocab.panelHeader('incident')}
           <div class="ff-section-label">Group <span style="opacity:.6;font-weight:400;">(${ltCount.toLocaleString()} total)</span></div>
           <div class="floating-filter-pills">${typePills}</div>
+          ${agencyBlock}
           ${categoryBlock}
           ${subtypeBlock}
         `;
@@ -10935,6 +11200,52 @@ function initPagerHoursFromStorage() {
       const lbl = document.querySelector('#floating-filter-panel #ff-heat-opacity-val');
       if (lbl) lbl.textContent = `${v}%`;
     };
+    // Floods. Single-source until Victoria's SES flood warnings landed
+    // here, which is what the agency row is for - without it those would
+    // be the only records on the map with no way to filter by who issued
+    // them. Records with no agency (the road authority's road-flooding
+    // reports) are never hidden by it.
+    function _rebuildFloodLayer() {
+      for (const m of _floodMarkers) {
+        const desired = !(m.agency && _floodExcludedAgencies.has(m.agency));
+        if (desired) { if (!floodsLayer.hasLayer(m.marker)) floodsLayer.addLayer(m.marker); }
+        else if (floodsLayer.hasLayer(m.marker)) floodsLayer.removeLayer(m.marker);
+      }
+    }
+    window.toggleFloodAgencyPill = function (key) {
+      if (_floodExcludedAgencies.has(key)) _floodExcludedAgencies.delete(key);
+      else _floodExcludedAgencies.add(key);
+      _rebuildFloodLayer();
+      refreshActiveFilterPanel();
+    };
+    FILTER_REGISTRY.floods = {
+      icon: 'fa-water',
+      label: 'Floods',
+      color: '#06b6d4',
+      render() {
+        const agencyCounts = {};
+        let unattributed = 0;
+        for (const m of _floodMarkers) {
+          if (m.agency) agencyCounts[m.agency] = (agencyCounts[m.agency] || 0) + 1;
+          else unattributed += 1;
+        }
+        const keys = Object.keys(agencyCounts)
+          .sort((a, b) => agencyCounts[b] - agencyCounts[a] || a.localeCompare(b));
+        const pills = keys.map((k) => {
+          const on = !_floodExcludedAgencies.has(k);
+          return _ffPill(on, `${escapeHtml(agencyLabel(k))} (${agencyCounts[k].toLocaleString()})`,
+                         `toggleFloodAgencyPill('${jsArg(k)}')`);
+        }).join('');
+        return `
+          <h4><i class="fa-solid fa-water" style="color:#06b6d4;"></i> Floods</h4>
+          ${pills ? `<div class="ff-section-label">Agency</div><div class="floating-filter-pills">${pills}</div>` : ''}
+          <div style="font-size:10px;color:#64748b;margin-top:6px;">
+            ${unattributed.toLocaleString()} record${unattributed === 1 ? '' : 's'} with no agency published (road authority and council reports) - always shown
+          </div>
+        `;
+      },
+    };
+
     FILTER_REGISTRY.police = {
       icon: 'fa-shield-halved',
       label: 'Police Reports',
@@ -11204,7 +11515,7 @@ function initPagerHoursFromStorage() {
     // hardcoded list would rot.
     // The Fires layer carries more than one agency now, so anything that
     // used to ask "is this RFS?" asks "is this a fire incident?" instead.
-    const FIRE_SOURCES = new Set(['rfs', 'nt_fire', 'qld_fire', 'qld_warning']);
+    const FIRE_SOURCES = new Set(['rfs', 'nt_fire', 'qld_fire', 'qld_warning', 'vic_emergency']);
     function isFireIncident(item) { return !!item && FIRE_SOURCES.has(item.source); }
 
     const RFS_ALERT_BUCKETS = [
@@ -11216,11 +11527,7 @@ function initPagerHoursFromStorage() {
     const rfsAlertFilter = { emergency: true, watchact: true, advice: true, other: true };
     const rfsTypeFilter = {}; // typeKey → bool; absent = on
     function rfsAlertBucket(item) {
-      const lvl = ((item.rawDetails && item.rawDetails['ALERT LEVEL']) || '').toLowerCase();
-      if (lvl.includes('emergency')) return 'emergency';
-      if (lvl.includes('watch')) return 'watchact';
-      if (lvl.includes('advice')) return 'advice';
-      return 'other';
+      return alertBucketFor((item.rawDetails && item.rawDetails['ALERT LEVEL']) || '');
     }
     function rfsTypeKey(item) {
       return (((item.rawDetails && item.rawDetails['TYPE']) || 'Other') + '').trim().toLowerCase() || 'other';
@@ -11240,17 +11547,15 @@ function initPagerHoursFromStorage() {
     // appears without needing to be registered here first.
     const fireAgencyFilter = {};
     // Agency, not source: QFD publishes incidents and warnings as two
-    // feeds, but they are one agency and belong under one pill.
+    // feeds, but they are one agency and belong under one pill. Victoria
+    // is the mirror image - one feed, several agencies - so those records
+    // name their own key.
     function fireAgencyKey(item) {
+      if (item.agencyKey) return item.agencyKey;
       if (item.source === 'nt_fire') return 'nt_fire';
       if (item.source === 'qld_fire' || item.source === 'qld_warning') return 'qld';
       return 'rfs';
     }
-    const FIRE_AGENCIES = [
-      { key: 'rfs', label: 'NSW RFS' },
-      { key: 'nt_fire', label: 'NT Fire & Rescue' },
-      { key: 'qld', label: 'QLD Fire Dept' },
-    ];
     window.toggleFireAgencyPill = function (key) {
       fireAgencyFilter[key] = fireAgencyFilter[key] === false;
       refreshMapAndList();
@@ -11289,11 +11594,16 @@ function initPagerHoursFromStorage() {
           const k = fireAgencyKey(it);
           agencyCounts[k] = (agencyCounts[k] || 0) + 1;
         }
-        // Only offer an agency once it has something to show, so the row
-        // doesn't advertise a feed that happens to be empty or down.
-        const agencyPills = FIRE_AGENCIES.filter((a) => agencyCounts[a.key]).map((a) =>
-          _ffPill(fireAgencyFilter[a.key] !== false, `${a.label} (${agencyCounts[a.key]})`, `toggleFireAgencyPill('${a.key}')`)
-        ).join('');
+        // Built from what loaded rather than a fixed list: only agencies
+        // with something to show get a pill, and one we have never seen
+        // gets one too instead of being silently unfilterable.
+        const agencyPills = Object.keys(agencyCounts)
+          .sort((a, b) => agencyCounts[b] - agencyCounts[a] || a.localeCompare(b))
+          .map((k) =>
+            _ffPill(fireAgencyFilter[k] !== false,
+                    `${escapeHtml(agencyLabel(k))} (${agencyCounts[k]})`,
+                    `toggleFireAgencyPill('${jsArg(k)}')`)
+          ).join('');
         return `
           <h4><i class="fa-solid fa-fire" style="color:#ef4444;"></i> Fires</h4>
           ${agencyPills ? `<div class="ff-section-label">Agency</div><div class="floating-filter-pills">${agencyPills}</div>` : ''}
@@ -17375,6 +17685,7 @@ function initPagerHoursFromStorage() {
           rfs: typeof rfsLayer !== 'undefined' ? rfsLayer : null,
           firms: typeof firmsLayer !== 'undefined' ? firmsLayer : null,
           hazards: typeof hazardsLayer !== 'undefined' ? hazardsLayer : null,
+          floods: typeof floodsLayer !== 'undefined' ? floodsLayer : null,
           police: typeof policeLayer !== 'undefined' ? policeLayer : null,
           cameras: typeof camerasLayer !== 'undefined' ? camerasLayer : null,
           beaches: typeof beachwatchLayer !== 'undefined' ? beachwatchLayer : null,
@@ -17410,6 +17721,6 @@ function initPagerHoursFromStorage() {
   <script src="ui-dialogs.js"></script>
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
-  <script src="map-editor-module.js?v=26"></script>
+  <script src="map-editor-module.js?v=27"></script>
 </body>
 </html>

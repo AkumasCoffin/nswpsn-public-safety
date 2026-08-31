@@ -930,7 +930,15 @@
       // Which agency's fire this is. NSW RFS and NT Fire & Rescue share
       // this panel, so nothing here should read "RFS" unconditionally.
       // Feeds identify themselves by code; people don't read codes.
-      const FIRE_AGENCY_NAMES = { RFS: 'NSW RFS', NTFRS: 'NT Fire & Rescue', QFD: 'Queensland Fire Department' };
+      const FIRE_AGENCY_NAMES = {
+        RFS: 'NSW RFS', NTFRS: 'NT Fire & Rescue', QFD: 'Queensland Fire Department',
+        // Victoria publishes several agencies through one feed.
+        CFA: 'Country Fire Authority (Vic)',
+        DEECA: 'Dept of Energy, Environment & Climate Action (Vic)',
+        EMV: 'Emergency Management Victoria',
+        ESTA: 'Triple Zero Victoria',
+        SES: 'State Emergency Service',
+      };
       const _fireAgencyRaw = data.agency || 'RFS';
       const _fireAgency = FIRE_AGENCY_NAMES[_fireAgencyRaw] || _fireAgencyRaw;
       const _isNswRfs = _fireAgencyRaw === 'RFS';

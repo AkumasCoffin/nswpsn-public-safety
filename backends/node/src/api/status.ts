@@ -333,6 +333,7 @@ const SOURCE_LABELS: Record<string, string> = {
   nt_fire: 'NT Fire & Rescue',
   qld_fire: 'QFD incidents',
   qld_warning: 'QFD warnings',
+  vic_emergency: 'VIC emergency events',
   qld_cameras: 'QLD Traffic — cameras',
   qld_flood_cameras: 'QLD Traffic — flood cameras',
   beachwatch: 'Beachwatch',
