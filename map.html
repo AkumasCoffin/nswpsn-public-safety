@@ -816,115 +816,128 @@
     .btn-toggle.active#btn-pager { border: 1px solid #22c55e; color: #bbf7d0; }
     .btn-toggle.active#btn-outages { border: 1px solid #f97316; color: #fdba74; }
 
-    /* ---- Boundary cycle button -------------------------------------------
-       One control that steps Off -> Suburbs -> LGA -> State. Everything
-       animates off a single custom property, --bb, which JS sets to the
-       colour of whichever boundary is showing: the dot, the glow, the
-       border and the ripple all read from it, so a new boundary kind
-       needs a colour and nothing else.
+    /* ---- Boundary segmented control --------------------------------------
+       All three borders visible at once, with one bubble that slides
+       between them. Only one boundary can be on, so the single moving
+       bubble IS the state — there is nothing to read but where it sits.
 
-       The width transition is what makes it feel like a bubble rather
-       than a button — the pill grows and shrinks around the label as the
-       word changes length. */
-    .boundary-bubble {
+       Hover moves the bubble to the option under the cursor and borrows
+       that option's colour; leaving returns it to whatever is selected,
+       or shrinks it away when nothing is. Position and width come from
+       JS (measured per option) because the labels differ in length. */
+    .boundary-seg {
       position: relative;
       display: inline-flex;
       align-items: center;
-      gap: 7px;
-      padding: 4px 12px 4px 9px;
+      gap: 2px;
+      padding: 3px;
       border-radius: 999px;
-      border: 1px solid rgba(255,255,255,0.14);
-      background: rgba(15,23,42,0.75);
-      color: #94a3b8;
+      background: rgba(15,23,42,0.7);
+      border: 1px solid rgba(255,255,255,0.1);
+      isolation: isolate;
+      --bb: #64748b;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    /* The bubble. Sits behind the labels and is the only thing that
+       moves; `left`/`width` are set inline by JS. */
+    .boundary-seg .bb-glider {
+      position: absolute;
+      top: 3px;
+      bottom: 3px;
+      left: 0;
+      width: 0;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--bb) 22%, transparent);
+      border: 1px solid color-mix(in srgb, var(--bb) 65%, transparent);
+      box-shadow: 0 0 10px color-mix(in srgb, var(--bb) 30%, transparent);
+      opacity: 0;
+      z-index: -1;
+      pointer-events: none;
+      /* The spring is what makes it feel like a bubble rather than a
+         box sliding on rails. */
+      transition:
+        left 0.34s cubic-bezier(0.34, 1.4, 0.64, 1),
+        width 0.34s cubic-bezier(0.34, 1.4, 0.64, 1),
+        opacity 0.2s ease,
+        background 0.24s ease,
+        border-color 0.24s ease,
+        box-shadow 0.24s ease;
+    }
+    .boundary-seg.showing .bb-glider { opacity: 1; }
+
+    .boundary-seg .bb-opt {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 10px;
+      border-radius: 999px;
+      background: none;
+      border: 0;
       font: inherit;
-      font-size: 0.72rem;
+      font-size: 0.7rem;
       font-weight: 600;
       letter-spacing: 0.04em;
       text-transform: uppercase;
+      color: #94a3b8;
       cursor: pointer;
-      overflow: hidden;
-      isolation: isolate;
-      user-select: none;
-      -webkit-user-select: none;
-      --bb: #64748b;
-      transition:
-        color 0.28s ease,
-        border-color 0.28s ease,
-        background 0.28s ease,
-        box-shadow 0.28s ease;
-    }
-    .boundary-bubble:hover { background: rgba(30,41,59,0.9); }
-    .boundary-bubble:active { transform: translateY(0.5px); }
-    .boundary-bubble:focus-visible {
-      outline: 2px solid var(--bb);
-      outline-offset: 2px;
-    }
-    /* Lit state: the pill takes on the layer's colour. */
-    .boundary-bubble.on {
-      color: #e2e8f0;
-      border-color: color-mix(in srgb, var(--bb) 70%, transparent);
-      background: color-mix(in srgb, var(--bb) 16%, rgba(15,23,42,0.85));
-      box-shadow: 0 0 12px color-mix(in srgb, var(--bb) 35%, transparent);
-    }
-
-    /* The dot is the bubble: it inflates when a layer comes on and
-       deflates back to a dim speck when you cycle past the end. */
-    .boundary-bubble .bb-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      flex: none;
-      background: var(--bb);
-      box-shadow: 0 0 0 0 color-mix(in srgb, var(--bb) 60%, transparent);
-      transform: scale(0.7);
-      opacity: 0.55;
-      transition: transform 0.32s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.28s ease, background 0.28s ease;
-    }
-    .boundary-bubble.on .bb-dot {
-      transform: scale(1);
-      opacity: 1;
-      animation: bbPulse 2.4s ease-out infinite;
-    }
-    @keyframes bbPulse {
-      0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--bb) 55%, transparent); }
-      70%  { box-shadow: 0 0 0 7px color-mix(in srgb, var(--bb) 0%, transparent); }
-      100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--bb) 0%, transparent); }
-    }
-
-    /* The label swaps by sliding out and the next one sliding in, so the
-       cycle reads as movement in one direction rather than a flicker. */
-    .boundary-bubble .bb-label {
-      display: inline-block;
       white-space: nowrap;
-      transition: transform 0.18s ease, opacity 0.18s ease;
+      transition: color 0.22s ease;
     }
-    .boundary-bubble.swapping .bb-label {
-      transform: translateY(-8px);
-      opacity: 0;
+    .boundary-seg .bb-opt:hover,
+    .boundary-seg .bb-opt.active { color: #e2e8f0; }
+    .boundary-seg .bb-opt:focus-visible {
+      outline: 2px solid var(--bb);
+      outline-offset: 1px;
     }
 
-    /* Ripple: a bubble expanding from where the click landed. Sized and
-       positioned by JS, removed when it finishes. */
-    .boundary-bubble .bb-ripple {
-      position: absolute;
+    /* Each option carries its own colour dot, so the control reads even
+       before the bubble moves anywhere. */
+    .boundary-seg .bb-opt i {
+      width: 7px;
+      height: 7px;
       border-radius: 50%;
-      background: color-mix(in srgb, var(--bb) 45%, transparent);
-      transform: scale(0);
-      opacity: 0.65;
-      pointer-events: none;
-      z-index: -1;
-      animation: bbRipple 0.5s ease-out forwards;
+      background: var(--dot, #64748b);
+      opacity: 0.5;
+      transform: scale(0.8);
+      transition: opacity 0.22s ease, transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
     }
-    @keyframes bbRipple {
-      to { transform: scale(1); opacity: 0; }
+    .boundary-seg .bb-opt:hover i { opacity: 0.9; transform: scale(1); }
+    .boundary-seg .bb-opt.active i {
+      opacity: 1;
+      transform: scale(1);
+      animation: bbDotPulse 2.4s ease-out infinite;
     }
+    @keyframes bbDotPulse {
+      0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--dot) 55%, transparent); }
+      70%  { box-shadow: 0 0 0 6px color-mix(in srgb, var(--dot) 0%, transparent); }
+      100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--dot) 0%, transparent); }
+    }
+
+    /* Spinner while a layer's viewport query is in flight. */
+    .boundary-seg .bb-opt.loading i {
+      animation: bbDotSpin 0.7s linear infinite;
+      border-radius: 50%;
+      background: none;
+      border: 1.5px solid color-mix(in srgb, var(--dot) 35%, transparent);
+      border-top-color: var(--dot);
+      box-sizing: border-box;
+      width: 9px;
+      height: 9px;
+    }
+    @keyframes bbDotSpin { to { transform: rotate(360deg); } }
 
     @media (prefers-reduced-motion: reduce) {
-      .boundary-bubble,
-      .boundary-bubble .bb-dot,
-      .boundary-bubble .bb-label { transition: none; }
-      .boundary-bubble.on .bb-dot { animation: none; }
-      .boundary-bubble .bb-ripple { display: none; }
+      .boundary-seg .bb-glider,
+      .boundary-seg .bb-opt,
+      .boundary-seg .bb-opt i { transition: none; }
+      .boundary-seg .bb-opt.active i,
+      .boundary-seg .bb-opt.loading i { animation: none; }
+    }
+    @media (max-width: 900px) {
+      .boundary-seg .bb-opt { padding: 3px 8px; font-size: 0.66rem; }
     }
 
     /* W3W switch toggle (inside map-type-controls) */
@@ -2806,19 +2819,31 @@
           </label>
           <span class="w3w-switch-label">W3W</span>
         </div>
-        <!-- Boundary overlays: one button that cycles Off -> Suburbs ->
-             LGA -> State. They stack into an unreadable mesh together and
-             each is a viewport query, so only one is ever on; a cycling
-             control says that in its shape rather than relying on three
-             switches to police each other. -->
-        <!-- A div, not a <button>: Chrome gives a button's contents an
-             anonymous box and never lays out an absolutely-positioned
-             child, so the ripple would be invisible inside one. -->
-        <div class="boundary-bubble" id="boundary-cycle" role="button" tabindex="0"
-             onclick="cycleBoundary(event)" onkeydown="onBoundaryKey(event)"
-             title="Borders: click to cycle">
-          <span class="bb-dot"></span>
-          <span class="bb-label" id="boundary-cycle-label">Borders</span>
+        <!-- Boundary overlays. All three shown; only one can be on, so a
+             single bubble slides between them and that position is the
+             state. Hover moves it, leaving returns it to the selection,
+             and clicking the selected one turns borders off. -->
+        <div class="boundary-seg" id="boundary-seg" role="group" aria-label="Border overlays"
+             onmouseleave="onBoundaryLeave()">
+          <span class="bb-glider" aria-hidden="true"></span>
+          <button type="button" class="bb-opt" data-kind="locality" style="--dot:#a78bfa"
+                  aria-pressed="false" title="Suburb / locality borders"
+                  onmouseenter="onBoundaryHover('locality')" onfocus="onBoundaryHover('locality')"
+                  onclick="selectBoundary('locality')" onkeydown="onBoundaryKey(event,'locality')">
+            <i aria-hidden="true"></i>Suburbs
+          </button>
+          <button type="button" class="bb-opt" data-kind="lga" style="--dot:#38bdf8"
+                  aria-pressed="false" title="Local Government Area borders"
+                  onmouseenter="onBoundaryHover('lga')" onfocus="onBoundaryHover('lga')"
+                  onclick="selectBoundary('lga')" onkeydown="onBoundaryKey(event,'lga')">
+            <i aria-hidden="true"></i>LGA
+          </button>
+          <button type="button" class="bb-opt" data-kind="state" style="--dot:#f59e0b"
+                  aria-pressed="false" title="State and territory borders"
+                  onmouseenter="onBoundaryHover('state')" onfocus="onBoundaryHover('state')"
+                  onclick="selectBoundary('state')" onkeydown="onBoundaryKey(event,'state')">
+            <i aria-hidden="true"></i>State
+          </button>
         </div>
       </div>
       
@@ -16851,12 +16876,8 @@ function initPagerHoursFromStorage() {
       }
     });
 
-    // The cycle order. `null` is the off state, and it is first so the
-    // map starts with no borders and one click gets you suburbs.
-    const BOUNDARY_CYCLE = [null, 'locality', 'lga', 'state'];
-
-    // Colours the button borrows from each layer, so the pill always
-    // matches the lines it drew.
+    // Colours each option lends the bubble when it is hovered or chosen,
+    // matching the lines that boundary draws on the map.
     const BOUNDARY_BUBBLE_COLOR = {
       locality: '#a78bfa',
       lga: '#38bdf8',
@@ -16864,107 +16885,94 @@ function initPagerHoursFromStorage() {
     };
 
     /**
-     * Paint the button for whichever boundary is showing.
+     * Move the bubble under an option.
      *
-     * The label swap is two-step on purpose: fade the old word out,
-     * change the text while it is invisible, fade the new one in. Doing
-     * it in one go reads as a flicker; this reads as movement.
+     * Measured rather than computed: the labels differ in length, and
+     * reading offsetLeft/offsetWidth keeps the bubble exact whatever the
+     * font or breakpoint does to them. Passing null shrinks it away.
      */
-    function _paintBoundaryBubble(kind, animate) {
-      const btn = document.getElementById('boundary-cycle');
-      const label = document.getElementById('boundary-cycle-label');
-      if (!btn || !label) return;
-      const text = kind ? _boundaryCfg[kind].shortLabel : 'Borders';
-      const color = kind ? BOUNDARY_BUBBLE_COLOR[kind] : '#64748b';
-      const apply = () => {
-        btn.style.setProperty('--bb', color);
-        btn.classList.toggle('on', !!kind);
-        label.textContent = text;
-        btn.title = kind
-          ? _boundaryCfg[kind].subtitle + ' borders — click for the next'
-          : 'Borders: click to cycle';
-      };
-      if (!animate) { apply(); return; }
-      btn.classList.add('swapping');
-      setTimeout(() => {
-        apply();
-        btn.classList.remove('swapping');
-      }, 180);
+    function _moveBoundaryGlider(kind) {
+      const seg = document.getElementById('boundary-seg');
+      const glider = seg && seg.querySelector('.bb-glider');
+      if (!seg || !glider) return;
+      const opt = kind ? seg.querySelector('.bb-opt[data-kind="' + kind + '"]') : null;
+      if (!opt) {
+        seg.classList.remove('showing');
+        return;
+      }
+      seg.style.setProperty('--bb', BOUNDARY_BUBBLE_COLOR[kind] || '#64748b');
+      glider.style.left = opt.offsetLeft + 'px';
+      glider.style.width = opt.offsetWidth + 'px';
+      seg.classList.add('showing');
     }
 
-    /** A bubble expanding from the click, sized to cover the button. */
-    function _boundaryRipple(btn, ev) {
-      if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-      const r = btn.getBoundingClientRect();
-      const size = Math.max(r.width, r.height) * 2.2;
-      const x = (ev && ev.clientX ? ev.clientX - r.left : r.width / 2) - size / 2;
-      const y = (ev && ev.clientY ? ev.clientY - r.top : r.height / 2) - size / 2;
-      const dot = document.createElement('span');
-      dot.className = 'bb-ripple';
-      dot.style.width = dot.style.height = size + 'px';
-      dot.style.left = x + 'px';
-      dot.style.top = y + 'px';
-      btn.appendChild(dot);
-      // animationend normally does it; the timeout is insurance. A tab
-      // that never paints (backgrounded, or a browser that suspends
-      // animations) never fires the event, and without this the nodes
-      // would pile up one per click.
-      let done = false;
-      const drop = () => { if (done) return; done = true; dot.remove(); };
-      dot.addEventListener('animationend', drop);
-      setTimeout(drop, 800);
+    /** Bubble follows the cursor; snaps back to the selection on leave. */
+    function onBoundaryHover(kind) { _moveBoundaryGlider(kind); }
+    function onBoundaryLeave() { _moveBoundaryGlider(_boundaryActive); }
+
+    /** Repaint which option reads as chosen, and park the bubble there. */
+    function _paintBoundarySeg() {
+      const seg = document.getElementById('boundary-seg');
+      if (!seg) return;
+      seg.querySelectorAll('.bb-opt').forEach((o) => {
+        const on = o.dataset.kind === _boundaryActive;
+        o.classList.toggle('active', on);
+        o.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+      _moveBoundaryGlider(_boundaryActive);
     }
 
     /**
-     * Step to the next boundary in the cycle.
+     * Choose a boundary — or clear it by clicking the one already on.
      *
-     * One control rather than three switches: only one boundary can be
-     * on anyway, and a cycling button says that in its shape instead of
-     * leaving three toggles to police each other.
+     * Only one can be shown at a time, so this is a radio group that also
+     * lets you deselect: the alternative is a fourth "off" segment for
+     * something the selected option can express by itself.
      */
-    // Enter/Space, since a div doesn't get that for free.
-    function onBoundaryKey(ev) {
-      if (ev.key === 'Enter' || ev.key === ' ' || ev.key === 'Spacebar') {
-        ev.preventDefault();
-        cycleBoundary(ev);
+    async function selectBoundary(kind) {
+      const seg = document.getElementById('boundary-seg');
+      const opt = seg && seg.querySelector('.bb-opt[data-kind="' + kind + '"]');
+      const previous = _boundaryActive;
+
+      if (previous) _hideBoundary(previous);
+
+      if (previous === kind) {
+        // Clicking the active option turns borders off.
+        _boundaryActive = null;
+        _paintBoundarySeg();
+        return;
       }
-    }
 
-    async function cycleBoundary(ev) {
-      const btn = document.getElementById('boundary-cycle');
-      if (!btn) return;
-      _boundaryRipple(btn, ev);
-
-      const current = _boundaryActive;
-      const idx = BOUNDARY_CYCLE.indexOf(current);
-      const next = BOUNDARY_CYCLE[(idx + 1) % BOUNDARY_CYCLE.length];
-
-      // Paint immediately so the button responds to the click even while
-      // the layer is still loading.
-      _paintBoundaryBubble(next, true);
-
-      if (current) _hideBoundary(current);
-      if (!next) { _boundaryActive = null; return; }
-
-      _boundaryActive = next;
+      _boundaryActive = kind;
       _boundaryLastKey = null;
+      _paintBoundarySeg();
+      if (opt) opt.classList.add('loading');
       try {
-        await _refreshBoundaryLayer(next, true);
+        await _refreshBoundaryLayer(kind, true);
       } catch (e) {
-        console.warn('[boundary] failed to load', next, e);
-        // Only back out if the user hasn't clicked on past this one.
-        if (_boundaryActive === next) {
-          _hideBoundary(next);
+        console.warn('[boundary] failed to load', kind, e);
+        // Only back out if the user hasn't picked something else since.
+        if (_boundaryActive === kind) {
+          _hideBoundary(kind);
           _boundaryActive = null;
-          _paintBoundaryBubble(null, true);
+          _paintBoundarySeg();
           if (typeof showW3WToast === 'function') {
-            showW3WToast('Could not load ' + _boundaryCfg[next].subtitle.toLowerCase() + ' borders');
+            showW3WToast('Could not load ' + _boundaryCfg[kind].subtitle.toLowerCase() + ' borders');
           }
         }
+      } finally {
+        if (opt) opt.classList.remove('loading');
       }
     }
 
-    /** Take one boundary off the map without touching the cycle state. */
+    function onBoundaryKey(ev, kind) {
+      if (ev.key === 'Enter' || ev.key === ' ' || ev.key === 'Spacebar') {
+        ev.preventDefault();
+        selectBoundary(kind);
+      }
+    }
+
+    /** Take one boundary off the map without touching the selection. */
     function _hideBoundary(kind) {
       if (_boundaryLayers[kind]) {
         map.removeLayer(_boundaryLayers[kind]);
@@ -16974,6 +16982,13 @@ function initPagerHoursFromStorage() {
       _boundaryLastKey = null;
       // Any in-flight fetch for this kind is now stale.
       _boundaryFetchSeq += 1;
+    }
+
+    // The bubble is positioned from measured widths, so it has to be
+    // re-measured whenever those can change.
+    window.addEventListener('resize', () => _moveBoundaryGlider(_boundaryActive));
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(() => _moveBoundaryGlider(_boundaryActive));
     }
 
 
