@@ -11,6 +11,8 @@
    Depends on globals provided by map.html + auth-common.js:
      map, L, sb, PROXY_BASE, API_BASE_URL, API_KEY, escapeHtml,
      haversineMeters, buildUserIncidentTooltip, isWithinMinutes,
+     alertBucketFor, ALERT_ICON_COLORS (so a fire's warning level is the
+     same colour here as on its pin and in its tooltip),
      marked, DOMPurify, userLayer (public user-incident layer).
    All editor internals stay private to this IIFE; only the functions
    referenced by inline on* handlers are exported onto window.
@@ -987,11 +989,35 @@
       customRFSBlock.id = 'rfs-read-only-data';
       customRFSBlock.dataset.point = data.point;
 
+      // Warning level, status and type as cards, the same three the map
+      // tooltip leads with and in the same colours — the level off the
+      // Australian Warning System palette the pin is drawn in, so one
+      // fire looks like itself wherever you meet it. This panel used to
+      // be a run of bold labels that named neither the warning level nor
+      // the type at all, which are the two things worth knowing first.
+      const _lvlRaw = data.ALERT_LEVEL || '';
+      const _lvlColor = (typeof alertBucketFor === 'function' && typeof ALERT_ICON_COLORS === 'object')
+        ? (ALERT_ICON_COLORS[alertBucketFor(_lvlRaw)] || '#94a3b8')
+        : '#94a3b8';
+      // word-break:break-word would split inside a word — this panel is
+      // barely 90px per card, and "Emergency Warning" came out as
+      // "Emergenc y Warning". overflow-wrap breaks between words first
+      // and only splits one that cannot fit on a line by itself.
+      const _card = (label, value, color) => `
+        <div style="background:${color}1f; border:1px solid ${color}59; padding:0.35rem 0.4rem; border-radius:5px; text-align:center; flex:1; min-width:0;">
+          <div style="color:${color}cc; font-size:0.58rem; font-weight:600; text-transform:uppercase; letter-spacing:0.02em; line-height:1.2;">${escapeHtml(label)}</div>
+          <div style="color:${color}; font-size:0.74rem; font-weight:700; line-height:1.25; overflow-wrap:break-word; word-break:normal; hyphens:none;">${escapeHtml(value)}</div>
+        </div>`;
+
       customRFSBlock.innerHTML = `
         <div style="background:rgba(148,163,184,0.07); border:1px solid rgba(148,163,184,0.25); padding:0.8rem; border-radius:6px; margin-bottom:1rem; font-size:0.85rem;">
-          <h5 style="margin-top:0.3rem; margin-bottom:0.5rem; color:#ef4444;">${escapeHtml(_fireAgency)} Incident Details (Read Only)</h5>
+          <h5 style="margin-top:0.3rem; margin-bottom:0.6rem; color:#ef4444;">${escapeHtml(_fireAgency)} Incident Details (Read Only)</h5>
+          <div style="display:flex; gap:6px; margin-bottom:0.7rem;">
+            ${_card('Warning Level', _lvlRaw || 'Not Applicable', _lvlColor)}
+            ${_card('Status', data.STATUS || 'Unknown', '#4ade80')}
+            ${_card('Type', data.TYPE || 'Fire', '#fb923c')}
+          </div>
           <strong>Title:</strong> ${escapeHtml(data.title || 'N/A')}<br>
-          <strong>Status:</strong> ${escapeHtml(data.STATUS || 'Unknown')}<br>
           <strong>Location:</strong> ${escapeHtml(data.LOCATION || 'N/A')}<br>
           <a href="${data.link}" target="_blank" style="font-size:0.8rem; margin-top:0.5rem; display:inline-block; color:#7dd3fc;">${_isNswRfs ? 'View on Fires Near Me' : 'View on the ' + escapeHtml(_fireAgency) + ' incident map'} →</a>
         </div>
@@ -2538,13 +2564,19 @@
             const d = item.rawDetails || {};
             // The fire layer carries more than one agency now, so the
             // panel is labelled from the record rather than assuming RFS.
-            const agency = (item.agenciesList && item.agenciesList[0])
-              || d['RESPONSIBLE AGENCY'] || 'RFS';
+            // agenciesList is the agency that PUBLISHED the record; the
+            // feed's own "RESPONSIBLE AGENCY" is whoever runs that
+            // particular fire, which on RFS records is often Forestry
+            // Corporation or Fire & Rescue NSW and would label the panel
+            // with an agency that has no feed.
+            const agency = (item.agenciesList && item.agenciesList[0]) || 'RFS';
             selectRfsIncident({
               id: item.id,
               title: item.title,
               STATUS: d.STATUS || d.status || 'Unknown',
               LOCATION: d.LOCATION || d.location || '',
+              ALERT_LEVEL: d['ALERT LEVEL'] || '',
+              TYPE: d.TYPE || '',
               agency,
               source: item.source || 'rfs',
               link: item.link || 'https://www.rfs.nsw.gov.au/fire-information/fires-near-me',
