@@ -36,6 +36,14 @@
  *   node scripts/import-boundaries.mjs --apply
  *   node scripts/import-boundaries.mjs --apply --kind=lga
  *   node scripts/import-boundaries.mjs --apply --refetch  # ignore the cache
+ *   node scripts/import-boundaries.mjs --apply --resume   # skip stored kinds
+ *
+ * The import is a few hundred requests to someone else's server over
+ * several minutes, so a blip somewhere in the middle is expected rather
+ * than exceptional - one ETIMEDOUT on the first LGA request once threw
+ * away a completed 15,785-row locality import's worth of progress from
+ * the same run. Every request retries with backoff, and each kind lands
+ * in its own transaction, so a kind that finished stays finished.
  */
 import pg from 'pg';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
@@ -49,6 +57,7 @@ const CACHE_DIR = join(REPO_ROOT, 'data', 'boundaries', 'source');
 
 const APPLY = process.argv.includes('--apply');
 const REFETCH = process.argv.includes('--refetch');
+const RESUME = process.argv.includes('--resume');
 const kindArg = process.argv.find((a) => a.startsWith('--kind='));
 const ONLY_KIND = kindArg ? kindArg.slice('--kind='.length) : null;
 
@@ -138,11 +147,42 @@ if (!url) {
 
 const pool = new pg.Pool({ connectionString: url, max: 4 });
 
+const TRIES = 4;
+const REQ_TIMEOUT_MS = 90_000;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * One request, retried. Without this a single dropped connection ends the
+ * run, and with three national datasets behind a few hundred requests
+ * that is a matter of when rather than if. 5xx and network errors are
+ * worth another go; a 4xx is us asking wrongly and repeating it would
+ * only be slower.
+ */
+async function getJson(url, label) {
+  let last;
+  for (let attempt = 1; attempt <= TRIES; attempt += 1) {
+    try {
+      const r = await fetch(url, { signal: AbortSignal.timeout(REQ_TIMEOUT_MS) });
+      if (r.ok) return await r.json();
+      if (r.status < 500) throw new Error(`${label}: HTTP ${r.status}`);
+      last = new Error(`${label}: HTTP ${r.status}`);
+    } catch (err) {
+      if (/HTTP 4\d\d/.test(err.message)) throw err;
+      last = err;
+    }
+    if (attempt < TRIES) {
+      const wait = 2000 * 2 ** (attempt - 1);
+      process.stdout.write(`\n  ${label} failed (${last.message}); retrying in ${wait / 1000}s\n`);
+      await sleep(wait);
+    }
+  }
+  throw last;
+}
+
 async function countRemote(ds) {
   const q = `${ds.url}/query?where=1%3D1&returnCountOnly=true&f=json`;
-  const r = await fetch(q);
-  if (!r.ok) throw new Error(`count ${ds.kind}: HTTP ${r.status}`);
-  return (await r.json()).count;
+  return (await getJson(q, `count ${ds.kind}`)).count;
 }
 
 /** One page, from the cache when we already have it. */
@@ -155,9 +195,7 @@ async function fetchPage(ds, offset) {
     `${ds.url}/query?where=1%3D1&outFields=${encodeURIComponent(ds.fields)}` +
     `&outSR=4326&maxAllowableOffset=${OFFSET}&geometryPrecision=${PRECISION}` +
     `&resultOffset=${offset}&resultRecordCount=${PAGE}&f=geojson`;
-  const r = await fetch(q);
-  if (!r.ok) throw new Error(`${ds.kind} @${offset}: HTTP ${r.status}`);
-  const body = await r.json();
+  const body = await getJson(q, `${ds.kind} @${offset}`);
   mkdirSync(CACHE_DIR, { recursive: true });
   writeFileSync(file, JSON.stringify(body));
   return body;
@@ -318,12 +356,37 @@ async function importDataset(ds) {
 }
 
 async function run() {
-  const sets = ONLY_KIND ? DATASETS.filter((d) => d.kind === ONLY_KIND) : DATASETS;
+  let sets = ONLY_KIND ? DATASETS.filter((d) => d.kind === ONLY_KIND) : DATASETS;
   if (!sets.length) {
     console.error(`unknown --kind. Use one of: ${DATASETS.map((d) => d.kind).join(', ')}`);
     process.exit(1);
   }
-  for (const ds of sets) await importDataset(ds);
+
+  if (RESUME && APPLY) {
+    const { rows } = await pool.query(
+      `SELECT kind FROM boundaries GROUP BY kind HAVING count(*) > 0`,
+    );
+    const done = new Set(rows.map((r) => r.kind));
+    const skip = sets.filter((d) => done.has(d.kind)).map((d) => d.kind);
+    if (skip.length) console.log(`--resume: ${skip.join(', ')} already stored, skipping`);
+    sets = sets.filter((d) => !done.has(d.kind));
+  }
+
+  // A kind that fails should not discard the ones that worked - each is
+  // its own transaction, so report and carry on rather than exiting.
+  const failed = [];
+  for (const ds of sets) {
+    try {
+      await importDataset(ds);
+    } catch (err) {
+      failed.push(ds.kind);
+      console.error(`\n  ${ds.kind} failed: ${err.message}`);
+    }
+  }
+  if (failed.length) {
+    console.error(`\nincomplete: ${failed.join(', ')} — re-run to finish (cached pages make it quick)`);
+    process.exitCode = 1;
+  }
 
   if (APPLY) {
     const { rows } = await pool.query(
