@@ -2154,7 +2154,7 @@
           const fireType = data.fireType || item.subcategory || '';
           const size = data.size || '';
           const council = data.councilArea || '';
-          const agency = agencyBadge(data.responsibleAgency || data.agency || '');
+          const agency = publishingAgency(item, data);
           if (agency) extraInfo += `<span class="lg-badge" style="--badge:${agency.color}">${escapeHtml(agency.label)}</span>`;
           if (status) extraInfo += `<span class="lg-badge" style="--badge:${getStatusColor(status)}">${escapeHtml(status)}</span>`;
           if (alertLevel) extraInfo += `<span class="lg-badge" style="--badge:${getAlertLevelColor(alertLevel)}">${escapeHtml(alertLevel)}</span>`;
@@ -2166,6 +2166,15 @@
           let details = [];
           if (size) details.push(`<span class="lg-dim"><i class="fas fa-expand-arrows-alt"></i> ${escapeHtml(size)}</span>`);
           if (council) details.push(`<span class="lg-dim"><i class="fas fa-map"></i> ${escapeHtml(council)}</span>`);
+          // Whoever is in charge of the fire, when that is not simply the
+          // agency that published it — a Forestry Corporation or National
+          // Parks fire is a genuinely different thing, and it is the RFS
+          // telling us so.
+          const managedBy = String(data.responsibleAgency || '').trim();
+          const managedLabel = managedBy ? agencyBadge(managedBy).label : '';
+          if (managedLabel && (!agency || managedLabel !== agency.label)) {
+            details.push(`<span class="lg-dim"><i class="fas fa-users"></i> ${escapeHtml(managedLabel)}</span>`);
+          }
           if (details.length) extraDetails = details.join(' · ');
         } else if (item.source === 'act_ambulance') {
           const status = data.status || item.status || '';
@@ -3972,12 +3981,43 @@
       'EMV': { label: 'EMV (Vic)', color: '#818cf8' },
       'ESTA': { label: 'Triple Zero (Vic)', color: '#a78bfa' },
       'SES': { label: 'SES', color: '#f59e0b' },
+      // Victoria's feed also relays two national agencies — earthquakes
+      // and severe weather — under their own org codes.
+      'AU/BOM': { label: 'Bureau of Meteorology', color: '#3b82f6' },
+      'AU/GA': { label: 'Geoscience Australia', color: '#a16207' },
     };
     function agencyBadge(raw) {
       const t = String(raw || '').trim();
       if (!t) return null;
       const hit = AGENCY_BADGES[t.toUpperCase()];
       return hit || { label: t, color: '#94a3b8' };
+    }
+
+    /**
+     * Which agency published this record.
+     *
+     * NOT the same question as the RFS feed's "RESPONSIBLE AGENCY",
+     * which names whoever is in charge of that particular fire — live
+     * right now that field reads Rural Fire Service on 21 records but
+     * Forestry Corporation of NSW on 5, Fire and Rescue NSW on 2 and
+     * National Parks on 2. Reading it as the publisher put a
+     * "Fire & Rescue NSW" pill on records from a feed FRNSW does not
+     * have, which is how this was spotted.
+     *
+     * So the feed decides, except for the two feeds that genuinely carry
+     * more than one publisher: the NT relays both NT Fire & Rescue and
+     * Bushfires NT, and Victoria's carries CFA, DEECA, SES, EMV and its
+     * triple-zero dispatcher — plus the Bureau and Geoscience Australia.
+     */
+    function publishingAgency(item, data) {
+      switch (item.source) {
+        case 'rfs': return AGENCY_BADGES['RFS'];
+        case 'qld_fire':
+        case 'qld_warning': return AGENCY_BADGES['QFD'];
+        case 'nt_fire': return agencyBadge(data.responsibleAgency || 'NTFRS');
+        case 'vic_emergency': return agencyBadge(data.agency || 'VIC');
+        default: return null;
+      }
     }
 
     function formatRelativeTime(timestamp) {
