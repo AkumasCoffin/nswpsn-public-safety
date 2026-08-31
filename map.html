@@ -5409,6 +5409,87 @@ function initPagerHoursFromStorage() {
         });
       } catch (e) { console.error("NT Fire API Error", e); }
 
+      // Queensland Fire Department: incidents and public warnings. The
+      // backend emits the RFS property names for both, so they ride the
+      // same layer, tooltip and details panel. Two feeds because they
+      // answer different questions - what is burning (44 right now) and
+      // what the public is being told about it (9) - and upstream leaves
+      // the field that would link them null, so a fire with a warning
+      // shows as both until it doesn't.
+      try {
+        const [incRes, warnRes] = await Promise.all([
+          apiFetch(`${PROXY_BASE}/api/qld-fire/incidents`).then(r => r.json()).catch(() => ({ features: [] })),
+          apiFetch(`${PROXY_BASE}/api/qld-fire/warnings`).then(r => r.json()).catch(() => ({ features: [] })),
+        ]);
+        // When upstream does populate the reference, the warning's alert
+        // level belongs on the incident and the separate warning pin is
+        // noise. Dormant today; costs nothing to have ready.
+        const warnByIncident = new Map();
+        (warnRes.features || []).forEach(f => {
+          const ref = (f.properties || {}).incidentRef;
+          if (ref) warnByIncident.set(ref, f.properties);
+        });
+
+        const pushQld = (feature, idx) => {
+          const props = feature.properties || {};
+          if (props.layer === 'hazard') return; // road crashes -> Hazards layer
+          const geom = feature.geometry || {};
+          if (geom.type !== 'Point' || !Array.isArray(geom.coordinates)) return;
+          const [lng, lat] = geom.coordinates;
+          if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+
+          // An incident with a matching warning wears that warning's level.
+          const linked = props.source === 'qld_fire'
+            ? warnByIncident.get(String(props.guid || '').replace(/^qfd:/, ''))
+            : null;
+          const alertLevel = (linked && linked.alertLevel) || props.alertLevel || '';
+
+          const details = {
+            'ALERT LEVEL': alertLevel,
+            'LOCATION': props.location || '',
+            'COUNCIL AREA': '',
+            'STATUS': props.status || '',
+            'TYPE': props.fireType || '',
+            'SIZE': '',
+            'RESPONSIBLE AGENCY': 'QFD',
+            'UPDATED': props.updated || '',
+            'UPDATED_ISO': props.updatedISO || '',
+            'CURRENT SITUATION': props.warningText || '',
+            'RISKS': props.impacts || '',
+            'WHAT TO DO': props.shouldDo || props.leaveSafely || '',
+            'ADVICE TO THE PUBLIC': props.furtherInformation || '',
+            title: props.title
+          };
+          if (props.vehiclesOnScene != null || props.vehiclesOnRoute != null) {
+            details['RESOURCES'] = `${props.vehiclesOnScene || 0} on scene, ${props.vehiclesOnRoute || 0} responding`;
+          }
+          rfsItems.push({
+            id: generateRfsId(props.guid || `qfd-${idx}`),
+            source: props.source || 'qld_fire',
+            title: props.title || 'QFD incident',
+            rawDetails: details,
+            link: 'https://www.qfes.qld.gov.au/Current-Incidents',
+            typeDisplay: details.TYPE || 'Fire',
+            typesList: [details.TYPE || 'Fire'],
+            agenciesList: ['QFD'],
+            lat: lat,
+            lng: lng,
+            alertLevel: alertLevel.toLowerCase(),
+            polygonCoords: null,
+            updatedISO: props.updatedISO || null
+          });
+        };
+
+        (incRes.features || []).forEach(pushQld);
+        // A warning that belongs to a shown incident has already been
+        // folded into it above.
+        (warnRes.features || []).forEach((f, i) => {
+          const ref = (f.properties || {}).incidentRef;
+          if (ref && warnByIncident.has(ref)) return;
+          pushQld(f, i);
+        });
+      } catch (e) { console.error("QLD Fire API Error", e); }
+
       // A newer loadAllData started while we fetched user/RFS data — bail before
       // resetting the shared array so we don't stomp the newer run's build.
       if (mySeq !== _loadAllSeq) return;
@@ -7237,7 +7318,7 @@ function initPagerHoursFromStorage() {
           <strong style="color:#a78bfa;">Last Updated:</strong> ${escapeHtml(item.updatedISO ? new Date(item.updatedISO).toLocaleString() : (data['UPDATED'] || 'Recently'))}
         </div>
         ${rfsLinkSafe ? `<a href="${escapeHtml(rfsLinkSafe)}" target="_blank" class="btn btn-primary" style="display:inline-block; width:100%; text-align:center; margin-bottom:1.5rem;">
-          ${item.source === 'nt_fire' ? 'View on the NT incident map' : 'View on Fires Near Me'}
+          ${item.source === 'rfs' ? 'View on Fires Near Me' : 'View the agency incident map'}
         </a>` : ''}
         <hr style="border:0; border-top:1px solid var(--border-subtle); margin:0 0 1.5rem 0;">
         <h3 style="font-size:0.85rem; text-transform:uppercase; color:var(--text-soft); letter-spacing:0.1em; margin-bottom:0.5rem;">User Incident Log (External)</h3>
@@ -9089,7 +9170,7 @@ function initPagerHoursFromStorage() {
           const j = (path) => apiFetch(`${PROXY_BASE}${path}`)
             .then((r) => r.json())
             .catch(() => ({ features: [] }));
-          const [inc, alp, fir, maj, lgaHz, wrkHz, ntHz] = await Promise.all([
+          const [inc, alp, fir, maj, lgaHz, wrkHz, ntHz, qldHz] = await Promise.all([
             j('/api/traffic/incidents'),
             j('/api/traffic/alpine'),
             j('/api/traffic/fire'),
@@ -9097,11 +9178,31 @@ function initPagerHoursFromStorage() {
             j('/api/traffic/lga'),
             j('/api/traffic/works'),
             j('/api/nt-fire/incidents'),
+            j('/api/qld-fire/incidents'),
           ]);
           // NT Fire & Rescue turns out to road crashes as well as fires.
           // The crashes belong with the other road incidents, not on the
           // Fires layer, so they're reshaped into the traffic property
           // names the hazard renderer reads.
+          // QFD turns out to road crashes too; same treatment.
+          const qldCrashes = (qldHz.features || [])
+            .filter((f) => (f.properties || {}).layer === 'hazard')
+            .map((f) => ({
+              type: 'Feature',
+              geometry: f.geometry,
+              properties: {
+                id: f.properties.guid,
+                displayName: f.properties.title,
+                title: f.properties.title,
+                mainCategory: 'Crash',
+                subcategory: f.properties.fireType || 'Road Crash',
+                roads: f.properties.location || '',
+                region: 'Queensland',
+                orgName: 'QFD',
+                created: f.properties.updatedISO || '',
+                lastUpdated: f.properties.updatedISO || '',
+              },
+            }));
           const ntCrashes = (ntHz.features || [])
             .filter((f) => (f.properties || {}).layer === 'hazard')
             .map((f) => ({
@@ -9133,6 +9234,7 @@ function initPagerHoursFromStorage() {
               // The works aggregate's hazard-ish share.
               ...(wrkHz.features || []).filter((f) => _worksTarget(f.properties) === 'hazard'),
               ...ntCrashes,
+              ...qldCrashes,
             ],
           };
           layerCache.hazards_merged = { data: trafficData, timestamp: now };
@@ -11088,7 +11190,7 @@ function initPagerHoursFromStorage() {
     // hardcoded list would rot.
     // The Fires layer carries more than one agency now, so anything that
     // used to ask "is this RFS?" asks "is this a fire incident?" instead.
-    const FIRE_SOURCES = new Set(['rfs', 'nt_fire']);
+    const FIRE_SOURCES = new Set(['rfs', 'nt_fire', 'qld_fire', 'qld_warning']);
     function isFireIncident(item) { return !!item && FIRE_SOURCES.has(item.source); }
 
     const RFS_ALERT_BUCKETS = [
@@ -11123,10 +11225,17 @@ function initPagerHoursFromStorage() {
     // Which agencies' fires to show. Absent = on, so a new agency
     // appears without needing to be registered here first.
     const fireAgencyFilter = {};
-    function fireAgencyKey(item) { return item.source === 'nt_fire' ? 'nt_fire' : 'rfs'; }
+    // Agency, not source: QFD publishes incidents and warnings as two
+    // feeds, but they are one agency and belong under one pill.
+    function fireAgencyKey(item) {
+      if (item.source === 'nt_fire') return 'nt_fire';
+      if (item.source === 'qld_fire' || item.source === 'qld_warning') return 'qld';
+      return 'rfs';
+    }
     const FIRE_AGENCIES = [
       { key: 'rfs', label: 'NSW RFS' },
       { key: 'nt_fire', label: 'NT Fire & Rescue' },
+      { key: 'qld', label: 'QLD Fire Dept' },
     ];
     window.toggleFireAgencyPill = function (key) {
       fireAgencyFilter[key] = fireAgencyFilter[key] === false;
@@ -17287,6 +17396,6 @@ function initPagerHoursFromStorage() {
   <script src="ui-dialogs.js"></script>
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
-  <script src="map-editor-module.js?v=25"></script>
+  <script src="map-editor-module.js?v=26"></script>
 </body>
 </html>

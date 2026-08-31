@@ -930,10 +930,10 @@
       // Which agency's fire this is. NSW RFS and NT Fire & Rescue share
       // this panel, so nothing here should read "RFS" unconditionally.
       // Feeds identify themselves by code; people don't read codes.
-      const FIRE_AGENCY_NAMES = { RFS: 'NSW RFS', NTFRS: 'NT Fire & Rescue' };
+      const FIRE_AGENCY_NAMES = { RFS: 'NSW RFS', NTFRS: 'NT Fire & Rescue', QFD: 'Queensland Fire Department' };
       const _fireAgencyRaw = data.agency || 'RFS';
       const _fireAgency = FIRE_AGENCY_NAMES[_fireAgencyRaw] || _fireAgencyRaw;
-      const _isNswRfs = data.source !== 'nt_fire';
+      const _isNswRfs = _fireAgencyRaw === 'RFS';
 
       // Units ARE editable on fire incidents — they persist immediately
       // against the shared stub row (no Save button in this view).

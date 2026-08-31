@@ -921,6 +921,9 @@
     // Full names for the codes the API returns.
     // One colour per jurisdiction, so the pill on each incident is
     // recognisable without reading it.
+    // Every agency on the Fires layer renders through one branch.
+    const FIRE_LOG_SOURCES = new Set(['rfs', 'nt_fire', 'qld_fire', 'qld_warning']);
+
     const STATE_COLORS = {
       NSW: '#38bdf8', VIC: '#818cf8', QLD: '#f59e0b', SA: '#f43f5e',
       WA: '#22c55e', TAS: '#14b8a6', NT: '#fb923c', ACT: '#a78bfa',
@@ -1121,6 +1124,8 @@
         // RFS
         'Major Incidents': { icon: 'fire-flame-curved', color: '#ef4444' },
         'NT Fire & Rescue': { icon: 'fire-flame-curved', color: '#f97316' },
+        'QLD Fire & Emergency': { icon: 'fire-flame-curved', color: '#dc2626' },
+        'QLD Warnings': { icon: 'triangle-exclamation', color: '#f59e0b' },
         // Endeavour / Ausgrid / Essential
         'Current Outages': { icon: 'bolt', color: '#ef4444' },
         'Planned Outages': { icon: 'calendar-check', color: '#22c55e' },
@@ -2100,7 +2105,7 @@
         let extraDetails = ''; // Additional details shown below badges
         const sourceColors = getSourceColors(item.source);
         
-        if (item.source === 'rfs' || item.source === 'nt_fire') {
+        if (FIRE_LOG_SOURCES.has(item.source)) {
           // Both feeds publish camelCase. The old uppercase reads never
           // matched, so alertLevel fell through to `severity` (always
           // null for these) and fireType fell through to `category` —
@@ -2516,7 +2521,7 @@
       // Resource Allocation Pending -> Units On Route -> On Scene; user
       // incidents get edited. Everything else (traffic, pager, outages) is
       // point-in-time and a history would just repeat one row.
-      const HISTORY_SOURCES = new Set(['rfs', 'user_incident', 'act_ambulance', 'nt_fire']);
+      const HISTORY_SOURCES = new Set(['rfs', 'user_incident', 'act_ambulance', 'nt_fire', 'qld_fire', 'qld_warning']);
       if (!HISTORY_SOURCES.has(item.source)) {
         historySection.innerHTML = '';
         return;
@@ -2581,6 +2586,10 @@
           // NT records move Going -> Closed and shift alert level;
           // `updated` is theirs and only moves on a real revision.
           nt_fire: (d, r) => [d.status ?? r.status, d.alertLevel ?? r.category, d.fireType ?? r.subcategory, d.updated].join('|'),
+          // QFD incidents move Going -> Contained -> Patrolled; warnings
+          // move up and down the alert levels.
+          qld_fire: (d, r) => [d.status ?? r.status, d.fireType ?? r.subcategory].join('|'),
+          qld_warning: (d, r) => [d.alertLevel ?? r.category, d.status ?? r.status].join('|'),
           user_incident: (d, r) => [d.status ?? r.status, d.category ?? r.category, d.description, d.title].join('|'),
         };
         const signature = TRACKED[item.source] || ((d, r) => JSON.stringify(d ?? r));
@@ -2615,8 +2624,8 @@
           const snapData = snapshot.data || {};
           const timeStr = snapshot.fetched_at_iso ? new Date(snapshot.fetched_at_iso).toLocaleString() : '';
           
-          if (item.source === 'rfs' || item.source === 'nt_fire') {
-            // Fire display, shared by NSW RFS and NT Fire & Rescue —
+          if (FIRE_LOG_SOURCES.has(item.source)) {
+            // Fire display, shared by every agency on the Fires layer —
             // the backend gives both the same property names.
             // The feed publishes camelCase (status / alertLevel / fireType /
             // updated). The old uppercase reads never matched, so every past
@@ -3311,6 +3320,8 @@
       const names = {
         'rfs': 'RFS Fires',
         'nt_fire': 'NT Fire & Rescue',
+        'qld_fire': 'QLD Fire & Emergency',
+        'qld_warning': 'QLD Warnings',
         'traffic_incident': 'Traffic Incidents',
         'traffic_roadwork': 'Roadwork',
         'traffic_flood': 'Floods',
@@ -3390,6 +3401,8 @@
       const colors = {
         'rfs': { primary: '#ef4444', secondary: '#f87171' },
         'nt_fire': { primary: '#f97316', secondary: '#fb923c' },
+        'qld_fire': { primary: '#dc2626', secondary: '#ef4444' },
+        'qld_warning': { primary: '#f59e0b', secondary: '#fbbf24' },
         'pager': { primary: '#22c55e', secondary: '#4ade80' },
         'user_incident': { primary: '#a855f7', secondary: '#c084fc' },
         'traffic_incident': { primary: '#f97316', secondary: '#fb923c' },

@@ -86,6 +86,8 @@ const ALERT_TYPE_PROVIDER: Record<string, [string, string]> = {
   // covering both agencies. NOT named 'Fires' as a TYPE: traffic_fire
   // already owns that label and the frontend keys its icons on the name.
   nt_fire: ['rfs', 'NT Fire & Rescue'],
+  qld_fire: ['rfs', 'QLD Fire & Emergency'],
+  qld_warning: ['rfs', 'QLD Warnings'],
   bom_land: ['bom', 'Land Warnings'],
   bom_marine: ['bom', 'Marine Warnings'],
   traffic_incident: ['livetraffic', 'Incidents'],
@@ -135,7 +137,7 @@ const PROVIDER_ORDER = [
 ];
 
 const PROVIDER_TYPE_ORDER: Record<string, string[]> = {
-  rfs: ['rfs', 'nt_fire'],
+  rfs: ['rfs', 'nt_fire', 'qld_fire', 'qld_warning'],
   bom: ['bom_land', 'bom_marine'],
   livetraffic: [
     'traffic_incident',
