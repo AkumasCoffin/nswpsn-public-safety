@@ -10193,14 +10193,28 @@ function initPagerHoursFromStorage() {
     // scheduled or emergency roadwork and belong with the roadwork layer,
     // and the rest are hazards. Routing by category keeps the planned vs
     // emergency distinction the roadwork panel already draws.
+    /**
+     * Categories that are the same thing under different names.
+     *
+     * The feeds disagree on more than casing: the incident stream says
+     * HAZARD where the works aggregate says GENERAL HAZARDS, and they
+     * mean it identically. Left alone that is two pills splitting one
+     * category between them, so the shorter name folds into the longer.
+     */
+    const CATEGORY_SYNONYMS = {
+      'HAZARD': 'GENERAL HAZARDS',
+      'HAZARDS': 'GENERAL HAZARDS',
+    };
+
     /** One canonical key per category across feeds that disagree on
      *  casing and camelCase. 'specialEvent' and 'SPECIAL EVENT' both
      *  become 'SPECIAL EVENT'. */
     function _canonCat(v) {
-      return String(v || '')
+      const key = String(v || '')
         .replace(/([a-z])([A-Z])/g, '$1 $2')
         .toUpperCase()
         .trim();
+      return CATEGORY_SYNONYMS[key] || key;
     }
 
     function _isCouncilRoadwork(props) {
