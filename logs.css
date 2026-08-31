@@ -672,6 +672,12 @@ html, body {
   display: block;
 }
 
+/* Tick box for the multi-select state list. */
+.state-check { width: 14px; text-align: center; opacity: 0.8; }
+.custom-dropdown-option.selected .state-check { opacity: 1; color: var(--accent); }
+/* State pill on an incident row — short code, so let it read as a code. */
+.lg-state { letter-spacing: 0.05em; font-weight: 700; }
+
 .custom-dropdown-option {
   padding: 0.5rem 0.7rem;
   cursor: pointer;

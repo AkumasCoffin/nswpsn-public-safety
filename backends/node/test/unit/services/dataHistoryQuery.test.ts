@@ -97,7 +97,8 @@ describe('buildSqlForTable — basics', () => {
     expect(q1.sql).toContain("'{}'::jsonb AS data");
     const q2 = buildSqlForTable('archive_traffic', defaultParams({ includeData: true }));
     expect(q2.sql).not.toContain("'{}'::jsonb AS data");
-    expect(q2.sql).toMatch(/lat, lng, category, subcategory,\s+data/);
+    // the state probe now sits between subcategory and data
+    expect(q2.sql).toMatch(/AS state,\s+data\s/);
   });
 
   it('emits NOT IN clause for deprecated sources by default', () => {
@@ -172,9 +173,12 @@ describe('buildSqlForTable — JSONB filters', () => {
     expect(q.params).toEqual(expect.arrayContaining(['NSW', 'QLD', 'VIC']));
   });
 
-  it('adds no state predicate when none is asked for', () => {
+  it('adds no state FILTER when none is asked for', () => {
+    // The SELECT always carries the state so the UI can show it; what
+    // must be absent is the EXISTS predicate that narrows the rows.
     const q = buildSqlForTable('archive_traffic', defaultParams({}));
-    expect(q.sql).not.toContain('sl.state');
+    expect(q.sql).not.toContain('sl.state IN');
+    expect(q.sql).toContain('AS state');
   });
 
   it('search uses ILIKE on title and location_text JSONB fields', () => {
@@ -335,9 +339,17 @@ describe('buildSqlForTable — unique=1', () => {
     expect(q.sql).toContain('CROSS JOIN LATERAL');
   });
 
-  it('non-unique queries do NOT use the sidecar', () => {
+  it('non-unique queries do not DRIVE off the sidecar', () => {
+    // History rows come from the parent table: the sidecar must not
+    // appear as a FROM/JOIN that could reshape the result set. The one
+    // permitted reference is the scalar state lookup, which is a
+    // primary-key probe per returned row and adds no rows.
     const q = buildSqlForTable('archive_traffic', defaultParams());
-    expect(q.sql).not.toContain('archive_traffic_latest');
+    expect(q.sql).not.toContain('JOIN archive_traffic_latest');
+    // the only permitted mention is the scalar probe in the SELECT list
+    expect(q.sql).toMatch(/\(SELECT sl\.state FROM archive_traffic_latest sl/);
+    const mentions = q.sql.match(/archive_traffic_latest/g) ?? [];
+    expect(mentions).toHaveLength(1);
   });
 
   it('cursor bounds top_keys AND seeks on effective_ts (not fetched_at)', () => {

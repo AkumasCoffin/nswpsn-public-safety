@@ -248,6 +248,8 @@ interface RawArchiveRow extends QueryResultRow {
   lng: number | null;
   category: string | null;
   subcategory: string | null;
+  /** Derived from the coordinate at write time; null when unplaceable. */
+  state?: string | null;
   data: Record<string, unknown> | string;
 }
 
@@ -296,6 +298,7 @@ function normaliseRow(r: RawArchiveRow): ArchiveQueryRow {
     lng: r.lng,
     category: r.category,
     subcategory: r.subcategory,
+    state: r.state ?? null,
     data,
   };
 }

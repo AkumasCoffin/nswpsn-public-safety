@@ -561,7 +561,7 @@ function buildUniqueQuery(table: ArchiveTable, p: DataHistoryParams): BuiltQuery
   const sql = `
     WITH top_keys AS (
       SELECT source, source_id, latest_fetched_at, last_seen_at,
-             source_timestamp_unix,
+             source_timestamp_unix, state,
              COALESCE(source_timestamp_unix,
                       EXTRACT(EPOCH FROM latest_fetched_at)::bigint) AS effective_ts
       FROM ${table}_latest
@@ -575,6 +575,7 @@ function buildUniqueQuery(table: ArchiveTable, p: DataHistoryParams): BuiltQuery
            extract(epoch FROM k.last_seen_at)::bigint AS last_seen_at_epoch,
            k.last_seen_at,
            k.source_timestamp_unix,
+           k.state,
            a.lat, a.lng, a.category, a.subcategory,
            ${dataCol}
     FROM top_keys k
@@ -730,6 +731,9 @@ export function buildSqlForTable(table: ArchiveTable, p: DataHistoryParams): Bui
            extract(epoch FROM fetched_at)::bigint AS fetched_at_epoch,
            fetched_at,
            lat, lng, category, subcategory,
+           (SELECT sl.state FROM ${table}_latest sl
+             WHERE sl.source = ${table}.source
+               AND sl.source_id = ${table}.source_id) AS state,
            ${dataCol}
     FROM ${table}
   `;
@@ -1094,6 +1098,9 @@ export interface ArchiveQueryRow {
   lng: number | null;
   category: string | null;
   subcategory: string | null;
+  /** State/territory derived from the coordinate at write time. Null when
+   *  the record has no usable point, or predates the backfill. */
+  state?: string | null;
   data: Record<string, unknown>;
   /** Which archive table this row came from. Tagged by the route after
    *  fetch so the multi-family merge can order by table rank and the

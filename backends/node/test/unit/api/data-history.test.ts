@@ -180,9 +180,12 @@ describe('GET /api/data/history', () => {
     expect(sqls).toHaveLength(4);
     const targets = sqls.map((s) => {
       // Skip the `FROM fetched_at` inside `extract(epoch FROM fetched_at)`
-      // by matching only the archive_* tables we actually care about.
-      const m = s.match(/FROM\s+(archive_\w+)/);
-      return m ? m[1] : null;
+      // by matching only the archive_* tables we actually care about, and
+      // skip the `_latest` sidecar too — the SELECT list carries a scalar
+      // state probe against it, but the table the query DRIVES off is the
+      // parent, which is what this test is about.
+      const all = [...s.matchAll(/FROM\s+(archive_\w+)/g)].map((m) => m[1]!);
+      return all.find((t) => !t.endsWith('_latest')) ?? null;
     });
     expect(new Set(targets)).toEqual(
       new Set([

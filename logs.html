@@ -841,6 +841,13 @@
     }
     
     // State dropdown functions
+    // The state list stays open while ticking, so a click inside it must
+    // not bubble out to whatever closes dropdowns on an outside click.
+    document.addEventListener('DOMContentLoaded', () => {
+      const opts = document.getElementById('state-options');
+      if (opts) opts.addEventListener('click', (e) => e.stopPropagation());
+    });
+
     function toggleStateDropdown() {
       document.getElementById('state-dropdown').classList.toggle('open');
     }
@@ -858,28 +865,65 @@
       }
     }
 
-    function selectState(value, text) {
-      document.getElementById('filter-state').value = value;
+    /**
+     * Multi-select: the state filter is a set, not a single value. An
+     * empty set means "all states" — the same query as no filter at all,
+     * which is why nothing is sent when it is empty.
+     */
+    const selectedStates = new Set();
+
+    function stateSummaryText() {
+      if (selectedStates.size === 0) return 'All States';
+      if (selectedStates.size === 1) {
+        const only = [...selectedStates][0];
+        return STATE_NAMES[only] || only;
+      }
+      return `${selectedStates.size} states`;
+    }
+
+    function syncStateDropdown() {
+      document.getElementById('filter-state').value = [...selectedStates].join(',');
       const selectedEl = document.querySelector('#state-dropdown .custom-dropdown-selected');
-      selectedEl.innerHTML = `<i class="fa-solid fa-map-location-dot provider-icon" style="color: ${value ? '#f97316' : '#64748b'};"></i><span id="state-selected-text">${escapeHtml(text)}</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
+      if (selectedEl) {
+        const on = selectedStates.size > 0;
+        selectedEl.innerHTML = `<i class="fa-solid fa-map-location-dot provider-icon" style="color: ${on ? '#f97316' : '#64748b'};"></i><span id="state-selected-text">${escapeHtml(stateSummaryText())}</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
+      }
       document.querySelectorAll('#state-options .custom-dropdown-option').forEach(opt => {
-        opt.classList.toggle('selected', opt.dataset.value === value);
+        const v = opt.dataset.value;
+        const chosen = v === '' ? selectedStates.size === 0 : selectedStates.has(v);
+        opt.classList.toggle('selected', chosen);
+        const box = opt.querySelector('.state-check');
+        if (box) box.className = `state-check fa-solid ${chosen ? 'fa-square-check' : 'fa-square'}`;
       });
-      closeStateDropdown();
-      // Like the other dropdowns, selecting only sets the filter — the
-      // Search button (or a quick-filter chip) is what runs the query.
+    }
+
+    function toggleStateValue(value) {
+      if (!value) {
+        selectedStates.clear();          // the "All States" row
+      } else if (selectedStates.has(value)) {
+        selectedStates.delete(value);
+      } else {
+        selectedStates.add(value);
+      }
+      syncStateDropdown();
+      // Stay open so several states can be picked in one go; the query
+      // runs on each change so the list keeps up.
       performSearch(1);
     }
 
     function resetStateDropdown() {
-      document.getElementById('filter-state').value = '';
-      const selectedEl = document.querySelector('#state-dropdown .custom-dropdown-selected');
-      if (selectedEl) {
-        selectedEl.innerHTML = `<i class="fa-solid fa-map-location-dot provider-icon"></i><span id="state-selected-text">All States</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
-      }
+      selectedStates.clear();
+      syncStateDropdown();
     }
 
     // Full names for the codes the API returns.
+    // One colour per jurisdiction, so the pill on each incident is
+    // recognisable without reading it.
+    const STATE_COLORS = {
+      NSW: '#38bdf8', VIC: '#818cf8', QLD: '#f59e0b', SA: '#f43f5e',
+      WA: '#22c55e', TAS: '#14b8a6', NT: '#fb923c', ACT: '#a78bfa',
+    };
+
     const STATE_NAMES = {
       NSW: 'New South Wales', VIC: 'Victoria', QLD: 'Queensland',
       SA: 'South Australia', WA: 'Western Australia', TAS: 'Tasmania',
@@ -902,7 +946,7 @@
       // control rather than offer a filter that would return nothing.
       if (entries.length === 0) {
         group.style.display = 'none';
-        if (document.getElementById('filter-state').value) resetStateDropdown();
+        if (selectedStates.size > 0) resetStateDropdown();
         return;
       }
       group.style.display = '';
@@ -910,8 +954,8 @@
       const allOpt = document.createElement('div');
       allOpt.className = 'custom-dropdown-option';
       allOpt.dataset.value = '';
-      allOpt.innerHTML = `<i class="fa-solid fa-map-location-dot" style="color:#64748b;"></i><span>All States</span><span class="option-count">${total.toLocaleString()}</span>`;
-      allOpt.onclick = () => selectState('', 'All States');
+      allOpt.innerHTML = `<i class="state-check fa-solid fa-square-check"></i><span>All States</span><span class="option-count">${total.toLocaleString()}</span>`;
+      allOpt.onclick = (e) => { e.stopPropagation(); toggleStateValue(''); };
       container.appendChild(allOpt);
       for (const e of entries) {
         const code = String(e.value).toUpperCase();
@@ -919,15 +963,15 @@
         const opt = document.createElement('div');
         opt.className = 'custom-dropdown-option';
         opt.dataset.value = code;
-        opt.innerHTML = `<i class="fa-solid fa-location-dot" style="color:#f97316;"></i><span>${escapeHtml(label)}</span><span class="option-count">${(Number(e.count) || 0).toLocaleString()}</span>`;
-        opt.onclick = () => selectState(code, label);
+        opt.innerHTML = `<i class="state-check fa-solid fa-square"></i><span style="color:${STATE_COLORS[code] || '#e2e8f0'};">${escapeHtml(label)}</span><span class="option-count">${(Number(e.count) || 0).toLocaleString()}</span>`;
+        opt.onclick = (ev) => { ev.stopPropagation(); toggleStateValue(code); };
         container.appendChild(opt);
       }
-      // Keep a selection that is still offered; drop one that isn't.
-      const current = document.getElementById('filter-state').value;
-      if (current && !entries.some(e => String(e.value).toUpperCase() === current)) {
-        resetStateDropdown();
-      }
+      // Drop any selection the new facet no longer offers, then redraw
+      // the ticks for whatever survived.
+      const offered = new Set(entries.map(e => String(e.value).toUpperCase()));
+      for (const v of [...selectedStates]) if (!offered.has(v)) selectedStates.delete(v);
+      syncStateDropdown();
     }
 
     // Status dropdown functions
@@ -2043,6 +2087,12 @@
         const time = formatRelativeTime(item.fetched_at);
         
         // Extra info based on source type - with color coding
+        // Every incident carries the state it happened in, derived from
+        // its coordinate by the backend. Records with no usable point
+        // (BOM warnings are areas) simply get no pill.
+        const statePill = item.state
+          ? `<span class="lg-badge lg-state" style="--badge:${STATE_COLORS[item.state] || '#64748b'}" title="${escapeHtml(STATE_NAMES[item.state] || item.state)}">${escapeHtml(item.state)}</span>`
+          : '';
         let extraInfo = '';
         let extraDetails = ''; // Additional details shown below badges
         const sourceColors = getSourceColors(item.source);
@@ -2131,8 +2181,15 @@
           // The three feeds added later share a branch — colour comes from
           // the shared Live Traffic vocab so the badge matches the map pin.
           const lt = (window.LiveTrafficVocab && LiveTrafficVocab.get(item.source)) || { color: '#64748b', short: '' };
-          if (item.category) extraInfo += `<span class="lg-badge" style="--badge:${lt.color}">${escapeHtml(formatSubcategory(item.category))}</span>`;
-          if (item.subcategory) extraInfo += `<span class="lg-badge-o" style="--badge:${lt.color}">${escapeHtml(formatSubcategory(item.subcategory))}</span>`;
+          const catTxt = item.category ? formatSubcategory(item.category) : '';
+          const subTxt = item.subcategory ? formatSubcategory(item.subcategory) : '';
+          if (catTxt) extraInfo += `<span class="lg-badge" style="--badge:${lt.color}">${escapeHtml(catTxt)}</span>`;
+          // The works feed repeats its category as the subcategory (every
+          // record reads "Roadwork" / "Roadwork"), so only draw the second
+          // pill when it actually says something the first one didn't.
+          if (subTxt && subTxt.toLowerCase() !== catTxt.toLowerCase()) {
+            extraInfo += `<span class="lg-badge-o" style="--badge:${lt.color}">${escapeHtml(subTxt)}</span>`;
+          }
           let details = [];
           if (data.roads) details.push(`<span class="lg-tint lg-wrap" style="--c:${lt.color}"><i class="fas fa-road"></i> ${escapeHtml(data.roads)}</span>`);
           if (data.region) details.push(`<span class="lg-dim"><i class="fas fa-map"></i> ${escapeHtml(data.region)}</span>`);
@@ -2281,7 +2338,7 @@
                 ${subcat ? `<span><i class="fas fa-tags"></i> ${escapeHtml(subcat)}</span>` : ''}
                 ${showLocation ? `<span class="lg-wrap"><i class="fas fa-map-marker-alt"></i> ${escapeHtml(item.location_text)}</span>` : ''}
               </div>
-              ${extraInfo ? `<div class="incident-badges">${extraInfo}</div>` : ''}
+              ${(statePill || extraInfo) ? `<div class="incident-badges">${statePill}${extraInfo}</div>` : ''}
               ${extraDetails ? `<div class="incident-details lg-details">${extraDetails}</div>` : ''}
             </div>
             <div class="incident-status">
