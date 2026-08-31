@@ -11610,8 +11610,46 @@ function initPagerHoursFromStorage() {
     function rfsAlertBucket(item) {
       return alertBucketFor((item.rawDetails && item.rawDetails['ALERT LEVEL']) || '');
     }
+    // Five agencies describing the same fire five ways. Live right now:
+    // "Bush Fire" (RFS), "Bushfire" (NT and CFA) and "FIRE VEGETATION"
+    // (QFD) are one thing; "Burn off", "Hazard Reduction", "Planned Burn"
+    // and "FIRE PERMITTED BURN" are another. Keyed on the raw string
+    // those were seven pills for two kinds of fire, and the counts on
+    // each were a share of the real total rather than the total.
+    //
+    // Only wordings are folded, never distinctions: a grass fire stays
+    // separate from a bush fire because the agencies mean different
+    // things by them. The deliberate burns are the one judgement call —
+    // whether a burn is a landholder's or the agency's own matters less,
+    // on a live incident map, than whether it was lit on purpose.
+    //
+    // Anything unrecognised keeps its own wording, so a new agency shows
+    // up as itself rather than being silently filed under Other.
+    const FIRE_TYPE_CANON = [
+      [/^(bush\s*fire|fire vegetation|vegetation fire)$/, 'Bush Fire'],
+      [/^(grass(\s*(and|&|\/)\s*scrub)?\s*fire|scrub fire)$/, 'Grass Fire'],
+      [/^(structure fire|building fire|fire structure|house fire)$/, 'Structure Fire'],
+      [/^(vehicle fire|fire vehicle|car fire)$/, 'Vehicle Fire'],
+      [/^(planned burn|hazard reduction|burn ?off|fire permitted burn|permitted burn)$/, 'Planned Burn'],
+      [/^(automatic fire alarm|fire alarm( \(afa\))?|afa)$/, 'Fire Alarm'],
+      [/^(fire|fire other|other fire|other|non structure fire)$/, 'Other Fire'],
+    ];
+    function canonFireType(raw) {
+      const t = String(raw || '').trim().replace(/\s+/g, ' ');
+      if (!t) return 'Other Fire';
+      const low = t.toLowerCase();
+      for (const [re, label] of FIRE_TYPE_CANON) if (re.test(low)) return label;
+      // Unrecognised: keep the words, lose the shouting. QFD sends its
+      // types in caps and they would otherwise sit oddly beside the rest.
+      return t === t.toUpperCase() && /[A-Z]{2,}/.test(t)
+        ? t.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase())
+        : t;
+    }
+    function rfsTypeLabel(item) {
+      return canonFireType((item.rawDetails && item.rawDetails['TYPE']) || '');
+    }
     function rfsTypeKey(item) {
-      return (((item.rawDetails && item.rawDetails['TYPE']) || 'Other') + '').trim().toLowerCase() || 'other';
+      return rfsTypeLabel(item).toLowerCase();
     }
     function _rfsPassesFilters(item) {
       if (fireAgencyFilter[fireAgencyKey(item)] === false) return false;
@@ -11659,17 +11697,20 @@ function initPagerHoursFromStorage() {
           const b = rfsAlertBucket(it);
           alertCounts[b] = (alertCounts[b] || 0) + 1;
           const k = rfsTypeKey(it);
-          const label = ((it.rawDetails && it.rawDetails['TYPE']) || 'Other') + '';
-          if (!typeCounts[k]) typeCounts[k] = { label: label, n: 0 };
+          if (!typeCounts[k]) typeCounts[k] = { label: rfsTypeLabel(it), n: 0 };
           typeCounts[k].n += 1;
         }
         const alertPills = RFS_ALERT_BUCKETS.map((b) => {
           const glyph = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${b.color};vertical-align:0;"></span>`;
           return _ffPillColored(rfsAlertFilter[b.key], b.color, glyph, `${b.label} (${alertCounts[b.key] || 0})`, `toggleRfsAlertPill('${b.key}')`);
         }).join('');
-        const typePills = Object.keys(typeCounts).sort().map((k) =>
-          _ffPill(rfsTypeFilter[k] !== false, `${escapeHtml(typeCounts[k].label)} (${typeCounts[k].n})`, `toggleRfsTypePill('${k}')`)
-        ).join('');
+        const typePills = Object.keys(typeCounts)
+          .sort((a, b) => typeCounts[b].n - typeCounts[a].n || a.localeCompare(b))
+          .map((k) =>
+            _ffPill(rfsTypeFilter[k] !== false,
+                    `${escapeHtml(typeCounts[k].label)} (${typeCounts[k].n})`,
+                    `toggleRfsTypePill('${jsArg(k)}')`)
+          ).join('');
         const agencyCounts = {};
         for (const it of rfsItems) {
           const k = fireAgencyKey(it);
