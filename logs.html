@@ -2502,10 +2502,14 @@
       const historySection = document.getElementById('incident-history-section');
       if (!historySection) return;
       
-      // Only RFS and user incidents have meaningful updates (status changes,
-      // alert levels, edits). Other sources like Waze, Traffic, Pager are
-      // point-in-time and don't have updates.
-      if (item.source !== 'rfs' && item.source !== 'user_incident') {
+      // Sources whose records are LIVING: the same incident is re-published
+      // as it progresses, so its snapshots form a timeline worth showing.
+      // RFS moves through alert levels and containment; ACT Ambulance moves
+      // Resource Allocation Pending -> Units On Route -> On Scene; user
+      // incidents get edited. Everything else (traffic, pager, outages) is
+      // point-in-time and a history would just repeat one row.
+      const HISTORY_SOURCES = new Set(['rfs', 'user_incident', 'act_ambulance']);
+      if (!HISTORY_SOURCES.has(item.source)) {
         historySection.innerHTML = '';
         return;
       }
@@ -2519,8 +2523,13 @@
       }
       
       try {
-        // Fetch all snapshots for this incident (not unique - get full history)
-        const url = `${API_BASE}/api/data/history?source=${item.source}&source_id=${encodeURIComponent(item.source_id)}&limit=50&order=desc&full=1`;
+        // unique=0 is REQUIRED, and its absence is why this panel had been
+        // silently empty: the endpoint defaults to unique=1 (one row per
+        // incident), so this asked for a history and got back the single
+        // latest snapshot, then bailed on `records.length <= 1`. An
+        // ambulance job that went Pending -> On Route -> On Scene over 45
+        // snapshots returned exactly one.
+        const url = `${API_BASE}/api/data/history?source=${item.source}&source_id=${encodeURIComponent(item.source_id)}&limit=50&order=desc&full=1&unique=0`;
         console.log('History URL:', url);
         const res = await fetch(url, { headers: { 'Authorization': `Bearer ${API_KEY}` } });
         if (!res.ok) throw new Error(`API returned ${res.status}`);
@@ -2536,9 +2545,51 @@
           return;
         }
         
-        // Show all past updates (skip the first/current one since it's already shown above)
-        const pastUpdates = data.records.slice(1);
-        
+        // A snapshot is written whenever ANY field moves, and for RFS the
+        // field that moves is almost always the fire polygon: one incident
+        // had 147 snapshots, of which the perimeter accounted for 1,416
+        // field-changes while the status never changed once. Showing all of
+        // them would bury the handful of real events, so collapse runs that
+        // say the same thing and keep only the moments something changed.
+        // Whether the feed's own `updated` stamp counts as a change is a
+        // per-source call, because the two feeds use it very differently:
+        //
+        //   RFS moves it only when the agency actually re-issues the
+        //   incident — 11 times across 147 snapshots on a fire whose status
+        //   never changed at all — so it IS the "when was this updated"
+        //   signal, and each move deserves a line.
+        //
+        //   ESA rewrites it on every single poll, so counting it collapsed
+        //   nothing (45 in, 45 out). ACT Ambulance tracks the response state
+        //   instead, and still dates each change by the stamp it arrived
+        //   with.
+        //
+        // What is never tracked either way: the RFS fire polygon, which
+        // accounts for the overwhelming majority of snapshots and tells a
+        // reader nothing.
+        const TRACKED = {
+          rfs: (d, r) => [d.status ?? r.status, d.alertLevel ?? r.severity, d.fireType ?? r.category, d.size, d.updated].join('|'),
+          act_ambulance: (d, r) => [d.status ?? r.subcategory, d.type ?? r.category].join('|'),
+          user_incident: (d, r) => [d.status ?? r.status, d.category ?? r.category, d.description, d.title].join('|'),
+        };
+        const signature = TRACKED[item.source] || ((d, r) => JSON.stringify(d ?? r));
+        const changes = [];
+        let lastSig = null;
+        // records come newest-first; walk oldest-first so a "change" is the
+        // snapshot that introduced the value, not the last one to repeat it.
+        for (const snap of [...data.records].reverse()) {
+          const sig = signature(snap.data || {}, snap);
+          if (sig !== lastSig) {
+            changes.push(snap);
+            lastSig = sig;
+          }
+        }
+        changes.reverse();
+        const collapsed = data.records.length - changes.length;
+
+        // The newest change is the state already shown above the timeline.
+        const pastUpdates = changes.slice(1);
+
         if (pastUpdates.length === 0) {
           historySection.innerHTML = '';
           return;
@@ -2546,7 +2597,7 @@
         
         let html = `<div class="lg-sep">
           <div class="lg-sec" style="--c:#a78bfa">
-            <i class="fas fa-history"></i>Previous Updates (${pastUpdates.length})
+            <i class="fas fa-history"></i>Previous Updates (${pastUpdates.length})${collapsed > 0 ? `<span class="lg-meta-10" style="margin-left:6px; opacity:0.7;">${collapsed} unchanged re-checks hidden</span>` : ''}
           </div>`;
         
         pastUpdates.forEach((snapshot, idx) => {
@@ -2555,10 +2606,13 @@
           
           if (item.source === 'rfs') {
             // RFS specific display - like the Discord bot
-            const status = snapData.STATUS || snapshot.status || 'Unknown';
-            const alertLevel = snapData.ALERT_LEVEL || snapshot.severity || '';
-            const fireType = snapData.TYPE || snapshot.category || '';
-            const updated = snapData.UPDATED || '';
+            // The feed publishes camelCase (status / alertLevel / fireType /
+            // updated). The old uppercase reads never matched, so every past
+            // update rendered as "Unknown" with no alert level.
+            const status = snapData.status || snapshot.status || 'Unknown';
+            const alertLevel = snapData.alertLevel || snapshot.severity || '';
+            const fireType = snapData.fireType || snapshot.category || '';
+            const updated = snapData.updated || '';
             
             const statusColor = getStatusColor(status);
             const alertColor = getAlertLevelColor(alertLevel);
@@ -2601,6 +2655,36 @@
               html += `<div style="color:#94a3b8; font-size:10px; margin-top:4px;"><i class="fas fa-sync-alt"></i>RFS Updated: ${escapeHtml(updated)}</div>`;
             }
             
+            html += `</div>`;
+          } else if (item.source === 'act_ambulance') {
+            // The whole point of an ambulance timeline is the response
+            // progressing: Resource Allocation Pending -> Units On Route ->
+            // On Scene. Status leads, and the feed's own `updated` time is
+            // shown when it differs from when we polled.
+            const status = snapData.status || snapshot.subcategory || 'Unknown';
+            const type = snapData.type || snapshot.category || '';
+            const updated = snapData.updated || '';
+            const sl = status.toLowerCase();
+            let statusColor = '#94a3b8';
+            let statusEmoji = '📋';
+            if (sl.includes('on scene')) { statusColor = '#22c55e'; statusEmoji = '🚑'; }
+            else if (sl.includes('route')) { statusColor = '#f59e0b'; statusEmoji = '🚨'; }
+            else if (sl.includes('pending')) { statusColor = '#eab308'; statusEmoji = '⏳'; }
+            else if (sl.includes('finished') || sl.includes('closed')) { statusColor = '#64748b'; statusEmoji = '✅'; }
+
+            html += `<div class="lg-update" style="--c:${statusColor}">
+              <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+                <span class="lg-meta-10"><i class="far fa-clock" style="margin-right:3px;"></i>${escapeHtml(timeStr)}</span>
+              </div>
+              <div class="lg-chips spaced">
+                <span style="background:${statusColor}; color:#fff; font-size:9px; padding:2px 6px; border-radius:3px; font-weight:600;">${statusEmoji} ${escapeHtml(status)}</span>`;
+            if (type) {
+              html += `<span style="background:rgba(236,72,153,0.2); color:#f472b6; font-size:9px; padding:2px 6px; border-radius:3px;">${escapeHtml(type)}</span>`;
+            }
+            html += `</div>`;
+            if (updated) {
+              html += `<div style="color:#94a3b8; font-size:10px; margin-top:4px;"><i class="fas fa-sync-alt"></i> ESA updated: ${escapeHtml(updated)}</div>`;
+            }
             html += `</div>`;
           } else if (item.source === 'pager') {
             // Pager specific display
