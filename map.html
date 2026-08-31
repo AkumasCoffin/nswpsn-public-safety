@@ -3758,6 +3758,77 @@
     };
     function agencyLabel(key) { return AGENCY_LABELS[key] || String(key); }
 
+    // ---------- CAP ----------
+    // The CAP <info> block, pulled off whatever an agency's feed gave us.
+    // Both the NSW RFS and Victoria publish real CAP-AU: severity,
+    // urgency and certainty are the three axes the standard uses to say
+    // how bad, how soon and how sure - none of which the alert level on
+    // its own tells you. An Advice that is Severe/Immediate/Observed is a
+    // different thing from one that is Minor/Future/Possible, and until
+    // now the map threw that away.
+    function capInfoOf(props) {
+      if (!props) return null;
+      const cap = {
+        event: props.capEvent || '',
+        category: props.capCategory || '',
+        severity: props.capSeverity || '',
+        urgency: props.capUrgency || '',
+        certainty: props.capCertainty || '',
+        responseType: props.capResponseType || '',
+        sender: props.capSender || '',
+        instruction: props.capInstruction || '',
+        fuelType: props.capFuelType || '',
+        fireDangerClass: props.capFireDangerClass || '',
+        controlAuthority: props.capControlAuthority || '',
+        web: props.capWeb || ''
+      };
+      // 'Unknown' is CAP's own placeholder for "not asserted". Rendering
+      // it would fill the panel with rows that say nothing.
+      for (const k of Object.keys(cap)) {
+        if (/^unknown$/i.test(cap[k])) cap[k] = '';
+      }
+      return Object.values(cap).some(Boolean) ? cap : null;
+    }
+
+    // Severity and urgency are ordered scales in CAP, so they get colour;
+    // certainty and response type are labels and stay neutral.
+    const CAP_SEVERITY_COLORS = {
+      extreme: '#dc2626', severe: '#ef4444', moderate: '#f97316', minor: '#eab308'
+    };
+    const CAP_URGENCY_COLORS = {
+      immediate: '#ef4444', expected: '#f97316', future: '#38bdf8', past: '#64748b'
+    };
+    function _capChip(label, value, color) {
+      if (!value) return '';
+      const c = color || '#64748b';
+      return `<span style="display:inline-block; background:${c}26; border:1px solid ${c}80; color:#e2e8f0; border-radius:0.35rem; padding:2px 7px; margin:0 4px 4px 0; font-size:0.72rem; white-space:nowrap;">` +
+             `<span style="color:${c}; font-weight:600;">${escapeHtml(label)}</span> ${escapeHtml(value)}</span>`;
+    }
+
+    /** The CAP section for the details panel, or '' when there is none. */
+    function capSectionHtml(cap) {
+      if (!cap) return '';
+      const chips = [
+        _capChip('Severity', cap.severity, CAP_SEVERITY_COLORS[cap.severity.toLowerCase()]),
+        _capChip('Urgency', cap.urgency, CAP_URGENCY_COLORS[cap.urgency.toLowerCase()]),
+        _capChip('Certainty', cap.certainty, '#94a3b8'),
+        _capChip('Response', cap.responseType, '#a78bfa'),
+        _capChip('Event', cap.event, '#38bdf8'),
+        _capChip('Fuel', cap.fuelType, '#84cc16'),
+        _capChip('Fire danger', cap.fireDangerClass, '#f59e0b'),
+      ].join('');
+      if (!chips && !cap.instruction) return '';
+      return `
+        <div style="background:rgba(148,163,184,0.07); border:1px solid rgba(148,163,184,0.18); padding:0.75rem 0.9rem; border-radius:0.5rem; margin-bottom:1rem;">
+          <div style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.09em; color:#94a3b8; margin-bottom:0.5rem;">
+            CAP alert${cap.sender ? ' · ' + escapeHtml(cap.sender) : ''}
+          </div>
+          ${chips ? `<div style="margin-bottom:${cap.instruction ? '0.55rem' : '0'};">${chips}</div>` : ''}
+          ${cap.instruction ? `<div style="font-size:0.83rem; line-height:1.55; color:#cbd5e1;">${escapeHtml(cap.instruction)}</div>` : ''}
+        </div>
+      `;
+    }
+
     // Victorian warning areas arrive as GeoJSON rings ([lon, lat]); the
     // fire layer draws polygons as Leaflet [lat, lng]. Returns null when
     // there is nothing worth drawing, which is what polygonCoords expects.
@@ -5421,6 +5492,9 @@ function initPagerHoursFromStorage() {
               lng: lng,
               alertLevel: (details['ALERT LEVEL'] || '').toLowerCase(),
               polygonCoords: polygonCoords,
+              // The RFS publishes a full CAP-AU feed alongside the RSS one
+              // and the backend joins them; this is that block.
+              cap: capInfoOf(props),
               // Use updatedISO for proper timestamp (pubDate was just feed refresh time)
               updatedISO: props.updatedISO || null
             });
@@ -5622,6 +5696,7 @@ function initPagerHoursFromStorage() {
             // Warnings carry their area as rings; the fire layer already
             // draws these for RFS fire grounds.
             polygonCoords: vicPolygonRings(props),
+            cap: capInfoOf(props),
             updatedISO: props.updatedISO || null
           });
         });
@@ -6359,13 +6434,18 @@ function initPagerHoursFromStorage() {
           // agencies themselves put on roadside boards and in their apps,
           // so it needs no legend. Everything else keeps the red fire
           // circle, because a record with no published level has no
-          // severity to claim. The glow stays either way: it is what makes
-          // an emergency findable at state-wide zoom.
+          // severity to claim.
+          //
+          // The halo is drawn with drop-shadow rather than the circular
+          // box-shadow the round pins use. A round glow behind a triangle
+          // reads as a smudge with a dark shape sitting in it; drop-shadow
+          // follows the alpha, so the glow is triangle-shaped and the sign
+          // stays the thing you see. The dark shadow underneath it is what
+          // separates the yellow Advice triangle from a pale basemap.
           const alertIcon = alertIconFor(al);
           const triColor = ALERT_ICON_COLORS[alertBucket] || alertColor;
           const rfsInnerHtml = alertIcon ? `
-            <div style="position:absolute; width:26px; height:26px; border-radius:50%; box-shadow:0 0 16px ${triColor}, 0 0 32px ${triColor}66;"></div>
-            <img src="${alertIcon}" alt="" width="26" height="25" style="position:relative; display:block; filter:drop-shadow(0 1px 2px rgba(0,0,0,0.6));">
+            <img src="${alertIcon}" alt="" width="34" height="32" style="position:relative; display:block; filter:drop-shadow(0 0 3px ${triColor}) drop-shadow(0 0 7px ${triColor}bb) drop-shadow(0 1px 2px rgba(0,0,0,0.85));">
           ` : `
             <div style="position:absolute; width:28px; height:28px; border-radius:50%; border:2px solid ${alertColor}; box-shadow:${alertGlow}; background:transparent;"></div>
             <div style="background:linear-gradient(145deg, #ff6b6b, #ee4444, #cc2a2a); width:20px; height:20px; border-radius:50%; border:2px solid #fff; box-shadow:inset 0 -2px 4px rgba(0,0,0,0.3), inset 0 2px 4px rgba(255,255,255,0.2); display:flex; align-items:center; justify-content:center; font-size:10px; color:#fff;"><i class="fa-solid fa-fire"></i></div>
@@ -7462,6 +7542,7 @@ function initPagerHoursFromStorage() {
           <strong>Size:</strong> ${escapeHtml(data['SIZE'] || '-')}<br>
           <strong>Agency:</strong> ${escapeHtml(data['RESPONSIBLE AGENCY'] || 'RFS')}
         </div>
+        ${capSectionHtml(item.cap)}
         <div style="font-size:0.8rem; color:#94a3b8; margin-bottom:1rem;">
           <strong style="color:#a78bfa;">Last Updated:</strong> ${escapeHtml(item.updatedISO ? new Date(item.updatedISO).toLocaleString() : (data['UPDATED'] || 'Recently'))}
         </div>

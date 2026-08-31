@@ -11,6 +11,19 @@
  * Each feature's properties include the parsed-out alertLevel /
  * location / size / status / etc. fields the Python parser extracts
  * from the RFS description's pipe-delimited free text.
+ *
+ * CAP. The RFS also publishes majorIncidentsCAP.xml - the same 33
+ * incidents as proper CAP-AU alerts inside an EDXL-DE envelope - and it
+ * carries what the RSS free text does not: severity, urgency, certainty,
+ * responseType, the public instruction, and structured parameters like
+ * fuel type and fire danger class. Both feeds are read and joined on the
+ * CAP <incidents> element, which is the incident id at the tail of the
+ * RSS <guid> (33/33 when this was written).
+ *
+ * The join is best-effort on purpose. CAP is enrichment, not the record:
+ * if that feed is down or reshaped, the incidents still publish without
+ * it rather than the whole layer going dark. Only the RSS fetch failing
+ * throws, because that is the one that means we have no incidents.
  */
 import { fetchText } from './shared/http.js';
 import { asArray, parseXml, textOf } from './shared/xml.js';
@@ -18,6 +31,7 @@ import { registerSource } from '../services/sourceRegistry.js';
 import { liveStore } from '../store/live.js';
 
 const RFS_URL = 'https://www.rfs.nsw.gov.au/feeds/majorIncidents.xml';
+const RFS_CAP_URL = 'https://www.rfs.nsw.gov.au/feeds/majorIncidentsCAP.xml';
 
 export interface RfsFeature {
   type: 'Feature';
@@ -37,6 +51,29 @@ export interface RfsFeature {
     updated: string;
     updatedISO: string;
     polygons: string[];
+    /**
+     * The CAP <info> block, when the CAP feed carries this incident.
+     * Empty strings rather than undefined so the frontend can render
+     * them without a presence check, the same shape the Victorian
+     * source emits.
+     */
+    capEvent: string;
+    capCategory: string;
+    capSeverity: string;
+    capUrgency: string;
+    capCertainty: string;
+    capResponseType: string;
+    capSender: string;
+    capHeadline: string;
+    capInstruction: string;
+    capEffective: string;
+    capExpires: string;
+    capWeb: string;
+    /** Structured CAP <parameter> entries the RSS text has no field for. */
+    capFuelType: string;
+    capFireDangerClass: string;
+    capControlAuthority: string;
+    capAllocatedResources: string;
     source: 'rfs';
   };
 }
@@ -165,10 +202,143 @@ export function parseRfsDescription(desc: string): ParsedDescription {
   return result;
 }
 
+/** The CAP fields carried onto a feature, all blank when unmatched. */
+export interface RfsCapInfo {
+  capEvent: string;
+  capCategory: string;
+  capSeverity: string;
+  capUrgency: string;
+  capCertainty: string;
+  capResponseType: string;
+  capSender: string;
+  capHeadline: string;
+  capInstruction: string;
+  capEffective: string;
+  capExpires: string;
+  capWeb: string;
+  capFuelType: string;
+  capFireDangerClass: string;
+  capControlAuthority: string;
+  capAllocatedResources: string;
+}
+
+const EMPTY_CAP: RfsCapInfo = {
+  capEvent: '',
+  capCategory: '',
+  capSeverity: '',
+  capUrgency: '',
+  capCertainty: '',
+  capResponseType: '',
+  capSender: '',
+  capHeadline: '',
+  capInstruction: '',
+  capEffective: '',
+  capExpires: '',
+  capWeb: '',
+  capFuelType: '',
+  capFireDangerClass: '',
+  capControlAuthority: '',
+  capAllocatedResources: '',
+};
+
+/**
+ * The incident id a record is keyed by: the tail of the RSS
+ * `<guid>` (".../incidents/673561"), which is exactly what the CAP
+ * alert puts in `<incidents>`.
+ */
+export function rfsIncidentId(guidOrId: string): string {
+  const t = String(guidOrId ?? '').trim();
+  if (!t) return '';
+  const tail = t.split('/').pop() ?? '';
+  return tail.trim();
+}
+
+/**
+ * Read the CAP-AU alerts out of the EDXL-DE envelope, keyed by incident
+ * id. Alerts sit at
+ * EDXLDistribution > contentObject[] > xmlContent > embeddedXMLContent >
+ * alert, and fast-xml-parser strips the inline default namespaces, so
+ * the elements come through under their bare local names.
+ */
+export function parseRfsCap(xml: string): Map<string, RfsCapInfo> {
+  const out = new Map<string, RfsCapInfo>();
+  const root = parseXml(xml);
+  const dist =
+    (root['EDXLDistribution'] as Record<string, unknown> | undefined) ?? root;
+  const objects = asArray(
+    (dist as Record<string, unknown>)['contentObject'],
+  ) as Array<Record<string, unknown>>;
+
+  for (const obj of objects) {
+    const xmlContent = obj['xmlContent'] as Record<string, unknown> | undefined;
+    const embedded = xmlContent?.['embeddedXMLContent'] as
+      | Record<string, unknown>
+      | undefined;
+    const alert = embedded?.['alert'] as Record<string, unknown> | undefined;
+    if (!alert) continue;
+
+    // <incidents> is the incident id outright; the identifier's trailing
+    // segment is the same value and covers a record that omits it.
+    const id =
+      rfsIncidentId(textOf(alert, 'incidents')) ||
+      (textOf(alert, 'identifier').split(':').pop() ?? '').trim();
+    if (!id) continue;
+
+    // A CAP alert may carry several <info> blocks (one per language).
+    // The RFS sends one; take the first either way.
+    const info = asArray(alert['info'])[0] as Record<string, unknown> | undefined;
+    if (!info) continue;
+
+    // <parameter> is CAP's escape hatch for agency-specific fields, as
+    // name/value pairs. The RFS puts the things its own map shows there
+    // - fuel type, fire danger class, allocated resources.
+    const params = new Map<string, string>();
+    for (const p of asArray(info['parameter']) as Array<Record<string, unknown>>) {
+      const name = textOf(p, 'valueName');
+      if (name) params.set(name.toLowerCase(), textOf(p, 'value'));
+    }
+
+    out.set(id, {
+      capEvent: textOf(info, 'event'),
+      capCategory: textOf(info, 'category'),
+      capSeverity: textOf(info, 'severity'),
+      capUrgency: textOf(info, 'urgency'),
+      capCertainty: textOf(info, 'certainty'),
+      capResponseType: textOf(info, 'responseType'),
+      capSender: textOf(info, 'senderName'),
+      capHeadline: textOf(info, 'headline'),
+      capInstruction: textOf(info, 'instruction'),
+      capEffective: textOf(info, 'effective'),
+      capExpires: textOf(info, 'expires'),
+      capWeb: textOf(info, 'web'),
+      capFuelType: params.get('fueltype') ?? '',
+      capFireDangerClass: params.get('firedangerclass') ?? '',
+      capControlAuthority: params.get('controlauthority') ?? '',
+      capAllocatedResources: params.get('allocatedresources') ?? '',
+    });
+  }
+  return out;
+}
+
 export async function fetchRfs(): Promise<RfsSnapshot> {
-  const xml = await fetchText(RFS_URL, {
-    headers: { 'User-Agent': 'Mozilla/5.0' },
-  });
+  // The incidents feed is the record and its failure must propagate so
+  // the poller backs off. CAP is enrichment - a failure there costs the
+  // extra fields, not the layer.
+  const [xml, capXml] = await Promise.all([
+    fetchText(RFS_URL, { headers: { 'User-Agent': 'Mozilla/5.0' } }),
+    fetchText(RFS_CAP_URL, { headers: { 'User-Agent': 'Mozilla/5.0' } }).catch(
+      () => '',
+    ),
+  ]);
+  let capById = new Map<string, RfsCapInfo>();
+  if (capXml) {
+    try {
+      capById = parseRfsCap(capXml);
+    } catch {
+      // A reshaped CAP envelope is not a reason to drop the incidents.
+      capById = new Map();
+    }
+  }
   const root = parseXml(xml);
   const rss = (root['rss'] as Record<string, unknown> | undefined) ?? root;
   const channel =
@@ -243,6 +413,7 @@ export async function fetchRfs(): Promise<RfsSnapshot> {
         updated: parsed.updated,
         updatedISO: parsed.updatedISO,
         polygons,
+        ...(capById.get(rfsIncidentId(guid)) ?? EMPTY_CAP),
         source: 'rfs',
       },
     });
