@@ -1003,10 +1003,11 @@
       const _v = (window.FireVocab || null) && window.FireVocab.describe({
         type: data.TYPE, status: data.STATUS, level: data.ALERT_LEVEL,
       });
+      // Each card shows the agency's own words; fire-vocab.js supplies
+      // only the colour, and grey where the agency published something
+      // that is not really a level or a containment state.
       const _lvlColor = _v && _v.level.real ? _v.level.color : '#94a3b8';
-      // The same containment scale the pin is coloured by, so the card
-      // and the marker cannot say different things about one fire.
-      const _statusColor = _v ? _v.status.ring : '#4ade80';
+      const _statusColor = _v && _v.status.real ? _v.status.ring : '#94a3b8';
       // word-break:break-word would split inside a word — this panel is
       // barely 90px per card, and "Emergency Warning" came out as
       // "Emergenc y Warning". overflow-wrap breaks between words first
@@ -1022,8 +1023,8 @@
         <div style="background:rgba(148,163,184,0.07); border:1px solid rgba(148,163,184,0.25); padding:0.8rem; border-radius:6px; margin-bottom:1rem; font-size:0.85rem;">
           <h5 style="margin-top:0.3rem; margin-bottom:0.6rem; color:#ef4444;">${escapeHtml(_fireAgency)} Incident Details (Read Only)</h5>
           <div style="display:flex; gap:6px; margin-bottom:0.7rem;">
-            ${_card('Warning Level', _v && _v.level.real ? _v.level.label : 'None published', _lvlColor, _v && _v.level.real ? _v.level.published : null, !(_v && _v.level.real))}
-            ${_card('Status', _v && _v.status.real ? _v.status.label : 'Not published', _statusColor, _v && (_v.status.real ? _v.status.published : _v.status.raw), !(_v && _v.status.real))}
+            ${_card('Warning Level', data.ALERT_LEVEL || 'None published', _lvlColor, null, !(_v && _v.level.real))}
+            ${_card('Status', data.STATUS || 'Not published', _statusColor, null, !(_v && _v.status.real))}
             ${_card('Type', data.TYPE || 'Fire', '#fb923c', null, false)}
           </div>
           <strong>Title:</strong> ${escapeHtml(data.title || 'N/A')}<br>

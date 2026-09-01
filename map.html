@@ -1411,12 +1411,26 @@
       transition: color 0.12s, border-color 0.12s;
     }
     .floating-filter-panel .ff-agency:hover { color: #f8fafc; }
-    .floating-filter-panel .ff-agency .ff-agency-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
+    /* The agency's colour and its on/off state in one control. A bare
+       coloured dot said which agency this was but gave no hint the
+       heading could be clicked, so it read as a label. A box that fills
+       and ticks does both jobs. */
+    .floating-filter-panel .ff-agency .ff-agency-box {
+      width: 14px;
+      height: 14px;
+      border-radius: 4px;
       flex: 0 0 auto;
+      border: 1.5px solid currentColor;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 8px;
+      line-height: 1;
+      color: #64748b;
+      transition: background 0.12s, border-color 0.12s, color 0.12s;
     }
+    .floating-filter-panel .ff-agency .ff-agency-box i { opacity: 0; }
+    .floating-filter-panel .ff-agency.on .ff-agency-box i { opacity: 1; color: #0b1220; }
     .floating-filter-panel .ff-agency .ff-agency-n {
       margin-left: auto;
       font-weight: 500;
@@ -7377,18 +7391,24 @@ function initPagerHoursFromStorage() {
         + (published ? '<div style="color:#64748b; font-size:9px; margin-top:1px;">' + escapeHtml(published) + '</div>' : '')
         + '</div>';
 
+      // All three cards show the agency's OWN words. The shared
+      // vocabulary supplies the colour and the icon and nothing else:
+      // "Active" on a burn-off is still drawn green because a deliberate
+      // burn alight is not an uncontained fire, but it is not renamed to
+      // say so. Renaming was the thing that kept turning RFS records
+      // into somebody else's vocabulary.
+      //
+      // A value that is not really a containment state — Queensland
+      // files its warnings' call to action here — keeps the agency's
+      // words but loses the colour, because grey is the honest answer
+      // to "how contained is it" when nobody said.
       html += '<div style="display:flex; gap:8px; margin-bottom:10px;">';
-      html += _tip('Warning Level', v.level.real ? v.level.label : 'None published',
-                   v.level.real ? v.level.color : '#94a3b8',
-                   v.level.real ? v.level.published : null, !v.level.real);
+      html += _tip('Warning Level', v.level.raw || 'None published',
+                   v.level.real ? v.level.color : '#94a3b8', null, !v.level.real);
       // Same containment scale as the pin — a red pin with a green
       // status card would be the map disagreeing with itself.
-      html += _tip('Status', v.status.real ? v.status.label : 'Not published',
-                   v.status.ring, v.status.real ? v.status.published : v.status.raw,
-                   !v.status.real);
-      // The agency's own word for what this is, the same word its
-      // filter pill uses. Only status and level are spoken in one
-      // shared vocabulary; the type is the agency's to name.
+      html += _tip('Status', v.status.raw || 'Not published',
+                   v.status.real ? v.status.ring : '#94a3b8', null, !v.status.real);
       html += _tip('Type', v.type.raw || v.type.label, '#fb923c', null, false);
       html += '</div>';
       
@@ -11810,8 +11830,13 @@ function initPagerHoursFromStorage() {
           .sort((a, b) => byAgency[b].n - byAgency[a].n || a.localeCompare(b))
           .map((a) => {
             const on = fireAgencyFilter[a] !== false;
-            const head = `<button class="ff-agency ${on ? '' : 'off'}" onclick="toggleFireAgencyPill('${jsArg(a)}')">`
-              + `<span class="ff-agency-dot" style="background:${FV.agencyColor(a)};"></span>`
+            const col = FV.agencyColor(a);
+            const box = on
+              ? `<span class="ff-agency-box" style="background:${col};border-color:${col};"><i class="fa-solid fa-check"></i></span>`
+              : `<span class="ff-agency-box"><i class="fa-solid fa-check"></i></span>`;
+            const head = `<button class="ff-agency ${on ? 'on' : 'off'}" onclick="toggleFireAgencyPill('${jsArg(a)}')" `
+              + `title="${on ? 'Hide' : 'Show'} ${escapeHtml(agencyLabel(a))}">`
+              + box
               + `<span>${escapeHtml(agencyLabel(a))}</span>`
               + `<span class="ff-agency-n">${byAgency[a].n}</span></button>`;
             // An agency that is switched off does not need its types
@@ -17944,6 +17969,6 @@ function initPagerHoursFromStorage() {
   <script src="ui-dialogs.js"></script>
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
-  <script src="map-editor-module.js?v=33"></script>
+  <script src="map-editor-module.js?v=34"></script>
 </body>
 </html>

@@ -2178,17 +2178,19 @@
           const fv = window.FireVocab
             ? FireVocab.describe({ type: fireType, status, level: alertLevel })
             : null;
-          const said = (v) => (v && v.published ? ` title="Published as &quot;${escapeHtml(v.published)}&quot;"` : '');
-          if (fv && fv.status.real) {
-            extraInfo += `<span class="lg-badge" style="--badge:${fv.status.ring}"${said(fv.status)}>${escapeHtml(fv.status.label)}</span>`;
-          } else if (!fv && status) {
-            extraInfo += `<span class="lg-badge" style="--badge:${getStatusColor(status)}">${escapeHtml(status)}</span>`;
+          // The agency's own words, coloured by the shared scale — the
+          // same rule the map's filter pills follow. A status that is
+          // not really a containment state keeps its words and loses
+          // its colour.
+          if (status) {
+            const c = fv ? (fv.status.real ? fv.status.ring : '#94a3b8') : getStatusColor(status);
+            extraInfo += `<span class="lg-badge" style="--badge:${c}">${escapeHtml(status)}</span>`;
           }
           // A level badge only when a level was actually published. The
           // RFS writes "Not Applicable" on most of its records and the
           // incident type on many of the rest, and neither is a warning.
           if (fv && fv.level.real) {
-            extraInfo += `<span class="lg-badge" style="--badge:${fv.level.color}"${said(fv.level)}>${escapeHtml(fv.level.label)}</span>`;
+            extraInfo += `<span class="lg-badge" style="--badge:${fv.level.color}">${escapeHtml(alertLevel)}</span>`;
           }
           // The agency's own word for what this is - the map's filter
           // pills are grouped by agency now, so nothing has to be
@@ -2197,8 +2199,8 @@
           // same kind of fire.
           const typeLabel = fireType;
           if (typeLabel
-              && (!fv || !fv.status.real || typeLabel !== fv.status.label)
-              && (!fv || !fv.level.real || typeLabel.toLowerCase() !== fv.level.label.toLowerCase())
+              && typeLabel !== status
+              && typeLabel.toLowerCase() !== String(alertLevel).toLowerCase()
               && typeLabel !== 'Not Applicable') {
             const ic = window.FireVocab ? FireVocab.typeIcon(fireType) : '';
             extraInfo += `<span class="lg-badge-o" style="--badge:#fb923c">`
