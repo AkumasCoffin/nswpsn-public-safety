@@ -3720,8 +3720,11 @@
     const ALERT_ICON_COLORS = { emergency: '#D32027', watchact: '#F17131', advice: '#FFD44F' };
     const fireTypeIcon = (item) =>
       FV.typeIcon((item && item.rawDetails && item.rawDetails['TYPE']) || '');
-    const fireStatusBucket = (status) => FV.statusBucket(status);
-    const fireStatusColor = (status) => FV.statusColor(status);
+    // Both take the type as well: a deliberate burn that is alight is
+    // not an uncontained fire, and the same words mean opposite things
+    // on the two. See BURNING_AS_PLANNED in fire-vocab.js.
+    const fireStatusBucket = (status, type) => FV.statusBucket(status, type);
+    const fireStatusColor = (status, type) => FV.statusColor(status, type);
     const agencyLabel = (key) => FV.agencyLabel(key);
 
 
@@ -5408,7 +5411,13 @@ function initPagerHoursFromStorage() {
           const props = feature.properties || {};
           if (props.layer === 'hazard') return; // road crashes -> Hazards layer
           const geom = feature.geometry || {};
-          let lat = null, lng = null, polygonCoords = null;
+          // The backend now pairs a warning's Point and Polygon siblings
+          // into one record, so the fire ground arrives as `polygons`
+          // beside a Point pin - the same shape Victoria and WA use.
+          // Upstream publishes them as separate features with identical
+          // properties, which is why the NT used to show two pins and a
+          // shaded area for one fire.
+          let lat = null, lng = null, polygonCoords = polygonRingsFor(props);
           if (geom.type === 'Point' && Array.isArray(geom.coordinates)) {
             lng = geom.coordinates[0];
             lat = geom.coordinates[1];
@@ -6405,7 +6414,9 @@ function initPagerHoursFromStorage() {
           const alertBucket = alertBucketFor(al);
           // No published level: the pin is coloured by how contained the
           // fire is and shaped by what kind of fire it is.
-          const statusHue = fireStatusColor((item.rawDetails && item.rawDetails['STATUS']) || '');
+          const statusHue = fireStatusColor(
+            (item.rawDetails && item.rawDetails['STATUS']) || '',
+            (item.rawDetails && item.rawDetails['TYPE']) || '');
           const typeIcon = fireTypeIcon(item);
 
           const hasPagerVisible = showPagerFlag && hasPagerLinked;

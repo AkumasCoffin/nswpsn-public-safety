@@ -75,6 +75,14 @@ export interface NtFireFeature {
     updatedISO: string;
     /** Which map layer this belongs on — 'fire' or 'hazard'. */
     layer: NtLayer;
+    /**
+     * The fire ground, as GeoJSON outer rings ([lon, lat]).
+     *
+     * Upstream publishes a warning as TWO sibling features — a Point to
+     * pin and a Polygon to shade — rather than one feature carrying
+     * both. Paired here so a fire is one record; see pairGeometry().
+     */
+    polygons: number[][][];
     /** Upstream's own category slug, kept for debugging and filters. */
     ntCategory: string;
     /** Bushfire advice text, present only on BushfiresNT records. */
@@ -218,6 +226,7 @@ export function toNtFeature(raw: unknown): NtFireFeature | null {
       updated: tidy(p['Last Update']),
       updatedISO: lastUpdate,
       layer: ntLayerFor(category),
+      polygons: [],
       ntCategory: category,
       currentSituation: tidy(p['Current Situation']),
       risks: tidy(p['Risks']),
@@ -228,6 +237,90 @@ export function toNtFeature(raw: unknown): NtFireFeature | null {
       source: 'nt_fire',
     },
   };
+}
+
+/**
+ * The key upstream uses, in effect, for one incident.
+ *
+ * A bushfire advice arrives as a Point feature and one or more Polygon
+ * features with byte-identical properties — same location, same event
+ * type, same notified time — and nothing tying them together but those
+ * properties. Grouping on them is what turns three features at Harrison
+ * Dam into one fire.
+ *
+ * Deliberately NOT the coordinates: that is the whole problem. The
+ * polygon's ring centroid sits hundreds of metres from the point, so
+ * the id derived from it differed and the same fire was pinned twice.
+ */
+function ntGroupKey(p: Record<string, unknown>): string {
+  return [
+    asString(p['_location']) || asString(p['Location']),
+    asString(p['_eventtype']) || asString(p['Fire Type']),
+    asString(p['_datenotified']),
+  ]
+    .join('|')
+    .toLowerCase();
+}
+
+/** Outer rings of a Polygon/MultiPolygon geometry, or []. */
+function ringsOf(geom: unknown): number[][][] {
+  const g = geom as Record<string, unknown> | undefined;
+  if (!g) return [];
+  const c = g['coordinates'];
+  if (g['type'] === 'Polygon' && Array.isArray(c)) {
+    const ring = c[0];
+    return Array.isArray(ring) ? [ring as number[][]] : [];
+  }
+  if (g['type'] === 'MultiPolygon' && Array.isArray(c)) {
+    const out: number[][][] = [];
+    for (const poly of c as unknown[]) {
+      const ring = Array.isArray(poly) ? (poly as unknown[])[0] : null;
+      if (Array.isArray(ring)) out.push(ring as number[][]);
+    }
+    return out;
+  }
+  return [];
+}
+
+/**
+ * One record per fire, with its rings attached.
+ *
+ * The Point sibling wins the pin because it is where the agency put the
+ * marker on its own map; a group with only polygons still gets a record
+ * (mapped from the first, which pins at the ring centroid) rather than
+ * being dropped.
+ */
+export function pairGeometry(items: unknown[]): NtFireFeature[] {
+  const order: string[] = [];
+  const groups = new Map<string, unknown[]>();
+  for (const item of items) {
+    if (!item || typeof item !== 'object') continue;
+    const props = ((item as Record<string, unknown>)['properties'] as Record<string, unknown>) ?? {};
+    const key = ntGroupKey(props);
+    if (!groups.has(key)) {
+      groups.set(key, []);
+      order.push(key);
+    }
+    groups.get(key)!.push(item);
+  }
+
+  const out: NtFireFeature[] = [];
+  for (const key of order) {
+    const group = groups.get(key)!;
+    const isPoint = (it: unknown) =>
+      asString(((it as Record<string, unknown>)['geometry'] as Record<string, unknown>)?.['type']) ===
+      'Point';
+    const base = group.find(isPoint) ?? group[0];
+    const feature = toNtFeature(base);
+    if (!feature) continue;
+    const rings: number[][][] = [];
+    for (const it of group) {
+      rings.push(...ringsOf((it as Record<string, unknown>)['geometry']));
+    }
+    feature.properties.polygons = rings;
+    out.push(feature);
+  }
+  return out;
 }
 
 /** Throws on upstream failure so the poller's backoff engages. */
@@ -244,9 +337,7 @@ export async function fetchNtFire(): Promise<NtFireSnapshot> {
   }
   const features: NtFireFeature[] = [];
   const seen = new Set<string>();
-  for (const item of items) {
-    const f = toNtFeature(item);
-    if (!f) continue;
+  for (const f of pairGeometry(items)) {
     // Two records at the same place, of the same type, notified at the
     // same minute would collide; keep the first rather than stack them.
     if (seen.has(f.properties.guid)) continue;

@@ -129,6 +129,26 @@
   };
 
   /**
+   * A deliberate burn that is alight is doing what it was lit to do.
+   *
+   * WA marks all 35 of its burn-offs "Active" and Queensland marks its
+   * permitted burns "Going" — the same words those agencies use for a
+   * bushfire nobody has contained — so a state full of routine hazard
+   * reduction was drawn as a state on fire. The NSW RFS publishes the
+   * same thing as "Under control", which is the reading that matches
+   * reality, so a planned burn under way takes the controlled colour
+   * and says plainly what it is.
+   *
+   * Only the label is new. The bucket and the palette are the existing
+   * controlled ones, so nothing downstream has to learn a fifth state.
+   */
+  const BURNING_AS_PLANNED = /^(active|going|in progress|alight|burning|underway|under way)$/;
+  const STATUS_PLANNED = {
+    id: 'controlled', label: 'Burning as planned',
+    ring: '#86efac', a: '#4ade80', b: '#15803d',
+  };
+
+  /**
    * Words that appear in a status field but are not a containment state.
    *
    * Queensland files its warnings' CallToAction as their status, so a
@@ -151,16 +171,22 @@
     return !!t && !NOT_A_STATUS.test(t);
   }
 
-  function statusEntry(raw) {
+  function statusEntry(raw, type) {
     const t = low(raw);
     if (!t || NOT_A_STATUS.test(t)) return STATUS_UNKNOWN;
+    // Status is read in the context of what is burning: see
+    // BURNING_AS_PLANNED. Tested first, because the words it matches are
+    // the same ones that mean "out of control" on an unplanned fire.
+    if (type && canonType(type) === 'Planned Burn' && BURNING_AS_PLANNED.test(t)) {
+      return STATUS_PLANNED;
+    }
     for (const s of STATUSES) if (s.match.test(t)) return s;
     return STATUS_UNKNOWN;
   }
 
-  const statusBucket = (raw) => statusEntry(raw).id;
-  const statusColor = (raw) => statusEntry(raw);
-  const statusLabel = (raw) => statusEntry(raw).label;
+  const statusBucket = (raw, type) => statusEntry(raw, type).id;
+  const statusColor = (raw, type) => statusEntry(raw, type);
+  const statusLabel = (raw, type) => statusEntry(raw, type).label;
 
   // ------------------------------------------------------------------
   // LEVEL — the Australian Warning System level, when one is published.
@@ -243,7 +269,7 @@
   function describe(raw) {
     const r = raw || {};
     const type = canonType(r.type);
-    const st = statusEntry(r.status);
+    const st = statusEntry(r.status, r.type);
     const lv = levelEntry(r.level);
     const rawStatus = clean(r.status);
     const rawType = clean(r.type);

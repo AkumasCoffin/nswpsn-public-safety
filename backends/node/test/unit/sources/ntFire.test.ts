@@ -17,6 +17,7 @@ vi.mock('../../../src/sources/shared/http.js', () => ({
 }));
 
 import {
+  pairGeometry,
   fetchNtFire,
   toNtFeature,
   ntLayerFor,
@@ -41,6 +42,45 @@ const FIRE = {
     'Last Update': '30/08/2026 19:16',
     Notified: '30/08/2026 19:11',
   },
+};
+
+/**
+ * A bushfire advice as upstream actually publishes it: the SAME
+ * properties on two sibling features, one Point and one Polygon, with
+ * nothing linking them but those properties. Taken from the live
+ * Harrison Dam record that showed as two pins.
+ */
+const ADVICE_PROPS = {
+  _category: 'bushfire-advice',
+  _status: 'active',
+  _eventtype: 'Bushfire',
+  _location: 'Anzac Parade, MIDDLE POINT (HARRISON DAM)',
+  _datenotified: '2026-08-31T11:54:00+09:30',
+  _lastupdate: '2026-09-01T10:00:00+09:30',
+  'Fire Type': 'Bushfire',
+  Location: 'Anzac Parade, MIDDLE POINT (HARRISON DAM)',
+  Status: 'Being Controlled',
+  'Alert Level': 'Advice',
+  'Responsible Agency': 'Bushfires NT',
+  'Last Update': '01/09/2026 10:00',
+};
+const ADVICE_POINT = {
+  type: 'Feature',
+  geometry: { type: 'Point', coordinates: [131.34178866856902, -12.577106263006101] },
+  properties: { ...ADVICE_PROPS },
+};
+const ADVICE_POLYGON = {
+  type: 'Feature',
+  geometry: {
+    type: 'Polygon',
+    coordinates: [[
+      [131.3413913441691, -12.606308148653497],
+      [131.36, -12.6],
+      [131.35, -12.58],
+      [131.3413913441691, -12.606308148653497],
+    ]],
+  },
+  properties: { ...ADVICE_PROPS },
 };
 
 const wrap = (features: unknown[]) => ({
@@ -206,6 +246,40 @@ describe('fetchNtFire', () => {
   it('collapses a duplicate rather than stacking two markers', async () => {
     fetchJson.mockResolvedValueOnce(wrap([FIRE, FIRE]));
     expect((await fetchNtFire()).count).toBe(1);
+  });
+
+  it('pins a warning once, not once per geometry', async () => {
+    // Upstream publishes the pin and the fire ground as two features
+    // with identical properties. Keyed on coordinates they looked like
+    // two incidents, so the NT drew two triangles for one fire — the
+    // polygon's ring centroid is ~3km from the point it belongs to.
+    fetchJson.mockResolvedValueOnce(wrap([ADVICE_POINT, ADVICE_POLYGON]));
+    const snap = await fetchNtFire();
+    expect(snap.count).toBe(1);
+    const f = snap.features[0]!;
+    // The pin is the agency's own marker position, not a centroid.
+    expect(f.geometry).toEqual(ADVICE_POINT.geometry);
+    expect(f.properties.polygons).toHaveLength(1);
+    expect(f.properties.polygons[0]![0]).toEqual([131.3413913441691, -12.606308148653497]);
+  });
+
+  it('keeps two genuinely different fires at one locality apart', async () => {
+    // A closed grass fire and an active bushfire both at Middle Point:
+    // same suburb, different event type and different notified time.
+    fetchJson.mockResolvedValueOnce(wrap([ADVICE_POINT, ADVICE_POLYGON, FIRE]));
+    expect((await fetchNtFire()).count).toBe(2);
+  });
+
+  it('still places a warning that arrives with only a polygon', async () => {
+    const only = pairGeometry([ADVICE_POLYGON]);
+    expect(only).toHaveLength(1);
+    expect(only[0]!.properties.polygons).toHaveLength(1);
+  });
+
+  it('leaves a plain incident with no rings', async () => {
+    fetchJson.mockResolvedValueOnce(wrap([FIRE]));
+    const snap = await fetchNtFire();
+    expect(snap.features[0]!.properties.polygons).toEqual([]);
   });
 
   it('throws when the payload has no incidents.features', async () => {
