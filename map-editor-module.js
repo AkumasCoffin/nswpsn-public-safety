@@ -1024,7 +1024,7 @@
           <div style="display:flex; gap:6px; margin-bottom:0.7rem;">
             ${_card('Warning Level', _v && _v.level.real ? _v.level.label : 'None published', _lvlColor, _v && _v.level.real ? _v.level.published : null, !(_v && _v.level.real))}
             ${_card('Status', _v && _v.status.real ? _v.status.label : 'Not published', _statusColor, _v && (_v.status.real ? _v.status.published : _v.status.raw), !(_v && _v.status.real))}
-            ${_card('Type', _v ? _v.type.label : (data.TYPE || 'Fire'), '#fb923c', _v && _v.type.published, false)}
+            ${_card('Type', data.TYPE || 'Fire', '#fb923c', null, false)}
           </div>
           <strong>Title:</strong> ${escapeHtml(data.title || 'N/A')}<br>
           <strong>Location:</strong> ${escapeHtml(data.LOCATION || 'N/A')}<br>

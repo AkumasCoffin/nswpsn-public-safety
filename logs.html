@@ -2190,15 +2190,18 @@
           if (fv && fv.level.real) {
             extraInfo += `<span class="lg-badge" style="--badge:${fv.level.color}"${said(fv.level)}>${escapeHtml(fv.level.label)}</span>`;
           }
-          // Only show the type when it isn't just repeating the status or
-          // the level back at you.
-          const typeLabel = fv ? fv.type.label : fireType;
+          // The agency's own word for what this is - the map's filter
+          // pills are grouped by agency now, so nothing has to be
+          // renamed to be filterable. Only the icon is shared, and that
+          // is what shows "Burn off" and "FIRE PERMITTED BURN" to be the
+          // same kind of fire.
+          const typeLabel = fireType;
           if (typeLabel
               && (!fv || !fv.status.real || typeLabel !== fv.status.label)
               && (!fv || !fv.level.real || typeLabel.toLowerCase() !== fv.level.label.toLowerCase())
               && typeLabel !== 'Not Applicable') {
             const ic = window.FireVocab ? FireVocab.typeIcon(fireType) : '';
-            extraInfo += `<span class="lg-badge-o" style="--badge:#fb923c"${said(fv && fv.type)}>`
+            extraInfo += `<span class="lg-badge-o" style="--badge:#fb923c">`
               + (ic ? `<i class="fa-solid ${ic}" style="margin-right:4px;"></i>` : '')
               + `${escapeHtml(typeLabel)}</span>`;
           }
