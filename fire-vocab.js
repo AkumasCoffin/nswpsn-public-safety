@@ -60,8 +60,18 @@
       match: /^(structure fire|fire structure|building fire|house fire)$/ },
     { id: 'vehicle', label: 'Vehicle Fire', icon: 'fa-car-burst', fire: true,
       match: /^(vehicle fire|fire vehicle|car fire|truck fire|vehicle\/equipment fire|equipment fire)$/ },
-    { id: 'planned', label: 'Planned Burn', icon: 'fa-fire-flame-simple', fire: true,
-      match: /^(planned burn|hazard reduction|burn ?off|fire permitted burn|permit(ted)? burn)$/ },
+    // Two kinds of deliberate burn, and they are not the same job. A
+    // hazard reduction is an agency's own prescribed burn, lit with a
+    // driptorch; a burn-off is a landholder's, and what the service is
+    // doing there is standing by. They were folded together while the
+    // canonical name was what mattered — now that the pills carry each
+    // agency's own words, the icon is free to tell them apart.
+    { id: 'planned', label: 'Planned Burn', icon: 'fa-fire-flame-simple',
+      img: 'assets/driptorch-icon-1179815-512.svg', fire: true,
+      match: /^(planned burn|prescribed burn|hazard reduction|fire permitted burn|permit(ted)? burn)$/ },
+    { id: 'burnoff', label: 'Burn Off', icon: 'fa-fire-flame-simple',
+      img: 'assets/fire-sheild-icon-3913893-512.svg', fire: true,
+      match: /^(burn ?off)$/ },
     { id: 'alarm', label: 'Fire Alarm', icon: 'fa-bell', fire: true,
       match: /^(automatic fire alarm|fire alarm( \(afa\))?|afa|active alarm|alarm bells ringing)$/ },
     { id: 'other_fire', label: 'Other Fire', icon: 'fa-fire', fire: true,
@@ -106,6 +116,42 @@
     const e = typeEntry(raw);
     return e ? e.icon : 'fa-fire';
   }
+
+  /**
+   * The type's icon as markup, whichever kind of icon it is.
+   *
+   * Most types are a Font Awesome glyph. Two are artwork — the driptorch
+   * and the fire shield — and those are drawn as a CSS mask rather than
+   * an <img>, so the shape takes the colour of whatever it sits in
+   * exactly as a font icon does: white inside a pin, amber on a badge,
+   * dimmed on an inactive pill. An <img> of a black SVG would need a
+   * different filter hack at every one of those.
+   */
+  function typeIconHtml(raw, opts) {
+    const o = opts || {};
+    const e = typeEntry(raw);
+    const style = o.style || '';
+    if (e && e.img) {
+      const size = o.size || '1em';
+      return '<span class="fv-type-icon" style="--fv-img:url(' + e.img
+        + ');width:' + size + ';height:' + size + ';' + style + '"></span>';
+    }
+    return '<i class="fa-solid ' + (e ? e.icon : 'fa-fire') + '"'
+      + (style ? ' style="' + style + '"' : '') + '></i>';
+  }
+
+  // Injected here rather than duplicated into both pages' stylesheets,
+  // for the same reason the vocabulary itself lives in one file.
+  (function injectIconCss() {
+    if (typeof document === 'undefined' || document.getElementById('fv-icon-css')) return;
+    const el = document.createElement('style');
+    el.id = 'fv-icon-css';
+    el.textContent = '.fv-type-icon{display:inline-block;flex:0 0 auto;'
+      + 'background-color:currentColor;vertical-align:-0.125em;'
+      + '-webkit-mask:var(--fv-img) no-repeat center;mask:var(--fv-img) no-repeat center;'
+      + '-webkit-mask-size:contain;mask-size:contain;}';
+    document.head.appendChild(el);
+  })();
 
   // ------------------------------------------------------------------
   // STATUS — how far from controlled. Drives the colour.
@@ -309,7 +355,7 @@
 
   window.FireVocab = {
     TYPES, STATUSES, LEVELS, AGENCIES,
-    canonType, typeEntry, typeIcon,
+    canonType, typeEntry, typeIcon, typeIconHtml,
     statusBucket, statusColor, statusLabel, statusEntry, isStatus,
     levelBucket, levelIcon, levelColor, levelLabel, levelEntry, isLevel,
     agencyLabel, agencyColor,

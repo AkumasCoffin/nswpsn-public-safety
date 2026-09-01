@@ -33,7 +33,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="livetraffic-vocab.js?v=1"></script>
-  <script src="fire-vocab.js?v=2"></script>
+  <script src="fire-vocab.js?v=3"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js" integrity="sha384-948ahk4ZmxYVYOc+rxN1H2gM1EJ2Duhp7uHtZ4WSLkV4Vtx5MUqnV+l7u9B+jFv+" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
 
@@ -3788,6 +3788,10 @@
     const ALERT_ICON_COLORS = { emergency: '#D32027', watchact: '#F17131', advice: '#FFD44F' };
     const fireTypeIcon = (item) =>
       FV.typeIcon((item && item.rawDetails && item.rawDetails['TYPE']) || '');
+    // Markup rather than a class name: two of the types are artwork
+    // rather than a font glyph. See typeIconHtml in fire-vocab.js.
+    const fireTypeIconHtml = (item, opts) =>
+      FV.typeIconHtml((item && item.rawDetails && item.rawDetails['TYPE']) || '', opts);
     // Both take the type as well: a deliberate burn that is alight is
     // not an uncontained fire, and the same words mean opposite things
     // on the two. See BURNING_AS_PLANNED in fire-vocab.js.
@@ -6623,7 +6627,7 @@ function initPagerHoursFromStorage() {
           const statusHue = fireStatusColor(
             (item.rawDetails && item.rawDetails['STATUS']) || '',
             (item.rawDetails && item.rawDetails['TYPE']) || '');
-          const typeIcon = fireTypeIcon(item);
+          const typeIconHtml = fireTypeIconHtml(item, { size: '11px' });
 
           const hasPagerVisible = showPagerFlag && hasPagerLinked;
 
@@ -6643,7 +6647,7 @@ function initPagerHoursFromStorage() {
             <img src="${alertIcon}" alt="" width="34" height="32" style="position:relative; display:block; filter:drop-shadow(0 1px 2px rgba(0,0,0,0.85));">
           ` : `
             <div style="position:absolute; width:28px; height:28px; border-radius:50%; border:2px solid ${statusHue.ring}; background:transparent;"></div>
-            <div style="background:linear-gradient(145deg, ${statusHue.a}, ${statusHue.b}); width:20px; height:20px; border-radius:50%; border:2px solid #fff; box-shadow:0 1px 3px rgba(0,0,0,0.55), inset 0 -2px 4px rgba(0,0,0,0.3), inset 0 2px 4px rgba(255,255,255,0.2); display:flex; align-items:center; justify-content:center; font-size:10px; color:#fff;"><i class="fa-solid ${typeIcon}"></i></div>
+            <div style="background:linear-gradient(145deg, ${statusHue.a}, ${statusHue.b}); width:20px; height:20px; border-radius:50%; border:2px solid #fff; box-shadow:0 1px 3px rgba(0,0,0,0.55), inset 0 -2px 4px rgba(0,0,0,0.3), inset 0 2px 4px rgba(255,255,255,0.2); display:flex; align-items:center; justify-content:center; font-size:10px; color:#fff;">${typeIconHtml}</div>
           `;
 
           let iconHtml;
@@ -12230,9 +12234,11 @@ function initPagerHoursFromStorage() {
             const pills = Object.keys(types)
               .sort((x, y) => types[y].n - types[x].n || x.localeCompare(y))
               .map((k) => {
-                const icon = FV.typeIcon(types[k].label);
+                const icon = FV.typeIconHtml(types[k].label, {
+                  size: '11px', style: 'margin-right:5px;opacity:.75;',
+                });
                 return _ffPill(rfsTypeFilter[k] !== false,
-                  `<i class="fa-solid ${icon}" style="margin-right:5px;opacity:.75;"></i>${escapeHtml(types[k].label)} (${types[k].n})`,
+                  `${icon}${escapeHtml(types[k].label)} (${types[k].n})`,
                   `toggleRfsTypePill('${jsArg(k)}')`);
               }).join('');
             return head + `<div class="floating-filter-pills ff-agency-types">${pills}</div>`;
