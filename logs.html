@@ -2122,11 +2122,29 @@
         // second, unrelated field.
         if (item.source === 'pager') subcat = '';
         
+        // Where it is, from whichever field the feed happens to use.
+        //
+        // The roadwork/works feed leaves location_text null on every one
+        // of its records and puts the street in data.roads. Reading only
+        // location_text meant five different water-main jobs — three on
+        // Victoria Road North Haven, one at Outer Harbor, one on Heaslip
+        // Road Angle Vale — all rendered as an identical "Water Mains /
+        // Roadwork" card with nothing on it to tell them apart, which
+        // reads as the same record repeated.
+        const locationLine = (() => {
+          const first = (v) => (Array.isArray(v) ? v.filter(Boolean).join(', ') : v);
+          for (const v of [item.location_text, first(data.roads), first(data.crossStreet), data.secondLocation]) {
+            const t = String(v || '').trim();
+            if (t) return t;
+          }
+          return '';
+        })();
+
         // Don't show location if it matches title or title is start of location (RFS case: "Surry St, Coraki" vs "Surry St, Coraki, NSW 2471")
-        const showLocation = item.location_text && 
-                             item.location_text !== title && 
-                             !title.toLowerCase().includes(item.location_text.toLowerCase().substring(0, 20)) &&
-                             !item.location_text.toLowerCase().startsWith(title.toLowerCase());
+        const showLocation = locationLine &&
+                             locationLine !== title &&
+                             !title.toLowerCase().includes(locationLine.toLowerCase().substring(0, 20)) &&
+                             !locationLine.toLowerCase().startsWith(title.toLowerCase());
         
         const viewed = isViewed(item.source_id);
 
@@ -2449,7 +2467,7 @@
               <div class="incident-meta">
                 <span><i class="fas fa-tag"></i> ${escapeHtml(sourceName)}</span>
                 ${metaSubcat ? `<span><i class="fas fa-tags"></i> ${escapeHtml(metaSubcat)}</span>` : ''}
-                ${showLocation ? `<span class="lg-wrap"><i class="fas fa-map-marker-alt"></i> ${escapeHtml(item.location_text)}</span>` : ''}
+                ${showLocation ? `<span class="lg-wrap"><i class="fas fa-map-marker-alt"></i> ${escapeHtml(locationLine)}</span>` : ''}
               </div>
               ${(statePill || extraInfo) ? `<div class="incident-badges">${statePill}${extraInfo}</div>` : ''}
               ${extraDetails ? `<div class="incident-details lg-details">${extraDetails}</div>` : ''}
