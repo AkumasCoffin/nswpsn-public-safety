@@ -1029,7 +1029,12 @@
         try {
           const changes = await loadFireChanges(_trailItem);
           if (changes && changes.length && typeof renderFireChanges === 'function') {
-            host.innerHTML = renderFireChanges(changes, { small: true });
+            // Same colour resolver the tooltip uses, so a status going
+            // green here is the green it is on the pin.
+            host.innerHTML = renderFireChanges(changes, {
+              small: true,
+              colorFor: typeof fireTrailColor === 'function' ? fireTrailColor(data.TYPE) : undefined,
+            });
           }
         } catch (e) { console.warn('[editor] change trail', e); }
       }, 0);

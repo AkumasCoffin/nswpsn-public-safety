@@ -6650,9 +6650,9 @@ function initPagerHoursFromStorage() {
             // 180 pins on load. The tooltip is redrawn in place once it
             // lands, and only if it is still open — otherwise the next
             // hover picks it up from the cache instantly.
-            const withChanges = (src) => {
-              if (item._changes !== undefined) return;
-              loadFireChanges(item).then((changes) => {
+            const withChanges = () => {
+              if (getChangeTrail(item.source, item.sourceId) !== undefined) return;
+              loadChangeTrail(item.source, item.sourceId).then((changes) => {
                 if (!changes || !changes.length) return;
                 const fresh = buildRfsTooltip(item);
                 marker.setTooltipContent(fresh);
@@ -7428,13 +7428,26 @@ function initPagerHoursFromStorage() {
      * including an empty one, which is how a record that has never
      * changed avoids being asked about twice.
      */
-    async function loadFireChanges(item) {
-      if (item._changes !== undefined || item._changesLoading) return item._changes;
-      if (!item.sourceId) { item._changes = []; return item._changes; }
-      item._changesLoading = true;
+    // Keyed by identity, not stored on the item: every refresh rebuilds
+    // the marker objects, and a trail cached on one would be thrown away
+    // and re-fetched every sixty seconds.
+    const _changeTrails = new Map();
+    const _trailKey = (source, sourceId) => `${source}|${sourceId}`;
+    function getChangeTrail(source, sourceId) {
+      const v = _changeTrails.get(_trailKey(source, sourceId));
+      return Array.isArray(v) ? v : undefined;
+    }
+
+    async function loadChangeTrail(source, sourceId) {
+      if (!source || !sourceId) return [];
+      const key = _trailKey(source, sourceId);
+      const seen = _changeTrails.get(key);
+      if (Array.isArray(seen)) return seen;
+      if (seen === 'loading') return undefined;
+      _changeTrails.set(key, 'loading');
       try {
-        const url = `${PROXY_BASE}/api/data/history?source=${encodeURIComponent(item.source)}`
-          + `&source_id=${encodeURIComponent(item.sourceId)}&limit=50&order=desc&full=1&unique=0`;
+        const url = `${PROXY_BASE}/api/data/history?source=${encodeURIComponent(source)}`
+          + `&source_id=${encodeURIComponent(sourceId)}&limit=50&order=desc&full=1&unique=0`;
         const res = await apiFetch(url);
         const body = await res.json();
         // Oldest first, so a change reads as "from -> to" in the order
@@ -7471,40 +7484,84 @@ function initPagerHoursFromStorage() {
           }
           prev = cur;
         }
-        item._changes = out;
+        _changeTrails.set(key, out);
+        return out;
       } catch (e) {
         console.warn('change trail failed', e);
-        // Left undefined so a later hover can try again, rather than
-        // caching a failure as "nothing ever happened".
-        item._changes = undefined;
-      } finally {
-        item._changesLoading = false;
+        // Forgotten rather than cached as an empty trail, so a later
+        // hover can try again instead of "nothing ever happened".
+        _changeTrails.delete(key);
+        return undefined;
       }
-      return item._changes;
     }
 
-    /** The trail as a compact block; '' when nothing has moved. */
+    /** Back-compat for the editor module, which is handed the item. */
+    function loadFireChanges(item) {
+      return item ? loadChangeTrail(item.source, item.sourceId) : Promise.resolve([]);
+    }
+
+    /**
+     * The trail as a compact block; '' when nothing has moved.
+     *
+     * One line per change, in four columns that always land in the same
+     * place: what changed, what it was, what it became, how long ago.
+     * The first version ran all four together in near-identical greys at
+     * one size, so reading it meant parsing a sentence — the label, the
+     * old value and the age all competed with the one word that matters.
+     *
+     * The new value carries the colour of the scale it belongs to, so a
+     * status going green and a warning level going red are legible
+     * before you have read either word.
+     */
     function renderFireChanges(changes, opts) {
       if (!changes || !changes.length) return '';
       const o = opts || {};
+      const small = !!o.small;
+      const colorFor = o.colorFor || (() => '#e2e8f0');
       const recent = changes.slice(-4);
       const rows = recent.map((c) => {
-        const when = c.at ? formatAgo(c.at) : '';
-        return '<div style="color:#cbd5e1; font-size:' + (o.small ? '10px' : '11px') + '; line-height:1.5;">'
-          + '<span style="color:#94a3b8;">' + escapeHtml(c.label) + '</span> '
-          + '<span style="color:#64748b;">' + escapeHtml(c.from) + '</span>'
-          + ' <i class="fa-solid fa-arrow-right" style="font-size:8px; opacity:.6;"></i> '
-          + '<span style="color:#e2e8f0; font-weight:600;">' + escapeHtml(c.to) + '</span>'
-          + (when ? ' <span style="color:#64748b;">' + escapeHtml(when) + '</span>' : '')
-          + '</div>';
+        const when = c.at ? formatAgo(c.at).replace(/ ago$/, '') : '';
+        const to = colorFor(c.label, c.to) || '#e2e8f0';
+        // Two lines, not one. A tooltip is 320px wide and these values
+        // are phrases — "Not yet controlled" became "Not yet / controlled"
+        // on one line, splitting mid-phrase and leaving the columns
+        // ragged. The label and the age take the first line, the
+        // transition gets the second to itself and never wraps.
+        return '<div style="margin-bottom:5px;">'
+          + '<div style="display:flex; align-items:baseline; gap:6px; line-height:1.3;">'
+            + '<span style="color:#64748b; font-size:' + (small ? '8px' : '9px')
+              + '; text-transform:uppercase; letter-spacing:0.5px;">' + escapeHtml(c.label) + '</span>'
+            + (when ? '<span style="margin-left:auto; color:#475569; font-size:'
+                + (small ? '8px' : '9px') + ';">' + escapeHtml(when) + '</span>' : '')
+          + '</div>'
+          + '<div style="line-height:1.4; font-size:' + (small ? '10px' : '11.5px') + ';">'
+            + '<span style="color:#64748b;">' + escapeHtml(c.from) + '</span>'
+            + ' <i class="fa-solid fa-arrow-right" style="font-size:8px; color:#475569;"></i> '
+            + '<span style="color:' + to + '; font-weight:700;">' + escapeHtml(c.to) + '</span>'
+          + '</div>'
+        + '</div>';
       }).join('');
       const more = changes.length > recent.length
-        ? '<div style="color:#64748b; font-size:9px; margin-top:2px;">+' + (changes.length - recent.length) + ' earlier</div>'
+        ? '<div style="color:#475569; font-size:9px; margin-top:3px;">+' + (changes.length - recent.length) + ' earlier</div>'
         : '';
       return '<div style="border-top:1px solid rgba(148,163,184,0.2); padding-top:8px; margin-top:4px; margin-bottom:10px;">'
         + '<div style="color:#38bdf8; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">'
         + '<i class="fa-solid fa-clock-rotate-left" style="margin-right:4px;"></i>Changes</div>'
         + rows + more + '</div>';
+    }
+
+    /** Colour a fire's new value by the scale that value belongs to. */
+    function fireTrailColor(type) {
+      return (label, value) => {
+        if (label === 'Status') {
+          const e = FV.statusEntry(value, type);
+          return e.id === 'unknown' ? '#e2e8f0' : e.ring;
+        }
+        if (label === 'Warning level') {
+          return FV.isLevel(value) ? FV.levelColor(value) : '#94a3b8';
+        }
+        return '#e2e8f0';
+      };
     }
 
     function buildRfsTooltip(item) {
@@ -7620,8 +7677,10 @@ function initPagerHoursFromStorage() {
       }
 
       // What has moved since we first saw it. Empty until the first
-      // hover has fetched it; see loadFireChanges().
-      html += renderFireChanges(item._changes);
+      // hover has fetched it; see loadChangeTrail().
+      html += renderFireChanges(getChangeTrail(item.source, item.sourceId), {
+        colorFor: fireTrailColor(data['TYPE']),
+      });
 
       // Timing section - compact footer
       // Note: RFS only provides "Updated" time, not a separate "Reported" time
@@ -10833,13 +10892,22 @@ function initPagerHoursFromStorage() {
             iconSize: [24, 24],
             iconAnchor: [12, 12]
           });
-          L.marker([lat, lon], { icon })
+          const ambo = L.marker([lat, lon], { icon })
             .addTo(actAmbulanceLayer)
             .bindTooltip(buildActAmbulanceTooltip(props), {
               direction: 'top',
               offset: [0, -10],
               opacity: 0.95
             });
+          // A response moves Resource Allocation Pending -> Units On
+          // Route -> On Scene, which is the whole point of watching one.
+          // Same on-hover fetch the fire pins use.
+          ambo.on('tooltipopen', () => {
+            if (!props.id || getChangeTrail('act_ambulance', props.id) !== undefined) return;
+            loadChangeTrail('act_ambulance', props.id).then((changes) => {
+              if (changes && changes.length) ambo.setTooltipContent(buildActAmbulanceTooltip(props));
+            });
+          });
         });
       } catch (e) {
         console.error('ACT Ambulance error', e);
@@ -10867,6 +10935,10 @@ function initPagerHoursFromStorage() {
         h += _ttSection('Suburb', '#f9a8d4', '236,72,153',
           `<div style="color:#e2e8f0; font-size:12px;">${escapeHtml(props.location_text)}</div>`);
       }
+      // How this response has moved, once a hover has fetched it.
+      h += renderFireChanges(getChangeTrail('act_ambulance', props.id), {
+        colorFor: (label, value) => (label === 'Status' ? actAmbulanceStatusColour(value) : '#e2e8f0'),
+      });
       if (props.time_of_call || props.updated) {
         let body = '';
         if (props.time_of_call) body += `<div style="color:#94a3b8; font-size:11px;">Called: ${escapeHtml(props.time_of_call)}</div>`;
@@ -18174,6 +18246,6 @@ function initPagerHoursFromStorage() {
   <script src="ui-dialogs.js"></script>
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
-  <script src="map-editor-module.js?v=36"></script>
+  <script src="map-editor-module.js?v=37"></script>
 </body>
 </html>
