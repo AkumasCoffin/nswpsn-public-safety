@@ -939,7 +939,7 @@
         CFA: 'Country Fire Authority (Vic)',
         DEECA: 'Dept of Energy, Environment & Climate Action (Vic)',
         EMV: 'Emergency Management Victoria',
-        ESTA: 'Triple Zero Victoria',
+        ESTA: 'Triple Zero Victoria (000 dispatch)',
         SES: 'State Emergency Service',
         DFES: 'Dept of Fire & Emergency Services (WA)',
       };

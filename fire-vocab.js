@@ -253,7 +253,12 @@
     CFA: { label: 'CFA (Vic)', color: '#6366f1' },
     DEECA: { label: 'DEECA (Vic)', color: '#84cc16' },
     EMV: { label: 'EMV (Vic)', color: '#818cf8' },
-    ESTA: { label: 'Triple Zero (Vic)', color: '#a78bfa' },
+    // Not a fire service. Victoria's 000 call-taking and dispatch
+    // agency, which the feed names as the source on jobs no
+    // responding brigade is attributed to — so the label has to say
+    // what it is, or it reads as a phone number sitting between CFA
+    // and the SES.
+    ESTA: { label: 'Triple Zero Vic (dispatch)', color: '#a78bfa' },
     SES: { label: 'SES', color: '#f59e0b' },
   };
   const agencyLabel = (key) => (AGENCIES[key] && AGENCIES[key].label) || String(key || '');
