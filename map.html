@@ -33,7 +33,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="livetraffic-vocab.js?v=1"></script>
-  <script src="fire-vocab.js?v=1"></script>
+  <script src="fire-vocab.js?v=2"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js" integrity="sha384-948ahk4ZmxYVYOc+rxN1H2gM1EJ2Duhp7uHtZ4WSLkV4Vtx5MUqnV+l7u9B+jFv+" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
 
@@ -3605,6 +3605,8 @@
       vic_emergency_events: { data: null, timestamp: 0 },
       wa_emergency_incidents: { data: null, timestamp: 0 },
       wa_emergency_warnings: { data: null, timestamp: 0 },
+      sa_cfs_incidents: { data: null, timestamp: 0 },
+      sa_mfs_incidents: { data: null, timestamp: 0 },
       // Waze data
       waze_hazards: { data: null, timestamp: 0 },
       waze_police: { data: null, timestamp: 0 },
@@ -5826,6 +5828,83 @@ function initPagerHoursFromStorage() {
           pushWa(f, i);
         });
       } catch (e) { console.error("WA Emergency API Error", e); }
+
+      // South Australia: two agencies rather than one agency's two
+      // feeds. The Country Fire Service covers the state and the
+      // Metropolitan Fire Service covers Adelaide, and they are separate
+      // services the way the RFS and Fire & Rescue NSW are - so each
+      // gets its own heading in the filter panel.
+      //
+      // They do share one dispatch sequence, which is why the backend
+      // namespaces the guid per agency. Records are routed by event, so
+      // vehicle accidents and assist-agency jobs go to Hazards and only
+      // fires arrive here.
+      try {
+        const [saCfsRes, saMfsRes] = await Promise.all([
+          fetchFireFeed('sa_cfs_incidents', '/api/sa-fire/cfs'),
+          fetchFireFeed('sa_mfs_incidents', '/api/sa-fire/mfs'),
+        ]);
+
+        const pushSa = (feature, idx) => {
+          const props = feature.properties || {};
+          if (props.layer !== 'fire') return;
+          const geom = feature.geometry || {};
+          if (geom.type !== 'Point' || !Array.isArray(geom.coordinates)) return;
+          const [lng, lat] = geom.coordinates;
+          if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+
+          const isCfs = props.source === 'sa_cfs';
+          const agencyKey = isCfs ? 'sacfs' : 'samfs';
+          const details = {
+            'ALERT LEVEL': props.alertLevel || '',
+            'LOCATION': props.location || '',
+            'COUNCIL AREA': props.district || '',
+            'STATUS': props.status || '',
+            'TYPE': props.fireType || '',
+            'SIZE': '',
+            'RESPONSIBLE AGENCY': props.agency || 'SACFS',
+            'UPDATED': props.updated || '',
+            'UPDATED_ISO': props.updatedISO || '',
+            'CURRENT SITUATION': props.text || '',
+            'RISKS': '',
+            'WHAT TO DO': '',
+            'ADVICE TO THE PUBLIC': '',
+            title: props.title
+          };
+          // The CFS counts appliances and aircraft; the MFS feed carries
+          // neither field. Zero means the feed has not said, the same as
+          // it does for Victoria and Queensland.
+          const appliances = Number(props.resources) || 0;
+          const aircraft = Number(props.aircraft) || 0;
+          if (appliances > 0 || aircraft > 0) {
+            details['RESOURCES'] = [
+              appliances > 0 ? `${appliances} ${appliances === 1 ? 'appliance' : 'appliances'}` : '',
+              aircraft > 0 ? `${aircraft} aircraft` : '',
+            ].filter(Boolean).join(', ');
+          }
+
+          rfsItems.push({
+            id: generateRfsId(props.guid || `sa-${idx}`),
+            sourceId: props.guid || '',
+            source: props.source || 'sa_cfs',
+            title: props.title || 'SA incident',
+            rawDetails: details,
+            link: props.url || 'https://www.cfs.sa.gov.au/warnings-restrictions/warnings/incidents-warnings/',
+            typeDisplay: details.TYPE || 'Fire',
+            typesList: [details.TYPE || 'Fire'],
+            agenciesList: [props.agency || 'SACFS'],
+            agencyKey: agencyKey,
+            lat: lat,
+            lng: lng,
+            alertLevel: String(props.alertLevel || '').toLowerCase(),
+            polygonCoords: null,
+            updatedISO: props.updatedISO || null
+          });
+        };
+
+        (saCfsRes.features || []).forEach(pushSa);
+        (saMfsRes.features || []).forEach(pushSa);
+      } catch (e) { console.error("SA Fire API Error", e); }
 
       // A newer loadAllData started while we fetched user/RFS data — bail before
       // resetting the shared array so we don't stomp the newer run's build.
@@ -9731,7 +9810,7 @@ function initPagerHoursFromStorage() {
           const j = (path) => apiFetch(`${PROXY_BASE}${path}`)
             .then((r) => r.json())
             .catch(() => ({ features: [] }));
-          const [inc, alp, fir, maj, lgaHz, wrkHz, ntHz, qldHz, vicHz, waHz, waHzW] = await Promise.all([
+          const [inc, alp, fir, maj, lgaHz, wrkHz, ntHz, qldHz, vicHz, waHz, waHzW, saHzC, saHzM] = await Promise.all([
             j('/api/traffic/incidents'),
             j('/api/traffic/alpine'),
             j('/api/traffic/fire'),
@@ -9743,6 +9822,8 @@ function initPagerHoursFromStorage() {
             j('/api/vic-emergency/events'),
             j('/api/wa-emergency/incidents'),
             j('/api/wa-emergency/warnings'),
+            j('/api/sa-fire/cfs'),
+            j('/api/sa-fire/mfs'),
           ]);
           // NT Fire & Rescue turns out to road crashes as well as fires.
           // The crashes belong with the other road incidents, not on the
@@ -9820,6 +9901,30 @@ function initPagerHoursFromStorage() {
                 lastUpdated: f.properties.updatedISO || '',
               },
             }));
+          // South Australia's non-fire share: vehicle accidents from both
+          // services, plus the assist-agency and "Other" jobs the fire
+          // routing does not recognise as fires.
+          const saHazards = [...(saHzC.features || []), ...(saHzM.features || [])]
+            .filter((f) => (f.properties || {}).layer === 'hazard')
+            .map((f) => ({
+              type: 'Feature',
+              geometry: f.geometry,
+              properties: {
+                id: f.properties.guid,
+                displayName: f.properties.title,
+                title: f.properties.title,
+                mainCategory: /accident|crash|collision|rescue/i.test(f.properties.fireType || '')
+                  ? 'Crash' : 'Hazard',
+                subcategory: f.properties.fireType || 'Incident',
+                roads: f.properties.location || '',
+                region: 'South Australia',
+                orgName: f.properties.agency || 'SACFS',
+                responderAgency: f.properties.agency || 'SACFS',
+                alertLevel: f.properties.alertLevel || '',
+                created: f.properties.updatedISO || '',
+                lastUpdated: f.properties.updatedISO || '',
+              },
+            }));
           const ntCrashes = (ntHz.features || [])
             .filter((f) => (f.properties || {}).layer === 'hazard')
             .map((f) => ({
@@ -9855,6 +9960,7 @@ function initPagerHoursFromStorage() {
               ...qldCrashes,
               ...vicHazards,
               ...waHazards,
+              ...saHazards,
             ],
           };
           layerCache.hazards_merged = { data: trafficData, timestamp: now };
@@ -12001,7 +12107,7 @@ function initPagerHoursFromStorage() {
     // hardcoded list would rot.
     // The Fires layer carries more than one agency now, so anything that
     // used to ask "is this RFS?" asks "is this a fire incident?" instead.
-    const FIRE_SOURCES = new Set(['rfs', 'nt_fire', 'qld_fire', 'qld_warning', 'vic_emergency', 'wa_incident', 'wa_warning']);
+    const FIRE_SOURCES = new Set(['rfs', 'nt_fire', 'qld_fire', 'qld_warning', 'vic_emergency', 'wa_incident', 'wa_warning', 'sa_cfs', 'sa_mfs']);
     function isFireIncident(item) { return !!item && FIRE_SOURCES.has(item.source); }
 
     const RFS_ALERT_BUCKETS = [

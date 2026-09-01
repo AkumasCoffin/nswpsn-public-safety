@@ -97,6 +97,11 @@ const ALERT_TYPE_PROVIDER: Record<string, [string, string]> = {
   vic_emergency: ['vic', 'Events'],
   wa_incident: ['dfes', 'Incidents'],
   wa_warning: ['dfes', 'Warnings'],
+  // Two agencies, not two feeds of one: the Country Fire Service and
+  // the Metropolitan Fire Service are separate services the way the
+  // RFS and Fire & Rescue NSW are.
+  sa_cfs: ['sacfs', 'Incidents'],
+  sa_mfs: ['samfs', 'Incidents'],
   bom_land: ['bom', 'Land Warnings'],
   bom_marine: ['bom', 'Marine Warnings'],
   traffic_incident: ['livetraffic', 'Incidents'],
@@ -132,6 +137,8 @@ const PROVIDER_DISPLAY: Record<string, { name: string; icon: string; color: stri
   // and the feed does not say which, so all of them are attributed
   // to the department that publishes them.
   dfes: { name: 'DFES', icon: 'fire', color: '#e11d48' },
+  sacfs: { name: 'SA CFS', icon: 'fire', color: '#ea580c' },
+  samfs: { name: 'SA MFS', icon: 'fire', color: '#0ea5e9' },
   bom: { name: 'Bureau of Meteorology', icon: 'cloud', color: '#3b82f6' },
   livetraffic: { name: 'LiveTraffic NSW', icon: 'road', color: '#f97316' },
   endeavour: { name: 'Endeavour Energy', icon: 'bolt', color: '#fbbf24' },
@@ -150,6 +157,8 @@ const PROVIDER_ORDER = [
   'qfd',
   'vic',
   'dfes',
+  'sacfs',
+  'samfs',
   'bom',
   'livetraffic',
   'endeavour',
@@ -167,6 +176,8 @@ const PROVIDER_TYPE_ORDER: Record<string, string[]> = {
   qfd: ['qld_fire', 'qld_warning'],
   vic: ['vic_emergency'],
   dfes: ['wa_incident', 'wa_warning'],
+  sacfs: ['sa_cfs'],
+  samfs: ['sa_mfs'],
   bom: ['bom_land', 'bom_marine'],
   livetraffic: [
     'traffic_incident',

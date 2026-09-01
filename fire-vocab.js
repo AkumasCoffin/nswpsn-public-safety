@@ -68,13 +68,13 @@
       match: /^(fire|fire other|other fire|non structure fire|rubbish fire|haystack fire|smoke complaint\/illegal burn|fire had occurred)$/ },
     // Not fires. They ride in on a fire agency's feed.
     { id: 'rescue', label: 'Rescue & Crash', icon: 'fa-helmet-safety', fire: false,
-      match: /^(mva\/transport|road crash|rescue road crash|rescue technical|search\/rescue|rescue flood|medical|rescue)$/ },
+      match: /^(mva\/transport|road crash|vehicle accident|rescue road crash|rescue technical|search\/rescue|rescue flood|medical|rescue)$/ },
     { id: 'hazmat', label: 'Hazmat', icon: 'fa-flask', fire: false,
       match: /^(hazmat|hazmat all|hazmat incident|hazardous materials|chemical)$/ },
     { id: 'storm', label: 'Storm & Flood', icon: 'fa-water', fire: false,
       match: /^(flood\/storm\/tree down|riverine flood|flood|storm|tree down)$/ },
     { id: 'other', label: 'Other Incident', icon: 'fa-circle-info', fire: false,
-      match: /^(other|incident|planned event|assist other agency|weather|earthquake|power \/ gas.*)$/ },
+      match: /^(other|incident|planned event|assist other agency|assist agency|weather|earthquake|power \/ gas.*)$/ },
   ];
 
   const TYPE_BY_ID = {};
@@ -128,8 +128,11 @@
     // consults this colour at all, so the two never appear on one pin.
     { id: 'containing', label: 'Being contained', ring: '#fde047', a: '#facc15', b: '#a16207',
       match: /being controlled|contained|in progress|under investigation|on scene/ },
+    // `^controlled$` is South Australia's word, and it matched nothing:
+    // not `under control` (which wants the "under"), not `contained` in
+    // the row above. It was drawing live SA fires in finished grey.
     { id: 'controlled', label: 'Under control', ring: '#86efac', a: '#4ade80', b: '#15803d',
-      match: /under control|patrolled|monitoring|^safe$|^out$|extinguish/ },
+      match: /under control|^controlled$|patrolled|monitoring|^safe$|^out$|extinguish/ },
     { id: 'closed', label: 'Closed', ring: '#cbd5e1', a: '#94a3b8', b: '#475569',
       match: /closed|complete|finalis|inactive/ },
   ];
@@ -259,6 +262,10 @@
     QFD: { label: 'QLD Fire Dept', color: '#dc2626' },
     dfes: { label: 'DFES (WA)', color: '#e11d48' },
     DFES: { label: 'DFES (WA)', color: '#e11d48' },
+    sacfs: { label: 'SA CFS', color: '#ea580c' },
+    SACFS: { label: 'SA CFS', color: '#ea580c' },
+    samfs: { label: 'SA MFS', color: '#0ea5e9' },
+    SAMFS: { label: 'SA MFS', color: '#0ea5e9' },
     CFA: { label: 'CFA (Vic)', color: '#6366f1' },
     DEECA: { label: 'DEECA (Vic)', color: '#84cc16' },
     EMV: { label: 'EMV (Vic)', color: '#818cf8' },

@@ -19,6 +19,7 @@ import registerNtFire from './ntFire.js';
 import registerQldFire from './qldFire.js';
 import registerVicEmergency from './vicEmergency.js';
 import registerWaEmergency from './waEmergency.js';
+import registerSaFire from './saFire.js';
 
 export function registerAllSources(): void {
   registerRfs();
@@ -37,4 +38,5 @@ export function registerAllSources(): void {
   registerQldFire();
   registerVicEmergency();
   registerWaEmergency();
+  registerSaFire();
 }

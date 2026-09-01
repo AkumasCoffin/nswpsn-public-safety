@@ -81,11 +81,14 @@ describe('sourceFamilies', () => {
       'vic_emergency',
       'wa_incident',
       'wa_warning',
+      'sa_cfs',
+      'sa_mfs',
     ]) {
       expect(sourceFamilies([s])).toEqual(['archive_rfs']);
     }
     expect(sourceFamilies(['nt_fire', 'qld_warning'])).toEqual(['archive_rfs']);
     expect(sourceFamilies(['wa_incident', 'wa_warning'])).toEqual(['archive_rfs']);
+    expect(sourceFamilies(['sa_cfs', 'sa_mfs'])).toEqual(['archive_rfs']);
   });
 
   it('falls back unknown sources to archive_misc', () => {

@@ -37,10 +37,11 @@ describe('filterCache', () => {
 
   it('returns the full provider list when LiveStore is empty', () => {
     const facets = getFilterFacetsLive();
-    // 14 providers: the five fire agencies (rfs, nt_fire, qfd, vic,
-    // dfes) plus bom, livetraffic, endeavour, ausgrid, essential, pager,
-    // user, rdio, actas. Waze was retired along with its ingest.
-    expect(facets.providers).toHaveLength(14);
+    // 16 providers: the seven fire agencies (rfs, nt_fire, qfd, vic,
+    // dfes, sacfs, samfs) plus bom, livetraffic, endeavour, ausgrid,
+    // essential, pager, user, rdio, actas. Waze was retired with its
+    // ingest.
+    expect(facets.providers).toHaveLength(16);
     for (const p of facets.providers) {
       expect(p.count).toBe(0);
     }
@@ -181,6 +182,8 @@ describe('filterCache', () => {
     liveStore.set('vic_emergency', [{ category: 'Advice' }]);
     liveStore.set('wa_incident', [{ status: 'Active' }]);
     liveStore.set('wa_warning', [{ category: 'Advice' }]);
+    liveStore.set('sa_cfs', [{ status: 'GOING' }]);
+    liveStore.set('sa_mfs', [{ status: 'GOING' }]);
     const facets = getFilterFacetsLive();
 
     const named = (key: string) => findProvider(facets, key)?.name;
@@ -189,6 +192,10 @@ describe('filterCache', () => {
     expect(named('qfd')).toBe('QLD Fire Dept');
     expect(named('vic')).toBe('VIC Emergency');
     expect(named('dfes')).toBe('DFES');
+    // South Australia's two are separate agencies, so they get a
+    // provider each rather than two types under one.
+    expect(named('sacfs')).toBe('SA CFS');
+    expect(named('samfs')).toBe('SA MFS');
     // The old catch-all is gone, not merely renamed.
     expect(facets.providers.some((p) => p.name === 'Fires')).toBe(false);
 
