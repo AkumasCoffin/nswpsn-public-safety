@@ -997,32 +997,34 @@
       // fire looks like itself wherever you meet it. This panel used to
       // be a run of bold labels that named neither the warning level nor
       // the type at all, which are the two things worth knowing first.
-      const _lvlRaw = data.ALERT_LEVEL || '';
-      const _lvlColor = (typeof alertBucketFor === 'function' && typeof ALERT_ICON_COLORS === 'object')
-        ? (ALERT_ICON_COLORS[alertBucketFor(_lvlRaw)] || '#94a3b8')
-        : '#94a3b8';
+      // Canonical wording from fire-vocab.js, so this panel, the map
+      // tooltip and the logs page all call one state by one name. The
+      // agency's own wording is kept underneath where it differs.
+      const _v = (window.FireVocab || null) && window.FireVocab.describe({
+        type: data.TYPE, status: data.STATUS, level: data.ALERT_LEVEL,
+      });
+      const _lvlColor = _v && _v.level.real ? _v.level.color : '#94a3b8';
       // The same containment scale the pin is coloured by, so the card
       // and the marker cannot say different things about one fire.
-      const _statusColor = (typeof fireStatusColor === 'function')
-        ? fireStatusColor(data.STATUS || '').ring
-        : '#4ade80';
+      const _statusColor = _v ? _v.status.ring : '#4ade80';
       // word-break:break-word would split inside a word — this panel is
       // barely 90px per card, and "Emergency Warning" came out as
       // "Emergenc y Warning". overflow-wrap breaks between words first
       // and only splits one that cannot fit on a line by itself.
-      const _card = (label, value, color) => `
+      const _card = (label, value, color, published, dim) => `
         <div style="background:${color}1f; border:1px solid ${color}59; padding:0.35rem 0.4rem; border-radius:5px; text-align:center; flex:1; min-width:0;">
           <div style="color:${color}cc; font-size:0.58rem; font-weight:600; text-transform:uppercase; letter-spacing:0.02em; line-height:1.2;">${escapeHtml(label)}</div>
-          <div style="color:${color}; font-size:0.74rem; font-weight:700; line-height:1.25; overflow-wrap:break-word; word-break:normal; hyphens:none;">${escapeHtml(value)}</div>
+          <div style="color:${dim ? '#94a3b8' : color}; font-size:0.74rem; font-weight:700; line-height:1.25; overflow-wrap:break-word; word-break:normal; hyphens:none;">${escapeHtml(value)}</div>
+          ${published ? `<div style="color:#64748b; font-size:0.55rem; margin-top:1px; line-height:1.2; overflow-wrap:break-word;">${escapeHtml(published)}</div>` : ''}
         </div>`;
 
       customRFSBlock.innerHTML = `
         <div style="background:rgba(148,163,184,0.07); border:1px solid rgba(148,163,184,0.25); padding:0.8rem; border-radius:6px; margin-bottom:1rem; font-size:0.85rem;">
           <h5 style="margin-top:0.3rem; margin-bottom:0.6rem; color:#ef4444;">${escapeHtml(_fireAgency)} Incident Details (Read Only)</h5>
           <div style="display:flex; gap:6px; margin-bottom:0.7rem;">
-            ${_card('Warning Level', _lvlRaw || 'Not Applicable', _lvlColor)}
-            ${_card('Status', data.STATUS || 'Unknown', _statusColor)}
-            ${_card('Type', data.TYPE || 'Fire', '#fb923c')}
+            ${_card('Warning Level', _v && _v.level.real ? _v.level.label : 'None published', _lvlColor, _v && _v.level.real ? _v.level.published : null, !(_v && _v.level.real))}
+            ${_card('Status', _v && _v.status.real ? _v.status.label : 'Not published', _statusColor, _v && (_v.status.real ? _v.status.published : _v.status.raw), !(_v && _v.status.real))}
+            ${_card('Type', _v ? _v.type.label : (data.TYPE || 'Fire'), '#fb923c', _v && _v.type.published, false)}
           </div>
           <strong>Title:</strong> ${escapeHtml(data.title || 'N/A')}<br>
           <strong>Location:</strong> ${escapeHtml(data.LOCATION || 'N/A')}<br>

@@ -39,6 +39,7 @@
 
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="livetraffic-vocab.js?v=1"></script>
+  <script src="fire-vocab.js?v=1"></script>
   <script src="auth-common.js"></script>
   <script src="ui-dialogs.js"></script>
 </head>
@@ -1299,6 +1300,43 @@
         const typeLabel = document.getElementById('type-filter-label');
         
         // Status icon mappings
+        // The dropdown keeps each agency's own wording — these are the
+        // stored values a filter query has to send back — but a fire
+        // status takes its COLOUR from fire-vocab.js, so "Going",
+        // "Active" and "Not yet controlled" are the same red in this
+        // list that they are on the map. The per-status icon below is
+        // still worth having and is left alone.
+        // A fire TYPE takes its icon from fire-vocab.js and one shared
+        // amber, because in the unified scheme the icon says what a thing
+        // is and the colour is reserved for how it is going. This list
+        // used to give "Burn Off" one green and "Hazard Reduction"
+        // another, for the same kind of fire.
+        const typeChip = (value, displayName) => {
+          const fv = window.FireVocab;
+          const e = fv && fv.typeEntry(value);
+          if (e) return { icon: e.icon.replace(/^fa-/, ''), color: '#fb923c' };
+          return categoryIcons[value] || categoryIcons[displayName] || { icon: 'circle-dot', color: '#94a3b8' };
+        };
+        // The Australian Warning System palette, so an Advice is the same
+        // yellow here, on the pin and in the tooltip. This list had it
+        // GREEN, which is the third place that mistake was living.
+        const levelChip = (value) => {
+          const fv = window.FireVocab;
+          if (fv && fv.isLevel(value)) {
+            const e = fv.levelEntry(value);
+            return { icon: alertLevelIcons[value] ? alertLevelIcons[value].icon : 'triangle-exclamation', color: e.color };
+          }
+          return alertLevelIcons[value] || { icon: 'circle-dot', color: '#94a3b8' };
+        };
+        const statusChip = (value, displayName) => {
+          const hit = statusIcons[value] || statusIcons[displayName];
+          const fv = window.FireVocab;
+          if (fv && fv.isStatus(value)) {
+            const e = fv.statusEntry(value);
+            if (e.id !== 'unknown') return { icon: (hit && hit.icon) || 'circle-dot', color: e.ring };
+          }
+          return hit || { icon: 'circle-dot', color: '#94a3b8' };
+        };
         const statusIcons = {
           // RFS Statuses
           'Responding': { icon: 'fire-flame-simple', color: '#ef4444' },
@@ -1383,7 +1421,7 @@
             
             data.subcategories.forEach(s => {
               const displayName = formatSubcategory(s.value);
-              const info = statusIcons[s.value] || statusIcons[displayName] || { icon: 'circle-dot', color: '#94a3b8' };
+              const info = statusChip(s.value, displayName);
               const opt = document.createElement('div');
               opt.className = 'custom-dropdown-option';
               opt.dataset.value = s.value;
@@ -1435,7 +1473,7 @@
             statusOptionsContainer.appendChild(allStatusOpt);
             
             data.statuses.forEach(s => {
-              const info = statusIcons[s.value] || { icon: 'circle-dot', color: '#94a3b8' };
+              const info = statusChip(s.value, s.value);
               const opt = document.createElement('div');
               opt.className = 'custom-dropdown-option';
               opt.dataset.value = s.value;
@@ -1713,7 +1751,7 @@
             // Add items in group
             items.forEach(s => {
               const displayName = formatSubcategory(s.value);
-              const info = categoryIcons[s.value] || { icon: 'circle-dot', color: '#94a3b8' };
+              const info = typeChip(s.value, s.value);
               const opt = document.createElement('div');
               opt.className = 'custom-dropdown-option';
               opt.dataset.value = s.value;
@@ -1728,7 +1766,7 @@
           // Default: populate without grouping
           categoryOptions.forEach(s => {
             const displayName = formatSubcategory(s.value);
-            const info = isPager ? { icon: 'tags', color: '#64748b' } : (categoryIcons[s.value] || categoryIcons[displayName] || { icon: 'circle-dot', color: '#94a3b8' });
+            const info = isPager ? { icon: 'tags', color: '#64748b' } : typeChip(s.value, displayName);
             const opt = document.createElement('div');
             opt.className = 'custom-dropdown-option';
             opt.dataset.value = s.value;
@@ -1780,7 +1818,7 @@
           alertLevelOptionsContainer.appendChild(allLevelOpt);
           
           data.severities.forEach(s => {
-            const info = alertLevelIcons[s.value] || { icon: 'circle-dot', color: '#94a3b8' };
+            const info = levelChip(s.value);
             const opt = document.createElement('div');
             opt.className = 'custom-dropdown-option';
             opt.dataset.value = s.value;
@@ -2133,11 +2171,36 @@
           const council = data.councilArea || '';
           const agency = publishingAgency(item, data);
           if (agency) extraInfo += `<span class="lg-badge" style="--badge:${agency.color}">${escapeHtml(agency.label)}</span>`;
-          if (status) extraInfo += `<span class="lg-badge" style="--badge:${getStatusColor(status)}">${escapeHtml(status)}</span>`;
-          if (alertLevel) extraInfo += `<span class="lg-badge" style="--badge:${getAlertLevelColor(alertLevel)}">${escapeHtml(alertLevel)}</span>`;
-          // Only show fire type if it's different from status AND alert level (avoid duplicates like "Advice" showing twice)
-          if (fireType && fireType !== status && fireType.toLowerCase() !== alertLevel.toLowerCase() && fireType !== 'Not Applicable') {
-            extraInfo += `<span class="lg-badge-o" style="--badge:#fb923c">${escapeHtml(fireType)}</span>`;
+          // Canonical wording, so a Queensland fire and a NSW one in the
+          // same state read as the same state. The agency's own words
+          // are kept on the badge's title attribute rather than thrown
+          // away - and the map's detail panel shows them outright.
+          const fv = window.FireVocab
+            ? FireVocab.describe({ type: fireType, status, level: alertLevel })
+            : null;
+          const said = (v) => (v && v.published ? ` title="Published as &quot;${escapeHtml(v.published)}&quot;"` : '');
+          if (fv && fv.status.real) {
+            extraInfo += `<span class="lg-badge" style="--badge:${fv.status.ring}"${said(fv.status)}>${escapeHtml(fv.status.label)}</span>`;
+          } else if (!fv && status) {
+            extraInfo += `<span class="lg-badge" style="--badge:${getStatusColor(status)}">${escapeHtml(status)}</span>`;
+          }
+          // A level badge only when a level was actually published. The
+          // RFS writes "Not Applicable" on most of its records and the
+          // incident type on many of the rest, and neither is a warning.
+          if (fv && fv.level.real) {
+            extraInfo += `<span class="lg-badge" style="--badge:${fv.level.color}"${said(fv.level)}>${escapeHtml(fv.level.label)}</span>`;
+          }
+          // Only show the type when it isn't just repeating the status or
+          // the level back at you.
+          const typeLabel = fv ? fv.type.label : fireType;
+          if (typeLabel
+              && (!fv || !fv.status.real || typeLabel !== fv.status.label)
+              && (!fv || !fv.level.real || typeLabel.toLowerCase() !== fv.level.label.toLowerCase())
+              && typeLabel !== 'Not Applicable') {
+            const ic = window.FireVocab ? FireVocab.typeIcon(fireType) : '';
+            extraInfo += `<span class="lg-badge-o" style="--badge:#fb923c"${said(fv && fv.type)}>`
+              + (ic ? `<i class="fa-solid ${ic}" style="margin-right:4px;"></i>` : '')
+              + `${escapeHtml(typeLabel)}</span>`;
           }
           // Extra details
           let details = [];
@@ -3408,24 +3471,17 @@
         .replace(/\b\w/g, c => c.toUpperCase());
     }
     
+    // Both scales come from fire-vocab.js now. The local copies had
+    // drifted a long way from the map's: an Advice was drawn GREEN here
+    // and yellow there, "patrolled" was blue here and green there, and
+    // "responding" was blue here and red there. One incident, two
+    // pages, two different readings of how bad it was.
     function getAlertLevelColor(level) {
-      if (!level) return '#64748b';
-      const l = level.toLowerCase();
-      if (l.includes('emergency')) return '#ef4444';
-      if (l.includes('watch')) return '#f97316';
-      if (l.includes('advice')) return '#22c55e';
-      if (l.includes('not applicable') || l.includes('not yet')) return '#64748b';
-      return '#3b82f6';
+      return window.FireVocab ? FireVocab.levelColor(level) : '#64748b';
     }
     
     function getStatusColor(status) {
-      if (!status) return '#64748b';
-      const s = status.toLowerCase();
-      if (s.includes('out of control') || s.includes('going') || s.includes('not yet controlled')) return '#ef4444';
-      if (s.includes('being controlled') || s.includes('active')) return '#f97316';
-      if (s.includes('under control') || s.includes('contained')) return '#22c55e';
-      if (s.includes('patrol') || s.includes('responding')) return '#3b82f6';
-      return '#94a3b8';
+      return window.FireVocab ? FireVocab.statusColor(status).ring : '#94a3b8';
     }
     
     // ACT ESA status vocabulary: pending -> en route -> on scene.

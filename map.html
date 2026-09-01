@@ -33,6 +33,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="livetraffic-vocab.js?v=1"></script>
+  <script src="fire-vocab.js?v=1"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js" integrity="sha384-948ahk4ZmxYVYOc+rxN1H2gM1EJ2Duhp7uHtZ4WSLkV4Vtx5MUqnV+l7u9B+jFv+" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
 
@@ -3703,113 +3704,25 @@
     // set — they have no subtypeLabel and pass through unconditionally.
     const _hazardExcludedSubtypes = new Set();
 
-    // ---------- Alert levels and agencies, shared across layers ----------
-    // Every Australian agency publishes the same three warning levels, in
-    // slightly different words - QFD says "Leave Immediately" where RFS
-    // says "Emergency Warning", and a CFA warning's call to action reads
-    // "Stay Informed" for an Advice. Folding the wordings here means one
-    // bucket drives the pill row, the pin and the colour, and a new
-    // agency's phrasing is one line to add rather than four to chase.
-    function alertBucketFor(level) {
-      const l = String(level || '').toLowerCase();
-      if (!l) return 'other';
-      if (l.includes('emergency') || l.includes('leave immediately') || l.includes('evacuate')) return 'emergency';
-      if (l.includes('watch') || l.includes('prepare')) return 'watchact';
-      if (l.includes('advice') || l.includes('stay informed')) return 'advice';
-      return 'other';
-    }
-    // The standard Australian Warning System triangles. Using the one set
-    // for every agency is the point: an Advice from CFA has to read as the
-    // same thing as an Advice from the RFS. Records with no level keep the
-    // plain circle, because inventing a triangle for them would claim a
-    // severity the agency never published.
-    const ALERT_ICONS = {
-      emergency: 'assets/rfs-emergency.svg',
-      watchact: 'assets/rfs-watch-and-act.svg',
-      advice: 'assets/rfs-advice.svg'
-    };
-    function alertIconFor(level) { return ALERT_ICONS[alertBucketFor(level)] || null; }
-
-    // A pin says two things, and each gets its own channel: the SHAPE
-    // says what kind of fire it is, the COLOUR says how far from
-    // controlled it is. Mixing them — colouring by type — meant the map
-    // had no way to show the one thing that changes minute to minute.
+    // ---------- Alert levels, types, statuses and agencies ----------
+    // All four vocabularies live in fire-vocab.js, which logs.html reads
+    // too. Six agencies describe the same handful of real things in
+    // their own words, and the page that draws a pin and the page that
+    // lists it have to agree about which thing a record is - they used
+    // to keep separate copies and drift apart.
     //
-    // Icons are keyed on the same canonical types the filter pills use,
-    // so a pill and a pin can never disagree.
-    const FIRE_TYPE_ICONS = {
-      'Bush Fire': 'fa-tree',
-      'Grass Fire': 'fa-seedling',
-      'Structure Fire': 'fa-house-fire',
-      'Vehicle Fire': 'fa-car-burst',
-      'Planned Burn': 'fa-fire-flame-simple',
-      'Fire Alarm': 'fa-bell',
-      'Other Fire': 'fa-fire'
-    };
-    function fireTypeIcon(item) {
-      const raw = (item && item.rawDetails && item.rawDetails['TYPE']) || '';
-      return FIRE_TYPE_ICONS[canonFireType(raw)] || 'fa-fire';
-    }
-
-    /**
-     * How far from controlled, across every agency's wording.
-     *
-     * Seventeen distinct status strings in the live feeds for four real
-     * states. Order matters here: "Not Yet Under Control" contains
-     * "under control" and "Out of control" contains "out", so the worst
-     * cases have to be tested before the calmer ones they read like.
-     */
-    function fireStatusBucket(status) {
-      const t = String(status || '').toLowerCase().trim();
-      if (!t) return 'unknown';
-      if (/out of control|not yet (under )?control|going|^active$|responding|spreading|^warning$|on scene/.test(t)) return 'uncontained';
-      if (/being controlled|contained|in progress|under investigation/.test(t)) return 'containing';
-      // WA's "Monitoring" is what the RFS calls "Patrolled": crews are
-      // watching a fire they already hold, not fighting one.
-      if (/under control|patrolled|monitoring|^safe$|^out$|extinguish/.test(t)) return 'controlled';
-      if (/closed|complete|finalis|inactive|stay informed|avoid smoke|^minor$/.test(t)) return 'closed';
-      return 'unknown';
-    }
-    const FIRE_STATUS_COLORS = {
-      uncontained: { ring: '#f87171', a: '#ff6b6b', b: '#b91c1c' },
-      containing:  { ring: '#fdba74', a: '#fb923c', b: '#c2410c' },
-      controlled:  { ring: '#86efac', a: '#4ade80', b: '#15803d' },
-      closed:      { ring: '#cbd5e1', a: '#94a3b8', b: '#475569' },
-      unknown:     { ring: '#cbd5e1', a: '#94a3b8', b: '#475569' }
-    };
-    function fireStatusColor(status) {
-      return FIRE_STATUS_COLORS[fireStatusBucket(status)] || FIRE_STATUS_COLORS.unknown;
-    }
-    // The triangles' own fills. A pin's halo has to read as the same
-    // alert as the icon inside it - the layer's blue-for-advice would put
-    // a blue glow around a yellow triangle. Only the halo uses these; the
-    // pill row and the tooltip badge keep the layer's palette.
-    const ALERT_ICON_COLORS = {
-      emergency: '#D32027',
-      watchact: '#F17131',
-      advice: '#FFD44F'
-    };
-
-    // One label per agency short code. The Fires, Hazards and Floods
-    // agency rows all read this, so a pill means the same agency wherever
-    // its records happened to land - which matters because routing is by
-    // event: a CFA hazmat call is on Hazards and an SES flood warning is
-    // on Floods.
-    const AGENCY_LABELS = {
-      rfs: 'NSW RFS',
-      nt_fire: 'NT Fire & Rescue',
-      NTFRS: 'NT Fire & Rescue',
-      qld: 'QLD Fire Dept',
-      QFD: 'QLD Fire Dept',
-      CFA: 'CFA (Vic)',
-      DEECA: 'DEECA (Vic)',
-      EMV: 'EMV (Vic)',
-      ESTA: 'Triple Zero (Vic)',
-      SES: 'SES',
-      dfes: 'DFES (WA)',
-      DFES: 'DFES (WA)'
-    };
-    function agencyLabel(key) { return AGENCY_LABELS[key] || String(key); }
+    // These are thin aliases rather than direct FireVocab calls so the
+    // couple of hundred existing call sites keep reading the way they
+    // did. The definitions are all one file away.
+    const FV = window.FireVocab;
+    const alertBucketFor = (level) => FV.levelBucket(level);
+    const alertIconFor = (level) => FV.levelIcon(level);
+    const ALERT_ICON_COLORS = { emergency: '#D32027', watchact: '#F17131', advice: '#FFD44F' };
+    const fireTypeIcon = (item) =>
+      FV.typeIcon((item && item.rawDetails && item.rawDetails['TYPE']) || '');
+    const fireStatusBucket = (status) => FV.statusBucket(status);
+    const fireStatusColor = (status) => FV.statusColor(status);
+    const agencyLabel = (key) => FV.agencyLabel(key);
 
 
     // Warning areas arrive as GeoJSON rings ([lon, lat]) from Victoria
@@ -7389,24 +7302,37 @@ function initPagerHoursFromStorage() {
       // Warning level, status and type. The level leads: it is the one
       // that says how bad this is, and it used to be a 9px chip beside
       // the title while status and type each had a tile to themselves.
-      const status = data['STATUS'] || 'Unknown';
-      const type = data['TYPE'] || 'Fire';
+      //
+      // All three read canonical, so a Queensland fire and a NSW one in
+      // the same state say the same words. Where the agency's own
+      // wording differs it is kept underneath in grey - the RFS calls a
+      // contained fire "Being controlled" and QFD calls it "Going", and
+      // the panel is the right place to still be able to see that.
+      const v = FV.describe({
+        type: data['TYPE'],
+        status: data['STATUS'],
+        level: alertLevel,
+      });
+      // A card for a value the agency never published says so, rather
+      // than echoing "Not Applicable" or a type name as if it were a
+      // warning level.
+      const _tip = (label, value, color, published, dim) =>
+        '<div style="background:' + color + '1f; padding:6px 10px; border-radius:5px; text-align:center; flex:1; min-width:0;">'
+        + '<div style="color:' + color + 'cc; font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px;">' + label + '</div>'
+        + '<div style="color:' + (dim ? '#94a3b8' : color) + '; font-size:12px; font-weight:600;">' + escapeHtml(value) + '</div>'
+        + (published ? '<div style="color:#64748b; font-size:9px; margin-top:1px;">' + escapeHtml(published) + '</div>' : '')
+        + '</div>';
+
       html += '<div style="display:flex; gap:8px; margin-bottom:10px;">';
-      html += '<div style="background:' + alertColor + '1f; padding:6px 10px; border-radius:5px; text-align:center; flex:1;">';
-      html += '<div style="color:' + alertColor + 'cc; font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px;">Warning Level</div>';
-      html += '<div style="color:' + alertColor + '; font-size:12px; font-weight:700;">' + escapeHtml(alertLevel) + '</div>';
-      html += '</div>';
+      html += _tip('Warning Level', v.level.real ? v.level.label : 'None published',
+                   v.level.real ? v.level.color : '#94a3b8',
+                   v.level.real ? v.level.published : null, !v.level.real);
       // Same containment scale as the pin — a red pin with a green
       // status card would be the map disagreeing with itself.
-      const statusHue = fireStatusColor(status);
-      html += '<div style="background:' + statusHue.ring + '1f; padding:6px 10px; border-radius:5px; text-align:center; flex:1;">';
-      html += '<div style="color:' + statusHue.ring + 'cc; font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px;">Status</div>';
-      html += '<div style="color:' + statusHue.ring + '; font-size:12px; font-weight:600;">' + escapeHtml(status) + '</div>';
-      html += '</div>';
-      html += '<div style="background:rgba(251,146,60,0.12); padding:6px 10px; border-radius:5px; text-align:center; flex:1;">';
-      html += '<div style="color:#fdba74; font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px;">Type</div>';
-      html += '<div style="color:#fb923c; font-size:12px; font-weight:600;">' + escapeHtml(type) + '</div>';
-      html += '</div>';
+      html += _tip('Status', v.status.real ? v.status.label : 'Not published',
+                   v.status.ring, v.status.real ? v.status.published : v.status.raw,
+                   !v.status.real);
+      html += _tip('Type', v.type.label, '#fb923c', v.type.published, false);
       html += '</div>';
       
       // Location - cleaner styling
@@ -11736,40 +11662,11 @@ function initPagerHoursFromStorage() {
       return alertBucketFor((item.rawDetails && item.rawDetails['ALERT LEVEL']) || '');
     }
     // Five agencies describing the same fire five ways. Live right now:
-    // "Bush Fire" (RFS), "Bushfire" (NT and CFA) and "FIRE VEGETATION"
-    // (QFD) are one thing; "Burn off", "Hazard Reduction", "Planned Burn"
-    // and "FIRE PERMITTED BURN" are another. Keyed on the raw string
-    // those were seven pills for two kinds of fire, and the counts on
-    // each were a share of the real total rather than the total.
-    //
-    // Only wordings are folded, never distinctions: a grass fire stays
-    // separate from a bush fire because the agencies mean different
-    // things by them. The deliberate burns are the one judgement call —
-    // whether a burn is a landholder's or the agency's own matters less,
-    // on a live incident map, than whether it was lit on purpose.
-    //
-    // Anything unrecognised keeps its own wording, so a new agency shows
-    // up as itself rather than being silently filed under Other.
-    const FIRE_TYPE_CANON = [
-      [/^(bush\s*fire|fire vegetation|vegetation fire)$/, 'Bush Fire'],
-      [/^(grass(\s*(and|&|\/)\s*scrub)?\s*fire|scrub fire)$/, 'Grass Fire'],
-      [/^(structure fire|building fire|fire structure|house fire)$/, 'Structure Fire'],
-      [/^(vehicle fire|fire vehicle|car fire)$/, 'Vehicle Fire'],
-      [/^(planned burn|hazard reduction|burn ?off|fire permitted burn|permitted burn)$/, 'Planned Burn'],
-      [/^(automatic fire alarm|fire alarm( \(afa\))?|afa|active alarm)$/, 'Fire Alarm'],
-      [/^(fire|fire other|other fire|other|non structure fire)$/, 'Other Fire'],
-    ];
-    function canonFireType(raw) {
-      const t = String(raw || '').trim().replace(/\s+/g, ' ');
-      if (!t) return 'Other Fire';
-      const low = t.toLowerCase();
-      for (const [re, label] of FIRE_TYPE_CANON) if (re.test(low)) return label;
-      // Unrecognised: keep the words, lose the shouting. QFD sends its
-      // types in caps and they would otherwise sit oddly beside the rest.
-      return t === t.toUpperCase() && /[A-Z]{2,}/.test(t)
-        ? t.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase())
-        : t;
-    }
+    // Type wordings are folded in fire-vocab.js, beside the status and
+    // alert-level ones - twenty pills for eight kinds of fire was the
+    // problem, and it was the same problem on the logs page.
+    const canonFireType = (raw) => FV.canonType(raw);
+
     function rfsTypeLabel(item) {
       return canonFireType((item.rawDetails && item.rawDetails['TYPE']) || '');
     }
@@ -17967,6 +17864,6 @@ function initPagerHoursFromStorage() {
   <script src="ui-dialogs.js"></script>
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
-  <script src="map-editor-module.js?v=31"></script>
+  <script src="map-editor-module.js?v=32"></script>
 </body>
 </html>
