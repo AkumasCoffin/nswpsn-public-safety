@@ -18,6 +18,7 @@ import registerQldCameras from './qldCameras.js';
 import registerNtFire from './ntFire.js';
 import registerQldFire from './qldFire.js';
 import registerVicEmergency from './vicEmergency.js';
+import registerWaEmergency from './waEmergency.js';
 
 export function registerAllSources(): void {
   registerRfs();
@@ -35,4 +36,5 @@ export function registerAllSources(): void {
   registerNtFire();
   registerQldFire();
   registerVicEmergency();
+  registerWaEmergency();
 }

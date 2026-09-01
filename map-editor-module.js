@@ -941,6 +941,7 @@
         EMV: 'Emergency Management Victoria',
         ESTA: 'Triple Zero Victoria',
         SES: 'State Emergency Service',
+        DFES: 'Dept of Fire & Emergency Services (WA)',
       };
       const _fireAgencyRaw = data.agency || 'RFS';
       const _fireAgency = FIRE_AGENCY_NAMES[_fireAgencyRaw] || _fireAgencyRaw;

@@ -74,10 +74,18 @@ describe('sourceFamilies', () => {
     // but only `rfs` was mapped, so on their own they searched
     // archive_misc and returned nothing. The logs page hid it by always
     // asking for them together with `rfs`.
-    for (const s of ['nt_fire', 'qld_fire', 'qld_warning', 'vic_emergency']) {
+    for (const s of [
+      'nt_fire',
+      'qld_fire',
+      'qld_warning',
+      'vic_emergency',
+      'wa_incident',
+      'wa_warning',
+    ]) {
       expect(sourceFamilies([s])).toEqual(['archive_rfs']);
     }
     expect(sourceFamilies(['nt_fire', 'qld_warning'])).toEqual(['archive_rfs']);
+    expect(sourceFamilies(['wa_incident', 'wa_warning'])).toEqual(['archive_rfs']);
   });
 
   it('falls back unknown sources to archive_misc', () => {

@@ -3762,9 +3762,11 @@
     function fireStatusBucket(status) {
       const t = String(status || '').toLowerCase().trim();
       if (!t) return 'unknown';
-      if (/out of control|not yet (under )?control|going|^active$|responding|spreading|^warning$/.test(t)) return 'uncontained';
+      if (/out of control|not yet (under )?control|going|^active$|responding|spreading|^warning$|on scene/.test(t)) return 'uncontained';
       if (/being controlled|contained|in progress|under investigation/.test(t)) return 'containing';
-      if (/under control|patrolled|^safe$|^out$|extinguish/.test(t)) return 'controlled';
+      // WA's "Monitoring" is what the RFS calls "Patrolled": crews are
+      // watching a fire they already hold, not fighting one.
+      if (/under control|patrolled|monitoring|^safe$|^out$|extinguish/.test(t)) return 'controlled';
       if (/closed|complete|finalis|inactive|stay informed|avoid smoke|^minor$/.test(t)) return 'closed';
       return 'unknown';
     }
@@ -3803,15 +3805,18 @@
       DEECA: 'DEECA (Vic)',
       EMV: 'EMV (Vic)',
       ESTA: 'Triple Zero (Vic)',
-      SES: 'SES'
+      SES: 'SES',
+      dfes: 'DFES (WA)',
+      DFES: 'DFES (WA)'
     };
     function agencyLabel(key) { return AGENCY_LABELS[key] || String(key); }
 
 
-    // Victorian warning areas arrive as GeoJSON rings ([lon, lat]); the
-    // fire layer draws polygons as Leaflet [lat, lng]. Returns null when
-    // there is nothing worth drawing, which is what polygonCoords expects.
-    function vicPolygonRings(props) {
+    // Warning areas arrive as GeoJSON rings ([lon, lat]) from Victoria
+    // and Western Australia alike; the fire layer draws polygons as
+    // Leaflet [lat, lng]. Returns null when there is nothing worth
+    // drawing, which is what polygonCoords expects.
+    function polygonRingsFor(props) {
       const rings = (props.polygons || [])
         .map((r) => (Array.isArray(r) ? r
           .filter((pt) => Array.isArray(pt) && pt.length >= 2)
@@ -5558,6 +5563,13 @@ function initPagerHoursFromStorage() {
           const ref = (f.properties || {}).incidentRef;
           if (ref) warnByIncident.set(ref, f.properties);
         });
+        // Which references an incident pin actually absorbed. Testing
+        // against the warnings map instead would be testing whether a
+        // warning came from the warnings feed - true of all of them - and
+        // would drop every referenced warning the day upstream fills the
+        // field in. See the same set built for WA below, where it is not
+        // hypothetical.
+        const qldFolded = new Set();
 
         const pushQld = (feature, idx) => {
           const props = feature.properties || {};
@@ -5568,9 +5580,9 @@ function initPagerHoursFromStorage() {
           if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
 
           // An incident with a matching warning wears that warning's level.
-          const linked = props.source === 'qld_fire'
-            ? warnByIncident.get(String(props.guid || '').replace(/^qfd:/, ''))
-            : null;
+          const incidentKey = String(props.guid || '').replace(/^qfd:/, '');
+          const linked = props.source === 'qld_fire' ? warnByIncident.get(incidentKey) : null;
+          if (linked) qldFolded.add(incidentKey);
           const alertLevel = (linked && linked.alertLevel) || props.alertLevel || '';
 
           const details = {
@@ -5611,10 +5623,11 @@ function initPagerHoursFromStorage() {
 
         (incRes.features || []).forEach(pushQld);
         // A warning that belongs to a shown incident has already been
-        // folded into it above.
+        // folded into it above. One whose incident is closed, or routed
+        // to Hazards, still needs its own pin.
         (warnRes.features || []).forEach((f, i) => {
           const ref = (f.properties || {}).incidentRef;
-          if (ref && warnByIncident.has(ref)) return;
+          if (ref && qldFolded.has(ref)) return;
           pushQld(f, i);
         });
       } catch (e) { console.error("QLD Fire API Error", e); }
@@ -5671,11 +5684,99 @@ function initPagerHoursFromStorage() {
             alertLevel: (details['ALERT LEVEL'] || '').toLowerCase(),
             // Warnings carry their area as rings; the fire layer already
             // draws these for RFS fire grounds.
-            polygonCoords: vicPolygonRings(props),
+            polygonCoords: polygonRingsFor(props),
             updatedISO: props.updatedISO || null
           });
         });
       } catch (e) { console.error("VIC Emergency API Error", e); }
+
+      // Western Australia: DFES incidents and public warnings, the same
+      // pair Queensland publishes - what is turned out to, and what the
+      // public is being told about it. Records are routed by event, so
+      // road crashes and hazmat go to Hazards and only fires arrive here.
+      //
+      // WA is the one state where the two feeds can actually be joined.
+      // Both carry an `event` id and a warning's matches its incident's,
+      // which QFD's equivalent field has never been populated with. So a
+      // fire with a warning is ONE pin wearing the warning's alert level
+      // and the incident's containment status, rather than two pins
+      // disagreeing about the same fire.
+      try {
+        const [waIncRes, waWarnRes] = await Promise.all([
+          apiFetch(`${PROXY_BASE}/api/wa-emergency/incidents`).then(r => r.json()).catch(() => ({ features: [] })),
+          apiFetch(`${PROXY_BASE}/api/wa-emergency/warnings`).then(r => r.json()).catch(() => ({ features: [] })),
+        ]);
+        const waWarnByEvent = new Map();
+        (waWarnRes.features || []).forEach(f => {
+          const ev = (f.properties || {}).incidentRef;
+          if (ev) waWarnByEvent.set(ev, f.properties);
+        });
+        // Events an incident pin absorbed a warning for. Built as the
+        // incidents are pushed, not from the warnings - a warning whose
+        // incident has closed, or went to Hazards, has to keep its pin.
+        const waFolded = new Set();
+
+        const pushWa = (feature, idx) => {
+          const props = feature.properties || {};
+          if (props.layer !== 'fire') return;
+          const geom = feature.geometry || {};
+          if (geom.type !== 'Point' || !Array.isArray(geom.coordinates)) return;
+          const [lng, lat] = geom.coordinates;
+          if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+
+          const ev = props.eventRef || '';
+          const linked = props.source === 'wa_incident' && ev ? waWarnByEvent.get(ev) : null;
+          if (linked) waFolded.add(ev);
+          const alertLevel = (linked && linked.alertLevel) || props.alertLevel || '';
+          // Only the incident half knows how contained a fire is; a
+          // warning carries an instruction, not a containment state.
+          const status = props.status || '';
+
+          const details = {
+            'ALERT LEVEL': alertLevel,
+            'LOCATION': props.location || '',
+            'COUNCIL AREA': '',
+            'STATUS': status,
+            'TYPE': props.fireType || '',
+            'SIZE': '',
+            'RESPONSIBLE AGENCY': 'DFES',
+            'UPDATED': props.updated || '',
+            'UPDATED_ISO': props.updatedISO || '',
+            'CURRENT SITUATION': (linked && linked.alertLine) || props.alertLine || '',
+            'RISKS': (linked && linked.peopleAffected) || props.peopleAffected || '',
+            'WHAT TO DO': (linked && linked.whatToDo) || props.whatToDo || '',
+            'ADVICE TO THE PUBLIC': (linked && linked.action) || props.action || '',
+            title: props.title
+          };
+          if (props.region) details['REGION'] = props.region;
+
+          rfsItems.push({
+            id: generateRfsId(props.guid || `wa-${idx}`),
+            source: props.source || 'wa_incident',
+            title: props.title || 'DFES incident',
+            rawDetails: details,
+            link: 'https://www.emergency.wa.gov.au/',
+            typeDisplay: details.TYPE || 'Fire',
+            typesList: [details.TYPE || 'Fire'],
+            agenciesList: ['DFES'],
+            agencyKey: 'dfes',
+            lat: lat,
+            lng: lng,
+            alertLevel: alertLevel.toLowerCase(),
+            // A warning's area, drawn the way RFS fire grounds are. An
+            // incident folded into a warning borrows its rings.
+            polygonCoords: polygonRingsFor(linked || props),
+            updatedISO: props.updatedISO || null
+          });
+        };
+
+        (waIncRes.features || []).forEach(pushWa);
+        (waWarnRes.features || []).forEach((f, i) => {
+          const ev = (f.properties || {}).incidentRef;
+          if (ev && waFolded.has(ev)) return;
+          pushWa(f, i);
+        });
+      } catch (e) { console.error("WA Emergency API Error", e); }
 
       // A newer loadAllData started while we fetched user/RFS data — bail before
       // resetting the shared array so we don't stomp the newer run's build.
@@ -9366,7 +9467,7 @@ function initPagerHoursFromStorage() {
           const j = (path) => apiFetch(`${PROXY_BASE}${path}`)
             .then((r) => r.json())
             .catch(() => ({ features: [] }));
-          const [inc, alp, fir, maj, lgaHz, wrkHz, ntHz, qldHz, vicHz] = await Promise.all([
+          const [inc, alp, fir, maj, lgaHz, wrkHz, ntHz, qldHz, vicHz, waHz, waHzW] = await Promise.all([
             j('/api/traffic/incidents'),
             j('/api/traffic/alpine'),
             j('/api/traffic/fire'),
@@ -9376,6 +9477,8 @@ function initPagerHoursFromStorage() {
             j('/api/nt-fire/incidents'),
             j('/api/qld-fire/incidents'),
             j('/api/vic-emergency/events'),
+            j('/api/wa-emergency/incidents'),
+            j('/api/wa-emergency/warnings'),
           ]);
           // NT Fire & Rescue turns out to road crashes as well as fires.
           // The crashes belong with the other road incidents, not on the
@@ -9427,6 +9530,32 @@ function initPagerHoursFromStorage() {
                 lastUpdated: f.properties.updatedISO || '',
               },
             }));
+          // Western Australia's non-fire share, from both feeds: road
+          // crashes and rescues out of the incidents feed, hazmat and
+          // chemical warnings out of the warnings feed. WA words a
+          // chemical incident as "HAZMAT Fire", so the backend's routing
+          // is what keeps it off the Fires layer - not the word "fire".
+          const waHazards = [...(waHz.features || []), ...(waHzW.features || [])]
+            .filter((f) => (f.properties || {}).layer === 'hazard')
+            .map((f) => ({
+              type: 'Feature',
+              geometry: f.geometry,
+              properties: {
+                id: f.properties.guid,
+                displayName: f.properties.title,
+                title: f.properties.title,
+                mainCategory: /crash|collision|rescue/i.test(f.properties.fireType || '')
+                  ? 'Crash' : 'Hazard',
+                subcategory: f.properties.fireType || 'Incident',
+                roads: f.properties.location || '',
+                region: 'Western Australia',
+                orgName: 'DFES',
+                responderAgency: 'DFES',
+                alertLevel: f.properties.alertLevel || '',
+                created: f.properties.updatedISO || '',
+                lastUpdated: f.properties.updatedISO || '',
+              },
+            }));
           const ntCrashes = (ntHz.features || [])
             .filter((f) => (f.properties || {}).layer === 'hazard')
             .map((f) => ({
@@ -9461,6 +9590,7 @@ function initPagerHoursFromStorage() {
               ...ntCrashes,
               ...qldCrashes,
               ...vicHazards,
+              ...waHazards,
             ],
           };
           layerCache.hazards_merged = { data: trafficData, timestamp: now };
@@ -10560,10 +10690,12 @@ function initPagerHoursFromStorage() {
           const jf = (path) => apiFetch(`${PROXY_BASE}${path}`)
             .then((r) => r.json())
             .catch(() => ({ features: [] }));
-          const [fl, wrkFl, vicFl] = await Promise.all([
+          const [fl, wrkFl, vicFl, waFl, waFlW] = await Promise.all([
             jf('/api/traffic/flood'),
             jf('/api/traffic/works'),
             jf('/api/vic-emergency/events'),
+            jf('/api/wa-emergency/incidents'),
+            jf('/api/wa-emergency/warnings'),
           ]);
           // Victoria's water: the EMV warning layer is mostly riverine
           // flood advices issued for the SES, and routing is by event, so
@@ -10591,12 +10723,39 @@ function initPagerHoursFromStorage() {
                 polygons: f.properties.polygons || [],
               },
             }));
+          // Western Australia's water. Nothing is flowing today, but WA
+          // publishes flood and storm-surge warnings seasonally and they
+          // are routed by event like everyone else's - so they arrive
+          // here on their own rather than needing a code change first.
+          const waFloods = [...(waFl.features || []), ...(waFlW.features || [])]
+            .filter((f) => (f.properties || {}).layer === 'flood')
+            .map((f) => ({
+              type: 'Feature',
+              geometry: f.geometry,
+              properties: {
+                id: f.properties.guid,
+                displayName: f.properties.title,
+                title: f.properties.title,
+                mainCategory: 'Flooding',
+                subcategory: f.properties.fireType || 'Flood',
+                roads: f.properties.location || '',
+                region: 'Western Australia',
+                orgName: 'DFES',
+                responderAgency: 'DFES',
+                alertLevel: f.properties.alertLevel || '',
+                adviceText: f.properties.alertLine || f.properties.whatToDo || '',
+                created: f.properties.updatedISO || '',
+                lastUpdated: f.properties.updatedISO || '',
+                polygons: f.properties.polygons || [],
+              },
+            }));
           data = {
             type: 'FeatureCollection',
             features: [
               ...(fl.features || []),
               ...(wrkFl.features || []).filter((f) => _worksTarget(f.properties) === 'flood'),
               ...vicFloods,
+              ...waFloods,
             ],
           };
           layerCache.floods_merged = { data, timestamp: Date.now() };
@@ -11562,7 +11721,7 @@ function initPagerHoursFromStorage() {
     // hardcoded list would rot.
     // The Fires layer carries more than one agency now, so anything that
     // used to ask "is this RFS?" asks "is this a fire incident?" instead.
-    const FIRE_SOURCES = new Set(['rfs', 'nt_fire', 'qld_fire', 'qld_warning', 'vic_emergency']);
+    const FIRE_SOURCES = new Set(['rfs', 'nt_fire', 'qld_fire', 'qld_warning', 'vic_emergency', 'wa_incident', 'wa_warning']);
     function isFireIncident(item) { return !!item && FIRE_SOURCES.has(item.source); }
 
     const RFS_ALERT_BUCKETS = [
@@ -11597,7 +11756,7 @@ function initPagerHoursFromStorage() {
       [/^(structure fire|building fire|fire structure|house fire)$/, 'Structure Fire'],
       [/^(vehicle fire|fire vehicle|car fire)$/, 'Vehicle Fire'],
       [/^(planned burn|hazard reduction|burn ?off|fire permitted burn|permitted burn)$/, 'Planned Burn'],
-      [/^(automatic fire alarm|fire alarm( \(afa\))?|afa)$/, 'Fire Alarm'],
+      [/^(automatic fire alarm|fire alarm( \(afa\))?|afa|active alarm)$/, 'Fire Alarm'],
       [/^(fire|fire other|other fire|other|non structure fire)$/, 'Other Fire'],
     ];
     function canonFireType(raw) {
@@ -17808,6 +17967,6 @@ function initPagerHoursFromStorage() {
   <script src="ui-dialogs.js"></script>
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
-  <script src="map-editor-module.js?v=30"></script>
+  <script src="map-editor-module.js?v=31"></script>
 </body>
 </html>

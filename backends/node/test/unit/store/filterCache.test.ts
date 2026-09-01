@@ -37,10 +37,10 @@ describe('filterCache', () => {
 
   it('returns the full provider list when LiveStore is empty', () => {
     const facets = getFilterFacetsLive();
-    // 13 providers: the four fire agencies (rfs, nt_fire, qfd, vic) plus
-    // bom, livetraffic, endeavour, ausgrid, essential, pager, user, rdio,
-    // actas. Waze was retired along with its ingest.
-    expect(facets.providers).toHaveLength(13);
+    // 14 providers: the five fire agencies (rfs, nt_fire, qfd, vic,
+    // dfes) plus bom, livetraffic, endeavour, ausgrid, essential, pager,
+    // user, rdio, actas. Waze was retired along with its ingest.
+    expect(facets.providers).toHaveLength(14);
     for (const p of facets.providers) {
       expect(p.count).toBe(0);
     }
@@ -179,6 +179,8 @@ describe('filterCache', () => {
     liveStore.set('qld_fire', [{ status: 'Going' }]);
     liveStore.set('qld_warning', [{ category: 'Advice' }]);
     liveStore.set('vic_emergency', [{ category: 'Advice' }]);
+    liveStore.set('wa_incident', [{ status: 'Active' }]);
+    liveStore.set('wa_warning', [{ category: 'Advice' }]);
     const facets = getFilterFacetsLive();
 
     const named = (key: string) => findProvider(facets, key)?.name;
@@ -186,6 +188,7 @@ describe('filterCache', () => {
     expect(named('nt_fire')).toBe('NT Fire & Rescue');
     expect(named('qfd')).toBe('QLD Fire Dept');
     expect(named('vic')).toBe('VIC Emergency');
+    expect(named('dfes')).toBe('DFES');
     // The old catch-all is gone, not merely renamed.
     expect(facets.providers.some((p) => p.name === 'Fires')).toBe(false);
 
@@ -193,6 +196,11 @@ describe('filterCache', () => {
     expect(findProvider(facets, 'qfd')?.types.map((t) => t.name)).toEqual(['Incidents', 'Warnings']);
     expect(findProvider(facets, 'rfs')?.types.map((t) => t.alert_type)).toEqual(['rfs']);
     expect(findProvider(facets, 'vic')?.types.map((t) => t.name)).toEqual(['Events']);
+    // Western Australia has the same two feeds Queensland does.
+    expect(findProvider(facets, 'dfes')?.types.map((t) => t.name)).toEqual([
+      'Incidents',
+      'Warnings',
+    ]);
   });
 
   it('counts each fire agency against its own provider', () => {

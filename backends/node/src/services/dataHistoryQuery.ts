@@ -54,6 +54,8 @@ const SOURCE_TO_FAMILY: Record<string, ArchiveTable> = {
   qld_fire: 'archive_rfs',
   qld_warning: 'archive_rfs',
   vic_emergency: 'archive_rfs',
+  wa_incident: 'archive_rfs',
+  wa_warning: 'archive_rfs',
   // ACT Ambulance Service (ESA feed)
   act_ambulance: 'archive_misc',
   // Power

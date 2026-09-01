@@ -900,7 +900,7 @@
     // One colour per jurisdiction, so the pill on each incident is
     // recognisable without reading it.
     // Every agency on the Fires layer renders through one branch.
-    const FIRE_LOG_SOURCES = new Set(['rfs', 'nt_fire', 'qld_fire', 'qld_warning', 'vic_emergency']);
+    const FIRE_LOG_SOURCES = new Set(['rfs', 'nt_fire', 'qld_fire', 'qld_warning', 'vic_emergency', 'wa_incident', 'wa_warning']);
 
     const STATE_COLORS = {
       NSW: '#38bdf8', VIC: '#818cf8', QLD: '#f59e0b', SA: '#f43f5e',
@@ -1054,12 +1054,14 @@
     // BOM and pager entries, so a shared ?provider=&source= link
     // rendered grey circles for types the UI itself drew correctly.
     const typeIcons = {
-      // Fire agencies — one feed each, except Queensland's two.
+      // Fire agencies — one feed each, except Queensland's and WA's two.
       'rfs': { icon: 'fire-flame-curved', color: '#ef4444' },
       'nt_fire': { icon: 'fire-flame-curved', color: '#f97316' },
       'qld_fire': { icon: 'fire-flame-curved', color: '#dc2626' },
       'qld_warning': { icon: 'triangle-exclamation', color: '#f59e0b' },
       'vic_emergency': { icon: 'triangle-exclamation', color: '#6366f1' },
+      'wa_incident': { icon: 'fire-flame-curved', color: '#e11d48' },
+      'wa_warning': { icon: 'triangle-exclamation', color: '#f59e0b' },
       // LiveTraffic NSW
       'traffic_incident': { icon: 'car-burst', color: '#ef4444' },
       'traffic_roadwork': { icon: 'person-digging', color: '#f97316' },
@@ -2551,7 +2553,7 @@
       // Resource Allocation Pending -> Units On Route -> On Scene; user
       // incidents get edited. Everything else (traffic, pager, outages) is
       // point-in-time and a history would just repeat one row.
-      const HISTORY_SOURCES = new Set(['rfs', 'user_incident', 'act_ambulance', 'nt_fire', 'qld_fire', 'qld_warning', 'vic_emergency']);
+      const HISTORY_SOURCES = new Set(['rfs', 'user_incident', 'act_ambulance', 'nt_fire', 'qld_fire', 'qld_warning', 'vic_emergency', 'wa_incident', 'wa_warning']);
       if (!HISTORY_SOURCES.has(item.source)) {
         historySection.innerHTML = '';
         return;
@@ -2624,6 +2626,11 @@
           // move up and down the alert levels and rewrite their advice
           // text, which is the part a reader actually came for.
           vic_emergency: (d, r) => [d.status ?? r.status, d.alertLevel ?? r.category, d.fireType ?? r.subcategory, d.text].join('|'),
+          // WA incidents move Active -> Monitoring -> gone. Its warnings
+          // carry no status at all — an "Escalating" action statement is
+          // the thing that moves, alongside the alert level.
+          wa_incident: (d, r) => [d.status ?? r.status, d.fireType ?? r.subcategory].join('|'),
+          wa_warning: (d, r) => [d.alertLevel ?? r.category, d.action, d.actionType].join('|'),
           user_incident: (d, r) => [d.status ?? r.status, d.category ?? r.category, d.description, d.title].join('|'),
         };
         const signature = TRACKED[item.source] || ((d, r) => JSON.stringify(d ?? r));
@@ -3357,6 +3364,8 @@
         'qld_fire': 'QLD Fire & Emergency',
         'qld_warning': 'QLD Warnings',
         'vic_emergency': 'VIC Emergency',
+        'wa_incident': 'DFES Incidents',
+        'wa_warning': 'DFES Warnings',
         'traffic_incident': 'Traffic Incidents',
         'traffic_roadwork': 'Roadwork',
         'traffic_flood': 'Floods',
@@ -3439,6 +3448,8 @@
         'qld_fire': { primary: '#dc2626', secondary: '#ef4444' },
         'qld_warning': { primary: '#f59e0b', secondary: '#fbbf24' },
         'vic_emergency': { primary: '#6366f1', secondary: '#818cf8' },
+        'wa_incident': { primary: '#e11d48', secondary: '#fb7185' },
+        'wa_warning': { primary: '#f59e0b', secondary: '#fbbf24' },
         'pager': { primary: '#22c55e', secondary: '#4ade80' },
         'user_incident': { primary: '#a855f7', secondary: '#c084fc' },
         'traffic_incident': { primary: '#f97316', secondary: '#fb923c' },
@@ -3956,6 +3967,7 @@
       'EMV': { label: 'EMV (Vic)', color: '#818cf8' },
       'ESTA': { label: 'Triple Zero (Vic)', color: '#a78bfa' },
       'SES': { label: 'SES', color: '#f59e0b' },
+      'DFES': { label: 'DFES (WA)', color: '#e11d48' },
       // Victoria's feed also relays two national agencies — earthquakes
       // and severe weather — under their own org codes.
       'AU/BOM': { label: 'Bureau of Meteorology', color: '#3b82f6' },
@@ -3991,6 +4003,8 @@
         case 'qld_warning': return AGENCY_BADGES['QFD'];
         case 'nt_fire': return agencyBadge(data.responsibleAgency || 'NTFRS');
         case 'vic_emergency': return agencyBadge(data.agency || 'VIC');
+        case 'wa_incident':
+        case 'wa_warning': return AGENCY_BADGES['DFES'];
         default: return null;
       }
     }

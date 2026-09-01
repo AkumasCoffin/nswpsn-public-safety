@@ -45,6 +45,7 @@ import { ntFireRouter } from './api/nt-fire.js';
 import { boundariesRouter } from './api/boundaries.js';
 import { qldFireRouter } from './api/qld-fire.js';
 import { vicEmergencyRouter } from './api/vic-emergency.js';
+import { waEmergencyRouter } from './api/wa-emergency.js';
 import { agencyRouter } from './api/agency.js';
 import { marinetrafficRouter } from './api/marinetraffic.js';
 import { newsRouter } from './api/news.js';
@@ -326,6 +327,7 @@ export function createApp() {
   app.route('/', boundariesRouter);
   app.route('/', qldFireRouter);
   app.route('/', vicEmergencyRouter);
+  app.route('/', waEmergencyRouter);
   app.route('/', agencyRouter);
   app.route('/', marinetrafficRouter);
   app.route('/', newsRouter);

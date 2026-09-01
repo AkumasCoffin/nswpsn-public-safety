@@ -95,6 +95,8 @@ const ALERT_TYPE_PROVIDER: Record<string, [string, string]> = {
   qld_fire: ['qfd', 'Incidents'],
   qld_warning: ['qfd', 'Warnings'],
   vic_emergency: ['vic', 'Events'],
+  wa_incident: ['dfes', 'Incidents'],
+  wa_warning: ['dfes', 'Warnings'],
   bom_land: ['bom', 'Land Warnings'],
   bom_marine: ['bom', 'Marine Warnings'],
   traffic_incident: ['livetraffic', 'Incidents'],
@@ -125,6 +127,11 @@ const PROVIDER_DISPLAY: Record<string, { name: string; icon: string; color: stri
   // hazmat as well, and two national agencies relay earthquake and
   // severe-weather warnings through it.
   vic: { name: 'VIC Emergency', icon: 'triangle-exclamation', color: '#6366f1' },
+  // Named for the agency, as NSW RFS and QFD are. A handful of WA
+  // records originate with DBCA (Parks & Wildlife) rather than DFES
+  // and the feed does not say which, so all of them are attributed
+  // to the department that publishes them.
+  dfes: { name: 'DFES', icon: 'fire', color: '#e11d48' },
   bom: { name: 'Bureau of Meteorology', icon: 'cloud', color: '#3b82f6' },
   livetraffic: { name: 'LiveTraffic NSW', icon: 'road', color: '#f97316' },
   endeavour: { name: 'Endeavour Energy', icon: 'bolt', color: '#fbbf24' },
@@ -142,6 +149,7 @@ const PROVIDER_ORDER = [
   'nt_fire',
   'qfd',
   'vic',
+  'dfes',
   'bom',
   'livetraffic',
   'endeavour',
@@ -158,6 +166,7 @@ const PROVIDER_TYPE_ORDER: Record<string, string[]> = {
   nt_fire: ['nt_fire'],
   qfd: ['qld_fire', 'qld_warning'],
   vic: ['vic_emergency'],
+  dfes: ['wa_incident', 'wa_warning'],
   bom: ['bom_land', 'bom_marine'],
   livetraffic: [
     'traffic_incident',
