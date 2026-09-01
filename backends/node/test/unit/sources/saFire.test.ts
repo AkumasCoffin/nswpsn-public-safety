@@ -85,12 +85,10 @@ const UNAVAILABLE_HTML =
   + '<body><p><h3>File currently unavailable, please try again</h3></p></body></html>';
 
 describe('saLayerFor — routing is by event, not by agency', () => {
-  it('sends a vehicle accident to Hazards', () => {
-    // The reason `accident` had to join the crash pattern: SA's wording
-    // contains none of road crash / crash / rescue / collision, so the
-    // fire test below would have caught it and put a car crash on the
-    // bushfire layer.
-    expect(saLayerFor('Vehicle Accident')).toBe('hazard');
+  it('keeps a vehicle accident on Fires, with the rest of CFS work', () => {
+    // A fire service's own jobs stay on its own layer. Only flooding and
+    // hazmat are carved out.
+    expect(saLayerFor('Vehicle Accident')).toBe('fire');
   });
 
   it.each([
@@ -101,14 +99,16 @@ describe('saLayerFor — routing is by event, not by agency', () => {
     ['Grass Fire', 'fire'],
     ['Flood', 'flood'],
     ['Hazmat', 'hazard'],
-    ['Rescue', 'hazard'],
+    ['Rescue', 'fire'],
+    ['Assist Agency', 'fire'],
+    ['Other', 'fire'],
   ])('routes %s to %s', (type, layer) => {
     expect(saLayerFor(type)).toBe(layer);
   });
 
-  it('sends wording it does not recognise to Hazards rather than Fires', () => {
-    expect(saLayerFor('Assist Agency')).toBe('hazard');
-    expect(saLayerFor('Other')).toBe('hazard');
+  it('still sends flooding to Floods, the one carve-out asked for', () => {
+    expect(saLayerFor('Flood Rescue')).toBe('flood');
+    expect(saLayerFor('Storm Surge')).toBe('flood');
   });
 });
 

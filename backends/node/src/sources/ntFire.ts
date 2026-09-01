@@ -52,9 +52,16 @@ export type NtLayer = 'fire' | 'hazard';
  * (hazmat, smoke complaints, illegal burns) sits with the fires because
  * it is still an NTFRS turnout.
  */
+/**
+ * Where an NT record belongs.
+ *
+ * Road crashes used to go to Hazards; they stay on Fires now, with the
+ * rest of what NT Fire & Rescue turns out to. Only hazmat is carved out,
+ * as a different kind of emergency rather than a different kind of fire.
+ */
 export function ntLayerFor(category: string): NtLayer {
   const c = category.toLowerCase().replace(/[^a-z]/g, '');
-  if (c.includes('roadcrash')) return 'hazard';
+  if (c.includes('hazmat') || c.includes('chemical')) return 'hazard';
   return 'fire';
 }
 

@@ -122,14 +122,16 @@ export function saAlertLevel(level: unknown): string {
 }
 
 /**
- * Where an SA record belongs, decided by the EVENT and not the
- * publisher — the rule Victoria established. Both services turn out to
- * far more than fires.
- *
- * ORDER IS LOAD-BEARING, and `accident` is the addition SA forces: it
- * writes "Vehicle Accident", which contains none of the words the other
- * states' crash patterns look for and would otherwise fall through to
- * the fire test and land a car crash on the bushfire layer.
+ * Where an SA record belongs.
+ * *
+ * A FIRE SERVICE'S OWN JOBS STAY ON ITS OWN LAYER. Crashes, rescues,
+ * alarms and assists are what these brigades spend most of their time
+ * on, and pushing them to Hazards split one agency's work across two
+ * layers — while NSW, whose feed has never been routed at all, kept its
+ * MVA/Transport and Medical jobs on Fires the whole time. Only two
+ * things are carved out: flooding, which belongs on Floods, and hazmat,
+ * which is a different kind of emergency rather than a different kind
+ * of fire.
  */
 export function saLayerFor(text: string): SaLayer {
   const t = text.toLowerCase();
@@ -137,9 +139,7 @@ export function saLayerFor(text: string): SaLayer {
   if (/hazmat|hazardous material|chemical|cbrne|radiolog|toxic/.test(t)) {
     return 'hazard';
   }
-  if (/accident|road crash|crash|rescue|collision/.test(t)) return 'hazard';
-  if (/fire|burn|smoke|alarm/.test(t)) return 'fire';
-  return 'hazard';
+  return 'fire';
 }
 
 /**

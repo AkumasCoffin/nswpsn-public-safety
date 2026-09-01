@@ -90,9 +90,15 @@ const wrap = (features: unknown[]) => ({
 });
 
 describe('ntLayerFor', () => {
-  it('sends road crashes to the hazard layer', () => {
-    expect(ntLayerFor('roadcrash')).toBe('hazard');
-    expect(ntLayerFor('roadcrash-closed')).toBe('hazard');
+  it('keeps road crashes on the fire layer with the rest of NTFRS work', () => {
+    // They used to go to Hazards, which split one agency's jobs across
+    // two layers while NSW kept its MVA/Transport calls on Fires.
+    expect(ntLayerFor('roadcrash')).toBe('fire');
+    expect(ntLayerFor('roadcrash-closed')).toBe('fire');
+  });
+
+  it('still carves out hazmat', () => {
+    expect(ntLayerFor('hazmat')).toBe('hazard');
   });
 
   it('sends everything else to the fire layer', () => {

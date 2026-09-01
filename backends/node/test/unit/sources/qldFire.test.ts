@@ -78,9 +78,10 @@ describe('esriDateToIso', () => {
 });
 
 describe('qldLayerFor', () => {
-  it('sends rescues and road crashes to the hazard layer', () => {
-    expect(qldLayerFor('RESCUE ROAD CRASH')).toBe('hazard');
-    expect(qldLayerFor('RESCUE VERTICAL')).toBe('hazard');
+  it('keeps rescues and road crashes on the fire layer', () => {
+    // QFD's own jobs, on QFD's own layer.
+    expect(qldLayerFor('RESCUE ROAD CRASH')).toBe('fire');
+    expect(qldLayerFor('RESCUE VERTICAL')).toBe('fire');
   });
 
   it('keeps every fire type on the fire layer', () => {
@@ -89,9 +90,10 @@ describe('qldLayerFor', () => {
     }
   });
 
-  it('treats a non-fire warning type as a hazard', () => {
-    expect(qldLayerFor('Flood')).toBe('hazard');
-    expect(qldLayerFor('Cyclone')).toBe('hazard');
+  it('carves out hazmat and nothing else', () => {
+    expect(qldLayerFor('HAZMAT ALL')).toBe('hazard');
+    // A warning QFD issues is QFD's, whatever it is about.
+    expect(qldLayerFor('Cyclone')).toBe('fire');
   });
 });
 
@@ -123,12 +125,12 @@ describe('toIncidentFeature', () => {
     expect(f.properties.updatedISO).toBe(new Date(1786580181000).toISOString());
   });
 
-  it('routes a road crash to the hazard layer', () => {
+  it('keeps a road crash on the fire layer', () => {
     const f = toIncidentFeature({
       ...INCIDENT,
       properties: { ...INCIDENT.properties, GroupedType: 'RESCUE ROAD CRASH' },
     })!;
-    expect(f.properties.layer).toBe('hazard');
+    expect(f.properties.layer).toBe('fire');
   });
 
   it('returns null without an incident number or a point', () => {

@@ -135,15 +135,21 @@ export function stripHtml(v: unknown): string {
 }
 
 /**
- * Where a WA record belongs, decided by the EVENT and not the publisher —
- * the rule Victoria established. DFES turns out to far more than fires.
+ * Where a WA record belongs.
+ * *
+ * A FIRE SERVICE'S OWN JOBS STAY ON ITS OWN LAYER. Crashes, rescues,
+ * alarms and assists are what these brigades spend most of their time
+ * on, and pushing them to Hazards split one agency's work across two
+ * layers — while NSW, whose feed has never been routed at all, kept its
+ * MVA/Transport and Medical jobs on Fires the whole time. Only two
+ * things are carved out: flooding, which belongs on Floods, and hazmat,
+ * which is a different kind of emergency rather than a different kind
+ * of fire.
  *
- * ORDER IS LOAD-BEARING. Hazmat is tested before fire because WA words a
- * chemical incident as `hazmat-type: "HAZMAT Fire"` with a
- * `cap-event-type` of Toxic Plume: a fire test run first matches the word
- * "Fire" and files a chemical spill on the bushfire layer. Flood is
- * tested before both for the reason Victoria documented — a flood rescue
- * names both.
+ * ORDER IS LOAD-BEARING between those two. WA words a chemical incident
+ * as `hazmat-type: "HAZMAT Fire"` with a `cap-event-type` of Toxic
+ * Plume, so a fire test running first would file a chemical spill as a
+ * fire; and a flood rescue names both.
  */
 export function waLayerFor(text: string): WaLayer {
   const t = text.toLowerCase();
@@ -151,9 +157,7 @@ export function waLayerFor(text: string): WaLayer {
   if (/hazmat|hazardous material|chemical|cbrne|radiolog|toxic/.test(t)) {
     return 'hazard';
   }
-  if (/road crash|crash|rescue|collision/.test(t)) return 'hazard';
-  if (/fire|burn|smoke|alarm/.test(t)) return 'fire';
-  return 'hazard';
+  return 'fire';
 }
 
 /** Everything a record says about what it is, as one string for matching. */

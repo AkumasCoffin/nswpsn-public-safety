@@ -75,8 +75,16 @@ export function vicLayerFor(props: Record<string, unknown>): VicLayer {
     .join(' ');
 
   if (/flood|water over|riverine|storm surge|tsunami/.test(text)) return 'flood';
+  if (/hazmat|hazardous material|chemical/.test(text)) return 'hazard';
   if (/fire|burn|smoke/.test(text)) return 'fire';
-  return 'hazard';
+
+  // Victoria is the one feed where the publisher has to be consulted,
+  // because it is the one feed that is not a single agency's. A CFA or
+  // DEECA road accident is a fire service's own job and belongs on Fires
+  // with the rest of its work; an SES tree-down or building-damage call
+  // is not, and stays on Hazards where it has always been.
+  const org = vicAgencyFor(asString(props['sourceOrg']));
+  return org === 'CFA' || org === 'DEECA' ? 'fire' : 'hazard';
 }
 
 export interface VicFeature {

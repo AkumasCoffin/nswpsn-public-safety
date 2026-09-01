@@ -126,17 +126,21 @@ function point(geom: unknown): [number, number] | null {
 
 /**
  * Where a QFD record belongs.
- *
- * Everything QFD turns out to is on the Fires layer except road
- * crashes, which are road incidents and sit with the other hazards —
- * the same split NT Fire & Rescue gets.
+ * *
+ * A FIRE SERVICE'S OWN JOBS STAY ON ITS OWN LAYER. Crashes, rescues,
+ * alarms and assists are what these brigades spend most of their time
+ * on, and pushing them to Hazards split one agency's work across two
+ * layers — while NSW, whose feed has never been routed at all, kept its
+ * MVA/Transport and Medical jobs on Fires the whole time. Only two
+ * things are carved out: flooding, which belongs on Floods, and hazmat,
+ * which is a different kind of emergency rather than a different kind
+ * of fire.
  */
 export function qldLayerFor(kind: string): QldLayer {
+  // No flood branch: QldLayer has none, because neither QFD feed has
+  // ever published one — swift-water jobs come through as RESCUE.
   const k = kind.toUpperCase();
-  if (k.startsWith('RESCUE') || k.includes('ROAD CRASH')) return 'hazard';
-  // Warnings name their own event type; anything that isn't a fire is
-  // not a fire.
-  if (k && !k.includes('FIRE') && !k.includes('BURN')) return 'hazard';
+  if (k.includes('HAZMAT') || k.includes('CHEMICAL')) return 'hazard';
   return 'fire';
 }
 

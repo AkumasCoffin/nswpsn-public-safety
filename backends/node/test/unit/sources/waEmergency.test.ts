@@ -171,8 +171,8 @@ describe('waLayerFor — routing is by event, not by agency', () => {
     expect(waLayerFor('Burn Off Other Incident')).toBe('fire');
   });
 
-  it('sends a road crash to Hazards', () => {
-    expect(waLayerFor('Road Crash Other Incident')).toBe('hazard');
+  it('keeps a road crash on Fires, with the rest of DFES work', () => {
+    expect(waLayerFor('Road Crash Other Incident')).toBe('fire');
   });
 
   it('sends a flood to Floods, not Fires', () => {
@@ -187,8 +187,9 @@ describe('waLayerFor — routing is by event, not by agency', () => {
     );
   });
 
-  it('sends anything it does not recognise to Hazards rather than Fires', () => {
-    expect(waLayerFor('School Closure')).toBe('hazard');
+  it('keeps wording it does not recognise on Fires', () => {
+    // It arrived on a fire service's feed; that is enough.
+    expect(waLayerFor('School Closure')).toBe('fire');
   });
 });
 
@@ -274,8 +275,8 @@ describe('toWaIncident', () => {
     expect(toWaIncident(ROAD_CRASH)!.properties.fireType).toBe('Road Crash');
   });
 
-  it('sends the road crash to Hazards while the burn-off stays on Fires', () => {
-    expect(toWaIncident(ROAD_CRASH)!.properties.layer).toBe('hazard');
+  it('keeps both the road crash and the burn-off on Fires', () => {
+    expect(toWaIncident(ROAD_CRASH)!.properties.layer).toBe('fire');
     expect(toWaIncident(BURN_OFF)!.properties.layer).toBe('fire');
   });
 
