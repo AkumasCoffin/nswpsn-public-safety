@@ -17,6 +17,7 @@ vi.mock('../../../src/sources/shared/http.js', () => ({
 
 import {
   fetchVicEmergency,
+  isInterstateRepublication,
   toVicFeature,
   vicLayerFor,
   vicAgencyFor,
@@ -181,13 +182,28 @@ describe('toVicFeature', () => {
     expect(f.geometry.coordinates[0]).toBeCloseTo(144.8, 1);
   });
 
-  it('drops the re-published NSW RFS record', () => {
-    // We ingest the RFS feed directly; keeping this doubles every NSW
-    // fire on the map.
-    expect(toVicFeature({
-      ...CFA_FIRE,
-      properties: { ...CFA_FIRE.properties, sourceOrg: 'NSW/RFS', sourceFeed: 'rfs-cap' },
-    })).toBeNull();
+  it('drops any state re-publishing its neighbour, not just NSW', () => {
+    // We ingest every one of these states directly. The SA/CFS case is
+    // how this was found: one Paringa building fire drew two pins, the
+    // Victorian copy saying "Going" and the CFS original "GOING", with
+    // the appliance count on the original only.
+    for (const org of ['NSW/RFS', 'SA/CFS', 'QLD/QFES', 'NT/NTFRS', 'WA/DFES']) {
+      expect(toVicFeature({
+        ...CFA_FIRE,
+        properties: { ...CFA_FIRE.properties, sourceOrg: org },
+      })).toBeNull();
+    }
+  });
+
+  it('keeps the Victorian agencies and the national relays', () => {
+    // EMV is the state warning layer and AU/* the Bureau and Geoscience
+    // Australia — neither duplicates a pin drawn from another feed.
+    for (const org of ['VIC/CFA', 'VIC/SES', 'VIC/DEECA', 'EMV', 'AU/BOM']) {
+      expect(isInterstateRepublication(org)).toBe(false);
+    }
+    for (const org of ['NSW/RFS', 'SA/CFS', 'TAS/TFS']) {
+      expect(isInterstateRepublication(org)).toBe(true);
+    }
   });
 
   it('names a warning by its event and place, not by its alert level', () => {

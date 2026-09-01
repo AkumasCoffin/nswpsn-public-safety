@@ -12,9 +12,10 @@
  *   VIC/SES    State Emergency Service — storm, flood, building damage
  *   VIC/ESTA   the state's triple-zero dispatcher, publishing calls it
  *              has dispatched but no single agency owns yet
- *   NSW/RFS    a re-publication of a NSW incident, DROPPED — we ingest
- *              the RFS feed directly, and keeping this would put every
- *              border fire on the map twice
+ *   NSW/RFS    a re-publication of another state's incident, DROPPED —
+ *   SA/CFS     see isInterstateRepublication(). We ingest those states
+ *              directly, and keeping these puts a border fire on the
+ *              map twice
  *
  * ROUTING IS BY EVENT, NOT BY AGENCY. Only fire alerts belong on the
  * Fires layer, so a CFA hazmat call goes to Hazards and an SES riverine
@@ -63,6 +64,29 @@ export function vicAgencyFor(sourceOrg: string): string {
  * SES warnings are mostly water. Checked flood-first because a flood
  * rescue names both, and the water is the thing to show.
  */
+/**
+ * Is this another state's incident, mirrored into Victoria's feed?
+ *
+ * Victoria carries its neighbours' border incidents under their own org
+ * codes — NSW/RFS and SA/CFS live right now — and we ingest every one of
+ * those states directly. Keeping the copy puts one fire on the map
+ * twice, and the two pins do not even agree with each other: the same
+ * Paringa building fire arrived as "Going" from Victoria and "GOING"
+ * from the CFS, with the appliance count only on the SA original.
+ *
+ * Checked by prefix rather than by listing the orgs, because the list
+ * is upstream's to change: only VIC/* is Victoria's own. EMV is the
+ * state warning layer and AU/* the national relays (the Bureau,
+ * Geoscience Australia), and both stay — neither duplicates a pin we
+ * already draw from somewhere else.
+ */
+export function isInterstateRepublication(sourceOrg: string): boolean {
+  const o = sourceOrg.toUpperCase();
+  if (!o.includes('/')) return false;
+  const state = o.slice(0, o.indexOf('/'));
+  return state !== 'VIC' && state !== 'AU';
+}
+
 export function vicLayerFor(props: Record<string, unknown>): VicLayer {
   const cap = (props['cap'] as Record<string, unknown> | undefined) ?? {};
   const text = [
@@ -204,9 +228,7 @@ export function toVicFeature(raw: unknown): VicFeature | null {
   const p = (f['properties'] as Record<string, unknown> | undefined) ?? {};
 
   const org = asString(p['sourceOrg']);
-  // Victoria re-publishes NSW RFS incidents. We ingest that feed
-  // directly, so keeping these would double every NSW fire.
-  if (org.toUpperCase().startsWith('NSW/')) return null;
+  if (isInterstateRepublication(org)) return null;
 
   const geo = geometryOf(f['geometry']);
   if (!geo) return null;
