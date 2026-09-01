@@ -1019,6 +1019,21 @@
           ${published ? `<div style="color:#64748b; font-size:0.55rem; margin-top:1px; line-height:1.2; overflow-wrap:break-word;">${escapeHtml(published)}</div>` : ''}
         </div>`;
 
+      // What has moved on this fire. The map caches the trail on the
+      // item after the first hover, so this is usually instant; when it
+      // is not, the panel renders without it and fills in.
+      const _trailItem = data._item;
+      setTimeout(async () => {
+        const host = document.getElementById('rfs-change-trail');
+        if (!host || !_trailItem || typeof loadFireChanges !== 'function') return;
+        try {
+          const changes = await loadFireChanges(_trailItem);
+          if (changes && changes.length && typeof renderFireChanges === 'function') {
+            host.innerHTML = renderFireChanges(changes, { small: true });
+          }
+        } catch (e) { console.warn('[editor] change trail', e); }
+      }, 0);
+
       customRFSBlock.innerHTML = `
         <div style="background:rgba(148,163,184,0.07); border:1px solid rgba(148,163,184,0.25); padding:0.8rem; border-radius:6px; margin-bottom:1rem; font-size:0.85rem;">
           <h5 style="margin-top:0.3rem; margin-bottom:0.6rem; color:#ef4444;">${escapeHtml(_fireAgency)} Incident Details (Read Only)</h5>
@@ -1029,6 +1044,8 @@
           </div>
           <strong>Title:</strong> ${escapeHtml(data.title || 'N/A')}<br>
           <strong>Location:</strong> ${escapeHtml(data.LOCATION || 'N/A')}<br>
+          ${data.RESOURCES ? `<strong>Resources:</strong> ${escapeHtml(data.RESOURCES)}<br>` : ''}
+          <div id="rfs-change-trail"></div>
           <a href="${data.link}" target="_blank" style="font-size:0.8rem; margin-top:0.5rem; display:inline-block; color:#7dd3fc;">${_isNswRfs ? 'View on Fires Near Me' : 'View on the ' + escapeHtml(_fireAgency) + ' incident map'} →</a>
         </div>
       `;
@@ -2591,6 +2608,10 @@
               source: item.source || 'rfs',
               link: item.link || 'https://www.rfs.nsw.gov.au/fire-information/fires-near-me',
               point: `${item.lat} ${item.lng}`,
+              RESOURCES: d.RESOURCES || '',
+              // The live item, so the panel can render the change trail
+              // the map already fetches and caches on it.
+              _item: item,
             }, item.pagerDetails);
             openEditorSheet();
           } catch (e) { console.warn('[editor] openRfs', e); }

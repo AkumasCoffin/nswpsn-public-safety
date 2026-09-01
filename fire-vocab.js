@@ -120,7 +120,13 @@
     // "On scene" sits here, not in the red above: crews have arrived and
     // are working it. Red is for a fire nothing is holding yet — which
     // is what "Responding" still means, because en route is not there.
-    { id: 'containing', label: 'Being contained', ring: '#fdba74', a: '#fb923c', b: '#c2410c',
+    // Yellow, not orange. Red -> yellow -> green is the progression
+    // people already read, and the middle step was sitting so close to
+    // the red one that "On scene" looked like bad news. It does not
+    // clash with the Australian Warning System's Advice yellow: a record
+    // with a published warning level is drawn as a TRIANGLE and never
+    // consults this colour at all, so the two never appear on one pin.
+    { id: 'containing', label: 'Being contained', ring: '#fde047', a: '#facc15', b: '#a16207',
       match: /being controlled|contained|in progress|under investigation|on scene/ },
     { id: 'controlled', label: 'Under control', ring: '#86efac', a: '#4ade80', b: '#15803d',
       match: /under control|patrolled|monitoring|^safe$|^out$|extinguish/ },
