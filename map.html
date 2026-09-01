@@ -3596,6 +3596,15 @@
     const layerCache = {
       // Emergency services
       rfs_incidents: { data: null, timestamp: 0 },
+      // The other five fire agencies. NSW has been cached here since the
+      // beginning and the rest were not, which is why a blip emptied the
+      // map of everything except NSW: see fetchFireFeed().
+      nt_fire_incidents: { data: null, timestamp: 0 },
+      qld_fire_incidents: { data: null, timestamp: 0 },
+      qld_fire_warnings: { data: null, timestamp: 0 },
+      vic_emergency_events: { data: null, timestamp: 0 },
+      wa_emergency_incidents: { data: null, timestamp: 0 },
+      wa_emergency_warnings: { data: null, timestamp: 0 },
       // Waze data
       waze_hazards: { data: null, timestamp: 0 },
       waze_police: { data: null, timestamp: 0 },
@@ -5352,6 +5361,46 @@ function initPagerHoursFromStorage() {
 
 
 
+    /**
+     * Fetch one fire agency's feed, keeping the last good answer.
+     *
+     * Every agency except NSW used to end its fetch with
+     * `.catch(() => ({ features: [] }))`, which quietly turns "we could
+     * not ask" into "there is nothing there" — so a single failed
+     * request emptied that agency off the map until the next refresh
+     * happened to succeed. NSW was immune only because it reads out of
+     * layerCache, so it survived on the previous answer.
+     *
+     * The refresh makes this likely rather than rare: it fires four
+     * pre-warm requests and then a dozen more at once, so a timeout or a
+     * rate-limit somewhere in that burst is ordinary. Losing five of six
+     * agencies over one of them is not.
+     *
+     * Stale data is the right answer to a failed fetch here. These are
+     * snapshots that change every couple of minutes, and showing the
+     * last known fires is far closer to the truth than showing none.
+     */
+    async function fetchFireFeed(cacheKey, path) {
+      const slot = layerCache[cacheKey] || (layerCache[cacheKey] = { data: null, timestamp: 0 });
+      try {
+        const res = await apiFetch(`${PROXY_BASE}${path}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (!data || !Array.isArray(data.features)) throw new Error('no features array');
+        slot.data = data;
+        slot.timestamp = Date.now();
+        return data;
+      } catch (e) {
+        if (slot.data) {
+          const age = Math.round((Date.now() - slot.timestamp) / 1000);
+          console.warn(`${path} failed (${e.message}) — keeping the last answer, ${age}s old`);
+          return slot.data;
+        }
+        console.error(`${path} failed and nothing cached:`, e);
+        return { features: [] };
+      }
+    }
+
     async function loadAllData() {
       const mySeq = ++_loadAllSeq;
       let userIncidents = [];
@@ -5462,8 +5511,7 @@ function initPagerHoursFromStorage() {
       // filtered out server-side; road crashes are routed to Hazards
       // instead of here.
       try {
-        const res = await apiFetch(`${PROXY_BASE}/api/nt-fire/incidents`);
-        const data = await res.json();
+        const data = await fetchFireFeed('nt_fire_incidents', '/api/nt-fire/incidents');
         (data.features || []).forEach((feature, idx) => {
           const props = feature.properties || {};
           if (props.layer === 'hazard') return; // road crashes -> Hazards layer
@@ -5531,8 +5579,8 @@ function initPagerHoursFromStorage() {
       // shows as both until it doesn't.
       try {
         const [incRes, warnRes] = await Promise.all([
-          apiFetch(`${PROXY_BASE}/api/qld-fire/incidents`).then(r => r.json()).catch(() => ({ features: [] })),
-          apiFetch(`${PROXY_BASE}/api/qld-fire/warnings`).then(r => r.json()).catch(() => ({ features: [] })),
+          fetchFireFeed('qld_fire_incidents', '/api/qld-fire/incidents'),
+          fetchFireFeed('qld_fire_warnings', '/api/qld-fire/warnings'),
         ]);
         // When upstream does populate the reference, the warning's alert
         // level belongs on the incident and the separate warning pin is
@@ -5628,8 +5676,7 @@ function initPagerHoursFromStorage() {
       // the NSW/RFS records Victoria re-publishes, which we already ingest
       // straight from the RFS.
       try {
-        const res = await apiFetch(`${PROXY_BASE}/api/vic-emergency/events`);
-        const data = await res.json();
+        const data = await fetchFireFeed('vic_emergency_events', '/api/vic-emergency/events');
         (data.features || []).forEach((feature, idx) => {
           const props = feature.properties || {};
           if (props.layer !== 'fire') return;
@@ -5700,8 +5747,8 @@ function initPagerHoursFromStorage() {
       // disagreeing about the same fire.
       try {
         const [waIncRes, waWarnRes] = await Promise.all([
-          apiFetch(`${PROXY_BASE}/api/wa-emergency/incidents`).then(r => r.json()).catch(() => ({ features: [] })),
-          apiFetch(`${PROXY_BASE}/api/wa-emergency/warnings`).then(r => r.json()).catch(() => ({ features: [] })),
+          fetchFireFeed('wa_emergency_incidents', '/api/wa-emergency/incidents'),
+          fetchFireFeed('wa_emergency_warnings', '/api/wa-emergency/warnings'),
         ]);
         const waWarnByEvent = new Map();
         (waWarnRes.features || []).forEach(f => {
