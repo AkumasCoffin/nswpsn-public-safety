@@ -116,9 +116,12 @@
   // ------------------------------------------------------------------
   const STATUSES = [
     { id: 'uncontained', label: 'Out of control', ring: '#f87171', a: '#ff6b6b', b: '#b91c1c',
-      match: /out of control|not yet (under )?control|^going$|^active$|responding|spreading|on scene|^warning$/ },
+      match: /out of control|not yet (under )?control|^going$|^active$|responding|spreading|^warning$/ },
+    // "On scene" sits here, not in the red above: crews have arrived and
+    // are working it. Red is for a fire nothing is holding yet — which
+    // is what "Responding" still means, because en route is not there.
     { id: 'containing', label: 'Being contained', ring: '#fdba74', a: '#fb923c', b: '#c2410c',
-      match: /being controlled|contained|in progress|under investigation/ },
+      match: /being controlled|contained|in progress|under investigation|on scene/ },
     { id: 'controlled', label: 'Under control', ring: '#86efac', a: '#4ade80', b: '#15803d',
       match: /under control|patrolled|monitoring|^safe$|^out$|extinguish/ },
     { id: 'closed', label: 'Closed', ring: '#cbd5e1', a: '#94a3b8', b: '#475569',
