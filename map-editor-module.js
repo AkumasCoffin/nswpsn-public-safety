@@ -10,6 +10,9 @@
 
    Depends on globals provided by map.html + auth-common.js:
      map, L, sb, PROXY_BASE, API_BASE_URL, API_KEY, escapeHtml,
+     safeUrl (the only sanctioned way to put a feed-supplied URL in an
+     href — it resolves, admits http/https only, and escapes; anything
+     else becomes an inert '#'),
      haversineMeters, buildUserIncidentTooltip, isWithinMinutes,
      alertBucketFor, ALERT_ICON_COLORS, fireStatusColor (so a fire's
      warning level and containment read the same colour here as on its
@@ -1039,6 +1042,14 @@
         } catch (e) { console.warn('[editor] change trail', e); }
       }, 0);
 
+      // data.link is whatever the upstream feed said — RFS props.link,
+      // VIC props.url, SA Message_link. Interpolated raw it was not just
+      // a javascript: hazard: one double quote in the URL closes the
+      // attribute and the rest of the string becomes markup on a
+      // staff-facing panel. safeUrl resolves it, keeps only http/https,
+      // and escapes; same host-page guard style as fireTrailColor above
+      // so a missing helper renders a dead link instead of throwing.
+      const _link = typeof safeUrl === 'function' ? safeUrl(data.link) : '#';
       customRFSBlock.innerHTML = `
         <div style="background:rgba(148,163,184,0.07); border:1px solid rgba(148,163,184,0.25); padding:0.8rem; border-radius:6px; margin-bottom:1rem; font-size:0.85rem;">
           <h5 style="margin-top:0.3rem; margin-bottom:0.6rem; color:#ef4444;">${escapeHtml(_fireAgency)} Incident Details (Read Only)</h5>
@@ -1051,7 +1062,7 @@
           <strong>Location:</strong> ${escapeHtml(data.LOCATION || 'N/A')}<br>
           ${data.RESOURCES ? `<strong>Resources:</strong> ${escapeHtml(data.RESOURCES)}<br>` : ''}
           <div id="rfs-change-trail"></div>
-          <a href="${data.link}" target="_blank" style="font-size:0.8rem; margin-top:0.5rem; display:inline-block; color:#7dd3fc;">${_isNswRfs ? 'View on Fires Near Me' : 'View on the ' + escapeHtml(_fireAgency) + ' incident map'} →</a>
+          <a href="${_link}" target="_blank" style="font-size:0.8rem; margin-top:0.5rem; display:inline-block; color:#7dd3fc;">${_isNswRfs ? 'View on Fires Near Me' : 'View on the ' + escapeHtml(_fireAgency) + ' incident map'} →</a>
         </div>
       `;
       const editorPanel = document.getElementById('selection-editor');

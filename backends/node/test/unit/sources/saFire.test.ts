@@ -1,7 +1,7 @@
 /**
  * South Australia (CFS + MFS) feed tests.
  *
- * Four things here would be wrong silently rather than loudly:
+ * Five things here would be wrong silently rather than loudly:
  *
  *   - a car crash landing on the bushfire layer, because SA writes
  *     "Vehicle Accident" and no other state's crash pattern matches it;
@@ -10,9 +10,11 @@
  *   - SA ESS's "File Unavailable" HTML being parsed as a feed, because
  *     it is served with a 200;
  *   - the two agencies' guids colliding, because they share one
- *     dispatch sequence.
+ *     dispatch sequence;
+ *   - a COMPLETE job drawn as a live pin, because SA leaves finished
+ *     incidents in the feed and is_active was computed but never used.
  *
- * All four are pinned below.
+ * All five are pinned below.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -22,15 +24,21 @@ vi.mock('../../../src/sources/shared/http.js', () => ({
   HttpError: class HttpError extends Error {},
 }));
 
+import { Hono } from 'hono';
+import { liveStore } from '../../../src/store/live.js';
 import {
   adelaideIso,
   fetchSaCfs,
   fetchSaMfs,
   saAlertLevel,
+  saCfsActiveSnapshot,
+  saCfsSnapshot,
   saLayerFor,
+  saMfsActiveSnapshot,
   saResourcesText,
   toSaFeature,
 } from '../../../src/sources/saFire.js';
+import { saFireRouter } from '../../../src/api/sa-fire.js';
 
 /** A CFS record, verbatim in shape from the live feed. */
 const CFS_BURN = {
@@ -204,6 +212,19 @@ describe('toSaFeature', () => {
     expect(saResourcesText(f)).toBe('1 appliance');
   });
 
+  it('carries the resources line on the feature, so the popup need not rebuild it', () => {
+    // The contract with the frontend: a string, always present, empty
+    // when nothing is turned out. map.html reads props.resourcesText
+    // instead of re-deriving the singular/plural rule.
+    expect(toSaFeature(CFS_CRASH, 'SACFS')!.properties.resourcesText)
+      .toBe('3 appliances, 1 aircraft');
+    expect(toSaFeature(CFS_BURN, 'SACFS')!.properties.resourcesText).toBe('');
+    expect(toSaFeature(MFS_ALARM, 'SAMFS')!.properties.resourcesText).toBe('');
+    // One aircraft is still "aircraft" — its own plural.
+    expect(toSaFeature({ ...CFS_CRASH, Resources: 0 }, 'SACFS')!.properties.resourcesText)
+      .toBe('1 aircraft');
+  });
+
   it('does not repeat the district when the location already names it', () => {
     const f = toSaFeature(MFS_ALARM, 'SAMFS')!;
     expect(f.properties.location).toBe('GILLES STREET, ADELAIDE, ADELAIDE METROPOLITAN');
@@ -263,5 +284,72 @@ describe('fetchSaCfs / fetchSaMfs', () => {
   it('drops unplaceable records without failing the batch', async () => {
     fetchJson.mockResolvedValue([CFS_BURN, { ...CFS_CRASH, Location: '' }]);
     expect((await fetchSaCfs()).count).toBe(1);
+  });
+});
+
+/**
+ * SA does not remove a job the moment it closes — it sits in the feed
+ * marked COMPLETE. Measured on a live sa_mfs poll: 7 records, 2 of them
+ * inactive. Serving the raw snapshot therefore drew finished work as
+ * live pins, which is what these pin.
+ */
+describe('active-only snapshots', () => {
+  function store(key: 'sa_cfs' | 'sa_mfs', raws: unknown[], agency: 'SACFS' | 'SAMFS'): void {
+    const features = raws.map((r) => toSaFeature(r, agency)!);
+    liveStore.set(key, { type: 'FeatureCollection', features, count: features.length });
+  }
+
+  beforeEach(() => {
+    liveStore.delete('sa_cfs');
+    liveStore.delete('sa_mfs');
+  });
+
+  it('drops a COMPLETE record and keeps a GOING one', () => {
+    store('sa_cfs', [CFS_CRASH, CFS_DONE], 'SACFS');
+    const active = saCfsActiveSnapshot();
+    expect(active.count).toBe(1);
+    expect(active.features.map((f) => f.properties.guid)).toEqual(['sa:cfs:1722524']);
+    // The archive still wants both.
+    expect(saCfsSnapshot().count).toBe(2);
+  });
+
+  it('filters MFS the same way', () => {
+    store('sa_mfs', [MFS_ALARM, { ...MFS_ALARM, IncidentNo: '1722546', Status: 'COMPLETE' }], 'SAMFS');
+    expect(saMfsActiveSnapshot().count).toBe(1);
+  });
+
+  it('is empty rather than undefined before the first poll', () => {
+    expect(saCfsActiveSnapshot()).toEqual({ type: 'FeatureCollection', features: [], count: 0 });
+    expect(saMfsActiveSnapshot().count).toBe(0);
+  });
+});
+
+describe('GET /api/sa-fire/{cfs,mfs}', () => {
+  const app = new Hono().route('/', saFireRouter);
+
+  beforeEach(() => {
+    const features = [CFS_CRASH, CFS_DONE].map((r) => toSaFeature(r, 'SACFS')!);
+    liveStore.set('sa_cfs', { type: 'FeatureCollection', features, count: features.length });
+    liveStore.delete('sa_mfs');
+  });
+
+  it('serves only what is still running', async () => {
+    const res = await app.request('/api/sa-fire/cfs');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { count: number; features: { properties: { status: string } }[] };
+    expect(body.count).toBe(1);
+    expect(body.features[0]!.properties.status).toBe('GOING');
+  });
+
+  it('serves everything under ?all=1, the debugging escape hatch', async () => {
+    const res = await app.request('/api/sa-fire/cfs?all=1');
+    const body = (await res.json()) as { count: number };
+    expect(body.count).toBe(2);
+  });
+
+  it('does not 500 on an unpolled feed', async () => {
+    const res = await app.request('/api/sa-fire/mfs');
+    expect(res.status).toBe(200);
+    expect((await res.json() as { count: number }).count).toBe(0);
   });
 });

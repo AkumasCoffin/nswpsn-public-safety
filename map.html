@@ -5875,17 +5875,14 @@ function initPagerHoursFromStorage() {
             'ADVICE TO THE PUBLIC': '',
             title: props.title
           };
-          // The CFS counts appliances and aircraft; the MFS feed carries
-          // neither field. Zero means the feed has not said, the same as
-          // it does for Victoria and Queensland.
-          const appliances = Number(props.resources) || 0;
-          const aircraft = Number(props.aircraft) || 0;
-          if (appliances > 0 || aircraft > 0) {
-            details['RESOURCES'] = [
-              appliances > 0 ? `${appliances} ${appliances === 1 ? 'appliance' : 'appliances'}` : '',
-              aircraft > 0 ? `${aircraft} aircraft` : '',
-            ].filter(Boolean).join(', ');
-          }
+          // "3 appliances, 1 aircraft" is composed by the backend, which
+          // is the side that knows the CFS counts appliances and aircraft
+          // while the MFS feed carries neither field. It arrives empty
+          // when nothing is turned out. This used to be rebuilt here from
+          // props.resources/props.aircraft, which meant two copies of the
+          // same pluralisation rules drifting apart — deliberately not
+          // kept as a fallback, so there is exactly one definition.
+          if (props.resourcesText) details['RESOURCES'] = props.resourcesText;
 
           rfsItems.push({
             id: generateRfsId(props.guid || `sa-${idx}`),
@@ -7521,6 +7518,34 @@ function initPagerHoursFromStorage() {
       return Array.isArray(v) ? v : undefined;
     }
 
+    // When a history snapshot was taken, as something new Date() cannot
+    // misread. The API sends the same instant twice: fetched_at as unix
+    // seconds (1788334663) and fetched_at_iso as naive server-local time
+    // with no offset ("2026-09-02T17:37:43"). We used to take the ISO
+    // first, so new Date() applied the *viewer's* zone — right in AEST,
+    // two hours out in WA, thirty minutes in SA. And because formatAgo
+    // refuses to print a negative age, everyone west of the server just
+    // lost the age silently. Since WA and SA joined the map that is a
+    // real audience, so read the unix seconds and hand formatAgo a UTC
+    // ISO string: it does new Date(iso), so a bare seconds value would
+    // be read as milliseconds and land in 1970.
+    function trailStamp(r) {
+      const secs = Number(r && r.fetched_at);
+      if (Number.isFinite(secs) && secs > 0) {
+        // Seconds today are ten digits; they do not reach 1e11 until the
+        // year 5138, so anything bigger is already milliseconds. Without
+        // this a backend switching units would put every change 3000
+        // years in the future and formatAgo would blank the age again —
+        // the same silent failure, from the other direction.
+        return new Date(secs > 1e11 ? secs : secs * 1000).toISOString();
+      }
+      // Nothing unambiguous on offer. The naive string is still better
+      // than no age for the eastern majority; it cannot be repaired here
+      // because we do not know the server's offset, and guessing one
+      // (appending 'Z') would break it for everybody instead of some.
+      return (r && r.fetched_at_iso) || '';
+    }
+
     async function loadChangeTrail(source, sourceId) {
       if (!source || !sourceId) return [];
       const key = _trailKey(source, sourceId);
@@ -7548,7 +7573,7 @@ function initPagerHoursFromStorage() {
             status: (r.status || d.status || '').trim(),
             level: (d.alertLevel || r.severity || '').trim(),
             units,
-            at: r.fetched_at_iso || r.fetched_at || '',
+            at: trailStamp(r),
           };
         };
         const out = [];
@@ -18358,6 +18383,6 @@ function initPagerHoursFromStorage() {
   <script src="ui-dialogs.js"></script>
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
-  <script src="map-editor-module.js?v=37"></script>
+  <script src="map-editor-module.js?v=38"></script>
 </body>
 </html>

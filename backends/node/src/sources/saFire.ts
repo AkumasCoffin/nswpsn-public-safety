@@ -66,6 +66,13 @@ export interface SaFeature {
     /** CFS only: appliances and aircraft turned out to it. */
     resources: number | null;
     aircraft: number | null;
+    /**
+     * The same two counts as one line — "3 appliances, 1 aircraft", or ''
+     * when nothing is turned out. Formatted here so the popup reads it
+     * rather than rebuilding it: the singular/plural rule lived in both
+     * places at once and only one copy would ever get fixed.
+     */
+    resourcesText: string;
     /** CFS only: the public message, when one has been written. */
     text: string;
     url: string;
@@ -242,8 +249,9 @@ function resourcesFor(resources: number | null, aircraft: number | null): string
   if (resources && resources > 0) {
     bits.push(`${resources} ${resources === 1 ? 'appliance' : 'appliances'}`);
   }
+  // "aircraft" is its own plural, unlike appliance/appliances above.
   if (aircraft && aircraft > 0) {
-    bits.push(`${aircraft} ${aircraft === 1 ? 'aircraft' : 'aircraft'}`);
+    bits.push(`${aircraft} aircraft`);
   }
   return bits.join(', ');
 }
@@ -295,6 +303,7 @@ export function toSaFeature(raw: unknown, agency: SaAgency): SaFeature | null {
       district,
       resources,
       aircraft,
+      resourcesText: resourcesFor(resources, aircraft),
       text: tidy(p['Message']),
       url: tidy(p['Message_link']) || AGENCY_URL[agency],
       // COMPLETE is the feed's own word for finished. Everything else —
@@ -306,9 +315,15 @@ export function toSaFeature(raw: unknown, agency: SaAgency): SaFeature | null {
   };
 }
 
-/** The resources line, exposed so the frontend need not rebuild it. */
+/**
+ * The resources line for a feature.
+ *
+ * It is now carried on the feature itself, so this reads the property
+ * rather than reformatting the counts — the whole point of B3 was that
+ * the rule should exist once.
+ */
 export function saResourcesText(f: SaFeature): string {
-  return resourcesFor(f.properties.resources, f.properties.aircraft);
+  return f.properties.resourcesText;
 }
 
 async function fetchFeed(url: string, agency: SaAgency, label: string): Promise<SaSnapshot> {
@@ -360,10 +375,35 @@ export default function register(): void {
   });
 }
 
+/** Every record, COMPLETE ones included — the archive wants those. */
 export function saCfsSnapshot(): SaSnapshot {
   return liveStore.getData<SaSnapshot>('sa_cfs') ?? EMPTY;
 }
 
 export function saMfsSnapshot(): SaSnapshot {
   return liveStore.getData<SaSnapshot>('sa_mfs') ?? EMPTY;
+}
+
+/**
+ * What the map should draw: incidents still running.
+ *
+ * SA leaves finished jobs in the feed for a while after they close — a
+ * sampled sa_mfs poll had 2 of 7 records already COMPLETE — so serving
+ * the raw snapshot put roughly a quarter of SA's pins on the map as live
+ * work that had already been packed up. is_active is computed in
+ * toSaFeature; this is the same filter NT applies, for the same reason,
+ * and it belongs here rather than in the browser because no other layer
+ * asks the frontend to do it.
+ */
+function activeOnly(snap: SaSnapshot): SaSnapshot {
+  const features = snap.features.filter((f) => f.properties.is_active !== false);
+  return { type: 'FeatureCollection', features, count: features.length };
+}
+
+export function saCfsActiveSnapshot(): SaSnapshot {
+  return activeOnly(saCfsSnapshot());
+}
+
+export function saMfsActiveSnapshot(): SaSnapshot {
+  return activeOnly(saMfsSnapshot());
 }
