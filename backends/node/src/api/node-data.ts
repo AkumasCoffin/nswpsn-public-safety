@@ -668,6 +668,139 @@ function iso(v: unknown): string {
 }
 
 // ---------------------------------------------------------------------------
+/** The eight tile figures, however they were sourced. */
+export interface RadioTotals {
+  received: number;
+  transmissions: number;
+  ingested: number;
+  no_tgid: number;
+  enc: number;
+  not_recorded: number;
+  dropped_patch: number;
+  dropped_site: number;
+}
+
+/**
+ * The outcome classification, as SQL, against a column holding the call's
+ * home talkgroup.
+ *
+ * Written once and shared by the rollup read so the precedence cannot drift
+ * from radioReceptionsSql's CASE: encrypted beats unprogrammed beats
+ * recorded, and cardinality() = 0 means "we could not ask rdio" rather than
+ * "nothing is programmed" — the same guard, for the same reason.
+ */
+export function outcomeSql(homeCol: string, encParam: string, progParam: string) {
+  const isEnc = `${homeCol} = ANY(${encParam}::int[])`;
+  const isNoTgid =
+    `cardinality(${progParam}::int[]) > 0 AND ${homeCol} <> ALL(${progParam}::int[])`;
+  return { isEnc, isNoTgid };
+}
+
+/**
+ * The tiles, summed from node_radio_hourly_rx plus the hour in progress.
+ *
+ * The rollup holds one row per (completed hour, home talkgroup) — tens of rows
+ * an hour against the ~73,000 detail rows the same hour contains — so a 30-day
+ * window reads thousands of rows instead of 1.75M. That is the entire point:
+ * the detail query is not slow, it is just enormous, and its cost is linear in
+ * the window (measured at ~1.7s per day).
+ *
+ * WINDOW EDGES. The rollup is bucketed, so the window is whole hours back from
+ * the top of the current hour, and the current partial hour is unioned from
+ * detail. That makes the span slightly longer than the literal interval — a
+ * "24h" view covers 24 whole hours plus however far into this one we are —
+ * which is steadier than a sliding edge that reshuffles the first bucket on
+ * every poll.
+ *
+ * A call that straddles the boundary is counted twice: the rollup attributed
+ * the whole call to the hour it STARTED in, and the partial-hour scan sees its
+ * tail and treats it as a call of its own. At roughly 400 calls an hour, each
+ * a few seconds long, that is on the order of one call, once, at the single
+ * live boundary — not once per hour of the window. Left uncorrected
+ * deliberately: an anti-join against the previous hour would cost more than
+ * the error.
+ *
+ * Returns null when it cannot answer, and the caller falls back to detail.
+ */
+export async function radioTotalsFromRollup(
+  pool: Pool,
+  window: Exclude<Windows, 'all'>,
+  encTgIds: number[],
+  progTgIds: number[],
+  hideEnc: boolean,
+): Promise<RadioTotals | null> {
+  const iv = WINDOW_INTERVAL[window];
+  const { isEnc, isNoTgid } = outcomeSql('home_talkgroup', '$2', '$3');
+  // Hiding encrypted traffic drops those calls from every figure rather than
+  // zeroing one tile, so the buckets still partition `received` — the same
+  // treatment the detail path gives it.
+  const encFilter = hideEnc ? ` AND NOT (${isEnc})` : '';
+
+  const rollup = await pool.query<Record<string, unknown>>(
+    `SELECT
+       COALESCE(SUM(receptions), 0)::int                       AS received,
+       COALESCE(SUM(transmissions), 0)::int                    AS transmissions,
+       COALESCE(SUM(receptions - receptions_home), 0)::int      AS dropped_patch,
+       COALESCE(SUM(receptions_home - transmissions), 0)::int   AS dropped_site,
+       COALESCE(SUM(transmissions) FILTER (WHERE ${isEnc}), 0)::int AS enc,
+       COALESCE(SUM(transmissions) FILTER (
+         WHERE NOT (${isEnc}) AND (${isNoTgid})), 0)::int       AS no_tgid,
+       COALESCE(SUM(recorded) FILTER (
+         WHERE NOT (${isEnc}) AND NOT (${isNoTgid})), 0)::int   AS ingested
+     FROM node_radio_hourly_rx
+    WHERE hour >= date_trunc('hour', now()) - $1::interval
+      AND hour <  date_trunc('hour', now())${encFilter}`,
+    [iv, encTgIds, progTgIds],
+  );
+
+  // The hour in progress, which the rollup deliberately never builds — it
+  // would have to recompute it on every pass. One hour is ~6k rows.
+  const partial = await pool.query<Record<string, unknown>>(
+    radioReceptionsSql(
+      `received_at >= date_trunc('hour', now()) AND ${CALL_GROUP}`,
+      '$1',
+      '$2',
+      hideEnc,
+    ),
+    [encTgIds, progTgIds],
+  );
+
+  const r = rollup.rows[0];
+  const p = partial.rows[0];
+  if (!r || !p) return null;
+
+  const add = (k: string): number => num(r[k]) + num(p[k]);
+  const received = add('received');
+  const transmissions = add('transmissions');
+  const enc = add('enc');
+  const no_tgid = add('no_tgid');
+  const ingested = add('ingested');
+  // The residual, so the four outcome buckets always account for every
+  // transmission exactly — the identity the detail path's CASE/ELSE gives for
+  // free. Clamped because it is derived rather than counted: if the rollup and
+  // the live hour ever disagree enough to overshoot, a tile reading -3 is a
+  // worse answer than 0, and the warn is how we find out rather than hearing
+  // it from a screenshot.
+  const residual = transmissions - ingested - enc - no_tgid;
+  if (residual < 0) {
+    log.warn(
+      { received, transmissions, ingested, enc, no_tgid, residual },
+      'overview: rollup outcomes exceed transmissions — clamping not_recorded',
+    );
+  }
+
+  return {
+    received,
+    transmissions,
+    enc,
+    no_tgid,
+    ingested,
+    not_recorded: Math.max(0, residual),
+    dropped_patch: add('dropped_patch'),
+    dropped_site: add('dropped_site'),
+  };
+}
+
 // GET /api/node-data/overview?window=24h|7d|30d|all&scope=all|radio|pager
 // ---------------------------------------------------------------------------
 nodeDataRouter.get(
@@ -927,8 +1060,23 @@ nodeDataRouter.get(
         // pager queries keep the fleet-wide `cond`/`[iv]`.
         const radioCond = nodeId !== null ? `${cond} AND node_id = $2` : cond;
         const radioParams: unknown[] = nodeId !== null ? [iv, nodeId] : [iv];
+
+        // Fleet-wide totals come from the hourly rollup; a node-scoped request
+        // still reads detail.
+        //
+        // Not an oversight: scoping to one node changes what a reception IS.
+        // The rollup is keyed on the call's home talkgroup with no node in the
+        // grain, and its transmission counts are attributed once per call
+        // across the whole fleet — filtering those rows by node would silently
+        // undercount rather than narrow. The node selector is a drill-down, so
+        // it keeps the exact path.
+        const rollupTotals =
+          wantRadio && nodeId === null
+            ? await radioTotalsFromRollup(pool, window, encTgIds, progTgIds, hideEnc)
+            : null;
+        if (rollupTotals) pt.mark('totals-rollup');
         const [rTot, pTot, pnR, pnP, tg, un, si, sr, sp] = await inFlightLimit(OVERVIEW_CONCURRENCY, [
-          () => wantRadio
+          () => wantRadio && !rollupTotals
             ? pool.query<{
                 received: unknown;
                 transmissions: unknown;
@@ -1046,14 +1194,16 @@ nodeDataRouter.get(
               )
             : null,
         ]);
-        receptionsReceived = num(rTot?.rows[0]?.received);
-        transmissions = num(rTot?.rows[0]?.transmissions);
-        receptionsIngested = num(rTot?.rows[0]?.ingested);
-        droppedNoTgid = num(rTot?.rows[0]?.no_tgid);
-        droppedEnc = num(rTot?.rows[0]?.enc);
-        droppedNotRecorded = num(rTot?.rows[0]?.not_recorded);
-        droppedPatch = num(rTot?.rows[0]?.dropped_patch);
-        droppedSite = num(rTot?.rows[0]?.dropped_site);
+        // The rollup answered, or the detail query did.
+        const rt = rollupTotals ?? rTot?.rows[0];
+        receptionsReceived = num(rt?.received);
+        transmissions = num(rt?.transmissions);
+        receptionsIngested = num(rt?.ingested);
+        droppedNoTgid = num(rt?.no_tgid);
+        droppedEnc = num(rt?.enc);
+        droppedNotRecorded = num(rt?.not_recorded);
+        droppedPatch = num(rt?.dropped_patch);
+        droppedSite = num(rt?.dropped_site);
         pages = num(pTot?.rows[0]?.raw);
         pagesLogical = num(pTot?.rows[0]?.logical);
         perNodeRadioRows = pnR?.rows ?? [];

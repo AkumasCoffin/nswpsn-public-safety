@@ -48,6 +48,16 @@ const MAX_BACKFILL_HOURS = 24 * 31;
  */
 const BATCH_HOURS = 24;
 
+/**
+ * How far back each pass re-derives, on top of the hours it has never seen.
+ *
+ * Covers the lag between a call and its audio: markRecorded lands after the
+ * call ends and can cross an hour boundary, so the hour just closed is not
+ * final when it closes. Six hours is far more slack than that needs and costs
+ * six DELETE+INSERT pairs an hour against a table of tens of rows per hour.
+ */
+const REDERIVE_HOURS = 6;
+
 /** A call, and only a call. Kept textually identical to node-data.ts's
  *  callGroup() — if one changes the other must. */
 const CALL_GROUP =
@@ -186,6 +196,77 @@ async function rollupRange(
       [from.toISOString(), to.toISOString()],
     );
 
+    // The overview's eight tiles, at the grain they are actually asked for.
+    //
+    // This is radioReceptionsSql from api/node-data.ts, bucketed by hour and
+    // summarised per home talkgroup. It has to stay a mirror of that query:
+    // if the two definitions of a reception drift, the page silently reports
+    // different numbers depending on which window it is showing.
+    //
+    // THE CALL IS THE UNIT, and its earliest event defines it. `home` is that
+    // event's talkgroup and `hour` is that event's hour, so a call spanning a
+    // boundary lands in one bucket rather than being counted in both. Summing
+    // rows across hours is then exact, which is the whole point.
+    //
+    // Ordering is by id, matching the read path: an unnested patch member
+    // inherits its parent row's id, so ordering the EXPANDED set would leave
+    // ties that resolve arbitrarily and `home` would differ run to run.
+    await client.query(
+      `DELETE FROM node_radio_hourly_rx WHERE hour >= $1::timestamptz AND hour < $2::timestamptz`,
+      [from.toISOString(), to.toISOString()],
+    );
+    await client.query(
+      `WITH ev AS MATERIALIZED (
+         SELECT id, logical_call_id, talkgroup, patch_members, node_id,
+                COALESCE(site_rfss, -1) AS rfss, COALESCE(site_id, -1) AS site,
+                COALESCE(system, 0) AS system,
+                recorded,
+                date_trunc('hour', received_at) AS hour
+           FROM node_radio_events
+          WHERE received_at >= $1::timestamptz AND received_at < $2::timestamptz
+            AND ${CALL_GROUP}
+       ), tx AS (
+         -- One row per call: when it started, what talkgroup it started on,
+         -- and whether anything ever recorded it.
+         SELECT logical_call_id,
+                bool_or(recorded) AS rec,
+                (array_agg(talkgroup ORDER BY id))[1] AS home,
+                (array_agg(hour ORDER BY id))[1] AS hour
+           FROM ev GROUP BY logical_call_id
+       ), expanded AS (
+         SELECT logical_call_id, node_id, rfss, site, talkgroup AS tg FROM ev
+         UNION ALL
+         SELECT logical_call_id, node_id, rfss, site, unnest(patch_members)
+           FROM ev WHERE patch_members IS NOT NULL
+       ), pairs AS (
+         SELECT DISTINCT logical_call_id, node_id, rfss, site, tg FROM expanded
+       ), rx AS (
+         SELECT t.hour, t.home,
+                COUNT(*)::int AS receptions,
+                (COUNT(*) FILTER (WHERE p.tg IS NOT DISTINCT FROM t.home))::int
+                  AS receptions_home
+           FROM pairs p JOIN tx t USING (logical_call_id)
+          GROUP BY 1, 2
+       ), calls AS (
+         -- Attribution is unnecessary here BECAUSE the call is already the
+         -- grain: it has exactly one hour and one home, so counting distinct
+         -- calls per (hour, home) cannot double-count the way the per-site
+         -- table could. That is what buying the narrower grain gets us.
+         SELECT hour, home,
+                COUNT(*)::int AS transmissions,
+                (COUNT(*) FILTER (WHERE rec))::int AS recorded
+           FROM tx GROUP BY 1, 2
+       )
+       INSERT INTO node_radio_hourly_rx
+         (hour, home_talkgroup, receptions, receptions_home, transmissions, recorded)
+       SELECT rx.hour, COALESCE(rx.home, 0),
+              rx.receptions, rx.receptions_home,
+              COALESCE(c.transmissions, 0), COALESCE(c.recorded, 0)
+         FROM rx
+         LEFT JOIN calls c ON c.hour = rx.hour AND c.home IS NOT DISTINCT FROM rx.home`,
+      [from.toISOString(), to.toISOString()],
+    );
+
     await client.query(
       `UPDATE node_rollup_state SET rolled_up_to = $1::timestamptz, updated_at = now() WHERE id`,
       [to.toISOString()],
@@ -222,6 +303,25 @@ export async function rollupNodeHourlyOnce(now: Date = new Date()): Promise<numb
     const stored = state.rows[0]?.rolled_up_to ?? null;
     let cursor: Date = stored === null || stored < earliest ? earliest : stored;
     if (cursor >= upTo) return 0;
+
+    // Re-derive a few hours BEHIND the cursor as well as ahead of it.
+    //
+    // `recorded` is not final when an hour ends. markRecorded sets it when the
+    // audio arrives, which is routinely after the call — and so, often enough,
+    // after the hour it belongs to has already been summarised. A cursor that
+    // only moves forward never revisits that hour, so its recorded count stays
+    // permanently short. Nothing noticed while nothing read these tables; the
+    // moment the ingested tile is served from here it becomes wrong numbers on
+    // the page.
+    //
+    // DELETE-then-INSERT per hour makes re-running free of consequence, so the
+    // cheapest correct answer is simply to redo the recent past every pass.
+    if (stored !== null) {
+      const redoFrom = new Date(
+        Math.max(earliest.getTime(), cursor.getTime() - REDERIVE_HOURS * 3_600_000),
+      );
+      if (redoFrom < cursor) cursor = redoFrom;
+    }
 
     let hours = 0;
     while (cursor < upTo) {

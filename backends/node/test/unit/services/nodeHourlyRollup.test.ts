@@ -48,16 +48,40 @@ beforeEach(() => {
 
 describe('rollupNodeHourlyOnce', () => {
   it('never summarises the hour in progress', async () => {
-    // Cursor at 10:00, "now" is 11:30 — only 10:00→11:00 is complete.
+    // Cursor at 10:00, "now" is 11:30 — 11:00→11:30 is still running.
     armCursor('2026-08-24T10:00:00.000Z');
-    const hours = await rollupNodeHourlyOnce(new Date('2026-08-24T11:30:00.000Z'));
+    await rollupNodeHourlyOnce(new Date('2026-08-24T11:30:00.000Z'));
 
-    expect(hours).toBe(1);
     // The upper bound is the top of the current hour, never 11:30: an hour
     // summarised while still running would need summarising again.
     const p = paramsOf('INSERT INTO node_radio_hourly\n');
-    expect(p[0]).toBe('2026-08-24T10:00:00.000Z');
     expect(p[1]).toBe('2026-08-24T11:00:00.000Z');
+  });
+
+  it('re-derives the recent past, not just the hours it has never seen', async () => {
+    // `recorded` is not final when an hour ends. markRecorded sets it when the
+    // audio arrives, which lands after the call and so, often enough, after
+    // the hour it belongs to was summarised. A cursor that only moved forward
+    // left that hour permanently short — invisible while nothing read these
+    // tables, and wrong numbers on the page the moment a tile is served from
+    // one.
+    armCursor('2026-08-24T10:00:00.000Z');
+    const hours = await rollupNodeHourlyOnce(new Date('2026-08-24T11:30:00.000Z'));
+
+    // Six hours back, plus the one new one.
+    expect(hours).toBe(7);
+    const p = paramsOf('INSERT INTO node_radio_hourly\n');
+    expect(p[0]).toBe('2026-08-24T04:00:00.000Z');
+  });
+
+  it('does not walk back past the backfill window on a cold start', async () => {
+    // A null cursor already reaches back as far as the detail table goes;
+    // subtracting another six hours would only run off the end of it.
+    armCursor(null);
+    await rollupNodeHourlyOnce(new Date('2026-08-24T11:30:00.000Z'));
+    const p = paramsOf('INSERT INTO node_radio_hourly\n');
+    const upTo = Date.UTC(2026, 7, 24, 11, 0, 0);
+    expect(p[0]).toBe(new Date(upTo - 24 * 31 * 3_600_000).toISOString());
   });
 
   it('does nothing when the cursor is already at the current hour', async () => {
