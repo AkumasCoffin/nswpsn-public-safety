@@ -564,6 +564,57 @@ function phaseTimer(label: string) {
   };
 }
 
+/**
+ * How many of the overview's queries may be in flight at once.
+ *
+ * They all scan the SAME seven-day slice of node_radio_events, which is the
+ * whole reason a limit helps rather than hurts: run concurrently they evict
+ * each other from shared_buffers, run in sequence the first one warms the
+ * cache and the rest read it back. Measured on production, one of them alone
+ * is 660ms and touches 220,360 buffers — every one a cache hit, zero reads.
+ * Seven at once is ~1.5GB of buffer demand against a table whose heap and
+ * indexes total 2.1GB, so they thrash, hits become reads, and 660ms becomes
+ * the 30s statement timeout. A beautiful plan the whole way down.
+ *
+ * Three rather than one because they are not all heavy and the pager side
+ * touches different tables entirely; tune with PG_OVERVIEW_CONCURRENCY if the
+ * phase timings say otherwise.
+ */
+const OVERVIEW_CONCURRENCY = Math.max(
+  1,
+  Number(process.env['PG_OVERVIEW_CONCURRENCY'] ?? '3') || 3,
+);
+
+/**
+ * Promise.all with a ceiling on how many run at once.
+ *
+ * Takes thunks rather than promises — a promise has already started, so an
+ * array of them cannot be throttled after the fact. The mapped tuple type
+ * keeps each result's own type through the call, which a plain
+ * `Array<() => Promise<unknown>>` would flatten to a union and cost every
+ * `?.rows` below its typing.
+ */
+export async function inFlightLimit<T extends readonly unknown[]>(
+  limit: number,
+  tasks: readonly [...{ [K in keyof T]: () => T[K] }],
+  // Awaited, mirroring Promise.all: a thunk here returns
+  // `Promise<QueryResult> | null`, and the caller wants `QueryResult | null`.
+): Promise<{ -readonly [K in keyof T]: Awaited<T[K]> }> {
+  const out = new Array(tasks.length) as { -readonly [K in keyof T]: Awaited<T[K]> };
+  let next = 0;
+  const runner = async (): Promise<void> => {
+    for (;;) {
+      const i = next++;
+      if (i >= tasks.length) return;
+      out[i] = (await tasks[i]!()) as Awaited<T[typeof i]>;
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(limit, tasks.length) }, () => runner()),
+  );
+  return out;
+}
+
 /** One entry per receiving site, keeping the first frequency any reception on
  *  that site named. See the sites aggregate in /events for why duplicates
  *  reach here at all. */
@@ -732,8 +783,8 @@ nodeDataRouter.get(
         // index do its job.
         const nAllFloor = `received_at >= now() - interval '30 days' AND `;
         const [radioTotQ, pagerTotQ, pnR, pnP, tg, un, si, sr, sp] =
-          await Promise.all([
-            wantRadio
+          await inFlightLimit(OVERVIEW_CONCURRENCY, [
+            () => wantRadio
               ? pool.query<{
                   received: unknown;
                   transmissions: unknown;
@@ -757,14 +808,14 @@ nodeDataRouter.get(
                   [...nAllParams, encTgIds, progTgIds],
                 )
               : null,
-            wantPager
+            () => wantPager
               ? pool.query<{ raw: unknown; logical: unknown }>(
                   `SELECT COALESCE(SUM(pages), 0)::bigint AS raw,
                           COALESCE(SUM(logical_pages), 0)::bigint AS logical
                      FROM node_pager_hourly`,
                 )
               : null,
-            wantRadio
+            () => wantRadio
               ? pool.query<{ node_id: string; calls: unknown; bytes: unknown }>(
                   `SELECT node_id, COUNT(*)::int AS calls,
                           COALESCE(SUM(audio_bytes), 0)::bigint AS bytes
@@ -773,13 +824,13 @@ nodeDataRouter.get(
                   nAllParams,
                 )
               : null,
-            wantPager
+            () => wantPager
               ? pool.query<{ node_id: string; pages: unknown }>(
                   `SELECT node_id, SUM(pages)::bigint AS pages
                      FROM node_pager_hourly GROUP BY node_id`,
                 )
               : null,
-            wantRadio
+            () => wantRadio
               ? pool.query<{
                   system: number;
                   talkgroup: number;
@@ -806,7 +857,7 @@ nodeDataRouter.get(
                   nAllParams,
                 )
               : null,
-            wantRadio
+            () => wantRadio
               ? pool.query<{ unit: number; alias: string | null; receptions: unknown }>(
                   // Receptions, same tuple as the talkgroup card — see the
                   // detail-path twin for why COUNT(*) was wrong here.
@@ -823,7 +874,7 @@ nodeDataRouter.get(
                   nAllParams,
                 )
               : null,
-            wantRadio
+            () => wantRadio
               ? pool.query<{ site_rfss: number; site_id: number; receptions: unknown }>(
                   // Receptions this site carried — see the detail-path twin.
                   `SELECT site_rfss, site_id,
@@ -835,7 +886,7 @@ nodeDataRouter.get(
                   nAllParams,
                 )
               : null,
-            wantRadio
+            () => wantRadio
               ? pool.query<{ bucket: Date; n: unknown }>(
                   `SELECT date_trunc('day', received_at) AS bucket, COUNT(*)::int AS n
                      FROM node_radio_events
@@ -843,7 +894,7 @@ nodeDataRouter.get(
                   nAllParams,
                 )
               : null,
-            wantPager
+            () => wantPager
               ? pool.query<{ bucket: Date; n: unknown }>(
                   `SELECT date_trunc('day', hour) AS bucket, SUM(pages)::bigint AS n
                      FROM node_pager_hourly GROUP BY 1 ORDER BY 1`,
@@ -876,8 +927,8 @@ nodeDataRouter.get(
         // pager queries keep the fleet-wide `cond`/`[iv]`.
         const radioCond = nodeId !== null ? `${cond} AND node_id = $2` : cond;
         const radioParams: unknown[] = nodeId !== null ? [iv, nodeId] : [iv];
-        const [rTot, pTot, pnR, pnP, tg, un, si, sr, sp] = await Promise.all([
-          wantRadio
+        const [rTot, pTot, pnR, pnP, tg, un, si, sr, sp] = await inFlightLimit(OVERVIEW_CONCURRENCY, [
+          () => wantRadio
             ? pool.query<{
                 received: unknown;
                 transmissions: unknown;
@@ -900,7 +951,7 @@ nodeDataRouter.get(
                 [...radioParams, encTgIds, progTgIds],
               )
             : null,
-          wantPager
+          () => wantPager
             ? pool.query<{ raw: unknown; logical: unknown }>(
                 `SELECT COUNT(*)::int AS raw,
                         COUNT(DISTINCT logical_id)::int AS logical
@@ -908,7 +959,7 @@ nodeDataRouter.get(
                 [iv],
               )
             : null,
-          wantRadio
+          () => wantRadio
             ? pool.query<{ node_id: string; calls: unknown; bytes: unknown }>(
                 `SELECT node_id, COUNT(*)::int AS calls,
                         COALESCE(SUM(audio_bytes), 0)::bigint AS bytes
@@ -917,14 +968,14 @@ nodeDataRouter.get(
                 radioParams,
               )
             : null,
-          wantPager
+          () => wantPager
             ? pool.query<{ node_id: string; pages: unknown }>(
                 `SELECT node_id, COUNT(*)::int AS pages
                    FROM node_pager_events WHERE ${cond} GROUP BY node_id`,
                 [iv],
               )
             : null,
-          wantRadio
+          () => wantRadio
             ? pool.query<{
                 system: number | null;
                 talkgroup: number | null;
@@ -949,7 +1000,7 @@ nodeDataRouter.get(
                 radioParams,
               )
             : null,
-          wantRadio
+          () => wantRadio
             ? pool.query<{ unit: number; alias: string | null; receptions: unknown }>(
                 // Receptions, same tuple as the talkgroup card — NOT COUNT(*),
                 // which tallied raw GRANT+CALL event rows and overstated the
@@ -965,7 +1016,7 @@ nodeDataRouter.get(
                 radioParams,
               )
             : null,
-          wantRadio
+          () => wantRadio
             ? pool.query<{ site_rfss: number; site_id: number; receptions: unknown }>(
                 // Receptions this site carried: distinct (call, node, talkgroup)
                 // — the site itself is the group key. Raw COUNT(*) here made a
@@ -979,7 +1030,7 @@ nodeDataRouter.get(
                 radioParams,
               )
             : null,
-          wantRadio
+          () => wantRadio
             ? pool.query<{ bucket: Date; n: unknown }>(
                 `SELECT date_trunc('hour', received_at) AS bucket, COUNT(*)::int AS n
                    FROM node_radio_events
@@ -987,7 +1038,7 @@ nodeDataRouter.get(
                 radioParams,
               )
             : null,
-          wantPager
+          () => wantPager
             ? pool.query<{ bucket: Date; n: unknown }>(
                 `SELECT date_trunc('hour', received_at) AS bucket, COUNT(*)::int AS n
                    FROM node_pager_events WHERE ${cond} GROUP BY 1 ORDER BY 1`,
