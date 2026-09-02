@@ -641,11 +641,20 @@ nodeDataRouter.get(
       // queries are never node-filtered (the selector is radio-only).
       const nodeId = qpNode(url);
 
+      // This endpoint could not be explained from outside either: the 500 that
+      // prompted this said only that SOMETHING in a nine-query Promise.all hit
+      // the 30s statement timeout, and which two were named came from the
+      // destructuring order in the stack trace. /talkgroups already reports its
+      // own phases for exactly this reason; costs a Date.now() per phase and
+      // nothing at all on a fast request.
+      const pt = phaseTimer(`overview ${window}/${scope}${nodeId !== null ? '/node' : ''}`);
+
       // Node metadata for perNode name/kind (small table, one read).
       const nodesRes = await pool.query<{ id: string; name: string; kind: string }>(
         `SELECT id, name, kind FROM nodes`,
       );
       const nodeMeta = new Map(nodesRes.rows.map((r) => [r.id, r]));
+      pt.mark('nodes');
 
       // Every one of these is a count of RECEPTIONS or of transmissions, and
       // the six outcome/drop buckets partition `received` exactly — see
@@ -691,6 +700,7 @@ nodeDataRouter.get(
             programmedTalkgroupIds().then((s) => [...s]),
           ])
         : [[] as number[], [] as number[]];
+      pt.mark('tgfacts');
 
       // Hiding encrypted traffic removes those transmissions from the totals
       // entirely — receptions and drops alike — rather than zeroing one tile,
@@ -857,6 +867,7 @@ nodeDataRouter.get(
         topSiteRows = si?.rows ?? [];
         seriesRadioRows = sr?.rows ?? [];
         seriesPagerRows = sp?.rows ?? [];
+        pt.mark('queries-all');
       } else {
         // Detail path: exact logical counts via COUNT(DISTINCT logical_*).
         const iv = WINDOW_INTERVAL[window];
@@ -1001,6 +1012,7 @@ nodeDataRouter.get(
         topSiteRows = si?.rows ?? [];
         seriesRadioRows = sr?.rows ?? [];
         seriesPagerRows = sp?.rows ?? [];
+        pt.mark('queries-detail');
       }
 
       // Merge the two perNode result sets on node_id.
@@ -1124,6 +1136,10 @@ nodeDataRouter.get(
         body['unitsWindowCapped'] = true;
         body['radioWindowCapped'] = true;
       }
+      // Names the slow phase in the same log line as the slow request, so
+      // the next timeout does not need a stack trace read backwards to say
+      // which query it was.
+      pt.done();
       return c.json(body);
     } catch (err) {
       log.error({ err }, '/api/node-data/overview error');

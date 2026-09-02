@@ -4769,7 +4769,20 @@
       if (el) el.style.display = 'none';
     }
 
+    // One overview request at a time.
+    //
+    // The view auto-refreshes every 30s, and this request can take longer
+    // than that: when it does, each tick fires another copy while the last
+    // is still running, so the server ends up holding several overlapping
+    // sets of the same nine queries — a slow endpoint made slower by the
+    // page watching it. The guard is here rather than at the timer because
+    // the Refresh button calls this too, and a second manual copy helps
+    // just as little as a second automatic one.
+    let _nd2OverviewInflight = false;
+
     async function nd2LoadOverview() {
+      if (_nd2OverviewInflight) return;
+      _nd2OverviewInflight = true;
       try {
         const params = new URLSearchParams({ window: nd2.window, scope: nd2.scope });
         if (nd2.node) params.set('node', nd2.node);
@@ -4788,6 +4801,11 @@
         console.error('Error loading node-data overview:', e);
         nd2.overview = null;
         nd2ShowError(e.status, e.message);
+      } finally {
+        // finally, not after the catch: an early return or a throw from the
+        // render calls below would otherwise leave the flag stuck true and
+        // the view frozen for the rest of the session.
+        _nd2OverviewInflight = false;
       }
       nd2RenderStats();
       nd2RenderChart();
