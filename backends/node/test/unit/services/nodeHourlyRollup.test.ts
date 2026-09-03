@@ -100,10 +100,67 @@ describe('rollupNodeHourlyOnce', () => {
     const insNode = order.findIndex((s) => s.includes('INSERT INTO node_radio_hourly\n'));
     const delSys = order.findIndex((s) => s.includes('DELETE FROM node_radio_hourly_sys'));
     const insSys = order.findIndex((s) => s.includes('INSERT INTO node_radio_hourly_sys'));
+    const delUnit = order.findIndex((s) => s.includes('DELETE FROM node_radio_hourly_unit'));
+    const insUnit = order.findIndex((s) => s.includes('INSERT INTO node_radio_hourly_unit'));
     expect(delNode).toBeGreaterThan(-1);
     expect(insNode).toBeGreaterThan(delNode);
     expect(delSys).toBeGreaterThan(-1);
     expect(insSys).toBeGreaterThan(delSys);
+    expect(delUnit).toBeGreaterThan(-1);
+    expect(insUnit).toBeGreaterThan(delUnit);
+  });
+
+  it('buckets a call by the hour it STARTED, in every table', async () => {
+    // The per-node and per-site tables used to bucket each EVENT into its own
+    // hour, so a call spanning a boundary was counted in both. About one call
+    // per boundary — nothing, while nothing read these tables, and a permanent
+    // floor on how closely a window sum could match the detail query the
+    // overview is moving off. All four now agree with node_radio_hourly_rx.
+    armCursor('2026-08-24T10:00:00.000Z');
+    await rollupNodeHourlyOnce(new Date('2026-08-24T11:30:00.000Z'));
+
+    for (const table of [
+      'INSERT INTO node_radio_hourly\n',
+      'INSERT INTO node_radio_hourly_sys',
+      'INSERT INTO node_radio_hourly_rx',
+      'INSERT INTO node_radio_hourly_unit',
+    ]) {
+      const sql = ran(table)[0] ?? '';
+      // Ordered by id rather than received_at, matching radioReceptionsSql:
+      // the rule that picks a call's home talkgroup should pick its hour too.
+      expect(sql).toContain("array_agg(date_trunc('hour', received_at) ORDER BY id)");
+    }
+  });
+
+  it('counts a radio the way the card does, and keeps its alias', async () => {
+    armCursor('2026-08-24T10:00:00.000Z');
+    await rollupNodeHourlyOnce(new Date('2026-08-24T11:30:00.000Z'));
+
+    const sql = ran('INSERT INTO node_radio_hourly_unit')[0] ?? '';
+    // The same tuple the detail query counts. The talkgroup is IN it: a radio
+    // heard on a patched call was heard on each of its talkgroups.
+    expect(sql).toContain('SELECT DISTINCT ch.hour, e.source_unit, e.logical_call_id, e.node_id');
+    expect(sql).toContain('e.rfss, e.site, e.talkgroup');
+    // Aliases that merely echo the RID back as text are not aliases.
+    expect(sql).toContain('e.source_alias <> e.source_unit::text');
+    // The band predicate is NOT applied here — it is a read-time question.
+    expect(sql).not.toContain('BETWEEN 100000');
+  });
+
+  it('attributes calls twice on the per-site table, once per call and once per talkgroup', async () => {
+    armCursor('2026-08-24T10:00:00.000Z');
+    await rollupNodeHourlyOnce(new Date('2026-08-24T11:30:00.000Z'));
+
+    const sys = ran('INSERT INTO node_radio_hourly_sys')[0] ?? '';
+    // logical_calls: once per call, fleet-wide. Summing rows gives the network
+    // total, which is the only reason this table can be summed at all.
+    expect(sys).toContain('PARTITION BY r.hour, r.logical_call_id\n');
+    // logical_calls_tg: once per (call, system, talkgroup). The talkgroup card
+    // asks COUNT(DISTINCT call) PER TALKGROUP, and a patched call belongs to
+    // each of its talkgroups — under the fleet-wide attribution alone every
+    // talkgroup but the lowest would read zero.
+    expect(sys).toContain('PARTITION BY r.hour, r.logical_call_id, r.system, r.talkgroup');
+    expect(sys).toContain('(COUNT(*) FILTER (WHERE a.rn_tg = 1))::int');
   });
 
   it('attributes each call to ONE row, so the site rows still sum correctly', async () => {

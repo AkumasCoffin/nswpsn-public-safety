@@ -544,9 +544,11 @@ export async function recordActivityEvents(
  * when nothing matches — e.g. the agent hasn't shipped that event yet or
  * the call predates the activity stream.
  *
- * Also folds the audio bytes into the matched row's node_radio_hourly
- * bucket (the event insert bucketed 0 bytes since audio size is only known
- * at upload time) so the forever per-node byte rollup stays truthful.
+ * The hourly rollups need no help from here. They used to be bumped per
+ * event, so a late audio size had to be folded into the bucket by hand; since
+ * migration 080 they are DERIVED, recomputed from these rows, and
+ * nodeHourlyRollup re-derives the last few hours on every pass precisely
+ * because an upload can land after the hour it belongs to has closed.
  */
 export async function markRecorded(
   nodeId: string,

@@ -63,6 +63,28 @@ const REDERIVE_HOURS = 6;
 const CALL_GROUP =
   "(event_type LIKE 'CALL_GROUP%' OR event_type LIKE 'CALL_PATCH_GROUP%')";
 
+
+/**
+ * The hour a CALL belongs to: the hour of its earliest event.
+ *
+ * Every rollup buckets on this, so a call spanning an hour boundary lands in
+ * one bucket rather than being counted in both, and summing any set of hours
+ * is exact. The per-node and per-site tables used to bucket each EVENT into
+ * its own hour, which ran about one call adrift per boundary -- invisible
+ * while nothing read them, and a permanent floor on how closely a window sum
+ * could match the detail query it replaces.
+ *
+ * Ordered by id, not by received_at, matching radioReceptionsSql: the same
+ * rule that picks a call's home talkgroup should pick its hour, and id is the
+ * tiebreak that makes both deterministic.
+ *
+ * Expects a preceding CTE named `ev` exposing id, received_at and
+ * logical_call_id.
+ */
+const CALL_HOUR = `SELECT logical_call_id,
+                (array_agg(date_trunc('hour', received_at) ORDER BY id))[1] AS hour
+           FROM ev GROUP BY logical_call_id`;
+
 let timer: NodeJS.Timeout | null = null;
 let tickRunning = false;
 
@@ -108,26 +130,31 @@ async function rollupRange(
       [from.toISOString(), to.toISOString()],
     );
     await client.query(
-      `INSERT INTO node_radio_hourly
+      `WITH ev AS MATERIALIZED (
+         SELECT id, received_at, logical_call_id, node_id,
+                COALESCE(system, 0) AS system,
+                COALESCE(talkgroup, 0) AS talkgroup,
+                COALESCE(site_rfss, -1) AS rfss,
+                COALESCE(site_id, -1) AS site,
+                audio_bytes
+           FROM node_radio_events
+          WHERE received_at >= $1::timestamptz AND received_at < $2::timestamptz
+            AND ${CALL_GROUP}
+       ), ch AS (
+         ${CALL_HOUR}
+       ), r AS (
+         SELECT ch.hour, e.node_id, e.system, e.talkgroup, e.logical_call_id,
+                e.rfss, e.site, MAX(e.audio_bytes) AS audio_bytes
+           FROM ev e JOIN ch USING (logical_call_id)
+          GROUP BY 1, 2, 3, 4, 5, 6, 7
+       )
+       INSERT INTO node_radio_hourly
          (hour, node_id, system, talkgroup, calls, audio_bytes, logical_calls)
        SELECT r.hour, r.node_id, r.system, r.talkgroup,
               COUNT(*)::int,
               COALESCE(SUM(r.audio_bytes), 0)::bigint,
               COUNT(DISTINCT r.logical_call_id)::int
-         FROM (
-           SELECT date_trunc('hour', received_at) AS hour,
-                  node_id,
-                  COALESCE(system, 0) AS system,
-                  COALESCE(talkgroup, 0) AS talkgroup,
-                  logical_call_id,
-                  COALESCE(site_rfss, -1) AS rfss,
-                  COALESCE(site_id, -1) AS site,
-                  MAX(audio_bytes) AS audio_bytes
-             FROM node_radio_events
-            WHERE received_at >= $1::timestamptz AND received_at < $2::timestamptz
-              AND ${CALL_GROUP}
-            GROUP BY 1, 2, 3, 4, 5, 6, 7
-         ) r
+         FROM r
         GROUP BY r.hour, r.node_id, r.system, r.talkgroup`,
       [from.toISOString(), to.toISOString()],
     );
@@ -157,41 +184,60 @@ async function rollupRange(
       `DELETE FROM node_radio_hourly_sys WHERE hour >= $1::timestamptz AND hour < $2::timestamptz`,
       [from.toISOString(), to.toISOString()],
     );
+    //
+    // logical_calls_tg is a SECOND attribution of the same calls, once per
+    // (call, system, talkgroup) instead of once per call. The overview's
+    // talkgroup card asks COUNT(DISTINCT call) PER TALKGROUP, and a patched
+    // call belongs to each of its talkgroups; under the fleet-wide rn = 1 only
+    // the lowest of them would count it and the rest would read zero. Summed
+    // across a talkgroup's sites this equals the detail query exactly.
     await client.query(
-      `INSERT INTO node_radio_hourly_sys
+      `WITH ev AS MATERIALIZED (
+         SELECT id, received_at, logical_call_id, node_id,
+                COALESCE(system, 0) AS system,
+                COALESCE(talkgroup, 0) AS talkgroup,
+                COALESCE(site_rfss, -1) AS rfss,
+                COALESCE(site_id, -1) AS site,
+                encrypted, recorded
+           FROM node_radio_events
+          WHERE received_at >= $1::timestamptz AND received_at < $2::timestamptz
+            AND ${CALL_GROUP}
+       ), ch AS (
+         ${CALL_HOUR}
+       ), r AS (
+         SELECT ch.hour, e.system, e.talkgroup, e.rfss, e.site,
+                e.logical_call_id, e.node_id,
+                bool_or(e.encrypted) AS encrypted,
+                bool_or(e.recorded) AS recorded
+           FROM ev e JOIN ch USING (logical_call_id)
+          GROUP BY 1, 2, 3, 4, 5, 6, 7
+       ), a AS (
+         SELECT r.*,
+                bool_or(r.encrypted) OVER w AS call_encrypted,
+                bool_or(r.recorded) OVER w AS call_recorded,
+                ROW_NUMBER() OVER (
+                  PARTITION BY r.hour, r.logical_call_id
+                  ORDER BY r.system, r.talkgroup, r.rfss, r.site, r.node_id
+                ) AS rn,
+                ROW_NUMBER() OVER (
+                  PARTITION BY r.hour, r.logical_call_id, r.system, r.talkgroup
+                  ORDER BY r.rfss, r.site, r.node_id
+                ) AS rn_tg
+           FROM r
+         WINDOW w AS (PARTITION BY r.hour, r.logical_call_id)
+       )
+       INSERT INTO node_radio_hourly_sys
          (hour, system, talkgroup, site_rfss, site_id,
-          calls, logical_calls, receptions, encrypted_calls, recorded_calls)
+          calls, logical_calls, receptions, encrypted_calls, recorded_calls,
+          logical_calls_tg)
        SELECT a.hour, a.system, a.talkgroup, a.rfss, a.site,
               COUNT(*)::int,
               (COUNT(*) FILTER (WHERE a.rn = 1))::int,
               COUNT(*)::int,
               (COUNT(*) FILTER (WHERE a.rn = 1 AND a.call_encrypted))::int,
-              (COUNT(*) FILTER (WHERE a.rn = 1 AND a.call_recorded))::int
-         FROM (
-           SELECT r.*,
-                  bool_or(r.encrypted) OVER w AS call_encrypted,
-                  bool_or(r.recorded) OVER w AS call_recorded,
-                  ROW_NUMBER() OVER (
-                    PARTITION BY r.hour, r.logical_call_id
-                    ORDER BY r.system, r.talkgroup, r.rfss, r.site, r.node_id
-                  ) AS rn
-             FROM (
-               SELECT date_trunc('hour', received_at) AS hour,
-                      COALESCE(system, 0) AS system,
-                      COALESCE(talkgroup, 0) AS talkgroup,
-                      COALESCE(site_rfss, -1) AS rfss,
-                      COALESCE(site_id, -1) AS site,
-                      logical_call_id,
-                      node_id,
-                      bool_or(encrypted) AS encrypted,
-                      bool_or(recorded) AS recorded
-                 FROM node_radio_events
-                WHERE received_at >= $1::timestamptz AND received_at < $2::timestamptz
-                  AND ${CALL_GROUP}
-                GROUP BY 1, 2, 3, 4, 5, 6, 7
-             ) r
-             WINDOW w AS (PARTITION BY r.hour, r.logical_call_id)
-         ) a
+              (COUNT(*) FILTER (WHERE a.rn = 1 AND a.call_recorded))::int,
+              (COUNT(*) FILTER (WHERE a.rn_tg = 1))::int
+         FROM a
         GROUP BY a.hour, a.system, a.talkgroup, a.rfss, a.site`,
       [from.toISOString(), to.toISOString()],
     );
@@ -220,8 +266,7 @@ async function rollupRange(
          SELECT id, logical_call_id, talkgroup, patch_members, node_id,
                 COALESCE(site_rfss, -1) AS rfss, COALESCE(site_id, -1) AS site,
                 COALESCE(system, 0) AS system,
-                recorded,
-                date_trunc('hour', received_at) AS hour
+                recorded, received_at
            FROM node_radio_events
           WHERE received_at >= $1::timestamptz AND received_at < $2::timestamptz
             AND ${CALL_GROUP}
@@ -231,7 +276,7 @@ async function rollupRange(
          SELECT logical_call_id,
                 bool_or(recorded) AS rec,
                 (array_agg(talkgroup ORDER BY id))[1] AS home,
-                (array_agg(hour ORDER BY id))[1] AS hour
+                (array_agg(date_trunc('hour', received_at) ORDER BY id))[1] AS hour
            FROM ev GROUP BY logical_call_id
        ), expanded AS (
          SELECT logical_call_id, node_id, rfss, site, talkgroup AS tg FROM ev
@@ -264,6 +309,55 @@ async function rollupRange(
               COALESCE(c.transmissions, 0), COALESCE(c.recorded, 0)
          FROM rx
          LEFT JOIN calls c ON c.hour = rx.hour AND c.home IS NOT DISTINCT FROM rx.home`,
+      [from.toISOString(), to.toISOString()],
+    );
+
+    // Top radios, at the grain the card asks for.
+    //
+    // Receptions here are the same tuple the detail query counts --
+    // DISTINCT (call, node, rfss, site, talkgroup) per unit -- so the list can
+    // be summed over a window and still agree with the page around it. The
+    // talkgroup is IN the tuple deliberately: a radio heard on a patched call
+    // was heard on each of its talkgroups, which is how the detail query has
+    // always counted it.
+    //
+    // No RID band filter: RID_VALID is a read-path predicate (see node-data.ts)
+    // and applying it here would freeze today's definition of a plausible radio
+    // id into stored history. Decode noise is a few dozen rows a week.
+    await client.query(
+      `DELETE FROM node_radio_hourly_unit WHERE hour >= $1::timestamptz AND hour < $2::timestamptz`,
+      [from.toISOString(), to.toISOString()],
+    );
+    await client.query(
+      `WITH ev AS MATERIALIZED (
+         SELECT id, received_at, logical_call_id, node_id, source_unit, source_alias,
+                COALESCE(talkgroup, 0) AS talkgroup,
+                COALESCE(site_rfss, -1) AS rfss,
+                COALESCE(site_id, -1) AS site
+           FROM node_radio_events
+          WHERE received_at >= $1::timestamptz AND received_at < $2::timestamptz
+            AND ${CALL_GROUP} AND source_unit IS NOT NULL
+       ), ch AS (
+         ${CALL_HOUR}
+       ), rx AS (
+         SELECT DISTINCT ch.hour, e.source_unit, e.logical_call_id, e.node_id,
+                e.rfss, e.site, e.talkgroup
+           FROM ev e JOIN ch USING (logical_call_id)
+       ), al AS (
+         -- The alias the detail query picks: most recent, skipping the ones
+         -- that only echo the RID back as text.
+         SELECT ch.hour, e.source_unit,
+                (array_agg(e.source_alias ORDER BY e.received_at DESC)
+                   FILTER (WHERE e.source_alias IS NOT NULL
+                             AND e.source_alias <> e.source_unit::text))[1] AS alias
+           FROM ev e JOIN ch USING (logical_call_id)
+          GROUP BY 1, 2
+       )
+       INSERT INTO node_radio_hourly_unit (hour, source_unit, receptions, alias)
+       SELECT rx.hour, rx.source_unit, COUNT(*)::int, al.alias
+         FROM rx
+         LEFT JOIN al ON al.hour = rx.hour AND al.source_unit = rx.source_unit
+        GROUP BY rx.hour, rx.source_unit, al.alias`,
       [from.toISOString(), to.toISOString()],
     );
 

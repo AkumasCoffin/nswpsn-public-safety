@@ -407,7 +407,7 @@ describe('display enrichment (labels, site names, aliases)', () => {
   it('/overview attaches topSites name via the rfss:site fallback and topUnits alias', async () => {
     queryMock.mockImplementation((sql: string) => {
       if (sql.includes('DISTINCT ON (system_id, rfss, site_id)')) return { rows: [SNAPSHOT_ROW] };
-      if (sql.includes('GROUP BY source_unit')) {
+      if (sql.includes('node_radio_hourly_unit')) {
         return { rows: [{ unit: 999, alias: 'CAR 1', receptions: 9 }] };
       }
       if (sql.includes('GROUP BY site_rfss, site_id')) {
@@ -594,7 +594,7 @@ describe('CALL_GROUP filter (talkgroup voice calls only)', () => {
     expect(totalsSql).toContain("WHERE outcome <> 'enc'");
   });
 
-  it('/overview window=all re-sources radio from detail (CALL_GROUP) and flags radioWindowCapped', async () => {
+  it('/overview window=all reads the rollups, keeps CALL_GROUP, and stays capped at 30 days', async () => {
     const seen: string[] = [];
     queryMock.mockImplementation((sql: string) => {
       seen.push(sql);
@@ -608,12 +608,22 @@ describe('CALL_GROUP filter (talkgroup voice calls only)', () => {
     const res = await app.request('/api/node-data/overview?window=all&scope=radio');
     expect(res.status).toBe(200);
     const body = await res.json();
-    // all-window radio no longer reads the event_type-less hourly rollups.
-    expect(seen.some((s) => s.includes('node_radio_hourly'))).toBe(false);
-    // Every radio all-window query carries the CALL_GROUP predicate.
+
+    // This test used to assert the OPPOSITE — that all-window radio never
+    // touched the hourly rollups — because they were per-event counters with
+    // no event_type column and reading them counted signalling as voice. They
+    // are derived from these same rows now, and filter CALL_GROUP doing it.
+    expect(seen.some((s) => s.includes('node_radio_hourly_sys'))).toBe(true);
+    expect(seen.some((s) => s.includes('node_radio_hourly_unit'))).toBe(true);
+
+    // What has NOT changed: every read of the detail table is gated on
+    // CALL_GROUP, so data and signalling are still never counted as calls.
     const radioReads = seen.filter((s) => s.includes('node_radio_events'));
     expect(radioReads.length).toBeGreaterThan(0);
     expect(radioReads.every((s) => s.includes("LIKE 'CALL_GROUP%'"))).toBe(true);
+
+    // And radio all-time is still 30-day all-time: the rollups are derived
+    // from a table pruned at 30 days, so moving to them buys speed, not reach.
     expect(body.radioWindowCapped).toBe(true);
     expect(body.totals.receptionsReceived).toBe(2);
   });
