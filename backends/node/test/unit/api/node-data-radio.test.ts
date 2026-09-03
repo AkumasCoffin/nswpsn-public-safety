@@ -628,3 +628,62 @@ describe('CALL_GROUP filter (talkgroup voice calls only)', () => {
     expect(body.totals.receptionsReceived).toBe(2);
   });
 });
+
+describe('overview response cache', () => {
+  /** Count the executions one /overview request costs. */
+  const countingPool = () => {
+    const seen: string[] = [];
+    queryMock.mockImplementation((sql: string) => {
+      seen.push(sql);
+      if (sql.includes('FROM nodes')) return { rows: [] };
+      return { rows: [] };
+    });
+    return seen;
+  };
+
+  it('serves a repeat of the same request without re-querying', async () => {
+    // The staff page polls every 30s and a second tab doubles that; production
+    // logs show the 7d view fetched three times inside 30 seconds.
+    const seen = countingPool();
+    const app = await setupApp();
+    await app.request('/api/node-data/overview?window=7d&scope=radio');
+    const afterFirst = seen.length;
+    expect(afterFirst).toBeGreaterThan(0);
+
+    await app.request('/api/node-data/overview?window=7d&scope=radio');
+    expect(seen.length).toBe(afterFirst);
+  });
+
+  it('keys on everything that changes the answer', async () => {
+    // enc=hide is not a display filter — it removes those transmissions from
+    // the totals — so it must not share a cache entry with the plain view.
+    const seen = countingPool();
+    const app = await setupApp();
+    await app.request('/api/node-data/overview?window=7d&scope=radio');
+    const afterFirst = seen.length;
+
+    await app.request('/api/node-data/overview?window=7d&scope=radio&enc=hide');
+    expect(seen.length).toBeGreaterThan(afterFirst);
+    const afterSecond = seen.length;
+
+    await app.request('/api/node-data/overview?window=24h&scope=radio');
+    expect(seen.length).toBeGreaterThan(afterSecond);
+  });
+
+  it('can be switched off outright', async () => {
+    // Number('0') || 20_000 is 20_000, so the obvious off switch used to be
+    // the one setting that did nothing.
+    process.env['NODE_OVERVIEW_TTL_MS'] = '0';
+    try {
+      vi.resetModules();
+      const seen = countingPool();
+      const app = await setupApp();
+      await app.request('/api/node-data/overview?window=7d&scope=radio');
+      const afterFirst = seen.length;
+      await app.request('/api/node-data/overview?window=7d&scope=radio');
+      expect(seen.length).toBeGreaterThan(afterFirst);
+    } finally {
+      delete process.env['NODE_OVERVIEW_TTL_MS'];
+    }
+  });
+});

@@ -668,6 +668,57 @@ function iso(v: unknown): string {
 }
 
 // ---------------------------------------------------------------------------
+/**
+ * The finished overview body, briefly.
+ *
+ * The staff page polls this every 30 seconds and a second open tab doubles
+ * that; the production log shows the 7d view fetched three times inside 30
+ * seconds, each one a full execution. With the rollups doing the work that is
+ * no longer expensive, but it is still pointless — the answer cannot have
+ * changed meaningfully in the gap.
+ *
+ * Deliberately built LAST, after the queries were made fast. A cache in front
+ * of a slow query buys the same numbers and hides the reason they were slow;
+ * this one is only removing duplicate work.
+ *
+ * TTL is well under the 30s poll so a single tab still sees fresh figures
+ * every refresh, and the entries it collapses are the concurrent ones.
+ */
+const OVERVIEW_TTL_MS = (() => {
+  // 0 turns it off, so this cannot be `|| 20_000` — that is the one value
+  // someone reaching for the off switch would type.
+  const n = Number(process.env['NODE_OVERVIEW_TTL_MS']);
+  return Number.isFinite(n) && n >= 0 ? n : 20_000;
+})();
+
+/**
+ * Keyed on everything that changes the answer: window, scope, node scope and
+ * the encrypted switch.
+ *
+ * Capped, because `node` is a caller-supplied string and is not validated
+ * against the nodes table until well after this point — an unbounded map keyed
+ * on it would grow with whatever anyone asked for. The real key space is two
+ * dozen entries, so hitting the cap at all means something other than the
+ * staff page is calling, and dropping the lot is the right answer.
+ */
+const OVERVIEW_CACHE_MAX = 64;
+const _overviewCache = new Map<string, { at: number; body: Record<string, unknown> }>();
+
+function overviewCached(key: string): Record<string, unknown> | null {
+  const hit = _overviewCache.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.at >= OVERVIEW_TTL_MS) {
+    _overviewCache.delete(key);
+    return null;
+  }
+  return hit.body;
+}
+
+function overviewStore(key: string, body: Record<string, unknown>): void {
+  if (_overviewCache.size >= OVERVIEW_CACHE_MAX) _overviewCache.clear();
+  _overviewCache.set(key, { at: Date.now(), body });
+}
+
 /** The eight tile figures, however they were sourced. */
 export interface RadioTotals {
   received: number;
@@ -1021,11 +1072,18 @@ nodeDataRouter.get(
       const scope = (['all', 'radio', 'pager'] as const).find((s) => s === scopeRaw) ?? 'all';
       const wantRadio = scope !== 'pager';
       const wantPager = scope !== 'radio';
-      // Optional per-node scope (Radio mode). Applied to node_radio_events and
-      // node_radio_hourly (both carry node_id); node_radio_hourly_sys has no
-      // node_id, so window=all's topSites stays fleet-wide. Pager
-      // queries are never node-filtered (the selector is radio-only).
+      // Optional per-node scope (Radio mode). It puts the whole radio side back
+      // on node_radio_events: the rollups attribute each call once across the
+      // fleet, so filtering their rows by node would undercount rather than
+      // narrow. Pager queries are never node-filtered (the selector is
+      // radio-only).
       const nodeId = qpNode(url);
+
+      const cacheKey = `${window}|${scope}|${nodeId ?? ''}|${
+        url.searchParams.get('enc') ?? ''
+      }`;
+      const cached = overviewCached(cacheKey);
+      if (cached) return c.json(cached);
 
       // This endpoint could not be explained from outside either: the 500 that
       // prompted this said only that SOMETHING in a nine-query Promise.all hit
@@ -1563,6 +1621,7 @@ nodeDataRouter.get(
       // the next timeout does not need a stack trace read backwards to say
       // which query it was.
       pt.done();
+      overviewStore(cacheKey, body);
       return c.json(body);
     } catch (err) {
       log.error({ err }, '/api/node-data/overview error');
