@@ -153,7 +153,9 @@ const CLIENT_COLOUR: Record<ClientKind, string> = {
   'discord-bot': '\x1b[95m', // magenta: the bot's pollers
   node: '\x1b[92m', // green: feeder agents
   rdio: '\x1b[38;5;208m', // orange: rdio's call/transcript pushes
-  whisper: '\x1b[96m', // cyan: transcription traffic
+  // Bold white, NOT cyan: pino-pretty renders the message body cyan, so a
+  // cyan tag vanished into its own line — and this is the most frequent tag.
+  whisper: '\x1b[1;97m', // bold white: transcription traffic
   'whisper-node': '\x1b[93m', // yellow: the PC watcher
   other: '\x1b[90m', // grey: unidentified
 };
