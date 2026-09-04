@@ -407,11 +407,6 @@ const Schema = z.object({
   // Unset = the whole feature is off and the Nodes tab hides its card.
   WHISPER_BACKENDS: z.string().optional(),
 
-  // What rdio must present to transcribe. Deliberately its OWN key rather than
-  // the site API key, which is public via /api/config: transcription is
-  // expensive GPU time and an open endpoint is a free one for anyone.
-  WHISPER_INGEST_KEY: z.string().optional(),
-
   // What the PC's idle watcher presents to drain a backend before stopping it.
   // A headless script cannot hold a user session, so it gets a shared secret
   // instead of a role.

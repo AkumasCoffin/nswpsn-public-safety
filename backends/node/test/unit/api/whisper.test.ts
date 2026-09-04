@@ -58,25 +58,36 @@ function stubBackends() {
   );
 }
 
-const INGEST = 'ingest-key';
 const ADMIN = 'admin-token';
+const SITE_KEY = 'site-api-key';
 
-async function setup(backends = `pc=${PC},vm=${VM}`) {
+/**
+ * @param gated mount the real requireApiKey, as server.ts does on every route.
+ *   Off by default so the routing tests stay about routing; the block at the
+ *   bottom turns it on, because that middleware is where this feature can be
+ *   broken without any of these tests noticing.
+ */
+async function setup(backends = `pc=${PC},vm=${VM}`, gated = false) {
   vi.resetModules();
   vi.doMock('../../../src/config.js', () => ({
     config: {
       WHISPER_BACKENDS: backends,
-      WHISPER_INGEST_KEY: INGEST,
       WHISPER_ADMIN_TOKEN: ADMIN,
+      NSWPSN_API_KEY: SITE_KEY,
     },
   }));
   const svc = await import('../../../src/services/whisperRouter.js');
   const { whisperRouter } = await import('../../../src/api/whisper.js');
   const app = new Hono();
-  app.use('*', async (c, next) => {
-    c.set('userId', 'u1');
-    await next();
-  });
+  if (gated) {
+    const { requireApiKey } = await import('../../../src/services/auth/apiKey.js');
+    app.use('*', requireApiKey);
+  } else {
+    app.use('*', async (c, next) => {
+      c.set('userId', 'u1');
+      await next();
+    });
+  }
   app.route('/', whisperRouter);
   return { app, svc };
 }
@@ -96,7 +107,10 @@ async function probeOnce(svc: Awaited<ReturnType<typeof setup>>['svc']) {
 
 const post = (body = 'RIFFfake') => ({
   method: 'POST',
-  headers: { Authorization: `Bearer ${INGEST}`, 'Content-Type': 'multipart/form-data; boundary=x' },
+  headers: {
+    Authorization: `Bearer ${SITE_KEY}`,
+    'Content-Type': 'multipart/form-data; boundary=x',
+  },
   body,
 });
 
@@ -167,19 +181,6 @@ describe('POST /api/whisper/v1/audio/transcriptions', () => {
     expect(svc.whisperStatus().current).toBeNull();
   });
 
-  it('needs its own key, not the site API key', async () => {
-    // The site key is public via /api/config. Transcription is GPU time, so an
-    // endpoint gated on it would be a free one for anyone who looked.
-    const { app, svc } = await setup();
-    await probeOnce(svc);
-    const res = await app.request('/api/whisper/v1/audio/transcriptions', {
-      ...post(),
-      headers: { Authorization: 'Bearer wrong', 'Content-Type': 'multipart/form-data' },
-    });
-    expect(res.status).toBe(401);
-    expect(pc.hits).toBe(0);
-  });
-
   it('404s when the feature is off, giving nothing away', async () => {
     const { app } = await setup('');
     const res = await app.request('/api/whisper/v1/audio/transcriptions', post());
@@ -192,7 +193,7 @@ describe('POST /api/whisper/v1/audio/transcriptions', () => {
     const res = await app.request('/api/whisper/v1/audio/transcriptions', {
       ...post(),
       headers: {
-        Authorization: `Bearer ${INGEST}`,
+        Authorization: `Bearer ${SITE_KEY}`,
         'Content-Type': 'multipart/form-data',
         'Content-Length': String(30 * 1024 * 1024),
       },
@@ -303,5 +304,62 @@ describe('GET /api/whisper/status', () => {
     await probeOnce(svc);
     const body = await (await app.request('/api/whisper/status')).json();
     expect(body.backends.map((b: { name: string }) => b.name)).toEqual(['pc', 'vm']);
+  });
+});
+
+describe('behind requireApiKey, as server.ts actually mounts it', () => {
+  // Every test above mounts the whisper router ALONE, which is how this
+  // feature shipped broken for a moment: requireApiKey runs on '*' and reads
+  // the same Authorization header rdio uses, so it answered 403 before any
+  // handler ran. Routing tests cannot see that. These can.
+
+  it('lets rdio transcribe with the site API key in its whisper key field', async () => {
+    const { app, svc } = await setup(`pc=${PC},vm=${VM}`, true);
+    await probeOnce(svc);
+    const res = await app.request('/api/whisper/v1/audio/transcriptions', post());
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ text: 'hello from pc' });
+  });
+
+  it('still refuses a transcription with no key at all', async () => {
+    // The one route here that spends GPU time is the one that keeps the gate.
+    const { app, svc } = await setup(`pc=${PC},vm=${VM}`, true);
+    await probeOnce(svc);
+    const res = await app.request('/api/whisper/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'multipart/form-data; boundary=x' },
+      body: 'RIFFfake',
+    });
+    expect(res.status).toBe(401);
+    expect(pc.hits).toBe(0);
+  });
+
+  it('lets the headless watcher drain with only its own token', async () => {
+    // The watcher has no session and no reason to hold the site key, so
+    // /drain and /status are public to that gate and check their own
+    // credential instead.
+    const { app, svc } = await setup(`pc=${PC},vm=${VM}`, true);
+    await probeOnce(svc);
+    const res = await app.request('/api/whisper/drain', {
+      method: 'POST',
+      headers: { 'x-whisper-token': ADMIN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ backend: 'pc', draining: true }),
+    });
+    expect(res.status).toBe(200);
+    const st = await app.request('/api/whisper/status', {
+      headers: { 'x-whisper-token': ADMIN },
+    });
+    expect(st.status).toBe(200);
+  });
+
+  it('does not let that exemption become an open door', async () => {
+    const { app, svc } = await setup(`pc=${PC},vm=${VM}`, true);
+    await probeOnce(svc);
+    const res = await app.request('/api/whisper/drain', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ backend: 'pc' }),
+    });
+    expect(res.status).toBe(401);
   });
 });

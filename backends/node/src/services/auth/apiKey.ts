@@ -86,6 +86,15 @@ export const PUBLIC_ENDPOINT_PREFIXES: readonly string[] = [
   // route to inject per-post Open Graph tags for social crawlers, which can't
   // send an API key. Only exposes OG fields of already-published posts.
   '/api/wire/og/',
+  // Whisper status + drain. The PC's idle watcher is a headless script with
+  // no user session and no reason to hold the site key; both routes verify
+  // WHISPER_ADMIN_TOKEN (or, for status, a staff role) inside the handler.
+  //
+  // NOT /api/whisper/v1/ — the transcription path deliberately KEEPS this
+  // gate. rdio has an API key field of its own to put NSWPSN_API_KEY in, and
+  // an endpoint that spends GPU time should not be the one open route.
+  '/api/whisper/status',
+  '/api/whisper/drain',
 ];
 
 function extractKey(authHeader: string | undefined, xApiKey: string | undefined, qsKey: string | null): string {

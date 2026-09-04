@@ -13,15 +13,17 @@
  *
  * AUTH IS TWO DIFFERENT THINGS HERE, on purpose:
  *
- *   - the transcription path is machine-to-machine and gated on
- *     WHISPER_INGEST_KEY, the same shape scanner-ingest uses. It is NOT gated
- *     on a role: rdio has no login. It is also not left on the site API key,
- *     which is public via /api/config — transcription is expensive GPU time
- *     and an open endpoint is a free one for anyone who finds it.
- *   - /status and /drain are operator surfaces. The panel authenticates as a
- *     user; the PC's watcher is a headless script, so it carries
- *     WHISPER_ADMIN_TOKEN instead. Either is accepted for status; drain takes
- *     the token only, because it is a machine action.
+ *   - the transcription path keeps the ordinary site API key gate
+ *     (requireApiKey, applied to every /api/ route that is not explicitly
+ *     public). rdio has no login, but it does have an API key field for its
+ *     whisper provider, so NSWPSN_API_KEY goes in there and no new secret has
+ *     to exist. This route is deliberately NOT added to PUBLIC_ENDPOINTS: it
+ *     is the one that spends GPU time.
+ *   - /status and /drain ARE public to that gate, because the PC's watcher is
+ *     a headless script with no session and no reason to hold the site key.
+ *     They verify their own credential instead: the panel authenticates as a
+ *     user, the watcher carries WHISPER_ADMIN_TOKEN. Either is accepted for
+ *     status; drain takes the token only, because it is a machine action.
  *
  * NOT CONFIGURED IS NOT AN ERROR. With no WHISPER_BACKENDS set, /status
  * answers 200 with configured:false so the panel hides its card rather than
@@ -48,21 +50,6 @@ export const whisperRouter = new Hono();
  */
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 
-/** The key rdio must present, from either header shape it might use. */
-function presentedKey(auth: string | undefined, xKey: string | undefined): string {
-  if (xKey) return xKey.trim();
-  const a = (auth ?? '').trim();
-  return a.toLowerCase().startsWith('bearer ') ? a.slice(7).trim() : a;
-}
-
-function ingestAuthorised(c: {
-  req: { header: (n: string) => string | undefined };
-}): boolean {
-  const expected = config.WHISPER_INGEST_KEY;
-  if (!expected) return false;
-  return presentedKey(c.req.header('authorization'), c.req.header('x-whisper-key')) === expected;
-}
-
 function adminAuthorised(c: { req: { header: (n: string) => string | undefined } }): boolean {
   const expected = config.WHISPER_ADMIN_TOKEN;
   return Boolean(expected) && c.req.header('x-whisper-token') === expected;
@@ -73,14 +60,11 @@ function adminAuthorised(c: { req: { header: (n: string) => string | undefined }
 // ---------------------------------------------------------------------------
 
 whisperRouter.post('/api/whisper/v1/audio/transcriptions', async (c) => {
-  // Unset key or no backends = the feature is off. 404 rather than 403, so an
+  // No backends = the feature is off. 404 rather than 403, so an
   // unconfigured deployment gives nothing away about the endpoint existing —
-  // the same posture as scanner-ingest.
-  if (!config.WHISPER_INGEST_KEY || !whisperConfigured()) return c.notFound();
-  if (!ingestAuthorised(c)) {
-    log.warn('whisper: rejected a transcription with a bad key');
-    return c.json({ error: 'unauthorised' }, 401);
-  }
+  // the same posture as scanner-ingest. The CALLER has already been checked by
+  // requireApiKey; there is no second key here.
+  if (!whisperConfigured()) return c.notFound();
 
   // Checked BEFORE the body is read, so an oversize push costs nothing.
   const len = Number(c.req.header('content-length') ?? '');
@@ -112,7 +96,7 @@ whisperRouter.post('/api/whisper/v1/audio/transcriptions', async (c) => {
  * actual work can still be routed to the other one.
  */
 whisperRouter.get('/api/whisper/v1/models', (c) => {
-  if (!config.WHISPER_INGEST_KEY || !whisperConfigured()) return c.notFound();
+  if (!whisperConfigured()) return c.notFound();
   return c.json({ data: [{ id: 'whisper-router', object: 'model' }] });
 });
 
