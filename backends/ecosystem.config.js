@@ -44,8 +44,16 @@ module.exports = {
       max_restarts: 10,
       restart_delay: 1000,
       // PM2 sends SIGINT first; our index.ts waits for the server to
-      // close gracefully before exiting. 10s should be plenty.
-      kill_timeout: 10_000
+      // close gracefully before exiting.
+      //
+      // 30s, not 10s, because /api/whisper/v1/audio/transcriptions is now an
+      // in-flight request that can legitimately run for a while — the longest
+      // honest transcription measured on this deployment was 16.9s, and a
+      // SIGKILL through one loses that transcript for good (rdio does not come
+      // back for it). This only costs a slow deploy when something is actually
+      // mid-flight: server.close() returns as soon as in-flight requests
+      // finish, so a quiet restart is still instant.
+      kill_timeout: 30_000
     }
 
     // Legacy python backend ('API-Proxy', external_api_proxy.py) used to

@@ -27,6 +27,7 @@ setGlobalDispatcher(new Agent({ connect: { family: 4 } }));
 import { serve } from '@hono/node-server';
 import { config } from './config.js';
 import { log } from './lib/log.js';
+import { startWhisperHealth, stopWhisperHealth } from './services/whisperRouter.js';
 import { closePool } from './db/pool.js';
 import { runMigrations } from './db/migrate.js';
 import { createApp } from './server.js';
@@ -135,6 +136,7 @@ async function preflight(): Promise<void> {
   startRdioIncidentAlertLoop(); // rdio burst → ntfy push (gated by RDIO_INCIDENT_ALERTS_ENABLED)
   startNodeEventsPruner(); // hourly 30-day prune of node_radio_events / node_pager_events
   startNodeHourlyRollup(); // hourly rebuild of node_radio_hourly* from the detail table
+  startWhisperHealth();    // probe the faster-whisper backends rdio transcribes through
   startVideoProcessor(); // ffmpeg pass over newly uploaded Wire videos
   startMemoryWatch(); // heap gauge — see services/memoryWatch.ts (post-OOM telemetry)
 
@@ -254,6 +256,7 @@ async function shutdown(signal: string) {
     stopRdioIncidentAlertLoop();
     stopNodeEventsPruner();
     stopNodeHourlyRollup();
+    stopWhisperHealth();
     stopVideoProcessor();
     stopMemoryWatch();
     // Centralwatch: stop the loops first so they don't enqueue more

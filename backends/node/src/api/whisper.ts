@@ -1,145 +1,167 @@
 /**
- * GET /api/whisper/status — which transcription server is doing the work.
+ * The whisper endpoint rdio transcribes through, and the status the staff
+ * panel reads.
  *
- * There are two faster-whisper instances: one on a VM that is always up, and
- * one on a PC that is only available while nobody is using it. rdio's
- * transcripts plugin takes a single base URL, so it points at whisper_router
- * (D:\working-dir\faster-whisper-server\whisper_router.py) and the router
- * decides which backend each call goes to.
+ *   POST /api/whisper/v1/audio/transcriptions  — rdio; forwarded to a backend
+ *   GET  /api/whisper/v1/models                — rdio's probe; answered here
+ *   GET  /api/whisper/status                   — staff panel + the PC watcher
+ *   POST /api/whisper/drain                    — the PC watcher, before a stop
  *
- * That makes the router the only thing that knows the answer, and this route
- * exists so the staff panel can ask it. It is a read-through: no state is kept
- * here beyond a few seconds of cache.
+ * rdio's transcripts plugin takes one base URL, so it points at
+ * `<this backend>/api/whisper/v1` and services/whisperRouter.ts picks a
+ * healthy faster-whisper server per call. See that module for why.
  *
- * NOT CONFIGURED IS NOT AN ERROR. A deployment without WHISPER_ROUTER_URL set
- * answers 200 with configured:false, so the panel can say "not set up" instead
- * of showing a failure that looks like the router is down.
+ * AUTH IS TWO DIFFERENT THINGS HERE, on purpose:
+ *
+ *   - the transcription path is machine-to-machine and gated on
+ *     WHISPER_INGEST_KEY, the same shape scanner-ingest uses. It is NOT gated
+ *     on a role: rdio has no login. It is also not left on the site API key,
+ *     which is public via /api/config — transcription is expensive GPU time
+ *     and an open endpoint is a free one for anyone who finds it.
+ *   - /status and /drain are operator surfaces. The panel authenticates as a
+ *     user; the PC's watcher is a headless script, so it carries
+ *     WHISPER_ADMIN_TOKEN instead. Either is accepted for status; drain takes
+ *     the token only, because it is a machine action.
+ *
+ * NOT CONFIGURED IS NOT AN ERROR. With no WHISPER_BACKENDS set, /status
+ * answers 200 with configured:false so the panel hides its card rather than
+ * showing a failure for a feature that was never turned on.
  */
 import { Hono } from 'hono';
 import { config } from '../config.js';
 import { log } from '../lib/log.js';
-import { describeRelayError } from '../lib/relayError.js';
 import { requireRole, canViewNodeData } from '../services/auth/roles.js';
+import {
+  whisperConfigured,
+  whisperForward,
+  whisperSetDrain,
+  whisperStatus,
+} from '../services/whisperRouter.js';
 
 export const whisperRouter = new Hono();
 
 /**
- * Short, because this is a UI poll and a slow router should read as a problem
- * rather than as a hung panel. Nothing here is on the transcription path — a
- * timeout costs a status card, not a transcript.
+ * A transcription request body. rdio sends a few seconds of narrowband audio;
+ * this is a sanity ceiling, not a working limit. Matches the standalone
+ * router's posture of refusing before reading rather than buffering anything
+ * that arrives.
  */
-const STATUS_TIMEOUT_MS = 4_000;
+const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
+
+/** The key rdio must present, from either header shape it might use. */
+function presentedKey(auth: string | undefined, xKey: string | undefined): string {
+  if (xKey) return xKey.trim();
+  const a = (auth ?? '').trim();
+  return a.toLowerCase().startsWith('bearer ') ? a.slice(7).trim() : a;
+}
+
+function ingestAuthorised(c: {
+  req: { header: (n: string) => string | undefined };
+}): boolean {
+  const expected = config.WHISPER_INGEST_KEY;
+  if (!expected) return false;
+  return presentedKey(c.req.header('authorization'), c.req.header('x-whisper-key')) === expected;
+}
+
+function adminAuthorised(c: { req: { header: (n: string) => string | undefined } }): boolean {
+  const expected = config.WHISPER_ADMIN_TOKEN;
+  return Boolean(expected) && c.req.header('x-whisper-token') === expected;
+}
+
+// ---------------------------------------------------------------------------
+// The transcription path — rdio's side.
+// ---------------------------------------------------------------------------
+
+whisperRouter.post('/api/whisper/v1/audio/transcriptions', async (c) => {
+  // Unset key or no backends = the feature is off. 404 rather than 403, so an
+  // unconfigured deployment gives nothing away about the endpoint existing —
+  // the same posture as scanner-ingest.
+  if (!config.WHISPER_INGEST_KEY || !whisperConfigured()) return c.notFound();
+  if (!ingestAuthorised(c)) {
+    log.warn('whisper: rejected a transcription with a bad key');
+    return c.json({ error: 'unauthorised' }, 401);
+  }
+
+  // Checked BEFORE the body is read, so an oversize push costs nothing.
+  const len = Number(c.req.header('content-length') ?? '');
+  if (Number.isFinite(len) && len > MAX_AUDIO_BYTES) {
+    return c.json({ error: 'body too large' }, 413);
+  }
+
+  const body = await c.req.arrayBuffer();
+  const result = await whisperForward(body, c.req.header('content-type') ?? null);
+
+  if (result.backend === null) {
+    log.error({ detail: result.detail }, 'whisper: no backend took the transcription');
+    return c.json({ error: result.detail ?? 'whisper unavailable' }, result.status === 503 ? 503 : 502);
+  }
+
+  return c.body(result.body, result.status as 200, {
+    ...(result.contentType ? { 'Content-Type': result.contentType } : {}),
+    // Which server did it, so a transcript can be traced back to a machine
+    // without reading the log.
+    'X-Whisper-Backend': result.backend,
+  });
+});
 
 /**
- * Long enough that several open staff tabs cost the router one request, short
- * enough that "the PC just came up" shows within a refresh. The panel polls on
- * the same cadence as the rest of the Nodes tab.
+ * Answered HERE, not forwarded.
+ *
+ * Clients ping this before transcribing. Forwarding it would make us look down
+ * whenever the preferred backend happened to be mid-restart, when in fact the
+ * actual work can still be routed to the other one.
  */
-const CACHE_MS = 5_000;
+whisperRouter.get('/api/whisper/v1/models', (c) => {
+  if (!config.WHISPER_INGEST_KEY || !whisperConfigured()) return c.notFound();
+  return c.json({ data: [{ id: 'whisper-router', object: 'model' }] });
+});
 
-interface RouterBackend {
-  name: string;
-  url: string;
-  priority: number;
-  healthy: boolean;
-  draining: boolean;
-  inFlight: number;
-  requests: number;
-  failures: number;
-  avgMs: number | null;
-  lastOkAt: number | null;
-  lastErrorAt: number | null;
-  lastError: string | null;
-  stateSince: number;
-}
+// ---------------------------------------------------------------------------
+// Operator surfaces — the staff panel and the PC's idle watcher.
+// ---------------------------------------------------------------------------
 
-interface RouterStatus {
-  ok: boolean;
-  generatedAt: number;
-  current: string | null;
-  backends: RouterBackend[];
-}
-
-let _cache: { at: number; body: Record<string, unknown> } | null = null;
-
-/** The router speaks epoch seconds; the panel wants what every other date on
- *  the page is. */
-function iso(v: number | null | undefined): string | null {
-  return typeof v === 'number' && Number.isFinite(v)
-    ? new Date(v * 1000).toISOString()
-    : null;
-}
+/**
+ * Status. The panel comes with a user session; the watcher comes with the
+ * admin token and polls this for inFlight while draining, so both are let in.
+ */
+const statusBody = () =>
+  whisperConfigured() ? whisperStatus() : { configured: false, backends: [] };
 
 whisperRouter.get(
   '/api/whisper/status',
-  requireRole(canViewNodeData),
-  async (c) => {
-    const base = config.WHISPER_ROUTER_URL;
-    if (!base) {
-      return c.json({ configured: false, reachable: false, backends: [] });
-    }
-
-    if (_cache && Date.now() - _cache.at < CACHE_MS) return c.json(_cache.body);
-
-    let body: Record<string, unknown>;
-    try {
-      const res = await fetch(`${base.replace(/\/$/, '')}/status`, {
-        headers: config.WHISPER_ROUTER_TOKEN
-          ? { 'x-router-token': config.WHISPER_ROUTER_TOKEN }
-          : {},
-        signal: AbortSignal.timeout(STATUS_TIMEOUT_MS),
-      });
-      if (!res.ok) {
-        // A 401 here means the token is wrong, which is a configuration
-        // problem worth naming rather than showing as "router down".
-        return c.json({
-          configured: true,
-          reachable: false,
-          error: res.status === 401 ? 'router rejected our token' : `router HTTP ${res.status}`,
-          backends: [],
-        });
-      }
-      const s = (await res.json()) as RouterStatus;
-      body = {
-        configured: true,
-        reachable: true,
-        // The backend that would take the NEXT call. Null means every one of
-        // them is down or draining and transcripts are being refused outright.
-        current: s.current ?? null,
-        anyAvailable: Boolean(s.ok),
-        generatedAt: iso(s.generatedAt),
-        backends: (s.backends ?? []).map((b) => ({
-          name: b.name,
-          url: b.url,
-          priority: b.priority,
-          healthy: Boolean(b.healthy),
-          // Draining is a healthy server being deliberately emptied before a
-          // stop, not a failure — the panel has to say so or an idle PC
-          // shutting down looks like an outage.
-          draining: Boolean(b.draining),
-          inFlight: Number(b.inFlight) || 0,
-          requests: Number(b.requests) || 0,
-          failures: Number(b.failures) || 0,
-          avgMs: b.avgMs ?? null,
-          lastOkAt: iso(b.lastOkAt),
-          lastErrorAt: iso(b.lastErrorAt),
-          lastError: b.lastError ?? null,
-          stateSince: iso(b.stateSince),
-        })),
-      };
-    } catch (err) {
-      log.warn({ cause: describeRelayError(err) }, 'whisper router status unreachable');
-      return c.json({
-        configured: true,
-        reachable: false,
-        error: describeRelayError(err),
-        backends: [],
-      });
-    }
-
-    // Only a good answer is cached. Caching a failure would keep the panel
-    // showing "down" for seconds after the router came back.
-    _cache = { at: Date.now(), body };
-    return c.json(body);
+  // The token short-circuits the role check; anything without it falls through
+  // to the normal staff gate. Written as one middleware rather than two
+  // registrations of the same path, which would have depended on Hono's
+  // fall-through ordering to mean "or".
+  async (c, next) => {
+    if (adminAuthorised(c)) return c.json(statusBody());
+    return requireRole(canViewNodeData)(c, next);
   },
+  (c) => c.json(statusBody()),
 );
+
+/**
+ * Drain, the first half of a clean stop on the PC.
+ *
+ * The watcher sets draining, polls /status until that backend's inFlight is 0,
+ * and only then stops the service. Without it a stop lands on top of a
+ * transcription in progress and that call simply never gets a transcript —
+ * rdio does not retry one.
+ */
+whisperRouter.post('/api/whisper/drain', async (c) => {
+  if (!adminAuthorised(c)) return c.json({ error: 'unauthorised' }, 401);
+  if (!whisperConfigured()) return c.json({ error: 'whisper routing not configured' }, 404);
+
+  let payload: { backend?: unknown; draining?: unknown };
+  try {
+    payload = (await c.req.json()) as typeof payload;
+  } catch {
+    return c.json({ error: 'invalid json' }, 400);
+  }
+  const name = typeof payload.backend === 'string' ? payload.backend : '';
+  const draining = payload.draining !== false;
+
+  const b = whisperSetDrain(name, draining);
+  if (!b) return c.json({ error: `unknown backend ${JSON.stringify(name)}` }, 404);
+  return c.json({ ok: true, backend: b.name, draining: b.draining, inFlight: b.inFlight });
+});

@@ -397,12 +397,25 @@ const Schema = z.object({
   RDIO_INTERNAL_URL: z.string().optional(),
   RDIO_INTERNAL_API_KEY: z.string().optional(),
 
-  // The whisper failover router (whisper_router.py). rdio's transcripts plugin
-  // points at it directly; this is only so the staff panel can ask which of
-  // the two whisper servers is currently doing the work. Unset = the Nodes tab
-  // says "not configured" rather than showing an outage.
-  WHISPER_ROUTER_URL: z.string().optional(),
-  WHISPER_ROUTER_TOKEN: z.string().optional(),
+  // Transcription routing. rdio's transcripts plugin takes one base URL, so it
+  // points at <this backend>/api/whisper/v1 and services/whisperRouter.ts
+  // picks a healthy faster-whisper server per call.
+  //
+  // "name=url,name=url" and ORDER IS PREFERENCE: the first healthy,
+  // non-draining backend takes the call. Fast one first, dependable one last —
+  // e.g. pc=http://10.1.0.50:8000,vm=http://10.1.0.118:8000
+  // Unset = the whole feature is off and the Nodes tab hides its card.
+  WHISPER_BACKENDS: z.string().optional(),
+
+  // What rdio must present to transcribe. Deliberately its OWN key rather than
+  // the site API key, which is public via /api/config: transcription is
+  // expensive GPU time and an open endpoint is a free one for anyone.
+  WHISPER_INGEST_KEY: z.string().optional(),
+
+  // What the PC's idle watcher presents to drain a backend before stopping it.
+  // A headless script cannot hold a user session, so it gets a shared secret
+  // instead of a role.
+  WHISPER_ADMIN_TOKEN: z.string().optional(),
 
   // How long an outbound relay may take before we give up on it.
   //

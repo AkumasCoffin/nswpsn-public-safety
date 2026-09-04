@@ -8153,11 +8153,10 @@
 
     // --- Transcription (whisper) -------------------------------------------
     //
-    // rdio points at whisper_router, which forwards each call to whichever of
-    // the two faster-whisper servers is healthy: the PC's (preferred, only up
-    // while the desktop is idle) or the VM's (always on). The router is the
-    // only thing that knows which one took the last call, so this reads its
-    // status through /api/whisper/status.
+    // rdio transcribes through the backend, which forwards each call to
+    // whichever faster-whisper server is healthy: the PC's (preferred, only up
+    // while the desktop is idle) or the VM's (always on). The backend is the
+    // only thing that knows which one took the last call.
     //
     // Hidden entirely when no router is configured — an unset feature should
     // not leave an empty card on the page.
@@ -8174,16 +8173,6 @@
         const d = await res.json();
         if (!d.configured) { card.style.display = 'none'; return; }
         card.style.display = '';
-
-        if (!d.reachable) {
-          // The router being unreachable and every backend being down both
-          // stop transcripts, but they are different machines to go and look
-          // at, so they must not render the same.
-          sub.textContent = '';
-          rows.innerHTML = `<div class="wh-row"><span class="nd-ready bad">router unreachable</span>` +
-            `<span class="wh-err">${escapeHtml(d.error || '')}</span></div>`;
-          return;
-        }
 
         sub.textContent = d.current
           ? `serving from ${d.current}`
