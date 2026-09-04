@@ -90,20 +90,78 @@ const SLOW_REQUEST_MS = 500;
 const VERBOSE_REQUEST_LOG = process.env['NODE_ENV'] !== 'production';
 
 /**
- * Classify the request origin from headers. The discord bot sets
- * `User-Agent: AusAwareBot/1.0` (and sometimes `X-Client-Type: discord-bot`)
- * on every API call (see discord-bot/bot.py + alert_poller.py). Browsers
- * always carry a Mozilla/Chrome/Safari UA. Everything else is grouped
- * under "other" — curl, monitoring probes, server-to-server callers.
+ * Classify the request origin, so the log answers "who is doing this" at a
+ * glance instead of lumping every machine caller into "other".
+ *
+ * Identity comes from whatever each caller can actually carry:
+ *
+ *   discord-bot   UA `AusAwareBot/…` (NSWPSNBot pre-rebrand) or
+ *                 X-Client-Type: discord-bot — bot.py sets both.
+ *   node          UA `NSWPSN-NodeAgent/…` — every feeder agent (radio and
+ *                 pager alike) sends it on every request (version.go).
+ *   rdio          the PATH. rdio's downstream sender cannot set custom
+ *                 headers (the reason scanner-ingest auths by form field),
+ *                 so /api/scanner-ingest/ itself is the identity.
+ *   whisper       the path again: /api/whisper/v1/ is only ever rdio's
+ *                 transcripts plugin asking for a transcription.
+ *   whisper-node  X-Client-Type: whisper-node — the PC's idle watcher
+ *                 (whisper_watch.ps1). Without the header its
+ *                 Invoke-RestMethod UA reads as a browser, which had its
+ *                 status polls masquerading as dashboard traffic.
+ *   browser       Mozilla/Chrome/Safari UA.
+ *   other         what remains: curl, probes, unknown callers.
+ *
+ * Paths win over headers for rdio/whisper because they are the stronger
+ * claim: nothing else posts to those routes, and the callers that do
+ * cannot carry anything else.
  */
-function classifyClient(ua: string, xClient: string): 'bot' | 'browser' | 'other' {
-  if (xClient.toLowerCase() === 'discord-bot') return 'bot';
+type ClientKind =
+  | 'browser'
+  | 'discord-bot'
+  | 'node'
+  | 'rdio'
+  | 'whisper'
+  | 'whisper-node'
+  | 'other';
+
+function classifyClient(ua: string, xClient: string, path: string): ClientKind {
+  if (path.startsWith('/api/whisper/v1/')) return 'whisper';
+  if (path.startsWith('/api/scanner-ingest/')) return 'rdio';
+  const x = xClient.toLowerCase();
+  if (x === 'discord-bot') return 'discord-bot';
+  if (x === 'whisper-node') return 'whisper-node';
   if (!ua) return 'other';
+  if (/^NSWPSN-NodeAgent\//.test(ua)) return 'node';
   // AusAwareBot is the current UA; NSWPSNBot is the pre-rebrand one, kept so a
   // bot that hasn't restarted yet is still classified as a bot, not "other".
-  if (/^(?:AusAware|NSWPSN)Bot/i.test(ua) || /\bdiscord(?:bot)?\b/i.test(ua)) return 'bot';
+  if (/^(?:AusAware|NSWPSN)Bot/i.test(ua) || /\bdiscord(?:bot)?\b/i.test(ua)) return 'discord-bot';
   if (/Mozilla\/|Chrome\/|Safari\/|Firefox\/|Edge\/|Edg\//.test(ua)) return 'browser';
   return 'other';
+}
+
+/**
+ * One colour per client kind, so a busy tail separates into streams by eye.
+ *
+ * Gated on the same condition as pretty-printing: with NODE_ENV=production
+ * the logger emits raw ndjson for a shipper, and ANSI inside msg would
+ * pollute it. (The live box runs mode=dev, where pino-pretty already
+ * colourises every line, so embedded colour matches the existing output.)
+ */
+const COLOUR_TAGS = process.env['NODE_ENV'] !== 'production';
+const CLIENT_COLOUR: Record<ClientKind, string> = {
+  browser: '\x1b[94m', // bright blue: people
+  'discord-bot': '\x1b[95m', // magenta: the bot's pollers
+  node: '\x1b[92m', // green: feeder agents
+  rdio: '\x1b[38;5;208m', // orange: rdio's call/transcript pushes
+  whisper: '\x1b[96m', // cyan: transcription traffic
+  'whisper-node': '\x1b[93m', // yellow: the PC watcher
+  other: '\x1b[90m', // grey: unidentified
+};
+const COLOUR_OFF = '\x1b[0m';
+
+function clientTag(client: ClientKind): string {
+  if (!COLOUR_TAGS) return `[${client}]`;
+  return `[${CLIENT_COLOUR[client]}${client}${COLOUR_OFF}]`;
 }
 
 /**
@@ -115,9 +173,9 @@ function classifyClient(ua: string, xClient: string): 'bot' | 'browser' | 'other
  *   - 4xx logs at info ("client error")
  *   - 5xx logs at warn ("server error")
  *   - OPTIONS preflights are silent (huge volume, no signal)
- *   - every line tags `client` as bot|browser|other so log readers
- *     can tell the discord bot's pollers apart from dashboard / map
- *     traffic at a glance
+ *   - every line tags the client (browser, discord-bot, node, rdio,
+ *     whisper, whisper-node, other), colour-coded outside production,
+ *     so the streams separate at a glance — see classifyClient
  */
 const requestLogger: MiddlewareHandler = async (c, next) => {
   const start = Date.now();
@@ -131,7 +189,7 @@ const requestLogger: MiddlewareHandler = async (c, next) => {
 
   const ua = c.req.header('User-Agent') ?? '';
   const xClient = c.req.header('X-Client-Type') ?? '';
-  const client = classifyClient(ua, xClient);
+  const client = classifyClient(ua, xClient, path);
 
   // One-line human-readable format. Earlier versions passed the fields as
   // a structured object so pino-pretty would render them inline, but
@@ -139,7 +197,7 @@ const requestLogger: MiddlewareHandler = async (c, next) => {
   // signal under {"method":"GET",…} on every line. Embed everything in
   // the message string instead — production ndjson keeps it grep-able,
   // dev pretty-print shows the same clean line.
-  const line = `${method} ${path} → ${status} ${ms}ms [${client}]`;
+  const line = `${method} ${path} → ${status} ${ms}ms ${clientTag(client)}`;
 
   if (status >= 500) {
     log.warn(`5xx ${line}`);
