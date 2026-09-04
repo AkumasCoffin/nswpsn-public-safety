@@ -363,3 +363,75 @@ describe('behind requireApiKey, as server.ts actually mounts it', () => {
     expect(res.status).toBe(401);
   });
 });
+
+describe('quarantine: a backend that passes its probe but fails real work', () => {
+  // The fault this guards against actually happened: a whisper whose CUDA
+  // libraries were off the loader path loaded its model, answered /v1/models,
+  // and 500'd every transcription. The probe cannot see that, so the backend
+  // stayed healthy and preferred, and every call paid a failed attempt before
+  // the retry landed on the other server.
+
+  it('stops choosing a backend after repeated transcription failures', async () => {
+    const { app, svc } = await setup();
+    pc.fail = true;      // probe passes, work 500s
+    await probeOnce(svc);
+
+    // Three calls: each fails on pc and retries onto vm.
+    for (let i = 0; i < 3; i++) {
+      const r = await app.request('/api/whisper/v1/audio/transcriptions', post());
+      expect(await r.json()).toEqual({ text: 'hello from vm' });
+    }
+    expect(pc.hits).toBe(3);
+
+    // The fourth call must not touch pc at all.
+    await app.request('/api/whisper/v1/audio/transcriptions', post());
+    expect(pc.hits).toBe(3);
+    expect(svc.whisperStatus().current).toBe('vm');
+
+    // And the panel can say WHY, distinctly from down or draining.
+    const b = svc.whisperStatus().backends[0]!;
+    expect(b).toMatchObject({ name: 'pc', healthy: true });
+    expect(b.quarantinedUntil).not.toBeNull();
+  });
+
+  it('a success clears the strike count, so occasional blips never accumulate', async () => {
+    const { app, svc } = await setup();
+    await probeOnce(svc);
+    pc.fail = true;
+    await app.request('/api/whisper/v1/audio/transcriptions', post());
+    await app.request('/api/whisper/v1/audio/transcriptions', post());
+    pc.fail = false;     // recovered before the third strike
+    await app.request('/api/whisper/v1/audio/transcriptions', post());
+
+    pc.fail = true;      // two more failures — still under threshold
+    await app.request('/api/whisper/v1/audio/transcriptions', post());
+    await app.request('/api/whisper/v1/audio/transcriptions', post());
+    expect(svc.whisperStatus().backends[0]!.quarantinedUntil).toBeNull();
+  });
+
+  it('re-tests after the quarantine expires, with a clean slate', async () => {
+    // Fake ONLY Date: the quarantine expiry is a Date.now() comparison, but
+    // probeOnce awaits a real setTimeout — full fake timers leave it parked
+    // forever and the test dies on its own timeout instead.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const { app, svc } = await setup();
+      await probeOnce(svc);
+      pc.fail = true;
+      for (let i = 0; i < 3; i++) {
+        await app.request('/api/whisper/v1/audio/transcriptions', post());
+      }
+      expect(svc.whisperStatus().current).toBe('vm');
+
+      pc.fail = false;   // the operator fixed it during the rest
+      vi.advanceTimersByTime(61_000);
+      const r = await app.request('/api/whisper/v1/audio/transcriptions', post());
+      // Preferred again, first call after expiry IS the re-test.
+      expect(await r.json()).toEqual({ text: 'hello from pc' });
+      expect(svc.whisperStatus().current).toBe('pc');
+      expect(svc.whisperStatus().backends[0]!.quarantinedUntil).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

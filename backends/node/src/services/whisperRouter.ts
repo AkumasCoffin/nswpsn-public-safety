@@ -54,6 +54,10 @@ export interface WhisperBackend {
    *  identical to a steady one without it. */
   stateSince: number;
   recentMs: number[];
+  /** Consecutive TRANSCRIPTION failures — the probe cannot see these. */
+  workFailures: number;
+  /** Until when this backend is excluded for failing real work. */
+  quarantinedUntil: number | null;
 }
 
 /** How often each backend is probed, and how long a probe may take. */
@@ -72,6 +76,25 @@ const REQUEST_TIMEOUT_MS = 180_000;
 const FAIL_THRESHOLD = 2;
 /** Rolling window for the average shown on the staff panel. */
 const RECENT_SAMPLES = 50;
+
+/**
+ * Consecutive transcription failures before a backend is quarantined, and for
+ * how long.
+ *
+ * The health probe cannot catch everything: measured here, a whisper whose
+ * CUDA libraries were missing loaded its model, answered /v1/models, and
+ * 500'd every single transcription — so it stayed "healthy", stayed
+ * preferred, and taxed every call with a failed attempt before the retry
+ * landed on the other server.
+ *
+ * Deliberately NOT folded into `healthy`: probe() marks a backend healthy on
+ * every good probe, so it would un-quarantine within 5 seconds — undone by
+ * the very check that cannot see the problem. Time-boxed rather than
+ * permanent because the fault is usually fixed by a restart, and the first
+ * call after expiry is the re-test.
+ */
+const WORK_FAIL_THRESHOLD = 3;
+const QUARANTINE_MS = 60_000;
 
 let _backends: WhisperBackend[] | null = null;
 let _timer: NodeJS.Timeout | null = null;
@@ -101,6 +124,8 @@ function parseBackends(spec: string): WhisperBackend[] {
       lastError: null,
       stateSince: Date.now(),
       recentMs: [],
+      workFailures: 0,
+      quarantinedUntil: null,
     });
   }
   return out;
@@ -145,9 +170,33 @@ async function probe(b: WhisperBackend): Promise<void> {
   if (b.consecutiveFailures >= FAIL_THRESHOLD) noteState(b, false);
 }
 
-/** Healthy, not draining, in preference order. */
+/** Healthy, not draining, not quarantined — in preference order. */
 export function whisperCandidates(): WhisperBackend[] {
-  return whisperBackends().filter((b) => b.healthy && !b.draining);
+  const now = Date.now();
+  return whisperBackends().filter((b) => {
+    if (!b.healthy || b.draining) return false;
+    if (b.quarantinedUntil !== null) {
+      if (now < b.quarantinedUntil) return false;
+      // Expired: a clean slate, not a hair trigger. Without this the counter
+      // is still at the threshold and the first failure after expiry — even
+      // an unrelated blip — re-quarantines immediately.
+      b.quarantinedUntil = null;
+      b.workFailures = 0;
+      log.info({ backend: b.name }, 'whisper backend quarantine expired — re-testing');
+    }
+    return true;
+  });
+}
+
+function noteWorkFailure(b: WhisperBackend): void {
+  b.workFailures += 1;
+  if (b.workFailures >= WORK_FAIL_THRESHOLD && b.quarantinedUntil === null) {
+    b.quarantinedUntil = Date.now() + QUARANTINE_MS;
+    log.warn(
+      { backend: b.name, failures: b.workFailures, forMs: QUARANTINE_MS },
+      'whisper backend quarantined — passes its health check but fails real work',
+    );
+  }
 }
 
 export interface ForwardResult {
@@ -204,9 +253,12 @@ export async function whisperForward(
         b.lastErrorAt = Date.now();
         b.lastError = `HTTP ${r.status}`;
         detail = `${b.name}: HTTP ${r.status}`;
+        noteWorkFailure(b);
         log.warn({ backend: b.name, status: r.status }, 'whisper backend errored — trying next');
         continue;
       }
+      b.workFailures = 0;
+      b.quarantinedUntil = null;
       return {
         status: r.status,
         body: buf,
@@ -219,6 +271,7 @@ export async function whisperForward(
       b.lastErrorAt = Date.now();
       b.lastError = describeRelayError(err);
       detail = `${b.name}: ${b.lastError}`;
+      noteWorkFailure(b);
       log.warn(
         { backend: b.name, cause: b.lastError, ms: Date.now() - started },
         'whisper backend failed — trying next',
@@ -270,6 +323,10 @@ export function whisperStatus() {
       lastErrorAt: b.lastErrorAt ? new Date(b.lastErrorAt).toISOString() : null,
       lastError: b.lastError,
       stateSince: new Date(b.stateSince).toISOString(),
+      quarantinedUntil:
+        b.quarantinedUntil !== null && Date.now() < b.quarantinedUntil
+          ? new Date(b.quarantinedUntil).toISOString()
+          : null,
     })),
   };
 }
