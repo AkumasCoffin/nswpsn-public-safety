@@ -305,7 +305,7 @@ func writeTalkgroups(tx *sql.Tx, systemID int, v any, caps transcriptCaps) error
 			return err
 		}
 		// Transcription: core column + plugin row for this talkgroup (guarded).
-		if err := writeTalkgroupTranscription(tx, systemID, id, r, caps); err != nil {
+		if err := writeTalkgroupTranscription(tx, systemID, id, caps); err != nil {
 			return err
 		}
 	}
@@ -436,6 +436,23 @@ func writeDownstreams(tx *sql.Tx, v any) error {
 
 // --- transcription config sync ------------------------------------------------
 
+// nodeTranscribe is what a node's rdio is told about transcription: nothing to
+// do. It is forced, not defaulted, because the config that reaches here is the
+// CENTRAL one and its transcribe flags are right for central rdio -- the node
+// gets the same document fanned out to it, and a talkgroup marked transcribe on
+// central would otherwise switch transcription on at every node too.
+//
+// A node transcript would have nowhere to go. rdio only pushes transcripts to a
+// downstream that advertises transcript-forward on its capability probe, and
+// the agent's own relay listener answers {"features":[]} (relay/listener.go), as
+// does the backend's node-ingest probe. Central rdio receives the AUDIO and
+// transcribes it there, which is the whole design -- so transcription at a node
+// is work whose output no one can read.
+//
+// Written as 0 rather than skipped: skipping leaves whatever is already in the
+// node's DB switched on, and turning it off is the point.
+const nodeTranscribe = 0
+
 // transcriptCaps records which transcription columns/plugin tables the target
 // DB actually has. An older rdio DB may lack any of them; each write is guarded
 // so a missing column/table silently skips rather than failing the apply.
@@ -458,16 +475,19 @@ func probeTranscriptCaps(tx *sql.Tx) transcriptCaps {
 	}
 }
 
-// writeSystemTranscription writes a system's transcribe flag + prompt to the
-// core rdioScannerSystems columns (post-upsert UPDATE, so the base upsert SQL is
-// untouched) AND mirrors them into plugin_transcripts_systems — matching the
+// writeSystemTranscription turns a system's transcription OFF on the core
+// rdioScannerSystems column (post-upsert UPDATE, so the base upsert SQL is
+// untouched) AND mirrors that into plugin_transcripts_systems — matching the
 // migration's id→systemId, transcribe→transcribe, transcriptionPrompt→prompt
 // mapping — because the direct-DB path bypasses rdio's config-save hook that
-// normally performs that mirror. transcribe defaults to 1 (rdio's own default)
-// when unset; prompt defaults to an empty string. Each write is skipped when its
-// column/table is absent.
+// normally performs that mirror. See nodeTranscribe for why the config's own
+// flag is ignored. Each write is skipped when its column/table is absent.
+//
+// The PROMPT is still synced from the config. It is inert while transcribe is
+// 0, and it means an operator who switches a node's rdio on by hand gets the
+// right prompt rather than an empty one.
 func writeSystemTranscription(tx *sql.Tx, id int, r map[string]any, caps transcriptCaps) error {
-	transcribe := asBoolIntDefault(r["transcribe"], 1)
+	transcribe := nodeTranscribe
 	prompt := asStr(r["transcriptionPrompt"])
 
 	if caps.systemsTranscribe {
@@ -497,12 +517,14 @@ func writeSystemTranscription(tx *sql.Tx, id int, r map[string]any, caps transcr
 	return nil
 }
 
-// writeTalkgroupTranscription writes a talkgroup's transcribe flag to the core
-// rdioScannerTalkgroups column AND mirrors it into plugin_transcripts_talkgroups
-// (systemId, talkgroupId=id, transcribe), same rationale as the system variant.
-// transcribe defaults to 1 when unset; skipped when its column/table is absent.
-func writeTalkgroupTranscription(tx *sql.Tx, systemID, id int, r map[string]any, caps transcriptCaps) error {
-	transcribe := asBoolIntDefault(r["transcribe"], 1)
+// writeTalkgroupTranscription turns a talkgroup's transcription OFF on the core
+// rdioScannerTalkgroups column AND mirrors that into
+// plugin_transcripts_talkgroups (systemId, talkgroupId=id, transcribe), same
+// rationale as the system variant. Skipped when its column/table is absent.
+//
+// Takes no config row: there is nothing left in it to read. See nodeTranscribe.
+func writeTalkgroupTranscription(tx *sql.Tx, systemID, id int, caps transcriptCaps) error {
+	transcribe := nodeTranscribe
 
 	if caps.talkgroupsTranscribe {
 		if _, err := tx.Exec(
@@ -704,33 +726,6 @@ func asBoolInt(v any) int {
 		}
 	}
 	return 0
-}
-
-// asBoolIntDefault coerces a JSON bool/number/string to 0/1, returning d when
-// the value is absent or unrecognised. Used for transcribe flags, which rdio
-// defaults to true (1) when unset.
-func asBoolIntDefault(v any, d int) int {
-	switch b := v.(type) {
-	case bool:
-		if b {
-			return 1
-		}
-		return 0
-	case float64:
-		if b != 0 {
-			return 1
-		}
-		return 0
-	case string:
-		s := strings.TrimSpace(b)
-		if strings.EqualFold(s, "true") || s == "1" {
-			return 1
-		}
-		if strings.EqualFold(s, "false") || s == "0" {
-			return 0
-		}
-	}
-	return d
 }
 
 func asStr(v any) string {

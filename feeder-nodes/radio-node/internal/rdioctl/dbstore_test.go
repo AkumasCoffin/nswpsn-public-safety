@@ -3,6 +3,7 @@ package rdioctl
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -172,9 +173,19 @@ const transcribeCfg = `{
   "downstreams": [{"_id": 1, "apiKey": "key-aaa", "disabled": false, "order": null, "systems": "*", "url": "http://127.0.0.1:17390"}]
 }`
 
-// TestWriteConfigDB_TranscriptionSync verifies transcribe/transcriptionPrompt
-// land on the core systems/talkgroups columns AND the plugin_transcripts tables,
-// with the correct defaults, and that a re-apply is idempotent.
+// TestWriteConfigDB_TranscriptionSync verifies transcription is turned OFF on
+// every system and talkgroup, on the core columns AND the plugin_transcripts
+// tables, whatever the config says — and that a re-apply is idempotent.
+//
+// This test used to assert the opposite: that the config's transcribe flags
+// were honoured and defaulted to 1. They are the CENTRAL config's flags, right
+// for central rdio, and the node is handed the same document. A node transcript
+// has nowhere to go — the agent's relay listener advertises no
+// transcript-forward, so rdio never pushes one — and central transcribes the
+// audio it receives. Honouring the flags here only spent a node's CPU on output
+// nothing can read.
+//
+// The fixture covers all three inputs on purpose: true, false, and unset.
 func TestWriteConfigDB_TranscriptionSync(t *testing.T) {
 	dbPath := newRdioDBFromSchema(t, forkSchemaWithTranscribe)
 	cfg := cfgFromJSON(t, transcribeCfg)
@@ -192,7 +203,9 @@ func TestWriteConfigDB_TranscriptionSync(t *testing.T) {
 	}
 	defer db.Close()
 
-	// System core columns.
+	// System 1 asks for transcribe=true and gets 0. The PROMPT still syncs:
+	// it is inert while transcribe is 0, and it means an operator who switches
+	// a node on by hand gets the right prompt rather than an empty one.
 	var sysTranscribe int
 	var sysPrompt string
 	if err := db.QueryRow(
@@ -200,10 +213,10 @@ func TestWriteConfigDB_TranscriptionSync(t *testing.T) {
 	).Scan(&sysTranscribe, &sysPrompt); err != nil {
 		t.Fatalf("system 1 transcribe cols: %v", err)
 	}
-	if sysTranscribe != 1 || sysPrompt != "NSW RFS radio traffic" {
-		t.Errorf("system 1 core = transcribe %d / prompt %q, want 1 / \"NSW RFS radio traffic\"", sysTranscribe, sysPrompt)
+	if sysTranscribe != 0 || sysPrompt != "NSW RFS radio traffic" {
+		t.Errorf("system 1 core = transcribe %d / prompt %q, want 0 / \"NSW RFS radio traffic\"", sysTranscribe, sysPrompt)
 	}
-	// System 2 transcribe=false, prompt unset → '' default.
+	// System 2 asks for false and gets 0 too; prompt unset → '' default.
 	if err := db.QueryRow(
 		"select `transcribe`, `transcriptionPrompt` from `rdioScannerSystems` where `id` = 2",
 	).Scan(&sysTranscribe, &sysPrompt); err != nil {
@@ -213,9 +226,15 @@ func TestWriteConfigDB_TranscriptionSync(t *testing.T) {
 		t.Errorf("system 2 core = transcribe %d / prompt %q, want 0 / \"\"", sysTranscribe, sysPrompt)
 	}
 
-	// System plugin rows mirror the core values.
-	if n := count(t, db, "select `transcribe` from `plugin_transcripts_systems` where `systemId` = 1"); n != 1 {
-		t.Errorf("plugin_transcripts_systems[1].transcribe = %d, want 1", n)
+	// The plugin tables mirror the core values, because the direct-DB path
+	// bypasses the config-save hook that would normally do it. A row left on in
+	// the mirror would keep transcribing whatever the core column said.
+	for _, id := range []int{1, 2} {
+		if n := count(t, db, fmt.Sprintf(
+			"select `transcribe` from `plugin_transcripts_systems` where `systemId` = %d", id,
+		)); n != 0 {
+			t.Errorf("plugin_transcripts_systems[%d].transcribe = %d, want 0", id, n)
+		}
 	}
 	var pluginPrompt string
 	if err := db.QueryRow("select `prompt` from `plugin_transcripts_systems` where `systemId` = 1").Scan(&pluginPrompt); err != nil {
@@ -224,27 +243,31 @@ func TestWriteConfigDB_TranscriptionSync(t *testing.T) {
 	if pluginPrompt != "NSW RFS radio traffic" {
 		t.Errorf("plugin_transcripts_systems[1].prompt = %q, want \"NSW RFS radio traffic\"", pluginPrompt)
 	}
-	if n := count(t, db, "select `transcribe` from `plugin_transcripts_systems` where `systemId` = 2"); n != 0 {
-		t.Errorf("plugin_transcripts_systems[2].transcribe = %d, want 0", n)
-	}
 
-	// Talkgroup core column: 30015 true, 30016 false, 5001 unset → default 1.
-	if n := count(t, db, "select `transcribe` from `rdioScannerTalkgroups` where `systemId` = 1 and `id` = 30015"); n != 1 {
-		t.Errorf("talkgroup 30015.transcribe = %d, want 1", n)
+	// Talkgroups: 30015 asks true, 30016 asks false, 5001 says nothing. All 0.
+	for _, tg := range []struct {
+		systemID, id int
+		asked        string
+	}{
+		{1, 30015, "true"},
+		{1, 30016, "false"},
+		{2, 5001, "unset"},
+	} {
+		if n := count(t, db, fmt.Sprintf(
+			"select `transcribe` from `rdioScannerTalkgroups` where `systemId` = %d and `id` = %d",
+			tg.systemID, tg.id,
+		)); n != 0 {
+			t.Errorf("talkgroup %d.transcribe (config said %s) = %d, want 0", tg.id, tg.asked, n)
+		}
+		if n := count(t, db, fmt.Sprintf(
+			"select `transcribe` from `plugin_transcripts_talkgroups` where `systemId` = %d and `talkgroupId` = %d",
+			tg.systemID, tg.id,
+		)); n != 0 {
+			t.Errorf("plugin talkgroup %d.transcribe = %d, want 0", tg.id, n)
+		}
 	}
-	if n := count(t, db, "select `transcribe` from `rdioScannerTalkgroups` where `systemId` = 1 and `id` = 30016"); n != 0 {
-		t.Errorf("talkgroup 30016.transcribe = %d, want 0", n)
-	}
-	if n := count(t, db, "select `transcribe` from `rdioScannerTalkgroups` where `systemId` = 2 and `id` = 5001"); n != 1 {
-		t.Errorf("talkgroup 5001.transcribe (unset) = %d, want 1 (default)", n)
-	}
-	// Talkgroup plugin rows mirror the core column.
-	if n := count(t, db, "select `transcribe` from `plugin_transcripts_talkgroups` where `systemId` = 1 and `talkgroupId` = 30016"); n != 0 {
-		t.Errorf("plugin talkgroup 30016.transcribe = %d, want 0", n)
-	}
-	if n := count(t, db, "select `transcribe` from `plugin_transcripts_talkgroups` where `systemId` = 2 and `talkgroupId` = 5001"); n != 1 {
-		t.Errorf("plugin talkgroup 5001.transcribe = %d, want 1", n)
-	}
+	// Still one mirror row per talkgroup — off, not absent. A missing row is
+	// not the same as a row saying no: rdio's plugin defaults transcribe to 1.
 	if n := count(t, db, "select count(*) from `plugin_transcripts_talkgroups`"); n != 3 {
 		t.Errorf("plugin_transcripts_talkgroups rows = %d, want 3", n)
 	}
