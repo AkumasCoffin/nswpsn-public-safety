@@ -397,6 +397,13 @@ const Schema = z.object({
   RDIO_INTERNAL_URL: z.string().optional(),
   RDIO_INTERNAL_API_KEY: z.string().optional(),
 
+  // The whisper failover router (whisper_router.py). rdio's transcripts plugin
+  // points at it directly; this is only so the staff panel can ask which of
+  // the two whisper servers is currently doing the work. Unset = the Nodes tab
+  // says "not configured" rather than showing an outage.
+  WHISPER_ROUTER_URL: z.string().optional(),
+  WHISPER_ROUTER_TOKEN: z.string().optional(),
+
   // How long an outbound relay may take before we give up on it.
   //
   // Every relay used to run with no deadline at all, so a stalled upstream

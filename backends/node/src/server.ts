@@ -52,6 +52,7 @@ import { marinetrafficRouter } from './api/marinetraffic.js';
 import { newsRouter } from './api/news.js';
 import { summariesRouter } from './api/summaries.js';
 import { transcriptsRouter } from './api/transcripts.js';
+import { whisperRouter } from './api/whisper.js';
 // Centralwatch + dashboard (W8). Image proxy + dashboard endpoints
 // are 503 stubs — Apache routes those prefixes to python.
 import { centralwatchRouter } from './api/centralwatch.js';
@@ -326,6 +327,7 @@ export function createApp() {
   app.route('/', qldCamerasRouter);
   app.route('/', ntFireRouter);
   app.route('/', boundariesRouter);
+  app.route('/', whisperRouter);
   app.route('/', qldFireRouter);
   app.route('/', vicEmergencyRouter);
   app.route('/', waEmergencyRouter);

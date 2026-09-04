@@ -548,6 +548,23 @@
     .nd-ready.unknown { background: var(--accent-soft); color: var(--text-soft); }
     .nd-ready.updating { background: rgba(168,85,247,0.18); color: #c084fc; }
     @keyframes nodePulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+    /* Transcription card. Reuses .nd-ready for the state chips so a whisper
+       backend and a feeder node read the same way at a glance. */
+    .wh-card { margin: 0 0 1rem; padding: 0.75rem 0.9rem; border-radius: 8px;
+      background: var(--accent-soft); border: 1px solid var(--border); }
+    .wh-head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+      font-size: 0.8rem; font-weight: 600; margin-bottom: 0.6rem; }
+    .wh-head .wh-sub { margin-left: auto; font-weight: 400; font-size: 0.7rem; color: var(--text-soft); }
+    .wh-rows { display: flex; flex-direction: column; gap: 0.4rem; }
+    .wh-row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; font-size: 0.75rem; }
+    .wh-name { font-weight: 600; min-width: 3.5rem; }
+    /* The one currently taking calls. Colour rather than a border: the name
+       sits next to a coloured state chip, and a box around a min-width name
+       just reads as an empty text input. */
+    .wh-row.wh-current .wh-name { color: var(--brand, #60a5fa); }
+    .wh-row.wh-current .wh-name::before { content: '▸'; margin-right: 0.25rem; }
+    .wh-meta { color: var(--text-soft); font-size: 0.7rem; }
+    .wh-err { color: #f87171; font-size: 0.7rem; }
     /* iOS-ish enabled toggle switch (mirrors dashboard's .swx). */
     .node-switch { position: relative; display: inline-block; width: 34px; height: 18px; flex-shrink: 0; }
     .node-switch input { opacity: 0; width: 0; height: 0; }
@@ -2850,6 +2867,16 @@
           <button class="btn btn-secondary btn-sm" onclick="loadNodes()">
             <i class="fas fa-sync-alt"></i> Refresh
           </button>
+        </div>
+        <!-- Which of the two whisper servers rdio is transcribing through.
+             The PC one comes and goes with the desktop being idle, so "which
+             one right now" is a real question the panel has to answer. -->
+        <div class="wh-card" id="whisper-card" style="display:none;">
+          <div class="wh-head">
+            <i class="fas fa-microphone"></i> Transcription
+            <span class="wh-sub" id="whisper-sub"></span>
+          </div>
+          <div class="wh-rows" id="whisper-rows"></div>
         </div>
         <div class="dev-card-grid" id="nodes-grid">
           <div class="loading" style="grid-column: 1 / -1;">
@@ -8124,6 +8151,90 @@
       }
     }
 
+    // --- Transcription (whisper) -------------------------------------------
+    //
+    // rdio points at whisper_router, which forwards each call to whichever of
+    // the two faster-whisper servers is healthy: the PC's (preferred, only up
+    // while the desktop is idle) or the VM's (always on). The router is the
+    // only thing that knows which one took the last call, so this reads its
+    // status through /api/whisper/status.
+    //
+    // Hidden entirely when no router is configured — an unset feature should
+    // not leave an empty card on the page.
+    async function loadWhisperStatus() {
+      const card = document.getElementById('whisper-card');
+      const rows = document.getElementById('whisper-rows');
+      const sub = document.getElementById('whisper-sub');
+      if (!card || !rows) return;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/whisper/status`, {
+          headers: { 'Authorization': await authHeader() }
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const d = await res.json();
+        if (!d.configured) { card.style.display = 'none'; return; }
+        card.style.display = '';
+
+        if (!d.reachable) {
+          // The router being unreachable and every backend being down both
+          // stop transcripts, but they are different machines to go and look
+          // at, so they must not render the same.
+          sub.textContent = '';
+          rows.innerHTML = `<div class="wh-row"><span class="nd-ready bad">router unreachable</span>` +
+            `<span class="wh-err">${escapeHtml(d.error || '')}</span></div>`;
+          return;
+        }
+
+        sub.textContent = d.current
+          ? `serving from ${d.current}`
+          : 'no backend available — transcripts are being refused';
+
+        rows.innerHTML = (d.backends || []).map(b => {
+          // Draining is a healthy server being emptied before the PC stops it.
+          // Showing that as an outage would make every idle handover look like
+          // a fault, which is the opposite of what this card is for.
+          const state = b.draining ? ['updating', 'draining']
+            : b.healthy ? ['ok', 'up']
+            : ['bad', 'down'];
+          const bits = [];
+          if (b.inFlight > 0) bits.push(`${b.inFlight} in flight`);
+          if (b.avgMs != null) bits.push(`${(b.avgMs / 1000).toFixed(1)}s avg`);
+          if (b.requests) bits.push(`${b.requests} calls`);
+          if (b.failures) bits.push(`${b.failures} failed`);
+          const since = b.stateSince ? ` since ${whShortTime(b.stateSince)}` : '';
+          return `<div class="wh-row${b.name === d.current ? ' wh-current' : ''}">
+              <span class="wh-name">${escapeHtml(b.name)}</span>
+              <span class="nd-ready ${state[0]}">${state[1]}${escapeHtml(since)}</span>
+              <span class="wh-meta">${escapeHtml(bits.join(' · '))}</span>
+              ${b.lastError && !b.healthy ? `<span class="wh-err">${escapeHtml(b.lastError)}</span>` : ''}
+            </div>`;
+        }).join('');
+      } catch (e) {
+        console.error('Error loading whisper status:', e);
+        card.style.display = '';
+        sub.textContent = '';
+        rows.innerHTML = `<div class="wh-row"><span class="nd-ready unknown">status unavailable</span>` +
+          `<span class="wh-err">${escapeHtml(e.message)}</span></div>`;
+      }
+    }
+
+    /**
+     * Local time for an ISO string, dated once it is not today.
+     *
+     * The always-on backend stays up for weeks, and a bare "up since 12:00 PM"
+     * on a server that started three weeks ago reads as this afternoon — the
+     * opposite of what it means.
+     */
+    function whShortTime(iso) {
+      const d = new Date(iso);
+      if (isNaN(d)) return '';
+      const t = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const today = new Date();
+      const sameDay = d.getFullYear() === today.getFullYear()
+        && d.getMonth() === today.getMonth() && d.getDate() === today.getDate();
+      return sameDay ? t : `${d.toLocaleDateString([], { day: 'numeric', month: 'short' })} ${t}`;
+    }
+
     async function loadNodes() {
       const grid = document.getElementById('nodes-grid');
       try {
@@ -8135,6 +8246,7 @@
         allNodes = data.nodes || [];
         renderNodes();
         loadAutoUpdateState();
+        loadWhisperStatus();
       } catch (e) {
         console.error('Error loading nodes:', e);
         if (grid) grid.innerHTML = `
