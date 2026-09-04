@@ -46,13 +46,13 @@ module.exports = {
       // PM2 sends SIGINT first; our index.ts waits for the server to
       // close gracefully before exiting.
       //
-      // 30s, not 10s, because /api/whisper/v1/audio/transcriptions is now an
-      // in-flight request that can legitimately run for a while — the longest
-      // honest transcription measured on this deployment was 16.9s, and a
-      // SIGKILL through one loses that transcript for good (rdio does not come
-      // back for it). This only costs a slow deploy when something is actually
-      // mid-flight: server.close() returns as soon as in-flight requests
-      // finish, so a quiet restart is still instant.
+      // NOTE: the production box does NOT run from this file (env changes
+      // would need pm2 delete + start, which drops the API), so this value is
+      // documentation there, not configuration. The one that actually applies
+      // is the --kill-timeout flag deploy.sh passes on every restart — keep
+      // the two in agreement. 30s: a whisper transcription is an in-flight
+      // request that runs for seconds, and a SIGKILL through one loses that
+      // transcript for good.
       kill_timeout: 30_000
     }
 

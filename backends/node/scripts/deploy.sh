@@ -163,7 +163,24 @@ echo "[deploy] pm2 restart api-node…"
 # Try `api-node` by name first; if that fails, try id 6 (current
 # process id on the host as of writing). Either resolves to the same
 # process; this just future-proofs against rename.
-pm2 restart api-node 2>/dev/null || pm2 restart 6
+#
+# --kill-timeout 30000: how long pm2 waits after SIGINT before SIGKILL.
+# It lives HERE, not in ecosystem.config.js, because this deployment does
+# not manage the process through the ecosystem file (changing anything
+# there means pm2 delete + start, which drops the API) — and pm2 applies
+# restart flags to the stored process config, so setting it on every
+# deploy keeps it true no matter how the process was first created.
+# Checked on this box: the running process had NO kill_timeout at all,
+# so pm2's 1.6s default applied.
+#
+# 30s because /api/whisper/v1/audio/transcriptions is an in-flight
+# request that legitimately runs for seconds (measured up to ~3.2s, and
+# a cold backend can take far longer), and a SIGKILL through one loses
+# that call's transcript for good — rdio does not retry a transcription.
+# shutdown() in src/index.ts already waits for in-flight requests; this
+# gives that wait room to matter. A quiet restart is still instant:
+# server.close() returns as soon as nothing is in flight.
+pm2 restart api-node --kill-timeout 30000 2>/dev/null || pm2 restart 6 --kill-timeout 30000
 
 echo "[deploy] done — recent logs:"
 sleep 2
