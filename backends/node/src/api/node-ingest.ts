@@ -25,6 +25,7 @@ import type { BodyData } from 'hono/utils/body';
 import { z } from 'zod';
 import { config } from '../config.js';
 import { log } from '../lib/log.js';
+import { describeRelayError } from '../lib/relayError.js';
 import { resolveNodeToken } from '../services/auth/nodeToken.js';
 import { bumpNodeCallStat, getNode } from '../services/nodes/registry.js';
 import { getPagerIngest } from '../services/nodes/globalConfig.js';
@@ -280,10 +281,22 @@ nodeIngestRouter.post('/api/node-ingest/call-upload', async (c) => {
   //    boundary from the FormData automatically.
   const target = `${internalUrl.replace(/\/$/, '')}/api/call-upload`;
   let resp: Response;
+  const relayStartedAt = Date.now();
   try {
-    resp = await fetch(target, { method: 'POST', body: fd });
+    resp = await fetch(target, {
+      method: 'POST',
+      body: fd,
+      signal: AbortSignal.timeout(config.RELAY_TIMEOUT_MS),
+    });
   } catch (err) {
-    log.warn({ err, node: node.id.slice(0, 8) }, 'node relay: fetch failed');
+    log.warn(
+      {
+        cause: describeRelayError(err),
+        ms: Date.now() - relayStartedAt,
+        node: node.id.slice(0, 8),
+      },
+      'node relay: fetch failed',
+    );
     return c.json({ error: 'relay failed' }, 502);
   }
 
@@ -812,6 +825,7 @@ nodeIngestRouter.post('/api/node-ingest/pager-upload', async (c) => {
   });
   const target = `${ingest.url.replace(/\/$/, '')}/api/messages`;
   let resp: Response;
+  const relayStartedAt = Date.now();
   try {
     resp = await fetch(target, {
       method: 'POST',
@@ -820,9 +834,17 @@ nodeIngestRouter.post('/api/node-ingest/pager-upload', async (c) => {
         Authorization: ingest.apiKey,
       },
       body,
+      signal: AbortSignal.timeout(config.RELAY_TIMEOUT_MS),
     });
   } catch (err) {
-    log.warn({ err, node: node.id.slice(0, 8) }, 'pager relay: fetch failed');
+    log.warn(
+      {
+        cause: describeRelayError(err),
+        ms: Date.now() - relayStartedAt,
+        node: node.id.slice(0, 8),
+      },
+      'pager relay: fetch failed',
+    );
     return c.json({ error: 'relay failed' }, 502);
   }
 

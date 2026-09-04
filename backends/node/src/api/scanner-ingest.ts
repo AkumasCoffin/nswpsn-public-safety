@@ -35,6 +35,7 @@ import { createHash } from 'node:crypto';
 import type { BodyData } from 'hono/utils/body';
 import { config } from '../config.js';
 import { log } from '../lib/log.js';
+import { describeRelayError } from '../lib/relayError.js';
 import { getPool } from '../db/pool.js';
 import { recordScannerCall } from '../services/nodeEvents.js';
 
@@ -269,10 +270,14 @@ scannerIngestRouter.post('/api/scanner-ingest/api/call-upload', async (c) => {
     }
     fd.set('key', internalKey);
     if (!passthrough) fd.set('dateTime', String(alignedSecs));
+    // Times the RELAY. `startedAt` above is the call's own timestamp, off
+    // the sender's clock, and is skewed by design.
+    const audioRelayStartedAt = Date.now();
     try {
       const resp = await fetch(`${internalUrl.replace(/\/$/, '')}/api/call-upload`, {
         method: 'POST',
         body: fd,
+        signal: AbortSignal.timeout(config.RELAY_TIMEOUT_MS),
       });
       if (!resp.ok) {
         // Surface it: rdio retries a failed downstream, and the retry is
@@ -282,7 +287,12 @@ scannerIngestRouter.post('/api/scanner-ingest/api/call-upload', async (c) => {
         return c.json({ error: 'relay rejected' }, 502);
       }
     } catch (err) {
-      log.warn({ err }, 'scanner ingest: relay to central rdio failed');
+      // Cause and elapsed, not the undici stack: the frames are the same on
+      // every failure and never say which of the two happened.
+      log.warn(
+        { cause: describeRelayError(err), ms: Date.now() - audioRelayStartedAt },
+        'scanner ingest: relay to central rdio failed',
+      );
       return c.json({ error: 'relay failed' }, 502);
     }
   }
@@ -409,10 +419,12 @@ scannerIngestRouter.post('/api/scanner-ingest/api/call-transcript', async (c) =>
     return c.json({ ok: true, forwarded: false, reason: 'relay not configured' });
   }
 
+  const relayStartedAt = Date.now();
   try {
     const resp = await fetch(`${internalUrl.replace(/\/$/, '')}/api/call-transcript`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(config.RELAY_TIMEOUT_MS),
       // dateTime is passed through UNCHANGED. Central matches the transcript to
       // a stored call on (system, talkgroup, dateTime), and the call itself was
       // relayed with the sender's own timestamp, so rewriting it here would
@@ -430,7 +442,10 @@ scannerIngestRouter.post('/api/scanner-ingest/api/call-transcript', async (c) =>
       return c.json({ error: 'relay rejected' }, 502);
     }
   } catch (err) {
-    log.warn({ err }, 'scanner ingest: transcript relay failed');
+    log.warn(
+      { cause: describeRelayError(err), ms: Date.now() - relayStartedAt },
+      'scanner ingest: transcript relay failed',
+    );
     return c.json({ error: 'relay failed' }, 502);
   }
 

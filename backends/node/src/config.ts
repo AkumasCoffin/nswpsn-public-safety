@@ -397,6 +397,22 @@ const Schema = z.object({
   RDIO_INTERNAL_URL: z.string().optional(),
   RDIO_INTERNAL_API_KEY: z.string().optional(),
 
+  // How long an outbound relay may take before we give up on it.
+  //
+  // Every relay used to run with no deadline at all, so a stalled upstream
+  // held OUR inbound request — and the sender's connection — for as long as
+  // the socket stayed open. Measured once: four transcript pushes held 70s,
+  // 57s, 47s and 40s before the far end dropped them all together.
+  //
+  // 30s is a ceiling on damage, not a latency target. It has to clear the
+  // slowest HONEST case by a margin, and a transcript in that same window
+  // legitimately took 16.9s.
+  RELAY_TIMEOUT_MS: z
+    .string()
+    .optional()
+    .transform((v) => (v === undefined ? 30_000 : Number(v)))
+    .pipe(z.number().int().min(1_000).max(120_000)),
+
   // Where the base SDR-Trunk/rdio presets live (feeder-nodes/radio-node/
   // presets). Optional — defaults to that repo path relative to the backend
   // cwd (backends/node → ../../feeder-nodes/radio-node/presets).

@@ -23,7 +23,11 @@ vi.mock('../../../src/lib/log.js', () => ({
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
-async function appWith(key?: string, relay?: { url: string; key: string }) {
+async function appWith(
+  key?: string,
+  relay?: { url: string; key: string },
+  relayTimeoutMs = 30_000,
+) {
   vi.resetModules();
   vi.doMock('../../../src/config.js', () => ({
     config: {
@@ -32,6 +36,7 @@ async function appWith(key?: string, relay?: { url: string; key: string }) {
       SCANNER_TIME_OFFSET_MS: -1000,
       RDIO_INTERNAL_URL: relay?.url,
       RDIO_INTERNAL_API_KEY: relay?.key,
+      RELAY_TIMEOUT_MS: relayTimeoutMs,
     },
   }));
   const { scannerIngestRouter } = await import('../../../src/api/scanner-ingest.js');
@@ -290,5 +295,76 @@ describe('body size guard', () => {
     });
     expect(res.status).toBe(413);
     expect(res.status).not.toBe(401);
+  });
+});
+
+describe('relay deadline', () => {
+  // Nothing bounded these fetches, so a stalled upstream held OUR inbound
+  // request for as long as its socket stayed open: measured once at 70s, 57s,
+  // 47s and 40s across four transcript pushes that then failed together. The
+  // upstream cause was fixed elsewhere; this is the floor under the next one.
+
+  const push = (body: unknown) => {
+    const text = JSON.stringify(body);
+    return {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': String(Buffer.byteLength(text)),
+      },
+      body: text,
+    };
+  };
+  const good = {
+    key: 'right-key',
+    system: 3,
+    talkgroup: 30302,
+    dateTime: '2026-08-23T04:26:12Z',
+    transcript: 'car 850 responding',
+  };
+
+  it('gives the audio relay a deadline, from config', async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(new Response('{}', { status: 200 })));
+    vi.stubGlobal('fetch', fetchMock);
+    const app = await appWith('right-key', { url: 'http://rdio.internal', key: 'INTERNAL' });
+    await app.request('/api/scanner-ingest/api/call-upload',
+      upload({ key: 'right-key', talkgroup: '30013', dateTime: '1787000000' }));
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+    expect(init.signal!.aborted).toBe(false);
+    vi.unstubAllGlobals();
+  });
+
+  it('gives the transcript relay a deadline too', async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(new Response('ok', { status: 200 })));
+    vi.stubGlobal('fetch', fetchMock);
+    const app = await appWith('right-key', { url: 'http://rdio.internal', key: 'INTERNAL' });
+    await app.request('/api/scanner-ingest/api/call-transcript', push(good));
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+    expect(init.signal!.aborted).toBe(false);
+    vi.unstubAllGlobals();
+  });
+
+  it('actually fires, and the deadline is the configured one', async () => {
+    // A deliberately short deadline, so the abort lands while a fetch that
+    // never resolves is still in flight. If the signal were not wired
+    // through, this would hang rather than fail. Kept small because it is
+    // real elapsed time in a suite that runs in parallel.
+    const fetchMock = vi.fn((_url: string, init: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () =>
+          reject(Object.assign(new Error('aborted'), { name: 'TimeoutError' })));
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+    const app = await appWith('right-key', { url: 'http://rdio.internal', key: 'INTERNAL' }, 50);
+    const res = await app.request('/api/scanner-ingest/api/call-transcript', push(good));
+
+    // A timeout is still a 502: the sender treats any non-2xx as a failed
+    // downstream and retries, which is the behaviour we want either way.
+    expect(res.status).toBe(502);
+    vi.unstubAllGlobals();
   });
 });
