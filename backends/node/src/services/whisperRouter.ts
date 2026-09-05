@@ -36,6 +36,25 @@ import { config } from '../config.js';
 import { log } from '../lib/log.js';
 import { describeRelayError } from '../lib/relayError.js';
 
+/**
+ * What a whisper server reports about ITSELF (GET /v1/stats on
+ * whisper_openai_server.py). `waiting` is the reason this exists: a call
+ * queued inside whisper looks in-flight to this router, so queue depth — the
+ * "is this server keeping up" signal — is structurally unknowable from here.
+ */
+export interface BackendStats {
+  model: string | null;
+  device: string | null;
+  computeType: string | null;
+  waiting: number;
+  active: number;
+  totalOk: number;
+  totalFailed: number;
+  avgS: number | null;
+  p95S: number | null;
+  uptimeS: number;
+}
+
 export interface WhisperBackend {
   name: string;
   url: string;
@@ -53,6 +72,11 @@ export interface WhisperBackend {
   /** When `healthy` last flipped — a backend flapping every 90s looks
    *  identical to a steady one without it. */
   stateSince: number;
+  /** The server's own /v1/stats, refreshed by the probe. Null when the
+   *  backend does not expose it (older whisper_openai_server.py) or the
+   *  last fetch failed. */
+  stats: BackendStats | null;
+  statsAt: number | null;
   recentMs: number[];
   /** Consecutive TRANSCRIPTION failures — the probe cannot see these. */
   workFailures: number;
@@ -126,6 +150,8 @@ function parseBackends(spec: string): WhisperBackend[] {
       recentMs: [],
       workFailures: 0,
       quarantinedUntil: null,
+      stats: null,
+      statsAt: null,
     });
   }
   return out;
@@ -159,15 +185,53 @@ async function probe(b: WhisperBackend): Promise<void> {
       // One good answer is enough to come back: the model is loaded before the
       // port is bound, so there is no half-ready state to wait out.
       noteState(b, true);
+      // The server's own view of itself, on the SAME tick — not fetched per
+      // status call, which the watcher (~5s), the Nodes tab (10s) and the
+      // Data tab all make: that would multiply LAN round-trips by caller
+      // count for the same answer. Best-effort: a 404 (a whisper without the
+      // endpoint yet) or a failure just means no stats line, never unhealthy.
+      await probeStats(b);
       return;
     }
     b.lastError = `HTTP ${r.status}`;
   } catch (err) {
     b.lastError = describeRelayError(err);
   }
+  b.stats = null;
   b.lastErrorAt = Date.now();
   b.consecutiveFailures += 1;
   if (b.consecutiveFailures >= FAIL_THRESHOLD) noteState(b, false);
+}
+
+async function probeStats(b: WhisperBackend): Promise<void> {
+  try {
+    const r = await fetch(`${b.url}/v1/stats`, {
+      signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
+    });
+    if (!r.ok) {
+      b.stats = null;
+      return;
+    }
+    const raw = (await r.json()) as Record<string, unknown>;
+    const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+    const numOrNull = (v: unknown): number | null =>
+      typeof v === 'number' && Number.isFinite(v) ? v : null;
+    b.stats = {
+      model: typeof raw['model'] === 'string' ? raw['model'] : null,
+      device: typeof raw['device'] === 'string' ? raw['device'] : null,
+      computeType: typeof raw['computeType'] === 'string' ? raw['computeType'] : null,
+      waiting: num(raw['waiting']),
+      active: num(raw['active']),
+      totalOk: num(raw['totalOk']),
+      totalFailed: num(raw['totalFailed']),
+      avgS: numOrNull(raw['avgS']),
+      p95S: numOrNull(raw['p95S']),
+      uptimeS: num(raw['uptimeS']),
+    };
+    b.statsAt = Date.now();
+  } catch {
+    b.stats = null;
+  }
 }
 
 /** Healthy, not draining, not quarantined — in preference order. */
@@ -323,6 +387,8 @@ export function whisperStatus() {
       lastErrorAt: b.lastErrorAt ? new Date(b.lastErrorAt).toISOString() : null,
       lastError: b.lastError,
       stateSince: new Date(b.stateSince).toISOString(),
+      stats: b.stats,
+      statsAt: b.statsAt ? new Date(b.statsAt).toISOString() : null,
       quarantinedUntil:
         b.quarantinedUntil !== null && Date.now() < b.quarantinedUntil
           ? new Date(b.quarantinedUntil).toISOString()

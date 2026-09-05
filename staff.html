@@ -2653,6 +2653,7 @@
           <div class="tab-dd-menu" id="data-dd-menu" role="menu" aria-label="Data mode">
             <button class="tab-dd-item" role="menuitem" data-mode="radio" onclick="openDataMode('radio')"><i class="fas fa-walkie-talkie"></i> Radio</button>
             <button class="tab-dd-item" role="menuitem" data-mode="pager" onclick="openDataMode('pager')"><i class="fas fa-tower-broadcast"></i> Pager</button>
+            <button class="tab-dd-item" role="menuitem" data-mode="transcripts" onclick="openDataMode('transcripts')"><i class="fas fa-closed-captioning"></i> Transcripts</button>
           </div>
         </div>
         <button class="tab-btn" data-tab="nodes" onclick="switchTab('nodes')">
@@ -3053,6 +3054,33 @@
         </div>
 
         <!-- ===== Systems view (list › system overview › site overview) ===== -->
+        <!-- Transcripts: not a Radio/Pager sibling with its own pill row —
+             a single view opened straight from the Data dropdown. Whisper
+             server status on top (same card the Nodes tab renders, one shared
+             renderer), the transcript stream under it. -->
+        <div id="nd2-view-transcripts" style="display:none">
+          <div class="wh-card" id="nd2-whisper-card" style="display:none;">
+            <div class="wh-head"><i class="fas fa-microphone"></i> Whisper servers
+              <span class="wh-sub" id="nd2-whisper-sub"></span></div>
+            <div class="wh-rows" id="nd2-whisper-rows"></div>
+          </div>
+          <div class="nd2-controls" style="margin-bottom:0.75rem;">
+            <input type="text" id="nd2-ts-q" class="nd-input" placeholder="Search transcripts... (empty = latest)"
+                   style="min-width:260px;" oninput="nd2TsInputChanged()">
+            <input type="text" id="nd2-ts-tg" class="nd-input" placeholder="Talkgroup" inputmode="numeric"
+                   style="width:110px;" oninput="nd2TsInputChanged()">
+            <span class="nd-sub" id="nd2-ts-count"></span>
+          </div>
+          <div class="nd2-card">
+            <table class="data-table">
+              <thead><tr><th style="width:90px;">Time</th><th style="width:200px;">Talkgroup</th>
+                <th style="width:90px;">RID</th><th>Transcript</th></tr></thead>
+              <tbody id="nd2-ts-body">
+                <tr><td colspan="4" class="nd2-empty">Loading…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
         <div id="nd2-view-live" style="display: none;">
           <div class="nd2-card">
             <div class="nd2-card-h"><i class="fas fa-tower-broadcast"></i> Control channels
@@ -4495,7 +4523,9 @@
     // this drives the panel show/hide sweep and the saved-view whitelist).
     const ND2_RADIO_VIEWS = ['overview', 'live', 'events', 'systems', 'nodes', 'talkgroups', 'aliases'];
     const ND2_PAGER_VIEWS = ['poverview', 'capcodes'];
-    const _nd2AllViews = [...ND2_RADIO_VIEWS, ...ND2_PAGER_VIEWS];
+    // Transcripts is a single view opened straight from the Data dropdown —
+    // no pill row of its own, so no view LIST, just the one name.
+    const _nd2AllViews = [...ND2_RADIO_VIEWS, ...ND2_PAGER_VIEWS, 'transcripts'];
 
     function nd2StartPolling() {
       // Reflect the persisted hide-encrypted choice on the control itself —
@@ -4545,6 +4575,11 @@
             break;
           case 'events': if (nd2.evOffset === 0) nd2LoadEvents(); break;
           case 'poverview': nd2LoadPagerOverview(); break;
+          case 'transcripts':
+            // Do not clobber an active search mid-typing: auto-refresh only
+            // the default (browse) stream, mirroring the offset===0 guards.
+            if (!nd2TsVal('nd2-ts-q') && !nd2TsVal('nd2-ts-tg')) nd2LoadTranscripts();
+            break;
           case 'capcodes': if (nd2.capLevel === 'list' && nd2.cap.offset === 0) nd2LoadCapcodes(); break;
         }
       }, _nd2IntervalMs);
@@ -4575,6 +4610,7 @@
         case 'talkgroups': await nd2LoadTalkgroups(); break;
         // In a drill-down the list is hidden; refreshing it would reload the
         // wrong thing and leave the open sub-tab stale.
+        case 'transcripts': await nd2LoadTranscripts(); break;
         case 'nodes':
           if (nd2.nodes.level === 'detail') await nd2NodeRefresh();
           else await nd2LoadNodes();
@@ -4615,7 +4651,7 @@
     }
     // Menu pick: remember the mode, activate the Data tab, switch mode.
     function openDataMode(mode) {
-      if (mode !== 'radio' && mode !== 'pager') return;
+      if (mode !== 'radio' && mode !== 'pager' && mode !== 'transcripts') return;
       nd2LastMode = mode;
       staffRemember(STAFF_DATA_MODE_KEY, mode);
       closeDataMenu();
@@ -4634,7 +4670,7 @@
 
     // Radio ⇄ Pager: swap the view-pill row and reset to the mode's first view.
     function nd2SetMode(mode) {
-      if (mode !== 'radio' && mode !== 'pager') return;
+      if (mode !== 'radio' && mode !== 'pager' && mode !== 'transcripts') return;
       nd2LastMode = mode;
       staffRemember(STAFF_DATA_MODE_KEY, mode);
       if (nd2.mode === mode) { _nd2MarkDataMenu(); return; }
@@ -4644,6 +4680,7 @@
       const pBar = document.getElementById('nd2-viewbar-pager');
       if (rBar) rBar.style.display = mode === 'radio' ? '' : 'none';
       if (pBar) pBar.style.display = mode === 'pager' ? '' : 'none';
+      // Transcripts has ONE view, so it gets no pill row at all.
       // The per-node scope selector is a Radio-mode control (pager stays
       // fleet-wide); hide it entirely in Pager mode.
       const nodeCtl = document.getElementById('nd2-node-ctl');
@@ -4655,7 +4692,7 @@
       const encCtl = document.getElementById('nd2-enc-ctl');
       if (encCtl) encCtl.style.display = mode === 'radio' ? '' : 'none';
       // Reset to the mode's first view; force nd2SetView past its equality guard.
-      const first = mode === 'radio' ? 'overview' : 'poverview';
+      const first = mode === 'radio' ? 'overview' : mode === 'pager' ? 'poverview' : 'transcripts';
       nd2.view = null;
       nd2SetView(first);
     }
@@ -4705,7 +4742,9 @@
       // state. (Aliases used to be windowless on the grounds that an alias is
       // durable identity; but the table lists radios HEARD, so it follows the
       // window like its siblings and `All` restores the full history.)
-      const windowless = view === 'live';
+      // Transcripts too: its list has its own limit and search, so the
+      // window pills would be controls that do nothing.
+      const windowless = view === 'live' || view === 'transcripts';
       const winRow = document.getElementById('nd2-window-row') || document.querySelector('[data-nd2-window]')?.parentElement;
       if (winRow) winRow.style.visibility = windowless ? 'hidden' : '';
       // `All` is offered wherever the backend can answer it: the rollup views
@@ -4806,6 +4845,71 @@
     // the Refresh button calls this too, and a second manual copy helps
     // just as little as a second automatic one.
     let _nd2OverviewInflight = false;
+
+
+    // --- Data > Transcripts -------------------------------------------------
+    const nd2TsVal = (id) => (document.getElementById(id)?.value || '').trim();
+    let _nd2TsDebounce = null;
+    function nd2TsInputChanged() {
+      clearTimeout(_nd2TsDebounce);
+      _nd2TsDebounce = setTimeout(() => { if (nd2.view === 'transcripts') nd2LoadTranscripts(); }, 350);
+    }
+
+    async function nd2LoadTranscripts() {
+      const body = document.getElementById('nd2-ts-body');
+      const count = document.getElementById('nd2-ts-count');
+      if (!body) return;
+      const seq = ++nd2.reqSeq;
+
+      // The whisper server status rides along, fire-and-forget: a slow status
+      // must never delay the stream, and vice versa.
+      (async () => {
+        const card = document.getElementById('nd2-whisper-card');
+        const rows = document.getElementById('nd2-whisper-rows');
+        const sub = document.getElementById('nd2-whisper-sub');
+        if (!card || !rows) return;
+        try { whRenderStatus(card, sub, rows, await whFetchStatus()); }
+        catch (e) {
+          card.style.display = '';
+          rows.innerHTML = `<div class="wh-row"><span class="nd-ready unknown">status unavailable</span>` +
+            `<span class="wh-err">${escapeHtml(e.message)}</span></div>`;
+        }
+      })();
+
+      try {
+        const params = new URLSearchParams({ limit: '50' });
+        const q = nd2TsVal('nd2-ts-q');
+        const tg = nd2TsVal('nd2-ts-tg');
+        if (q) params.set('q', q);
+        if (tg && /^\d+$/.test(tg)) params.set('talkgroup', tg);
+        const res = await fetch(`${API_BASE_URL}/api/rdio/transcripts/search?${params}`, {
+          headers: { 'Authorization': await authHeader() }
+        });
+        if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status });
+        const data = await res.json();
+        if (seq !== nd2.reqSeq) return;   // a newer request owns the table
+
+        if (count) count.textContent = `${data.total.toLocaleString()} transcript${data.total === 1 ? '' : 's'}${q || tg ? ' matching' : ''}`;
+        const rows = data.results || [];
+        if (!rows.length) {
+          body.innerHTML = `<tr><td colspan="4" class="nd2-empty">${q || tg ? 'No transcripts match.' : 'No transcripts yet.'}</td></tr>`;
+          return;
+        }
+        body.innerHTML = rows.map(r => {
+          const tgLabel = r.talkgroup_label || (r.talkgroup != null ? `TG ${r.talkgroup}` : '—');
+          return `<tr>
+            <td><span class="nd-sub">${escapeHtml(whShortTime(r.datetime))}</span></td>
+            <td>${escapeHtml(tgLabel)}${r.talkgroup != null && r.talkgroup_label ? ` <span class="nd-sub">${r.talkgroup}</span>` : ''}</td>
+            <td><span class="nd-sub">${escapeHtml(r.radio_label || (r.radio_id != null ? String(r.radio_id) : '—'))}</span></td>
+            <td>${escapeHtml(r.transcript || '')}</td>
+          </tr>`;
+        }).join('');
+      } catch (e) {
+        if (seq !== nd2.reqSeq) return;
+        console.error('Error loading transcripts:', e);
+        body.innerHTML = `<tr><td colspan="4" class="nd2-empty">Could not load transcripts: ${escapeHtml(e.message)}</td></tr>`;
+      }
+    }
 
     async function nd2LoadOverview() {
       if (_nd2OverviewInflight) return;
@@ -8160,48 +8264,71 @@
     //
     // Hidden entirely when no router is configured — an unset feature should
     // not leave an empty card on the page.
+
+    /**
+     * Render one whisper status payload into a card. Shared by the Nodes tab
+     * and Data > Transcripts, so the two can never drift — the only Nodes-
+     * specific thing was ever the element ids.
+     */
+    function whRenderStatus(card, sub, rows, d) {
+      if (!d.configured) { card.style.display = 'none'; return; }
+      card.style.display = '';
+      sub.textContent = d.current
+        ? `serving from ${d.current}`
+        : 'no backend available — transcripts are being refused';
+      rows.innerHTML = (d.backends || []).map(b => {
+        // Draining is a healthy server being emptied before the PC stops it.
+        // Showing that as an outage would make every idle handover look like
+        // a fault, which is the opposite of what this card is for.
+        // Quarantined is its own thing too: the server ANSWERS its health
+        // check but failed real transcriptions, so the backend is resting it
+        // — neither up nor down, and worth saying which.
+        const state = b.quarantinedUntil ? ['bad', 'quarantined']
+          : b.draining ? ['updating', 'draining']
+          : b.healthy ? ['ok', 'up']
+          : ['bad', 'down'];
+        const bits = [];
+        if (b.inFlight > 0) bits.push(`${b.inFlight} in flight`);
+        if (b.avgMs != null) bits.push(`${(b.avgMs / 1000).toFixed(1)}s avg`);
+        if (b.requests) bits.push(`${b.requests} calls`);
+        if (b.failures) bits.push(`${b.failures} failed`);
+        // The server's own /v1/stats, when it exposes them. Queue depth is
+        // the "keeping up?" signal only the server itself can know — a call
+        // queued inside whisper looks in-flight to the backend router.
+        let queueHtml = '';
+        if (b.stats) {
+          if (b.stats.model) bits.push(`${b.stats.model} ${b.stats.device || ''}`.trim());
+          if (b.stats.p95S != null) bits.push(`p95 ${b.stats.p95S.toFixed(1)}s`);
+          if (b.stats.waiting > 0) {
+            queueHtml = `<span class="nd-ready bad">queue ${b.stats.waiting}</span>`;
+          }
+        }
+        const since = b.stateSince ? ` since ${whShortTime(b.stateSince)}` : '';
+        return `<div class="wh-row${b.name === d.current ? ' wh-current' : ''}">
+            <span class="wh-name">${escapeHtml(b.name)}</span>
+            <span class="nd-ready ${state[0]}">${state[1]}${escapeHtml(since)}</span>
+            ${queueHtml}
+            <span class="wh-meta">${escapeHtml(bits.join(' · '))}</span>
+            ${b.lastError && !b.healthy ? `<span class="wh-err">${escapeHtml(b.lastError)}</span>` : ''}
+          </div>`;
+      }).join('');
+    }
+
+    async function whFetchStatus() {
+      const res = await fetch(`${API_BASE_URL}/api/whisper/status`, {
+        headers: { 'Authorization': await authHeader() }
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    }
+
     async function loadWhisperStatus() {
       const card = document.getElementById('whisper-card');
       const rows = document.getElementById('whisper-rows');
       const sub = document.getElementById('whisper-sub');
       if (!card || !rows) return;
       try {
-        const res = await fetch(`${API_BASE_URL}/api/whisper/status`, {
-          headers: { 'Authorization': await authHeader() }
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const d = await res.json();
-        if (!d.configured) { card.style.display = 'none'; return; }
-        card.style.display = '';
-
-        sub.textContent = d.current
-          ? `serving from ${d.current}`
-          : 'no backend available — transcripts are being refused';
-
-        rows.innerHTML = (d.backends || []).map(b => {
-          // Draining is a healthy server being emptied before the PC stops it.
-          // Showing that as an outage would make every idle handover look like
-          // a fault, which is the opposite of what this card is for.
-          // Quarantined is its own thing too: the server ANSWERS its health
-          // check but failed real transcriptions, so the backend is resting it
-          // — neither up nor down, and worth saying which.
-          const state = b.quarantinedUntil ? ['bad', 'quarantined']
-            : b.draining ? ['updating', 'draining']
-            : b.healthy ? ['ok', 'up']
-            : ['bad', 'down'];
-          const bits = [];
-          if (b.inFlight > 0) bits.push(`${b.inFlight} in flight`);
-          if (b.avgMs != null) bits.push(`${(b.avgMs / 1000).toFixed(1)}s avg`);
-          if (b.requests) bits.push(`${b.requests} calls`);
-          if (b.failures) bits.push(`${b.failures} failed`);
-          const since = b.stateSince ? ` since ${whShortTime(b.stateSince)}` : '';
-          return `<div class="wh-row${b.name === d.current ? ' wh-current' : ''}">
-              <span class="wh-name">${escapeHtml(b.name)}</span>
-              <span class="nd-ready ${state[0]}">${state[1]}${escapeHtml(since)}</span>
-              <span class="wh-meta">${escapeHtml(bits.join(' · '))}</span>
-              ${b.lastError && !b.healthy ? `<span class="wh-err">${escapeHtml(b.lastError)}</span>` : ''}
-            </div>`;
-        }).join('');
+        whRenderStatus(card, sub, rows, await whFetchStatus());
       } catch (e) {
         console.error('Error loading whisper status:', e);
         card.style.display = '';

@@ -45,6 +45,19 @@ function stubBackends() {
           ? new Response(JSON.stringify({ data: [] }), { status: 200 })
           : new Response('', { status: 503 });
       }
+      // BEFORE the transcription fallthrough, or every stats probe counts as
+      // a transcription hit and the pc.hits assertions below break. pc has
+      // the endpoint, vm 404s — production's exact shape today.
+      if (String(url).endsWith('/v1/stats')) {
+        if (name === 'pc') {
+          return new Response(JSON.stringify({
+            model: 'large-v3', device: 'cuda', computeType: 'float16',
+            waiting: 1, active: 2, totalOk: 40, totalFailed: 0,
+            avgS: 0.98, p95S: 3.2, uptimeS: 600,
+          }), { status: 200 });
+        }
+        return new Response('', { status: 404 });
+      }
       // A transcription.
       if (!who.up) throw new TypeError('fetch failed');
       who.hits += 1;
@@ -433,5 +446,33 @@ describe('quarantine: a backend that passes its probe but fails real work', () =
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('per-backend stats enrichment', () => {
+  it('carries each backend own /v1/stats, and tolerates one without the endpoint', async () => {
+    // waiting (queue depth) is the point: a call queued inside whisper looks
+    // in-flight to this router, so only the server itself can report it. The
+    // vm has not been updated yet and 404s — that must read as "no stats",
+    // never as unhealthy, and must not count as a transcription attempt.
+    const { app, svc } = await setup();
+    await probeOnce(svc);
+
+    const st = svc.whisperStatus();
+    const pcB = st.backends[0]!;
+    const vmB = st.backends[1]!;
+    expect(pcB.stats).toMatchObject({ model: 'large-v3', device: 'cuda', waiting: 1 });
+    expect(pcB.statsAt).not.toBeNull();
+    expect(vmB.stats).toBeNull();
+    expect(vmB.healthy).toBe(true);
+
+    // Probing cost no transcription hits.
+    expect(pc.hits).toBe(0);
+    expect(vm.hits).toBe(0);
+
+    // And the HTTP surface carries it through.
+    const body = await (await app.request('/api/whisper/status')).json();
+    expect(body.backends[0].stats.model).toBe('large-v3');
+    expect(body.backends[1].stats).toBeNull();
   });
 });

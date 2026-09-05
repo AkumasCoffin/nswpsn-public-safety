@@ -112,9 +112,11 @@ transcriptsRouter.get('/api/rdio/transcripts/search', async (c) => {
       callIdRaw !== null && callIdRaw !== '' && /^\d+$/.test(callIdRaw)
         ? Number.parseInt(callIdRaw, 10)
         : null;
-    if (!q && callId === null) {
-      return c.json({ error: 'q (keyword) or call_id is required' }, 400);
-    }
+    // No q and no call_id is BROWSE mode: the newest transcribed calls,
+    // filterable by system/talkgroup/date like a search. This diverges from
+    // python (which required a keyword) deliberately — the staff Transcripts
+    // view needs a default stream to show, and "latest N with a transcript"
+    // is a cheap indexed read on rdio's dateTime ordering.
     const systemRaw = url.searchParams.get('system');
     const talkgroupRaw = url.searchParams.get('talkgroup');
     const systemId =
@@ -161,13 +163,18 @@ transcriptsRouter.get('/api/rdio/transcripts/search', async (c) => {
         .split(',')
         .map((t) => t.trim())
         .filter((t) => t.length >= 2);
-      if (terms.length === 0) {
+      // A PRESENT-but-useless q (all terms under 2 chars) is still an error:
+      // silently browsing would look like a search that matched everything.
+      // An absent q is the browse mode described above and adds no clause.
+      if (q && terms.length === 0) {
         return c.json(
           { error: 'q must contain at least one term of 2+ chars' },
           400,
         );
       }
-      if (terms.length === 1) {
+      if (terms.length === 0) {
+        // browse: transcript IS NOT NULL alone
+      } else if (terms.length === 1) {
         clauses.push(`${RDIO_TRANSCRIPT} ILIKE ${next()}`);
         params.push(`%${terms[0]}%`);
       } else {

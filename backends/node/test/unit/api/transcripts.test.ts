@@ -58,12 +58,33 @@ describe('/api/rdio/transcripts/search', () => {
     expect(body['error']).toBe('RDIO_DATABASE_URL not configured');
   });
 
-  it('400s without q or call_id', async () => {
+  it('browses the newest transcribed calls when no q or call_id is given', async () => {
+    // This used to 400 (python parity: a keyword was mandatory). The staff
+    // Transcripts view needs a default stream, so bare requests are now
+    // BROWSE mode: latest calls that HAVE a transcript, newest first. The
+    // guard that matters is in the SQL, not the status code — without the
+    // IS NOT NULL clause the stream would be every untranscribed call too.
+    queryMock.mockImplementationOnce(async () => ({ rows: [{ n: 1 }] }));
+    queryMock.mockImplementationOnce(async () => ({
+      rows: [{ id: 9, date_time: new Date('2026-09-05T06:00:00Z'), system: 1,
+               talkgroup: 30003, transcript: 'car 850 responding', source: 2073252, sources: null }],
+    }));
     const { createApp } = await import('../../../src/server.js');
     const app = createApp();
-    const res = await app.request('/api/rdio/transcripts/search', {
-      headers: AUTH,
-    });
+    const res = await app.request('/api/rdio/transcripts/search', { headers: AUTH });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.total).toBe(1);
+    expect(body.results[0].transcript).toBe('car 850 responding');
+    const sql = String(queryMock.mock.calls[1]![0]);
+    expect(sql).toContain('IS NOT NULL');
+    expect(sql).not.toContain('ILIKE');
+  });
+
+  it('still 400s a q whose every term is too short — that is a bad search, not a browse', async () => {
+    const { createApp } = await import('../../../src/server.js');
+    const app = createApp();
+    const res = await app.request('/api/rdio/transcripts/search?q=a', { headers: AUTH });
     expect(res.status).toBe(400);
   });
 
