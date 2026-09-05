@@ -582,7 +582,8 @@
               Local Government Area <span class="required">*</span>
             </label>
             <input type="text" id="region-lga" class="form-input" list="region-lga-list"
-                   placeholder="Select your state first..." autocomplete="off" disabled>
+                   placeholder="Select your state first..." autocomplete="off" disabled
+                   data-manual-disable="1">
             <datalist id="region-lga-list"></datalist>
           </div>
           <div class="form-group" data-contributor-only>
@@ -770,6 +771,10 @@
       const form = document.getElementById('signup-form');
       if (!form) return;
       form.querySelectorAll('input, select, textarea').forEach((f) => {
+        // A field something disables ON PURPOSE (the LGA input until a state
+        // is picked) marks itself manual-disable; blanket re-enabling it here
+        // would undo that rule every time any section toggled.
+        if (f.dataset.manualDisable === '1') { f.required = false; return; }
         // offsetParent is null for anything inside a display:none ancestor.
         const hidden = f.offsetParent === null && f.type !== 'hidden';
         if (f.dataset.wasRequired === undefined) f.dataset.wasRequired = f.required ? '1' : '0';
@@ -864,11 +869,14 @@
       lga.value = '';
       if (!state) {
         lga.disabled = true;
+        // Tells syncHiddenFieldValidation this is OUR rule, not stale state.
+        lga.dataset.manualDisable = '1';
         lga.placeholder = 'Select your state first...';
         list.innerHTML = '';
         return;
       }
       lga.disabled = false;
+      delete lga.dataset.manualDisable;
       lga.placeholder = 'Start typing your council area...';
       if (_lgaNamesCache[state]) {
         list.innerHTML = _lgaNamesCache[state];
@@ -1132,6 +1140,8 @@
         detailsInput.dataset.wasRequired = '0';
         detailsInput.value = '';
       }
+      // See toggleFeederSetup: show/hide must re-sync disabled state.
+      syncHiddenFieldValidation();
     }
     
     function toggleFeederSetup() {
@@ -1153,6 +1163,12 @@
         document.getElementById('rating-label').textContent = '';
         document.querySelectorAll('#star-rating .star').forEach(star => star.style.color = '#475569');
       }
+      // Any function that changes which sections are visible MUST re-sync, or
+      // fields revealed here stay disabled from the last sync while they were
+      // hidden. That is exactly what happened on the signed-out email path:
+      // chooseEmailSignup() synced with this card hidden, and showing it
+      // without re-syncing left every control inside grey and unclickable.
+      syncHiddenFieldValidation();
     }
     
     function toggleSetupDetails() {
@@ -1166,6 +1182,8 @@
         detailsGroup.style.display = 'none';
         setupDetailsInput.value = '';
       }
+      // See toggleFeederSetup: show/hide must re-sync disabled state.
+      syncHiddenFieldValidation();
     }
     
     /**
