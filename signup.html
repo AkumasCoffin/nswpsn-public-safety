@@ -555,27 +555,41 @@
             </div>
           </div>
 
-          <!-- Region -->
+          <!-- Location: State -> LGA -> Suburb. Stored as one readable
+               string (the backend's `region` column is free text), combined
+               at submit time. LGA is a datalist combo rather than a select:
+               a state has 100+ LGAs, and if the suggestion fetch ever fails
+               the field still works as plain text instead of bricking
+               signup. -->
           <div class="form-group" data-contributor-only>
             <label class="form-label">
-              Location / Region <span class="required">*</span>
+              State / Territory <span class="required">*</span>
             </label>
-            <select id="region" class="form-input" required>
-              <option value="">Select your region...</option>
-              <option value="sydney_metro">Sydney Metro</option>
-              <option value="greater_sydney">Greater Sydney (Outer suburbs)</option>
-              <option value="hunter">Hunter Region</option>
-              <option value="central_coast">Central Coast</option>
-              <option value="illawarra">Illawarra / South Coast</option>
-              <option value="blue_mountains">Blue Mountains / Western Sydney</option>
-              <option value="central_west">Central West</option>
-              <option value="new_england">New England / North West</option>
-              <option value="north_coast">North Coast</option>
-              <option value="riverina">Riverina / Murray</option>
-              <option value="south_east">South East / Snowy</option>
-              <option value="far_west">Far West</option>
-              <option value="interstate">Interstate / Other</option>
+            <select id="region-state" class="form-input" onchange="onRegionStateChange()">
+              <option value="">Select your state...</option>
+              <option value="NSW">New South Wales</option>
+              <option value="ACT">Australian Capital Territory</option>
+              <option value="NT">Northern Territory</option>
+              <option value="QLD">Queensland</option>
+              <option value="SA">South Australia</option>
+              <option value="TAS">Tasmania</option>
+              <option value="VIC">Victoria</option>
+              <option value="WA">Western Australia</option>
             </select>
+          </div>
+          <div class="form-group" data-contributor-only>
+            <label class="form-label">
+              Local Government Area <span class="required">*</span>
+            </label>
+            <input type="text" id="region-lga" class="form-input" list="region-lga-list"
+                   placeholder="Select your state first..." autocomplete="off" disabled>
+            <datalist id="region-lga-list"></datalist>
+          </div>
+          <div class="form-group" data-contributor-only>
+            <label class="form-label">
+              Suburb <span class="optional">(optional)</span>
+            </label>
+            <input type="text" id="region-suburb" class="form-input" placeholder="Your suburb or town" maxlength="80">
           </div>
           
           <!-- Background -->
@@ -837,6 +851,54 @@
       });
     }
 
+
+    // --- Location: State -> LGA suggestions --------------------------------
+    // ABS LGA names per state, from the boundaries table. Cached per state;
+    // a failed fetch degrades to a free-text LGA field, never a blocked form.
+    const _lgaNamesCache = {};
+    async function onRegionStateChange() {
+      const state = document.getElementById('region-state').value;
+      const lga = document.getElementById('region-lga');
+      const list = document.getElementById('region-lga-list');
+      if (!lga || !list) return;
+      lga.value = '';
+      if (!state) {
+        lga.disabled = true;
+        lga.placeholder = 'Select your state first...';
+        list.innerHTML = '';
+        return;
+      }
+      lga.disabled = false;
+      lga.placeholder = 'Start typing your council area...';
+      if (_lgaNamesCache[state]) {
+        list.innerHTML = _lgaNamesCache[state];
+        return;
+      }
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/boundaries/lga-names?state=${state}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const opts = (data.names || [])
+          .map(n => `<option value="${n.replace(/"/g, '&quot;')}">`)
+          .join('');
+        _lgaNamesCache[state] = opts;
+        // The user may have changed state while this was in flight.
+        if (document.getElementById('region-state').value === state) list.innerHTML = opts;
+      } catch (e) {
+        // No suggestions is fine — the field is a plain text input either
+        // way, and blocking signup on a lookup would be backwards.
+        console.warn('LGA suggestions unavailable:', e.message);
+      }
+    }
+
+    /** The stored region string: "NSW — Penrith — Emu Plains" (suburb optional). */
+    function combinedRegion() {
+      const state = document.getElementById('region-state')?.value?.trim() || '';
+      const lga = document.getElementById('region-lga')?.value?.trim() || '';
+      const suburb = document.getElementById('region-suburb')?.value?.trim() || '';
+      return [state, lga, suburb].filter(Boolean).join(' \u2014 ');
+    }
+
     // Put a previously-collected form body back into the fields (used when the
     // post-OAuth auto-submit fails, so the user can retry without re-typing).
     function restoreSignupForm(b) {
@@ -846,7 +908,17 @@
       });
       if (typeof toggleFeederSetup === 'function') toggleFeederSetup();
       const setVal = (id, v) => { const el = document.getElementById(id); if (el && v != null) el.value = v; };
-      setVal('region', b.region || '');
+      // region is stored combined ("NSW \u2014 Penrith \u2014 Emu Plains");
+      // split it back into the three fields. Older pending bodies carry the
+      // legacy single-select slug, which has no separator and lands (harmlessly)
+      // in the state box for the user to correct.
+      {
+        const parts = String(b.region || '').split(' \u2014 ');
+        setVal('region-state', parts[0] || '');
+        if (typeof onRegionStateChange === 'function') onRegionStateChange();
+        setVal('region-lga', parts[1] || '');
+        setVal('region-suburb', parts[2] || '');
+      }
       setVal('background', b.background || '');
       setVal('background-details', b.background_details || '');
       setVal('website', b.website || '');
@@ -1212,7 +1284,9 @@
 
       const requestTypes = Array.from(document.querySelectorAll('input[name="request-type"]:checked')).map(cb => cb.value);
       const email = document.getElementById('email').value.trim();
-      const region = document.getElementById('region').value;
+      const region = combinedRegion();
+      const regionState = document.getElementById('region-state').value;
+      const regionLga = document.getElementById('region-lga').value.trim();
       const background = document.getElementById('background').value;
       const backgroundDetails = document.getElementById('background-details').value.trim();
       const website = document.getElementById('website').value.trim();
@@ -1265,8 +1339,11 @@
         return;
       }
 
-      if (!region) {
-        messageEl.textContent = 'Please select your region.';
+      // State and LGA are required; suburb is optional.
+      if (!regionState || !regionLga) {
+        messageEl.textContent = !regionState
+          ? 'Please select your state.'
+          : 'Please enter your Local Government Area.';
         messageEl.className = 'message error';
         return;
       }

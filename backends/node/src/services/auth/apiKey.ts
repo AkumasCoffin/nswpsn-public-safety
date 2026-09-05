@@ -95,6 +95,9 @@ export const PUBLIC_ENDPOINT_PREFIXES: readonly string[] = [
   // an endpoint that spends GPU time should not be the one open route.
   '/api/whisper/status',
   '/api/whisper/drain',
+  // LGA names for the signup form's State -> LGA flow. Signup runs before any
+  // auth exists, and the list is ABS public data.
+  '/api/boundaries/lga-names',
 ];
 
 function extractKey(authHeader: string | undefined, xApiKey: string | undefined, qsKey: string | null): string {

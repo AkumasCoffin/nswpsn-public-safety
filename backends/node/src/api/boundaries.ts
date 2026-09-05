@@ -356,6 +356,40 @@ function toFeature(r: BoundaryRow, kind: string, geom: unknown) {
   };
 }
 
+/**
+ * GET /api/boundaries/lga-names?state=NSW — every LGA name in a state.
+ *
+ * For the signup form's State -> LGA flow. Deliberately PUBLIC (see
+ * PUBLIC_ENDPOINTS): signup runs before any authentication exists, and the
+ * list is ABS public data — nothing here is worth a key.
+ *
+ * Cached per state for the process lifetime: LGA boundaries change on a
+ * census cadence, not a request cadence.
+ */
+const LGA_STATES = new Set(['NSW', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'NT', 'ACT']);
+const _lgaNameCache = new Map<string, string[]>();
+
+boundariesRouter.get('/api/boundaries/lga-names', async (c) => {
+  const state = (c.req.query('state') ?? '').toUpperCase().trim();
+  if (!LGA_STATES.has(state)) {
+    return c.json({ error: 'state must be one of NSW, VIC, QLD, SA, WA, TAS, NT, ACT' }, 400);
+  }
+  const cached = _lgaNameCache.get(state);
+  if (cached) return c.json({ state, names: cached });
+
+  const pool = await getPool();
+  if (!pool) return c.json({ error: 'database unavailable' }, 503);
+  const res = await pool.query<{ name: string }>(
+    `SELECT DISTINCT name FROM boundaries WHERE kind = 'lga' AND state = $1 ORDER BY name`,
+    [state],
+  );
+  const names = res.rows.map((r) => r.name);
+  // ACT has no incorporated LGAs — an empty list is correct, not a miss, and
+  // the form treats it as free text. Cache it either way.
+  _lgaNameCache.set(state, names);
+  return c.json({ state, names });
+});
+
 boundariesRouter.get('/api/boundaries/:kind', async (c) => {
   const kind = c.req.param('kind');
   if (!KINDS.has(kind)) {

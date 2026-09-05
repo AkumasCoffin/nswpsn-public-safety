@@ -285,3 +285,52 @@ describe('boundary response cache', () => {
     expect(__cache.bytes()).toBe(0);
   });
 });
+
+describe('GET /api/boundaries/lga-names', () => {
+  // The signup form's State -> LGA flow. Public on purpose (signup runs
+  // before auth exists) and cached per state for the process lifetime,
+  // because LGA boundaries change on a census cadence.
+  async function appWithPool(query: (sql: string, params?: unknown[]) => Promise<unknown>) {
+    const { vi } = await import('vitest');
+    vi.resetModules();
+    vi.doMock('../../../src/db/pool.js', () => ({
+      getPool: vi.fn(() => Promise.resolve({ query })),
+      getWriterPool: vi.fn(() => Promise.resolve(null)),
+      closePool: vi.fn(),
+    }));
+    const { boundariesRouter } = await import('../../../src/api/boundaries.js');
+    const { Hono } = await import('hono');
+    const app = new Hono();
+    app.route('/', boundariesRouter);
+    return app;
+  }
+
+  it('lists a state’s LGA names, sorted by the query itself', async () => {
+    const { vi } = await import('vitest');
+    const q = vi.fn(async () => ({ rows: [{ name: 'Blacktown' }, { name: 'Penrith' }] }));
+    const app = await appWithPool(q as never);
+    const res = await app.request('/api/boundaries/lga-names?state=nsw');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toEqual({ state: 'NSW', names: ['Blacktown', 'Penrith'] });
+    expect(String(q.mock.calls[0]![0])).toContain("kind = 'lga'");
+  });
+
+  it('caches per state, so a second request costs no query', async () => {
+    const { vi } = await import('vitest');
+    const q = vi.fn(async () => ({ rows: [] }));
+    const app = await appWithPool(q as never);
+    await app.request('/api/boundaries/lga-names?state=ACT');
+    // ACT genuinely has no incorporated LGAs — an empty list is an answer,
+    // not a miss, and must be cached like any other.
+    const res = await app.request('/api/boundaries/lga-names?state=ACT');
+    expect((await res.json()).names).toEqual([]);
+    expect(q).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects anything that is not an Australian state code', async () => {
+    const app = await appWithPool((async () => ({ rows: [] })) as never);
+    expect((await app.request('/api/boundaries/lga-names?state=XX')).status).toBe(400);
+    expect((await app.request('/api/boundaries/lga-names')).status).toBe(400);
+  });
+});
