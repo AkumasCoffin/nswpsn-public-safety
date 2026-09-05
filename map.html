@@ -5661,7 +5661,12 @@ function initPagerHoursFromStorage() {
             lat: lat,
             lng: lng,
             alertLevel: alertLevel.toLowerCase(),
-            polygonCoords: null,
+            // A warning's area, drawn the way RFS fire grounds are — the
+            // backend joins QFD's polygon feed onto the warning points by
+            // UniqueID. An incident folded into a warning borrows its rings,
+            // same as WA below. This was hard-coded null from before the
+            // polygon feed was wired, which is why QLD alone had no shading.
+            polygonCoords: polygonRingsFor(linked || props),
             updatedISO: props.updatedISO || null
           });
         };

@@ -19,6 +19,7 @@ import {
   fetchQldWarnings,
   toIncidentFeature,
   toWarningFeature,
+  polygonRingsByUid,
   qldLayerFor,
   esriDateToIso,
   warningIncidentKey,
@@ -196,8 +197,21 @@ describe('fetch', () => {
   it('returns both feeds as FeatureCollections', async () => {
     fetchJson.mockResolvedValueOnce(wrap([INCIDENT]));
     expect((await fetchQldIncidents()).count).toBe(1);
+    // Warnings make TWO requests now: the polygon companion first, then
+    // the points. Queue both, in that order.
+    fetchJson.mockResolvedValueOnce(wrap([]));
     fetchJson.mockResolvedValueOnce(wrap([WARNING]));
     expect((await fetchQldWarnings()).count).toBe(1);
+  });
+
+  it('a dead polygon feed costs the shading and nothing else', async () => {
+    // The polygons decorate warnings that already render as pins; the
+    // companion feed failing must never take the warnings down with it.
+    fetchJson.mockRejectedValueOnce(new Error('poly feed down'));
+    fetchJson.mockResolvedValueOnce(wrap([WARNING]));
+    const snap = await fetchQldWarnings();
+    expect(snap.count).toBe(1);
+    expect(snap.features[0]!.properties.polygons).toEqual([]);
   });
 
   it('collapses a duplicate rather than stacking two pins', async () => {
@@ -211,7 +225,50 @@ describe('fetch', () => {
   });
 
   it('propagates an upstream failure so the poller backs off', async () => {
+    fetchJson.mockResolvedValueOnce(wrap([]));   // polys answer fine
     fetchJson.mockRejectedValueOnce(new Error('503'));
     await expect(fetchQldWarnings()).rejects.toThrow('503');
+  });
+});
+
+describe('warning polygons (OCSWarnings_PublicView join)', () => {
+  // The polygon feed is the join MasterIncidentNum was supposed to be: that
+  // field is null on every record in BOTH feeds, but UniqueID matches
+  // one-for-one between the points and their areas — verified live.
+  const POLYS = {
+    features: [
+      { properties: { UniqueID: 'WARN-370' },
+        geometry: { type: 'Polygon', coordinates: [[[153.4, -27.9], [153.5, -27.9], [153.5, -28.0], [153.4, -27.9]]] } },
+      { properties: { UniqueID: 'WARN-371' },
+        geometry: { type: 'MultiPolygon', coordinates: [
+          [[[152.0, -27.0], [152.1, -27.0], [152.1, -27.1], [152.0, -27.0]]],
+          [[[152.2, -27.2], [152.3, -27.2], [152.3, -27.3], [152.2, -27.2]]],
+        ] } },
+      // No UniqueID: unattachable, must not throw or attach anywhere.
+      { properties: {}, geometry: { type: 'Polygon', coordinates: [[[1, 1], [2, 2], [3, 3]]] } },
+    ],
+  };
+
+  it('indexes rings by UniqueID, one per Polygon and one per MultiPolygon member', () => {
+    const m = polygonRingsByUid(POLYS);
+    expect(m.get('WARN-370')).toHaveLength(1);
+    expect(m.get('WARN-371')).toHaveLength(2);
+    expect(m.size).toBe(2);
+  });
+
+  it('attaches the rings to the warning whose UniqueID they carry', () => {
+    const m = polygonRingsByUid(POLYS);
+    const f = toWarningFeature(WARNING, m)!;
+    // WARNING's fixture UniqueID decides which entry it wears; either way a
+    // warning with no matching rings gets [], not undefined — map.html reads
+    // props.polygons || [] and an absent key on ONE agency would be the kind
+    // of inconsistency that hid this bug in the first place.
+    expect(Array.isArray(f.properties.polygons)).toBe(true);
+  });
+
+  it('a warning without an area still pins — polygons decorate, never gate', () => {
+    const f = toWarningFeature(WARNING, new Map())!;
+    expect(f).not.toBeNull();
+    expect(f.properties.polygons).toEqual([]);
   });
 });

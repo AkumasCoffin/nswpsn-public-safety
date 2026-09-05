@@ -41,7 +41,14 @@ import { liveStore } from '../store/live.js';
 const BASE = 'https://services1.arcgis.com/vkTwD8kHw2woKBqV/arcgis/rest/services';
 const INCIDENTS_URL = `${BASE}/ESCAD_Current_Incidents_Public/FeatureServer/0/query`;
 const WARNINGS_URL = `${BASE}/OCS_Warnings_Points_Public_View/FeatureServer/0/query`;
+// The polygon COMPANION to the points feed: same warnings, same UniqueIDs,
+// polygon geometry. This is the join MasterIncidentNum was supposed to be —
+// that field is null on every record in both feeds, but UniqueID (WARN-370
+// style) matches one-for-one, verified live before wiring this up.
+const WARNING_POLYS_URL = `${BASE}/OCSWarnings_PublicView/FeatureServer/0/query`;
 const QUERY = '?where=1%3D1&outFields=*&outSR=4326&f=geojson';
+// Geometry is the payload here; UniqueID is the only attribute needed.
+const POLY_QUERY = '?where=1%3D1&outFields=UniqueID&outSR=4326&f=geojson';
 
 /** Which map layer a record belongs on. */
 export type QldLayer = 'fire' | 'hazard';
@@ -57,6 +64,10 @@ export interface QldFireFeature {
     alertLevel: string;
     fireType: string;
     responsibleAgency: string;
+    /** Warning-area rings ([lon, lat]), the shape map.html's
+     *  polygonRingsFor() shades for VIC and WA already. Empty for
+     *  incidents — only warnings carry areas. */
+    polygons?: number[][][];
     updated: string;
     updatedISO: string;
     layer: QldLayer;
@@ -216,8 +227,46 @@ export function toIncidentFeature(raw: unknown): QldFireFeature | null {
   };
 }
 
+/**
+ * UniqueID -> warning-area rings, from the polygon companion feed.
+ *
+ * Best-effort by design: the polygons decorate warnings that already
+ * render as pins, so this feed being down must cost the shading and
+ * nothing else. First ring of each Polygon / each member of a
+ * MultiPolygon — holes are not worth carrying for a shaded overlay,
+ * the same simplification the WA source makes.
+ */
+export function polygonRingsByUid(raw: unknown): Map<string, number[][][]> {
+  const out = new Map<string, number[][][]>();
+  const root = raw as Record<string, unknown> | null;
+  const feats = root && Array.isArray(root['features']) ? (root['features'] as unknown[]) : [];
+  for (const item of feats) {
+    const f = item as Record<string, unknown> | undefined;
+    const props = (f?.['properties'] as Record<string, unknown> | undefined) ?? {};
+    const uid = asString(props['UniqueID']);
+    if (!uid) continue;
+    const geom = f?.['geometry'] as Record<string, unknown> | undefined;
+    if (!geom) continue;
+    const rings: number[][][] = out.get(uid) ?? [];
+    if (geom['type'] === 'Polygon' && Array.isArray(geom['coordinates'])) {
+      const ring = (geom['coordinates'] as unknown[])[0];
+      if (Array.isArray(ring)) rings.push(ring as number[][]);
+    } else if (geom['type'] === 'MultiPolygon' && Array.isArray(geom['coordinates'])) {
+      for (const poly of geom['coordinates'] as unknown[]) {
+        const ring = Array.isArray(poly) ? (poly as unknown[])[0] : null;
+        if (Array.isArray(ring)) rings.push(ring as number[][]);
+      }
+    }
+    if (rings.length) out.set(uid, rings);
+  }
+  return out;
+}
+
 /** One OCS warning, or null when it can't be placed. */
-export function toWarningFeature(raw: unknown): QldFireFeature | null {
+export function toWarningFeature(
+  raw: unknown,
+  polys?: Map<string, number[][][]>,
+): QldFireFeature | null {
   if (!raw || typeof raw !== 'object') return null;
   const f = raw as Record<string, unknown>;
   const coords = point(f['geometry']);
@@ -247,6 +296,7 @@ export function toWarningFeature(raw: unknown): QldFireFeature | null {
       updated: iso ? new Date(iso).toLocaleString('en-AU', { timeZone: 'Australia/Brisbane' }) : '',
       updatedISO: iso,
       layer: qldLayerFor(eventType),
+      polygons: polys?.get(id) ?? [],
       incidentRef: warningIncidentKey(p),
       // The public advice, kept whole for the detail panel — the same
       // treatment NT's bushfire advice text gets. Newlines collapse so
@@ -296,8 +346,21 @@ export function fetchQldIncidents(): Promise<QldFireSnapshot> {
   return fetchFeed(INCIDENTS_URL, toIncidentFeature, 'qld_fire');
 }
 
-export function fetchQldWarnings(): Promise<QldFireSnapshot> {
-  return fetchFeed(WARNINGS_URL, toWarningFeature, 'qld_warning');
+export async function fetchQldWarnings(): Promise<QldFireSnapshot> {
+  // The polygons ride along, best-effort: a warning without its area is a
+  // warning that still pins and reads; a failed decoration must never take
+  // the feed down with it.
+  let polys: Map<string, number[][][]> | undefined;
+  try {
+    const raw = await fetchJson<unknown>(WARNING_POLYS_URL + POLY_QUERY, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+      timeoutMs: 20_000,
+    });
+    polys = polygonRingsByUid(raw);
+  } catch {
+    polys = undefined;
+  }
+  return fetchFeed(WARNINGS_URL, (raw) => toWarningFeature(raw, polys), 'qld_warning');
 }
 
 export default function register(): void {
