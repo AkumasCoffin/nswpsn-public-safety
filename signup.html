@@ -38,6 +38,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="config.js"></script>
+  <script src="fleet-vocab.js"></script>
 
   <style>
     /* Plain-User signup hides the contributor-only sections. Done with a class
@@ -202,6 +203,20 @@
       min-height: 120px;
       resize: vertical;
     }
+
+    /* Emergency Services Background multi-select */
+    .bg-item {
+      display: flex;
+      gap: 0.55rem;
+      align-items: center;
+      padding: 0.4rem 0.5rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.88rem;
+      color: var(--text-primary);
+    }
+    .bg-item:hover { background: rgba(255, 255, 255, 0.06); }
+    .bg-item input { accent-color: var(--accent); }
     
     .btn {
       width: 100%;
@@ -598,18 +613,16 @@
             <label class="form-label">
               Emergency Services Background <span class="optional">(optional)</span>
             </label>
-            <select id="background" class="form-input" onchange="toggleBackgroundDetails()">
-              <option value="">Select if applicable...</option>
-              <option value="rfs">RFS (Rural Fire Service)</option>
-              <option value="frnsw">Fire & Rescue NSW</option>
-              <option value="ses">SES (State Emergency Service)</option>
-              <option value="ambulance">NSW Ambulance</option>
-              <option value="police">NSW Police</option>
-              <option value="vra">Volunteer Rescue Association</option>
-              <option value="marine_rescue">Marine Rescue NSW</option>
-              <option value="other_emergency">Other Emergency Services</option>
-              <option value="none">General Interest / None</option>
-            </select>
+            <!-- Same per-state agency taxonomy the Fleet uses (fleet-vocab.js).
+                 Multi-select; submits as a comma-joined string in the existing
+                 `background` field so the backend and staff views are untouched. -->
+            <div id="background-drop" style="position:relative;">
+              <button type="button" id="background-btn" class="form-input" style="text-align:left; cursor:pointer;" onclick="bgToggle(event)" disabled>Select your state first...</button>
+              <div id="background-panel" style="display:none; position:absolute; top:calc(100% + 4px); left:0; right:0; z-index:40; background:var(--bg-card); border:1px solid var(--border-subtle); border-radius:8px; padding:0.5rem; box-shadow:0 12px 30px rgba(0,0,0,0.45);">
+                <input type="text" id="background-search" class="form-input" data-manual-disable="1" style="padding:0.5rem 0.75rem; font-size:0.85rem; margin-bottom:0.4rem;" placeholder="Search agencies..." oninput="bgRender()">
+                <div id="background-list" style="max-height:240px; overflow-y:auto; display:flex; flex-direction:column; gap:0.1rem;"></div>
+              </div>
+            </div>
           </div>
           
           <!-- Background Details (shown when background selected) -->
@@ -863,6 +876,7 @@
     const _lgaNamesCache = {};
     async function onRegionStateChange() {
       const state = document.getElementById('region-state').value;
+      bgOnStateChange();
       const lga = document.getElementById('region-lga');
       const list = document.getElementById('region-lga-list');
       if (!lga || !list) return;
@@ -927,7 +941,11 @@
         setVal('region-lga', parts[1] || '');
         setVal('region-suburb', parts[2] || '');
       }
-      setVal('background', b.background || '');
+      // background is a comma-joined list of agency names (a legacy body's
+      // single slug matches no option and is pruned by bgOnStateChange).
+      _bgSelected.clear();
+      String(b.background || '').split(', ').filter(Boolean).forEach((v) => _bgSelected.add(v));
+      bgOnStateChange();
       setVal('background-details', b.background_details || '');
       setVal('website', b.website || '');
       setVal('about', b.about || '');
@@ -1123,12 +1141,11 @@
     }
     
     function toggleBackgroundDetails() {
-      const background = document.getElementById('background').value;
       const detailsGroup = document.getElementById('background-details-group');
       const detailsInput = document.getElementById('background-details');
-      
-      // Show details field for any selection except empty or "none"
-      if (background && background !== 'none') {
+
+      // Details are wanted as soon as any agency is ticked.
+      if (_bgSelected.size > 0) {
         detailsGroup.style.display = 'block';
         detailsInput.required = true;
         // Keep syncHiddenFieldValidation's snapshot honest — otherwise a later
@@ -1144,6 +1161,90 @@
       syncHiddenFieldValidation();
     }
     
+    // ---- Emergency Services Background: per-state agency multi-select ----
+    // Options come from the selected State / Territory's department list in
+    // fleet-vocab.js, the same taxonomy Fleet and article posts use.
+    const _bgSelected = new Set();
+
+    function bgOptions() {
+      const state = document.getElementById('region-state')?.value || '';
+      const vocab = window.FleetVocab;
+      const names = vocab && state && vocab.departments[state]
+        ? vocab.departments[state].map((d) => d.name)
+        : [];
+      return names.concat(['Other Emergency Services']);
+    }
+
+    function bgValue() { return [..._bgSelected].join(', '); }
+
+    function bgEsc(t) {
+      return String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+    }
+
+    function bgSyncButton() {
+      const btn = document.getElementById('background-btn');
+      if (!btn) return;
+      const state = document.getElementById('region-state')?.value || '';
+      if (!state) {
+        btn.disabled = true;
+        btn.textContent = 'Select your state first...';
+        return;
+      }
+      btn.disabled = false;
+      const sel = [..._bgSelected];
+      btn.textContent = sel.length === 0
+        ? 'Select if applicable...'
+        : sel.length <= 2 ? sel.join(', ') : `${sel.length} agencies selected`;
+    }
+
+    function bgRender() {
+      const listEl = document.getElementById('background-list');
+      if (!listEl) return;
+      const q = (document.getElementById('background-search')?.value || '').trim().toLowerCase();
+      const opts = bgOptions().filter((n) => !q || n.toLowerCase().includes(q));
+      listEl.innerHTML = opts.map((n) =>
+        `<label class="bg-item"><input type="checkbox" value="${bgEsc(n)}"${_bgSelected.has(n) ? ' checked' : ''}><span>${bgEsc(n)}</span></label>`
+      ).join('') || '<div style="padding:0.4rem 0.5rem; color:#64748b; font-size:0.85rem;">No matches.</div>';
+    }
+
+    function bgToggle(e) {
+      e.stopPropagation();
+      const panel = document.getElementById('background-panel');
+      const open = panel.style.display !== 'none';
+      panel.style.display = open ? 'none' : '';
+      if (!open) {
+        const search = document.getElementById('background-search');
+        search.value = '';
+        bgRender();
+        search.focus();
+      }
+    }
+
+    /** Refresh options for the chosen state. Picks from another state fall
+     *  away; the catch-all "Other Emergency Services" survives any switch. */
+    function bgOnStateChange() {
+      const allowed = new Set(bgOptions());
+      for (const v of [..._bgSelected]) if (!allowed.has(v)) _bgSelected.delete(v);
+      bgSyncButton();
+      bgRender();
+      toggleBackgroundDetails();
+    }
+
+    document.getElementById('background-list').addEventListener('change', (e) => {
+      const cb = e.target.closest('input[type=checkbox]');
+      if (!cb) return;
+      if (cb.checked) _bgSelected.add(cb.value); else _bgSelected.delete(cb.value);
+      bgSyncButton();
+      toggleBackgroundDetails();
+    });
+    document.getElementById('background-panel').addEventListener('click', (e) => e.stopPropagation());
+    document.addEventListener('click', (e) => {
+      const panel = document.getElementById('background-panel');
+      if (panel && panel.style.display !== 'none' && !e.target.closest('#background-drop')) {
+        panel.style.display = 'none';
+      }
+    });
+
     function toggleFeederSetup() {
       const requestTypes = Array.from(document.querySelectorAll('input[name="request-type"]:checked')).map(cb => cb.value);
       const feederSetupGroup = document.getElementById('feeder-setup-group');
@@ -1305,7 +1406,7 @@
       const region = combinedRegion();
       const regionState = document.getElementById('region-state').value;
       const regionLga = document.getElementById('region-lga').value.trim();
-      const background = document.getElementById('background').value;
+      const background = bgValue();
       const backgroundDetails = document.getElementById('background-details').value.trim();
       const website = document.getElementById('website').value.trim();
       const about = document.getElementById('about').value.trim();
