@@ -1990,6 +1990,27 @@
     @media (max-width: 720px) {
       .ais-list-panel { width: calc(100vw - 24px); top: 60px; max-height: 50vh; }
     }
+    /* The ONE details panel, mobile: a bottom sheet over the map
+       (updateMobileFiltersPlacement parents it to .map-container). Above
+       the map-type bar (900) and the tip card (1005). */
+    @media (max-width: 900px) {
+      .map-container > #incident-info-panel {
+        position: fixed;
+        top: auto; left: 0; right: 0; bottom: 0;
+        width: 100%; max-width: none;
+        max-height: 72vh;
+        border-radius: 14px 14px 0 0;
+        border-left: 0; border-right: 0; border-bottom: 0;
+        z-index: 1006;
+        padding-bottom: env(safe-area-inset-bottom, 0px);
+      }
+    }
+    .ais-list-close {
+      margin-left: 8px; flex: 0 0 auto; width: 26px; height: 26px;
+      border-radius: 6px; background: rgba(148,163,184,0.12);
+      border: 1px solid rgba(148,163,184,0.25); color: #cbd5e1;
+      font-size: 1rem; line-height: 1; cursor: pointer;
+    }
 
     /* AIS vessel hover tooltip — overrides the bright pager-style default
        above so vessel info reads on a dark slate panel. */
@@ -2865,6 +2886,7 @@
           <i class="fa-solid fa-pager" style="color:#22c55e;" id="incident-info-icon"></i>
           <h4 id="incident-info-title">Details</h4>
           <span class="ais-list-count" id="incident-info-sub"></span>
+          <button type="button" class="ais-list-close" onclick="closeIncidentInfoPanel()" aria-label="Close">&times;</button>
         </div>
         <div class="ais-list-body" id="incident-info-body"></div>
       </div>
@@ -3075,16 +3097,21 @@
       // (so it relocates into the sidebar) and Map Controls returns to
       // .map-container (so its bottom-sheet positioning works).
       const dock = document.getElementById('right-dock');
-      for (const id of ['ais-list-panel', 'transport-info-panel', 'incident-info-panel']) {
+      for (const id of ['ais-list-panel', 'transport-info-panel']) {
         const panel = document.getElementById(id);
         if (!dock || !panel) continue;
         if (isMobile && panel.parentElement === dock) wrapper.appendChild(panel);
         else if (!isMobile && panel.parentElement !== dock) dock.appendChild(panel);
       }
-      const editorPanel = document.getElementById('editor-panel');
-      if (dock && editorPanel) {
-        if (isMobile && editorPanel.parentElement === dock) mapContainer.appendChild(editorPanel);
-        else if (!isMobile && editorPanel.parentElement !== dock) dock.appendChild(editorPanel);
+      // The incident details panel is the ONE detail surface for every
+      // role (the editor's tools ride inside it, so it needs no separate
+      // re-homing) -- on mobile it becomes a bottom sheet over the map,
+      // never a row tucked away inside the nav sidebar where a pin tap
+      // appeared to do nothing.
+      const infoPanel = document.getElementById('incident-info-panel');
+      if (infoPanel) {
+        if (isMobile && infoPanel.parentElement !== mapContainer) mapContainer.appendChild(infoPanel);
+        else if (!isMobile && dock && infoPanel.parentElement !== dock) dock.appendChild(infoPanel);
       }
     }
     window.updateMobileFiltersPlacement = updateMobileFiltersPlacement;
@@ -3196,9 +3223,6 @@
     // Mark touch devices so CSS can hide map-anchored tooltips (shown in the
     // bottom card instead). Matches the isMobile condition exactly.
     if (isMobile) document.body.classList.add('is-touch');
-    let lastTappedMarker = null;
-    let lastTapTime = 0;
-    const DOUBLE_TAP_THRESHOLD = 3000; // 3 seconds to second-tap for sidebar
     
     // Mobile performance: disable animations and polygons when zoomed out (many markers visible)
     const ZOOM_ANIMATION_THRESHOLD = 10; // Enable animations at zoom 10+
@@ -3231,53 +3255,15 @@
     }
     map.on('zoomend', updateMobileAnimationState);
 
-    // Helper: Handle marker tap with mobile two-tap behavior
-    // First tap shows tooltip, second tap executes the sidebar action
+    // ONE tap, ONE popup, for every role: a pin tap opens the details
+    // panel (#incident-info-panel) directly, on desktop and mobile alike.
+    // The old mobile two-tap flow (tooltip card first, full details on a
+    // second tap) is gone -- it meant two different-looking popups and an
+    // extra tap to reach the change trail.
     function handleMarkerTap(marker, sidebarAction, selectionAction) {
-      if (!isMobile) {
-        // Desktop: single click opens sidebar directly
-        if (selectionAction) selectionAction();
-        sidebarAction();
-        return;
-      }
-
-      // ONE popup per role: while the editor is active (and its panel can
-      // actually show), a tap goes STRAIGHT to the Map Controls sheet --
-      // the detail functions reroute into it -- and the public overview
-      // card never enters the picture. The two-tap card flow below is the
-      // signed-out / non-editor experience only. Racing the card against
-      // the sheet with visibility guards kept losing to the sheet's
-      // opening animation; not starting the race is the fix.
-      if (typeof _editorHooksUsable === 'function' && _editorHooksUsable()) {
-        hideMobileTipCard();
-        if (selectionAction) selectionAction();
-        sidebarAction();
-        lastTappedMarker = null;
-        lastTapTime = 0;
-        return;
-      }
-
-      const now = Date.now();
-      const isSameMarker = (lastTappedMarker === marker);
-      const withinThreshold = (now - lastTapTime) < DOUBLE_TAP_THRESHOLD;
-
-      if (isSameMarker && withinThreshold) {
-        // Second tap on same marker within threshold - open sidebar (full
-        // details), and dismiss the overview card so they don't stack.
-        hideMobileTipCard();
-        if (selectionAction) selectionAction();
-        sidebarAction();
-        lastTappedMarker = null;
-        lastTapTime = 0;
-      } else {
-        // First tap or different marker - show tooltip
-        lastTappedMarker = marker;
-        lastTapTime = now;
-        // Open tooltip programmatically (if bound)
-        if (marker.getTooltip()) {
-          marker.openTooltip();
-        }
-      }
+      hideMobileTipCard();
+      if (selectionAction) selectionAction();
+      sidebarAction();
     }
 
     // Pan to a marker, but leave room for its open tooltip. Centring
@@ -3401,19 +3387,14 @@
       setTimeout(() => {
         const cam = document.getElementById('camera-fullscreen');
         if (cam && cam.classList.contains('open')) return;
-        // Same stand-down for the public detail sheet: the SECOND tap on a
-        // pin opens it (handleMarkerTap), but that tap also re-fires
-        // tooltipopen -- and this deferred card ran after the sheet opened,
-        // stacking the overview card on top of the details it had just been
-        // dismissed for. The sheet is the fuller view; the card yields.
+        // Pin taps open the details panel directly now; this card only
+        // serves layers whose tooltip is their whole story (hazards,
+        // outages, beaches...). Stand down whenever a fuller detail
+        // surface is already up so the card never stacks on a panel.
         const sheet = document.getElementById('incident-sidebar');
         if (sheet && sheet.classList.contains('open')) return;
-        // Editors never get the overview card AT ALL -- their popup is the
-        // Map Controls sheet (handleMarkerTap opens it on the first tap).
-        // Tooltips also open outside handleMarkerTap (search, deep links),
-        // so this is checked here too. A geometry test on #editor-panel was
-        // tried and lost the race against the sheet's opening animation.
-        if (typeof _editorHooksUsable === 'function' && _editorHooksUsable()) return;
+        const infoP = document.getElementById('incident-info-panel');
+        if (infoP && infoP.classList.contains('open')) return;
         showMobileTipCard(content);
         if (layer && typeof layer.getLatLng === 'function') panMarkerAboveCard(layer);
       }, 0);
@@ -7239,6 +7220,9 @@ function initPagerHoursFromStorage() {
     function _openIncidentInfoPanel(iconCls, color, title, sub) {
       const p = document.getElementById('incident-info-panel');
       if (!p) return null;
+      // The panel is the fuller view -- never leave the overview card
+      // underneath it.
+      if (typeof hideMobileTipCard === 'function') hideMobileTipCard();
       const icon = document.getElementById('incident-info-icon');
       if (icon) { icon.className = 'fa-solid ' + iconCls; icon.style.color = color; }
       const t = document.getElementById('incident-info-title');
@@ -7255,10 +7239,16 @@ function initPagerHoursFromStorage() {
     window.closeIncidentInfoPanel = closeIncidentInfoPanel;
 
     async function showPagerDetails(item) {
-      // Editor mode: pager cluster details open in the editor panel.
-      if (_editorHooksUsable()) { return NSWPSNEditorHooks.openPager(item); }
       const raw = item.rawDetails || {};
       const hits = raw.hits ? raw.hits.length : 0;
+      // Editor: same panel; the editor renders the pager block itself
+      // (plus editable units/photos/logs), so the body starts empty.
+      if (_editorHooksUsable()) {
+        const c = _openIncidentInfoPanel('fa-pager', '#22c55e', 'Pager hits',
+          hits ? hits + ' call' + (hits === 1 ? '' : 's') : '');
+        if (c) c.innerHTML = '';
+        return NSWPSNEditorHooks.openPager(item);
+      }
       const body = _openIncidentInfoPanel('fa-pager', '#22c55e', 'Pager hits',
         hits ? hits + ' call' + (hits === 1 ? '' : 's') : '');
       if (!body) return;
@@ -7880,10 +7870,16 @@ function initPagerHoursFromStorage() {
 
     
     async function showIncidentDetails(incident, pagerDetails) {
-      // Editor mode: pin details open in the editor panel instead.
-      if (_editorHooksUsable()) { return NSWPSNEditorHooks.openUser(incident, pagerDetails); }
       // Ensure we always have an object to work with
       const data = incident || {};
+      // Editor: the SAME panel opens, but the edit form (which carries
+      // every field as its values) replaces the read-only body -- one
+      // popup, role decides its contents.
+      if (_editorHooksUsable()) {
+        const c = _openIncidentInfoPanel('fa-user', '#a855f7', 'User incident', data.status || '');
+        if (c) c.innerHTML = '';
+        return NSWPSNEditorHooks.openUser(incident, pagerDetails);
+      }
       // Public sessions get the right-dock details card — same "hovering"
       // chrome as the RFS/pager/vessels panels — not the old full-height
       // sidebar, so every pin type looks consistent.
@@ -7961,8 +7957,11 @@ function initPagerHoursFromStorage() {
 
     
     async function showRfsDetails(item) {
-      // Editor mode: RFS details open in the editor panel (read-only + logs).
-      if (_editorHooksUsable()) { return NSWPSNEditorHooks.openRfs(item); }
+      // ONE panel for every role: this view-only rendering is what
+      // everyone sees; when the map editor is active, its tools (units,
+      // photos, logs, suggestions) are filled into the SAME panel after
+      // it -- see the openRfs call at the bottom.
+      const editing = _editorHooksUsable();
       const data = item.rawDetails;
       const pagerDetails = item.pagerDetails;
       // Public sessions get the right-dock details card (same chrome as
@@ -7973,8 +7972,11 @@ function initPagerHoursFromStorage() {
 
       content.innerHTML = '<p style="color:var(--text-soft); text-align:center; margin-top:2rem;">Loading details and log...</p>';
 
-      let updatesHtml;
-      try {
+      let updatesHtml = '';
+      // Editors get the editable log list (edit/delete/post) from the
+      // editor tools below -- rendering the read-only copy too would put
+      // the same log in the panel twice.
+      if (!editing) try {
         const updatesRes = await apiFetch(`${PROXY_BASE}/api/incidents/${item.id}/updates`);
         if (!updatesRes.ok) {
           updatesHtml = `<div style="color:#ef4444; font-size:0.85rem; margin-top:1rem; font-style:italic;">Error loading user logs.</div>`;
@@ -7995,12 +7997,6 @@ function initPagerHoursFromStorage() {
         updatesHtml = '<div style="color:#ef4444; font-size:0.85rem; margin-top:1rem; font-style:italic;">Error loading user logs.</div>';
       }
 
-      let badgeClass = "pill-white";
-      const lvl = (data['ALERT LEVEL'] || '').toLowerCase();
-      if (lvl.includes('emergency')) badgeClass = "pill-red";
-      else if (lvl.includes('watch')) badgeClass = "pill-orange";
-      else if (lvl.includes('advice')) badgeClass = "pill-blue";
-
       // Only allow http(s) links — drop anything else (javascript:, data:, etc.)
       let rfsLinkSafe = '';
       try {
@@ -8010,35 +8006,80 @@ function initPagerHoursFromStorage() {
         }
       } catch (_) { /* invalid URL — leave link dropped */ }
 
+      // Warning level, status and type as the same colour cards the map
+      // tooltip leads with (fire-vocab palette), so the fire looks like
+      // itself wherever you meet it. The agency's own words on every
+      // card; grey where the value is not really a level or containment
+      // state.
+      const _v = (window.FireVocab && FV && FV.describe)
+        ? FV.describe({ type: data['TYPE'], status: data['STATUS'], level: data['ALERT LEVEL'] || '' })
+        : null;
+      const _card = (label, value, color, dim) => `
+        <div style="background:${color}1f; border:1px solid ${color}59; padding:0.45rem 0.5rem; border-radius:6px; text-align:center; flex:1; min-width:0;">
+          <div style="color:${color}cc; font-size:0.6rem; font-weight:600; text-transform:uppercase; letter-spacing:0.03em; line-height:1.2;">${escapeHtml(label)}</div>
+          <div style="color:${dim ? '#94a3b8' : color}; font-size:0.8rem; font-weight:700; line-height:1.25; overflow-wrap:break-word; word-break:normal;">${escapeHtml(value)}</div>
+        </div>`;
+      const _feedAgency = (item.agenciesList && item.agenciesList[0]) || 'RFS';
+
       let html = `
         <div style="margin-bottom:0.5rem;">
-          <span class="pill pill-agency-rfs">NSW RFS FEED</span>
-          <span class="pill ${badgeClass}">${escapeHtml(data['ALERT LEVEL'] || 'Incident')}</span>
+          <span class="pill pill-agency-rfs">${escapeHtml(_feedAgency)} FEED</span>
         </div>
         <h2 style="margin:0 0 0.5rem 0; font-size:1.6rem; color:#fff;">${escapeHtml(data.title)}</h2>
+        <div style="display:flex; gap:6px; margin-bottom:0.8rem;">
+          ${_card('Warning Level', data['ALERT LEVEL'] || 'None published', _v && _v.level.real ? _v.level.color : '#94a3b8', !(_v && _v.level.real))}
+          ${_card('Status', data['STATUS'] || 'Not published', _v && _v.status.real ? _v.status.ring : '#94a3b8', !(_v && _v.status.real))}
+          ${_card('Type', data['TYPE'] || 'Fire', '#fb923c', false)}
+        </div>
         <div style="background:rgba(255,255,255,0.05); padding:1rem; border-radius:0.5rem; margin-bottom:1rem; font-size:0.9rem; line-height:1.6; color:#cbd5e1;">
           <strong>Location:</strong> ${escapeHtml(data['LOCATION'] || 'N/A')}<br>
-          <strong>Status:</strong> ${escapeHtml(data['STATUS'] || 'Unknown')}<br>
-          <strong>Type:</strong> ${escapeHtml(data['TYPE'] || 'Fire')}<br>
           <strong>Size:</strong> ${escapeHtml(data['SIZE'] || '-')}<br>
           <strong>Agency:</strong> ${escapeHtml(data['RESPONSIBLE AGENCY'] || 'RFS')}
         </div>
+        <div id="info-fire-changes"></div>
         <div style="font-size:0.8rem; color:#94a3b8; margin-bottom:1rem;">
           <strong style="color:#a78bfa;">Last Updated:</strong> ${escapeHtml(item.updatedISO ? new Date(item.updatedISO).toLocaleString() : (data['UPDATED'] || 'Recently'))}
         </div>
         ${rfsLinkSafe ? `<a href="${escapeHtml(rfsLinkSafe)}" target="_blank" class="btn btn-primary" style="display:inline-block; width:100%; text-align:center; margin-bottom:1.5rem;">
           ${item.source === 'rfs' ? 'View on Fires Near Me' : 'View the agency incident map'}
         </a>` : ''}
-        <hr style="border:0; border-top:1px solid var(--border-subtle); margin:0 0 1.5rem 0;">
+        ${editing ? '' : `<hr style="border:0; border-top:1px solid var(--border-subtle); margin:0 0 1.5rem 0;">
         <h3 style="font-size:0.85rem; text-transform:uppercase; color:var(--text-soft); letter-spacing:0.1em; margin-bottom:0.5rem;">User Incident Log (External)</h3>
-        ${updatesHtml}
+        ${updatesHtml}`}
       `;
 
-      if (pagerDetails && pagerDetails.hits && pagerDetails.hits.length) {
+      // The editor renders its own pager section (renderPagerSection).
+      if (!editing && pagerDetails && pagerDetails.hits && pagerDetails.hits.length) {
         html += renderPagerDetailsHtml(pagerDetails, { heading: true });
       }
 
       content.innerHTML = html;
+
+      // The change trail -- what has moved on this fire -- with the same
+      // renderer and colours as the map tooltip. Filled async: the map
+      // caches the trail on the item after the first hover, so this is
+      // usually instant.
+      (async () => {
+        try {
+          if (typeof loadFireChanges !== 'function') return;
+          const changes = await loadFireChanges(item);
+          const host = document.getElementById('info-fire-changes');
+          if (host && host.isConnected && changes && changes.length) {
+            host.innerHTML = renderFireChanges(changes, {
+              small: true,
+              colorFor: typeof fireTrailColor === 'function' ? fireTrailColor(data['TYPE']) : undefined,
+            });
+          }
+        } catch (e) { /* the trail is decoration */ }
+      })();
+
+      if (editing) {
+        // Editor tools (editable units, photos, logs, archive) fill into
+        // the SAME panel below this body; the editor no longer rebuilds
+        // its own copy of the fire details.
+        NSWPSNEditorHooks.openRfs(item);
+        return;
+      }
 
       // Attached units + photos (read-only, from the shared RFS stub row).
       const stubExtras = await _fetchStubExtras(item.id);
@@ -18424,6 +18465,6 @@ function initPagerHoursFromStorage() {
   <script src="ui-dialogs.js"></script>
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
-  <script src="map-editor-module.js?v=38"></script>
+  <script src="map-editor-module.js?v=39"></script>
 </body>
 </html>

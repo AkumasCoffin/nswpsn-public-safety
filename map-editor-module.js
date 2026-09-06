@@ -990,91 +990,15 @@
       const rfsHeader = document.querySelector('#edit-header h4');
       if (rfsHeader) { rfsHeader.textContent = _fireAgency + ' Incident'; rfsHeader.style.color = '#ef4444'; }
 
-      const customRFSBlock = document.createElement('div');
-      customRFSBlock.id = 'rfs-read-only-data';
-      customRFSBlock.dataset.point = data.point;
-
-      // Warning level, status and type as cards, the same three the map
-      // tooltip leads with and in the same colours — the level off the
-      // Australian Warning System palette the pin is drawn in, so one
-      // fire looks like itself wherever you meet it. This panel used to
-      // be a run of bold labels that named neither the warning level nor
-      // the type at all, which are the two things worth knowing first.
-      // Canonical wording from fire-vocab.js, so this panel, the map
-      // tooltip and the logs page all call one state by one name. The
-      // agency's own wording is kept underneath where it differs.
-      const _v = (window.FireVocab || null) && window.FireVocab.describe({
-        type: data.TYPE, status: data.STATUS, level: data.ALERT_LEVEL,
-      });
-      // Each card shows the agency's own words; fire-vocab.js supplies
-      // only the colour, and grey where the agency published something
-      // that is not really a level or a containment state.
-      const _lvlColor = _v && _v.level.real ? _v.level.color : '#94a3b8';
-      const _statusColor = _v && _v.status.real ? _v.status.ring : '#94a3b8';
-      // word-break:break-word would split inside a word — this panel is
-      // barely 90px per card, and "Emergency Warning" came out as
-      // "Emergenc y Warning". overflow-wrap breaks between words first
-      // and only splits one that cannot fit on a line by itself.
-      const _card = (label, value, color, published, dim) => `
-        <div style="background:${color}1f; border:1px solid ${color}59; padding:0.35rem 0.4rem; border-radius:5px; text-align:center; flex:1; min-width:0;">
-          <div style="color:${color}cc; font-size:0.58rem; font-weight:600; text-transform:uppercase; letter-spacing:0.02em; line-height:1.2;">${escapeHtml(label)}</div>
-          <div style="color:${dim ? '#94a3b8' : color}; font-size:0.74rem; font-weight:700; line-height:1.25; overflow-wrap:break-word; word-break:normal; hyphens:none;">${escapeHtml(value)}</div>
-          ${published ? `<div style="color:#64748b; font-size:0.55rem; margin-top:1px; line-height:1.2; overflow-wrap:break-word;">${escapeHtml(published)}</div>` : ''}
-        </div>`;
-
-      // What has moved on this fire. The map caches the trail on the
-      // item after the first hover, so this is usually instant; when it
-      // is not, the panel renders without it and fills in.
-      const _trailItem = data._item;
-      setTimeout(async () => {
-        const host = document.getElementById('rfs-change-trail');
-        if (!host || !_trailItem || typeof loadFireChanges !== 'function') return;
-        try {
-          const changes = await loadFireChanges(_trailItem);
-          if (changes && changes.length && typeof renderFireChanges === 'function') {
-            // Same colour resolver the tooltip uses, so a status going
-            // green here is the green it is on the pin.
-            host.innerHTML = renderFireChanges(changes, {
-              small: true,
-              colorFor: typeof fireTrailColor === 'function' ? fireTrailColor(data.TYPE) : undefined,
-            });
-          }
-        } catch (e) { console.warn('[editor] change trail', e); }
-      }, 0);
-
-      // data.link is whatever the upstream feed said — RFS props.link,
-      // VIC props.url, SA Message_link. Interpolated raw it was not just
-      // a javascript: hazard: one double quote in the URL closes the
-      // attribute and the rest of the string becomes markup on a
-      // staff-facing panel. safeUrl resolves it, keeps only http/https,
-      // and escapes; same host-page guard style as fireTrailColor above
-      // so a missing helper renders a dead link instead of throwing.
-      const _link = typeof safeUrl === 'function' ? safeUrl(data.link) : '#';
-      customRFSBlock.innerHTML = `
-        <div style="background:rgba(148,163,184,0.07); border:1px solid rgba(148,163,184,0.25); padding:0.8rem; border-radius:6px; margin-bottom:1rem; font-size:0.85rem;">
-          <h5 style="margin-top:0.3rem; margin-bottom:0.6rem; color:#ef4444;">${escapeHtml(_fireAgency)} Incident Details (Read Only)</h5>
-          <div style="display:flex; gap:6px; margin-bottom:0.7rem;">
-            ${_card('Warning Level', data.ALERT_LEVEL || 'None published', _lvlColor, null, !(_v && _v.level.real))}
-            ${_card('Status', data.STATUS || 'Not published', _statusColor, null, !(_v && _v.status.real))}
-            ${_card('Type', data.TYPE || 'Fire', '#fb923c', null, false)}
-          </div>
-          <strong>Title:</strong> ${escapeHtml(data.title || 'N/A')}<br>
-          <strong>Location:</strong> ${escapeHtml(data.LOCATION || 'N/A')}<br>
-          ${data.RESOURCES ? `<strong>Resources:</strong> ${escapeHtml(data.RESOURCES)}<br>` : ''}
-          <div id="rfs-change-trail"></div>
-          <a href="${_link}" target="_blank" style="font-size:0.8rem; margin-top:0.5rem; display:inline-block; color:#7dd3fc;">${_isNswRfs ? 'View on Fires Near Me' : 'View on the ' + escapeHtml(_fireAgency) + ' incident map'} →</a>
-        </div>
-      `;
-      const editorPanel = document.getElementById('selection-editor');
-      let existingRFSBlock = document.getElementById('rfs-read-only-data');
-      if (existingRFSBlock) existingRFSBlock.remove();
-      
-      const logSection = document.getElementById('log-section');
-      editorPanel.insertBefore(customRFSBlock, logSection);
-      // Units sit between the read-only details and the logs.
+      // The view-only fire details (title, warning-level cards, change
+      // trail, feed link) are the PUBLIC rendering already sitting in
+      // #incident-info-body just above this tools section -- one panel,
+      // one look for every role. This function used to rebuild its own
+      // "(Read Only)" copy of all of it here, so editors saw the same
+      // fire twice in two styles.
       placeUnitsGroup(true);
 
-      logSection.style.display = 'block';
+      document.getElementById('log-section').style.display = 'block';
       document.getElementById('new-update-msg').value = '';
 
       loadIncidentLogs(data.id);
@@ -2340,48 +2264,39 @@
 
 
   // --- Panel visibility -------------------------------------------------
-  // Desktop: the panel floats top-right whenever the User layer is on.
-  // The vessels/aircraft list panel no longer competes for that corner —
-  // map.html docks it INSIDE this panel while Map Controls is open (see
-  // syncUnifiedListPanelDock), so the old mutual-exclusion with the AIS
-  // list is gone. Mobile (<=900px): .map-sidebar becomes a 60% bottom
-  // sheet, so it stays COLLAPSED behind a floating button and only opens
-  // when the user taps a pin or the button; a close X collapses it again.
-  let mobileSheetOpen = false;
-
-  function isMobileLayout() {
-    return window.matchMedia('(max-width: 900px)').matches;
-  }
-
+  // The editor's tools ride INSIDE the shared #incident-info-panel, so
+  // there is no separate sheet left to manage: this only decides whether
+  // the tools section renders (User layer on) and whether the floating
+  // + Add Pin button shows (it is the way into the editor when nothing
+  // is selected, so it hides while the details panel is open).
   function editorPanelVisibility() {
     const editorPanel = document.getElementById('editor-panel');
     if (!editorPanel) return;
     const userBtn = document.getElementById('btn-user');
     const userOn = !userBtn || userBtn.classList.contains('active');
-    const mobile = isMobileLayout();
-    const open = userOn && (!mobile || mobileSheetOpen);
-    editorPanel.classList.toggle('open', open);
-
+    editorPanel.style.display = userOn ? 'block' : 'none';
+    const info = document.getElementById('incident-info-panel');
+    const infoOpen = !!(info && info.classList.contains('open'));
     const fab = document.getElementById('editor-mobile-fab');
-    if (fab) fab.style.display = (mobile && userOn && !open) ? 'flex' : 'none';
-    const closeBtn = document.getElementById('editor-panel-close');
-    if (closeBtn) closeBtn.style.display = mobile ? 'flex' : 'none';
+    if (fab) fab.style.display = (userOn && !infoOpen) ? 'flex' : 'none';
   }
 
   function openEditorSheet() {
-    mobileSheetOpen = true;
+    const p = document.getElementById('incident-info-panel');
+    if (p) p.classList.add('open');
     editorPanelVisibility();
   }
 
   function closeEditorSheet() {
-    mobileSheetOpen = false;
+    const p = document.getElementById('incident-info-panel');
+    if (p) p.classList.remove('open');
     editorPanelVisibility();
   }
 
   // --- DOM injection (CSS + floating panel), done only on activation ---
-  const EDITOR_CSS = '    /* --- Editor sidebar custom scrollbar --- */\n    #editor-panel {\n      overflow-y: auto;\n      scrollbar-width: thin;\n      scrollbar-color: transparent transparent; /* Firefox default: hidden */\n    }\n    /* Desktop: Map Controls is the top SECTION of the single #right-dock\n       card (map.html owns the card chrome) — flat background, divider\n       below separating it from the vessels/aircraft section. A\n       floating-card fallback covers the rare case the dock is missing.\n       Mobile keeps its bottom-sheet. */\n    @media (min-width: 901px) {\n      #right-dock #editor-panel.map-sidebar {\n        position: static;\n        transform: none;\n        visibility: visible;\n        width: 100%;\n        height: auto;\n        max-height: none;\n        flex: 0 1 auto;\n        min-height: 0;\n        padding: 12px;\n        order: 0;\n        background: transparent;\n        border: 0;\n        border-bottom: 1px solid rgba(148, 163, 184, 0.18);\n        border-radius: 0;\n        box-shadow: none;\n        backdrop-filter: none;\n      }\n      #right-dock #editor-panel.map-sidebar:not(.open) { display: none; }\n      .map-container > #editor-panel.map-sidebar {\n        right: 14px;\n        top: 96px;\n        height: auto;\n        max-height: calc(100% - 110px);\n        border: 1px solid rgba(125, 211, 252, 0.35);\n        border-radius: 10px;\n        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);\n      }\n      #editor-panel h3 {\n        margin: 0 0 10px;\n        font-size: 13px;\n        font-weight: 600;\n        color: #7dd3fc;\n        letter-spacing: 0.02em;\n      }\n    }\n    #editor-panel::-webkit-scrollbar {\n      width: 10px;\n    }\n    #editor-panel::-webkit-scrollbar-track {\n      background: transparent;\n    }\n    #editor-panel::-webkit-scrollbar-thumb {\n      background: transparent;\n      border-radius: 999px;\n      border: 2px solid transparent;\n      box-shadow: none;\n      transition: background 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;\n    }\n    /* Show + animate thumb while hovering or actively scrolling */\n    #editor-panel:hover,\n    #editor-panel.scrolling {\n      scrollbar-color: #4ade80 rgba(15,23,42,0.9); /* Firefox thumb + track */\n    }\n    #editor-panel:hover::-webkit-scrollbar-thumb,\n    #editor-panel.scrolling::-webkit-scrollbar-thumb {\n      background: linear-gradient(180deg, #22c55e, #0ea5e9);\n      border-color: rgba(15,23,42,0.9);\n      box-shadow: 0 0 8px rgba(34,197,94,0.8);\n    }\n    /* Extra glow animation while scrolling */\n    #editor-panel.scrolling::-webkit-scrollbar-thumb {\n      animation: sidebarScrollGlow 1.2s infinite alternate;\n    }\n    @keyframes sidebarScrollGlow {\n      0% { box-shadow: 0 0 4px rgba(34,197,94,0.4); }\n      100% { box-shadow: 0 0 14px rgba(34,197,94,1); }\n    }\n    \n    .pill-checkbox {\n      display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px;\n      border-radius: 20px; border: 1px solid rgba(255,255,255,0.2);\n      background: rgba(255,255,255,0.05); color: #cbd5e1; font-size: 0.75rem;\n      cursor: pointer; user-select: none; transition: all 0.2s;\n    }\n    .pill-checkbox:hover { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.4); color: #fff; }\n    .pill-checkbox input { accent-color: var(--accent); }\n    .pill-checkbox:has(input:checked) { background: rgba(249, 115, 22, 0.2); border-color: #f97316; color: #fdba74; }\n\n    /* Incident Type(s) toggle pills + group headings */\n    .type-group-label {\n      width: 100%; font-size: 0.62rem; font-weight: 700; letter-spacing: 0.08em;\n      text-transform: uppercase; color: var(--text-soft); margin: 0.45rem 0 0.15rem;\n    }\n    .type-group-label:first-child { margin-top: 0; }\n    .type-pill {\n      display: inline-flex; align-items: center; padding: 5px 11px; border-radius: 999px;\n      border: 1px solid rgba(148,163,184,0.3); background: rgba(255,255,255,0.04);\n      color: #cbd5e1; font-size: 0.72rem; font-weight: 500; cursor: pointer;\n      user-select: none; transition: background 0.15s, border-color 0.15s, color 0.15s;\n    }\n    .type-pill:hover { background: rgba(255,255,255,0.09); border-color: rgba(148,163,184,0.5); color: #fff; }\n    .type-pill input { position: absolute; opacity: 0; width: 0; height: 0; pointer-events: none; }\n    .type-pill:has(input:checked) {\n      background: rgba(56,189,248,0.18); border-color: rgba(56,189,248,0.6); color: #7dd3fc;\n    }\n    .type-pill:focus-within { outline: 2px solid rgba(56,189,248,0.5); outline-offset: 1px; }\n    \n    /* Auto-remove slider */\n    .expiry-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.5rem; }\n    .expiry-value {\n      font-size: 0.8rem; font-weight: 700; color: #7dd3fc;\n      background: rgba(56,189,248,0.12); border: 1px solid rgba(56,189,248,0.35);\n      padding: 0.1rem 0.55rem; border-radius: 999px;\n    }\n    .expiry-range {\n      -webkit-appearance: none; appearance: none; width: 100%; height: 6px;\n      border-radius: 4px; outline: none; margin: 0.1rem 0;\n      background: rgba(255,255,255,0.15);\n    }\n    .expiry-range::-webkit-slider-runnable-track {\n      height: 6px; border-radius: 4px;\n      background: linear-gradient(90deg, #38bdf8 var(--percent, 50%), rgba(255,255,255,0.15) var(--percent, 50%));\n    }\n    .expiry-range::-moz-range-track {\n      height: 6px; border-radius: 4px;\n      background: linear-gradient(90deg, #38bdf8 var(--percent, 50%), rgba(255,255,255,0.15) var(--percent, 50%));\n    }\n    .expiry-range::-webkit-slider-thumb {\n      -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;\n      background: #38bdf8; border: 2px solid #e0f2fe; cursor: pointer; margin-top: -5px;\n      box-shadow: 0 0 8px rgba(56,189,248,0.7);\n    }\n    .expiry-range::-moz-range-thumb {\n      width: 16px; height: 16px; border-radius: 50%; background: #38bdf8;\n      border: 2px solid #e0f2fe; cursor: pointer; box-shadow: 0 0 8px rgba(56,189,248,0.7);\n    }\n    .expiry-scale {\n      display: flex; justify-content: space-between; margin-top: 0.25rem;\n      font-size: 0.62rem; color: var(--text-soft);\n    }\n\n    /* Pin-move grab overlay: sized like the user pin icon so the ring\n       hugs the pin exactly. Hidden until hovered/dragged (the suggest\n       flow adds .always since its UI copy references the handle). */\n    .editor-move-ghost { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; cursor: move; }\n    .editor-move-ghost .ghost-ring { width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--ghost-color, #a855f7); box-shadow: 0 0 10px var(--ghost-glow, rgba(168, 85, 247, 0.8)); opacity: 0; transition: opacity 0.15s; }\n    .editor-move-ghost.always .ghost-ring,\n    .editor-move-ghost:hover .ghost-ring,\n    .ghost-dragging .editor-move-ghost .ghost-ring { opacity: 1; }\n    /* Neutral (non-orange) primary buttons inside the editor panel;\n       danger buttons keep their red. */\n    #editor-panel .btn-primary {\n      background: rgba(148, 163, 184, 0.12);\n      border: 1px solid rgba(148, 163, 184, 0.4);\n      color: #cbd5e1;\n    }\n    #editor-panel .btn-primary:hover {\n      background: rgba(125, 211, 252, 0.12);\n      border-color: #7dd3fc;\n      color: #e0f2fe;\n    }';
+  const EDITOR_CSS = '    /* One panel for every role: the editor tools section rides inside\n       #incident-info-panel, below the read-only body. The whole panel\n       scrolls as one, so the body stops being its own scroll region\n       while the tools are mounted. */\n    #incident-info-panel.editor-hosted { overflow-y: auto; }\n    #incident-info-panel.editor-hosted .ais-list-body { flex: 0 0 auto; overflow: visible; min-height: auto; }\n    #editor-panel { display: none; padding: 4px 12px 12px; border-top: 1px solid rgba(148,163,184,0.18); }\n    /* --- Editor sidebar custom scrollbar --- */\n    #editor-panel {\n      scrollbar-width: thin;\n      scrollbar-color: transparent transparent; /* Firefox default: hidden */\n    }\n    /* Desktop: Map Controls is the top SECTION of the single #right-dock\n       card (map.html owns the card chrome) — flat background, divider\n       below separating it from the vessels/aircraft section. A\n       floating-card fallback covers the rare case the dock is missing.\n       Mobile keeps its bottom-sheet. */\n    @media (min-width: 901px) {\n      #right-dock #editor-panel.map-sidebar {\n        position: static;\n        transform: none;\n        visibility: visible;\n        width: 100%;\n        height: auto;\n        max-height: none;\n        flex: 0 1 auto;\n        min-height: 0;\n        padding: 12px;\n        order: 0;\n        background: transparent;\n        border: 0;\n        border-bottom: 1px solid rgba(148, 163, 184, 0.18);\n        border-radius: 0;\n        box-shadow: none;\n        backdrop-filter: none;\n      }\n      #right-dock #editor-panel.map-sidebar:not(.open) { display: none; }\n      .map-container > #editor-panel.map-sidebar {\n        right: 14px;\n        top: 96px;\n        height: auto;\n        max-height: calc(100% - 110px);\n        border: 1px solid rgba(125, 211, 252, 0.35);\n        border-radius: 10px;\n        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);\n      }\n      #editor-panel h3 {\n        margin: 0 0 10px;\n        font-size: 13px;\n        font-weight: 600;\n        color: #7dd3fc;\n        letter-spacing: 0.02em;\n      }\n    }\n    #editor-panel::-webkit-scrollbar {\n      width: 10px;\n    }\n    #editor-panel::-webkit-scrollbar-track {\n      background: transparent;\n    }\n    #editor-panel::-webkit-scrollbar-thumb {\n      background: transparent;\n      border-radius: 999px;\n      border: 2px solid transparent;\n      box-shadow: none;\n      transition: background 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;\n    }\n    /* Show + animate thumb while hovering or actively scrolling */\n    #editor-panel:hover,\n    #editor-panel.scrolling {\n      scrollbar-color: #4ade80 rgba(15,23,42,0.9); /* Firefox thumb + track */\n    }\n    #editor-panel:hover::-webkit-scrollbar-thumb,\n    #editor-panel.scrolling::-webkit-scrollbar-thumb {\n      background: linear-gradient(180deg, #22c55e, #0ea5e9);\n      border-color: rgba(15,23,42,0.9);\n      box-shadow: 0 0 8px rgba(34,197,94,0.8);\n    }\n    /* Extra glow animation while scrolling */\n    #editor-panel.scrolling::-webkit-scrollbar-thumb {\n      animation: sidebarScrollGlow 1.2s infinite alternate;\n    }\n    @keyframes sidebarScrollGlow {\n      0% { box-shadow: 0 0 4px rgba(34,197,94,0.4); }\n      100% { box-shadow: 0 0 14px rgba(34,197,94,1); }\n    }\n    \n    .pill-checkbox {\n      display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px;\n      border-radius: 20px; border: 1px solid rgba(255,255,255,0.2);\n      background: rgba(255,255,255,0.05); color: #cbd5e1; font-size: 0.75rem;\n      cursor: pointer; user-select: none; transition: all 0.2s;\n    }\n    .pill-checkbox:hover { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.4); color: #fff; }\n    .pill-checkbox input { accent-color: var(--accent); }\n    .pill-checkbox:has(input:checked) { background: rgba(249, 115, 22, 0.2); border-color: #f97316; color: #fdba74; }\n\n    /* Incident Type(s) toggle pills + group headings */\n    .type-group-label {\n      width: 100%; font-size: 0.62rem; font-weight: 700; letter-spacing: 0.08em;\n      text-transform: uppercase; color: var(--text-soft); margin: 0.45rem 0 0.15rem;\n    }\n    .type-group-label:first-child { margin-top: 0; }\n    .type-pill {\n      display: inline-flex; align-items: center; padding: 5px 11px; border-radius: 999px;\n      border: 1px solid rgba(148,163,184,0.3); background: rgba(255,255,255,0.04);\n      color: #cbd5e1; font-size: 0.72rem; font-weight: 500; cursor: pointer;\n      user-select: none; transition: background 0.15s, border-color 0.15s, color 0.15s;\n    }\n    .type-pill:hover { background: rgba(255,255,255,0.09); border-color: rgba(148,163,184,0.5); color: #fff; }\n    .type-pill input { position: absolute; opacity: 0; width: 0; height: 0; pointer-events: none; }\n    .type-pill:has(input:checked) {\n      background: rgba(56,189,248,0.18); border-color: rgba(56,189,248,0.6); color: #7dd3fc;\n    }\n    .type-pill:focus-within { outline: 2px solid rgba(56,189,248,0.5); outline-offset: 1px; }\n    \n    /* Auto-remove slider */\n    .expiry-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.5rem; }\n    .expiry-value {\n      font-size: 0.8rem; font-weight: 700; color: #7dd3fc;\n      background: rgba(56,189,248,0.12); border: 1px solid rgba(56,189,248,0.35);\n      padding: 0.1rem 0.55rem; border-radius: 999px;\n    }\n    .expiry-range {\n      -webkit-appearance: none; appearance: none; width: 100%; height: 6px;\n      border-radius: 4px; outline: none; margin: 0.1rem 0;\n      background: rgba(255,255,255,0.15);\n    }\n    .expiry-range::-webkit-slider-runnable-track {\n      height: 6px; border-radius: 4px;\n      background: linear-gradient(90deg, #38bdf8 var(--percent, 50%), rgba(255,255,255,0.15) var(--percent, 50%));\n    }\n    .expiry-range::-moz-range-track {\n      height: 6px; border-radius: 4px;\n      background: linear-gradient(90deg, #38bdf8 var(--percent, 50%), rgba(255,255,255,0.15) var(--percent, 50%));\n    }\n    .expiry-range::-webkit-slider-thumb {\n      -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;\n      background: #38bdf8; border: 2px solid #e0f2fe; cursor: pointer; margin-top: -5px;\n      box-shadow: 0 0 8px rgba(56,189,248,0.7);\n    }\n    .expiry-range::-moz-range-thumb {\n      width: 16px; height: 16px; border-radius: 50%; background: #38bdf8;\n      border: 2px solid #e0f2fe; cursor: pointer; box-shadow: 0 0 8px rgba(56,189,248,0.7);\n    }\n    .expiry-scale {\n      display: flex; justify-content: space-between; margin-top: 0.25rem;\n      font-size: 0.62rem; color: var(--text-soft);\n    }\n\n    /* Pin-move grab overlay: sized like the user pin icon so the ring\n       hugs the pin exactly. Hidden until hovered/dragged (the suggest\n       flow adds .always since its UI copy references the handle). */\n    .editor-move-ghost { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; cursor: move; }\n    .editor-move-ghost .ghost-ring { width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--ghost-color, #a855f7); box-shadow: 0 0 10px var(--ghost-glow, rgba(168, 85, 247, 0.8)); opacity: 0; transition: opacity 0.15s; }\n    .editor-move-ghost.always .ghost-ring,\n    .editor-move-ghost:hover .ghost-ring,\n    .ghost-dragging .editor-move-ghost .ghost-ring { opacity: 1; }\n    /* Neutral (non-orange) primary buttons inside the editor panel;\n       danger buttons keep their red. */\n    #editor-panel .btn-primary {\n      background: rgba(148, 163, 184, 0.12);\n      border: 1px solid rgba(148, 163, 184, 0.4);\n      color: #cbd5e1;\n    }\n    #editor-panel .btn-primary:hover {\n      background: rgba(125, 211, 252, 0.12);\n      border-color: #7dd3fc;\n      color: #e0f2fe;\n    }';
 
-  const PANEL_HTML = '      <div class="map-sidebar open" id="editor-panel">\n        <h3>Map Controls</h3>\n\n        <div style="display:flex; gap:0.5rem; margin-bottom:1.5rem;">\n          <button class="btn btn-primary btn-block" id="btn-add-mode" onclick="toggleAddMode()">+ Add Pin</button>\n          <button class="btn btn-secondary" onclick="refreshData()" title="Reload Data">↻</button>\n        </div>\n        <hr style="border:0; border-top:1px solid var(--border-subtle); margin-bottom:1.5rem;">\n        <div id="selection-editor" style="display:none;">\n          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;" id="edit-header">\n            <h4 style="margin:0; color:var(--accent);">Edit Incident</h4>\n            <span style="font-size:0.7rem; color:var(--text-soft);" id="edit-id-display"></span>\n          </div>\n          <input type="hidden" id="edit-id">\n          <div class="form-group" id="title-group">\n            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">\n              <label class="form-label" for="edit-title" style="margin-bottom:0;">Title</label>\n              <button class="btn btn-secondary" style="padding:0.25rem 0.5rem; font-size:0.7rem;" onclick="checkGrammarForTitle()" title="Check grammar">✓ Grammar</button>\n            </div>\n            <input type="text" id="edit-title" class="form-input">\n            <div id="title-grammar-results" style="display:none; margin-top:0.5rem;"></div>\n          </div>\n          \n          <div class="form-group" id="location-group" style="display:none;">\n            <label class="form-label">Location</label>\n            <div id="edit-location-display" style="color:#94a3b8; font-size:0.85rem; padding:0.5rem; background:rgba(0,0,0,0.2); border-radius:6px; border:1px solid var(--border-subtle);">\n              <i class="fa-solid fa-location-dot" style="margin-right:0.4rem; color:#f59e0b;"></i>\n              <span id="edit-location-text">-</span>\n            </div>\n          </div>\n          \n          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.5rem;" id="status-size-group">\n            <div class="form-group">\n              <label class="form-label" for="edit-status">Status</label>\n              <select id="edit-status" class="form-select">\n                <option value="Going">Going</option>\n                <option value="In Route">In Route</option>\n                <option value="On Scene">On Scene</option>\n                <option value="Out of Control">Out of Control</option>\n                <option value="Being Controlled">Being Controlled</option>\n                <option value="Emergency Warning">Emergency Warning</option>\n                <option value="Watch and Act">Watch and Act</option>\n                <option value="Advice">Advice</option>\n                <option value="Under Control">Under Control</option>\n                <option value="Pending">Pending</option>\n                <option value="Investigation">Investigation</option>\n                <option value="Monitor">Monitor</option>\n                <option value="Patrol">Patrol</option>\n                <option value="Off Scene">Off Scene</option>\n                <option value="Safe">Safe</option>\n              </select>\n            </div>\n            <div class="form-group">\n              <label class="form-label" for="edit-size">Size</label>\n              <input type="text" id="edit-size" class="form-input" placeholder="e.g. 5 ha">\n            </div>\n          </div>\n\n          <div class="form-group" id="expiry-group">\n            <div class="expiry-head">\n              <label class="form-label" for="edit-expiry-range" style="margin-bottom:0;">Auto-Remove In</label>\n              <span id="edit-expiry-label" class="expiry-value">2 hours</span>\n            </div>\n            <input type="range" id="edit-expiry-range" class="expiry-range" min="0" max="10" step="1" value="5" oninput="updateExpiryLabel()">\n            <div class="expiry-scale"><span>20 min</span><span>12 hrs</span></div>\n          </div>\n          <div class="form-group" id="type-group">\n            <div class="form-label">Incident Type(s)</div>\n            <div id="type-checkboxes" style="display:flex; flex-wrap:wrap; gap:0.4rem; max-height:150px; overflow-y:auto; background:rgba(0,0,0,0.2); padding:0.5rem; border-radius:6px; border:1px solid var(--border-subtle);"></div>\n          </div>\n          <div class="form-group" id="agency-group">\n            <div class="form-label">Responding Agencies</div>\n            <div style="display:flex; flex-wrap:wrap; gap:0.5rem;" id="agency-checkboxes">\n              <label class="pill-checkbox"><input type="checkbox" value="RFS"> RFS</label>\n              <label class="pill-checkbox"><input type="checkbox" value="FRNSW"> FRNSW</label>\n              <label class="pill-checkbox"><input type="checkbox" value="NSWAS"> NSWAS</label>\n              <label class="pill-checkbox"><input type="checkbox" value="SES"> SES</label>\n              <label class="pill-checkbox"><input type="checkbox" value="Police"> Police</label>\n              <label class="pill-checkbox"><input type="checkbox" value="VRA"> VRA</label>\n            </div>\n          </div>\n          <div class="form-group" id="units-group">\n            <div class="form-label">Attached Units</div>\n            <div id="unit-chips" style="display:flex; flex-wrap:wrap; gap:0.4rem; margin-bottom:0.4rem;"></div>\n            <input type="text" id="unit-input" class="form-input" placeholder="Callsign - Enter adds, Tab completes" autocomplete="off">\n          </div>\n          <div class="form-group" id="photos-group">\n            <div class="form-label">Photos <span id="photo-count" style="color:#94a3b8; font-weight:400;"></span></div>\n            <div id="photo-tiles" style="display:flex; flex-wrap:wrap; gap:0.4rem;"></div>\n            <input type="file" id="photo-input" accept="image/jpeg,image/png,image/webp,image/gif" style="display:none;">\n          </div>\n          <div class="form-group" id="desc-group">\n            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">\n              <label class="form-label" for="edit-desc" style="margin-bottom:0;">Description (Markdown)</label>\n              <button class="btn btn-secondary" style="padding:0.25rem 0.5rem; font-size:0.7rem;" onclick="checkGrammarForDescription()" title="Check grammar">✓ Grammar</button>\n            </div>\n            <textarea id="edit-desc" class="form-textarea" placeholder="Use **bold**, *italics*, or lists..."></textarea>\n            <div id="description-grammar-results" style="display:none; margin-top:0.5rem;"></div>\n          </div>\n          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.5rem; margin-bottom:1.5rem;" id="save-delete-group">\n            <button class="btn btn-primary" onclick="saveIncident()">Save Changes</button>\n            <button class="btn btn-danger" onclick="deleteIncident()">Delete Pin</button>\n          </div>\n          <button class="btn btn-secondary btn-block" id="btn-archive" style="display:none; margin-bottom:1.5rem;" onclick="archiveIncident()" title="Staff only - preserves this incident forever">\n            <i class="fa-solid fa-box-archive"></i> Archive Incident\n          </button>\n\n          <!-- Ownership-aware panels (rebuilt per-selection in selectIncident):\n               - ownership-notice: shown to non-owners in place of direct edit.\n               - suggest-panel: non-owners propose edits / notes.\n               - suggestions-review-panel: owners/admins review pending items. -->\n          <div id="ownership-notice" style="display:none; background:rgba(59,130,246,0.08); border:1px solid rgba(59,130,246,0.3); color:#93c5fd; padding:0.7rem 0.8rem; border-radius:6px; margin-bottom:1rem; font-size:0.8rem;"></div>\n          <div id="suggest-panel" style="display:none; margin-bottom:1.5rem;"></div>\n          <div id="suggestions-review-panel" style="display:none; margin-bottom:1.5rem;"></div>\n\n          <div class="form-group" style="margin-top:1.5rem; border-top:1px solid rgba(255,255,255,0.1); padding-top:1rem;" id="log-section">\n            <div class="form-label">Incident Logs</div>\n            <div id="editor-logs-container" style="max-height: 250px; overflow-y: auto; background: rgba(0,0,0,0.2); border: 1px solid var(--border-subtle); border-radius: 6px; margin-bottom:0.8rem;">\n              <div style="padding:1rem; color:var(--text-soft); font-size:0.8rem;">Loading...</div>\n            </div>\n            <div style="background:rgba(255,255,255,0.03); padding:0.8rem; border-radius:8px;">\n              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">\n                <label class="form-label" for="new-update-msg" style="margin-bottom:0;">New Log Entry</label>\n                <button class="btn btn-secondary" style="padding:0.25rem 0.5rem; font-size:0.7rem;" onclick="checkGrammarForNew()" title="Check grammar">✓ Grammar</button>\n              </div>\n              <textarea id="new-update-msg" class="form-textarea" placeholder="Type update here..." style="min-height:50px; font-size:0.85rem; margin-bottom:0.5rem;"></textarea>\n              <div id="new-log-grammar-results" style="display:none; margin-top:0.5rem;"></div>\n              <button class="btn btn-secondary btn-block" style="padding:0.4rem;" onclick="addUpdate()">Post Update</button>\n            </div>\n          </div>\n\n        </div>\n        <div id="instruction-text" style="color:var(--text-soft); font-size:0.9rem; text-align:center; margin-top:0.5rem;">\n          Select a pin to edit<br>or click <strong>+ Add Pin</strong> to create new.\n        </div>\n      </div>';
+  const PANEL_HTML = '      <div id="editor-panel">\n        <div style="display:flex; gap:0.5rem; margin:0.4rem 0 1.5rem;">\n          <button class="btn btn-primary btn-block" id="btn-add-mode" onclick="toggleAddMode()">+ Add Pin</button>\n          <button class="btn btn-secondary" onclick="refreshData()" title="Reload Data">↻</button>\n        </div>\n        <hr style="border:0; border-top:1px solid var(--border-subtle); margin-bottom:1.5rem;">\n        <div id="selection-editor" style="display:none;">\n          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;" id="edit-header">\n            <h4 style="margin:0; color:var(--accent);">Edit Incident</h4>\n            <span style="font-size:0.7rem; color:var(--text-soft);" id="edit-id-display"></span>\n          </div>\n          <input type="hidden" id="edit-id">\n          <div class="form-group" id="title-group">\n            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">\n              <label class="form-label" for="edit-title" style="margin-bottom:0;">Title</label>\n              <button class="btn btn-secondary" style="padding:0.25rem 0.5rem; font-size:0.7rem;" onclick="checkGrammarForTitle()" title="Check grammar">✓ Grammar</button>\n            </div>\n            <input type="text" id="edit-title" class="form-input">\n            <div id="title-grammar-results" style="display:none; margin-top:0.5rem;"></div>\n          </div>\n          \n          <div class="form-group" id="location-group" style="display:none;">\n            <label class="form-label">Location</label>\n            <div id="edit-location-display" style="color:#94a3b8; font-size:0.85rem; padding:0.5rem; background:rgba(0,0,0,0.2); border-radius:6px; border:1px solid var(--border-subtle);">\n              <i class="fa-solid fa-location-dot" style="margin-right:0.4rem; color:#f59e0b;"></i>\n              <span id="edit-location-text">-</span>\n            </div>\n          </div>\n          \n          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.5rem;" id="status-size-group">\n            <div class="form-group">\n              <label class="form-label" for="edit-status">Status</label>\n              <select id="edit-status" class="form-select">\n                <option value="Going">Going</option>\n                <option value="In Route">In Route</option>\n                <option value="On Scene">On Scene</option>\n                <option value="Out of Control">Out of Control</option>\n                <option value="Being Controlled">Being Controlled</option>\n                <option value="Emergency Warning">Emergency Warning</option>\n                <option value="Watch and Act">Watch and Act</option>\n                <option value="Advice">Advice</option>\n                <option value="Under Control">Under Control</option>\n                <option value="Pending">Pending</option>\n                <option value="Investigation">Investigation</option>\n                <option value="Monitor">Monitor</option>\n                <option value="Patrol">Patrol</option>\n                <option value="Off Scene">Off Scene</option>\n                <option value="Safe">Safe</option>\n              </select>\n            </div>\n            <div class="form-group">\n              <label class="form-label" for="edit-size">Size</label>\n              <input type="text" id="edit-size" class="form-input" placeholder="e.g. 5 ha">\n            </div>\n          </div>\n\n          <div class="form-group" id="expiry-group">\n            <div class="expiry-head">\n              <label class="form-label" for="edit-expiry-range" style="margin-bottom:0;">Auto-Remove In</label>\n              <span id="edit-expiry-label" class="expiry-value">2 hours</span>\n            </div>\n            <input type="range" id="edit-expiry-range" class="expiry-range" min="0" max="10" step="1" value="5" oninput="updateExpiryLabel()">\n            <div class="expiry-scale"><span>20 min</span><span>12 hrs</span></div>\n          </div>\n          <div class="form-group" id="type-group">\n            <div class="form-label">Incident Type(s)</div>\n            <div id="type-checkboxes" style="display:flex; flex-wrap:wrap; gap:0.4rem; max-height:150px; overflow-y:auto; background:rgba(0,0,0,0.2); padding:0.5rem; border-radius:6px; border:1px solid var(--border-subtle);"></div>\n          </div>\n          <div class="form-group" id="agency-group">\n            <div class="form-label">Responding Agencies</div>\n            <div style="display:flex; flex-wrap:wrap; gap:0.5rem;" id="agency-checkboxes">\n              <label class="pill-checkbox"><input type="checkbox" value="RFS"> RFS</label>\n              <label class="pill-checkbox"><input type="checkbox" value="FRNSW"> FRNSW</label>\n              <label class="pill-checkbox"><input type="checkbox" value="NSWAS"> NSWAS</label>\n              <label class="pill-checkbox"><input type="checkbox" value="SES"> SES</label>\n              <label class="pill-checkbox"><input type="checkbox" value="Police"> Police</label>\n              <label class="pill-checkbox"><input type="checkbox" value="VRA"> VRA</label>\n            </div>\n          </div>\n          <div class="form-group" id="units-group">\n            <div class="form-label">Attached Units</div>\n            <div id="unit-chips" style="display:flex; flex-wrap:wrap; gap:0.4rem; margin-bottom:0.4rem;"></div>\n            <input type="text" id="unit-input" class="form-input" placeholder="Callsign - Enter adds, Tab completes" autocomplete="off">\n          </div>\n          <div class="form-group" id="photos-group">\n            <div class="form-label">Photos <span id="photo-count" style="color:#94a3b8; font-weight:400;"></span></div>\n            <div id="photo-tiles" style="display:flex; flex-wrap:wrap; gap:0.4rem;"></div>\n            <input type="file" id="photo-input" accept="image/jpeg,image/png,image/webp,image/gif" style="display:none;">\n          </div>\n          <div class="form-group" id="desc-group">\n            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">\n              <label class="form-label" for="edit-desc" style="margin-bottom:0;">Description (Markdown)</label>\n              <button class="btn btn-secondary" style="padding:0.25rem 0.5rem; font-size:0.7rem;" onclick="checkGrammarForDescription()" title="Check grammar">✓ Grammar</button>\n            </div>\n            <textarea id="edit-desc" class="form-textarea" placeholder="Use **bold**, *italics*, or lists..."></textarea>\n            <div id="description-grammar-results" style="display:none; margin-top:0.5rem;"></div>\n          </div>\n          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.5rem; margin-bottom:1.5rem;" id="save-delete-group">\n            <button class="btn btn-primary" onclick="saveIncident()">Save Changes</button>\n            <button class="btn btn-danger" onclick="deleteIncident()">Delete Pin</button>\n          </div>\n          <button class="btn btn-secondary btn-block" id="btn-archive" style="display:none; margin-bottom:1.5rem;" onclick="archiveIncident()" title="Staff only - preserves this incident forever">\n            <i class="fa-solid fa-box-archive"></i> Archive Incident\n          </button>\n\n          <!-- Ownership-aware panels (rebuilt per-selection in selectIncident):\n               - ownership-notice: shown to non-owners in place of direct edit.\n               - suggest-panel: non-owners propose edits / notes.\n               - suggestions-review-panel: owners/admins review pending items. -->\n          <div id="ownership-notice" style="display:none; background:rgba(59,130,246,0.08); border:1px solid rgba(59,130,246,0.3); color:#93c5fd; padding:0.7rem 0.8rem; border-radius:6px; margin-bottom:1rem; font-size:0.8rem;"></div>\n          <div id="suggest-panel" style="display:none; margin-bottom:1.5rem;"></div>\n          <div id="suggestions-review-panel" style="display:none; margin-bottom:1.5rem;"></div>\n\n          <div class="form-group" style="margin-top:1.5rem; border-top:1px solid rgba(255,255,255,0.1); padding-top:1rem;" id="log-section">\n            <div class="form-label">Incident Logs</div>\n            <div id="editor-logs-container" style="max-height: 250px; overflow-y: auto; background: rgba(0,0,0,0.2); border: 1px solid var(--border-subtle); border-radius: 6px; margin-bottom:0.8rem;">\n              <div style="padding:1rem; color:var(--text-soft); font-size:0.8rem;">Loading...</div>\n            </div>\n            <div style="background:rgba(255,255,255,0.03); padding:0.8rem; border-radius:8px;">\n              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">\n                <label class="form-label" for="new-update-msg" style="margin-bottom:0;">New Log Entry</label>\n                <button class="btn btn-secondary" style="padding:0.25rem 0.5rem; font-size:0.7rem;" onclick="checkGrammarForNew()" title="Check grammar">✓ Grammar</button>\n              </div>\n              <textarea id="new-update-msg" class="form-textarea" placeholder="Type update here..." style="min-height:50px; font-size:0.85rem; margin-bottom:0.5rem;"></textarea>\n              <div id="new-log-grammar-results" style="display:none; margin-top:0.5rem;"></div>\n              <button class="btn btn-secondary btn-block" style="padding:0.4rem;" onclick="addUpdate()">Post Update</button>\n            </div>\n          </div>\n\n        </div>\n        <div id="instruction-text" style="color:var(--text-soft); font-size:0.9rem; text-align:center; margin-top:0.5rem;">\n          Select a pin to edit<br>or click <strong>+ Add Pin</strong> to create new.\n        </div>\n      </div>';
 
   function injectEditorDom() {
     if (document.getElementById('editor-panel')) return;
@@ -2390,42 +2305,49 @@
     style.textContent = EDITOR_CSS;
     document.head.appendChild(style);
 
-    // Desktop: stack inside the shared right-side dock (map.html) so
-    // panels never overlap; mobile keeps .map-container so the
-    // bottom-sheet positioning works. map.html re-homes the panel on
-    // breakpoint changes (updateMobileFiltersPlacement).
+    // ONE panel for every role: the tools mount INSIDE the shared
+    // incident details panel (#incident-info-panel), below its read-only
+    // body -- not as a separate Map Controls sheet. The panel already
+    // re-homes itself between the desktop dock and the mobile bottom
+    // sheet (map.html updateMobileFiltersPlacement), and the tools
+    // travel with it. The .map-container fallback covers the rare case
+    // the panel is missing.
     const mapContainer = document.querySelector('.map-container') || document.body;
-    const desktop = window.matchMedia('(min-width: 901px)').matches;
-    const host = (desktop && document.getElementById('right-dock')) || mapContainer;
+    const infoPanel = document.getElementById('incident-info-panel');
+    if (infoPanel) infoPanel.classList.add('editor-hosted');
+    const host = infoPanel || mapContainer;
     const wrap = document.createElement('div');
     wrap.innerHTML = PANEL_HTML;
     host.appendChild(wrap.firstElementChild);
 
-    // Mobile: floating button that opens the collapsed bottom sheet.
+    // Floating button (all breakpoints): with no always-visible sheet,
+    // this is how an editor reaches + Add Pin with nothing selected. It
+    // opens the details panel in its blank editor state and hides while
+    // the panel is open.
     const fab = document.createElement('button');
     fab.id = 'editor-mobile-fab';
     fab.type = 'button';
-    fab.title = 'Map Controls';
-    fab.setAttribute('aria-label', 'Open Map Controls');
+    fab.title = 'Add or edit map pins';
+    fab.setAttribute('aria-label', 'Add or edit map pins');
     fab.innerHTML = '<i class="fa-solid fa-map-pin"></i>';
     fab.style.cssText = 'display:none; position:fixed; bottom:calc(84px + env(safe-area-inset-bottom, 0px)); right:12px; z-index:1004; width:48px; height:48px; border-radius:50%; background:#f97316; color:#fff; border:none; box-shadow:0 6px 20px rgba(0,0,0,0.5); font-size:1.05rem; align-items:center; justify-content:center; cursor:pointer;';
-    fab.onclick = openEditorSheet;
-    // The fab is position:fixed and mobile-only — keep it out of the
-    // dock (which is display:none on mobile) so it can always show.
+    fab.onclick = () => {
+      try {
+        if (typeof window.__editorReset === 'function') window.__editorReset();
+        const icon = document.getElementById('incident-info-icon');
+        if (icon) { icon.className = 'fa-solid fa-map-pin'; icon.style.color = '#f97316'; }
+        const t = document.getElementById('incident-info-title');
+        if (t) t.textContent = 'Map editor';
+        const sb = document.getElementById('incident-info-sub');
+        if (sb) sb.textContent = '';
+        const body = document.getElementById('incident-info-body');
+        if (body) body.innerHTML = '';
+      } catch (e) { /* still open the panel */ }
+      openEditorSheet();
+    };
+    // The fab is position:fixed -- keep it out of the dock (display:none
+    // on mobile) so it can always show.
     mapContainer.appendChild(fab);
-
-    // Mobile: close X inside the sheet (hidden on desktop).
-    const panel = document.getElementById('editor-panel');
-    if (panel) {
-      const closeBtn = document.createElement('button');
-      closeBtn.id = 'editor-panel-close';
-      closeBtn.type = 'button';
-      closeBtn.setAttribute('aria-label', 'Close Map Controls');
-      closeBtn.innerHTML = '&times;';
-      closeBtn.style.cssText = 'display:none; position:absolute; top:10px; right:12px; z-index:5; width:32px; height:32px; border-radius:8px; background:rgba(148,163,184,0.12); border:1px solid rgba(148,163,184,0.25); color:#cbd5e1; font-size:1.2rem; align-items:center; justify-content:center; cursor:pointer;';
-      closeBtn.onclick = closeEditorSheet;
-      panel.insertBefore(closeBtn, panel.firstChild);
-    }
   }
 
   // --- Map click: place pin in add-mode (snap to pager cluster when the
@@ -2593,9 +2515,13 @@
 
       // Pins stay with the public unified renderer (user/RFS/pager keep
       // merging and every layer toggle keeps working). The hooks below
-      // reroute pin CLICKS from the public #incident-sidebar into the
-      // editor panel instead.
+      // fill the editor tools into the shared details panel: map.html
+      // renders the view-only body first (fires), or opens the panel
+      // with an empty body where the editor renders the content itself
+      // (user pins get the edit form, pager clusters their own block),
+      // then calls these.
       window.__editorActive = true;
+      window.__editorReset = resetEditor;
       window.NSWPSNEditorHooks = {
         // showIncidentDetails(incident, pagerDetails) — raw incident row.
         openUser(incident, pagerDetails) {
@@ -2666,6 +2592,8 @@
           const mo = new MutationObserver(editorPanelVisibility);
           if (aisPanel) mo.observe(aisPanel, { attributes: true, attributeFilter: ['class'] });
           if (userBtn) mo.observe(userBtn, { attributes: true, attributeFilter: ['class'] });
+          const infoPanel = document.getElementById('incident-info-panel');
+          if (infoPanel) mo.observe(infoPanel, { attributes: true, attributeFilter: ['class'] });
         }
         window.addEventListener('resize', editorPanelVisibility, { passive: true });
         editorPanelVisibility();
