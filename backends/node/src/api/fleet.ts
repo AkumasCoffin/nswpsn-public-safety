@@ -113,7 +113,7 @@ interface VehicleFields {
   production_year: number | null;
   crew_capacity: number | null;
   radio_ids: { cab: string[]; mobile: string[] };
-  specs: Record<string, number | boolean>;
+  specs: Record<string, number | boolean | string>;
   image_key: string | null;
 }
 
@@ -137,7 +137,11 @@ function parseVehicle(data: Record<string, unknown>): VehicleFields | { error: s
   if (badId !== undefined) return { error: 'radio IDs must be exactly 7 digits' };
 
   const specsRaw = (data['specs'] ?? {}) as Record<string, unknown>;
-  const specs: Record<string, number | boolean> = {};
+  const specs: Record<string, number | boolean | string> = {};
+  const dt = typeof specsRaw['drive_type'] === 'string' ? specsRaw['drive_type'].trim() : '';
+  if (['2WD', '4WD', '6WD', 'unknown'].includes(dt)) specs['drive_type'] = dt;
+  const pt = typeof specsRaw['pump_type'] === 'string' ? specsRaw['pump_type'].trim().slice(0, 120) : '';
+  if (pt) specs['pump_type'] = pt;
   const wt = intIn(specsRaw['water_tank_l'], 0, 1_000_000);
   if (wt !== null) specs['water_tank_l'] = wt;
   const ft = intIn(specsRaw['foam_tank_l'], 0, 1_000_000);

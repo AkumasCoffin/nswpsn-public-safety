@@ -187,6 +187,15 @@
           <div class="field"><label for="crewCap">Crew capacity</label>
             <select id="crewCap"><option value="">Select…</option></select>
           </div>
+          <div class="field"><label for="driveType">Drive type</label>
+            <select id="driveType">
+              <option value="">Select…</option>
+              <option value="2WD">2WD</option>
+              <option value="4WD">4WD</option>
+              <option value="6WD">6WD</option>
+              <option value="unknown">Unknown</option>
+            </select>
+          </div>
         </div>
       </div>
 
@@ -212,6 +221,7 @@
           <div class="field"><label for="waterTank">Water tank capacity (L)</label><input type="text" id="waterTank" inputmode="numeric" maxlength="7"></div>
           <div class="field"><label for="foamTank">Class A foam tank capacity (L)</label><input type="text" id="foamTank" inputmode="numeric" maxlength="7"></div>
           <div class="field"><label for="foamBTank">Class B foam tank capacity (L)</label><input type="text" id="foamBTank" inputmode="numeric" maxlength="7"></div>
+          <div class="field"><label for="pumpType">Pump type</label><input type="text" id="pumpType" maxlength="120" placeholder="e.g. Godiva P2A, Darley HE, GAAM MK450"></div>
           <div class="field"><label for="baSets">Breathing apparatus sets</label><input type="text" id="baSets" inputmode="numeric" maxlength="2"></div>
           <div class="field"><label>&nbsp;</label><label class="chk"><input type="checkbox" id="cafs"> CAFS equipped</label></div>
         </div>
@@ -461,12 +471,14 @@
     function buildPayload() {
       const st = $('#fState').value;
       const specs = {};
+      const dtv = $('#driveType').value; if (dtv) specs.drive_type = dtv;
       const cat = window.FleetVocab ? FleetVocab.categoryOf(st, $('#fAgency').value) : null;
       if (cat === 'fire') {
         const wt = numOrNull('#waterTank'); if (wt !== null) specs.water_tank_l = wt;
         const ft = numOrNull('#foamTank'); if (ft !== null) specs.foam_tank_l = ft;
         const fb = numOrNull('#foamBTank'); if (fb !== null) specs.foam_b_tank_l = fb;
         const ba = numOrNull('#baSets'); if (ba !== null) specs.ba_sets = ba;
+        const pmp = $('#pumpType').value.trim(); if (pmp) specs.pump_type = pmp;
         specs.cafs = $('#cafs').checked;
       }
       if (cat === 'ambulance') {
@@ -544,6 +556,8 @@
       $('#foamTank').value = sp.foam_tank_l ?? '';
       $('#foamBTank').value = sp.foam_b_tank_l ?? '';
       $('#baSets').value = sp.ba_sets ?? '';
+      $('#pumpType').value = sp.pump_type ?? '';
+      $('#driveType').value = sp.drive_type ?? '';
       $('#cafs').checked = sp.cafs === true;
       $('#stretchers').value = sp.stretchers ?? '';
       state.imageKey = v.image_key || null;
