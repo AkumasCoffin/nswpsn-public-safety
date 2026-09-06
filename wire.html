@@ -965,6 +965,8 @@
             ${amboRows ? `<div class="wd-block wd-meta-grid"><div class="wd-lbl" style="grid-column:1/-1;color:var(--accent)">Ambulance</div>${amboRows}</div>` : ''}
             ${radioBlock('Radio IDs · in cab', v.radio_ids && v.radio_ids.cab)}
             ${radioBlock('Radio IDs · mobile', v.radio_ids && v.radio_ids.mobile)}
+            <div class="wd-block"><div class="wd-lbl">License</div>
+              <div style="font-size:0.85rem;color:var(--text-muted)"><i class="fa-regular fa-copyright"></i> ${esc(v.license_label || 'Credit required')}${v.credit ? ' · ' + esc(v.credit) : ''}</div></div>
             ${actions}
           </div>
         </div>`;

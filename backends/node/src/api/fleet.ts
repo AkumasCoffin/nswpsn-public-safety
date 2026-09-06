@@ -26,7 +26,7 @@ import {
   canManageUsers,
 } from '../services/auth/roles.js';
 import { wirePublic } from '../services/wireSettings.js';
-import { r2PublicUrl, deleteR2Object, viewerHash } from '../services/wire.js';
+import { r2PublicUrl, deleteR2Object, viewerHash, normaliseLicense, licenseLabel } from '../services/wire.js';
 
 export const fleetRouter = new Hono();
 
@@ -112,6 +112,10 @@ interface VehicleFields {
   cab_chassis: string | null;
   production_year: number | null;
   crew_capacity: number | null;
+  license: string;
+  credit: string | null;
+  rights_affirmed: true;
+  watermark: boolean;
   radio_ids: { cab: string[]; mobile: string[] };
   specs: Record<string, number | boolean | string>;
   image_key: string | null;
@@ -128,6 +132,11 @@ function parseVehicle(data: Record<string, unknown>): VehicleFields | { error: s
   const catRaw = typeof data['agency_category'] === 'string' ? data['agency_category'].trim() : '';
   const agency = str(data['agency'], 120);
   if (!agency) return { error: 'an agency is required' };
+  // Same publish-time affirmation articles require -- fleet posts have no
+  // draft state, so it applies to every create AND edit.
+  if (data['rights_affirmed'] !== true) {
+    return { error: 'you must confirm you own or have the rights to publish this' };
+  }
 
   const radioRaw = (data['radio_ids'] ?? {}) as Record<string, unknown>;
   const badId = ([] as unknown[])
@@ -171,6 +180,10 @@ function parseVehicle(data: Record<string, unknown>): VehicleFields | { error: s
     cab_chassis: str(data['cab_chassis'], 120),
     production_year: intIn(data['production_year'], 1900, 2100),
     crew_capacity: intIn(data['crew_capacity'], 0, 99),
+    license: normaliseLicense(data['license']),
+    credit: str(data['credit'], 200),
+    rights_affirmed: true,
+    watermark: data['watermark'] === true,
     radio_ids: { cab: radioList(radioRaw['cab']), mobile: radioList(radioRaw['mobile']) },
     specs,
     image_key: str(data['image_key'], 300),
@@ -210,6 +223,10 @@ function shapeVehicle(row: any, includeKeys = false): Record<string, unknown> {
     specs: row.specs && typeof row.specs === 'object' ? row.specs : {},
     image_url: row.image_key ? r2PublicUrl(row.image_key) : null,
     ...(includeKeys ? { image_key: row.image_key ?? null } : {}),
+    license: row.license || 'credit',
+    license_label: licenseLabel(row.license || 'credit'),
+    credit: row.credit || null,
+    watermark: row.watermark === true,
     views: Number(row.views) || 0,
     status: row.status,
     review_note: row.review_note ?? null,
@@ -222,16 +239,18 @@ function shapeVehicle(row: any, includeKeys = false): Record<string, unknown> {
 
 const VEHICLE_COLS = `callsign, state, lga, suburb, agency, agency_category, station, cad_code,
   aerial_id, vehicle_type, registration, make, model, cab_chassis, production_year, crew_capacity,
+  license, credit, rights_affirmed, watermark,
   radio_ids, specs, image_key`;
 
 // The two jsonb values sit at these indexes of vehicleVals -- the INSERT
 // placeholder builder casts them. Keep all three in sync.
-const JSONB_IDX = new Set([16, 17]);
+const JSONB_IDX = new Set([20, 21]);
 
 function vehicleVals(v: VehicleFields): unknown[] {
   return [
     v.callsign, v.state, v.lga, v.suburb, v.agency, v.agency_category, v.station, v.cad_code,
     v.aerial_id, v.vehicle_type, v.registration, v.make, v.model, v.cab_chassis, v.production_year, v.crew_capacity,
+    v.license, v.credit, v.rights_affirmed, v.watermark,
     JSON.stringify(v.radio_ids), JSON.stringify(v.specs), v.image_key,
   ];
 }

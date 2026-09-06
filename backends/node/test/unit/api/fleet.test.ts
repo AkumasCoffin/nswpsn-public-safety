@@ -55,6 +55,8 @@ vi.mock('../../../src/services/wire.js', () => ({
   r2PublicUrl: (k: string) => `https://r2.example/${k}`,
   deleteR2Object: (k: string) => deleteR2(k),
   viewerHash: () => 'vh-1',
+  normaliseLicense: (v: unknown) => (v === 'display' || v === 'public' ? v : 'credit'),
+  licenseLabel: (v: string) => (v === 'public' ? 'Public domain' : v === 'display' ? 'All rights reserved' : 'Credit required'),
 }));
 
 const { fleetRouter } = await import('../../../src/api/fleet.js');
@@ -78,6 +80,7 @@ const row = (over: Record<string, unknown> = {}) => ({
   make: 'Scania', model: 'P320', cab_chassis: 'Varley Group',
   production_year: 2020, crew_capacity: 4,
   radio_ids: { cab: ['1234567'], mobile: [] }, specs: { water_tank_l: 2000, cafs: true },
+  license: 'credit', credit: null, rights_affirmed: true, watermark: false,
   image_key: 'wire/img1.webp', views: 3, status: 'published', review_note: null,
   created_at: new Date('2026-09-01T00:00:00Z'), updated_at: new Date('2026-09-01T00:00:00Z'),
   ...over,
@@ -85,7 +88,8 @@ const row = (over: Record<string, unknown> = {}) => ({
 
 const goodBody = {
   callsign: 'P 251', state: 'NSW', lga: 'Penrith', agency: 'Fire and Rescue NSW (FRNSW)',
-  agency_category: 'fire', radio_ids: { cab: ['1234567'], mobile: ['7654321'] },
+  agency_category: 'fire', rights_affirmed: true,
+  radio_ids: { cab: ['1234567'], mobile: ['7654321'] },
   specs: { water_tank_l: 2000, cafs: true },
 };
 
@@ -133,6 +137,14 @@ describe('fleet create', () => {
     });
     expect(res.status).toBe(400);
     expect((await res.json()).error).toMatch(/7 digits/);
+    // ...and publishing without the rights affirmation
+    res = await app.request('/api/wire/fleet', {
+      method: 'POST',
+      body: JSON.stringify({ ...goodBody, rights_affirmed: false }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/rights/);
   });
 
   it("lands pending for a contributor while approval is on, published for a moderator", async () => {
@@ -160,7 +172,7 @@ describe('fleet create', () => {
       headers: { 'Content-Type': 'application/json' },
     });
     const insert = calls.find((c) => c.sql.includes('INSERT INTO fleet_vehicles'))!;
-    const radio = JSON.parse(insert.params![16] as string);
+    const radio = JSON.parse(insert.params![20] as string);
     expect(radio).toEqual({ cab: ['1234567'], mobile: ['7654321'] });
   });
 });
