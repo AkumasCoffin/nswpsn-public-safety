@@ -377,10 +377,35 @@
       <details class="wire-nav"${onWire ? " open" : ""}>
         <summary><i class="fa-solid fa-photo-film"></i><span>The Wire</span></summary>
         <div class="wire-nav-list">
-          <a class="agency-item-link${onWire ? " active" : ""}" href="wire"><i class="agency-item-icon fa-solid fa-newspaper"></i><span class="agency-item-name">Articles</span></a>
+          <span class="wire-nav-glider" aria-hidden="true"></span>
+          <a class="${onWire ? "active" : ""}" href="wire"><i class="fa-solid fa-newspaper"></i><span>Articles</span></a>
         </div>
       </details>`;
     mount.parentNode.insertBefore(wrap, mount);
+
+    // The bubble follows the cursor and springs back to the active entry on
+    // leave -- the same glider the map page's basemap picker uses, with a
+    // vertical axis added since this list stacks its pills.
+    const list = wrap.querySelector(".wire-nav-list");
+    const glider = wrap.querySelector(".wire-nav-glider");
+    const glideTo = (el) => {
+      if (!el) { list.classList.remove("showing"); return; }
+      glider.style.left = el.offsetLeft + "px";
+      glider.style.top = el.offsetTop + "px";
+      glider.style.width = el.offsetWidth + "px";
+      glider.style.height = el.offsetHeight + "px";
+      list.classList.add("showing");
+    };
+    const park = () => glideTo(list.querySelector("a.active"));
+    list.querySelectorAll("a").forEach((a) => a.addEventListener("mouseenter", () => glideTo(a)));
+    list.addEventListener("mouseleave", park);
+    // Geometry reads 0 while the <details> is closed -- park on open instead.
+    // Direct calls, not requestAnimationFrame: rAF never fires in a
+    // background tab, so a page loaded there would sit unparked. Reading
+    // offsetLeft forces the layout synchronously, which is all we need.
+    const det = wrap.querySelector(".wire-nav");
+    det.addEventListener("toggle", () => { if (det.open) park(); });
+    if (det.open) park();
   }
 
   function initSidebarExtras() {
