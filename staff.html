@@ -13005,10 +13005,13 @@
         return;
       }
       el.innerHTML = _apItems.map(p => {
+        const isFleet = p.kind === 'fleet';
         const isArticle = p.kind === 'article';
-        const base = isArticle ? 'articles' : 'media';
-        const key = isArticle ? p.slug : p.id;
-        const link = `wire?tab=${isArticle ? 'articles' : 'media'}&${isArticle ? 'article' : 'post'}=${encodeURIComponent(key)}`;
+        const base = isFleet ? 'fleet' : 'articles';
+        const key = isFleet ? p.id : (p.slug || p.id);
+        const link = isFleet
+          ? `wire?tab=fleet&vehicle=${encodeURIComponent(p.id)}`
+          : `wire?article=${encodeURIComponent(key)}`;
         const when = p.created_at ? new Date(p.created_at).toLocaleString() : '';
         const cover = p.cover && p.cover.thumb_url ? p.cover.thumb_url : (p.cover && p.cover.url ? p.cover.url : '');
         const thumb = cover ? `<img src="${escapeHtml(cover)}" alt="" style="width:64px;height:48px;object-fit:cover;border-radius:6px;flex-shrink:0">` : `<span style="width:64px;height:48px;display:grid;place-items:center;background:rgba(148,163,184,0.12);border-radius:6px;flex-shrink:0"><i class="fas fa-${isArticle ? 'newspaper' : 'image'}"></i></span>`;

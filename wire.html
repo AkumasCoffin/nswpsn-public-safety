@@ -31,6 +31,7 @@
   <script src="auth-common.js"></script>
   <script src="ui-dialogs.js"></script>
   <script src="agencies.js"></script>
+  <script src="fleet-vocab.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js" integrity="sha384-948ahk4ZmxYVYOc+rxN1H2gM1EJ2Duhp7uHtZ4WSLkV4Vtx5MUqnV+l7u9B+jFv+" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
 
@@ -407,6 +408,13 @@
       <button class="clear" id="fClear">Clear</button>
     </div>
 
+    <div class="wire-filters" id="fleetFilters" style="display:none">
+      <input type="text" id="flSearch" placeholder="Search call sign, station, rego…" autocomplete="off" style="min-width:200px">
+      <select id="flState"><option value="">All states</option><option>NSW</option><option>VIC</option><option>QLD</option><option>WA</option><option>SA</option><option>TAS</option><option>ACT</option><option>NT</option></select>
+      <select id="flAgency"><option value="">All agencies</option></select>
+      <button class="clear" id="flClear">Clear</button>
+    </div>
+
     <!-- One post kind since the media/article merge; the container stays
          for layout code that references it. -->
     <div class="wire-tabs2" id="mineFilters" style="display:none" role="tablist"></div>
@@ -471,8 +479,10 @@
     if (window.marked && marked.setOptions) marked.setOptions({ gfm: true, breaks: true });
     let API_KEY = null;
     let ME = { userId: null, canFeed: false, canModerate: false, isOwner: false };
-    // ONE feed since the media/article merge -- everything is an article.
-    // Old ?tab= links land here and just see the single feed.
+    // ONE article feed since the media/article merge; ?tab=fleet switches
+    // this page to the Fleet directory instead. Other old ?tab= values just
+    // land on the article feed.
+    const fleetMode = new URLSearchParams(location.search).get('tab') === 'fleet';
     let mineMode = new URLSearchParams(location.search).get('mine') === '1';
 
     const $ = (s, r = document) => r.querySelector(s);
@@ -527,6 +537,7 @@
       } catch (e) {}
       if (ME.canFeed) {
         $('#postBtn').style.display = 'inline-flex';
+        if (fleetMode) { const b = $('#postBtn'); b.href = 'fleet-compose'; b.innerHTML = '<i class="fa-solid fa-plus"></i> Add a vehicle'; }
         // Your own posts now live in the sidebar Profile panel, so there's no
         // "My posts" button here any more. The ?mine=1 view still works for
         // anyone holding a link to it — it just needs a way back out.
@@ -558,6 +569,25 @@
     }
 
     // ---- feed ----
+    // Fleet cards share the .wire-card chrome: one photo, callsign-led.
+    function fleetCardHTML(v) {
+      const media = v.image_url
+        ? `<img src="${esc(v.image_url)}" alt="" loading="lazy">`
+        : `<div class="placeholder"><i class="fa-solid fa-truck-field"></i></div>`;
+      const chips = [v.agency, v.vehicle_type, v.state].filter(Boolean).slice(0, 3)
+        .map((t) => `<span class="wire-chip">${esc(t)}</span>`).join('');
+      const draft = statusBadge(v.status);
+      const authorLink = `<a class="wire-author wire-author-av" href="profile?u=${encodeURIComponent(v.author?.id || '')}&name=${encodeURIComponent(v.author?.name || '')}" onclick="event.stopPropagation()">${esc(v.author?.name || 'contributor')}</a>`;
+      return `<article class="wire-card" data-kind="fleet" data-key="${esc(v.id)}">
+        <div class="wire-thumb">${media}<span class="wire-badge">Fleet</span>
+          <span class="wire-views"><i class="fa-regular fa-eye"></i> ${fmtViews(v.views)}</span></div>
+        <div class="wire-card-body">
+          <h3>${esc(v.callsign)} ${draft}</h3>
+          <div class="wire-byline">by ${authorLink}${v.created_at ? ' · ' + timeAgo(v.created_at) : ''}</div>
+          <div class="wire-chips">${chips}</div>
+        </div></article>`;
+    }
+
     function cardHTML(item) {
       const cover = item.cover;
       const isArticle = item.kind === 'article';
@@ -668,13 +698,22 @@
     let feedOffset = 0;
     function feedParams(offset) {
       const params = new URLSearchParams();
-      const search = $('#fSearch').value.trim(); if (search) params.set('q', search);
-      const unit = $('#fUnit').value.trim(); if (unit) params.set('unit', unit);
-      const ag = $('#fAgency').value; if (ag) params.set('agency', ag);
-      const rg = $('#fRegion').value; if (rg) params.set('region', rg);
+      if (fleetMode) {
+        const search = $('#flSearch').value.trim(); if (search) params.set('q', search);
+        const st = $('#flState').value; if (st) params.set('state', st);
+        const ag = $('#flAgency').value; if (ag) params.set('agency', ag);
+      } else {
+        const search = $('#fSearch').value.trim(); if (search) params.set('q', search);
+        const unit = $('#fUnit').value.trim(); if (unit) params.set('unit', unit);
+        const ag = $('#fAgency').value; if (ag) params.set('agency', ag);
+        const rg = $('#fRegion').value; if (rg) params.set('region', rg);
+      }
       params.set('limit', PAGE); params.set('offset', offset);
       return params;
     }
+    const FEED_PATH = () => (fleetMode ? 'fleet' : 'articles');
+    const feedItems = (j) => (fleetMode ? j.vehicles : j.articles) || [];
+    const feedCard = (item) => (fleetMode ? fleetCardHTML(item) : cardHTML(item));
     // One delegated click handler covers cards added by loadFeed, loadMore and loadMine.
     $('#grid').addEventListener('click', (e) => {
       const card = e.target.closest('.wire-card'); if (card) openDetail(card.dataset.kind, card.dataset.key);
@@ -688,12 +727,12 @@
       try {
         // Send the JWT when logged in (userHeaders falls back to the public key)
         // so the owner-only soft-launch gate recognises the owner.
-        const r = await fetch(`${API_BASE}/api/wire/articles?${feedParams(0)}`, { headers: await userHeaders() });
+        const r = await fetch(`${API_BASE}/api/wire/${FEED_PATH()}?${feedParams(0)}`, { headers: await userHeaders() });
         const j = await r.json();
-        const items = j.articles || [];
+        const items = feedItems(j);
         loading.style.display = 'none';
-        if (!items.length) { empty.textContent = 'Nothing posted yet.'; empty.style.display = 'block'; return; }
-        grid.innerHTML = items.map(cardHTML).join('');
+        if (!items.length) { empty.textContent = fleetMode ? 'No vehicles in the fleet yet.' : 'Nothing posted yet.'; empty.style.display = 'block'; return; }
+        grid.innerHTML = items.map(feedCard).join('');
         feedOffset = items.length;
         $('#showMore').style.display = items.length === PAGE ? 'inline-flex' : 'none';
       } catch (e) {
@@ -703,10 +742,10 @@
     async function loadMore() {
       const btn = $('#showMore'); btn.disabled = true; const orig = btn.innerHTML; btn.innerHTML = 'Loading…';
       try {
-        const r = await fetch(`${API_BASE}/api/wire/articles?${feedParams(feedOffset)}`, { headers: await userHeaders() });
+        const r = await fetch(`${API_BASE}/api/wire/${FEED_PATH()}?${feedParams(feedOffset)}`, { headers: await userHeaders() });
         const j = await r.json();
-        const items = j.articles || [];
-        $('#grid').insertAdjacentHTML('beforeend', items.map(cardHTML).join(''));
+        const items = feedItems(j);
+        $('#grid').insertAdjacentHTML('beforeend', items.map(feedCard).join(''));
         feedOffset += items.length;
         btn.style.display = items.length === PAGE ? 'inline-flex' : 'none';
       } catch (e) { /* keep button */ }
@@ -718,8 +757,9 @@
     let galleryMedia = [], galleryIdx = 0, currentItem = null;
 
     async function openDetail(kind, key, push = true) {
-      // kind is vestigial since the merge -- every post is an article, and the
-      // API resolves both slugs and pre-merge media-post ids.
+      if (kind === 'fleet') return openFleetDetail(key, push);
+      // kind is otherwise vestigial since the merge -- every post is an
+      // article, and the API resolves both slugs and pre-merge media ids.
       try {
         const r = await fetch(`${API_BASE}/api/wire/articles/${encodeURIComponent(key)}`, { headers: await userHeaders() });
         if (!r.ok) { toast('Post not found.'); return; }
@@ -752,19 +792,109 @@
     }
 
     // Show/hide the feed's filter chrome. Hidden while a post detail is open so
-    // the search/agency/LGA bar (or the My-posts tabs) doesn't sit above a post.
+    // the search/agency/LGA bar (or the fleet bar) doesn't sit above a post.
     function feedChrome(show) {
-      if (!show) { $('#filters').style.display = 'none'; $('#mineFilters').style.display = 'none'; return; }
-      if (mineMode) { $('#filters').style.display = 'none'; }
-      else { $('#filters').style.display = ''; }
+      if (!show) { $('#filters').style.display = 'none'; $('#fleetFilters').style.display = 'none'; $('#mineFilters').style.display = 'none'; return; }
+      if (mineMode) { $('#filters').style.display = 'none'; $('#fleetFilters').style.display = 'none'; }
+      else if (fleetMode) { $('#fleetFilters').style.display = ''; $('#filters').style.display = 'none'; }
+      else { $('#filters').style.display = ''; $('#fleetFilters').style.display = 'none'; }
       $('#mineFilters').style.display = 'none';
+    }
+
+    // ---- fleet detail ----
+    async function openFleetDetail(id, push = true) {
+      try {
+        const r = await fetch(`${API_BASE}/api/wire/fleet/${encodeURIComponent(id)}`, { headers: await userHeaders() });
+        if (!r.ok) { toast('Vehicle not found.'); return; }
+        const v = (await r.json()).vehicle;
+        currentItem = { id: v.id, kind: 'fleet', title: v.callsign };
+        renderFleetDetail(v);
+        $('#feedView').style.display = 'none';
+        feedChrome(false);
+        $('#detail').classList.add('on');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        if (push) history.pushState({ kind: 'fleet', key: id }, '', `wire?tab=fleet&vehicle=${encodeURIComponent(id)}`);
+        if (push && typeof umami !== 'undefined') umami.track('wire-open', { kind: 'fleet' });
+        if (!(ME.userId && v.author && v.author.id === ME.userId)) {
+          fetch(`${API_BASE}/api/wire/fleet/${encodeURIComponent(v.id)}/view`, { method: 'POST', headers: await userHeaders() }).catch(() => {});
+        }
+      } catch (e) { console.warn(e); }
+    }
+
+    function renderFleetDetail(v) {
+      galleryMedia = [];
+      const canEdit = ME.userId && v.author && v.author.id === ME.userId;
+      const specRow = (label, val) => (val == null || val === '' ? '' :
+        `<div class="wd-lbl">${label}</div><div style="font-size:0.85rem">${esc(String(val))}</div>`);
+      const sp = v.specs || {};
+      const globalRows =
+        specRow('Agency', v.agency) + specRow('Station', v.station) + specRow('CAD code', v.cad_code) +
+        specRow('Aerial ID', v.aerial_id) + specRow('Vehicle type', v.vehicle_type) +
+        specRow('Registration', v.registration) + specRow('Make / Model', v.make_model) +
+        specRow('Production year', v.production_year) + specRow('Crew capacity', v.crew_capacity);
+      const fireRows =
+        specRow('Water tank', sp.water_tank_l != null ? `${sp.water_tank_l} L` : null) +
+        specRow('Class A foam tank', sp.foam_tank_l != null ? `${sp.foam_tank_l} L` : null) +
+        specRow('CAFS equipped', typeof sp.cafs === 'boolean' ? (sp.cafs ? 'Yes' : 'No') : null) +
+        specRow('BA sets', sp.ba_sets);
+      const amboRows = specRow('Stretchers', sp.stretchers);
+      const radioChips = (list) => (list && list.length
+        ? list.map((id) => `<span class="wire-chip" style="font-family:ui-monospace,monospace">${esc(id)}</span>`).join('')
+        : '<span style="color:var(--text-soft);font-size:0.8rem">—</span>');
+      const loc = [v.state, v.lga, v.suburb].filter(Boolean).join(' — ');
+      const photo = v.image_url
+        ? `<div class="wd-gallery" style="cursor:default"><img src="${esc(v.image_url)}" alt="" style="width:100%;border-radius:12px"></div>`
+        : `<div class="wd-gallery" style="display:grid;place-items:center;min-height:220px;color:var(--text-soft)"><i class="fa-solid fa-truck-field" style="font-size:3rem"></i></div>`;
+      const actions = (canEdit || ME.canModerate) ? `<div class="wd-block"><div class="wd-lbl" style="display:flex;justify-content:space-between;align-items:center">Manage ${canEdit ? '<span class="wd-yourpost">Your post</span>' : '<span class="wd-yourpost" style="color:#f59e0b;border-color:rgba(245,158,11,0.45)">Team</span>'}</div><div class="wd-actions">
+          ${canEdit ? `<a class="wd-btn" href="fleet-compose?edit=${encodeURIComponent(v.id)}"><i class="fa-solid fa-pen"></i> Edit</a>` : ''}
+          ${canEdit ? `<button class="wd-btn danger" data-fact="delete"><i class="fa-solid fa-trash"></i> Delete</button>` : ''}
+          ${ME.canModerate && !canEdit ? `<button class="wd-btn danger" data-fact="remove"><i class="fa-solid fa-ban"></i> Remove</button>` : ''}
+        </div></div>` : '';
+      const notices = `${v.status === 'pending' ? `<div style="color:#f59e0b;font-size:0.82rem;margin-bottom:0.9rem"><i class="fa-regular fa-clock"></i> Awaiting moderator approval — only you can see this until it's approved.</div>` : ''}${v.status === 'rejected' && v.review_note ? `<div style="color:#ef4444;font-size:0.82rem;margin-bottom:0.9rem"><b>Rejected:</b> ${esc(v.review_note)} — edit and re-submit.</div>` : ''}`;
+      const authorLink = `<a class="wire-author wire-author-av" href="profile?u=${encodeURIComponent(v.author?.id || '')}&name=${encodeURIComponent(v.author?.name || '')}">${esc(v.author?.name || 'contributor')}</a>`;
+      $('#detail').innerHTML = `<button class="wire-back" id="backBtn"><i class="fa-solid fa-arrow-left"></i> Back to the Fleet</button>
+        <div class="wd-eyebrow">Fleet · ${esc(v.agency || 'Vehicle')}</div>
+        <div class="wd-grid">
+          <div>${photo}</div>
+          <div>
+            <h1 class="wd-title">${esc(v.callsign)}</h1>
+            <div class="wd-meta">by ${authorLink}${v.created_at ? ' · ' + new Date(v.created_at).toLocaleString('en-AU') : ''}</div>
+            ${notices}
+            <div class="wd-block"><div class="wd-stats">
+              <div><div class="n">${fmtViews(v.views)}</div><div class="k">Views</div></div></div></div>
+            <div class="wd-block wd-meta-grid">
+              ${specRow('Location', loc)}
+              ${globalRows}
+            </div>
+            ${fireRows ? `<div class="wd-block wd-meta-grid"><div class="wd-lbl" style="grid-column:1/-1;color:var(--accent)">Fire appliance</div>${fireRows}</div>` : ''}
+            ${amboRows ? `<div class="wd-block wd-meta-grid"><div class="wd-lbl" style="grid-column:1/-1;color:var(--accent)">Ambulance</div>${amboRows}</div>` : ''}
+            <div class="wd-block"><div class="wd-lbl">Radio IDs · in cab</div><div class="wire-chips">${radioChips(v.radio_ids && v.radio_ids.cab)}</div></div>
+            <div class="wd-block"><div class="wd-lbl">Radio IDs · mobile</div><div class="wire-chips">${radioChips(v.radio_ids && v.radio_ids.mobile)}</div></div>
+            ${actions}
+          </div>
+        </div>`;
+      $('#backBtn').addEventListener('click', () => closeDetail());
+      const del = $('#detail [data-fact="delete"]');
+      if (del) del.addEventListener('click', async () => {
+        const ok = await uiConfirm(`"${v.callsign}" — this can't be undone.`, { title: 'Delete this vehicle?', okText: 'Delete', danger: true });
+        if (!ok) return;
+        const r = await fetch(`${API_BASE}/api/wire/fleet/${encodeURIComponent(v.id)}`, { method: 'DELETE', headers: await userHeaders() });
+        if (r.ok) { closeDetail(); loadFeed(); } else toast('Failed to delete.');
+      });
+      const rem = $('#detail [data-fact="remove"]');
+      if (rem) rem.addEventListener('click', async () => {
+        const ok = await uiConfirm(`"${v.callsign}" — remove this vehicle?`, { title: 'Remove this vehicle?', okText: 'Remove', danger: true });
+        if (!ok) return;
+        const r = await fetch(`${API_BASE}/api/wire/fleet/${encodeURIComponent(v.id)}/remove`, { method: 'POST', headers: await userHeaders() });
+        if (r.ok) { closeDetail(); loadFeed(); } else toast('Failed to remove.');
+      });
     }
 
     function closeDetail(push = true) {
       $('#detail').classList.remove('on'); $('#detail').innerHTML = '';
       $('#feedView').style.display = '';
       feedChrome(true);
-      if (push) history.pushState({}, '', 'wire');
+      if (push) history.pushState({}, '', fleetMode ? 'wire?tab=fleet' : 'wire');
     }
 
     function renderDetail(item) {
@@ -1304,7 +1434,26 @@
     function applySection() {
       $('#wireSub').textContent = mineMode
         ? 'Your posts — including anything awaiting review.'
-        : 'Independent photos, video & reporting from contributors on the ground.';
+        : (fleetMode
+          ? 'The fleet — emergency-service vehicles documented by contributors.'
+          : 'Independent photos, video & reporting from contributors on the ground.');
+      if (fleetMode && window.FleetVocab) {
+        // State narrows the agency filter to that state's departments.
+        const fillAg = () => {
+          const st = $('#flState').value;
+          const lists = st ? [FleetVocab.departments[st] || []] : Object.values(FleetVocab.departments);
+          const names = [...new Set(lists.flat().map((d) => d.name))];
+          $('#flAgency').innerHTML = '<option value="">All agencies</option>' +
+            names.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+        };
+        fillAg();
+        $('#flState').addEventListener('change', fillAg);
+        ['flSearch', 'flState', 'flAgency'].forEach((id) => {
+          const el = $('#' + id); const ev = id === 'flSearch' ? 'input' : 'change';
+          let t; el.addEventListener(ev, () => { clearTimeout(t); t = setTimeout(loadFeed, ev === 'input' ? 300 : 0); });
+        });
+        $('#flClear').addEventListener('click', () => { $('#flSearch').value = ''; $('#flState').value = ''; $('#flAgency').value = ''; fillAg(); loadFeed(); });
+      }
     }
     ['fSearch', 'fUnit', 'fAgency', 'fRegion'].forEach((id) => {
       const el = $('#' + id); const ev = (id === 'fUnit' || id === 'fSearch') ? 'input' : 'change';
@@ -1314,8 +1463,9 @@
 
     window.addEventListener('popstate', () => {
       const p = new URLSearchParams(location.search);
-      const post = p.get('post'), article = p.get('article');
-      if (article) openDetail('article', article, false);
+      const post = p.get('post'), article = p.get('article'), vehicle = p.get('vehicle');
+      if (vehicle) openDetail('fleet', vehicle, false);
+      else if (article) openDetail('article', article, false);
       else if (post) openDetail('article', post, false);
       else closeDetail(false);
     });
@@ -1407,8 +1557,9 @@
       // the public agency/region filters don't apply there.
       if (mineMode) { $('#mineFilters').style.display = 'inline-flex'; $('#filters').style.display = 'none'; }
       const p = new URLSearchParams(location.search);
-      const post = p.get('post'), article = p.get('article');
-      if (article) { await loadFeed(); openDetail('article', article, false); }
+      const post = p.get('post'), article = p.get('article'), vehicle = p.get('vehicle');
+      if (vehicle) { await loadFeed(); openDetail('fleet', vehicle, false); }
+      else if (article) { await loadFeed(); openDetail('article', article, false); }
       else if (post) { await loadFeed(); openDetail('article', post, false); }
       else loadFeed();
     })();

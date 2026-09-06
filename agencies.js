@@ -370,16 +370,17 @@
     const onWire = path.endsWith("/wire") || path.endsWith("/wire.html");
     const wrap = document.createElement("div");
     wrap.id = "wire-nav";
-    // One feed since the media/article merge. Still a dropdown -- Articles is
-    // the single entry today, with room for more tabs (e.g. Units) later --
-    // and it wears the same card chrome as the All Agencies dropdown below it
-    // (agency-root: bordered rounded card, left chevron, item rows).
+    // Same card chrome as the All Agencies dropdown below it (agency-root:
+    // bordered rounded card, left chevron, item rows). ?tab= picks which
+    // child reads as active.
+    const wireTab = onWire ? (new URLSearchParams(location.search).get("tab") || "articles") : null;
     wrap.innerHTML = `
       <div class="sidebar-section-label">News &amp; Media</div>
       <details class="agency-root"${onWire ? " open" : ""}>
         <summary><span class="agency-root-name"><i class="fa-solid fa-photo-film" style="margin-right:0.45rem;color:var(--accent);"></i>The Wire</span></summary>
         <div class="agency-root-body">
-          <a class="agency-item-link${onWire ? " active" : ""}" href="wire"><i class="agency-item-icon fa-solid fa-newspaper"></i><span class="agency-item-name">Articles</span></a>
+          <a class="agency-item-link${wireTab === "articles" ? " active" : ""}" href="wire"><i class="agency-item-icon fa-solid fa-newspaper"></i><span class="agency-item-name">Articles</span></a>
+          <a class="agency-item-link${wireTab === "fleet" ? " active" : ""}" href="wire?tab=fleet"><i class="agency-item-icon fa-solid fa-truck-field"></i><span class="agency-item-name">Fleet</span></a>
         </div>
       </details>`;
     mount.parentNode.insertBefore(wrap, mount);
