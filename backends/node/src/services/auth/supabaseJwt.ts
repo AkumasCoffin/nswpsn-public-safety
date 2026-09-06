@@ -167,7 +167,11 @@ export function avatarFromClaims(payload: Record<string, unknown>): string {
 
 export function displayNameFromClaims(payload: Record<string, unknown>): string {
   const meta = payload['user_metadata'] as Record<string, unknown> | undefined;
-  for (const key of ['username', 'display_name', 'full_name', 'name']) {
+  // display_name FIRST: it's the username the user chose on their profile.
+  // Discord OAuth fills `username` with the Discord handle, and having it
+  // outrank display_name meant bylines showed the Discord name even after
+  // the user picked one on the site.
+  for (const key of ['display_name', 'username', 'full_name', 'name']) {
     const v = meta?.[key];
     if (typeof v === 'string' && v.trim()) return v.trim().slice(0, 64);
   }

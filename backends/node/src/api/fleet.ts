@@ -73,6 +73,18 @@ async function approvalRequired(pool: Pool): Promise<boolean> {
   }
 }
 
+/** The byline name: the profile's chosen display name when set, else the
+ *  JWT's (which can lag behind a rename until the token refreshes). */
+async function authorNameFor(pool: Pool, uid: string, fallback: string | null): Promise<string | null> {
+  try {
+    const r = await pool.query<{ display_name: string | null }>(
+      'SELECT display_name FROM user_profiles WHERE user_id = $1', [uid]);
+    return (r.rows[0]?.display_name || '').trim() || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 // ---- validation ------------------------------------------------------------
 
 function str(v: unknown, cap: number): string | null {
@@ -342,7 +354,7 @@ fleetRouter.post('/api/wire/fleet', requireRole(canFeedMedia), async (c) => {
     const ins = await pool.query<{ id: string }>(
       `INSERT INTO fleet_vehicles (author_id, author_name, status, ${cols})
        VALUES ($${vals.length + 1}, $${vals.length + 2}, $${vals.length + 3}, ${ph}) RETURNING id`,
-      [...vals, authorId, currentUserName(c), status],
+      [...vals, authorId, await authorNameFor(pool, authorId, currentUserName(c)), status],
     );
     return c.json({ id: ins.rows[0]!.id, success: true, status }, 201);
   } catch (err) {
@@ -372,9 +384,13 @@ fleetRouter.put('/api/wire/fleet/:id', async (c) => {
     const sets = cols.map((col, i) =>
       `${col} = $${i + 1}${col === 'radio_ids' || col === 'specs' ? '::jsonb' : ''}`);
     const vals = vehicleVals(v);
+    // An edit also refreshes the author's byline (only for the author's own
+    // edits -- an admin fixing a typo mustn't take over the credit).
+    const nameSet = isAuthor ? `, author_name = $${vals.length + 2}` : '';
+    const nameVal = isAuthor ? [await authorNameFor(pool, uid, currentUserName(c))] : [];
     await pool.query(
-      `UPDATE fleet_vehicles SET ${sets.join(', ')}, updated_at = now() WHERE id = $${vals.length + 1}`,
-      [...vals, id],
+      `UPDATE fleet_vehicles SET ${sets.join(', ')}, updated_at = now()${nameSet} WHERE id = $${vals.length + 1}`,
+      [...vals, id, ...nameVal],
     );
     // A replaced photo leaves its old object behind — clean it up, best-effort.
     const oldKey = prev.rows[0].image_key as string | null;

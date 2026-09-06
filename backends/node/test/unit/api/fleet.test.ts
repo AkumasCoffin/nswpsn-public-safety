@@ -148,8 +148,8 @@ describe('fleet create', () => {
   });
 
   it("lands pending for a contributor while approval is on, published for a moderator", async () => {
-    // approvalRequired SELECT answers first, then the INSERT
-    resultQueue = [{ rows: [], rowCount: 0 }, { rows: [{ id: 'new1' }], rowCount: 1 }];
+    // approvalRequired SELECT, the byline display-name lookup, then the INSERT
+    resultQueue = [{ rows: [], rowCount: 0 }, { rows: [], rowCount: 0 }, { rows: [{ id: 'new1' }], rowCount: 1 }];
     let res = await makeApp().request('/api/wire/fleet', {
       method: 'POST', body: JSON.stringify(goodBody), headers: { 'Content-Type': 'application/json' },
     });
@@ -157,7 +157,7 @@ describe('fleet create', () => {
     expect((await res.json()).status).toBe('pending');
 
     moderatorMock = true;
-    resultQueue = [{ rows: [], rowCount: 0 }, { rows: [{ id: 'new2' }], rowCount: 1 }];
+    resultQueue = [{ rows: [], rowCount: 0 }, { rows: [], rowCount: 0 }, { rows: [{ id: 'new2' }], rowCount: 1 }];
     res = await makeApp().request('/api/wire/fleet', {
       method: 'POST', body: JSON.stringify(goodBody), headers: { 'Content-Type': 'application/json' },
     });
@@ -165,7 +165,7 @@ describe('fleet create', () => {
   });
 
   it('dedupes radio IDs and keeps the two lists separate', async () => {
-    resultQueue = [{ rows: [], rowCount: 0 }, { rows: [{ id: 'new1' }], rowCount: 1 }];
+    resultQueue = [{ rows: [], rowCount: 0 }, { rows: [], rowCount: 0 }, { rows: [{ id: 'new1' }], rowCount: 1 }];
     await makeApp().request('/api/wire/fleet', {
       method: 'POST',
       body: JSON.stringify({ ...goodBody, radio_ids: { cab: ['1234567', '1234567'], mobile: ['7654321'] } }),

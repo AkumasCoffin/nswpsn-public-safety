@@ -221,6 +221,10 @@ function createProfileModal() {
       @media (max-width: 900px) { #profile-grid { grid-template-columns:1fr; gap:1.4rem; } }
       #profile-modal .pf-card { background:#1e293b; border:1px solid rgba(148,163,184,0.2); border-radius:12px; padding:1.4rem 1.5rem; margin-bottom:1.2rem; }
       #profile-modal .pf-col-hd { color:#f97316; font-size:0.72rem; text-transform:uppercase; letter-spacing:0.1em; font-weight:700; margin:0 0 0.8rem; }
+      #profile-tabs { display:flex; gap:0.4rem; margin-bottom:1.3rem; }
+      #profile-tabs button { background:rgba(148,163,184,0.08); border:1px solid rgba(148,163,184,0.2); border-radius:8px; color:#94a3b8; font:inherit; font-size:0.82rem; font-weight:600; padding:0.45rem 1.1rem; cursor:pointer; }
+      #profile-tabs button.on { background:rgba(249,115,22,0.16); border-color:rgba(249,115,22,0.45); color:#f97316; }
+      #profile-modal .pf-sect-hd { color:#cbd5e1; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em; font-weight:600; margin-bottom:0.6rem; display:block; }
     </style>
     <div style="background:#0f172a; width:100%; height:100%; overflow-y:auto; padding:1.6rem clamp(1rem, 4vw, 3rem) 3rem; box-sizing:border-box;">
       <div style="max-width:1180px; margin:0 auto;">
@@ -229,6 +233,12 @@ function createProfileModal() {
         <button onclick="closeProfileModal()" style="background:rgba(148,163,184,0.12); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#cbd5e1; font-size:1.3rem; cursor:pointer; padding:0; width:34px; height:34px; display:flex; align-items:center; justify-content:center;">&times;</button>
       </div>
 
+      <div id="profile-tabs">
+        <button data-ptab="main" class="on">Profile</button>
+        <button data-ptab="posts" id="profile-posts-tab-btn" style="display:none">My posts</button>
+      </div>
+
+      <div id="profile-tab-main">
       <div id="profile-grid">
       <div><!-- MAIN settings: who you are -->
       <div class="pf-col-hd">Profile</div>
@@ -236,6 +246,7 @@ function createProfileModal() {
       <div style="text-align:center; margin-bottom:1.3rem;">
         <div id="profile-avatar-preview" style="width:82px; height:82px; border-radius:50%; margin:0 auto 0.55rem; background:rgba(249,115,22,0.2); color:#f97316; display:grid; place-items:center; font-size:1.9rem; font-weight:700; overflow:hidden; border:2px solid rgba(148,163,184,0.25);"></div>
         <button type="button" onclick="pickProfileAvatar()" id="profile-avatar-btn" style="padding:0.45rem 0.9rem; background:rgba(148,163,184,0.12); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#e2e8f0; font-size:0.8rem; cursor:pointer; font-family:inherit;"><i class="fas fa-camera"></i> Change picture</button>
+        <button type="button" onclick="removeProfileAvatar()" id="profile-avatar-remove" style="display:none; padding:0.45rem 0.9rem; background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.3); border-radius:8px; color:#fca5a5; font-size:0.8rem; cursor:pointer; font-family:inherit; margin-left:0.4rem;"><i class="fas fa-trash"></i> Remove</button>
         <input type="file" id="profile-avatar-input" accept="image/jpeg,image/png,image/webp" style="display:none">
         <div style="color:#64748b; font-size:0.72rem; margin-top:0.4rem;">Overrides your Discord avatar.</div>
         <div id="profile-stats" style="display:none; justify-content:center; gap:1.4rem; margin-top:0.9rem;"></div>
@@ -301,21 +312,31 @@ function createProfileModal() {
           <span id="profile-discord-value" style="flex:1; color:#e2e8f0; font-size:0.85rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></span>
           <button id="profile-discord-link-btn" onclick="linkDiscordAccount()" style="display:none; padding:0.35rem 0.7rem; background:#5865F2; border:none; border-radius:6px; color:#fff; font-weight:600; cursor:pointer; font-size:0.75rem; font-family:inherit;">Link</button>
           <span id="profile-discord-linked-badge" style="display:none; color:#22c55e; font-size:0.75rem; font-weight:600;"><i class="fas fa-check"></i> Linked</span>
+          <button id="profile-discord-unlink-btn" onclick="unlinkDiscordAccount()" style="display:none; padding:0.35rem 0.7rem; background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.3); border-radius:6px; color:#fca5a5; font-weight:600; cursor:pointer; font-size:0.75rem; font-family:inherit;">Unlink</button>
         </div>
         <a id="profile-change-password" href="change-password.html" style="display:flex; width:100%; padding:0.55rem; background:rgba(148,163,184,0.1); border:1px solid rgba(148,163,184,0.2); border-radius:6px; color:#94a3b8; font-size:0.8rem; cursor:pointer; align-items:center; justify-content:center; gap:0.4rem; font-family:inherit; text-decoration:none; box-sizing:border-box; margin-top:0.7rem;">
           <i class="fas fa-key"></i> Change Password
         </a>
       </div>
 
-      <div id="profile-posts-section" class="pf-card" style="display:none;">
-        <div style="display:flex; align-items:center; justify-content:space-between; gap:0.6rem; margin-bottom:0.7rem;">
-          <label style="color:#cbd5e1; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em; font-weight:600;">My posts</label>
-          <div id="profile-posts-filter" style="display:flex; gap:0.25rem;"></div>
-        </div>
-        <div id="profile-posts-list"></div>
-      </div>
       </div><!-- /other column -->
       </div><!-- /profile-grid -->
+      </div><!-- /profile-tab-main -->
+
+      <div id="profile-tab-posts" style="display:none;">
+        <div id="profile-drafts-card" class="pf-card" style="display:none; border-color:rgba(245,158,11,0.35);">
+          <label class="pf-sect-hd" style="color:#fbbf24;">Drafts</label>
+          <div id="profile-drafts-list"></div>
+        </div>
+        <div class="pf-card">
+          <label class="pf-sect-hd">Articles</label>
+          <div id="profile-articles-list"></div>
+        </div>
+        <div class="pf-card">
+          <label class="pf-sect-hd">Fleet</label>
+          <div id="profile-fleet-list"></div>
+        </div>
+      </div>
       </div>
     </div>
   `;
@@ -329,6 +350,11 @@ function createProfileModal() {
   if (avInput) avInput.addEventListener('change', handleProfileAvatar);
   const wmInput = document.getElementById('profile-wm-input');
   if (wmInput) wmInput.addEventListener('change', handleProfileWatermarkFile);
+  document.querySelectorAll('#profile-tabs button').forEach((b) => b.addEventListener('click', () => {
+    document.querySelectorAll('#profile-tabs button').forEach((x) => x.classList.toggle('on', x === b));
+    document.getElementById('profile-tab-main').style.display = b.dataset.ptab === 'main' ? '' : 'none';
+    document.getElementById('profile-tab-posts').style.display = b.dataset.ptab === 'posts' ? '' : 'none';
+  }));
 }
 
 // ===================== NOTIFICATIONS (sidebar bell) =====================
@@ -609,6 +635,67 @@ async function handleProfileWatermarkFile() {
   }
 }
 
+/** Remove the custom profile picture (the Discord fallback, if any,
+ *  returns). Sends the full form alongside clear_avatar because the
+ *  profile PUT is a whole-row upsert -- a clear-only body would blank
+ *  the name/bio/socials. */
+async function removeProfileAvatar() {
+  try {
+    const { data } = await sb.auth.getSession();
+    const jwt = data.session?.access_token; if (!jwt) return;
+    const v = (id) => (document.getElementById(id)?.value || '').trim();
+    const body = {
+      display_name: v('profile-username') || null, bio: v('profile-bio'),
+      twitter: v('profile-twitter'), facebook: v('profile-facebook'),
+      instagram: v('profile-instagram'), youtube: v('profile-youtube'), website: v('profile-website'),
+      clear_avatar: true,
+    };
+    const r = await fetch(`${API_BASE_URL}/api/profiles`, {
+      method: 'PUT', headers: { Authorization: 'Bearer ' + jwt, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) return;
+    await sb.auth.updateUser({ data: { custom_avatar_url: null } }).catch(() => {});
+    const j = await r.json().catch(() => ({}));
+    const prev = document.getElementById('profile-avatar-preview');
+    const fallback = j.profile && j.profile.avatar_url;
+    if (prev) {
+      prev.innerHTML = fallback
+        ? `<img src="${fallback}" style="width:100%;height:100%;object-fit:cover;">`
+        : (v('profile-username') || '?').charAt(0).toUpperCase();
+    }
+    const rm = document.getElementById('profile-avatar-remove');
+    if (rm) rm.style.display = 'none';
+    checkAuthState();
+  } catch (e) { /* leave the picture in place */ }
+}
+
+/** Unlink the Discord identity, after an explicit confirmation. Only ever
+ *  offered while an email identity exists (see the modal-open wiring). */
+async function unlinkDiscordAccount() {
+  const ask = 'Unlink your Discord account? You will keep signing in with your email and password.';
+  const ok = typeof uiConfirm === 'function'
+    ? await uiConfirm(ask, { title: 'Unlink Discord?', okText: 'Unlink', danger: true })
+    : window.confirm(ask);
+  if (!ok) return;
+  const msg = document.getElementById('profile-message');
+  try {
+    const { data, error: idErr } = await sb.auth.getUserIdentities();
+    if (idErr) throw idErr;
+    const discord = (data?.identities || []).find((i) => i.provider === 'discord');
+    if (!discord) return;
+    const { error } = await sb.auth.unlinkIdentity(discord);
+    if (error) throw error;
+    document.getElementById('profile-discord-value').textContent = 'Not linked';
+    document.getElementById('profile-discord-link-btn').style.display = 'inline-block';
+    document.getElementById('profile-discord-linked-badge').style.display = 'none';
+    document.getElementById('profile-discord-unlink-btn').style.display = 'none';
+    if (msg) { msg.style.color = '#22c55e'; msg.textContent = 'Discord account unlinked.'; }
+  } catch (e) {
+    if (msg) { msg.style.color = '#ef4444'; msg.textContent = 'Could not unlink: ' + (e && e.message ? e.message : 'unknown error'); }
+  }
+}
+
 // Pending avatar (uploaded to R2 but not yet saved to the profile).
 let _pendingAvatarKey = null, _pendingAvatarUrl = null;
 function pickProfileAvatar() { document.getElementById('profile-avatar-input')?.click(); }
@@ -672,74 +759,66 @@ async function handleProfileAvatar(e) {
 // EVERYTHING you've written, including drafts and anything awaiting review —
 // this is your own private view, so unlike a public profile it shouldn't hide
 // your unpublished work from you.
-let _profilePosts = [];
-let _profilePostFilter = 'all';
-
 function profilePostHref(item) {
-  // Everything is an article since the merge; pre-merge media posts kept
-  // their ids and the article endpoint resolves those too.
+  if (item.kind === 'fleet') return `wire?tab=fleet&vehicle=${encodeURIComponent(item.id)}`;
   return `wire?article=${encodeURIComponent(item.slug || item.id)}`;
 }
 
-function renderProfilePostFilter() {
-  const box = document.getElementById('profile-posts-filter');
-  if (!box) return;
-  // One post kind since the media/article merge -- nothing to filter by.
-  box.innerHTML = '';
+function _profilePostRow(i) {
+  const cover = i.cover || null;
+  const src = i.kind === 'fleet'
+    ? (i.image_url || null)
+    : (cover && cover.kind === 'image' ? (cover.thumb_url || cover.feed_url || cover.url)
+      : (cover ? (cover.poster_feed_url || cover.poster_url) : null));
+  const thumb = src
+    ? `<img src="${escNotif(src)}" alt="" loading="lazy" style="width:100%; height:100%; object-fit:cover;">`
+    : `<i class="fas fa-${i.kind === 'fleet' ? 'truck-field' : 'newspaper'}" style="color:#475569;"></i>`;
+  // Only flag what ISN'T live — a published post needs no badge.
+  const st = i.status && i.status !== 'published'
+    ? `<span style="font-size:0.62rem; text-transform:uppercase; letter-spacing:0.04em; font-weight:700; color:#fbbf24;">${escNotif(i.status)}</span>` : '';
+  return `<a href="${escNotif(profilePostHref(i))}" style="display:flex; gap:0.6rem; align-items:center; padding:0.45rem; border-radius:8px; text-decoration:none; color:inherit;">
+    <div style="width:52px; height:36px; flex-shrink:0; border-radius:6px; overflow:hidden; background:rgba(2,6,23,0.5); display:grid; place-items:center;">${thumb}</div>
+    <div style="min-width:0; flex:1;">
+      <div style="font-size:0.82rem; font-weight:600; color:#e2e8f0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escNotif(i.title || 'Untitled')}</div>
+      <div style="font-size:0.7rem; color:#64748b; display:flex; gap:0.5rem; align-items:center;">
+        <span>${escNotif(notifAgo(i.published_at || i.created_at) || '')}</span>
+        ${st}
+      </div>
+    </div>
+  </a>`;
 }
 
-function renderProfilePosts() {
-  const list = document.getElementById('profile-posts-list');
-  if (!list) return;
-  const items = _profilePosts.filter((i) =>
-    _profilePostFilter === 'all' ? true
-      : _profilePostFilter === 'articles' ? i.kind === 'article'
-        : i.kind !== 'article');
-  if (!items.length) {
-    list.innerHTML = `<div style="color:#64748b; font-size:0.8rem; padding:0.6rem 0;">Nothing here yet.</div>`;
-    return;
-  }
-  list.innerHTML = items.map((i) => {
-    const cover = i.cover || null;
-    const src = cover && cover.kind === 'image' ? (cover.thumb_url || cover.feed_url || cover.url)
-      : (cover ? (cover.poster_feed_url || cover.poster_url) : null);
-    const thumb = src
-      ? `<img src="${escNotif(src)}" alt="" loading="lazy" style="width:100%; height:100%; object-fit:cover;">`
-      : `<i class="fas fa-${i.kind === 'article' ? 'newspaper' : 'image'}" style="color:#475569;"></i>`;
-    // Only flag what ISN'T live — a published post needs no badge.
-    const st = i.status && i.status !== 'published'
-      ? `<span style="font-size:0.62rem; text-transform:uppercase; letter-spacing:0.04em; font-weight:700; color:#fbbf24;">${escNotif(i.status)}</span>` : '';
-    return `<a href="${escNotif(profilePostHref(i))}" style="display:flex; gap:0.6rem; align-items:center; padding:0.45rem; border-radius:8px; text-decoration:none; color:inherit;">
-      <div style="width:52px; height:36px; flex-shrink:0; border-radius:6px; overflow:hidden; background:rgba(2,6,23,0.5); display:grid; place-items:center;">${thumb}</div>
-      <div style="min-width:0; flex:1;">
-        <div style="font-size:0.82rem; font-weight:600; color:#e2e8f0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escNotif(i.title || 'Untitled')}</div>
-        <div style="font-size:0.7rem; color:#64748b; display:flex; gap:0.5rem; align-items:center;">
-          <span>${i.kind === 'article' ? 'Article' : 'Media'}</span>
-          <span>${escNotif(notifAgo(i.published_at || i.created_at) || '')}</span>
-          ${st}
-        </div>
-      </div>
-    </a>`;
-  }).join('');
+function _fillProfileList(id, items, emptyText) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.innerHTML = items.length
+    ? items.map(_profilePostRow).join('')
+    : `<div style="color:#64748b; font-size:0.8rem; padding:0.3rem 0;">${emptyText}</div>`;
 }
 
 async function loadProfilePosts(session) {
-  const section = document.getElementById('profile-posts-section');
-  if (!section) return;
+  const tabBtn = document.getElementById('profile-posts-tab-btn');
+  if (!tabBtn) return;
   const h = { Authorization: 'Bearer ' + session.access_token };
+  const byDate = (a, b) => new Date(b.published_at || b.created_at || 0) - new Date(a.published_at || a.created_at || 0);
+  let articles = [], fleet = [];
   try {
-    const aj = await fetch(`${API_BASE_URL}/api/wire/articles?mine=1`, { headers: h }).then((r) => r.json()).catch(() => ({}));
-    _profilePosts = (aj.articles || [])
-      .sort((a, b) => new Date(b.published_at || b.created_at || 0) - new Date(a.published_at || a.created_at || 0));
-  } catch (e) {
-    _profilePosts = [];
-  }
-  // Contributors only — a reader with no posts gets no empty section.
-  if (!_profilePosts.length) { section.style.display = 'none'; return; }
-  section.style.display = 'block';
-  _profilePostFilter = 'all';
-  renderProfilePostFilter();
-  renderProfilePosts();
+    [articles, fleet] = await Promise.all([
+      fetch(`${API_BASE_URL}/api/wire/articles?mine=1`, { headers: h }).then((r) => r.json()).then((j) => j.articles || []).catch(() => []),
+      fetch(`${API_BASE_URL}/api/wire/fleet?mine=1`, { headers: h }).then((r) => r.json()).then((j) => j.vehicles || []).catch(() => []),
+    ]);
+  } catch (e) { /* both stay empty */ }
+  const drafts = articles.filter((a) => a.status === 'draft').sort(byDate);
+  const published = articles.filter((a) => a.status !== 'draft').sort(byDate);
+  fleet = fleet.sort(byDate);
+  // Contributors only — a reader with no posts gets no empty tab.
+  if (!articles.length && !fleet.length) { tabBtn.style.display = 'none'; return; }
+  tabBtn.style.display = '';
+  const draftsCard = document.getElementById('profile-drafts-card');
+  if (draftsCard) draftsCard.style.display = drafts.length ? 'block' : 'none';
+  _fillProfileList('profile-drafts-list', drafts, '');
+  _fillProfileList('profile-articles-list', published, 'No articles yet.');
+  _fillProfileList('profile-fleet-list', fleet, 'No fleet vehicles yet.');
 }
 
 /** Your badges. Awarded by staff, or automatically for posting to The Wire
@@ -785,15 +864,20 @@ async function openProfileModal() {
   const discordValue = document.getElementById('profile-discord-value');
   const linkBtn = document.getElementById('profile-discord-link-btn');
   const linkedBadge = document.getElementById('profile-discord-linked-badge');
+  const unlinkBtn = document.getElementById('profile-discord-unlink-btn');
   if (discordIdentity) {
     const idData = discordIdentity.identity_data || {};
     discordValue.textContent = idData.full_name || idData.name || idData.user_name || 'Discord';
     linkBtn.style.display = 'none';
     linkedBadge.style.display = 'inline';
+    // Unlinking needs another way back in -- only offered when an email
+    // identity exists, or the account would be locked out.
+    if (unlinkBtn) unlinkBtn.style.display = identities.some((i) => i.provider === 'email') ? 'inline-block' : 'none';
   } else {
     discordValue.textContent = 'Not linked';
     linkBtn.style.display = 'inline-block';
     linkedBadge.style.display = 'none';
+    if (unlinkBtn) unlinkBtn.style.display = 'none';
   }
 
   // Password management only makes sense for accounts with an email identity.
@@ -815,6 +899,8 @@ async function openProfileModal() {
       const bioEl = document.getElementById('profile-bio');
       if (bioEl) { bioEl.value = (profile && profile.bio) || ''; updateBioCount(); }
       if (profile && profile.avatar_url && avPrev) avPrev.innerHTML = `<img src="${profile.avatar_url}" style="width:100%;height:100%;object-fit:cover;">`;
+      const avRm = document.getElementById('profile-avatar-remove');
+      if (avRm) avRm.style.display = profile && profile.has_custom_avatar ? 'inline-block' : 'none';
       renderProfileStats(pj.stats);
       renderProfileTags(pj.tags);
     }

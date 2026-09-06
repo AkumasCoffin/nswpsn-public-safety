@@ -1030,7 +1030,14 @@ wireRouter.post('/api/wire/articles', requireRole(canFeedMedia), async (c) => {
       { uid: authorId, isAdmin: await canManageUsers(authorId) });
     if ('error' in parentRes) return c.json({ error: parentRes.error }, 400);
 
-    const authorName = currentUserName(c);
+    // Byline: the profile's chosen display name outranks the JWT's, which can
+    // lag behind a rename until the token refreshes.
+    let authorName = currentUserName(c);
+    try {
+      const pn = await pool.query<{ display_name: string | null }>(
+        'SELECT display_name FROM user_profiles WHERE user_id = $1', [authorId]);
+      authorName = (pn.rows[0]?.display_name || '').trim() || authorName;
+    } catch { /* JWT name stands */ }
     const rightsAffirmed = data['rights_affirmed'] === true;
     const coAuthors = await cleanCoAuthors(pool, data['co_authors'], authorId);
     const client = await pool.connect();

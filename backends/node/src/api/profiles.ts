@@ -53,6 +53,7 @@ function shapeProfile(userId: string, row?: ProfileRow): Record<string, unknown>
     // Custom pfp wins; otherwise fall back to the stored Discord avatar so the
     // picture shows to other viewers (who can't read the user's Supabase metadata).
     avatar_url: avatarUrl(row?.avatar_key, row?.discord_avatar_url, 'large'),
+    has_custom_avatar: !!row?.avatar_key,
     twitter: row?.twitter ?? null,
     facebook: row?.facebook ?? null,
     instagram: row?.instagram ?? null,
@@ -132,6 +133,18 @@ profilesRouter.put('/api/profiles', requireSupabaseJwt, async (c) => {
     // Must be a key we minted (under wire/avatars/) — never an arbitrary object.
     let avatarKey = typeof d['avatar_key'] === 'string' && d['avatar_key'] ? d['avatar_key'].slice(0, 200) : null;
     if (avatarKey && !avatarKey.startsWith('wire/avatars/')) avatarKey = null;
+    // clear_avatar removes the custom picture (COALESCE alone can't: null
+    // means "keep"). The old R2 object is deleted best-effort.
+    const clearAvatar = d['clear_avatar'] === true;
+    if (clearAvatar) {
+      avatarKey = null;
+      try {
+        const prevKey = await pool.query<{ avatar_key: string | null }>(
+          'SELECT avatar_key FROM user_profiles WHERE user_id = $1', [uid]);
+        const old = prevKey.rows[0]?.avatar_key;
+        if (old) deleteR2Object(old).catch(() => {});
+      } catch { /* the clear still proceeds */ }
+    }
     // Discord avatar: prefer the verified JWT claim; fall back to a client-sent
     // value. Stored as a public fallback pfp. COALESCE keeps any existing one.
     const jwtAvatar = c.get('userAvatar');
@@ -142,11 +155,11 @@ profilesRouter.put('/api/profiles', requireSupabaseJwt, async (c) => {
        ON CONFLICT (user_id) DO UPDATE SET
          display_name = $2,
          bio          = $3,
-         avatar_key   = COALESCE($4, user_profiles.avatar_key),
+         avatar_key   = CASE WHEN $11::boolean THEN NULL ELSE COALESCE($4, user_profiles.avatar_key) END,
          discord_avatar_url = COALESCE($5, user_profiles.discord_avatar_url),
          twitter = $6, facebook = $7, instagram = $8, youtube = $9, website = $10, updated_at = now()
        RETURNING *`,
-      [uid, displayName, bio, avatarKey, discordAvatar, twitter, facebook, instagram, youtube, website],
+      [uid, displayName, bio, avatarKey, discordAvatar, twitter, facebook, instagram, youtube, website, clearAvatar],
     );
     return c.json({ success: true, profile: shapeProfile(uid, r.rows[0]) });
   } catch (err) {
