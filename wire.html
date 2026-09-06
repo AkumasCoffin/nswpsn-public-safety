@@ -973,7 +973,7 @@
       $('#backBtn').addEventListener('click', () => closeDetail());
       const del = $('#detail [data-fact="delete"]');
       if (del) del.addEventListener('click', async () => {
-        const ok = await uiConfirm(`"${v.callsign}" — this can't be undone.`, { title: 'Delete this vehicle?', okText: 'Delete', danger: true });
+        const ok = await uiConfirm(`"${v.callsign}" will be hidden immediately and permanently deleted in 5 days. Until then you can recover it from your profile's My posts tab.`, { title: 'Delete this vehicle?', okText: 'Delete', danger: true });
         if (!ok) return;
         const r = await fetch(`${API_BASE}/api/wire/fleet/${encodeURIComponent(v.id)}`, { method: 'DELETE', headers: await userHeaders() });
         if (r.ok) { closeDetail(); loadFeed(); } else toast('Failed to delete.');
@@ -1514,10 +1514,14 @@
 
     async function mutateDelete(item, moderate) {
       const verb = moderate ? 'remove' : 'delete';
-      const ok = await uiConfirm(`"${item.title}" — this can't be undone.`, {
-        title: moderate ? 'Remove this post?' : 'Delete this post?',
-        okText: moderate ? 'Remove' : 'Delete', danger: true,
-      });
+      const ok = await uiConfirm(
+        moderate
+          ? `"${item.title}" — this can't be undone.`
+          : `"${item.title}" will be hidden immediately and permanently deleted in 5 days. Until then you can recover it from your profile's My posts tab.`,
+        {
+          title: moderate ? 'Remove this post?' : 'Delete this post?',
+          okText: moderate ? 'Remove' : 'Delete', danger: true,
+        });
       if (!ok) return;
       const base = item.kind === 'article' ? 'articles' : 'media';
       const url = `${API_BASE}/api/wire/${base}/${encodeURIComponent(item.id)}${moderate ? '/remove' : ''}`;

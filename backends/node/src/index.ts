@@ -89,6 +89,7 @@ import {
   startVideoProcessor,
   stopVideoProcessor,
 } from './services/videoProcessor.js';
+import { startWirePurge } from './services/wirePurge.js';
 import { startMemoryWatch, stopMemoryWatch } from './services/memoryWatch.js';
 
 // Pre-flight: hydrate the live store, run migrations, register every
@@ -138,6 +139,7 @@ async function preflight(): Promise<void> {
   startNodeHourlyRollup(); // hourly rebuild of node_radio_hourly* from the detail table
   startWhisperHealth();    // probe the faster-whisper backends rdio transcribes through
   startVideoProcessor(); // ffmpeg pass over newly uploaded Wire videos
+  startWirePurge(); // purges deleted Wire posts past their 5-day recovery window
   startMemoryWatch(); // heap gauge — see services/memoryWatch.ts (post-OOM telemetry)
 
   // Prewarm: fire every source's first poll in parallel and await with

@@ -34,6 +34,7 @@ import { wirePublic, autoTagsEnabled, setWireSetting } from '../services/wireSet
 import { awardPostingTags, tagMap } from '../services/userTags.js';
 import { diffSnapshots, mediaKeyOf, type EditSnapshot } from '../services/wireEdits.js';
 import { avatarMap } from '../services/wireComments.js';
+import { RECOVERY_DAYS } from '../services/wirePurge.js';
 import { shapeFleetVehicle } from './fleet.js';
 import {
   createImageUploadUrl,
@@ -370,7 +371,7 @@ async function seriesFor(
     `SELECT id, slug, title, published_at, created_at, status, parent_article_id
        FROM articles
       WHERE (id = $1 OR parent_article_id = $1)
-        AND status = 'published' AND taken_down_at IS NULL
+        AND status = 'published' AND taken_down_at IS NULL AND deleted_at IS NULL
       ORDER BY parent_article_id NULLS FIRST, published_at ASC NULLS LAST, created_at ASC`,
     [leadId],
   );
@@ -631,6 +632,10 @@ function shapeArticle(row: any, media: WireMediaRow[], includeKeys = false): Rec
     co_authors: Array.isArray(row.co_authors) ? row.co_authors : [],
     media: shaped,
     cover,
+    deleted_at: isoOrNull(row.deleted_at),
+    delete_after: row.deleted_at instanceof Date
+      ? new Date(row.deleted_at.getTime() + RECOVERY_DAYS * 86_400_000).toISOString()
+      : null,
     published_at: isoOrNull(row.published_at),
     created_at: isoOrNull(row.created_at),
     updated_at: isoOrNull(row.updated_at),
@@ -765,7 +770,7 @@ wireRouter.get('/api/wire/og/:type/:key', async (c) => {
     } else {
       return c.json({ error: 'not found' }, 404);
     }
-    if (!row || row.status !== 'published' || row.taken_down_at) {
+    if (!row || row.status !== 'published' || row.taken_down_at || row.deleted_at) {
       return c.json({ error: 'not found' }, 404);
     }
     const mediaMap = await fetchMediaFor(pool, parentType, [row.id]);
@@ -822,6 +827,10 @@ const listArticlesHandler = async (c: any) => {
 
     const vals: unknown[] = [];
     const where: string[] = [];
+    // ?deleted=1 (with mine) lists the author's posts awaiting purge — the
+    // profile's Pending-deletion area. Everything else excludes them.
+    const wantDeleted = mine && url.searchParams.get('deleted') === '1';
+    where.push(wantDeleted ? 'a.deleted_at IS NOT NULL' : 'a.deleted_at IS NULL');
     if (mine && uid) {
       // Author's own posts — including pending/rejected/draft — but NOT content
       // a moderator removed or that was taken down (DMCA); that's retracted.
@@ -873,7 +882,7 @@ const listArticlesHandler = async (c: any) => {
     const r = await pool.query(
       `SELECT a.*,
               (SELECT COUNT(*)::int FROM articles k
-                WHERE k.parent_article_id = a.id AND k.status = 'published' AND k.taken_down_at IS NULL
+                WHERE k.parent_article_id = a.id AND k.status = 'published' AND k.taken_down_at IS NULL AND k.deleted_at IS NULL
               ) AS series_parts
          FROM articles a WHERE ${where.join(' AND ')} ORDER BY ${order} LIMIT $${vals.length - 1} OFFSET $${vals.length}`,
       vals,
@@ -911,7 +920,7 @@ const getArticleHandler = async (c: any) => {
     if (row.taken_down_at && !isAuthor && !isAdmin) {
       return c.json({ tombstone: { type: 'article', taken_down_at: isoOrNull(row.taken_down_at) } });
     }
-    if (row.status !== 'published' && !isAuthor && !isAdmin) {
+    if ((row.status !== 'published' || row.deleted_at) && !isAuthor && !isAdmin) {
       return c.json({ error: 'not found' }, 404);
     }
     const mediaMap = await fetchMediaFor(pool, 'article', [row.id]);
@@ -961,6 +970,7 @@ wireRouter.get('/api/wire/article-leads', requireRole(canFeedMedia), async (c) =
     const vals: unknown[] = [MAX_SERIES_PARTS, exclude, uid ?? ''];
     let where = `a.parent_article_id IS NULL
                  AND a.taken_down_at IS NULL
+                 AND a.deleted_at IS NULL
                  AND (a.status = 'published' OR (a.author_id = $3 AND a.status IN ('draft','pending')))
                  AND ($2::text IS NULL OR a.id <> $2)
                  AND (SELECT COUNT(*) FROM articles k WHERE k.parent_article_id = a.id) < $1`;
@@ -1190,27 +1200,33 @@ wireRouter.delete('/api/wire/articles/:id', async (c) => {
     const existing = await pool.query<{ author_id: string }>('SELECT author_id FROM articles WHERE id = $1', [id]);
     if (existing.rowCount === 0) return c.json({ error: 'not found' }, 404);
     if (existing.rows[0]!.author_id !== uid && !(await canManageUsers(uid))) return c.json({ error: 'forbidden' }, 403);
-    const imgIds = await imageIdsFor(pool, 'article', id);
-    const r2keys = await r2KeysFor(pool, 'article', id);
-    // Delete child media + parent atomically (see media delete for rationale).
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      await client.query('DELETE FROM wire_media WHERE parent_type=$1 AND parent_id=$2', ['article', id]);
-      await client.query('DELETE FROM articles WHERE id = $1', [id]);
-      await client.query('COMMIT');
-    } catch (err) {
-      await client.query('ROLLBACK').catch(() => {});
-      throw err;
-    } finally {
-      client.release();
-    }
-    for (const iid of imgIds) await deleteCfImage(iid);
-    for (const k of r2keys) await safeDeleteR2(pool, k);
-    return c.json({ success: true });
+    // Soft delete: hidden at once, PURGED (row + media) by wirePurge.ts
+    // after the recovery window. The author can recover it from their
+    // profile until then.
+    await pool.query('UPDATE articles SET deleted_at = now(), updated_at = now() WHERE id = $1 AND deleted_at IS NULL', [id]);
+    return c.json({ success: true, recovery_days: RECOVERY_DAYS });
   } catch (err) {
     log.error({ err, id }, 'wire: delete article failed');
     return c.json({ error: 'failed to delete article' }, 500);
+  }
+});
+
+// Undo a deletion while it's still inside the recovery window.
+wireRouter.post('/api/wire/articles/:id/recover', async (c) => {
+  const pool = await getPool();
+  if (!pool) return c.json(DB_UNAVAILABLE, 503);
+  const id = c.req.param('id');
+  const uid = currentUserId(c);
+  if (!uid) return c.json({ error: 'authentication required' }, 401);
+  try {
+    const existing = await pool.query<{ author_id: string }>('SELECT author_id FROM articles WHERE id = $1 AND deleted_at IS NOT NULL', [id]);
+    if (existing.rowCount === 0) return c.json({ error: 'not found' }, 404);
+    if (existing.rows[0]!.author_id !== uid && !(await canManageUsers(uid))) return c.json({ error: 'forbidden' }, 403);
+    await pool.query('UPDATE articles SET deleted_at = NULL, updated_at = now() WHERE id = $1', [id]);
+    return c.json({ success: true });
+  } catch (err) {
+    log.error({ err, id }, 'wire: recover article failed');
+    return c.json({ error: 'failed to recover article' }, 500);
   }
 });
 
@@ -1283,8 +1299,8 @@ wireRouter.get('/api/wire/pending', requireRole(canModerateWire), async (c) => {
   if (!pool) return c.json(DB_UNAVAILABLE, 503);
   try {
     const [a, f] = await Promise.all([
-      pool.query(`SELECT * FROM articles WHERE status='pending' ORDER BY created_at DESC LIMIT 100`),
-      pool.query(`SELECT * FROM fleet_vehicles WHERE status='pending' ORDER BY created_at DESC LIMIT 100`),
+      pool.query(`SELECT * FROM articles WHERE status='pending' AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 100`),
+      pool.query(`SELECT * FROM fleet_vehicles WHERE status='pending' AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 100`),
     ]);
     const aMedia = await fetchMediaFor(pool, 'article', a.rows.map((r) => r.id));
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

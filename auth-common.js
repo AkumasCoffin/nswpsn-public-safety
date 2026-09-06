@@ -324,6 +324,11 @@ function createProfileModal() {
       </div><!-- /profile-tab-main -->
 
       <div id="profile-tab-posts" style="display:none;">
+        <div id="profile-deleted-card" class="pf-card" style="display:none; border-color:rgba(239,68,68,0.4);">
+          <label class="pf-sect-hd" style="color:#fca5a5;">Pending deletion</label>
+          <div style="color:#64748b; font-size:0.72rem; margin:-0.3rem 0 0.6rem;">Deleted posts stay recoverable for 5 days, then they're gone for good.</div>
+          <div id="profile-deleted-list"></div>
+        </div>
         <div id="profile-drafts-card" class="pf-card" style="display:none; border-color:rgba(245,158,11,0.35);">
           <label class="pf-sect-hd" style="color:#fbbf24;">Drafts</label>
           <div id="profile-drafts-list"></div>
@@ -788,6 +793,29 @@ function _profilePostRow(i) {
   </a>`;
 }
 
+function _deletedPostRow(i) {
+  const daysLeft = i.delete_after
+    ? Math.max(0, Math.ceil((new Date(i.delete_after).getTime() - Date.now()) / 86_400_000))
+    : '?';
+  return `<div style="display:flex; gap:0.6rem; align-items:center; padding:0.45rem; border-radius:8px;">
+    <div style="min-width:0; flex:1;">
+      <div style="font-size:0.82rem; font-weight:600; color:#e2e8f0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escNotif(i.title || 'Untitled')}</div>
+      <div style="font-size:0.7rem; color:#64748b;">${i.kind === 'fleet' ? 'Fleet vehicle' : 'Article'} · deletes in ${daysLeft} day${daysLeft === 1 ? '' : 's'}</div>
+    </div>
+    <button type="button" data-recover="${escNotif(i.kind)}:${escNotif(i.id)}" style="padding:0.35rem 0.8rem; background:rgba(34,197,94,0.12); border:1px solid rgba(34,197,94,0.35); border-radius:7px; color:#86efac; font-size:0.75rem; font-weight:600; cursor:pointer; font-family:inherit; flex-shrink:0;"><i class="fas fa-rotate-left"></i> Recover</button>
+  </div>`;
+}
+
+async function recoverProfilePost(kind, id, session) {
+  const base = kind === 'fleet' ? 'fleet' : 'articles';
+  try {
+    const r = await fetch(`${API_BASE_URL}/api/wire/${base}/${encodeURIComponent(id)}/recover`, {
+      method: 'POST', headers: { Authorization: 'Bearer ' + session.access_token },
+    });
+    if (r.ok) loadProfilePosts(session);
+  } catch (e) { /* the row stays; they can retry */ }
+}
+
 function _fillProfileList(id, items, emptyText) {
   const el = document.getElementById(id);
   if (!el) return;
@@ -801,24 +829,38 @@ async function loadProfilePosts(session) {
   if (!tabBtn) return;
   const h = { Authorization: 'Bearer ' + session.access_token };
   const byDate = (a, b) => new Date(b.published_at || b.created_at || 0) - new Date(a.published_at || a.created_at || 0);
-  let articles = [], fleet = [];
+  let articles = [], fleet = [], delA = [], delF = [];
   try {
-    [articles, fleet] = await Promise.all([
+    [articles, fleet, delA, delF] = await Promise.all([
       fetch(`${API_BASE_URL}/api/wire/articles?mine=1`, { headers: h }).then((r) => r.json()).then((j) => j.articles || []).catch(() => []),
       fetch(`${API_BASE_URL}/api/wire/fleet?mine=1`, { headers: h }).then((r) => r.json()).then((j) => j.vehicles || []).catch(() => []),
+      fetch(`${API_BASE_URL}/api/wire/articles?mine=1&deleted=1`, { headers: h }).then((r) => r.json()).then((j) => j.articles || []).catch(() => []),
+      fetch(`${API_BASE_URL}/api/wire/fleet?mine=1&deleted=1`, { headers: h }).then((r) => r.json()).then((j) => j.vehicles || []).catch(() => []),
     ]);
-  } catch (e) { /* both stay empty */ }
+  } catch (e) { /* all stay empty */ }
   const drafts = articles.filter((a) => a.status === 'draft').sort(byDate);
   const published = articles.filter((a) => a.status !== 'draft').sort(byDate);
   fleet = fleet.sort(byDate);
+  const deleted = [...delA, ...delF].sort((a, b) => new Date(a.delete_after || 0) - new Date(b.delete_after || 0));
   // Contributors only — a reader with no posts gets no empty tab.
-  if (!articles.length && !fleet.length) { tabBtn.style.display = 'none'; return; }
+  if (!articles.length && !fleet.length && !deleted.length) { tabBtn.style.display = 'none'; return; }
   tabBtn.style.display = '';
   const draftsCard = document.getElementById('profile-drafts-card');
   if (draftsCard) draftsCard.style.display = drafts.length ? 'block' : 'none';
   _fillProfileList('profile-drafts-list', drafts, '');
   _fillProfileList('profile-articles-list', published, 'No articles yet.');
   _fillProfileList('profile-fleet-list', fleet, 'No fleet vehicles yet.');
+  const delCard = document.getElementById('profile-deleted-card');
+  if (delCard) delCard.style.display = deleted.length ? 'block' : 'none';
+  const delList = document.getElementById('profile-deleted-list');
+  if (delList) {
+    delList.innerHTML = deleted.map(_deletedPostRow).join('');
+    delList.querySelectorAll('[data-recover]').forEach((b) => b.addEventListener('click', () => {
+      const [kind, id] = b.dataset.recover.split(':');
+      b.disabled = true;
+      recoverProfilePost(kind, id, session);
+    }));
+  }
 }
 
 /** Your badges. Awarded by staff, or automatically for posting to The Wire

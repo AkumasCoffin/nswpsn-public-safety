@@ -27,6 +27,7 @@ import {
 } from '../services/auth/roles.js';
 import { wirePublic } from '../services/wireSettings.js';
 import { r2PublicUrl, deleteR2Object, viewerHash, normaliseLicense, licenseLabel } from '../services/wire.js';
+import { RECOVERY_DAYS } from '../services/wirePurge.js';
 
 export const fleetRouter = new Hono();
 
@@ -242,6 +243,10 @@ function shapeVehicle(row: any, includeKeys = false): Record<string, unknown> {
     views: Number(row.views) || 0,
     status: row.status,
     review_note: row.review_note ?? null,
+    deleted_at: isoOrNull(row.deleted_at),
+    delete_after: row.deleted_at instanceof Date
+      ? new Date(row.deleted_at.getTime() + RECOVERY_DAYS * 86_400_000).toISOString()
+      : null,
     author: { id: row.author_id, name: row.author_name },
     created_at: isoOrNull(row.created_at),
     updated_at: isoOrNull(row.updated_at),
@@ -285,6 +290,9 @@ fleetRouter.get('/api/wire/fleet', async (c) => {
 
     const vals: unknown[] = [];
     const where: string[] = [];
+    // ?deleted=1 (with mine) lists the author's vehicles awaiting purge.
+    const wantDeleted = mine && url.searchParams.get('deleted') === '1';
+    where.push(wantDeleted ? 'deleted_at IS NOT NULL' : 'deleted_at IS NULL');
     if (mine && uid) {
       vals.push(uid);
       where.push(`author_id = $${vals.length} AND status <> 'removed'`);
@@ -326,7 +334,7 @@ fleetRouter.get('/api/wire/fleet/:id', async (c) => {
     const uid = currentUserId(c);
     const isAuthor = !!(uid && row.author_id === uid);
     const isAdmin = !!(uid && (await canManageUsers(uid)));
-    if (row.status !== 'published' && !isAuthor && !isAdmin) {
+    if ((row.status !== 'published' || row.deleted_at) && !isAuthor && !isAdmin) {
       return c.json({ error: 'not found' }, 404);
     }
     return c.json({ vehicle: shapeVehicle(row, isAuthor || isAdmin) });
@@ -409,18 +417,39 @@ fleetRouter.delete('/api/wire/fleet/:id', async (c) => {
   try {
     const uid = currentUserId(c);
     if (!uid) return c.json({ error: 'unauthorized' }, 401);
-    const prev = await pool.query('SELECT author_id, image_key FROM fleet_vehicles WHERE id = $1', [id]);
+    const prev = await pool.query('SELECT author_id FROM fleet_vehicles WHERE id = $1', [id]);
     if (prev.rowCount === 0) return c.json({ error: 'not found' }, 404);
     if (prev.rows[0].author_id !== uid && !(await canManageUsers(uid))) {
       return c.json({ error: 'forbidden' }, 403);
     }
-    await pool.query('DELETE FROM fleet_vehicles WHERE id = $1', [id]);
-    const key = prev.rows[0].image_key as string | null;
-    if (key) deleteR2Object(key).catch(() => {});
-    return c.json({ success: true });
+    // Soft delete: hidden at once, purged (row + photo) by wirePurge.ts
+    // after the recovery window.
+    await pool.query('UPDATE fleet_vehicles SET deleted_at = now(), updated_at = now() WHERE id = $1 AND deleted_at IS NULL', [id]);
+    return c.json({ success: true, recovery_days: RECOVERY_DAYS });
   } catch (err) {
     log.error({ err, id }, 'fleet: delete failed');
     return c.json({ error: 'failed to delete vehicle' }, 500);
+  }
+});
+
+// Undo a deletion while it's still inside the recovery window.
+fleetRouter.post('/api/wire/fleet/:id/recover', async (c) => {
+  const pool = await getPool();
+  if (!pool) return c.json(DB_UNAVAILABLE, 503);
+  const id = c.req.param('id');
+  try {
+    const uid = currentUserId(c);
+    if (!uid) return c.json({ error: 'unauthorized' }, 401);
+    const prev = await pool.query('SELECT author_id FROM fleet_vehicles WHERE id = $1 AND deleted_at IS NOT NULL', [id]);
+    if (prev.rowCount === 0) return c.json({ error: 'not found' }, 404);
+    if (prev.rows[0].author_id !== uid && !(await canManageUsers(uid))) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    await pool.query('UPDATE fleet_vehicles SET deleted_at = NULL, updated_at = now() WHERE id = $1', [id]);
+    return c.json({ success: true });
+  } catch (err) {
+    log.error({ err, id }, 'fleet: recover failed');
+    return c.json({ error: 'failed to recover vehicle' }, 500);
   }
 });
 

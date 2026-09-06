@@ -209,14 +209,27 @@ describe('fleet edit/delete', () => {
     expect(deleteR2).toHaveBeenCalledWith('wire/old.webp'); // replaced photo cleaned up
   });
 
-  it('deletes the row and its R2 object for the author', async () => {
+  it('soft-deletes for the author (recoverable; the photo survives)', async () => {
     resultQueue = [
-      { rows: [{ author_id: 'user-1', image_key: 'wire/img1.webp' }], rowCount: 1 },
-      { rows: [], rowCount: 1 },
+      { rows: [{ author_id: 'user-1' }], rowCount: 1 },
+      { rows: [], rowCount: 1 }, // UPDATE deleted_at
     ];
     const res = await makeApp('user-1').request('/api/wire/fleet/v1', { method: 'DELETE' });
     expect(res.status).toBe(200);
-    expect(deleteR2).toHaveBeenCalledWith('wire/img1.webp');
+    expect((await res.json()).recovery_days).toBe(5);
+    const upd = calls.find((c) => c.sql.includes('SET deleted_at = now()'));
+    expect(upd).toBeTruthy(); // hidden, not dropped
+    expect(deleteR2).not.toHaveBeenCalled(); // the purge sweep owns cleanup
+  });
+
+  it('recover clears deleted_at for the author', async () => {
+    resultQueue = [
+      { rows: [{ author_id: 'user-1' }], rowCount: 1 },
+      { rows: [], rowCount: 1 },
+    ];
+    const res = await makeApp('user-1').request('/api/wire/fleet/v1/recover', { method: 'POST' });
+    expect(res.status).toBe(200);
+    expect(calls.some((c) => c.sql.includes('SET deleted_at = NULL'))).toBe(true);
   });
 });
 
