@@ -404,8 +404,7 @@
       <input type="text" id="fSearch" placeholder="Search The Wire…" autocomplete="off" style="min-width:200px">
       <input type="text" id="fUnit" placeholder="Filter by unit / callsign…" autocomplete="off">
       <select id="fAgency"><option value="">All agencies</option></select>
-      <input type="text" id="aLga" list="aLgaList" placeholder="All LGAs…" autocomplete="off">
-      <datalist id="aLgaList"></datalist>
+      <select id="aLga" style="display:none"><option value="">All LGAs</option></select>
       <button class="clear" id="fClear">Clear</button>
     </div>
 
@@ -418,8 +417,7 @@
     <div class="wire-filters" id="fleetFilters" style="display:none">
       <input type="text" id="flSearch" placeholder="Search call sign, station, rego…" autocomplete="off" style="min-width:200px">
       <select id="flAgency"><option value="">All agencies</option></select>
-      <input type="text" id="flLga" list="flLgaList" placeholder="All LGAs…" autocomplete="off">
-      <datalist id="flLgaList"></datalist>
+      <select id="flLga" style="display:none"><option value="">All LGAs</option></select>
       <button class="clear" id="flClear">Clear</button>
     </div>
 
@@ -1442,7 +1440,6 @@
       // suggestions for whichever LGA box the mode shows — the same
       // State -> LGA hierarchy the composers store.
       const lgaBox = () => $(fleetMode ? '#flLga' : '#aLga');
-      const lgaListEl = () => $(fleetMode ? '#flLgaList' : '#aLgaList');
       const fillAg = () => {
         if (!fleetMode || !window.FleetVocab) return;
         const lists = feedState ? [FleetVocab.departments[feedState] || []] : Object.values(FleetVocab.departments);
@@ -1452,18 +1449,29 @@
           names.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
         if (names.includes(keep)) $('#flAgency').value = keep;
       };
+      // The LGA dropdown only exists WITHIN a state: hidden on All states,
+      // and filled with the selected state's ABS council names otherwise.
       const fillLga = async () => {
-        const list = lgaListEl();
-        if (!feedState) { list.innerHTML = ''; return; }
-        if (_flLgaCache[feedState]) { list.innerHTML = _flLgaCache[feedState]; return; }
-        try {
-          const r = await fetch(`${API_BASE}/api/boundaries/lga-names?state=${feedState}`, { headers: await userHeaders() });
-          if (!r.ok) return;
-          const opts = ((await r.json()).names || []).map((n) => `<option value="${esc(n)}">`).join('');
-          _flLgaCache[feedState] = opts;
-          list.innerHTML = opts;
-        } catch (e) { /* suggestions optional */ }
+        const box = lgaBox();
+        if (!feedState) {
+          box.style.display = 'none';
+          box.innerHTML = '<option value="">All LGAs</option>';
+          return;
+        }
+        box.style.display = '';
+        let opts = _flLgaCache[feedState];
+        if (!opts) {
+          try {
+            const r = await fetch(`${API_BASE}/api/boundaries/lga-names?state=${feedState}`, { headers: await userHeaders() });
+            if (r.ok) {
+              opts = ((await r.json()).names || []).map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+              _flLgaCache[feedState] = opts;
+            }
+          } catch (e) { /* the dropdown just stays state-less */ }
+        }
+        box.innerHTML = '<option value="">All LGAs</option>' + (opts || '');
       };
+      syncLgaFilter = fillLga;
       fillAg();
       $('#fleetStateTabs').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
         feedState = b.dataset.fs;
@@ -1473,7 +1481,7 @@
       }));
       if (fleetMode) {
         ['flSearch', 'flAgency', 'flLga'].forEach((id) => {
-          const el = $('#' + id); const ev = id === 'flAgency' ? 'change' : 'input';
+          const el = $('#' + id); const ev = id === 'flSearch' ? 'input' : 'change';
           let t; el.addEventListener(ev, () => { clearTimeout(t); t = setTimeout(loadFeed, ev === 'input' ? 300 : 0); });
         });
         $('#flClear').addEventListener('click', () => {
@@ -1485,13 +1493,14 @@
       }
     }
     ['fSearch', 'fUnit', 'fAgency', 'aLga'].forEach((id) => {
-      const el = $('#' + id); const ev = id === 'fAgency' ? 'change' : 'input';
+      const el = $('#' + id); const ev = (id === 'fSearch' || id === 'fUnit') ? 'input' : 'change';
       let t; el.addEventListener(ev, () => { clearTimeout(t); t = setTimeout(loadFeed, ev === 'input' ? 300 : 0); });
     });
     $('#fClear').addEventListener('click', () => {
       $('#fSearch').value = ''; $('#fUnit').value = ''; $('#fAgency').value = ''; $('#aLga').value = '';
       feedState = '';
       $('#fleetStateTabs').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x.dataset.fs === ''));
+      syncLgaFilter();
       loadFeed();
     });
 
@@ -1513,6 +1522,7 @@
     let WIRE_IS_PUBLIC = null;   // null = unknown
     let feedState = '';          // selected state tab ('' = all); shared by both feeds
     const _flLgaCache = {};
+    let syncLgaFilter = () => {};  // bound in applySection (needs its closures)
     async function loadWireSettings() {
       try {
         const r = await fetch(`${API_BASE}/api/wire/settings`, { headers: await userHeaders() });
