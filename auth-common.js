@@ -259,12 +259,18 @@ function createProfileModal() {
       </div>
 
       <div style="margin-bottom:1.2rem;">
-        <label style="display:block; color:#cbd5e1; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem; font-weight:600;">Username</label>
+        <label style="display:block; color:#cbd5e1; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem; font-weight:600;">Display name</label>
         <div style="display:flex; gap:0.5rem;">
-          <input type="text" id="profile-username" maxlength="32" style="flex:1; padding:0.65rem 0.75rem; background:rgba(2,6,23,0.5); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#fff; font-size:0.9rem; box-sizing:border-box; font-family:inherit;" placeholder="Pick a username">
+          <input type="text" id="profile-username" maxlength="40" style="flex:1; padding:0.65rem 0.75rem; background:rgba(2,6,23,0.5); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#fff; font-size:0.9rem; box-sizing:border-box; font-family:inherit;" placeholder="Your public name — spaces and caps welcome">
           <button onclick="saveProfile()" id="profile-save-btn" style="padding:0.65rem 1rem; background:#f97316; border:none; border-radius:8px; color:#fff; font-weight:700; cursor:pointer; font-size:0.85rem; font-family:inherit;">Save</button>
         </div>
         <div style="color:#64748b; font-size:0.75rem; margin-top:0.35rem;">How you'll appear around the site.</div>
+      </div>
+
+      <div style="margin-bottom:1.2rem;">
+        <label style="display:block; color:#cbd5e1; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem; font-weight:600;">Username</label>
+        <input type="text" id="profile-handle" maxlength="32" autocomplete="username" style="width:100%; padding:0.65rem 0.75rem; background:rgba(2,6,23,0.5); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#fff; font-size:0.9rem; box-sizing:border-box; font-family:inherit;" placeholder="account-handle">
+        <div style="color:#64748b; font-size:0.75rem; margin-top:0.35rem;">Your account handle — for your login identity only, never shown publicly. Letters, numbers, dots, dashes and underscores.</div>
       </div>
 
       <div style="margin-bottom:1.2rem;">
@@ -905,6 +911,8 @@ async function openProfileModal() {
   const identities = user.identities || [];
 
   document.getElementById('profile-username').value = meta.display_name || '';
+  const handleEl = document.getElementById('profile-handle');
+  if (handleEl) handleEl.value = meta.username || '';
   document.getElementById('profile-email-value').textContent = user.email || 'No email on account';
 
   const discordIdentity = identities.find((i) => i.provider === 'discord');
@@ -998,10 +1006,20 @@ async function saveProfile() {
   const input = document.getElementById('profile-username');
   const btn = document.getElementById('profile-save-btn');
   const msg = document.getElementById('profile-message');
-  const username = (input.value || '').trim();
+  // Display name: free text — spaces and capitals welcome (runs of
+  // whitespace collapsed).
+  const username = (input.value || '').trim().replace(/\s+/g, ' ');
   if (username.length > 0 && username.length < 2) {
     msg.style.color = '#ef4444';
-    msg.textContent = 'Username must be at least 2 characters.';
+    msg.textContent = 'Display name must be at least 2 characters.';
+    return;
+  }
+  // Username: the account handle. Login stays email/Discord — this is just
+  // the account's identity string, so it keeps a strict charset.
+  const handle = (document.getElementById('profile-handle')?.value || '').trim();
+  if (handle && !/^[A-Za-z0-9._-]{3,32}$/.test(handle)) {
+    msg.style.color = '#ef4444';
+    msg.textContent = 'Usernames are 3–32 characters: letters, numbers, dots, dashes, underscores — no spaces.';
     return;
   }
   btn.disabled = true;
@@ -1012,6 +1030,7 @@ async function saveProfile() {
     // 1) Supabase metadata: display name, and mirror the custom avatar so the
     //    sidebar/avatars can use it without a backend round-trip.
     const metaData = { display_name: username || null };
+    if (handle) metaData.username = handle;
     if (_pendingAvatarUrl) metaData.custom_avatar_url = _pendingAvatarUrl;
     const { error } = await sb.auth.updateUser({ data: metaData });
     if (error) throw new Error(error.message);
@@ -1075,13 +1094,13 @@ function maybeAskUsername(session) {
     overlay.style.cssText = 'position:fixed; inset:0; background:rgba(2,6,23,0.7); z-index:10005; display:flex; align-items:center; justify-content:center; backdrop-filter:blur(2px);';
     overlay.innerHTML = `
       <div style="background:#1e293b; border:1px solid rgba(148,163,184,0.25); border-radius:12px; padding:1.6rem; max-width:360px; width:90%; box-shadow:0 25px 50px -12px rgba(0,0,0,0.7);">
-        <div style="font-size:1.1rem; font-weight:700; color:#fff; margin-bottom:0.4rem;"><i class="fas fa-user" style="color:#f97316; margin-right:0.4rem;"></i>Choose a username</div>
-        <p style="color:#94a3b8; font-size:0.85rem; margin:0 0 1rem;">Your account doesn't have a username yet — pick how you'll appear around the site.</p>
-        <input type="text" id="username-prompt-input" maxlength="32" placeholder="Username" style="width:100%; padding:0.7rem 0.75rem; background:rgba(2,6,23,0.5); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#fff; font-size:0.95rem; box-sizing:border-box; font-family:inherit;">
+        <div style="font-size:1.1rem; font-weight:700; color:#fff; margin-bottom:0.4rem;"><i class="fas fa-user" style="color:#f97316; margin-right:0.4rem;"></i>Choose a display name</div>
+        <p style="color:#94a3b8; font-size:0.85rem; margin:0 0 1rem;">Your account doesn't have a display name yet — pick how you'll appear around the site. Spaces and capitals are fine.</p>
+        <input type="text" id="username-prompt-input" maxlength="40" placeholder="Display name" style="width:100%; padding:0.7rem 0.75rem; background:rgba(2,6,23,0.5); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#fff; font-size:0.95rem; box-sizing:border-box; font-family:inherit;">
         <div id="username-prompt-msg" style="color:#ef4444; font-size:0.8rem; min-height:1.1em; margin-top:0.45rem;"></div>
         <div style="display:flex; gap:0.5rem; margin-top:0.7rem;">
           <button id="username-prompt-later" style="flex:1; padding:0.6rem; background:rgba(148,163,184,0.1); border:1px solid rgba(148,163,184,0.2); border-radius:8px; color:#94a3b8; font-size:0.85rem; cursor:pointer; font-family:inherit;">Later</button>
-          <button id="username-prompt-save" style="flex:2; padding:0.6rem; background:#f97316; border:none; border-radius:8px; color:#fff; font-weight:700; font-size:0.85rem; cursor:pointer; font-family:inherit;">Save username</button>
+          <button id="username-prompt-save" style="flex:2; padding:0.6rem; background:#f97316; border:none; border-radius:8px; color:#fff; font-weight:700; font-size:0.85rem; cursor:pointer; font-family:inherit;">Save display name</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
@@ -1095,9 +1114,9 @@ function maybeAskUsername(session) {
     };
     const save = async () => {
       const msg = overlay.querySelector('#username-prompt-msg');
-      const username = input.value.trim();
+      const username = input.value.trim().replace(/\s+/g, ' ');
       if (username.length < 2) {
-        msg.textContent = 'Username must be at least 2 characters.';
+        msg.textContent = 'Display name must be at least 2 characters.';
         return;
       }
       const btn = overlay.querySelector('#username-prompt-save');
@@ -1106,7 +1125,7 @@ function maybeAskUsername(session) {
       const { error } = await sb.auth.updateUser({ data: { display_name: username } });
       if (error) {
         btn.disabled = false;
-        btn.textContent = 'Save username';
+        btn.textContent = 'Save display name';
         msg.textContent = error.message;
         return;
       }
