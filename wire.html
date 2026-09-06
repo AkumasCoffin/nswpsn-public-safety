@@ -408,10 +408,17 @@
       <button class="clear" id="fClear">Clear</button>
     </div>
 
+    <!-- Fleet: a tab per state, then agency (fleet-vocab taxonomy) and
+         LGA — the same State -> LGA hierarchy posting uses. -->
+    <div class="wire-tabs2" id="fleetStateTabs" style="display:none" role="tablist">
+      <button data-fs="" class="on">All states</button>
+      <button data-fs="NSW">NSW</button><button data-fs="VIC">VIC</button><button data-fs="QLD">QLD</button><button data-fs="WA">WA</button><button data-fs="SA">SA</button><button data-fs="TAS">TAS</button><button data-fs="ACT">ACT</button><button data-fs="NT">NT</button>
+    </div>
     <div class="wire-filters" id="fleetFilters" style="display:none">
       <input type="text" id="flSearch" placeholder="Search call sign, station, rego…" autocomplete="off" style="min-width:200px">
-      <select id="flState"><option value="">All states</option><option>NSW</option><option>VIC</option><option>QLD</option><option>WA</option><option>SA</option><option>TAS</option><option>ACT</option><option>NT</option></select>
       <select id="flAgency"><option value="">All agencies</option></select>
+      <input type="text" id="flLga" list="flLgaList" placeholder="All LGAs…" autocomplete="off">
+      <datalist id="flLgaList"></datalist>
       <button class="clear" id="flClear">Clear</button>
     </div>
 
@@ -700,8 +707,9 @@
       const params = new URLSearchParams();
       if (fleetMode) {
         const search = $('#flSearch').value.trim(); if (search) params.set('q', search);
-        const st = $('#flState').value; if (st) params.set('state', st);
+        if (fleetState) params.set('state', fleetState);
         const ag = $('#flAgency').value; if (ag) params.set('agency', ag);
+        const lg = $('#flLga').value.trim(); if (lg) params.set('lga', lg);
       } else {
         const search = $('#fSearch').value.trim(); if (search) params.set('q', search);
         const unit = $('#fUnit').value.trim(); if (unit) params.set('unit', unit);
@@ -794,10 +802,11 @@
     // Show/hide the feed's filter chrome. Hidden while a post detail is open so
     // the search/agency/LGA bar (or the fleet bar) doesn't sit above a post.
     function feedChrome(show) {
-      if (!show) { $('#filters').style.display = 'none'; $('#fleetFilters').style.display = 'none'; $('#mineFilters').style.display = 'none'; return; }
-      if (mineMode) { $('#filters').style.display = 'none'; $('#fleetFilters').style.display = 'none'; }
-      else if (fleetMode) { $('#fleetFilters').style.display = ''; $('#filters').style.display = 'none'; }
-      else { $('#filters').style.display = ''; $('#fleetFilters').style.display = 'none'; }
+      const set = (id, on) => { $(id).style.display = on ? '' : 'none'; };
+      if (!show) { set('#filters', false); set('#fleetFilters', false); set('#fleetStateTabs', false); $('#mineFilters').style.display = 'none'; return; }
+      set('#filters', show && !mineMode && !fleetMode);
+      set('#fleetFilters', show && fleetMode && !mineMode);
+      set('#fleetStateTabs', show && fleetMode && !mineMode);
       $('#mineFilters').style.display = 'none';
     }
 
@@ -1438,21 +1447,46 @@
           ? 'The fleet — emergency-service vehicles documented by contributors.'
           : 'Independent photos, video & reporting from contributors on the ground.');
       if (fleetMode && window.FleetVocab) {
-        // State narrows the agency filter to that state's departments.
+        // The selected state tab narrows the agency dropdown to that state's
+        // departments and swaps the LGA suggestions — the same State -> LGA
+        // hierarchy the composer uses.
         const fillAg = () => {
-          const st = $('#flState').value;
-          const lists = st ? [FleetVocab.departments[st] || []] : Object.values(FleetVocab.departments);
+          const lists = fleetState ? [FleetVocab.departments[fleetState] || []] : Object.values(FleetVocab.departments);
           const names = [...new Set(lists.flat().map((d) => d.name))];
+          const keep = $('#flAgency').value;
           $('#flAgency').innerHTML = '<option value="">All agencies</option>' +
             names.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+          if (names.includes(keep)) $('#flAgency').value = keep;
+        };
+        const fillLga = async () => {
+          const list = $('#flLgaList');
+          if (!fleetState) { list.innerHTML = ''; return; }
+          if (_flLgaCache[fleetState]) { list.innerHTML = _flLgaCache[fleetState]; return; }
+          try {
+            const r = await fetch(`${API_BASE}/api/boundaries/lga-names?state=${fleetState}`, { headers: await userHeaders() });
+            if (!r.ok) return;
+            const opts = ((await r.json()).names || []).map((n) => `<option value="${esc(n)}">`).join('');
+            _flLgaCache[fleetState] = opts;
+            list.innerHTML = opts;
+          } catch (e) { /* suggestions optional */ }
         };
         fillAg();
-        $('#flState').addEventListener('change', fillAg);
-        ['flSearch', 'flState', 'flAgency'].forEach((id) => {
-          const el = $('#' + id); const ev = id === 'flSearch' ? 'input' : 'change';
+        $('#fleetStateTabs').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
+          fleetState = b.dataset.fs;
+          $('#fleetStateTabs').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+          $('#flLga').value = '';
+          fillAg(); fillLga(); loadFeed();
+        }));
+        ['flSearch', 'flAgency', 'flLga'].forEach((id) => {
+          const el = $('#' + id); const ev = id === 'flAgency' ? 'change' : 'input';
           let t; el.addEventListener(ev, () => { clearTimeout(t); t = setTimeout(loadFeed, ev === 'input' ? 300 : 0); });
         });
-        $('#flClear').addEventListener('click', () => { $('#flSearch').value = ''; $('#flState').value = ''; $('#flAgency').value = ''; fillAg(); loadFeed(); });
+        $('#flClear').addEventListener('click', () => {
+          $('#flSearch').value = ''; $('#flAgency').value = ''; $('#flLga').value = '';
+          fleetState = '';
+          $('#fleetStateTabs').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x.dataset.fs === ''));
+          fillAg(); fillLga(); loadFeed();
+        });
       }
     }
     ['fSearch', 'fUnit', 'fAgency', 'fRegion'].forEach((id) => {
@@ -1477,6 +1511,8 @@
     // else finds out by asking the feed, which the server gates with the same
     // wireReadable() check. A 404 there means "not for you yet".
     let WIRE_IS_PUBLIC = null;   // null = unknown
+    let fleetState = '';         // selected fleet state tab ('' = all)
+    const _flLgaCache = {};
     async function loadWireSettings() {
       try {
         const r = await fetch(`${API_BASE}/api/wire/settings`, { headers: await userHeaders() });
@@ -1537,7 +1573,7 @@
     // ---- init ----
     function showComingSoon() {
       $('#comingSoon').style.display = 'block';
-      ['.wire-head', '.wire-filters', '#feedView', '#detail'].forEach((s) => { const el = document.querySelector(s); if (el) el.style.display = 'none'; });
+      ['.wire-head', '.wire-filters', '#fleetFilters', '#fleetStateTabs', '#feedView', '#detail'].forEach((s) => { document.querySelectorAll(s).forEach((el) => { el.style.display = 'none'; }); });
     }
 
     (async function init() {
@@ -1553,8 +1589,9 @@
       const privileged = ME.isOwner || ME.canFeed || ME.canModerate;
       if (!privileged && !(await feedVisibleToMe())) { showComingSoon(); return; }
       renderWirePromo();
-      // My posts = combined media + articles with an All/Media/Articles filter;
-      // the public agency/region filters don't apply there.
+      // Show the right filter chrome for the mode from the first paint --
+      // the static markup only knows the article bar.
+      feedChrome(true);
       if (mineMode) { $('#mineFilters').style.display = 'inline-flex'; $('#filters').style.display = 'none'; }
       const p = new URLSearchParams(location.search);
       const post = p.get('post'), article = p.get('article'), vehicle = p.get('vehicle');
