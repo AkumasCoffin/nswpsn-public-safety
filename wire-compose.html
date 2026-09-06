@@ -356,10 +356,12 @@
       <label style="display:flex;gap:0.6rem;align-items:flex-start;font-size:0.85rem;color:var(--text-muted);background:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:9px;padding:0.75rem 0.9rem;margin-bottom:0.9rem;cursor:pointer">
         <input type="checkbox" id="watermarkToggle" style="width:auto;margin-top:0.15rem;accent-color:var(--accent)">
         <span>
-          Watermark my media with my username
+          Watermark my media
           <span class="hint" style="display:block;margin-top:0.2rem">
-            Burned into the file itself, so it survives download. Photos are marked as
-            they upload; videos are marked while they're processed, a moment after you publish.
+            Burned into the file itself, so it survives download. Uses the watermark
+            image from your profile if you've uploaded one, otherwise your username.
+            Photos are marked as they upload; videos are marked (username only) while
+            they're processed, a moment after you publish.
           </span>
         </span>
       </label>
@@ -604,7 +606,28 @@
      * photo and a DSLR frame. Because it's painted onto the canvas the export
      * is a genuine watermark — it survives download, unlike a CSS overlay.
      */
+    // The contributor's custom watermark (transparent PNG from their
+    // profile). Fetched through the API so the canvas stays untainted;
+    // absent -> the username text is burned instead.
+    let _wmBitmap = null;
+    async function loadMyWatermark() {
+      try {
+        const r = await fetch(`${API_BASE}/api/profiles/watermark`, { headers: await userHeaders() });
+        if (r.ok) _wmBitmap = await createImageBitmap(await r.blob());
+      } catch (e) { /* username fallback */ }
+    }
+
     function drawWatermark(ctx, w, h, text) {
+      if (_wmBitmap) {
+        const targetW = Math.max(64, Math.round(w * 0.28));
+        const targetH = Math.round(targetW * (_wmBitmap.height / _wmBitmap.width));
+        const pad = Math.round(Math.min(w, h) * 0.025);
+        ctx.save();
+        ctx.globalAlpha = 0.95;
+        ctx.drawImage(_wmBitmap, w - targetW - pad, h - targetH - pad, targetW, targetH);
+        ctx.restore();
+        return;
+      }
       if (!text) return;
       const pad = Math.max(8, Math.round(Math.min(w, h) * 0.025));
       const size = Math.max(12, Math.round(Math.min(w, h) * 0.032));
@@ -1252,6 +1275,7 @@
     (async function init() {
       await loadKey();
       if (!(await checkAccess())) return;
+      loadMyWatermark();
       $('#form').style.display = 'block';
       applyType();
       initMap();

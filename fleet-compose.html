@@ -253,10 +253,11 @@
       <label style="display:flex;gap:0.6rem;align-items:flex-start;font-size:0.85rem;color:var(--text-muted);background:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:9px;padding:0.75rem 0.9rem;margin-bottom:0.9rem;cursor:pointer">
         <input type="checkbox" id="watermarkToggle" style="width:auto;margin-top:0.15rem;accent-color:var(--accent)">
         <span>
-          Watermark my photo with my username
+          Watermark my photo
           <span class="hint" style="display:block;margin-top:0.2rem">
-            Burned into the file itself, so it survives download. The photo is
-            marked as it uploads — set this before choosing the image.
+            Burned into the file itself, so it survives download. Uses the watermark
+            image from your profile if you've uploaded one, otherwise your username.
+            The photo is marked as it uploads — set this before choosing the image.
           </span>
         </span>
       </label>
@@ -358,9 +359,30 @@
     // Canvas re-encode: downscale + WebP (JPEG fallback). The canvas export
     // carries pixels only, so EXIF/GPS/device metadata never leaves the
     // browser. Returns null on failure; the caller must then refuse.
-    /** Contributor-name watermark, drawn onto the canvas so it survives
-     *  download (same rendering as wire-compose). */
+    // The contributor's custom watermark (transparent PNG from their
+    // profile). Fetched through the API so the canvas stays untainted;
+    // absent -> the username text is burned instead.
+    let _wmBitmap = null;
+    async function loadMyWatermark() {
+      try {
+        const r = await fetch(`${API_BASE}/api/profiles/watermark`, { headers: await userHeaders() });
+        if (r.ok) _wmBitmap = await createImageBitmap(await r.blob());
+      } catch (e) { /* username fallback */ }
+    }
+
+    /** Watermark, drawn onto the canvas so it survives download: the
+     *  profile's PNG when uploaded, the username text otherwise. */
     function drawWatermark(ctx, w, h, text) {
+      if (_wmBitmap) {
+        const targetW = Math.max(64, Math.round(w * 0.28));
+        const targetH = Math.round(targetW * (_wmBitmap.height / _wmBitmap.width));
+        const pad = Math.round(Math.min(w, h) * 0.025);
+        ctx.save();
+        ctx.globalAlpha = 0.95;
+        ctx.drawImage(_wmBitmap, w - targetW - pad, h - targetH - pad, targetW, targetH);
+        ctx.restore();
+        return;
+      }
       if (!text) return;
       const pad = Math.max(8, Math.round(Math.min(w, h) * 0.025));
       const size = Math.max(12, Math.round(Math.min(w, h) * 0.032));
@@ -648,6 +670,7 @@
     (async function init() {
       await loadKey();
       if (!(await checkAccess())) return;
+      loadMyWatermark();
       $('#form').style.display = 'block';
       // Same approval label logic as wire-compose (readable by contributors).
       try {

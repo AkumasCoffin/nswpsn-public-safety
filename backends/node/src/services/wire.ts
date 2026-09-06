@@ -209,13 +209,13 @@ async function r2Client() {
  * before upload, which also strips EXIF/GPS. Returns null when R2 isn't
  * configured or signing fails.
  */
-export async function createImageUploadUrl(prefix = 'wire/img'): Promise<{ uploadURL: string; key: string; publicUrl: string } | null> {
+export async function createImageUploadUrl(prefix = 'wire/img', ext = 'webp'): Promise<{ uploadURL: string; key: string; publicUrl: string } | null> {
   if (!r2Configured()) return null;
   try {
     const { PutObjectCommand } = await import('@aws-sdk/client-s3');
     const { getSignedUrl } = await import('@aws-sdk/s3-request-presigner');
     const s3 = await r2Client();
-    const key = `${prefix.replace(/\/+$/, '')}/${randomUUID()}.webp`;
+    const key = `${prefix.replace(/\/+$/, '')}/${randomUUID()}.${ext}`;
     const uploadURL = await getSignedUrl(s3, new PutObjectCommand({ Bucket: config.R2_BUCKET as string, Key: key }), { expiresIn: 600 });
     return { uploadURL, key, publicUrl: r2PublicUrl(key) };
   } catch (err) {
@@ -247,6 +247,29 @@ export async function createVideoUploadUrl(contentLength?: number): Promise<{ up
     return { uploadURL, key, publicUrl: r2PublicUrl(key) };
   } catch (err) {
     log.warn({ err }, 'wire: R2 presign failed');
+    return null;
+  }
+}
+
+/**
+ * Read a SMALL R2 object fully into memory (watermark PNGs). Capped so a
+ * mis-uploaded huge file can't balloon the API's RSS -- anything over the
+ * cap answers null and the caller 404s.
+ */
+export async function readR2ObjectBytes(key: string, maxBytes = 2_000_000): Promise<Buffer | null> {
+  if (!key || !r2Configured()) return null;
+  try {
+    const { GetObjectCommand } = await import('@aws-sdk/client-s3');
+    const s3 = await r2Client();
+    const res = await s3.send(new GetObjectCommand({ Bucket: config.R2_BUCKET as string, Key: key }));
+    if (res.ContentLength && res.ContentLength > maxBytes) return null;
+    const body = res.Body as { transformToByteArray?: () => Promise<Uint8Array> } | undefined;
+    if (!body?.transformToByteArray) return null;
+    const bytes = await body.transformToByteArray();
+    if (bytes.byteLength > maxBytes) return null;
+    return Buffer.from(bytes);
+  } catch (err) {
+    log.warn({ err, key }, 'wire: R2 object read failed');
     return null;
   }
 }

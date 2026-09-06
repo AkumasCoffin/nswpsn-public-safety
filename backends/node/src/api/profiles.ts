@@ -13,7 +13,7 @@ import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { requireSupabaseJwt } from '../services/auth/supabaseJwt.js';
 import { invalidateUserRolesCache } from '../services/auth/roles.js';
-import { avatarUrl, createImageUploadUrl, r2Configured } from '../services/wire.js';
+import { avatarUrl, createImageUploadUrl, r2Configured, readR2ObjectBytes, deleteR2Object } from '../services/wire.js';
 import { tagsFor } from '../services/userTags.js';
 
 export const profilesRouter = new Hono();
@@ -202,4 +202,65 @@ profilesRouter.post('/api/profiles/avatar-url', requireSupabaseJwt, async (c) =>
   const up = await createImageUploadUrl('wire/avatars');
   if (!up) return c.json({ error: 'could not create upload url' }, 503);
   return c.json({ uploadURL: up.uploadURL, key: up.key, publicUrl: up.publicUrl });
+});
+
+// ---- custom media watermark (transparent PNG, stamped onto photos) ---------
+
+profilesRouter.post('/api/profiles/watermark-url', requireSupabaseJwt, async (c) => {
+  if (!r2Configured()) return c.json({ error: 'watermark uploads not configured' }, 503);
+  const up = await createImageUploadUrl('wire/watermarks', 'png');
+  if (!up) return c.json({ error: 'could not create upload url' }, 503);
+  return c.json({ uploadURL: up.uploadURL, key: up.key });
+});
+
+/** Set (or clear, with key:null) the caller's watermark. The old object is
+ *  deleted so replaced watermarks don't accrue in R2. */
+profilesRouter.put('/api/profiles/watermark', requireSupabaseJwt, async (c) => {
+  const pool = await getPool();
+  if (!pool) return c.json(DB_UNAVAILABLE, 503);
+  const uid = c.get('userId') as string;
+  try {
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    let key = typeof body['key'] === 'string' ? body['key'].slice(0, 300) : null;
+    // Only keys we minted -- never an arbitrary object path.
+    if (key && !key.startsWith('wire/watermarks/')) key = null;
+    const prev = await pool.query<{ watermark_key: string | null }>(
+      'SELECT watermark_key FROM user_profiles WHERE user_id = $1', [uid]);
+    await pool.query(
+      `INSERT INTO user_profiles (user_id, watermark_key, updated_at)
+       VALUES ($1, $2, now())
+       ON CONFLICT (user_id) DO UPDATE SET watermark_key = $2, updated_at = now()`,
+      [uid, key],
+    );
+    const old = prev.rows[0]?.watermark_key ?? null;
+    if (old && old !== key) deleteR2Object(old).catch(() => {});
+    return c.json({ success: true, has_watermark: !!key });
+  } catch (err) {
+    log.error({ err, uid }, 'profiles: watermark save failed');
+    return c.json({ error: 'failed to save watermark' }, 500);
+  }
+});
+
+/** The caller's OWN watermark bytes. Served through the API (not the R2
+ *  public host) so the compose pages can draw it onto a canvas without
+ *  cross-origin taint. 404 when none is set. */
+profilesRouter.get('/api/profiles/watermark', requireSupabaseJwt, async (c) => {
+  const pool = await getPool();
+  if (!pool) return c.json(DB_UNAVAILABLE, 503);
+  const uid = c.get('userId') as string;
+  try {
+    const r = await pool.query<{ watermark_key: string | null }>(
+      'SELECT watermark_key FROM user_profiles WHERE user_id = $1', [uid]);
+    const key = r.rows[0]?.watermark_key ?? null;
+    if (!key) return c.json({ error: 'no watermark' }, 404);
+    const bytes = await readR2ObjectBytes(key);
+    if (!bytes) return c.json({ error: 'no watermark' }, 404);
+    return c.body(new Uint8Array(bytes), 200, {
+      'Content-Type': 'image/png',
+      'Cache-Control': 'private, max-age=60',
+    });
+  } catch (err) {
+    log.error({ err, uid }, 'profiles: watermark read failed');
+    return c.json({ error: 'failed to read watermark' }, 500);
+  }
 });

@@ -231,6 +231,18 @@ function createProfileModal() {
         <div id="profile-tags" style="display:none; flex-wrap:wrap; justify-content:center; gap:0.35rem; margin-top:0.7rem;"></div>
       </div>
 
+      <div id="profile-wm-section" style="display:none; margin-bottom:1.3rem;">
+        <label style="display:block; color:#cbd5e1; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem; font-weight:600;">Media watermark</label>
+        <canvas id="profile-wm-preview" width="640" height="480" style="width:100%; border-radius:10px; border:1px solid rgba(148,163,184,0.25); background:#0b1220; display:block;"></canvas>
+        <div style="display:flex; gap:0.5rem; margin-top:0.55rem; align-items:center; flex-wrap:wrap;">
+          <button type="button" onclick="pickProfileWatermark()" style="padding:0.45rem 0.9rem; background:rgba(148,163,184,0.12); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#e2e8f0; font-size:0.8rem; cursor:pointer; font-family:inherit;"><i class="fas fa-stamp"></i> Upload watermark (PNG)</button>
+          <button type="button" id="profile-wm-remove" onclick="removeProfileWatermark()" style="display:none; padding:0.45rem 0.9rem; background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.3); border-radius:8px; color:#fca5a5; font-size:0.8rem; cursor:pointer; font-family:inherit;"><i class="fas fa-trash"></i> Remove</button>
+          <span id="profile-wm-msg" style="color:#64748b; font-size:0.72rem;"></span>
+        </div>
+        <input type="file" id="profile-wm-input" accept="image/png" style="display:none">
+        <div style="color:#64748b; font-size:0.72rem; margin-top:0.4rem;">A transparent PNG, stamped onto the bottom-right of your Wire &amp; Fleet photos when the watermark toggle is on. Without one, your username is used.</div>
+      </div>
+
       <div style="margin-bottom:1.2rem;">
         <label style="display:block; color:#cbd5e1; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem; font-weight:600;">Username</label>
         <div style="display:flex; gap:0.5rem;">
@@ -475,6 +487,114 @@ function updateBioCount() {
   if (el && out) out.textContent = `${el.value.length}/500`;
 }
 
+// ---- custom media watermark (profile) --------------------------------------
+// The preview draws the uploaded PNG bottom-right over an example photo so
+// the contributor sees exactly how their photos will carry it.
+let _wmPreviewBitmap = null; // the user's watermark, as an ImageBitmap
+const _WM_PREVIEW_BG = 'assets/watermark-preview.webp';
+
+function pickProfileWatermark() { document.getElementById('profile-wm-input')?.click(); }
+
+function _wmMsg(text, err) {
+  const el = document.getElementById('profile-wm-msg');
+  if (el) { el.textContent = text || ''; el.style.color = err ? '#fca5a5' : '#64748b'; }
+}
+
+async function drawWatermarkPreview() {
+  const canvas = document.getElementById('profile-wm-preview');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+  // Example background, cover-fitted.
+  try {
+    const bg = await new Promise((res, rej) => {
+      const img = new Image();
+      img.onload = () => res(img); img.onerror = rej;
+      img.src = _WM_PREVIEW_BG;
+    });
+    const s = Math.max(w / bg.width, h / bg.height);
+    ctx.drawImage(bg, (w - bg.width * s) / 2, (h - bg.height * s) / 2, bg.width * s, bg.height * s);
+  } catch (e) {
+    ctx.fillStyle = '#1e293b'; ctx.fillRect(0, 0, w, h);
+  }
+  if (_wmPreviewBitmap) {
+    // Same placement maths the composers use: ~28% of the width, 2.5% pad.
+    const targetW = Math.max(64, Math.round(w * 0.28));
+    const targetH = Math.round(targetW * (_wmPreviewBitmap.height / _wmPreviewBitmap.width));
+    const pad = Math.round(Math.min(w, h) * 0.025);
+    ctx.globalAlpha = 0.95;
+    ctx.drawImage(_wmPreviewBitmap, w - targetW - pad, h - targetH - pad, targetW, targetH);
+    ctx.globalAlpha = 1;
+  } else {
+    ctx.fillStyle = 'rgba(2,6,23,0.55)'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#cbd5e1';
+    ctx.font = '600 22px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Upload a PNG to preview your watermark', w / 2, h / 2);
+  }
+}
+
+async function loadProfileWatermark(session) {
+  _wmPreviewBitmap = null;
+  try {
+    const r = await fetch(`${API_BASE_URL}/api/profiles/watermark`, { headers: { Authorization: 'Bearer ' + session.access_token } });
+    if (r.ok) _wmPreviewBitmap = await createImageBitmap(await r.blob());
+  } catch (e) { /* none set */ }
+  const rm = document.getElementById('profile-wm-remove');
+  if (rm) rm.style.display = _wmPreviewBitmap ? 'inline-block' : 'none';
+  drawWatermarkPreview();
+}
+
+async function removeProfileWatermark() {
+  try {
+    const { data } = await sb.auth.getSession();
+    const jwt = data.session?.access_token; if (!jwt) return;
+    const r = await fetch(`${API_BASE_URL}/api/profiles/watermark`, {
+      method: 'PUT', headers: { Authorization: 'Bearer ' + jwt, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: null }),
+    });
+    if (!r.ok) { _wmMsg('Failed to remove.', true); return; }
+    _wmPreviewBitmap = null;
+    const rm = document.getElementById('profile-wm-remove');
+    if (rm) rm.style.display = 'none';
+    _wmMsg('Watermark removed.');
+    drawWatermarkPreview();
+  } catch (e) { _wmMsg('Failed to remove.', true); }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const inp = document.getElementById('profile-wm-input');
+  if (!inp) return;
+  inp.addEventListener('change', async () => {
+    const file = inp.files && inp.files[0];
+    inp.value = '';
+    if (!file) return;
+    if (file.type !== 'image/png') { _wmMsg('Watermarks must be PNG files (for transparency).', true); return; }
+    if (file.size > 1_000_000) { _wmMsg('Keep the watermark under 1 MB.', true); return; }
+    _wmMsg('Uploading…');
+    try {
+      const { data } = await sb.auth.getSession();
+      const jwt = data.session?.access_token; if (!jwt) return;
+      const pre = await fetch(`${API_BASE_URL}/api/profiles/watermark-url`, { method: 'POST', headers: { Authorization: 'Bearer ' + jwt } });
+      if (!pre.ok) { _wmMsg('Uploads not available right now.', true); return; }
+      const { uploadURL, key } = await pre.json();
+      const put = await fetch(uploadURL, { method: 'PUT', body: file, headers: { 'Content-Type': 'image/png' } });
+      if (!put.ok) throw new Error('upload failed');
+      const save = await fetch(`${API_BASE_URL}/api/profiles/watermark`, {
+        method: 'PUT', headers: { Authorization: 'Bearer ' + jwt, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key }),
+      });
+      if (!save.ok) throw new Error('save failed');
+      _wmPreviewBitmap = await createImageBitmap(file);
+      const rm = document.getElementById('profile-wm-remove');
+      if (rm) rm.style.display = 'inline-block';
+      _wmMsg('Watermark saved.');
+      drawWatermarkPreview();
+    } catch (e) { _wmMsg('Upload failed — try again.', true); }
+  });
+});
+
 // Pending avatar (uploaded to R2 but not yet saved to the profile).
 let _pendingAvatarKey = null, _pendingAvatarUrl = null;
 function pickProfileAvatar() { document.getElementById('profile-avatar-input')?.click(); }
@@ -687,6 +807,15 @@ async function openProfileModal() {
   } catch (e) { /* ignore */ }
   // Posts load after the form is populated so the modal isn't held on them.
   loadProfilePosts(session);
+  // Watermark section: only shown to Wire contributors (it stamps their posts).
+  try {
+    const ce = await fetch(`${API_BASE_URL}/api/check-editor/${user.id}`).then((r) => r.json()).catch(() => ({}));
+    const sect = document.getElementById('profile-wm-section');
+    if (sect && (ce.can_feed_media || ce.is_owner)) {
+      sect.style.display = 'block';
+      loadProfileWatermark(session);
+    } else if (sect) { sect.style.display = 'none'; }
+  } catch (e) { /* section stays hidden */ }
 
   const msg = document.getElementById('profile-message');
   if (msg) msg.textContent = '';
