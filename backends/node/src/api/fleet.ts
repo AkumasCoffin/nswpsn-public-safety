@@ -28,6 +28,7 @@ import {
 import { wirePublic } from '../services/wireSettings.js';
 import { r2PublicUrl, deleteR2Object, viewerHash, normaliseLicense, licenseLabel } from '../services/wire.js';
 import { RECOVERY_DAYS } from '../services/wirePurge.js';
+import { displayNameMap } from '../services/wireComments.js';
 
 export const fleetRouter = new Hono();
 
@@ -315,7 +316,16 @@ fleetRouter.get('/api/wire/fleet', async (c) => {
         ORDER BY created_at DESC LIMIT $${vals.length - 1} OFFSET $${vals.length}`,
       vals,
     );
-    return c.json({ vehicles: r.rows.map((row) => shapeVehicle(row)) });
+    // Bylines show the CURRENT chosen username, not the one stored at
+    // write time (stale after renames).
+    const names = await displayNameMap(pool, r.rows.map((row) => row.author_id));
+    const vehicles = r.rows.map((row) => {
+      const v = shapeVehicle(row);
+      const live = names.get(row.author_id);
+      if (live) (v['author'] as Record<string, unknown>)['name'] = live;
+      return v;
+    });
+    return c.json({ vehicles });
   } catch (err) {
     log.error({ err }, 'fleet: list failed');
     return c.json({ error: 'failed to list fleet' }, 500);
@@ -337,7 +347,11 @@ fleetRouter.get('/api/wire/fleet/:id', async (c) => {
     if ((row.status !== 'published' || row.deleted_at) && !isAuthor && !isAdmin) {
       return c.json({ error: 'not found' }, 404);
     }
-    return c.json({ vehicle: shapeVehicle(row, isAuthor || isAdmin) });
+    const v = shapeVehicle(row, isAuthor || isAdmin);
+    const names = await displayNameMap(pool, [row.author_id]);
+    const live = names.get(row.author_id);
+    if (live) (v['author'] as Record<string, unknown>)['name'] = live;
+    return c.json({ vehicle: v });
   } catch (err) {
     log.error({ err, id }, 'fleet: get failed');
     return c.json({ error: 'failed to fetch vehicle' }, 500);

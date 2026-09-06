@@ -33,6 +33,7 @@ import {
   notifyLikeBatched,
   commenterIds,
   avatarMap,
+  displayNameMap,
 } from '../services/wireComments.js';
 
 export const wireCommentsRouter = new Hono();
@@ -120,8 +121,8 @@ wireCommentsRouter.get('/api/wire/comments', async (c) => {
     );
     // One batched lookup for every author on the page (no N+1).
     const commenterIds = r.rows.map((row) => row.author_id);
-    const [avatars, commenterTags] = await Promise.all([
-      avatarMap(pool, commenterIds), tagMap(pool, commenterIds),
+    const [avatars, commenterTags, liveNames] = await Promise.all([
+      avatarMap(pool, commenterIds), tagMap(pool, commenterIds), displayNameMap(pool, commenterIds),
     ]);
     // A deleted comment is tombstoned for everyone; only a moderator sees who
     // removed it and why (and never the original body).
@@ -131,7 +132,8 @@ wireCommentsRouter.get('/api/wire/comments', async (c) => {
         id: row.id,
         author: {
           id: row.author_id,
-          name: row.author_name,
+          // The CURRENT username outranks the one stored when commenting.
+          name: liveNames.get(row.author_id) ?? row.author_name,
           avatar_url: avatars.get(row.author_id) ?? null,
           tags: commenterTags.get(row.author_id) ?? [],
         },

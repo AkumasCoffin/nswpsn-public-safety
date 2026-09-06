@@ -33,7 +33,7 @@ import { ffmpegAvailable } from '../services/videoTranscode.js';
 import { wirePublic, autoTagsEnabled, setWireSetting } from '../services/wireSettings.js';
 import { awardPostingTags, tagMap } from '../services/userTags.js';
 import { diffSnapshots, mediaKeyOf, type EditSnapshot } from '../services/wireEdits.js';
-import { avatarMap } from '../services/wireComments.js';
+import { avatarMap, displayNameMap } from '../services/wireComments.js';
 import { RECOVERY_DAYS } from '../services/wirePurge.js';
 import { shapeFleetVehicle } from './fleet.js';
 import {
@@ -476,6 +476,7 @@ function withAvatars(
   shaped: Record<string, unknown>,
   avatars: Map<string, string>,
   tags?: Map<string, Array<Record<string, unknown>>>,
+  names?: Map<string, string>,
 ): Record<string, unknown> {
   const a = shaped['author'] as { id?: string } | undefined;
   if (a?.id) {
@@ -483,6 +484,10 @@ function withAvatars(
     // Badges ride along with the avatar because they render in the same place
     // — the byline chip — and are fetched from the same id set.
     if (tags) (a as Record<string, unknown>)['tags'] = tags.get(a.id) ?? [];
+    // The CURRENT chosen username outranks the name stored at write time
+    // (stale after renames; Discord-named on rows from before the fix).
+    const live = names?.get(a.id);
+    if (live) (a as Record<string, unknown>)['name'] = live;
   }
   const cos = shaped['co_authors'];
   if (Array.isArray(cos)) {
@@ -491,6 +496,8 @@ function withAvatars(
       if (id) {
         co['avatar_url'] = avatars.get(id) ?? null;
         if (tags) co['tags'] = tags.get(id) ?? [];
+        const live = names?.get(id);
+        if (live) co['name'] = live;
       }
     }
   }
@@ -891,9 +898,9 @@ const listArticlesHandler = async (c: any) => {
     const mediaMap = await fetchMediaFor(pool, 'article', ids);
     const engA = await engagementFor(pool, 'article', ids, currentUserId(c));
     const creditIdsA = creditedIds(r.rows);
-    const [avatarsA, authorTagsA] = await Promise.all([avatarMap(pool, creditIdsA), tagMap(pool, creditIdsA)]);
+    const [avatarsA, authorTagsA, namesA] = await Promise.all([avatarMap(pool, creditIdsA), tagMap(pool, creditIdsA), displayNameMap(pool, creditIdsA)]);
     const articles = r.rows.map((row) =>
-      withAvatars(withEngagement(shapeArticle(row, mediaMap.get(row.id) ?? []), engA.get(row.id)), avatarsA, authorTagsA));
+      withAvatars(withEngagement(shapeArticle(row, mediaMap.get(row.id) ?? []), engA.get(row.id)), avatarsA, authorTagsA, namesA));
     return c.json(legacyMediaPath(c) ? { posts: articles } : { articles });
   } catch (err) {
     log.error({ err }, 'wire: list articles failed');
@@ -928,11 +935,12 @@ const getArticleHandler = async (c: any) => {
     // Author/admin get storage keys + hash so the compose editor can round-trip.
     const engA = await engagementFor(pool, 'article', [row.id], uid);
     const creditIdsA = creditedIds([row]);
-    const [avatarsA, authorTagsA] = await Promise.all([avatarMap(pool, creditIdsA), tagMap(pool, creditIdsA)]);
+    const [avatarsA, authorTagsA, namesA] = await Promise.all([avatarMap(pool, creditIdsA), tagMap(pool, creditIdsA), displayNameMap(pool, creditIdsA)]);
     const shapedA = withAvatars(
       withEngagement(shapeArticle(row, mediaMap.get(row.id) ?? [], !!(isAuthor || isAdmin)), engA.get(row.id)),
       avatarsA,
       authorTagsA,
+      namesA,
     );
     // Series context: every published part (including the lead), oldest first,
     // so the page can show "Part 2 of 4" and link the rest.

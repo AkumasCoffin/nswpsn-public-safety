@@ -193,6 +193,31 @@ export async function commenterIds(pool: Pool, parentType: string, parentId: str
  * wins, otherwise the stored Discord avatar. Batched so rendering a comment
  * thread or a feed page stays one query instead of one per author.
  */
+/**
+ * Current chosen display names for a set of users. Posts store author_name at
+ * write time, which goes stale the moment someone renames (and rows written
+ * before the site username existed carry the Discord name forever) -- reads
+ * overlay this map so bylines always show the name the user has NOW.
+ */
+export async function displayNameMap(pool: Pool, userIds: readonly string[]): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  const ids = [...new Set(userIds.filter(Boolean))];
+  if (ids.length === 0) return map;
+  try {
+    const r = await pool.query<{ user_id: string; display_name: string | null }>(
+      `SELECT user_id, display_name FROM user_profiles
+        WHERE user_id = ANY($1::text[]) AND display_name IS NOT NULL AND display_name <> ''`,
+      [ids],
+    );
+    for (const row of r.rows) {
+      if (row.display_name) map.set(row.user_id, row.display_name);
+    }
+  } catch (err) {
+    log.debug({ err }, 'displayNameMap failed');
+  }
+  return map;
+}
+
 export async function avatarMap(pool: Pool, userIds: readonly string[]): Promise<Map<string, string>> {
   const map = new Map<string, string>();
   const ids = [...new Set(userIds.filter(Boolean))];
