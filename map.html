@@ -3220,6 +3220,21 @@
     // Use pointer:coarse to detect if PRIMARY input is touch (finger) vs fine (mouse/trackpad)
     // This correctly excludes touch-enabled Windows laptops when a mouse is being used
     const isMobile = window.matchMedia("(pointer: coarse)").matches;
+    // Everything on this page is position:fixed or absolute inside the
+    // map root -- the DOCUMENT never needs to scroll. But overflow:hidden
+    // does not stop the browser's own programmatic scrolls: the mobile
+    // keyboard scrolls the document trying to reveal a focused input
+    // (search bar, editor form in the bottom sheet), and the residual
+    // scroll shears the absolutely-positioned map up so the layer bar
+    // paints over the fixed header. Pin it back. Safe mid-focus too:
+    // the inputs live in fixed elements, so document scroll never moved
+    // them on screen in the first place.
+    window.addEventListener('scroll', () => {
+      if (window.scrollY || window.scrollX ||
+          document.documentElement.scrollTop || document.documentElement.scrollLeft) {
+        window.scrollTo(0, 0);
+      }
+    }, { passive: true });
     // Mark touch devices so CSS can hide map-anchored tooltips (shown in the
     // bottom card instead). Matches the isMobile condition exactly.
     if (isMobile) document.body.classList.add('is-touch');
@@ -3329,9 +3344,6 @@
       document.querySelectorAll('.pager-pin-dot.pin-selected')
         .forEach(el => el.classList.remove('pin-selected'));
       
-      // Reset mobile tap tracking when clicking on map background
-      lastTappedMarker = null;
-      lastTapTime = 0;
     });
 
     // Mobile: mirror ANY tooltip's content into a fixed bottom card instead of
