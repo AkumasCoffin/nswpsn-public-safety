@@ -34,6 +34,7 @@ import { wirePublic, autoTagsEnabled, setWireSetting } from '../services/wireSet
 import { awardPostingTags, tagMap } from '../services/userTags.js';
 import { diffSnapshots, mediaKeyOf, type EditSnapshot } from '../services/wireEdits.js';
 import { avatarMap } from '../services/wireComments.js';
+import { shapeFleetVehicle } from './fleet.js';
 import {
   createImageUploadUrl,
   deleteCfImage,
@@ -1256,10 +1257,16 @@ wireRouter.get('/api/wire/pending', requireRole(canModerateWire), async (c) => {
   const pool = await getPool();
   if (!pool) return c.json(DB_UNAVAILABLE, 503);
   try {
-    const a = await pool.query(`SELECT * FROM articles WHERE status='pending' ORDER BY created_at DESC LIMIT 100`);
+    const [a, f] = await Promise.all([
+      pool.query(`SELECT * FROM articles WHERE status='pending' ORDER BY created_at DESC LIMIT 100`),
+      pool.query(`SELECT * FROM fleet_vehicles WHERE status='pending' ORDER BY created_at DESC LIMIT 100`),
+    ]);
     const aMedia = await fetchMediaFor(pool, 'article', a.rows.map((r) => r.id));
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const items: any[] = a.rows.map((r) => shapeArticle(r, aMedia.get(r.id) ?? []));
+    const items: any[] = [
+      ...a.rows.map((r) => shapeArticle(r, aMedia.get(r.id) ?? [])),
+      ...f.rows.map((r) => shapeFleetVehicle(r)),
+    ].sort((x, y) => new Date(String(y['created_at'] || 0)).getTime() - new Date(String(x['created_at'] || 0)).getTime());
     return c.json({ items, pendingCount: items.length });
   } catch (err) {
     log.error({ err }, 'wire: pending list failed');

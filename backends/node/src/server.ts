@@ -33,6 +33,7 @@ import { statsRouter } from './api/stats.js';
 import { incidentsRouter } from './api/incidents.js';
 import { wireRouter } from './api/wire.js';
 import { wireCommentsRouter } from './api/wireComments.js';
+import { fleetRouter } from './api/fleet.js';
 import { profilesRouter } from './api/profiles.js';
 import { editorRouter } from './api/editor.js';
 import { usersRouter } from './api/users.js';
@@ -377,6 +378,7 @@ export function createApp() {
   app.route('/', incidentsRouter);
   app.route('/', wireRouter);
   app.route('/', wireCommentsRouter);
+  app.route('/', fleetRouter);
   app.route('/', profilesRouter);
   app.route('/', editorRouter);
   app.route('/', usersRouter);
