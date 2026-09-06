@@ -150,7 +150,10 @@
     .wd-thumb .vico { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; background: rgba(0,0,0,0.35); }
     .wd-title { font-size: 1.6rem; font-weight: 800; letter-spacing: -0.02em; margin: 0 0 0.3rem; }
     .wd-meta { font-size: 0.8rem; color: var(--text-soft); margin-bottom: 1rem; }
-    .wd-caption { color: var(--text-muted); line-height: 1.6; }
+    /* pre-line: captions are typed with real line breaks in the compose
+       textarea; rendered into a <p> they collapsed to spaces. The card
+       excerpt (.wire-excerpt) keeps collapsing -- it is 2-line clamped. */
+    .wd-caption { color: var(--text-muted); line-height: 1.6; white-space: pre-line; }
     .wd-article { line-height: 1.75; color: var(--text-main); margin-top: 1rem; }
     .wd-article :is(h1,h2,h3,h4) { line-height: 1.25; margin: 1.3rem 0 0.6rem; }
     .wd-article h1 { font-size: 1.55rem; } .wd-article h2 { font-size: 1.3rem; } .wd-article h3 { font-size: 1.1rem; }
