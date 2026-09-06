@@ -5,7 +5,7 @@
  * row per incident).
  */
 import { describe, it, expect } from 'vitest';
-import { defaultArchiveItems } from '../../../src/services/archiveExtract.js';
+import { defaultArchiveItems, extractSourceTimestampUnix } from '../../../src/services/archiveExtract.js';
 
 describe('defaultArchiveItems', () => {
   it('fans out a GeoJSON FeatureCollection one row per feature', () => {
@@ -113,5 +113,60 @@ describe('defaultArchiveItems', () => {
     const data = out[0]!.data as Record<string, unknown>;
     expect(data['title']).toBe('Crash on M1');
     expect(data['location_text']).toBe('Pacific Highway');
+  });
+});
+
+describe('extractSourceTimestampUnix', () => {
+  const at = (props: Record<string, unknown>, source?: string) =>
+    extractSourceTimestampUnix(props, source);
+
+  it('prefers updatedISO over the locale updated string', () => {
+    // The interstate fire sources pair both; the locale one is
+    // ambiguous and must lose.
+    const ts = at({
+      updated: '06/09/2026, 11:34:15 pm',
+      updatedISO: '2026-09-06T13:34:15.000Z',
+    });
+    expect(ts).toBe(Date.UTC(2026, 8, 6, 13, 34, 15) / 1000);
+  });
+
+  it('parses slash-dates day-first, never month-first', () => {
+    // "06/09/2026" is 6 September in every feed we ingest. Date.parse
+    // would read it as June 9 and push the incident months out of the
+    // logs window — the bug that zeroed the QFD counts.
+    const ts = at({ updated: '06/09/2026, 11:34:15 pm' });
+    expect(ts).toBe(Date.UTC(2026, 8, 6, 23, 34, 15) / 1000);
+  });
+
+  it('handles 24h slash-dates and bare dates', () => {
+    expect(at({ updated: '06/09/2026 22:35' })).toBe(
+      Date.UTC(2026, 8, 6, 22, 35, 0) / 1000,
+    );
+    expect(at({ updated: '25/12/2026' })).toBe(
+      Date.UTC(2026, 11, 25, 0, 0, 0) / 1000,
+    );
+    expect(at({ updated: '12:30am 06/09/2026' })).toBe(null); // unrecognised shape stays null
+  });
+
+  it('12am is midnight, 12pm is noon', () => {
+    expect(at({ updated: '06/09/2026, 12:05:00 am' })).toBe(
+      Date.UTC(2026, 8, 6, 0, 5, 0) / 1000,
+    );
+    expect(at({ updated: '06/09/2026, 12:05:00 pm' })).toBe(
+      Date.UTC(2026, 8, 6, 12, 5, 0) / 1000,
+    );
+  });
+
+  it('rejects impossible day-first dates instead of guessing', () => {
+    // Month 13 can't be a month even day-first — null, not a
+    // month-first reinterpretation.
+    expect(at({ updated: '06/13/2026, 1:00:00 pm' })).toBe(null);
+  });
+
+  it('still parses ISO and epoch forms', () => {
+    expect(at({ updated: '2026-09-06T13:34:15Z' })).toBe(
+      Date.UTC(2026, 8, 6, 13, 34, 15) / 1000,
+    );
+    expect(at({ pubMillis: 1757166855000 }, 'waze_alerts')).toBe(1757166855);
   });
 });

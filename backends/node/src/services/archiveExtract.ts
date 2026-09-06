@@ -74,6 +74,27 @@ function asEpochSeconds(v: unknown): number | null {
     if (Number.isFinite(n) && /^\d+(\.\d+)?$/.test(s)) {
       return n > 1e12 ? Math.floor(n / 1000) : Math.floor(n);
     }
+    // Day-first slash dates ("06/09/2026, 11:34:15 pm" — the en-AU
+    // locale strings the fire sources put in `updated`). Date.parse
+    // reads these month-first, so 6 Sep became 9 Jun and every
+    // interstate incident fell out of the logs' 24h window. Every
+    // upstream here is Australian, so day-first is the only correct
+    // reading. The string carries no zone; UTC keeps the error to
+    // hours where month-first made it months.
+    const au = /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[,\s]+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([ap]m)?)?$/i.exec(s);
+    if (au) {
+      const day = Number(au[1]);
+      const month = Number(au[2]);
+      if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+        let hour = Number(au[4] ?? '0');
+        const ampm = (au[7] ?? '').toLowerCase();
+        if (ampm === 'pm' && hour < 12) hour += 12;
+        if (ampm === 'am' && hour === 12) hour = 0;
+        const auMs = Date.UTC(Number(au[3]), month - 1, day, hour, Number(au[5] ?? '0'), Number(au[6] ?? '0'));
+        return Math.floor(auMs / 1000);
+      }
+      return null;
+    }
     // Try Date.parse — handles ISO 8601 + RFC 2822 + most other forms.
     const ms = Date.parse(s);
     if (Number.isFinite(ms)) return Math.floor(ms / 1000);
@@ -98,6 +119,9 @@ export function extractSourceTimestampUnix(
     'pubdate',
     'lastUpdated',
     'last_updated',
+    // Before `updated`: the fire sources pair a locale `updated` string
+    // with a machine `updatedISO` — always prefer the ISO one.
+    'updatedISO',
     'updated',
     'updated_at',
     'updatedAt',
