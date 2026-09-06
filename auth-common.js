@@ -36,19 +36,23 @@ function injectAuthSection() {
         </a>
       </div>
       <div id="auth-logged-in" style="display:none;">
-        <div style="display:flex; align-items:center; gap:0.5rem;">
-          <div id="auth-avatar" style="width:26px; height:26px; border-radius:50%; background:rgba(249,115,22,0.2); display:flex; align-items:center; justify-content:center; color:#f97316; font-weight:700; font-size:0.75rem; overflow:hidden; flex-shrink:0;"></div>
+        <div style="display:flex; align-items:center; gap:0.6rem; position:relative;">
+          <button type="button" id="auth-avatar-btn" onclick="toggleAccountMenu(event)" title="Account" aria-label="Account menu" aria-haspopup="menu" style="padding:0; background:none; border:0; cursor:pointer; flex-shrink:0; border-radius:50%;">
+            <div id="auth-avatar" style="width:40px; height:40px; border-radius:50%; background:rgba(249,115,22,0.2); display:flex; align-items:center; justify-content:center; color:#f97316; font-weight:700; font-size:1rem; overflow:hidden; border:2px solid rgba(148,163,184,0.25); transition:border-color 0.15s;"></div>
+          </button>
           <div id="auth-user-email" style="flex:1; min-width:0; font-size:0.82rem; color:#fff; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></div>
           <button onclick="toggleNotifications(event)" id="notif-btn" title="Notifications" aria-label="Notifications" style="position:relative; width:28px; height:28px; padding:0; background:rgba(148,163,184,0.1); border:1px solid rgba(148,163,184,0.2); border-radius:6px; color:#cbd5e1; font-size:0.75rem; cursor:pointer; display:flex; align-items:center; justify-content:center; font-family:inherit; flex-shrink:0;">
             <i class="fas fa-bell"></i>
             <span id="notif-badge" style="display:none; position:absolute; top:-5px; right:-5px; min-width:15px; height:15px; padding:0 3px; box-sizing:border-box; background:#ef4444; color:#fff; border-radius:999px; font-size:0.6rem; font-weight:700; line-height:15px; text-align:center;"></span>
           </button>
-          <button onclick="openProfileModal()" title="Profile" aria-label="Profile" style="width:28px; height:28px; padding:0; background:rgba(148,163,184,0.1); border:1px solid rgba(148,163,184,0.2); border-radius:6px; color:#cbd5e1; font-size:0.75rem; cursor:pointer; display:flex; align-items:center; justify-content:center; font-family:inherit; flex-shrink:0;">
-            <i class="fas fa-user-cog"></i>
-          </button>
-          <button onclick="doLogout()" title="Logout" aria-label="Logout" style="width:28px; height:28px; padding:0; background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.25); border-radius:6px; color:#ef4444; font-size:0.75rem; cursor:pointer; display:flex; align-items:center; justify-content:center; font-family:inherit; flex-shrink:0;">
-            <i class="fas fa-sign-out-alt"></i>
-          </button>
+          <div id="auth-account-menu" role="menu" style="display:none; position:absolute; top:calc(100% + 6px); left:0; z-index:1200; min-width:230px; background:#1e293b; border:1px solid rgba(148,163,184,0.25); border-radius:10px; box-shadow:0 12px 30px rgba(0,0,0,0.5); padding:0.35rem; box-sizing:border-box;">
+            <button type="button" role="menuitem" onclick="closeAccountMenu(); openProfileModal();" style="display:flex; align-items:center; gap:0.6rem; width:100%; padding:0.55rem 0.7rem; background:none; border:0; border-radius:7px; color:#e2e8f0; font-size:0.83rem; font-family:inherit; cursor:pointer; text-align:left;" onmouseover="this.style.background='rgba(148,163,184,0.1)'" onmouseout="this.style.background='none'">
+              <i class="fas fa-user-cog" style="width:16px; text-align:center; color:#94a3b8;"></i> Profile &amp; Account Settings
+            </button>
+            <button type="button" role="menuitem" onclick="closeAccountMenu(); doLogout();" style="display:flex; align-items:center; gap:0.6rem; width:100%; padding:0.55rem 0.7rem; background:none; border:0; border-radius:7px; color:#fca5a5; font-size:0.83rem; font-family:inherit; cursor:pointer; text-align:left;" onmouseover="this.style.background='rgba(239,68,68,0.12)'" onmouseout="this.style.background='none'">
+              <i class="fas fa-sign-out-alt" style="width:16px; text-align:center;"></i> Logout
+            </button>
+          </div>
         </div>
         <div id="auth-role-buttons" style="display:flex; gap:0.4rem; margin-top:0.5rem; flex-wrap:wrap;"></div>
       </div>
@@ -1135,6 +1139,22 @@ async function doDiscordLogin() {
     if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fab fa-discord"></i> Continue with Discord'; }
   }
   // On success the browser navigates away to Discord.
+}
+
+// ---- account dropdown (the sidebar avatar) ----
+function toggleAccountMenu(e) {
+  if (e) e.stopPropagation();
+  const menu = document.getElementById('auth-account-menu');
+  if (!menu) return;
+  menu.style.display = menu.style.display !== 'none' ? 'none' : 'block';
+}
+// One permanent outside-click closer (the toggle stops its own propagation).
+document.addEventListener('click', (ev) => {
+  if (!ev.target.closest('#auth-account-menu') && !ev.target.closest('#auth-avatar-btn')) closeAccountMenu();
+});
+function closeAccountMenu() {
+  const menu = document.getElementById('auth-account-menu');
+  if (menu) menu.style.display = 'none';
 }
 
 async function doLogout() {
