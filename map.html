@@ -3241,6 +3241,22 @@
         return;
       }
 
+      // ONE popup per role: while the editor is active (and its panel can
+      // actually show), a tap goes STRAIGHT to the Map Controls sheet --
+      // the detail functions reroute into it -- and the public overview
+      // card never enters the picture. The two-tap card flow below is the
+      // signed-out / non-editor experience only. Racing the card against
+      // the sheet with visibility guards kept losing to the sheet's
+      // opening animation; not starting the race is the fix.
+      if (typeof _editorHooksUsable === 'function' && _editorHooksUsable()) {
+        hideMobileTipCard();
+        if (selectionAction) selectionAction();
+        sidebarAction();
+        lastTappedMarker = null;
+        lastTapTime = 0;
+        return;
+      }
+
       const now = Date.now();
       const isSameMarker = (lastTappedMarker === marker);
       const withinThreshold = (now - lastTapTime) < DOUBLE_TAP_THRESHOLD;
@@ -3385,27 +3401,19 @@
       setTimeout(() => {
         const cam = document.getElementById('camera-fullscreen');
         if (cam && cam.classList.contains('open')) return;
-        // Same stand-down for the DETAIL SHEETS: the SECOND tap on a pin
-        // opens one (handleMarkerTap), but that tap also re-fires
+        // Same stand-down for the public detail sheet: the SECOND tap on a
+        // pin opens it (handleMarkerTap), but that tap also re-fires
         // tooltipopen -- and this deferred card ran after the sheet opened,
         // stacking the overview card on top of the details it had just been
         // dismissed for. The sheet is the fuller view; the card yields.
-        //
-        // TWO sheets, one per audience: the public #incident-sidebar and the
-        // editor's #editor-panel (map-editor-module reroutes pin clicks into
-        // it for logged-in editors). The editor panel is CREATED with the
-        // 'open' class, so a class test always reads true for editors -- test
-        // whether it is actually on screen instead: a closed mobile sheet
-        // sits at translateY(100%), i.e. its top is at the viewport bottom.
         const sheet = document.getElementById('incident-sidebar');
         if (sheet && sheet.classList.contains('open')) return;
-        const ep = document.getElementById('editor-panel');
-        if (ep) {
-          const r = ep.getBoundingClientRect();
-          const visible = r.height > 0 && r.top < window.innerHeight - 8 &&
-            getComputedStyle(ep).visibility !== 'hidden';
-          if (visible) return;
-        }
+        // Editors never get the overview card AT ALL -- their popup is the
+        // Map Controls sheet (handleMarkerTap opens it on the first tap).
+        // Tooltips also open outside handleMarkerTap (search, deep links),
+        // so this is checked here too. A geometry test on #editor-panel was
+        // tried and lost the race against the sheet's opening animation.
+        if (typeof _editorHooksUsable === 'function' && _editorHooksUsable()) return;
         showMobileTipCard(content);
         if (layer && typeof layer.getLatLng === 'function') panMarkerAboveCard(layer);
       }, 0);
