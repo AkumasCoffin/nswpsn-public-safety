@@ -330,14 +330,13 @@ async function resolveSeriesParent(
   );
   const parent = r.rows[0];
   if (!parent) return { error: 'the article you selected does not exist' };
-  // Match what article-leads offers: anyone's published article, or your own
-  // unpublished one. Without this, a guessed id could attach a part to someone
-  // else's draft — and the id is the only thing standing in the way.
+  // Match what article-leads offers: only YOUR OWN articles (a series is one
+  // author's continuing coverage). Admins may attach to any lead. Without
+  // this, a guessed id could attach a part to someone else's series.
   if (viewer) {
     const mine = !!viewer.uid && parent.author_id === viewer.uid;
-    const visible = parent.status === 'published' && !parent.taken_down_at;
-    if (!visible && !mine && !viewer.isAdmin) {
-      return { error: 'the article you selected does not exist' };
+    if (!mine && !viewer.isAdmin) {
+      return { error: 'you can only attach a follow-up to your own articles' };
     }
   }
   if (parent.parent_article_id) {
@@ -976,16 +975,16 @@ wireRouter.get('/api/wire/article-leads', requireRole(canFeedMedia), async (c) =
   const q = (url.searchParams.get('q') ?? '').trim();
   const exclude = (url.searchParams.get('exclude') ?? '').trim() || null;
   try {
-    // Your OWN drafts and pending articles are offered too, not just published
-    // ones: a series is usually written as a set, so the lead frequently isn't
-    // public yet when its first follow-up is being drafted. Other people's
-    // unpublished work stays invisible.
+    // A series is one author's continuing coverage: only YOUR OWN articles
+    // are offered as leads (drafts and pending included -- the lead often
+    // isn't public yet when its first follow-up is drafted).
     const uid = currentUserId(c);
     const vals: unknown[] = [MAX_SERIES_PARTS, exclude, uid ?? ''];
     let where = `a.parent_article_id IS NULL
                  AND a.taken_down_at IS NULL
                  AND a.deleted_at IS NULL
-                 AND (a.status = 'published' OR (a.author_id = $3 AND a.status IN ('draft','pending')))
+                 AND a.author_id = $3
+                 AND a.status IN ('published', 'draft', 'pending')
                  AND ($2::text IS NULL OR a.id <> $2)
                  AND (SELECT COUNT(*) FROM articles k WHERE k.parent_article_id = a.id) < $1`;
     if (q) { vals.push(`%${q}%`); where += ` AND a.title ILIKE $${vals.length}`; }

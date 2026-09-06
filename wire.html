@@ -1061,7 +1061,9 @@
             ? `<div class="ws-row here" aria-current="true">${inner}</div>`
             : `<a class="ws-row" href="wire?tab=articles&article=${encodeURIComponent(p.slug || p.id)}">${inner}</a>`;
         }).join('');
-        const canAdd = ME.canFeed && ser.parts.length <= 5;
+        // A series is one author's continuing coverage -- only the author
+        // (or an admin via canModerate's superset roles) can add to it.
+        const canAdd = ME.canFeed && ser.parts.length <= 5 && ((item.author && item.author.id === ME.userId) || ME.canModerate);
         seriesBlock = `<div class="wd-block">
           <div class="wd-lbl">Series · ${ser.parts.length} parts</div>
           <div class="ws-list">${rows}</div>
