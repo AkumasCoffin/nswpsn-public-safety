@@ -261,11 +261,11 @@ fleetRouter.get('/api/wire/fleet', async (c) => {
       where.push(`status = 'published'`);
     }
     if (STATES.has(state)) { vals.push(state); where.push(`state = $${vals.length}`); }
-    if (agency) { vals.push(agency); where.push(`agency = $${vals.length}`); }
-    // Case-insensitive exact LGA match (the filter offers the same ABS names
-    // the composer stores, but typed entries shouldn't miss on case).
-    const lga = url.searchParams.get('lga');
-    if (lga) { vals.push(lga.trim()); where.push(`lga ILIKE $${vals.length}`); }
+    // agency + lga accept comma-separated multi-selections.
+    const agencies = (agency || '').split(',').map((x) => x.trim()).filter(Boolean).slice(0, 20);
+    if (agencies.length) { vals.push(agencies); where.push(`agency = ANY($${vals.length}::text[])`); }
+    const lgas = (url.searchParams.get('lga') || '').split(',').map((x) => x.trim()).filter(Boolean).slice(0, 30);
+    if (lgas.length) { vals.push(lgas); where.push(`lga ILIKE ANY($${vals.length}::text[])`); }
     if (q) {
       vals.push(`%${q}%`);
       where.push(`(callsign ILIKE $${vals.length} OR station ILIKE $${vals.length} OR registration ILIKE $${vals.length})`);

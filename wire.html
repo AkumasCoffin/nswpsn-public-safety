@@ -75,6 +75,39 @@
     .wire-filters select:hover, .wire-filters input:hover { border-color: color-mix(in srgb, var(--accent) 40%, var(--border-subtle)); }
     .wire-filters select:focus, .wire-filters input:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
     .wire-filters optgroup { background: var(--bg-elevated-soft); color: var(--accent); font-weight: 700; font-style: normal; }
+    /* Multi-select dropdown: a button opening a searchable checkbox panel. */
+    .mdrop { position: relative; }
+    .mdrop-btn {
+      background: var(--bg-elevated); border: 1px solid var(--border-subtle); color: var(--text-main);
+      border-radius: 8px; padding: 0.45rem 1.9rem 0.45rem 0.6rem; font: inherit; font-size: 0.82rem;
+      min-width: 150px; text-align: left; cursor: pointer;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a1a5b6' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 0.6rem center; background-size: 0.85rem;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 240px;
+    }
+    .mdrop-btn:hover { border-color: color-mix(in srgb, var(--accent) 40%, var(--border-subtle)); }
+    .mdrop-btn.on { border-color: var(--accent); color: var(--accent); }
+    .mdrop-panel {
+      position: absolute; top: calc(100% + 5px); left: 0; z-index: 80;
+      min-width: 250px; max-width: 320px; max-height: 300px;
+      display: flex; flex-direction: column;
+      background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 10px;
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+    }
+    .mdrop-search {
+      margin: 6px; padding: 0.4rem 0.55rem; font: inherit; font-size: 0.8rem;
+      background: var(--bg-elevated-soft); border: 1px solid var(--border-subtle);
+      border-radius: 7px; color: var(--text-main);
+    }
+    .mdrop-search:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+    .mdrop-list { overflow-y: auto; padding: 2px 6px 6px; }
+    .mdrop-item {
+      display: flex; align-items: center; gap: 0.5rem; padding: 0.3rem 0.35rem;
+      font-size: 0.8rem; border-radius: 6px; cursor: pointer; color: var(--text-main);
+    }
+    .mdrop-item:hover { background: rgba(148,163,184,0.1); }
+    .mdrop-item input { accent-color: var(--accent); flex-shrink: 0; }
+    .mdrop-empty { padding: 0.5rem; color: var(--text-soft); font-size: 0.78rem; }
     .wire-filters option { background: var(--bg-elevated); color: var(--text-main); }
     .wire-filters .clear { background: none; border: 0; color: var(--text-soft); font: inherit; font-size: 0.8rem; cursor: pointer; text-decoration: underline; }
     .wire-tabs2 { display: inline-flex; border: 1px solid var(--border-subtle); border-radius: 9px; overflow: hidden; margin: 0.2rem 0 1.2rem; }
@@ -403,8 +436,8 @@
     <div class="wire-filters" id="filters">
       <input type="text" id="fSearch" placeholder="Search The Wire…" autocomplete="off" style="min-width:200px">
       <input type="text" id="fUnit" placeholder="Filter by unit / callsign…" autocomplete="off">
-      <select id="fAgency"><option value="">All agencies</option></select>
-      <select id="aLga" style="display:none"><option value="">All LGAs</option></select>
+      <div id="fAgencyDrop"></div>
+      <div id="aLgaDrop" style="display:none"></div>
       <button class="clear" id="fClear">Clear</button>
     </div>
 
@@ -416,8 +449,8 @@
     </div>
     <div class="wire-filters" id="fleetFilters" style="display:none">
       <input type="text" id="flSearch" placeholder="Search call sign, station, rego…" autocomplete="off" style="min-width:200px">
-      <select id="flAgency"><option value="">All agencies</option></select>
-      <select id="flLga" style="display:none"><option value="">All LGAs</option></select>
+      <div id="flAgencyDrop"></div>
+      <div id="flLgaDrop" style="display:none"></div>
       <button class="clear" id="flClear">Clear</button>
     </div>
 
@@ -545,15 +578,79 @@
     }
 
     // ---- filter option loaders ----
+    // ---- multi-select dropdown: button + searchable checkbox panel ----
+    const _allDrops = [];
+    function closeAllDrops() { _allDrops.forEach((p) => (p.style.display = 'none')); }
+    document.addEventListener('click', closeAllDrops);
+    function makeMultiDrop(host, { label, onChange }) {
+      host.classList.add('mdrop');
+      host.innerHTML = `<button type="button" class="mdrop-btn">${esc(label)}</button>
+        <div class="mdrop-panel" style="display:none">
+          <input type="text" class="mdrop-search" placeholder="Search…">
+          <div class="mdrop-list"></div>
+        </div>`;
+      const btn = host.querySelector('.mdrop-btn');
+      const panel = host.querySelector('.mdrop-panel');
+      const list = host.querySelector('.mdrop-list');
+      const search = host.querySelector('.mdrop-search');
+      let items = [];
+      const selected = new Set();
+      const short = label.replace(/^All /, '');
+      const sync = () => {
+        btn.textContent = selected.size
+          ? (selected.size === 1
+            ? (items.find((i) => selected.has(i.value))?.label || label)
+            : `${selected.size} ${short}`)
+          : label;
+        btn.classList.toggle('on', selected.size > 0);
+      };
+      const render = () => {
+        const q = search.value.trim().toLowerCase();
+        list.innerHTML = items
+          .filter((it) => !q || it.label.toLowerCase().includes(q))
+          .map((it) => `<label class="mdrop-item"><input type="checkbox" value="${esc(it.value)}"${selected.has(it.value) ? ' checked' : ''}><span>${esc(it.label)}</span></label>`)
+          .join('') || '<div class="mdrop-empty">No matches.</div>';
+      };
+      list.addEventListener('change', (e) => {
+        const cb = e.target.closest('input[type=checkbox]');
+        if (!cb) return;
+        if (cb.checked) selected.add(cb.value); else selected.delete(cb.value);
+        sync(); onChange();
+      });
+      search.addEventListener('input', render);
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const wasOpen = panel.style.display !== 'none';
+        closeAllDrops();
+        if (!wasOpen) { panel.style.display = ''; search.value = ''; render(); search.focus(); }
+      });
+      panel.addEventListener('click', (e) => e.stopPropagation());
+      _allDrops.push(panel);
+      sync();
+      return {
+        setOptions(next) {
+          items = next;
+          for (const v of [...selected]) if (!next.some((i) => i.value === v)) selected.delete(v);
+          sync(); render();
+        },
+        values() { return [...selected]; },
+        clear() { selected.clear(); sync(); render(); },
+        show(on) { host.style.display = on ? '' : 'none'; },
+      };
+    }
+    const fAgencyDrop = makeMultiDrop($('#fAgencyDrop'), { label: 'All agencies', onChange: () => loadFeed() });
+    const aLgaDrop = makeMultiDrop($('#aLgaDrop'), { label: 'All LGAs', onChange: () => loadFeed() });
+    const flAgencyDrop = makeMultiDrop($('#flAgencyDrop'), { label: 'All agencies', onChange: () => loadFeed() });
+    const flLgaDrop = makeMultiDrop($('#flLgaDrop'), { label: 'All LGAs', onChange: () => loadFeed() });
+
     async function loadFilterOptions() {
       try {
         const HIDE = new Set(['unconfirmed groups', 'sydney opera house', 'shared liaison groups', 'rental groups']);
         const data = await window.AgencyJSON.loadData();
-        const sel = $('#fAgency');
-        (data.agencies ? Object.values(data.agencies) : [])
+        fAgencyDrop.setOptions((data.agencies ? Object.values(data.agencies) : [])
           .filter((a) => !HIDE.has((a.name || '').toLowerCase()) && !HIDE.has((a.category || '').toLowerCase()))
           .sort((a, b) => a.name.localeCompare(b.name))
-          .forEach((a) => { const o = document.createElement('option'); o.value = a.slug; o.textContent = a.name; sel.appendChild(o); });
+          .map((a) => ({ value: a.slug, label: a.name })));
       } catch (e) {}
     }
 
@@ -690,14 +787,14 @@
       if (fleetMode) {
         const search = $('#flSearch').value.trim(); if (search) params.set('q', search);
         if (feedState) params.set('state', feedState);
-        const ag = $('#flAgency').value; if (ag) params.set('agency', ag);
-        const lg = $('#flLga').value.trim(); if (lg) params.set('lga', lg);
+        const ag = flAgencyDrop.values(); if (ag.length) params.set('agency', ag.join(','));
+        const lg = flLgaDrop.values(); if (lg.length) params.set('lga', lg.join(','));
       } else {
         const search = $('#fSearch').value.trim(); if (search) params.set('q', search);
         const unit = $('#fUnit').value.trim(); if (unit) params.set('unit', unit);
-        const ag = $('#fAgency').value; if (ag) params.set('agency', ag);
+        const ag = fAgencyDrop.values(); if (ag.length) params.set('agency', ag.join(','));
         if (feedState) params.set('state', feedState);
-        const lg = $('#aLga').value.trim(); if (lg) params.set('lga', lg);
+        const lg = aLgaDrop.values(); if (lg.length) params.set('lga', lg.join(','));
       }
       params.set('limit', PAGE); params.set('offset', offset);
       return params;
@@ -1439,65 +1536,60 @@
       // dropdown to that state's departments (fleet-vocab) and swap the LGA
       // suggestions for whichever LGA box the mode shows — the same
       // State -> LGA hierarchy the composers store.
-      const lgaBox = () => $(fleetMode ? '#flLga' : '#aLga');
+      const lgaDrop = () => (fleetMode ? flLgaDrop : aLgaDrop);
       const fillAg = () => {
         if (!fleetMode || !window.FleetVocab) return;
         const lists = feedState ? [FleetVocab.departments[feedState] || []] : Object.values(FleetVocab.departments);
         const names = [...new Set(lists.flat().map((d) => d.name))];
-        const keep = $('#flAgency').value;
-        $('#flAgency').innerHTML = '<option value="">All agencies</option>' +
-          names.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
-        if (names.includes(keep)) $('#flAgency').value = keep;
+        flAgencyDrop.setOptions(names.map((n) => ({ value: n, label: n })));
       };
       // The LGA dropdown only exists WITHIN a state: hidden on All states,
       // and filled with the selected state's ABS council names otherwise.
       const fillLga = async () => {
-        const box = lgaBox();
-        if (!feedState) {
-          box.style.display = 'none';
-          box.innerHTML = '<option value="">All LGAs</option>';
-          return;
-        }
-        box.style.display = '';
-        let opts = _flLgaCache[feedState];
-        if (!opts) {
+        const drop = lgaDrop();
+        if (!feedState) { drop.clear(); drop.show(false); return; }
+        drop.show(true);
+        let names = _flLgaCache[feedState];
+        if (!names) {
           try {
             const r = await fetch(`${API_BASE}/api/boundaries/lga-names?state=${feedState}`, { headers: await userHeaders() });
             if (r.ok) {
-              opts = ((await r.json()).names || []).map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
-              _flLgaCache[feedState] = opts;
+              names = (await r.json()).names || [];
+              _flLgaCache[feedState] = names;
             }
-          } catch (e) { /* the dropdown just stays state-less */ }
+          } catch (e) { /* the dropdown just stays empty */ }
         }
-        box.innerHTML = '<option value="">All LGAs</option>' + (opts || '');
+        drop.setOptions((names || []).map((n) => ({ value: n, label: n })));
       };
       syncLgaFilter = fillLga;
       fillAg();
       $('#fleetStateTabs').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
         feedState = b.dataset.fs;
         $('#fleetStateTabs').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
-        lgaBox().value = '';
+        lgaDrop().clear();
         fillAg(); fillLga(); loadFeed();
       }));
       if (fleetMode) {
-        ['flSearch', 'flAgency', 'flLga'].forEach((id) => {
-          const el = $('#' + id); const ev = id === 'flSearch' ? 'input' : 'change';
-          let t; el.addEventListener(ev, () => { clearTimeout(t); t = setTimeout(loadFeed, ev === 'input' ? 300 : 0); });
-        });
+        {
+          const el = $('#flSearch');
+          let t; el.addEventListener('input', () => { clearTimeout(t); t = setTimeout(loadFeed, 300); });
+        }
         $('#flClear').addEventListener('click', () => {
-          $('#flSearch').value = ''; $('#flAgency').value = ''; $('#flLga').value = '';
+          $('#flSearch').value = '';
+          flAgencyDrop.clear(); flLgaDrop.clear();
           feedState = '';
           $('#fleetStateTabs').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x.dataset.fs === ''));
           fillAg(); fillLga(); loadFeed();
         });
       }
     }
-    ['fSearch', 'fUnit', 'fAgency', 'aLga'].forEach((id) => {
-      const el = $('#' + id); const ev = (id === 'fSearch' || id === 'fUnit') ? 'input' : 'change';
-      let t; el.addEventListener(ev, () => { clearTimeout(t); t = setTimeout(loadFeed, ev === 'input' ? 300 : 0); });
+    ['fSearch', 'fUnit'].forEach((id) => {
+      const el = $('#' + id);
+      let t; el.addEventListener('input', () => { clearTimeout(t); t = setTimeout(loadFeed, 300); });
     });
     $('#fClear').addEventListener('click', () => {
-      $('#fSearch').value = ''; $('#fUnit').value = ''; $('#fAgency').value = ''; $('#aLga').value = '';
+      $('#fSearch').value = ''; $('#fUnit').value = '';
+      fAgencyDrop.clear(); aLgaDrop.clear();
       feedState = '';
       $('#fleetStateTabs').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x.dataset.fs === ''));
       syncLgaFilter();

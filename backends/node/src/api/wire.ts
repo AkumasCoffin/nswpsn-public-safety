@@ -842,7 +842,9 @@ const listArticlesHandler = async (c: any) => {
       }
     }
     if (q) { vals.push(`%${q}%`); where.push(`(title ILIKE $${vals.length} OR excerpt ILIKE $${vals.length} OR body ILIKE $${vals.length})`); }
-    if (agency) { vals.push(JSON.stringify([agency])); where.push(`agencies @> $${vals.length}::jsonb`); }
+    // Comma-separated multi-select: match posts tagged with ANY chosen agency.
+    const agencies = (agency || '').split(',').map((x) => x.trim()).filter(Boolean).slice(0, 20);
+    if (agencies.length) { vals.push(agencies); where.push(`agencies ?| $${vals.length}::text[]`); }
     if (region) { vals.push(region); where.push(`region = $${vals.length}`); }
     // Australia-wide location filters against the stored combined region
     // string ("NSW — Penrith — Emu Plains"). Legacy rows are a bare NSW
@@ -853,10 +855,12 @@ const listArticlesHandler = async (c: any) => {
       const legacyNsw = stateParam === 'NSW' ? ` OR (region IS NOT NULL AND region NOT LIKE '% — %')` : '';
       where.push(`(region LIKE $${vals.length}${legacyNsw})`);
     }
-    const lgaParam = (url.searchParams.get('lga') || '').trim();
-    if (lgaParam) {
-      vals.push(`% — ${lgaParam} — %`, `% — ${lgaParam}`, lgaParam);
-      where.push(`(region ILIKE $${vals.length - 2} OR region ILIKE $${vals.length - 1} OR region ILIKE $${vals.length})`);
+    // Multi-select LGAs (comma-separated): the region string matches when
+    // ANY chosen LGA is its middle segment (or the whole legacy value).
+    const lgaList = (url.searchParams.get('lga') || '').split(',').map((x) => x.trim()).filter(Boolean).slice(0, 30);
+    if (lgaList.length) {
+      vals.push(lgaList.map((l) => `% — ${l} — %`), lgaList.map((l) => `% — ${l}`), lgaList);
+      where.push(`(region ILIKE ANY($${vals.length - 2}::text[]) OR region ILIKE ANY($${vals.length - 1}::text[]) OR region ILIKE ANY($${vals.length}::text[]))`);
     }
     // Per-item unit tag filter (came from the media feed; kept in the merge).
     const unit = normaliseCallsign(url.searchParams.get('unit') || '') || null;
