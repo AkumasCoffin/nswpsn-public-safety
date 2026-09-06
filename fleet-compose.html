@@ -170,11 +170,23 @@
           <div class="field"><label for="station">Station</label><input type="text" id="station" maxlength="120"></div>
           <div class="field"><label for="cadCode">CAD code</label><input type="text" id="cadCode" maxlength="60"></div>
           <div class="field"><label for="aerialId">Aerial ID</label><input type="text" id="aerialId" maxlength="60"></div>
-          <div class="field"><label for="vehicleType">Vehicle type</label><input type="text" id="vehicleType" maxlength="120" placeholder="e.g. Pumper, Tanker, Rescue"></div>
+          <div class="field"><label for="vehicleType">Vehicle type</label>
+            <select id="vehicleType"><option value="">Select a type…</option></select>
+            <input type="text" id="vehicleTypeOther" maxlength="120" placeholder="Type of vehicle" style="display:none;margin-top:0.5rem">
+          </div>
           <div class="field"><label for="rego">Registration</label><input type="text" id="rego" maxlength="30"></div>
-          <div class="field"><label for="makeModel">Make / Model / Cab Chassis</label><input type="text" id="makeModel" maxlength="200"></div>
-          <div class="field"><label for="prodYear">Production year</label><input type="text" id="prodYear" inputmode="numeric" maxlength="4" placeholder="e.g. 2021"></div>
-          <div class="field"><label for="crewCap">Crew capacity</label><input type="text" id="crewCap" inputmode="numeric" maxlength="2"></div>
+          <div class="field"><label for="make">Make</label><input type="text" id="make" maxlength="80" placeholder="e.g. Scania, Isuzu, Mercedes-Benz"></div>
+          <div class="field"><label for="model">Model</label><input type="text" id="model" maxlength="80" placeholder="e.g. P320, FTS 139-260"></div>
+          <div class="field"><label for="cabChassis">Cab chassis / body builder</label>
+            <input type="text" id="cabChassis" list="cabChassisList" maxlength="120" placeholder="e.g. SEM, Varley, Mills-Tui" autocomplete="off">
+            <datalist id="cabChassisList"></datalist>
+          </div>
+          <div class="field"><label for="prodYear">Production year</label>
+            <select id="prodYear"><option value="">Select a year…</option></select>
+          </div>
+          <div class="field"><label for="crewCap">Crew capacity</label>
+            <select id="crewCap"><option value="">Select…</option></select>
+          </div>
         </div>
       </div>
 
@@ -199,6 +211,7 @@
         <div class="two-col">
           <div class="field"><label for="waterTank">Water tank capacity (L)</label><input type="text" id="waterTank" inputmode="numeric" maxlength="7"></div>
           <div class="field"><label for="foamTank">Class A foam tank capacity (L)</label><input type="text" id="foamTank" inputmode="numeric" maxlength="7"></div>
+          <div class="field"><label for="foamBTank">Class B foam tank capacity (L)</label><input type="text" id="foamBTank" inputmode="numeric" maxlength="7"></div>
           <div class="field"><label for="baSets">Breathing apparatus sets</label><input type="text" id="baSets" inputmode="numeric" maxlength="2"></div>
           <div class="field"><label>&nbsp;</label><label class="chk"><input type="checkbox" id="cafs"> CAFS equipped</label></div>
         </div>
@@ -375,7 +388,48 @@
       $('#amboSect').style.display = cat === 'ambulance' ? '' : 'none';
     }
     $('#fState').addEventListener('change', () => onStateChange());
-    $('#fAgency').addEventListener('change', applyCategory);
+    $('#fAgency').addEventListener('change', () => { applyCategory(); fillVehicleTypes(); });
+
+    // ---- static dropdowns: year, crew, body builders ----
+    {
+      const yr = $('#prodYear');
+      const now = new Date().getFullYear();
+      for (let y = now; y >= 1950; y--) { const o = document.createElement('option'); o.value = String(y); o.textContent = String(y); yr.appendChild(o); }
+      const crew = $('#crewCap');
+      for (let n = 1; n <= 10; n++) { const o = document.createElement('option'); o.value = String(n); o.textContent = String(n); crew.appendChild(o); }
+      if (window.FleetVocab && FleetVocab.manufacturers) {
+        $('#cabChassisList').innerHTML = FleetVocab.manufacturers.map((m) => `<option value="${esc(m)}">`).join('');
+      }
+    }
+
+    // The chosen agency's KNOWN types fill the dropdown (from the fleet CSV);
+    // 'Other…' reveals free text, and agencies with no list get free text only.
+    function fillVehicleTypes(keep) {
+      const sel = $('#vehicleType'), other = $('#vehicleTypeOther');
+      const types = window.FleetVocab ? FleetVocab.typesFor($('#fAgency').value) : [];
+      if (!types.length) {
+        sel.style.display = 'none';
+        other.style.display = ''; other.style.marginTop = '0';
+        if (keep !== undefined) other.value = keep || '';
+        return;
+      }
+      sel.style.display = ''; other.style.marginTop = '0.5rem';
+      sel.innerHTML = '<option value="">Select a type…</option>' +
+        types.map((t) => `<option value="${esc(t)}">${esc(t)}</option>`).join('') +
+        '<option value="__other">Other…</option>';
+      const val = keep !== undefined ? keep : '';
+      if (val && types.includes(val)) { sel.value = val; other.style.display = 'none'; other.value = ''; }
+      else if (val) { sel.value = '__other'; other.style.display = ''; other.value = val; }
+      else { sel.value = ''; other.style.display = 'none'; other.value = ''; }
+    }
+    $('#vehicleType').addEventListener('change', () => {
+      $('#vehicleTypeOther').style.display = $('#vehicleType').value === '__other' ? '' : 'none';
+    });
+    function vehicleTypeValue() {
+      const sel = $('#vehicleType');
+      if (sel.style.display === 'none' || sel.value === '__other') return $('#vehicleTypeOther').value.trim() || null;
+      return sel.value || null;
+    }
 
     // ---- radio ID chips: Enter adds; exactly 7 digits; no duplicates ----
     function renderChips(kind) {
@@ -411,6 +465,7 @@
       if (cat === 'fire') {
         const wt = numOrNull('#waterTank'); if (wt !== null) specs.water_tank_l = wt;
         const ft = numOrNull('#foamTank'); if (ft !== null) specs.foam_tank_l = ft;
+        const fb = numOrNull('#foamBTank'); if (fb !== null) specs.foam_b_tank_l = fb;
         const ba = numOrNull('#baSets'); if (ba !== null) specs.ba_sets = ba;
         specs.cafs = $('#cafs').checked;
       }
@@ -427,9 +482,11 @@
         station: $('#station').value.trim() || null,
         cad_code: $('#cadCode').value.trim() || null,
         aerial_id: $('#aerialId').value.trim() || null,
-        vehicle_type: $('#vehicleType').value.trim() || null,
+        vehicle_type: vehicleTypeValue(),
         registration: $('#rego').value.trim() || null,
-        make_model: $('#makeModel').value.trim() || null,
+        make: $('#make').value.trim() || null,
+        model: $('#model').value.trim() || null,
+        cab_chassis: $('#cabChassis').value.trim() || null,
         production_year: numOrNull('#prodYear'),
         crew_capacity: numOrNull('#crewCap'),
         radio_ids: state.radio,
@@ -466,22 +523,26 @@
       $('#callsign').value = v.callsign || '';
       $('#fState').value = v.state || '';
       await onStateChange(v.agency);
+      fillVehicleTypes('');
       $('#fLga').value = v.lga || '';
       $('#fSuburb').value = v.suburb || '';
       $('#station').value = v.station || '';
       $('#cadCode').value = v.cad_code || '';
       $('#aerialId').value = v.aerial_id || '';
-      $('#vehicleType').value = v.vehicle_type || '';
+      fillVehicleTypes(v.vehicle_type || '');
       $('#rego').value = v.registration || '';
-      $('#makeModel').value = v.make_model || '';
-      $('#prodYear').value = v.production_year ?? '';
-      $('#crewCap').value = v.crew_capacity ?? '';
+      $('#make').value = v.make || '';
+      $('#model').value = v.model || '';
+      $('#cabChassis').value = v.cab_chassis || '';
+      $('#prodYear').value = v.production_year != null ? String(v.production_year) : '';
+      $('#crewCap').value = v.crew_capacity != null ? String(v.crew_capacity) : '';
       state.radio.cab = (v.radio_ids && v.radio_ids.cab) || [];
       state.radio.mobile = (v.radio_ids && v.radio_ids.mobile) || [];
       renderChips('cab'); renderChips('mobile');
       const sp = v.specs || {};
       $('#waterTank').value = sp.water_tank_l ?? '';
       $('#foamTank').value = sp.foam_tank_l ?? '';
+      $('#foamBTank').value = sp.foam_b_tank_l ?? '';
       $('#baSets').value = sp.ba_sets ?? '';
       $('#cafs').checked = sp.cafs === true;
       $('#stretchers').value = sp.stretchers ?? '';

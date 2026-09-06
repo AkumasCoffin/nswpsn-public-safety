@@ -824,11 +824,13 @@
       const globalRows =
         specRow('Agency', v.agency) + specRow('Station', v.station) + specRow('CAD code', v.cad_code) +
         specRow('Aerial ID', v.aerial_id) + specRow('Vehicle type', v.vehicle_type) +
-        specRow('Registration', v.registration) + specRow('Make / Model', v.make_model) +
+        specRow('Registration', v.registration) + specRow('Make', v.make) +
+        specRow('Model', v.model) + specRow('Cab chassis / body', v.cab_chassis) +
         specRow('Production year', v.production_year) + specRow('Crew capacity', v.crew_capacity);
       const fireRows =
         specRow('Water tank', sp.water_tank_l != null ? `${sp.water_tank_l} L` : null) +
         specRow('Class A foam tank', sp.foam_tank_l != null ? `${sp.foam_tank_l} L` : null) +
+        specRow('Class B foam tank', sp.foam_b_tank_l != null ? `${sp.foam_b_tank_l} L` : null) +
         specRow('CAFS equipped', typeof sp.cafs === 'boolean' ? (sp.cafs ? 'Yes' : 'No') : null) +
         specRow('BA sets', sp.ba_sets);
       const amboRows = specRow('Stretchers', sp.stretchers);

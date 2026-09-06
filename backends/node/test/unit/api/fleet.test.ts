@@ -74,7 +74,8 @@ const row = (over: Record<string, unknown> = {}) => ({
   callsign: 'P 251', state: 'NSW', lga: 'Penrith', suburb: null,
   agency: 'Fire and Rescue NSW (FRNSW)', agency_category: 'fire',
   station: '251 Cardiff', cad_code: null, aerial_id: null,
-  vehicle_type: 'Pumper', registration: 'ABC123', make_model: 'Scania P320',
+  vehicle_type: 'Pumper Class 2', registration: 'ABC123',
+  make: 'Scania', model: 'P320', cab_chassis: 'Varley Group',
   production_year: 2020, crew_capacity: 4,
   radio_ids: { cab: ['1234567'], mobile: [] }, specs: { water_tank_l: 2000, cafs: true },
   image_key: 'wire/img1.webp', views: 3, status: 'published', review_note: null,
@@ -159,7 +160,7 @@ describe('fleet create', () => {
       headers: { 'Content-Type': 'application/json' },
     });
     const insert = calls.find((c) => c.sql.includes('INSERT INTO fleet_vehicles'))!;
-    const radio = JSON.parse(insert.params![14] as string);
+    const radio = JSON.parse(insert.params![16] as string);
     expect(radio).toEqual({ cab: ['1234567'], mobile: ['7654321'] });
   });
 });

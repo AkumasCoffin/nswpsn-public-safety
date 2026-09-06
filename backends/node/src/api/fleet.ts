@@ -107,7 +107,9 @@ interface VehicleFields {
   aerial_id: string | null;
   vehicle_type: string | null;
   registration: string | null;
-  make_model: string | null;
+  make: string | null;
+  model: string | null;
+  cab_chassis: string | null;
   production_year: number | null;
   crew_capacity: number | null;
   radio_ids: { cab: string[]; mobile: string[] };
@@ -140,6 +142,8 @@ function parseVehicle(data: Record<string, unknown>): VehicleFields | { error: s
   if (wt !== null) specs['water_tank_l'] = wt;
   const ft = intIn(specsRaw['foam_tank_l'], 0, 1_000_000);
   if (ft !== null) specs['foam_tank_l'] = ft;
+  const fb = intIn(specsRaw['foam_b_tank_l'], 0, 1_000_000);
+  if (fb !== null) specs['foam_b_tank_l'] = fb;
   if (typeof specsRaw['cafs'] === 'boolean') specs['cafs'] = specsRaw['cafs'];
   const ba = intIn(specsRaw['ba_sets'], 0, 99);
   if (ba !== null) specs['ba_sets'] = ba;
@@ -158,7 +162,9 @@ function parseVehicle(data: Record<string, unknown>): VehicleFields | { error: s
     aerial_id: str(data['aerial_id'], 60),
     vehicle_type: str(data['vehicle_type'], 120),
     registration: str(data['registration'], 30),
-    make_model: str(data['make_model'], 200),
+    make: str(data['make'], 80),
+    model: str(data['model'], 80),
+    cab_chassis: str(data['cab_chassis'], 120),
     production_year: intIn(data['production_year'], 1900, 2100),
     crew_capacity: intIn(data['crew_capacity'], 0, 99),
     radio_ids: { cab: radioList(radioRaw['cab']), mobile: radioList(radioRaw['mobile']) },
@@ -188,7 +194,9 @@ function shapeVehicle(row: any, includeKeys = false): Record<string, unknown> {
     aerial_id: row.aerial_id,
     vehicle_type: row.vehicle_type,
     registration: row.registration,
-    make_model: row.make_model,
+    make: row.make,
+    model: row.model,
+    cab_chassis: row.cab_chassis,
     production_year: row.production_year,
     crew_capacity: row.crew_capacity,
     radio_ids: {
@@ -209,13 +217,17 @@ function shapeVehicle(row: any, includeKeys = false): Record<string, unknown> {
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
 const VEHICLE_COLS = `callsign, state, lga, suburb, agency, agency_category, station, cad_code,
-  aerial_id, vehicle_type, registration, make_model, production_year, crew_capacity,
+  aerial_id, vehicle_type, registration, make, model, cab_chassis, production_year, crew_capacity,
   radio_ids, specs, image_key`;
+
+// The two jsonb values sit at these indexes of vehicleVals -- the INSERT
+// placeholder builder casts them. Keep all three in sync.
+const JSONB_IDX = new Set([16, 17]);
 
 function vehicleVals(v: VehicleFields): unknown[] {
   return [
     v.callsign, v.state, v.lga, v.suburb, v.agency, v.agency_category, v.station, v.cad_code,
-    v.aerial_id, v.vehicle_type, v.registration, v.make_model, v.production_year, v.crew_capacity,
+    v.aerial_id, v.vehicle_type, v.registration, v.make, v.model, v.cab_chassis, v.production_year, v.crew_capacity,
     JSON.stringify(v.radio_ids), JSON.stringify(v.specs), v.image_key,
   ];
 }
@@ -303,7 +315,7 @@ fleetRouter.post('/api/wire/fleet', requireRole(canFeedMedia), async (c) => {
       ? 'published' : 'pending';
     const cols = VEHICLE_COLS.replace(/\s+/g, ' ');
     const vals = vehicleVals(v);
-    const ph = vals.map((_, i) => (i === 14 || i === 15 ? `$${i + 1}::jsonb` : `$${i + 1}`)).join(',');
+    const ph = vals.map((_, i) => (JSONB_IDX.has(i) ? `$${i + 1}::jsonb` : `$${i + 1}`)).join(',');
     const ins = await pool.query<{ id: string }>(
       `INSERT INTO fleet_vehicles (author_id, author_name, status, ${cols})
        VALUES ($${vals.length + 1}, $${vals.length + 2}, $${vals.length + 3}, ${ph}) RETURNING id`,
