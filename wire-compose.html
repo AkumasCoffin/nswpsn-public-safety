@@ -18,6 +18,7 @@
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="auth-common.js"></script>
   <script src="agencies.js"></script>
+  <script src="fleet-vocab.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js" integrity="sha384-948ahk4ZmxYVYOc+rxN1H2gM1EJ2Duhp7uHtZ4WSLkV4Vtx5MUqnV+l7u9B+jFv+" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
 
@@ -283,14 +284,8 @@
       </div>
 
       <div class="field">
-        <label>Location · optional</label>
-        <div class="toggle2" id="locToggle">
-          <button type="button" data-loc="none" aria-current="true">No location</button>
-          <button type="button" data-loc="pin" aria-current="false">Drop a pin</button>
-          <button type="button" data-loc="region" aria-current="false">Pick an area</button>
-        </div>
-        <div id="pinWrap" style="display:none"><div id="pinMap"></div></div>
-        <div id="regionWrap" style="display:none">
+        <label>Location <span style="color:var(--accent)">*</span></label>
+        <div id="regionWrap">
           <!-- Same cascade as signup: State -> LGA (datalist combo backed by
                /api/boundaries/lga-names, degrades to free text) -> optional
                suburb. Stored as ONE readable string, "NSW — Penrith — Emu
@@ -310,6 +305,11 @@
           <datalist id="regionLgaList"></datalist>
           <input type="text" id="regionSuburb" placeholder="Suburb · optional" maxlength="80">
         </div>
+        <div class="toggle2" id="locToggle" style="margin-top:0.6rem">
+          <button type="button" data-loc="nopin" aria-current="true">No pin</button>
+          <button type="button" data-loc="pin" aria-current="false">Drop a pin · optional</button>
+        </div>
+        <div id="pinWrap" style="display:none"><div id="pinMap"></div></div>
         <div class="loc-readout" id="locReadout">No location set.</div>
       </div>
 
@@ -322,7 +322,7 @@
       </div>
 
       <div class="field">
-        <label>Agencies</label>
+        <label>Agencies in Attendance</label>
         <input type="text" id="agencyFilter" placeholder="Filter agencies…" autocomplete="off" style="margin-bottom:0.5rem">
         <div class="agency-check" id="agencyCheck"></div>
       </div>
@@ -783,20 +783,17 @@
       }
     }
     // ---- location ----
+    // The area (State + LGA) is REQUIRED and always visible; the pin is an
+    // optional refinement toggled here.
     $('#locToggle').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => setLocMode(b.dataset.loc)));
     function setLocMode(mode) {
       $('#locToggle').querySelectorAll('button').forEach((b) => b.setAttribute('aria-current', String(b.dataset.loc === mode)));
       $('#pinWrap').style.display = mode === 'pin' ? 'block' : 'none';
-      $('#regionWrap').style.display = mode === 'region' ? 'block' : 'none';
-      if (mode === 'none') {
-        // Optional: clear any location entirely (stored as pin + null coords).
-        state.location = { type: 'pin', region: null, lat: null, lng: null };
-        if (marker && map) { map.removeLayer(marker); marker = null; }
-        $('#regionState').value = ''; $('#regionLga').value = ''; $('#regionSuburb').value = '';
-      } else if (mode === 'pin') {
+      if (mode === 'pin') {
         setTimeout(() => map && map.invalidateSize(), 50);
-        state.location.type = 'pin'; state.location.region = null;
-      } else if (mode === 'region') {
+      } else {
+        // Pin off: drop the marker and fall back to the area's centroid.
+        if (marker && map) { map.removeLayer(marker); marker = null; }
         state.location.type = 'region';
         applyRegionFields();
       }
@@ -808,14 +805,17 @@
       map.on('click', (e) => { setPin(e.latlng.lat, e.latlng.lng); });
     }
     function setPin(lat, lng) {
-      state.location.type = 'pin'; state.location.lat = lat; state.location.lng = lng; state.location.region = null;
+      // The pin refines the area -- region stays.
+      state.location.type = 'pin'; state.location.lat = lat; state.location.lng = lng;
       if (!marker) marker = L.marker([lat, lng]).addTo(map); else marker.setLatLng([lat, lng]);
       refreshLocReadout(); refreshIncidentSuggestions();
     }
     function refreshLocReadout() {
       const l = state.location;
-      $('#locReadout').textContent = l.type === 'region' && l.region ? `Area: ${l.region}` :
-        (l.lat != null ? `Pin: ${l.lat.toFixed(4)}, ${l.lng.toFixed(4)}` : 'No location set.');
+      const bits = [];
+      if (l.region) bits.push(`Area: ${l.region}`);
+      if (l.type === 'pin' && l.lat != null) bits.push(`Pin: ${l.lat.toFixed(4)}, ${l.lng.toFixed(4)}`);
+      $('#locReadout').textContent = bits.join(' · ') || 'Pick the state and LGA — a location is required.';
     }
 
     // region centroid (rough: average of first ring)
@@ -881,6 +881,12 @@
       const lgaName = $('#regionLga').value.trim();
       const suburb = $('#regionSuburb').value.trim();
       const combined = st && lgaName ? [st, lgaName, suburb].filter(Boolean).join(' \u2014 ') : null;
+      if (state.location.type === 'pin' && state.location.lat != null) {
+        // A dropped pin owns the coordinates; the fields only update the area.
+        state.location.region = combined;
+        refreshLocReadout(); refreshIncidentSuggestions();
+        return;
+      }
       let lat = null, lng = null;
       if (combined && st === 'NSW') {
         const f = areaFeature(lgaName);
@@ -1004,34 +1010,24 @@
     $('#incidentSearch').addEventListener('focus', refreshIncidentSuggestions);
     document.addEventListener('click', (e) => { if (!e.target.closest('#incidentBox') && e.target !== $('#incidentSearch')) $('#incidentBox').style.display = 'none'; });
 
-    // ---- agencies ----
-    // Groups hidden from the agency picker (by name or category).
-    const AGENCY_HIDE = new Set(['unconfirmed groups', 'sydney opera house', 'shared liaison groups', 'rental groups']);
+    // ---- agencies in attendance ----
+    // The same per-state department taxonomy the Fleet uses (fleet-vocab.js),
+    // grouped under state headers. Stored as the full department NAMES.
     async function loadAgencies() {
-      try {
-        const data = await window.AgencyJSON.loadData();
-        agencyList = (data.agencies ? Object.values(data.agencies) : [])
-          .filter((a) => !AGENCY_HIDE.has((a.name || '').toLowerCase()) && !AGENCY_HIDE.has((a.category || '').toLowerCase()))
-          .map((a) => ({ slug: a.slug, name: a.name, category: a.category || 'Other' })).sort((a, b) => a.name.localeCompare(b.name));
-      } catch (e) {}
+      agencyList = window.FleetVocab
+        ? FleetVocab.states.flatMap((st) => (FleetVocab.departments[st] || []).map((d) => ({ state: st, name: d.name })))
+        : [];
       renderAgencyCheck('');
       $('#agencyFilter').addEventListener('input', (e) => renderAgencyCheck(e.target.value.trim().toLowerCase()));
     }
-    // Preferred category order; anything else falls to the end alphabetically.
-    const AGENCY_CAT_ORDER = ['Emergency Services', 'Enforcement', 'Transport', 'Utilities', 'Aviation', 'Miscellaneous'];
     function renderAgencyCheck(filter) {
       const box = $('#agencyCheck');
       const matches = agencyList.filter((a) => !filter || a.name.toLowerCase().includes(filter));
-      // Group the matches by category, then render each group under a header.
       const groups = new Map();
-      matches.forEach((a) => { const k = a.category || 'Other'; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(a); });
-      const cats = [...groups.keys()].sort((a, b) => {
-        const ia = AGENCY_CAT_ORDER.indexOf(a), ib = AGENCY_CAT_ORDER.indexOf(b);
-        return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b);
-      });
-      box.innerHTML = cats.map((cat) =>
-        `<div class="agency-cat-hd">${esc(cat)}</div>` + groups.get(cat).map((a) =>
-          `<label><input type="checkbox" value="${esc(a.slug)}" ${state.agencies.has(a.slug) ? 'checked' : ''}> ${esc(a.name)}</label>`).join('')
+      matches.forEach((a) => { if (!groups.has(a.state)) groups.set(a.state, []); groups.get(a.state).push(a); });
+      box.innerHTML = [...groups.keys()].map((st) =>
+        `<div class="agency-cat-hd">${esc(st)}</div>` + groups.get(st).map((a) =>
+          `<label><input type="checkbox" value="${esc(a.name)}" ${state.agencies.has(a.name) ? 'checked' : ''}> ${esc(a.name)}</label>`).join('')
       ).join('') || `<div class="agency-cat-hd" style="opacity:0.6">No agencies match.</div>`;
       box.querySelectorAll('input').forEach((c) => c.addEventListener('change', () => { c.checked ? state.agencies.add(c.value) : state.agencies.delete(c.value); }));
     }
@@ -1091,10 +1087,10 @@
           region: lead.location.region || null,
           lat: lead.location.lat, lng: lead.location.lng,
         };
-        const isRegion = state.location.type === 'region' && state.location.region;
-        setLocMode(isRegion ? 'region' : (state.location.lat != null ? 'pin' : 'none'));
-        if (isRegion) { setRegionFields(state.location.region); }
-        else if (state.location.lat != null) setPin(state.location.lat, state.location.lng);
+        const hasPin = state.location.type === 'pin' && state.location.lat != null;
+        setLocMode(hasPin ? 'pin' : 'nopin');
+        if (state.location.region) setRegionFields(state.location.region);
+        if (hasPin) setPin(state.location.lat, state.location.lng);
       }
       if (!state.incident && lead.incident) {
         state.incident = lead.incident;
@@ -1192,6 +1188,7 @@
     async function submit(status, next) {
       if (!$('#title').value.trim()) { setMsg('A headline is required.', true); return; }
       if (status === 'published' && !$('#rightsAffirm').checked) { setMsg('Please confirm you hold the rights before publishing.', true); return; }
+      if (status === 'published' && !($('#regionState').value && $('#regionLga').value.trim())) { setMsg('A location (state and LGA) is required.', true); return; }
       if (state.media.some((m) => m.uploading)) { setMsg('Wait for images to finish uploading.', true); return; }
       setBusy(true); setMsg('Saving…');
       const payload = buildPayload(status);
@@ -1264,11 +1261,11 @@
       state.incident = it.incident || null;
       if (it.location) state.location = { type: it.location.type || 'pin', region: it.location.region || null, lat: it.location.lat, lng: it.location.lng };
       renderMedia(); renderAgencyCheck(''); renderIncidentChosen(); renderCoAuthorChips();
-      const hasLoc = (state.location.type === 'region' && state.location.region) || (state.location.type === 'pin' && state.location.lat != null);
-      const wasRegion = state.location.type === 'region', wasLat = state.location.lat, wasLng = state.location.lng, wasRegionName = state.location.region;
-      setLocMode(hasLoc ? state.location.type : 'none');
-      if (hasLoc && !wasRegion && wasLat != null) setPin(wasLat, wasLng);
-      if (hasLoc && wasRegion && wasRegionName) { setRegionFields(wasRegionName); }
+      const wasPin = state.location.type === 'pin' && state.location.lat != null;
+      const wasLat = state.location.lat, wasLng = state.location.lng, wasRegionName = state.location.region;
+      setLocMode(wasPin ? 'pin' : 'nopin');
+      if (wasRegionName) await setRegionFields(wasRegionName);
+      if (wasPin) setPin(wasLat, wasLng);
     }
 
     // ---- init ----

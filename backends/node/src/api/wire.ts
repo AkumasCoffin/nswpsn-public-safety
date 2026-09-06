@@ -133,14 +133,18 @@ async function wireReadable(c: { get: (k: string) => unknown }): Promise<boolean
 // ---- validation ------------------------------------------------------------
 
 function cleanAgencies(raw: unknown): string[] {
+  // Department names from the fleet taxonomy (e.g. "Fire and Rescue NSW
+  // (FRNSW)") -- stored as given, deduped case-insensitively. Older posts
+  // carry the previous slug format; they still render and just don't match
+  // the new name-based filter.
   if (!Array.isArray(raw)) return [];
   const seen = new Set<string>();
   const out: string[] = [];
   for (const a of raw) {
     if (typeof a !== 'string') continue;
-    const s = a.trim().toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 40);
-    if (!s || seen.has(s)) continue;
-    seen.add(s);
+    const s = a.trim().slice(0, 120);
+    if (!s || seen.has(s.toLowerCase())) continue;
+    seen.add(s.toLowerCase());
     out.push(s);
     if (out.length >= 20) break;
   }
@@ -159,7 +163,9 @@ function cleanLocation(data: Record<string, unknown>): LocationFields {
     const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() ? Number(v) : NaN;
     return Number.isFinite(n) ? n : null;
   };
-  const region = type === 'region' && typeof data['region'] === 'string' ? (data['region'] as string).trim().slice(0, 120) || null : null;
+  // The area (region string) is kept for BOTH types: a dropped pin refines
+  // the required State/LGA area, it doesn't replace it.
+  const region = typeof data['region'] === 'string' ? (data['region'] as string).trim().slice(0, 120) || null : null;
   return { location_type: type, region, lat: toNum(data['lat']), lng: toNum(data['lng']) };
 }
 
@@ -1037,6 +1043,9 @@ wireRouter.post('/api/wire/articles', requireRole(canFeedMedia), async (c) => {
     // video player's overlay (video can't be burned in without a transcode).
     const watermark = data['watermark'] === true;
     if (wantPublish && data['rights_affirmed'] !== true) return c.json({ error: 'you must confirm you own or have the rights to publish this' }, 400);
+    // A location (State + LGA) is required to publish; the map pin stays
+    // optional. Drafts may be saved without one.
+    if (wantPublish && !loc.region) return c.json({ error: 'a location (state and LGA) is required' }, 400);
     const mv = validateMedia(data['media'], ARTICLE);
     if ('error' in mv) return c.json({ error: mv.error }, 400);
     if (await findDuplicateImageHash(pool, mv.items, null)) {
@@ -1129,6 +1138,7 @@ wireRouter.put('/api/wire/articles/:id', async (c) => {
     // video player's overlay (video can't be burned in without a transcode).
     const watermark = data['watermark'] === true;
     if (data['status'] === 'published' && data['rights_affirmed'] !== true) return c.json({ error: 'you must confirm you own or have the rights to publish this' }, 400);
+    if (data['status'] === 'published' && !loc.region) return c.json({ error: 'a location (state and LGA) is required' }, 400);
     const mv = validateMedia(data['media'], ARTICLE);
     if ('error' in mv) return c.json({ error: mv.error }, 400);
     if (await findDuplicateImageHash(pool, mv.items, id)) {
