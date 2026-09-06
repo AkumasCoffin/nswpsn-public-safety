@@ -404,12 +404,13 @@
       <input type="text" id="fSearch" placeholder="Search The Wire…" autocomplete="off" style="min-width:200px">
       <input type="text" id="fUnit" placeholder="Filter by unit / callsign…" autocomplete="off">
       <select id="fAgency"><option value="">All agencies</option></select>
-      <select id="fRegion"><option value="">All LGAs</option></select>
+      <input type="text" id="aLga" list="aLgaList" placeholder="All LGAs…" autocomplete="off">
+      <datalist id="aLgaList"></datalist>
       <button class="clear" id="fClear">Clear</button>
     </div>
 
-    <!-- Fleet: a tab per state, then agency (fleet-vocab taxonomy) and
-         LGA — the same State -> LGA hierarchy posting uses. -->
+    <!-- A tab per state, shared by the article and fleet feeds — the site
+         is Australia-wide, and posting stores State -> LGA -> Suburb. -->
     <div class="wire-tabs2" id="fleetStateTabs" style="display:none" role="tablist">
       <button data-fs="" class="on">All states</button>
       <button data-fs="NSW">NSW</button><button data-fs="VIC">VIC</button><button data-fs="QLD">QLD</button><button data-fs="WA">WA</button><button data-fs="SA">SA</button><button data-fs="TAS">TAS</button><button data-fs="ACT">ACT</button><button data-fs="NT">NT</button>
@@ -504,19 +505,6 @@
       return `<span class="wire-draft-badge" style="color:${color};border:1px solid ${color === 'var(--text-soft)' ? 'var(--border-subtle)' : color}">${label}</span>`;
     }
 
-    // Region-grouped <optgroup>s for an LGA <select> (mapping lga-regions.json).
-    const WIRE_REGION_ORDER = ['Greater Sydney', 'Central Coast', 'Hunter', 'Illawarra-Shoalhaven', 'North Coast', 'New England North West', 'Central West and Orana', 'Riverina Murray', 'South East and Tablelands', 'Far West', 'Other'];
-    function buildLgaOptgroups(rawNames, lgaReg) {
-      const groups = {};
-      rawNames.forEach((raw) => { const region = (lgaReg && lgaReg[raw]) || 'Other'; (groups[region] = groups[region] || []).push(titleCase(raw)); });
-      const frag = document.createDocumentFragment();
-      Object.keys(groups).sort((a, b) => { const ia = WIRE_REGION_ORDER.indexOf(a), ib = WIRE_REGION_ORDER.indexOf(b); return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b); }).forEach((region) => {
-        const og = document.createElement('optgroup'); og.label = region;
-        groups[region].sort((a, b) => a.localeCompare(b)).forEach((name) => { const o = document.createElement('option'); o.value = name; o.textContent = name; og.appendChild(o); });
-        frag.appendChild(og);
-      });
-      return frag;
-    }
 
     async function loadKey() {
       if (API_KEY) return API_KEY;
@@ -568,10 +556,6 @@
           .filter((a) => !HIDE.has((a.name || '').toLowerCase()) && !HIDE.has((a.category || '').toLowerCase()))
           .sort((a, b) => a.name.localeCompare(b.name))
           .forEach((a) => { const o = document.createElement('option'); o.value = a.slug; o.textContent = a.name; sel.appendChild(o); });
-      } catch (e) {}
-      try {
-        const lgaReg = await fetch('data/boundaries/lga-regions.json', { cache: 'force-cache' }).then((r) => r.json()).catch(() => ({}));
-        $('#fRegion').appendChild(buildLgaOptgroups(Object.keys(lgaReg), lgaReg));
       } catch (e) {}
     }
 
@@ -707,14 +691,15 @@
       const params = new URLSearchParams();
       if (fleetMode) {
         const search = $('#flSearch').value.trim(); if (search) params.set('q', search);
-        if (fleetState) params.set('state', fleetState);
+        if (feedState) params.set('state', feedState);
         const ag = $('#flAgency').value; if (ag) params.set('agency', ag);
         const lg = $('#flLga').value.trim(); if (lg) params.set('lga', lg);
       } else {
         const search = $('#fSearch').value.trim(); if (search) params.set('q', search);
         const unit = $('#fUnit').value.trim(); if (unit) params.set('unit', unit);
         const ag = $('#fAgency').value; if (ag) params.set('agency', ag);
-        const rg = $('#fRegion').value; if (rg) params.set('region', rg);
+        if (feedState) params.set('state', feedState);
+        const lg = $('#aLga').value.trim(); if (lg) params.set('lga', lg);
       }
       params.set('limit', PAGE); params.set('offset', offset);
       return params;
@@ -806,7 +791,7 @@
       if (!show) { set('#filters', false); set('#fleetFilters', false); set('#fleetStateTabs', false); $('#mineFilters').style.display = 'none'; return; }
       set('#filters', show && !mineMode && !fleetMode);
       set('#fleetFilters', show && fleetMode && !mineMode);
-      set('#fleetStateTabs', show && fleetMode && !mineMode);
+      set('#fleetStateTabs', show && !mineMode);
       $('#mineFilters').style.display = 'none';
     }
 
@@ -1446,54 +1431,63 @@
         : (fleetMode
           ? 'The fleet — emergency-service vehicles documented by contributors.'
           : 'Independent photos, video & reporting from contributors on the ground.');
-      if (fleetMode && window.FleetVocab) {
-        // The selected state tab narrows the agency dropdown to that state's
-        // departments and swaps the LGA suggestions — the same State -> LGA
-        // hierarchy the composer uses.
-        const fillAg = () => {
-          const lists = fleetState ? [FleetVocab.departments[fleetState] || []] : Object.values(FleetVocab.departments);
-          const names = [...new Set(lists.flat().map((d) => d.name))];
-          const keep = $('#flAgency').value;
-          $('#flAgency').innerHTML = '<option value="">All agencies</option>' +
-            names.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
-          if (names.includes(keep)) $('#flAgency').value = keep;
-        };
-        const fillLga = async () => {
-          const list = $('#flLgaList');
-          if (!fleetState) { list.innerHTML = ''; return; }
-          if (_flLgaCache[fleetState]) { list.innerHTML = _flLgaCache[fleetState]; return; }
-          try {
-            const r = await fetch(`${API_BASE}/api/boundaries/lga-names?state=${fleetState}`, { headers: await userHeaders() });
-            if (!r.ok) return;
-            const opts = ((await r.json()).names || []).map((n) => `<option value="${esc(n)}">`).join('');
-            _flLgaCache[fleetState] = opts;
-            list.innerHTML = opts;
-          } catch (e) { /* suggestions optional */ }
-        };
-        fillAg();
-        $('#fleetStateTabs').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
-          fleetState = b.dataset.fs;
-          $('#fleetStateTabs').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
-          $('#flLga').value = '';
-          fillAg(); fillLga(); loadFeed();
-        }));
+      // The state tabs serve both feeds: they narrow the fleet agency
+      // dropdown to that state's departments (fleet-vocab) and swap the LGA
+      // suggestions for whichever LGA box the mode shows — the same
+      // State -> LGA hierarchy the composers store.
+      const lgaBox = () => $(fleetMode ? '#flLga' : '#aLga');
+      const lgaListEl = () => $(fleetMode ? '#flLgaList' : '#aLgaList');
+      const fillAg = () => {
+        if (!fleetMode || !window.FleetVocab) return;
+        const lists = feedState ? [FleetVocab.departments[feedState] || []] : Object.values(FleetVocab.departments);
+        const names = [...new Set(lists.flat().map((d) => d.name))];
+        const keep = $('#flAgency').value;
+        $('#flAgency').innerHTML = '<option value="">All agencies</option>' +
+          names.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+        if (names.includes(keep)) $('#flAgency').value = keep;
+      };
+      const fillLga = async () => {
+        const list = lgaListEl();
+        if (!feedState) { list.innerHTML = ''; return; }
+        if (_flLgaCache[feedState]) { list.innerHTML = _flLgaCache[feedState]; return; }
+        try {
+          const r = await fetch(`${API_BASE}/api/boundaries/lga-names?state=${feedState}`, { headers: await userHeaders() });
+          if (!r.ok) return;
+          const opts = ((await r.json()).names || []).map((n) => `<option value="${esc(n)}">`).join('');
+          _flLgaCache[feedState] = opts;
+          list.innerHTML = opts;
+        } catch (e) { /* suggestions optional */ }
+      };
+      fillAg();
+      $('#fleetStateTabs').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
+        feedState = b.dataset.fs;
+        $('#fleetStateTabs').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+        lgaBox().value = '';
+        fillAg(); fillLga(); loadFeed();
+      }));
+      if (fleetMode) {
         ['flSearch', 'flAgency', 'flLga'].forEach((id) => {
           const el = $('#' + id); const ev = id === 'flAgency' ? 'change' : 'input';
           let t; el.addEventListener(ev, () => { clearTimeout(t); t = setTimeout(loadFeed, ev === 'input' ? 300 : 0); });
         });
         $('#flClear').addEventListener('click', () => {
           $('#flSearch').value = ''; $('#flAgency').value = ''; $('#flLga').value = '';
-          fleetState = '';
+          feedState = '';
           $('#fleetStateTabs').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x.dataset.fs === ''));
           fillAg(); fillLga(); loadFeed();
         });
       }
     }
-    ['fSearch', 'fUnit', 'fAgency', 'fRegion'].forEach((id) => {
-      const el = $('#' + id); const ev = (id === 'fUnit' || id === 'fSearch') ? 'input' : 'change';
+    ['fSearch', 'fUnit', 'fAgency', 'aLga'].forEach((id) => {
+      const el = $('#' + id); const ev = id === 'fAgency' ? 'change' : 'input';
       let t; el.addEventListener(ev, () => { clearTimeout(t); t = setTimeout(loadFeed, ev === 'input' ? 300 : 0); });
     });
-    $('#fClear').addEventListener('click', () => { $('#fSearch').value = ''; $('#fUnit').value = ''; $('#fAgency').value = ''; $('#fRegion').value = ''; loadFeed(); });
+    $('#fClear').addEventListener('click', () => {
+      $('#fSearch').value = ''; $('#fUnit').value = ''; $('#fAgency').value = ''; $('#aLga').value = '';
+      feedState = '';
+      $('#fleetStateTabs').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x.dataset.fs === ''));
+      loadFeed();
+    });
 
     window.addEventListener('popstate', () => {
       const p = new URLSearchParams(location.search);
@@ -1511,7 +1505,7 @@
     // else finds out by asking the feed, which the server gates with the same
     // wireReadable() check. A 404 there means "not for you yet".
     let WIRE_IS_PUBLIC = null;   // null = unknown
-    let fleetState = '';         // selected fleet state tab ('' = all)
+    let feedState = '';          // selected state tab ('' = all); shared by both feeds
     const _flLgaCache = {};
     async function loadWireSettings() {
       try {

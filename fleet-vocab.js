@@ -34,6 +34,7 @@
     QLD: [
       { name: "Queensland Police Service", cat: "police" },
       { name: "Queensland Fire Department", cat: "fire" },
+      { name: "Rural Fire Service Queensland", cat: "fire" },
       { name: "Queensland SES", cat: "ses" },
       { name: "Queensland Ambulance Service", cat: "ambulance" },
     ],

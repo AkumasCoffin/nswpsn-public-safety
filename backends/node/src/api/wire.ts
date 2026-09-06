@@ -844,6 +844,20 @@ const listArticlesHandler = async (c: any) => {
     if (q) { vals.push(`%${q}%`); where.push(`(title ILIKE $${vals.length} OR excerpt ILIKE $${vals.length} OR body ILIKE $${vals.length})`); }
     if (agency) { vals.push(JSON.stringify([agency])); where.push(`agencies @> $${vals.length}::jsonb`); }
     if (region) { vals.push(region); where.push(`region = $${vals.length}`); }
+    // Australia-wide location filters against the stored combined region
+    // string ("NSW — Penrith — Emu Plains"). Legacy rows are a bare NSW
+    // LGA name with no separator, so the NSW tab claims them too.
+    const stateParam = (url.searchParams.get('state') || '').trim().toUpperCase();
+    if (/^(NSW|VIC|QLD|WA|SA|TAS|ACT|NT)$/.test(stateParam)) {
+      vals.push(`${stateParam} — %`);
+      const legacyNsw = stateParam === 'NSW' ? ` OR (region IS NOT NULL AND region NOT LIKE '% — %')` : '';
+      where.push(`(region LIKE $${vals.length}${legacyNsw})`);
+    }
+    const lgaParam = (url.searchParams.get('lga') || '').trim();
+    if (lgaParam) {
+      vals.push(`% — ${lgaParam} — %`, `% — ${lgaParam}`, lgaParam);
+      where.push(`(region ILIKE $${vals.length - 2} OR region ILIKE $${vals.length - 1} OR region ILIKE $${vals.length})`);
+    }
     // Per-item unit tag filter (came from the media feed; kept in the merge).
     const unit = normaliseCallsign(url.searchParams.get('unit') || '') || null;
     if (unit) {
