@@ -46,6 +46,7 @@ function injectAuthSection() {
             <span id="notif-badge" style="display:none; position:absolute; top:-5px; right:-5px; min-width:15px; height:15px; padding:0 3px; box-sizing:border-box; background:#ef4444; color:#fff; border-radius:999px; font-size:0.6rem; font-weight:700; line-height:15px; text-align:center;"></span>
           </button>
           <div id="auth-account-menu" role="menu" style="display:none; position:absolute; top:calc(100% + 6px); left:0; z-index:1200; min-width:230px; background:#1e293b; border:1px solid rgba(148,163,184,0.25); border-radius:10px; box-shadow:0 12px 30px rgba(0,0,0,0.5); padding:0.35rem; box-sizing:border-box;">
+            <div id="auth-menu-roles"></div>
             <button type="button" role="menuitem" onclick="closeAccountMenu(); openProfileModal();" style="display:flex; align-items:center; gap:0.6rem; width:100%; padding:0.55rem 0.7rem; background:none; border:0; border-radius:7px; color:#e2e8f0; font-size:0.83rem; font-family:inherit; cursor:pointer; text-align:left;" onmouseover="this.style.background='rgba(148,163,184,0.1)'" onmouseout="this.style.background='none'">
               <i class="fas fa-user-cog" style="width:16px; text-align:center; color:#94a3b8;"></i> Profile &amp; Account Settings
             </button>
@@ -1265,24 +1266,30 @@ async function checkAuthState() {
       // Legacy names are accepted too, for pre-migration-059 rows.
       const _roles = Array.isArray(roleData.roles) ? roleData.roles : [];
       const _hasAny = (...names) => names.some((n) => _roles.includes(n));
+      // They live in the avatar dropdown, styled like its other entries.
+      const menuItem = (href, icon, label, color) =>
+        `<a href="${href}" role="menuitem" style="display:flex; align-items:center; gap:0.6rem; width:100%; padding:0.55rem 0.7rem; border-radius:7px; color:${color}; font-size:0.83rem; text-decoration:none; box-sizing:border-box;" onmouseover="this.style.background='rgba(148,163,184,0.1)'" onmouseout="this.style.background='none'">
+          <i class="fas ${icon}" style="width:16px; text-align:center;"></i> ${label}
+        </a>`;
       if (roleData.is_team_member || roleData.is_owner ||
           _hasAny('staff', 'team_member', 'feeder:monitor', 'node_monitor',
                   'feeder:manager', 'wire:manager', 'map:manager')) {
-        buttons += `<a href="staff.html" style="flex:1; display:flex; align-items:center; justify-content:center; gap:0.35rem; padding:0.35rem 0.5rem; background:rgba(249,115,22,0.15); border:1px solid rgba(249,115,22,0.3); border-radius:6px; color:#fb923c; font-size:0.72rem; text-decoration:none; white-space:nowrap;">
-          <i class="fas fa-users-cog"></i> Staff
-        </a>`;
+        buttons += menuItem('staff.html', 'fa-users-cog', 'Staff', '#fb923c');
       }
 
-      // Radio Feeder chip - for radio contributors (links to their node
-      // download + status page). Same shape/placement as the Staff chip,
-      // distinct sky accent so the two are easy to tell apart.
+      // Radio Feeder - for radio contributors (links to their node
+      // download + status page). Distinct sky accent from Staff.
       if (_hasAny('feeder:radio', 'radio_contributor', 'feeder:pager', 'pager_contributor')) {
-        buttons += `<a href="feeder.html" style="flex:1; display:flex; align-items:center; justify-content:center; gap:0.35rem; padding:0.35rem 0.5rem; background:rgba(56,189,248,0.15); border:1px solid rgba(56,189,248,0.3); border-radius:6px; color:#38bdf8; font-size:0.72rem; text-decoration:none; white-space:nowrap;">
-          <i class="fas fa-satellite-dish"></i> Feeder
-        </a>`;
+        buttons += menuItem('feeder.html', 'fa-satellite-dish', 'Feeder', '#38bdf8');
       }
 
-      if (buttonsDiv) buttonsDiv.innerHTML = buttons;
+      const rolesSlot = document.getElementById('auth-menu-roles');
+      if (rolesSlot) {
+        rolesSlot.innerHTML = buttons
+          ? buttons + '<div style="height:1px; background:rgba(148,163,184,0.18); margin:0.3rem 0.2rem;"></div>'
+          : '';
+      }
+      if (buttonsDiv) buttonsDiv.innerHTML = '';
     } else {
       // Role check failed after retries - show warning in sidebar
       console.error('Failed to load user roles after retries');
@@ -1297,6 +1304,9 @@ async function checkAuthState() {
     loggedOutDiv.style.display = 'block';
     loggedInDiv.style.display = 'none';
     if (buttonsDiv) buttonsDiv.innerHTML = '';
+    const rolesSlot = document.getElementById('auth-menu-roles');
+    if (rolesSlot) rolesSlot.innerHTML = '';
+    closeAccountMenu();
     // Logged out: no bell activity.
     stopNotifPolling();
     closeNotifPanel();
