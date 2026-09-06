@@ -396,7 +396,7 @@
             Sign up with Email
           </button>
           <p style="color:#64748b; font-size:0.78rem; margin-top:0.5rem; text-align:center;">
-            You'll choose a username and password as part of the form.
+            You'll choose a display name and password as part of the form.
           </p>
         </div>
         <div id="discord-linked-box" style="display:none; margin-bottom:1.5rem; background:rgba(88,101,242,0.12); border:1px solid rgba(88,101,242,0.4); border-radius:8px; padding:0.85rem 1rem; font-size:0.85rem; color:#c7d2fe;">
@@ -531,9 +531,9 @@
           <div id="password-group">
             <div class="form-group">
               <label class="form-label">
-                Username <span class="required">*</span>
+                Display name <span class="required">*</span>
               </label>
-              <input type="text" id="signup-username" class="form-input" placeholder="How you'll appear around the site" maxlength="32" autocomplete="username">
+              <input type="text" id="signup-username" class="form-input" placeholder="How you'll appear around the site — spaces welcome" maxlength="40" autocomplete="username">
             </div>
             <div class="form-group">
               <label class="form-label">
@@ -1225,7 +1225,7 @@
       if (!existingSession) {
         const username = document.getElementById('signup-username').value.trim();
         if (username.length < 2) {
-          messageEl.textContent = 'Please choose a username (at least 2 characters).';
+          messageEl.textContent = 'Please choose a display name (at least 2 characters).';
           messageEl.className = 'message error'; return;
         }
         if (!email) {
@@ -1419,7 +1419,7 @@
       if (_signupMode === 'email' && !existingSession) {
         const username = document.getElementById('signup-username').value.trim();
         if (username.length < 2) {
-          messageEl.textContent = 'Please choose a username (at least 2 characters).';
+          messageEl.textContent = 'Please choose a display name (at least 2 characters).';
           messageEl.className = 'message error';
           return;
         }
