@@ -268,12 +268,6 @@ function createProfileModal() {
       </div>
 
       <div style="margin-bottom:1.2rem;">
-        <label style="display:block; color:#cbd5e1; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem; font-weight:600;">Username</label>
-        <input type="text" id="profile-handle" maxlength="32" autocomplete="username" style="width:100%; padding:0.65rem 0.75rem; background:rgba(2,6,23,0.5); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#fff; font-size:0.9rem; box-sizing:border-box; font-family:inherit;" placeholder="account-handle">
-        <div style="color:#64748b; font-size:0.75rem; margin-top:0.35rem;">Your account handle — for your login identity only, never shown publicly. Letters, numbers, dots, dashes and underscores.</div>
-      </div>
-
-      <div style="margin-bottom:1.2rem;">
         <label style="display:block; color:#cbd5e1; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem; font-weight:600;">Bio</label>
         <textarea id="profile-bio" maxlength="500" rows="3" placeholder="A line or two about you — shown on your public profile." style="width:100%; padding:0.65rem 0.75rem; background:rgba(2,6,23,0.5); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#fff; font-size:0.9rem; box-sizing:border-box; font-family:inherit; resize:vertical;"></textarea>
         <div style="display:flex; justify-content:space-between; gap:0.5rem; color:#64748b; font-size:0.75rem; margin-top:0.35rem;">
@@ -911,8 +905,6 @@ async function openProfileModal() {
   const identities = user.identities || [];
 
   document.getElementById('profile-username').value = meta.display_name || '';
-  const handleEl = document.getElementById('profile-handle');
-  if (handleEl) handleEl.value = meta.username || '';
   document.getElementById('profile-email-value').textContent = user.email || 'No email on account';
 
   const discordIdentity = identities.find((i) => i.provider === 'discord');
@@ -1014,14 +1006,6 @@ async function saveProfile() {
     msg.textContent = 'Display name must be at least 2 characters.';
     return;
   }
-  // Username: the account handle. Login stays email/Discord — this is just
-  // the account's identity string, so it keeps a strict charset.
-  const handle = (document.getElementById('profile-handle')?.value || '').trim();
-  if (handle && !/^[A-Za-z0-9._-]{3,32}$/.test(handle)) {
-    msg.style.color = '#ef4444';
-    msg.textContent = 'Usernames are 3–32 characters: letters, numbers, dots, dashes, underscores — no spaces.';
-    return;
-  }
   btn.disabled = true;
   btn.textContent = 'Saving…';
   try {
@@ -1030,7 +1014,6 @@ async function saveProfile() {
     // 1) Supabase metadata: display name, and mirror the custom avatar so the
     //    sidebar/avatars can use it without a backend round-trip.
     const metaData = { display_name: username || null };
-    if (handle) metaData.username = handle;
     if (_pendingAvatarUrl) metaData.custom_avatar_url = _pendingAvatarUrl;
     const { error } = await sb.auth.updateUser({ data: metaData });
     if (error) throw new Error(error.message);
