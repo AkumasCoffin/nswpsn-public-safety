@@ -1086,13 +1086,23 @@
       const back = `<button class="wire-back" id="backBtn"><i class="fa-solid fa-arrow-left"></i> Back to The Wire</button>`;
       const hasVideo = galleryMedia.some((m) => m.kind === 'video');
       const eyebrow = `<div class="wd-eyebrow">Dispatch · ${isArticle ? 'Article' : (hasVideo ? 'Video' : 'Photo set')}</div>`;
+      // A draft needs to LOOK like one -- a full-width banner, not a chip.
+      const draftBanner = item.status === 'draft' ? `
+        <div style="display:flex; align-items:center; gap:0.8rem; flex-wrap:wrap; background:rgba(245,158,11,0.12); border:1.5px dashed rgba(245,158,11,0.55); border-radius:10px; padding:0.75rem 1rem; margin:0.4rem 0 1.1rem;">
+          <i class="fa-solid fa-file-pen" style="color:#fbbf24; font-size:1.1rem;"></i>
+          <div style="flex:1; min-width:200px;">
+            <div style="color:#fbbf24; font-weight:800; font-size:0.9rem; letter-spacing:0.04em;">DRAFT — not published</div>
+            <div style="color:var(--text-muted); font-size:0.8rem;">Only you can see this. Publish it from the editor when it's ready.</div>
+          </div>
+          ${ME.userId && item.author && item.author.id === ME.userId ? `<a class="wd-btn" style="font-size:0.78rem" href="wire-compose?edit=${encodeURIComponent(item.id)}"><i class="fa-solid fa-pen"></i> Continue editing</a>` : ''}
+        </div>` : '';
       // Both media posts and articles use the mockup's two-column layout: a
       // gallery panel (3:2, contained) on the left, the info rail on the right.
       // Articles render their Markdown body under the gallery.
       const left = isArticle
         ? `${galleryMedia.length ? galleryPane() : ''}<div class="wd-article">${DOMPurify.sanitize(marked.parse(item.body || ''))}</div>`
         : `${galleryPane()}<p class="wd-caption">${esc(item.caption || '')}</p>`;
-      $('#detail').innerHTML = `${back}${eyebrow}
+      $('#detail').innerHTML = `${back}${eyebrow}${draftBanner}
         <div class="wd-grid${isArticle ? ' wd-grid-article' : ''}">
           <div>${left}</div>
           <div>

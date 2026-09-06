@@ -1245,6 +1245,10 @@
       state.coAuthors = (it.co_authors || []).map((c) => ({ id: c.id, name: c.name, avatar_url: c.avatar_url || null }));
       const wmEl = $('#watermarkToggle'); if (wmEl) wmEl.checked = it.watermark === true;
       state.savedStatus = it.status || null;
+      // Editing a draft should FEEL like editing a draft.
+      if (it.status === 'draft') {
+        $('#composeSub').innerHTML = '<span style="display:inline-flex; align-items:center; gap:0.45rem; color:#fbbf24; font-weight:700;"><i class="fa-solid fa-file-pen"></i> DRAFT — not published. It stays private until you press Publish.</span>';
+      }
       syncPartBtn();
       if (it.parent_article_id) {
         // Resolve the lead's title for the chip (the article payload carries only the id).
