@@ -23,6 +23,10 @@
       { name: "Forestry Corporation NSW", cat: "fire" },
       { name: "National Parks and Wildlife Service", cat: "fire" },
       { name: "Water NSW", cat: "other" },
+      { name: "Transport for NSW - Roads", cat: "other" },
+      { name: "Transport for NSW - Rail", cat: "other" },
+      { name: "Sydney Trains", cat: "other" },
+      { name: "Australian Rail Track Corporation", cat: "other" },
     ],
     VIC: [
       { name: "Victoria Police", cat: "police" },
@@ -37,6 +41,8 @@
       { name: "Rural Fire Service Queensland", cat: "fire" },
       { name: "Queensland SES", cat: "ses" },
       { name: "Queensland Ambulance Service", cat: "ambulance" },
+      { name: "Queensland Rail", cat: "other" },
+      { name: "Translink", cat: "other" },
     ],
     WA: [
       { name: "WA Police Force", cat: "police" },
