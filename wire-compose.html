@@ -109,20 +109,25 @@
     .chip { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.78rem; background: var(--bg-elevated-soft); border: 1px solid var(--border-subtle); padding: 0.3rem 0.6rem; border-radius: 7px; }
     .chip b { cursor: pointer; color: var(--text-soft); }
     .chip b:hover { color: #ef4444; }
-    .suggest-box { border: 1px solid var(--border-subtle); border-radius: 9px; max-height: 220px; overflow-y: auto; background: var(--bg-elevated); margin-top: 0.5rem; }
+    .suggest-box { border: 1px solid var(--border-subtle); border-radius: 9px; max-height: 220px; overflow-y: auto; overscroll-behavior: contain; background: var(--bg-elevated); margin-top: 0.5rem; }
     .suggest-box .row { display: flex; justify-content: space-between; gap: 0.5rem; padding: 0.5rem 0.7rem; cursor: pointer; border-bottom: 1px solid var(--border-subtle); }
     .suggest-box .row:last-child { border-bottom: 0; }
     .suggest-box .row:hover, .suggest-box .row.sel { background: var(--accent-soft); }
     .suggest-box .row small { color: var(--text-soft); }
-    .agency-check { max-height: 200px; overflow-y: auto; border: 1px solid var(--border-subtle); border-radius: 9px; padding: 0.4rem; background: var(--bg-elevated); }
+    /* overscroll-behavior: once a touch gesture hits this box's edge the
+       scroll must NOT chain to the page -- on iOS the gesture latches to
+       the page and swipes over the list stop scrolling the list at all
+       ("couldn't scroll back up"). Top padding lives on the headers, not
+       the box, so the sticky headers pin flush at top: 0 instead of
+       hanging half-clipped outside the scrollport. */
+    .agency-check { max-height: 200px; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--border-subtle); border-radius: 9px; padding: 0 0.4rem 0.4rem; background: var(--bg-elevated); }
     .agency-check label { display: flex; align-items: center; gap: 0.5rem; padding: 0.3rem 0.4rem; font-size: 0.82rem; border-radius: 6px; cursor: pointer; }
     .agency-check label:hover { background: rgba(148,163,184,0.08); }
     .agency-check input { width: auto; }
-    .agency-cat-hd { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--accent); font-weight: 700; padding: 0.5rem 0.4rem 0.25rem; position: sticky; top: -0.4rem; background: var(--bg-elevated); }
-    .agency-cat-hd:first-child { padding-top: 0.2rem; }
+    .agency-cat-hd { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--accent); font-weight: 700; padding: 0.5rem 0.4rem 0.25rem; position: sticky; top: 0; background: var(--bg-elevated); }
     /* Co-author picker */
     .coauth-wrap { position: relative; }
-    .coauth-results { position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + 4px); background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 9px; box-shadow: var(--shadow-soft); max-height: 240px; overflow-y: auto; }
+    .coauth-results { position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + 4px); background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 9px; box-shadow: var(--shadow-soft); max-height: 240px; overflow-y: auto; overscroll-behavior: contain; }
     .coauth-results .row { display: flex; align-items: center; gap: 0.55rem; padding: 0.5rem 0.7rem; cursor: pointer; font-size: 0.85rem; }
     .coauth-results .row:hover, .coauth-results .row.on { background: var(--accent-soft); }
     .coauth-results .row.muted { color: var(--text-soft); cursor: default; }
@@ -566,9 +571,24 @@
     dz.addEventListener('dragleave', () => (dz.style.borderColor = ''));
     dz.addEventListener('drop', (e) => { e.preventDefault(); dz.style.borderColor = ''; handleFiles(e.dataTransfer.files); });
 
+    // ONE persistent picker input, parked in the DOM. A detached input
+    // created per-click can be garbage-collected by WebKit while the
+    // (slow) iOS photo picker is open -- its change event then never
+    // fires and the chosen photos silently vanish, which is exactly the
+    // "added photos and nothing happened, worked the second time" report.
+    // Parked in the document it cannot be collected. The value is cleared
+    // before each open so re-picking the same file still fires change,
+    // and the FileList is copied out because clearing empties it.
+    const filePicker = document.createElement('input');
+    filePicker.type = 'file';
+    filePicker.accept = 'image/jpeg,image/png,image/webp,image/gif';
+    filePicker.multiple = true;
+    filePicker.style.display = 'none';
+    filePicker.addEventListener('change', () => handleFiles([...filePicker.files]));
+    document.body.appendChild(filePicker);
     function pickFiles() {
-      const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/jpeg,image/png,image/webp,image/gif'; inp.multiple = true;
-      inp.onchange = () => handleFiles(inp.files); inp.click();
+      filePicker.value = '';
+      filePicker.click();
     }
     // Downscale + re-encode to WebP in the browser. This is the optimisation
     // (smaller files) AND strips EXIF/GPS (a canvas draw drops all metadata).
