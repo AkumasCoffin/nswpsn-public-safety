@@ -3102,10 +3102,16 @@
       const sidebar = document.getElementById('sidebar');
       const overlay = document.querySelector('.menu-overlay');
       const layerToggles = document.querySelector('.layer-toggles');
+      const mapTypeBar = document.querySelector('.map-type-controls');
       sidebar.classList.toggle('open');
       overlay.classList.toggle('active');
       if (sidebar.classList.contains('open')) {
         layerToggles.style.display = 'none';
+        // The base-map/type bar is position:fixed at z-index 900 on mobile,
+        // so it floats over the opened sidebar sheet and its toggles stay
+        // tappable through it. Desktop keeps it: the sidebar is a right
+        // panel there and the bottom-left bar never overlaps.
+        if (mapTypeBar && window.innerWidth <= 900) mapTypeBar.style.display = 'none';
         if (window.innerWidth <= 900) showFiltersSidebarToast();
         // Close search results and hide search bar
         const resultsBox = document.getElementById('search-results');
@@ -3124,6 +3130,7 @@
         }
       } else {
         layerToggles.style.display = '';
+        if (mapTypeBar) mapTypeBar.style.display = '';
         const searchBar = document.getElementById('map-search-bar');
         if (searchBar) searchBar.style.display = '';
       }
@@ -3378,6 +3385,13 @@
       setTimeout(() => {
         const cam = document.getElementById('camera-fullscreen');
         if (cam && cam.classList.contains('open')) return;
+        // Same stand-down for the incident detail sheet: the SECOND tap on a
+        // pin opens it (handleMarkerTap), but that tap also re-fires
+        // tooltipopen -- and this deferred card ran after the sheet opened,
+        // stacking the overview card on top of the details it had just been
+        // dismissed for. The sheet is the fuller view; the card yields.
+        const sheet = document.getElementById('incident-sidebar');
+        if (sheet && sheet.classList.contains('open')) return;
         showMobileTipCard(content);
         if (layer && typeof layer.getLatLng === 'function') panMarkerAboveCard(layer);
       }, 0);
