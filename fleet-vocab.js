@@ -79,6 +79,17 @@
   // Known vehicle types per department, from data/emergency-vehicles.csv.
   // Agencies without a list fall back to free-text entry in the composer.
   const vehicleTypes = {
+    "NSW Ambulance": [
+      "Ambulance",
+      "Intensive Care Ambulance",
+      "Patient Transport Service",
+      "Rapid Response",
+      "Rescue",
+      "Special Operations",
+      "Operations Commander",
+      "Major Incident Support",
+      "Support",
+    ],
     "ACT Fire and Rescue": [
       "Heavy Pumper",
       "Heavy Rescue Pumper",
