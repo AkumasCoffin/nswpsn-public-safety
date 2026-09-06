@@ -79,10 +79,7 @@ async function authorStats(pool: Pool, userId: string): Promise<{ posts: number;
   try {
     const r = await pool.query<{ posts: string; views: string; likes: string }>(
       `WITH mine AS (
-         SELECT 'media_post'::text AS t, id, COALESCE(views, 0) AS views FROM media_posts
-           WHERE author_id = $1 AND status = 'published' AND taken_down_at IS NULL
-         UNION ALL
-         SELECT 'article'::text, id, COALESCE(views, 0) FROM articles
+         SELECT 'article'::text AS t, id, COALESCE(views, 0) AS views FROM articles
            WHERE author_id = $1 AND status = 'published' AND taken_down_at IS NULL
        )
        SELECT COUNT(*)::int AS posts,

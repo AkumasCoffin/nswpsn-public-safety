@@ -40,7 +40,9 @@ export const wireCommentsRouter = new Hono();
 const DB_UNAVAILABLE = { error: 'database unavailable' } as const;
 const MAX_COMMENT_LEN = 280;
 
-const TABLE_FOR: Record<string, string> = { media_post: 'media_posts', article: 'articles' };
+// media_post rows merged into articles (086, ids preserved) -- the legacy
+// name resolves to the same table so old clients keep working.
+const TABLE_FOR: Record<string, string> = { media_post: 'articles', article: 'articles' };
 
 function currentUserId(c: { get: (k: string) => unknown }): string | undefined {
   const v = c.get('userId');
@@ -64,10 +66,10 @@ async function wireReadable(c: { get: (k: string) => unknown }): Promise<boolean
 }
 
 /** Normalise the ?type= param to a stored parent_type. */
-function parentTypeOf(raw: unknown): 'media_post' | 'article' | null {
+function parentTypeOf(raw: unknown): 'article' | null {
   const s = String(raw ?? '').trim();
-  if (s === 'media_post' || s === 'media') return 'media_post';
-  if (s === 'article' || s === 'articles') return 'article';
+  // media/media_post are the pre-merge names; those rows are articles now.
+  if (s === 'media_post' || s === 'media' || s === 'article' || s === 'articles') return 'article';
   return null;
 }
 
@@ -79,7 +81,7 @@ async function loadParent(
 ): Promise<{ author_id: string; co_authors: unknown; title: string; slug?: string } | null> {
   const table = TABLE_FOR[parentType];
   if (!table) return null;
-  const cols = parentType === 'article' ? 'author_id, co_authors, title, slug' : 'author_id, co_authors, title';
+  const cols = 'author_id, co_authors, title, slug';
   const r = await pool.query(`SELECT ${cols} FROM ${table} WHERE id = $1`, [parentId]);
   return (r.rows[0] as { author_id: string; co_authors: unknown; title: string; slug?: string }) ?? null;
 }

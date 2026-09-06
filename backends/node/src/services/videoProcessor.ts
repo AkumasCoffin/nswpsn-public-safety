@@ -54,7 +54,9 @@ interface PendingRow {
 async function watermarkFor(row: PendingRow): Promise<string | null> {
   const pool = await getWriterPool();
   if (!pool) return null;
-  const table = row.parent_type === 'article' ? 'articles' : 'media_posts';
+  // Every wire parent is an article since the 086 merge (legacy
+  // media_post rows were rewritten in place, ids preserved).
+  const table = 'articles';
   const r = await pool.query(
     `SELECT watermark, author_name FROM ${table} WHERE id = $1`,
     [row.parent_id],

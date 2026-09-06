@@ -1,10 +1,12 @@
 /**
  * "The Wire" — news & media API.
  *
- * Two entities share one shape: media_posts (photo/video sets, `caption`) and
- * articles (Markdown `body` + `slug`/`excerpt`/draft lifecycle). Both carry the
- * same tagging (units via per-item wire_media, agencies, pin|region location, a
- * single optional linked incident) and view tracking. Storage is external:
+ * ONE entity: articles (Markdown `body` + `slug`/`excerpt`, draft lifecycle,
+ * series, up to 6 images + 2 videos). Media posts merged into articles in
+ * migration 086 keeping their ids, so /api/wire/media[...] remain as READ
+ * aliases for pre-merge pages and old share links. Tagging: units via
+ * per-item wire_media, agencies, pin|region location, a single optional
+ * linked incident, and view tracking. Storage is external:
  * images in Cloudflare Images, videos in R2 (phase 1.5) — see services/wire.ts.
  *
  * Auth model (post-moderation):
@@ -55,13 +57,15 @@ export const wireRouter = new Hono();
 const DB_UNAVAILABLE = { error: 'database unavailable' } as const;
 
 interface EntityCfg {
-  table: 'media_posts' | 'articles';
-  parentType: 'media_post' | 'article';
+  table: 'articles';
+  parentType: 'article';
   maxImages: number;
   maxVideos: number;
 }
-const MEDIA: EntityCfg = { table: 'media_posts', parentType: 'media_post', maxImages: 6, maxVideos: 2 };
-const ARTICLE: EntityCfg = { table: 'articles', parentType: 'article', maxImages: 4, maxVideos: 2 };
+// The image cap is the old media-post cap, not the old article cap of 4:
+// photo sets merged in with up to 6 images, and dropping the limit under
+// existing content would make those posts uneditable.
+const ARTICLE: EntityCfg = { table: 'articles', parentType: 'article', maxImages: 6, maxVideos: 2 };
 
 // ---- tiny context helpers (mirrors incidents.ts) ---------------------------
 function currentUserId(c: { get: (k: string) => unknown }): string | undefined {
@@ -276,12 +280,6 @@ async function findDuplicateImageHash(pool: Pool, items: MediaItem[], excludeId:
   const ex = excludeId ?? '';
   const r = await pool.query<{ hash: string }>(
     `SELECT wm.hash FROM wire_media wm
-        JOIN media_posts mp ON wm.parent_id = mp.id
-       WHERE wm.parent_type='media_post' AND wm.kind='image'
-         AND wm.hash = ANY($1::text[]) AND wm.parent_id <> $2
-         AND mp.taken_down_at IS NULL AND mp.status NOT IN ('removed','rejected')
-     UNION
-     SELECT wm.hash FROM wire_media wm
         JOIN articles a ON wm.parent_id = a.id
        WHERE wm.parent_type='article' AND wm.kind='image'
          AND wm.hash = ANY($1::text[]) AND wm.parent_id <> $2
@@ -603,38 +601,6 @@ function isoOrNull(v: unknown): string | null {
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-function shapeMediaPost(row: any, media: WireMediaRow[], includeKeys = false): Record<string, unknown> {
-  const shaped = media.map((m) => shapeMedia(m, includeKeys));
-  const cover = shaped.find((m) => m['is_cover']) ?? shaped[0] ?? null;
-  return {
-    id: row.id,
-    kind: 'media_post',
-    title: row.title,
-    caption: row.caption,
-    location: { type: row.location_type, region: row.region, lat: row.lat, lng: row.lng },
-    agencies: row.agencies ?? [],
-    incident_id: row.incident_id,
-    incident: row.incident || (row.incident_id ? { source: 'user_incident', source_id: row.incident_id, title: null } : null),
-    units: deriveUnits(media),
-    watermark: row.watermark === true,
-    license: row.license || 'credit',
-    license_label: licenseLabel(row.license || 'credit'),
-    credit: row.credit || null,
-    views: Number(row.views) || 0,
-    status: row.status,
-    review_note: row.review_note ?? null,
-    // Only the detail queries fill this in; list responses leave it 0, which is
-    // also the honest answer for "does this need a Changes button?" in a feed.
-    edit_count: Number(row.edit_count) || 0,
-    author: { id: row.author_id, name: row.author_name },
-    co_authors: Array.isArray(row.co_authors) ? row.co_authors : [],
-    media: shaped,
-    cover,
-    created_at: isoOrNull(row.created_at),
-    updated_at: isoOrNull(row.updated_at),
-  };
-}
-
 function shapeArticle(row: any, media: WireMediaRow[], includeKeys = false): Record<string, unknown> {
   const shaped = media.map((m) => shapeMedia(m, includeKeys));
   const cover = shaped.find((m) => m['is_cover']) ?? shaped.find((m) => m['kind'] === 'image') ?? null;
@@ -703,11 +669,6 @@ wireRouter.post('/api/wire/upload-url', requireRole(canFeedMedia), async (c) => 
       const excludeId = typeof body['exclude_id'] === 'string' ? body['exclude_id'] : '';
       const dup = await pool.query<{ x: number }>(
         `SELECT 1 AS x FROM wire_media wm
-           JOIN media_posts mp ON wm.parent_id = mp.id
-          WHERE wm.parent_type='media_post' AND wm.kind='image' AND wm.hash=$1 AND wm.parent_id<>$2
-            AND mp.taken_down_at IS NULL AND mp.status NOT IN ('removed','rejected')
-         UNION
-         SELECT 1 AS x FROM wire_media wm
            JOIN articles a ON wm.parent_id = a.id
           WHERE wm.parent_type='article' AND wm.kind='image' AND wm.hash=$1 AND wm.parent_id<>$2
             AND a.taken_down_at IS NULL AND a.status NOT IN ('removed','rejected')
@@ -770,109 +731,6 @@ wireRouter.post('/api/wire/video-upload-url', requireRole(canFeedMedia), async (
 // MEDIA POSTS
 // ===========================================================================
 
-wireRouter.get('/api/wire/media', async (c) => {
-  const pool = await getPool();
-  if (!pool) return c.json(DB_UNAVAILABLE, 503);
-  // `visible: false` is the SIGNAL, not the empty list. This answers 200 so a
-  // gated feed is not an error, but that left the client unable to tell "the
-  // Wire is not live for you" from "the Wire is live and empty" — it was
-  // testing response.ok, which is true either way, so the coming-soon page
-  // never appeared. Absent on the ungated path, so an older client reading
-  // only the list is unaffected.
-  if (!(await wireReadable(c))) return c.json({ posts: [], visible: false });
-  try {
-    const url = new URL(c.req.url);
-    const mine = url.searchParams.get('mine') === '1';
-    const uid = currentUserId(c);
-    const agency = url.searchParams.get('agency');
-    const unit = normaliseCallsign(url.searchParams.get('unit') || '') || null;
-    const region = url.searchParams.get('region');
-    const q = (url.searchParams.get('q') || '').trim();
-    const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit') ?? 48) || 48));
-    const offset = Math.max(0, Number(url.searchParams.get('offset') ?? 0) || 0);
-
-    const vals: unknown[] = [];
-    const where: string[] = [];
-    if (mine && uid) {
-      // Author's own posts — including pending/rejected/draft — but NOT content
-      // a moderator removed or that was taken down (DMCA); that's retracted.
-      vals.push(uid);
-      where.push(`author_id = $${vals.length} AND status <> 'removed' AND taken_down_at IS NULL`);
-    }
-    else {
-      where.push(`status = 'published' AND taken_down_at IS NULL`);
-      // Public "posts by this contributor" — as author OR credited co-author.
-      const author = new URL(c.req.url).searchParams.get('author');
-      if (author) {
-        vals.push(author); const p = vals.length;
-        vals.push(JSON.stringify([{ id: author }]));
-        where.push(`(author_id = $${p} OR co_authors @> $${vals.length}::jsonb)`);
-      }
-    }
-    if (q) { vals.push(`%${q}%`); where.push(`(title ILIKE $${vals.length} OR caption ILIKE $${vals.length})`); }
-    if (agency) { vals.push(JSON.stringify([agency])); where.push(`agencies @> $${vals.length}::jsonb`); }
-    if (region) { vals.push(region); where.push(`region = $${vals.length}`); }
-    if (unit) {
-      vals.push(unit);
-      where.push(`EXISTS (SELECT 1 FROM wire_media wm WHERE wm.parent_type='media_post' AND wm.parent_id = media_posts.id AND wm.unit = $${vals.length})`);
-    }
-    vals.push(limit, offset);
-    const r = await pool.query(
-      `SELECT * FROM media_posts WHERE ${where.join(' AND ')}
-        ORDER BY created_at DESC LIMIT $${vals.length - 1} OFFSET $${vals.length}`,
-      vals,
-    );
-    const ids = r.rows.map((row) => row.id);
-    const mediaMap = await fetchMediaFor(pool, 'media_post', ids);
-    const eng = await engagementFor(pool, 'media_post', ids, currentUserId(c));
-    const creditIds = creditedIds(r.rows);
-    const [avatars, authorTags] = await Promise.all([avatarMap(pool, creditIds), tagMap(pool, creditIds)]);
-    const posts = r.rows.map((row) =>
-      withAvatars(withEngagement(shapeMediaPost(row, mediaMap.get(row.id) ?? []), eng.get(row.id)), avatars, authorTags));
-    return c.json({ posts });
-  } catch (err) {
-    log.error({ err }, 'wire: list media failed');
-    return c.json({ error: 'failed to list media posts' }, 500);
-  }
-});
-
-wireRouter.get('/api/wire/media/:id', async (c) => {
-  const pool = await getPool();
-  if (!pool) return c.json(DB_UNAVAILABLE, 503);
-  if (!(await wireReadable(c))) return c.json({ error: 'not found' }, 404);
-  const id = c.req.param('id');
-  try {
-    const r = await pool.query('SELECT * FROM media_posts WHERE id = $1', [id]);
-    if (r.rowCount === 0) return c.json({ error: 'not found' }, 404);
-    const row = r.rows[0];
-    const uid = currentUserId(c);
-    const isAuthor = uid && row.author_id === uid;
-    const isAdmin = !!(uid && (await canManageUsers(uid)));
-    if (row.taken_down_at && !isAuthor && !isAdmin) {
-      return c.json({ tombstone: { type: 'media_post', taken_down_at: isoOrNull(row.taken_down_at) } });
-    }
-    if (row.status !== 'published' && !isAuthor && !isAdmin) {
-      return c.json({ error: 'not found' }, 404);
-    }
-    const mediaMap = await fetchMediaFor(pool, 'media_post', [id]);
-    row.edit_count = await editCountFor(pool, 'media_post', id);
-    // Author/admin get storage keys + hash so the compose editor can round-trip.
-    const eng = await engagementFor(pool, 'media_post', [id], uid);
-    const creditIds = creditedIds([row]);
-    const [avatars, authorTags] = await Promise.all([avatarMap(pool, creditIds), tagMap(pool, creditIds)]);
-    return c.json({
-      post: withAvatars(
-        withEngagement(shapeMediaPost(row, mediaMap.get(id) ?? [], !!(isAuthor || isAdmin)), eng.get(id)),
-        avatars,
-        authorTags,
-      ),
-    });
-  } catch (err) {
-    log.error({ err, id }, 'wire: get media failed');
-    return c.json({ error: 'failed to fetch media post' }, 500);
-  }
-});
-
 // Canonical public site origin (the static frontend behind Cloudflare). Used
 // to build the canonical share URL that the OG tags point back to.
 const SITE_BASE = 'https://nswpsn.forcequit.xyz';
@@ -896,16 +754,13 @@ wireRouter.get('/api/wire/og/:type/:key', async (c) => {
     let row: any = null;
     let parentType: 'media_post' | 'article';
     let canonical = '';
-    if (type === 'media' || type === 'post') {
-      const r = await pool.query('SELECT * FROM media_posts WHERE id = $1', [key]);
-      row = r.rows[0];
-      parentType = 'media_post';
-      if (row) canonical = `${SITE_BASE}/wire?tab=media&post=${encodeURIComponent(row.id)}`;
-    } else if (type === 'article' || type === 'articles') {
+    if (type === 'media' || type === 'post' || type === 'article' || type === 'articles') {
+      // media/post are the pre-merge names: those rows became articles in
+      // 086 keeping their ids, so every old share link still unfurls.
       const r = await pool.query('SELECT * FROM articles WHERE slug = $1 OR id = $1', [key]);
       row = r.rows[0];
       parentType = 'article';
-      if (row) canonical = `${SITE_BASE}/wire?tab=articles&article=${encodeURIComponent(row.slug)}`;
+      if (row) canonical = `${SITE_BASE}/wire?article=${encodeURIComponent(row.slug)}`;
     } else {
       return c.json({ error: 'not found' }, 404);
     }
@@ -921,7 +776,7 @@ wireRouter.get('/api/wire/og/:type/:key', async (c) => {
       null;
     const rawImage = cover ? ((cover['url'] as string) || (cover['poster_url'] as string) || null) : null;
     const image = ogImageUrl(rawImage);
-    const rawDesc = (parentType === 'article' ? row.excerpt : row.caption) || '';
+    const rawDesc = row.excerpt || row.body || '';
     const description = String(rawDesc).replace(/\s+/g, ' ').trim().slice(0, 200);
     return c.json({
       og: {
@@ -942,209 +797,18 @@ wireRouter.get('/api/wire/og/:type/:key', async (c) => {
   }
 });
 
-wireRouter.post('/api/wire/media', requireRole(canFeedMedia), async (c) => {
+// Pre-merge pages (and anything holding an old link) read the feed at
+// /api/wire/media with a {posts} key; same rows, different envelope.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const legacyMediaPath = (c: any): boolean => String(c.req.path || '').includes('/wire/media');
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const listArticlesHandler = async (c: any) => {
   const pool = await getPool();
   if (!pool) return c.json(DB_UNAVAILABLE, 503);
-  try {
-    const data = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
-    const title = typeof data['title'] === 'string' ? data['title'].trim().slice(0, 300) : '';
-    if (!title) return c.json({ error: 'title is required' }, 400);
-    const caption = typeof data['caption'] === 'string' ? data['caption'].slice(0, 4000) : '';
-    const loc = cleanLocation(data);
-    const agencies = cleanAgencies(data['agencies']);
-    const incident = parseIncident(data);
-    const incidentId = incident?.source_id ?? null;
-    const incidentJson = incident ? JSON.stringify(incident) : null;
-    const license = normaliseLicense(data['license']);
-    const credit = typeof data['credit'] === 'string' ? data['credit'].trim().slice(0, 200) || null : null;
-    // Photos are burned in client-side; this records the choice and drives the
-    // video player's overlay (video can't be burned in without a transcode).
-    const watermark = data['watermark'] === true;
-    if (data['rights_affirmed'] !== true) return c.json({ error: 'you must confirm you own or have the rights to publish this' }, 400);
-    const mv = validateMedia(data['media'], MEDIA);
-    if ('error' in mv) return c.json({ error: mv.error }, 400);
-    if (await findDuplicateImageHash(pool, mv.items, null)) {
-      return c.json({ error: DUPLICATE_IMAGE_MSG, code: 'duplicate_image' }, 409);
-    }
-
-    const authorId = currentUserId(c)!;
-    const authorName = currentUserName(c);
-    const coAuthors = await cleanCoAuthors(pool, data['co_authors'], authorId);
-    // Approval mode (staff toggle): when required, non-moderators' posts are
-    // 'pending' until approved; moderators always publish instantly. When the
-    // toggle is off, everyone publishes instantly.
-    const status = (!(await wireApprovalRequired(pool)) || (await canModerateWire(authorId))) ? 'published' : 'pending';
-    const client = await pool.connect();
-    let newId: string;
-    try {
-      await client.query('BEGIN');
-      const ins = await client.query<{ id: string }>(
-        `INSERT INTO media_posts (author_id, author_name, title, caption, location_type, region, lat, lng, agencies, incident_id, license, credit, rights_affirmed, status, incident, co_authors, watermark)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,true,$13,$14::jsonb,$15::jsonb,$16) RETURNING id`,
-        [authorId, authorName, title, caption, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit, status, incidentJson, JSON.stringify(coAuthors), watermark],
-      );
-      newId = ins.rows[0]!.id;
-      await insertMediaRows(client, MEDIA, newId, mv.items);
-      await client.query('COMMIT');
-    } catch (err) {
-      await client.query('ROLLBACK').catch(() => {});
-      throw err;
-    } finally {
-      client.release();
-    }
-    await rememberCallsigns(pool, mv.units);
-    await maybeAwardPostingTags(pool, authorId, status);
-    return c.json({ id: newId, success: true, status }, 201);
-  } catch (err) {
-    log.error({ err }, 'wire: create media failed');
-    return c.json({ error: 'failed to create media post' }, 500);
+  if (!(await wireReadable(c))) {
+    return c.json(legacyMediaPath(c) ? { posts: [], visible: false } : { articles: [], visible: false });
   }
-});
-
-wireRouter.put('/api/wire/media/:id', async (c) => {
-  const pool = await getPool();
-  if (!pool) return c.json(DB_UNAVAILABLE, 503);
-  const id = c.req.param('id');
-  const uid = currentUserId(c);
-  if (!uid) return c.json({ error: 'authentication required' }, 401);
-  try {
-    // Enough of the old row to diff against for the edit log (below).
-    const existing = await pool.query<any>(
-      `SELECT author_id, taken_down_at, status, title, caption, location_type, region, lat, lng,
-              agencies, incident_id, license, credit, watermark, co_authors
-         FROM media_posts WHERE id = $1`, [id]);
-    if (existing.rowCount === 0) return c.json({ error: 'not found' }, 404);
-    if (existing.rows[0]!.author_id !== uid && !(await canManageUsers(uid))) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
-    if (existing.rows[0]!.taken_down_at) return c.json({ error: 'this content was removed following a rights complaint and cannot be edited' }, 409);
-    // Editing a rejected post resends it for review. Otherwise status is unchanged.
-    const statusSet = existing.rows[0]!.status === 'rejected' ? `, status='pending'` : '';
-    const data = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
-    const title = typeof data['title'] === 'string' ? data['title'].trim().slice(0, 300) : '';
-    if (!title) return c.json({ error: 'title is required' }, 400);
-    const caption = typeof data['caption'] === 'string' ? data['caption'].slice(0, 4000) : '';
-    const loc = cleanLocation(data);
-    const agencies = cleanAgencies(data['agencies']);
-    const incident = parseIncident(data);
-    const incidentId = incident?.source_id ?? null;
-    const incidentJson = incident ? JSON.stringify(incident) : null;
-    const license = normaliseLicense(data['license']);
-    const credit = typeof data['credit'] === 'string' ? data['credit'].trim().slice(0, 200) || null : null;
-    // Photos are burned in client-side; this records the choice and drives the
-    // video player's overlay (video can't be burned in without a transcode).
-    const watermark = data['watermark'] === true;
-    const mv = validateMedia(data['media'], MEDIA);
-    if ('error' in mv) return c.json({ error: mv.error }, 400);
-    if (await findDuplicateImageHash(pool, mv.items, id)) {
-      return c.json({ error: DUPLICATE_IMAGE_MSG, code: 'duplicate_image' }, 409);
-    }
-    const coAuthors = await cleanCoAuthors(pool, data['co_authors'], existing.rows[0]!.author_id);
-
-    const oldImageIds = await imageIdsFor(pool, 'media_post', id);
-    const oldR2Keys = await r2KeysFor(pool, 'media_post', id);
-    const prevRow = existing.rows[0]!;
-    // Snapshot BEFORE the update — cheap, and only used when the post is public.
-    const beforeSnap: EditSnapshot = prevRow.status === 'published' ? {
-      title: prevRow.title, caption: prevRow.caption,
-      location: { type: prevRow.location_type, region: prevRow.region, lat: prevRow.lat, lng: prevRow.lng },
-      agencies: Array.isArray(prevRow.agencies) ? prevRow.agencies : [],
-      incidentId: prevRow.incident_id, license: prevRow.license, credit: prevRow.credit,
-      watermark: prevRow.watermark === true,
-      coAuthors: Array.isArray(prevRow.co_authors) ? prevRow.co_authors : [],
-      mediaKeys: await mediaKeysFor(pool, 'media_post', id),
-    } : {};
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      await client.query(
-        `UPDATE media_posts SET title=$1, caption=$2, location_type=$3, region=$4, lat=$5, lng=$6,
-           agencies=$7::jsonb, incident_id=$8, license=$9, credit=$10, incident=$12::jsonb, co_authors=$13::jsonb, watermark=$14, updated_at=now()${statusSet} WHERE id=$11`,
-        [title, caption, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit, id, incidentJson, JSON.stringify(coAuthors), watermark],
-      );
-      await client.query('DELETE FROM wire_media WHERE parent_type=$1 AND parent_id=$2', ['media_post', id]);
-      await insertMediaRows(client, MEDIA, id, mv.items);
-      await client.query('COMMIT');
-    } catch (err) {
-      await client.query('ROLLBACK').catch(() => {});
-      throw err;
-    } finally {
-      client.release();
-    }
-    await recordEdit(pool, 'media_post', id, prevRow.status, uid, currentUserName(c), beforeSnap, {
-      title, caption,
-      location: { type: loc.location_type, region: loc.region, lat: loc.lat, lng: loc.lng },
-      agencies, incidentId, license, credit, watermark, coAuthors,
-      mediaKeys: mv.items.map(mediaKeyOf).filter(Boolean),
-    });
-    await rememberCallsigns(pool, mv.units);
-    // Best-effort: delete CF images no longer referenced.
-    const keptIds = new Set(mv.items.flatMap((m) => [m.cf_image_id, m.poster_cf_image_id]).filter(Boolean) as string[]);
-    for (const old of oldImageIds) if (!keptIds.has(old)) await deleteCfImage(old);
-    const keptKeys = new Set(mv.items.flatMap((m) => [m.r2_key, m.poster_r2_key]).filter(Boolean) as string[]);
-    for (const old of oldR2Keys) if (!keptKeys.has(old)) await safeDeleteR2(pool, old);
-    return c.json({ success: true });
-  } catch (err) {
-    log.error({ err, id }, 'wire: update media failed');
-    return c.json({ error: 'failed to update media post' }, 500);
-  }
-});
-
-wireRouter.delete('/api/wire/media/:id', async (c) => {
-  const pool = await getPool();
-  if (!pool) return c.json(DB_UNAVAILABLE, 503);
-  const id = c.req.param('id');
-  const uid = currentUserId(c);
-  if (!uid) return c.json({ error: 'authentication required' }, 401);
-  try {
-    const existing = await pool.query<{ author_id: string }>('SELECT author_id FROM media_posts WHERE id = $1', [id]);
-    if (existing.rowCount === 0) return c.json({ error: 'not found' }, 404);
-    if (existing.rows[0]!.author_id !== uid && !(await canManageUsers(uid))) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
-    const imgIds = await imageIdsFor(pool, 'media_post', id);
-    const r2keys = await r2KeysFor(pool, 'media_post', id);
-    // Delete the child media rows + the parent atomically so a mid-delete
-    // failure can't leave a post with no media (or vice-versa).
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      await client.query('DELETE FROM wire_media WHERE parent_type=$1 AND parent_id=$2', ['media_post', id]);
-      await client.query('DELETE FROM media_posts WHERE id = $1', [id]);
-      await client.query('COMMIT');
-    } catch (err) {
-      await client.query('ROLLBACK').catch(() => {});
-      throw err;
-    } finally {
-      client.release();
-    }
-    // Storage cleanup is best-effort and runs after the rows are gone (safeDeleteR2
-    // ref-counts against remaining wire_media, so it must follow the delete).
-    for (const iid of imgIds) await deleteCfImage(iid);
-    for (const k of r2keys) await safeDeleteR2(pool, k);
-    return c.json({ success: true });
-  } catch (err) {
-    log.error({ err, id }, 'wire: delete media failed');
-    return c.json({ error: 'failed to delete media post' }, 500);
-  }
-});
-
-wireRouter.post('/api/wire/media/:id/remove', requireRole(canModerateWire), async (c) => {
-  return softRemove(c, MEDIA);
-});
-
-wireRouter.post('/api/wire/media/:id/view', async (c) => {
-  return countView(c, 'media_post', 'media_posts');
-});
-
-// ===========================================================================
-// ARTICLES
-// ===========================================================================
-
-wireRouter.get('/api/wire/articles', async (c) => {
-  const pool = await getPool();
-  if (!pool) return c.json(DB_UNAVAILABLE, 503);
-  if (!(await wireReadable(c))) return c.json({ articles: [], visible: false });
   try {
     const url = new URL(c.req.url);
     const mine = url.searchParams.get('mine') === '1';
@@ -1179,6 +843,12 @@ wireRouter.get('/api/wire/articles', async (c) => {
     if (q) { vals.push(`%${q}%`); where.push(`(title ILIKE $${vals.length} OR excerpt ILIKE $${vals.length} OR body ILIKE $${vals.length})`); }
     if (agency) { vals.push(JSON.stringify([agency])); where.push(`agencies @> $${vals.length}::jsonb`); }
     if (region) { vals.push(region); where.push(`region = $${vals.length}`); }
+    // Per-item unit tag filter (came from the media feed; kept in the merge).
+    const unit = normaliseCallsign(url.searchParams.get('unit') || '') || null;
+    if (unit) {
+      vals.push(unit);
+      where.push(`EXISTS (SELECT 1 FROM wire_media wm WHERE wm.parent_type='article' AND wm.parent_id = a.id AND wm.unit = $${vals.length})`);
+    }
     vals.push(limit, offset);
     const order = mine ? 'updated_at DESC' : 'published_at DESC NULLS LAST';
     const r = await pool.query(
@@ -1196,18 +866,21 @@ wireRouter.get('/api/wire/articles', async (c) => {
     const [avatarsA, authorTagsA] = await Promise.all([avatarMap(pool, creditIdsA), tagMap(pool, creditIdsA)]);
     const articles = r.rows.map((row) =>
       withAvatars(withEngagement(shapeArticle(row, mediaMap.get(row.id) ?? []), engA.get(row.id)), avatarsA, authorTagsA));
-    return c.json({ articles });
+    return c.json(legacyMediaPath(c) ? { posts: articles } : { articles });
   } catch (err) {
     log.error({ err }, 'wire: list articles failed');
     return c.json({ error: 'failed to list articles' }, 500);
   }
-});
+};
+wireRouter.get('/api/wire/articles', listArticlesHandler);
+wireRouter.get('/api/wire/media', listArticlesHandler);
 
-wireRouter.get('/api/wire/articles/:slug', async (c) => {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const getArticleHandler = async (c: any) => {
   const pool = await getPool();
   if (!pool) return c.json(DB_UNAVAILABLE, 503);
   if (!(await wireReadable(c))) return c.json({ error: 'not found' }, 404);
-  const slug = c.req.param('slug');
+  const slug = c.req.param('slug') ?? c.req.param('id');
   try {
     // Accept a slug (public URLs) OR an id (the compose edit link uses the id).
     const r = await pool.query('SELECT * FROM articles WHERE slug = $1 OR id = $1', [slug]);
@@ -1236,12 +909,18 @@ wireRouter.get('/api/wire/articles/:slug', async (c) => {
     // Series context: every published part (including the lead), oldest first,
     // so the page can show "Part 2 of 4" and link the rest.
     shapedA['series'] = await seriesFor(pool, row);
+    if (legacyMediaPath(c)) {
+      // Pre-merge pages read {post} with a `caption`; the body carries it.
+      return c.json({ post: { ...shapedA, caption: String(row.body || row.excerpt || '') } });
+    }
     return c.json({ article: shapedA });
   } catch (err) {
     log.error({ err, slug }, 'wire: get article failed');
     return c.json({ error: 'failed to fetch article' }, 500);
   }
-});
+};
+wireRouter.get('/api/wire/articles/:slug', getArticleHandler);
+wireRouter.get('/api/wire/media/:id', getArticleHandler);
 
 /**
  * Lead articles this contributor could attach a follow-up to. Only leads with
@@ -1517,6 +1196,11 @@ wireRouter.post('/api/wire/articles/:id/view', async (c) => {
   return countView(c, 'article', 'articles');
 });
 
+// Legacy alias: pre-merge pages count views at the old media path (same ids).
+wireRouter.post('/api/wire/media/:id/view', async (c) => {
+  return countView(c, 'article', 'articles');
+});
+
 // ===========================================================================
 // PENDING REVIEW (pre-moderation queue)
 // ===========================================================================
@@ -1532,10 +1216,12 @@ wireRouter.get('/api/wire/edits/:type/:id', async (c) => {
   const pool = await getPool();
   if (!pool) return c.json(DB_UNAVAILABLE, 503);
   if (!(await wireReadable(c))) return c.json({ error: 'not found' }, 404);
-  const type = c.req.param('type') === 'article' ? 'article' : 'media_post';
+  // Every parent is an article: media_post edit histories were rewritten to
+  // 'article' in 086 (ids preserved), so the legacy type name lands here too.
+  const type = 'article';
   const id = c.req.param('id');
   try {
-    const table = type === 'article' ? 'articles' : 'media_posts';
+    const table = 'articles';
     const parent = await pool.query<{ author_id: string; status: string; taken_down_at: unknown }>(
       `SELECT author_id, status, taken_down_at FROM ${table} WHERE id = $1`, [id]);
     if (parent.rowCount === 0) return c.json({ error: 'not found' }, 404);
@@ -1570,17 +1256,10 @@ wireRouter.get('/api/wire/pending', requireRole(canModerateWire), async (c) => {
   const pool = await getPool();
   if (!pool) return c.json(DB_UNAVAILABLE, 503);
   try {
-    const [m, a] = await Promise.all([
-      pool.query(`SELECT * FROM media_posts WHERE status='pending' ORDER BY created_at DESC LIMIT 100`),
-      pool.query(`SELECT * FROM articles WHERE status='pending' ORDER BY created_at DESC LIMIT 100`),
-    ]);
-    const mMedia = await fetchMediaFor(pool, 'media_post', m.rows.map((r) => r.id));
+    const a = await pool.query(`SELECT * FROM articles WHERE status='pending' ORDER BY created_at DESC LIMIT 100`);
     const aMedia = await fetchMediaFor(pool, 'article', a.rows.map((r) => r.id));
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const items: any[] = [
-      ...m.rows.map((r) => shapeMediaPost(r, mMedia.get(r.id) ?? [])),
-      ...a.rows.map((r) => shapeArticle(r, aMedia.get(r.id) ?? [])),
-    ].sort((x, y) => new Date(String(y['created_at'] || 0)).getTime() - new Date(String(x['created_at'] || 0)).getTime());
+    const items: any[] = a.rows.map((r) => shapeArticle(r, aMedia.get(r.id) ?? []));
     return c.json({ items, pendingCount: items.length });
   } catch (err) {
     log.error({ err }, 'wire: pending list failed');
@@ -1588,8 +1267,6 @@ wireRouter.get('/api/wire/pending', requireRole(canModerateWire), async (c) => {
   }
 });
 
-wireRouter.post('/api/wire/media/:id/approve', requireRole(canModerateWire), (c) => reviewPost(c, MEDIA, 'approve'));
-wireRouter.post('/api/wire/media/:id/reject', requireRole(canModerateWire), (c) => reviewPost(c, MEDIA, 'reject'));
 wireRouter.post('/api/wire/articles/:id/approve', requireRole(canModerateWire), (c) => reviewPost(c, ARTICLE, 'approve'));
 wireRouter.post('/api/wire/articles/:id/reject', requireRole(canModerateWire), (c) => reviewPost(c, ARTICLE, 'reject'));
 
@@ -1736,7 +1413,9 @@ async function softRemove(c: any, cfg: EntityCfg) {
 // TAKEDOWNS (DMCA-style notice-and-takedown)
 // ===========================================================================
 
-const TARGET_TABLE: Record<string, string> = { media_post: 'media_posts', article: 'articles' };
+// media_post maps to articles too: 086 rewrote stored notices, but a row
+// that slipped through must still resolve rather than hit a renamed table.
+const TARGET_TABLE: Record<string, string> = { media_post: 'articles', article: 'articles' };
 
 // Public intake: anyone may file a notice (key-gated like other public routes,
 // no login required — a rights holder isn't a site user).
@@ -1745,7 +1424,9 @@ wireRouter.post('/api/wire/takedown', async (c) => {
   if (!pool) return c.json(DB_UNAVAILABLE, 503);
   try {
     const d = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
-    const targetType = d['target_type'] === 'article' ? 'article' : d['target_type'] === 'media_post' ? 'media_post' : null;
+    // media_post is accepted as a legacy name and stored as article (086
+    // rewrote existing notices the same way; the ids carried over).
+    const targetType = d['target_type'] === 'article' || d['target_type'] === 'media_post' ? 'article' : null;
     const targetId = typeof d['target_id'] === 'string' ? d['target_id'] : '';
     const name = typeof d['reporter_name'] === 'string' ? d['reporter_name'].trim().slice(0, 200) : '';
     const email = typeof d['reporter_email'] === 'string' ? d['reporter_email'].trim().slice(0, 200) : '';
