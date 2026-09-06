@@ -220,19 +220,9 @@
       <h1 id="formTitle">Compose a dispatch</h1>
       <p class="sub" id="composeSub">Your post is reviewed by our team before it goes public. You can edit or delete it any time.</p>
 
-      <div class="seg" id="typeSeg">
-        <button type="button" data-type="media" aria-current="true">Media Post</button>
-        <button type="button" data-type="article">Article</button>
-      </div>
-
       <div class="field">
         <label for="title">Headline</label>
         <input type="text" id="title" maxlength="300" placeholder="What's happening, and where">
-      </div>
-
-      <div class="field" id="captionField">
-        <label for="caption">Caption</label>
-        <textarea id="caption" maxlength="4000" placeholder="Set the scene in a line or two…"></textarea>
       </div>
 
       <div class="field" id="excerptField" style="display:none">
@@ -476,7 +466,9 @@
     let API_KEY = null;
     const qs = new URLSearchParams(location.search);
     const editId = qs.get('edit');
-    let type = qs.get('type') === 'article' ? 'article' : 'media';
+    // One post type since the media/article merge (the old ?type= param is
+    // accepted and ignored so pre-merge links keep working).
+    const type = 'article';
 
     const state = {
       media: [],          // {kind,cf_image_id,unit,is_cover, previewUrl}
@@ -502,7 +494,9 @@
     const $ = (s) => document.querySelector(s);
     const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     const titleCase = (s) => String(s || '').toLowerCase().replace(/\b([a-z])/g, (m, c) => c.toUpperCase());
-    const LIMITS = { media: { img: 6 }, article: { img: 4 } };
+    // 6 images: the old media-post cap survives the merge (photo sets moved
+    // over with 6 and must stay editable).
+    const LIMITS = { article: { img: 6 } };
 
 
     async function loadKey() { try { const r = await fetch(`${API_BASE}/api/config`); API_KEY = (await r.json()).apiKey; } catch (e) {} }
@@ -552,20 +546,16 @@
 
     // ---- type toggle ----
     function applyType() {
-      $('#typeSeg').querySelectorAll('button').forEach((b) => b.setAttribute('aria-current', String(b.dataset.type === type)));
-      const isArt = type === 'article';
-      $('#captionField').style.display = isArt ? 'none' : 'block';
-      $('#excerptField').style.display = isArt ? 'block' : 'none';
-      $('#bodyField').style.display = isArt ? 'block' : 'none';
-      $('#mediaLabel').textContent = isArt ? 'Images · up to 4 (pick a cover)' : 'Photos · up to 6';
-      $('#draftBtn').style.display = isArt ? 'inline-block' : 'none';
+      $('#excerptField').style.display = 'block';
+      $('#bodyField').style.display = 'block';
+      $('#mediaLabel').textContent = 'Photos · up to 6 (pick a cover)';
+      $('#draftBtn').style.display = 'inline-block';
       syncPartBtn();
       $('#publishBtn').textContent = (isModerator || !approvalRequired) ? 'Publish' : 'Submit for review';
-      $('#formTitle').textContent = editId ? (isArt ? 'Edit article' : 'Edit media post') : (isArt ? 'Write an article' : 'Compose a media post');
-      const sf = $('#seriesField'); if (sf) sf.style.display = isArt ? '' : 'none';
+      $('#formTitle').textContent = editId ? 'Edit post' : 'Compose a post';
+      const sf = $('#seriesField'); if (sf) sf.style.display = '';
       renderMedia();
     }
-    $('#typeSeg').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => { if (editId) return; type = b.dataset.type; applyType(); }));
 
     // ---- media upload ----
     const dz = $('#dropzone');
@@ -1174,8 +1164,7 @@
       base.license = $('#license').value;
       base.credit = $('#credit').value.trim() || null;
       base.rights_affirmed = $('#rightsAffirm').checked;
-      if (type === 'article') return { ...base, excerpt: $('#excerpt').value.trim(), body: $('#body').value, status };
-      return { ...base, caption: $('#caption').value.trim() };
+      return { ...base, excerpt: $('#excerpt').value.trim(), body: $('#body').value, status };
     }
     async function submit(status, next) {
       if (!$('#title').value.trim()) { setMsg('A headline is required.', true); return; }
@@ -1183,9 +1172,7 @@
       if (state.media.some((m) => m.uploading)) { setMsg('Wait for images to finish uploading.', true); return; }
       setBusy(true); setMsg('Saving…');
       const payload = buildPayload(status);
-      const isArt = type === 'article';
-      const base = isArt ? 'articles' : 'media';
-      const url = editId ? `${API_BASE}/api/wire/${base}/${encodeURIComponent(editId)}` : `${API_BASE}/api/wire/${base}`;
+      const url = editId ? `${API_BASE}/api/wire/articles/${encodeURIComponent(editId)}` : `${API_BASE}/api/wire/articles`;
       try {
         const r = await fetch(url, { method: editId ? 'PUT' : 'POST', headers: await userHeaders(true), body: JSON.stringify(payload) });
         const j = await r.json().catch(() => ({}));
@@ -1195,10 +1182,10 @@
         // part rather than bouncing to the (still unpublished) article.
         if (next === 'part') {
           const leadId = j.id || editId;
-          if (leadId) { location.href = `wire-compose?type=article&parent=${encodeURIComponent(leadId)}`; return; }
+          if (leadId) { location.href = `wire-compose?parent=${encodeURIComponent(leadId)}`; return; }
         }
-        const key = isArt ? (j.slug || editId) : (j.id || editId);
-        location.href = `wire?tab=${isArt ? 'articles' : 'media'}&${isArt ? 'article' : 'post'}=${encodeURIComponent(key)}`;
+        const key = j.slug || editId;
+        location.href = `wire?article=${encodeURIComponent(key)}`;
       } catch (e) { setMsg('Network error.', true); setBusy(false); }
     }
     // A series is one level deep, so only a LEAD can gain parts — hide this the
@@ -1224,13 +1211,13 @@
 
     // ---- edit prefill ----
     async function prefill() {
-      const isArt = type === 'article';
-      const r = await fetch(`${API_BASE}/api/wire/${isArt ? 'articles' : 'media'}/${encodeURIComponent(editId)}`, { headers: await userHeaders() });
+      const r = await fetch(`${API_BASE}/api/wire/articles/${encodeURIComponent(editId)}`, { headers: await userHeaders() });
       if (!r.ok) { setMsg('Could not load this post for editing.', true); return; }
       const data = await r.json();
-      const it = data.post || data.article; if (!it) return;
+      const it = data.article || data.post; if (!it) return;
       $('#title').value = it.title || '';
-      if (isArt) { $('#excerpt').value = it.excerpt || ''; $('#body').value = it.body || ''; } else { $('#caption').value = it.caption || ''; }
+      $('#excerpt').value = it.excerpt || '';
+      $('#body').value = it.body || '';
       state.media = (it.media || []).map((m) => m.kind === 'video'
         ? { kind: 'video', r2_key: m.r2_key, unit: m.unit || '', url: m.url, previewUrl: m.url }
         : { kind: 'image', r2_key: m.r2_key, hash: m.hash || null, unit: m.unit || '', is_cover: !!m.is_cover, deliveredUrl: m.url });
@@ -1267,7 +1254,6 @@
       if (!(await checkAccess())) return;
       $('#form').style.display = 'block';
       applyType();
-      if (editId) { $('#typeSeg').style.display = 'none'; }
       initMap();
       await Promise.all([loadRegions(), loadIncidents(), loadAgencies(), loadCallsigns()]);
       // Launched from an article's "Add update" button: preselect that lead.

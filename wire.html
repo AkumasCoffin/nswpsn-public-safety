@@ -407,11 +407,9 @@
       <button class="clear" id="fClear">Clear</button>
     </div>
 
-    <div class="wire-tabs2" id="mineFilters" style="display:none" role="tablist">
-      <button data-mf="all" class="on">All</button>
-      <button data-mf="media">Media posts</button>
-      <button data-mf="articles">Articles</button>
-    </div>
+    <!-- One post kind since the media/article merge; the container stays
+         for layout code that references it. -->
+    <div class="wire-tabs2" id="mineFilters" style="display:none" role="tablist"></div>
 
     <div id="feedView">
       <div id="wirePromo" style="display:none"></div>
@@ -473,9 +471,9 @@
     if (window.marked && marked.setOptions) marked.setOptions({ gfm: true, breaks: true });
     let API_KEY = null;
     let ME = { userId: null, canFeed: false, canModerate: false, isOwner: false };
-    let currentTab = new URLSearchParams(location.search).get('tab') === 'articles' ? 'articles' : 'media';
+    // ONE feed since the media/article merge -- everything is an article.
+    // Old ?tab= links land here and just see the single feed.
     let mineMode = new URLSearchParams(location.search).get('mine') === '1';
-    let mineFilter = 'all'; // all | media | articles (My posts view)
 
     const $ = (s, r = document) => r.querySelector(s);
     const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -537,7 +535,7 @@
           mb.style.display = 'inline-flex';
           mb.classList.add('on');
           mb.innerHTML = '<i class="fa-solid fa-arrow-left"></i> Public feed';
-          mb.href = `wire?tab=${currentTab}`;
+          mb.href = 'wire';
         }
       }
     }
@@ -657,14 +655,8 @@
       grid.innerHTML = ''; empty.style.display = 'none'; $('#showMore').style.display = 'none'; loading.style.display = 'block';
       try {
         const hdr = await userHeaders();
-        const getMedia = mineFilter !== 'articles'
-          ? fetch(`${API_BASE}/api/wire/media?mine=1`, { headers: hdr }).then((r) => r.json()).then((j) => j.posts || []).catch(() => [])
-          : Promise.resolve([]);
-        const getArticles = mineFilter !== 'media'
-          ? fetch(`${API_BASE}/api/wire/articles?mine=1`, { headers: hdr }).then((r) => r.json()).then((j) => j.articles || []).catch(() => [])
-          : Promise.resolve([]);
-        const [media, articles] = await Promise.all([getMedia, getArticles]);
-        const items = [...media, ...articles].sort((a, b) => new Date(b.updated_at || b.created_at || 0) - new Date(a.updated_at || a.created_at || 0));
+        const items = await fetch(`${API_BASE}/api/wire/articles?mine=1`, { headers: hdr })
+          .then((r) => r.json()).then((j) => j.articles || []).catch(() => []);
         loading.style.display = 'none';
         if (!items.length) { empty.textContent = "You haven't posted anything here yet."; empty.style.display = 'block'; return; }
         grid.innerHTML = items.map(cardHTML).join('');
@@ -693,15 +685,14 @@
       feedOffset = 0;
       const grid = $('#grid'), loading = $('#loading'), empty = $('#empty');
       grid.innerHTML = ''; empty.style.display = 'none'; $('#showMore').style.display = 'none'; loading.style.display = 'block';
-      const path = currentTab === 'articles' ? 'articles' : 'media';
       try {
         // Send the JWT when logged in (userHeaders falls back to the public key)
         // so the owner-only soft-launch gate recognises the owner.
-        const r = await fetch(`${API_BASE}/api/wire/${path}?${feedParams(0)}`, { headers: await userHeaders() });
+        const r = await fetch(`${API_BASE}/api/wire/articles?${feedParams(0)}`, { headers: await userHeaders() });
         const j = await r.json();
-        const items = j.posts || j.articles || [];
+        const items = j.articles || [];
         loading.style.display = 'none';
-        if (!items.length) { empty.textContent = (currentTab === 'articles' ? 'No articles yet.' : 'No media posts yet.'); empty.style.display = 'block'; return; }
+        if (!items.length) { empty.textContent = 'Nothing posted yet.'; empty.style.display = 'block'; return; }
         grid.innerHTML = items.map(cardHTML).join('');
         feedOffset = items.length;
         $('#showMore').style.display = items.length === PAGE ? 'inline-flex' : 'none';
@@ -711,11 +702,10 @@
     }
     async function loadMore() {
       const btn = $('#showMore'); btn.disabled = true; const orig = btn.innerHTML; btn.innerHTML = 'Loading…';
-      const path = currentTab === 'articles' ? 'articles' : 'media';
       try {
-        const r = await fetch(`${API_BASE}/api/wire/${path}?${feedParams(feedOffset)}`, { headers: await userHeaders() });
+        const r = await fetch(`${API_BASE}/api/wire/articles?${feedParams(feedOffset)}`, { headers: await userHeaders() });
         const j = await r.json();
-        const items = j.posts || j.articles || [];
+        const items = j.articles || [];
         $('#grid').insertAdjacentHTML('beforeend', items.map(cardHTML).join(''));
         feedOffset += items.length;
         btn.style.display = items.length === PAGE ? 'inline-flex' : 'none';
@@ -728,34 +718,35 @@
     let galleryMedia = [], galleryIdx = 0, currentItem = null;
 
     async function openDetail(kind, key, push = true) {
-      const path = kind === 'article' ? `articles/${encodeURIComponent(key)}` : `media/${encodeURIComponent(key)}`;
+      // kind is vestigial since the merge -- every post is an article, and the
+      // API resolves both slugs and pre-merge media-post ids.
       try {
-        const r = await fetch(`${API_BASE}/api/wire/${path}`, { headers: await userHeaders() });
+        const r = await fetch(`${API_BASE}/api/wire/articles/${encodeURIComponent(key)}`, { headers: await userHeaders() });
         if (!r.ok) { toast('Post not found.'); return; }
         const j = await r.json();
         if (j.tombstone) {
           renderTombstone();
           $('#feedView').style.display = 'none'; feedChrome(false); $('#detail').classList.add('on'); window.scrollTo({ top: 0, behavior: 'smooth' });
-          if (push) history.pushState({ kind, key }, '', `wire?tab=${kind === 'article' ? 'articles' : 'media'}`);
+          if (push) history.pushState({ kind, key }, '', 'wire');
           return;
         }
-        const item = j.post || j.article;
+        const item = j.article || j.post;
         // Only what the takedown form needs. The watermark isn't tracked here
         // any more — it's burned into the file itself, for photos and video alike.
-        currentItem = { id: item.id, kind: item.kind === 'article' ? 'article' : 'media_post', title: item.title };
+        currentItem = { id: item.id, kind: 'article', title: item.title };
         renderDetail(item);
         $('#feedView').style.display = 'none';
         feedChrome(false);
         $('#detail').classList.add('on');
         window.scrollTo({ top: 0, behavior: 'smooth' });
-        if (push) history.pushState({ kind, key }, '', `wire?tab=${kind === 'article' ? 'articles' : 'media'}&${kind === 'article' ? 'article' : 'post'}=${encodeURIComponent(key)}`);
-        if (push && typeof umami !== 'undefined') umami.track('wire-open', { kind: kind === 'article' ? 'article' : 'media_post' });
+        if (push) history.pushState({ kind, key }, '', `wire?article=${encodeURIComponent(item.slug || key)}`);
+        if (push && typeof umami !== 'undefined') umami.track('wire-open', { kind: 'article' });
         // Count a view (deduped server-side). Don't count the author's or a
         // co-author's own views: skip the request if you're credited, and send
         // your JWT so the server enforces the same exclusion.
         const credited = ME.userId && ((item.author && item.author.id === ME.userId) || (item.co_authors || []).some((c) => c && c.id === ME.userId));
         if (!credited) {
-          fetch(`${API_BASE}/api/wire/${kind === 'article' ? 'articles' : 'media'}/${encodeURIComponent(item.id)}/view`, { method: 'POST', headers: await userHeaders() }).catch(() => {});
+          fetch(`${API_BASE}/api/wire/articles/${encodeURIComponent(item.id)}/view`, { method: 'POST', headers: await userHeaders() }).catch(() => {});
         }
       } catch (e) { console.warn(e); }
     }
@@ -764,15 +755,16 @@
     // the search/agency/LGA bar (or the My-posts tabs) doesn't sit above a post.
     function feedChrome(show) {
       if (!show) { $('#filters').style.display = 'none'; $('#mineFilters').style.display = 'none'; return; }
-      if (mineMode) { $('#mineFilters').style.display = 'inline-flex'; $('#filters').style.display = 'none'; }
-      else { $('#filters').style.display = ''; $('#mineFilters').style.display = 'none'; }
+      if (mineMode) { $('#filters').style.display = 'none'; }
+      else { $('#filters').style.display = ''; }
+      $('#mineFilters').style.display = 'none';
     }
 
     function closeDetail(push = true) {
       $('#detail').classList.remove('on'); $('#detail').innerHTML = '';
       $('#feedView').style.display = '';
       feedChrome(true);
-      if (push) history.pushState({}, '', `wire?tab=${currentTab}`);
+      if (push) history.pushState({}, '', 'wire');
     }
 
     function renderDetail(item) {
@@ -792,7 +784,7 @@
           <div style="font-size:0.85rem;color:var(--text-muted)"><i class="fa-regular fa-copyright"></i> ${esc(item.license_label || 'Credit required')}${item.credit ? ' · ' + esc(item.credit) : ''}</div>
           <button class="wd-btn" id="reportBtn" style="margin-top:0.7rem;font-size:0.75rem"><i class="fa-regular fa-flag"></i> Report / request takedown</button></div>`;
       const actions = (canEdit || ME.canModerate) ? `<div class="wd-block"><div class="wd-lbl" style="display:flex;justify-content:space-between;align-items:center">Manage ${canEdit ? '<span class="wd-yourpost">Your post</span>' : '<span class="wd-yourpost" style="color:#f59e0b;border-color:rgba(245,158,11,0.45)">Team</span>'}</div><div class="wd-actions">
-          ${canEdit ? `<a class="wd-btn" href="wire-compose?type=${isArticle ? 'article' : 'media'}&edit=${encodeURIComponent(item.id)}"><i class="fa-solid fa-pen"></i> Edit</a>` : ''}
+          ${canEdit ? `<a class="wd-btn" href="wire-compose?edit=${encodeURIComponent(item.id)}"><i class="fa-solid fa-pen"></i> Edit</a>` : ''}
           ${canEdit ? `<button class="wd-btn danger" data-act="delete"><i class="fa-solid fa-trash"></i> Delete</button>` : ''}
           ${ME.canModerate && !canEdit ? `<button class="wd-btn danger" data-act="remove"><i class="fa-solid fa-ban"></i> Remove</button>` : ''}
         </div></div>` : '';
@@ -863,7 +855,7 @@
             <button class="wd-btn" id="shareBtn" style="margin:0.55rem 0 0.2rem;font-size:0.75rem"><i class="fa-solid fa-share-nodes"></i> <span>Share</span></button>
             ${editsBtn}
             ${notices}
-            ${isArticle && item.excerpt ? `<p class="wd-caption">${esc(item.excerpt)}</p>` : ''}
+            ${isArticle && item.excerpt && !String(item.body || '').trim().startsWith(String(item.excerpt).trim().slice(0, 60)) ? `<p class="wd-caption">${esc(item.excerpt)}</p>` : ''}
             ${statsBlock}
             ${seriesBlock}
             <div class="wd-block wd-meta-grid">
@@ -1312,25 +1304,19 @@
     function applySection() {
       $('#wireSub').textContent = mineMode
         ? 'Your posts — including anything awaiting review.'
-        : (currentTab === 'articles' ? 'Independent news & reporting from contributors.' : 'Independent photos & video from contributors on the ground.');
-      $('#fUnit').style.display = currentTab === 'articles' ? 'none' : '';
+        : 'Independent photos, video & reporting from contributors on the ground.';
     }
     ['fSearch', 'fUnit', 'fAgency', 'fRegion'].forEach((id) => {
       const el = $('#' + id); const ev = (id === 'fUnit' || id === 'fSearch') ? 'input' : 'change';
       let t; el.addEventListener(ev, () => { clearTimeout(t); t = setTimeout(loadFeed, ev === 'input' ? 300 : 0); });
     });
     $('#fClear').addEventListener('click', () => { $('#fSearch').value = ''; $('#fUnit').value = ''; $('#fAgency').value = ''; $('#fRegion').value = ''; loadFeed(); });
-    $('#mineFilters').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
-      mineFilter = b.dataset.mf;
-      $('#mineFilters').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
-      loadFeed();
-    }));
 
     window.addEventListener('popstate', () => {
       const p = new URLSearchParams(location.search);
       const post = p.get('post'), article = p.get('article');
       if (article) openDetail('article', article, false);
-      else if (post) openDetail('media', post, false);
+      else if (post) openDetail('article', post, false);
       else closeDetail(false);
     });
 
@@ -1352,7 +1338,7 @@
     }
     async function feedVisibleToMe() {
       try {
-        const r = await fetch(`${API_BASE}/api/wire/media?limit=1`, { headers: await userHeaders() });
+        const r = await fetch(`${API_BASE}/api/wire/articles?limit=1`, { headers: await userHeaders() });
         if (!r.ok) return false;
         // The server answers 200 with an empty list when the Wire is gated, so
         // r.ok alone said "visible" either way and the coming-soon page never
@@ -1374,11 +1360,9 @@
       if (!host || WIRE_IS_PUBLIC !== false) return;
       let hasAnyPost = true;
       try {
-        const [m, a] = await Promise.all([
-          fetch(`${API_BASE}/api/wire/media?limit=1`, { headers: await userHeaders() }).then((r) => r.json()).catch(() => ({})),
-          fetch(`${API_BASE}/api/wire/articles?limit=1`, { headers: await userHeaders() }).then((r) => r.json()).catch(() => ({})),
-        ]);
-        hasAnyPost = ((m.posts || []).length + (a.articles || []).length) > 0;
+        const a = await fetch(`${API_BASE}/api/wire/articles?limit=1`, { headers: await userHeaders() })
+          .then((r) => r.json()).catch(() => ({}));
+        hasAnyPost = (a.articles || []).length > 0;
       } catch (e) { /* assume posts exist — the weaker claim */ }
 
       const first = hasAnyPost ? '' : `
@@ -1425,7 +1409,7 @@
       const p = new URLSearchParams(location.search);
       const post = p.get('post'), article = p.get('article');
       if (article) { await loadFeed(); openDetail('article', article, false); }
-      else if (post) { await loadFeed(); openDetail('media', post, false); }
+      else if (post) { await loadFeed(); openDetail('article', post, false); }
       else loadFeed();
     })();
   </script>

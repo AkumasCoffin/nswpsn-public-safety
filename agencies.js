@@ -368,20 +368,14 @@
     if (!mount || document.getElementById("wire-nav")) return;
     const path = location.pathname.replace(/\/$/, "");
     const onWire = path.endsWith("/wire") || path.endsWith("/wire.html");
-    const tab = onWire ? new URLSearchParams(location.search).get("tab") || "media" : null;
-    const active = (t) =>
-      tab === t ? ' class="agency-item-link active"' : ' class="agency-item-link"';
     const wrap = document.createElement("div");
     wrap.id = "wire-nav";
+    // One feed since the media/article merge -- a single link, no sub-tabs.
     wrap.innerHTML = `
       <div class="sidebar-section-label">News &amp; Media</div>
-      <details class="wire-nav"${onWire ? " open" : ""}>
-        <summary><i class="fa-solid fa-photo-film"></i><span>The Wire</span></summary>
-        <div class="wire-nav-list">
-          <a${active("media")} href="wire?tab=media"><i class="agency-item-icon fa-solid fa-images"></i><span class="agency-item-name">Media Posts</span></a>
-          <a${active("articles")} href="wire?tab=articles"><i class="agency-item-icon fa-solid fa-newspaper"></i><span class="agency-item-name">Articles</span></a>
-        </div>
-      </details>`;
+      <a class="agency-item-link${onWire ? " active" : ""}" href="wire" style="display:flex;align-items:center;gap:0.55rem;">
+        <i class="agency-item-icon fa-solid fa-photo-film"></i><span class="agency-item-name">The Wire</span>
+      </a>`;
     mount.parentNode.insertBefore(wrap, mount);
   }
 

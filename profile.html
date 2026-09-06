@@ -169,11 +169,8 @@
     async function loadPosts() {
       try {
         const hdr = await userHeaders();
-        const [mj, aj] = await Promise.all([
-          fetch(`${API_BASE}/api/wire/media?author=${encodeURIComponent(uid)}`, { headers: hdr }).then((r) => r.json()).catch(() => ({})),
-          fetch(`${API_BASE}/api/wire/articles?author=${encodeURIComponent(uid)}`, { headers: hdr }).then((r) => r.json()).catch(() => ({})),
-        ]);
-        const items = [...(mj.posts || []), ...(aj.articles || [])].sort((a, b) => new Date(b.published_at || b.created_at || 0) - new Date(a.published_at || a.created_at || 0));
+        const aj = await fetch(`${API_BASE}/api/wire/articles?author=${encodeURIComponent(uid)}`, { headers: hdr }).then((r) => r.json()).catch(() => ({}));
+        const items = (aj.articles || []).sort((a, b) => new Date(b.published_at || b.created_at || 0) - new Date(a.published_at || a.created_at || 0));
         if (!items.length) return;
         document.getElementById('profPosts').innerHTML = `<div class="pp-head">Posts on The Wire</div><div class="pp-grid">${items.map(card).join('')}</div>`;
         document.querySelectorAll('.pp-card').forEach((el) => el.addEventListener('click', () => { location.href = el.dataset.href; }));
@@ -184,8 +181,7 @@
       const cover = item.cover;
       const media = cover && cover.kind === 'image' ? `<img src="${esc(cover.feed_url || cover.url)}" alt="" loading="lazy">`
         : (cover && (cover.poster_feed_url || cover.poster_url) ? `<img src="${esc(cover.poster_feed_url || cover.poster_url)}">` : `<div class="ph"><i class="fa-regular fa-${isArticle ? 'newspaper' : 'image'}"></i></div>`);
-      const key = isArticle ? item.slug : item.id;
-      const href = `wire?tab=${isArticle ? 'articles' : 'media'}&${isArticle ? 'article' : 'post'}=${encodeURIComponent(key)}`;
+      const href = `wire?article=${encodeURIComponent(item.slug || item.id)}`;
       return `<article class="pp-card" data-href="${esc(href)}">
         <div class="pp-thumb">${media}<span class="pp-badge ${isArticle ? 'article' : ''}">${isArticle ? 'Article' : 'Media'}</span></div>
         <div class="pp-body"><h3>${esc(item.title)}</h3><div class="m">${timeAgo(item.published_at || item.created_at)}</div></div>

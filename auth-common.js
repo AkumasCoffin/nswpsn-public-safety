@@ -542,32 +542,16 @@ let _profilePosts = [];
 let _profilePostFilter = 'all';
 
 function profilePostHref(item) {
-  const isArticle = item.kind === 'article';
-  const key = isArticle ? (item.slug || item.id) : item.id;
-  return `wire?tab=${isArticle ? 'articles' : 'media'}&${isArticle ? 'article' : 'post'}=${encodeURIComponent(key)}`;
+  // Everything is an article since the merge; pre-merge media posts kept
+  // their ids and the article endpoint resolves those too.
+  return `wire?article=${encodeURIComponent(item.slug || item.id)}`;
 }
 
 function renderProfilePostFilter() {
   const box = document.getElementById('profile-posts-filter');
   if (!box) return;
-  const counts = {
-    all: _profilePosts.length,
-    media: _profilePosts.filter((i) => i.kind !== 'article').length,
-    articles: _profilePosts.filter((i) => i.kind === 'article').length,
-  };
-  box.innerHTML = [['all', 'All'], ['media', 'Media'], ['articles', 'Articles']].map(([k, label]) => {
-    const on = _profilePostFilter === k;
-    return `<button data-pf="${k}" style="padding:0.25rem 0.55rem; font:inherit; font-size:0.72rem; cursor:pointer; border-radius:6px; font-family:inherit;
-      background:${on ? 'rgba(249,115,22,0.16)' : 'rgba(148,163,184,0.08)'};
-      border:1px solid ${on ? 'rgba(249,115,22,0.45)' : 'rgba(148,163,184,0.2)'};
-      color:${on ? '#f97316' : '#94a3b8'};">${label} ${counts[k]}</button>`;
-  }).join('');
-  box.querySelectorAll('[data-pf]').forEach((b) => b.addEventListener('click', (e) => {
-    e.preventDefault();
-    _profilePostFilter = b.dataset.pf;
-    renderProfilePostFilter();
-    renderProfilePosts();
-  }));
+  // One post kind since the media/article merge -- nothing to filter by.
+  box.innerHTML = '';
 }
 
 function renderProfilePosts() {
@@ -610,11 +594,8 @@ async function loadProfilePosts(session) {
   if (!section) return;
   const h = { Authorization: 'Bearer ' + session.access_token };
   try {
-    const [mj, aj] = await Promise.all([
-      fetch(`${API_BASE_URL}/api/wire/media?mine=1`, { headers: h }).then((r) => r.json()).catch(() => ({})),
-      fetch(`${API_BASE_URL}/api/wire/articles?mine=1`, { headers: h }).then((r) => r.json()).catch(() => ({})),
-    ]);
-    _profilePosts = [...(mj.posts || []), ...(aj.articles || [])]
+    const aj = await fetch(`${API_BASE_URL}/api/wire/articles?mine=1`, { headers: h }).then((r) => r.json()).catch(() => ({}));
+    _profilePosts = (aj.articles || [])
       .sort((a, b) => new Date(b.published_at || b.created_at || 0) - new Date(a.published_at || a.created_at || 0));
   } catch (e) {
     _profilePosts = [];
