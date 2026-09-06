@@ -297,11 +297,28 @@
         <div class="toggle2" id="locToggle">
           <button type="button" data-loc="none" aria-current="true">No location</button>
           <button type="button" data-loc="pin" aria-current="false">Drop a pin</button>
-          <button type="button" data-loc="region" aria-current="false">Pick an LGA</button>
+          <button type="button" data-loc="region" aria-current="false">Pick an area</button>
         </div>
         <div id="pinWrap" style="display:none"><div id="pinMap"></div></div>
         <div id="regionWrap" style="display:none">
-          <select id="regionSelect"><option value="">Select an LGA…</option></select>
+          <!-- Same cascade as signup: State -> LGA (datalist combo backed by
+               /api/boundaries/lga-names, degrades to free text) -> optional
+               suburb. Stored as ONE readable string, "NSW — Penrith — Emu
+               Plains", same separator as the signup form. -->
+          <select id="regionState" style="margin-bottom:0.5rem">
+            <option value="">Select state / territory…</option>
+            <option value="NSW">New South Wales</option>
+            <option value="ACT">Australian Capital Territory</option>
+            <option value="NT">Northern Territory</option>
+            <option value="QLD">Queensland</option>
+            <option value="SA">South Australia</option>
+            <option value="TAS">Tasmania</option>
+            <option value="VIC">Victoria</option>
+            <option value="WA">Western Australia</option>
+          </select>
+          <input type="text" id="regionLga" list="regionLgaList" placeholder="Select the state first…" autocomplete="off" disabled style="margin-bottom:0.5rem">
+          <datalist id="regionLgaList"></datalist>
+          <input type="text" id="regionSuburb" placeholder="Suburb · optional" maxlength="80">
         </div>
         <div class="loc-readout" id="locReadout">No location set.</div>
       </div>
@@ -487,20 +504,6 @@
     const titleCase = (s) => String(s || '').toLowerCase().replace(/\b([a-z])/g, (m, c) => c.toUpperCase());
     const LIMITS = { media: { img: 6 }, article: { img: 4 } };
 
-    // Build region-grouped <optgroup>s for an LGA <select>. rawNames = UPPERCASE
-    // LGA names; lgaReg maps each to its planning region.
-    const WIRE_REGION_ORDER = ['Greater Sydney', 'Central Coast', 'Hunter', 'Illawarra-Shoalhaven', 'North Coast', 'New England North West', 'Central West and Orana', 'Riverina Murray', 'South East and Tablelands', 'Far West', 'Other'];
-    function buildLgaOptgroups(rawNames, lgaReg) {
-      const groups = {};
-      rawNames.forEach((raw) => { const region = (lgaReg && lgaReg[raw]) || 'Other'; (groups[region] = groups[region] || []).push(titleCase(raw)); });
-      const frag = document.createDocumentFragment();
-      Object.keys(groups).sort((a, b) => { const ia = WIRE_REGION_ORDER.indexOf(a), ib = WIRE_REGION_ORDER.indexOf(b); return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b); }).forEach((region) => {
-        const og = document.createElement('optgroup'); og.label = region;
-        groups[region].sort((a, b) => a.localeCompare(b)).forEach((name) => { const o = document.createElement('option'); o.value = name; o.textContent = name; og.appendChild(o); });
-        frag.appendChild(og);
-      });
-      return frag;
-    }
 
     async function loadKey() { try { const r = await fetch(`${API_BASE}/api/config`); API_KEY = (await r.json()).apiKey; } catch (e) {} }
     async function keyHeaders() { return API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {}; }
@@ -776,12 +779,13 @@
         // Optional: clear any location entirely (stored as pin + null coords).
         state.location = { type: 'pin', region: null, lat: null, lng: null };
         if (marker && map) { map.removeLayer(marker); marker = null; }
-        $('#regionSelect').value = '';
+        $('#regionState').value = ''; $('#regionLga').value = ''; $('#regionSuburb').value = '';
       } else if (mode === 'pin') {
         setTimeout(() => map && map.invalidateSize(), 50);
         state.location.type = 'pin'; state.location.region = null;
       } else if (mode === 'region') {
         state.location.type = 'region';
+        applyRegionFields();
       }
       refreshLocReadout(); refreshIncidentSuggestions();
     }
@@ -797,7 +801,7 @@
     }
     function refreshLocReadout() {
       const l = state.location;
-      $('#locReadout').textContent = l.type === 'region' && l.region ? `LGA: ${l.region}` :
+      $('#locReadout').textContent = l.type === 'region' && l.region ? `Area: ${l.region}` :
         (l.lat != null ? `Pin: ${l.lat.toFixed(4)}, ${l.lng.toFixed(4)}` : 'No location set.');
     }
 
@@ -820,28 +824,81 @@
       return false;
     }
 
-    // The area picker uses the 132 NSW LGAs, grouped by planning region for a
-    // cleaner dropdown (mapping in data/boundaries/lga-regions.json). Names come
-    // UPPERCASE, so we title-case them for display; the title-cased name is what
-    // we store.
-    function areaFeature(name) { return (regionsGeo || []).find((x) => titleCase(x.properties.name) === name); }
-    async function loadRegions() {
+    // The NSW LGA boundary file is kept ONLY for centroids now (the
+    // nearby-incident sort needs a coordinate); the picker itself is the
+    // signup-style State -> LGA -> suburb cascade below.
+    function areaFeature(name) {
+      const want = String(name || '').toLowerCase();
+      return (regionsGeo || []).find((x) => titleCase(x.properties.name).toLowerCase() === want);
+    }
+
+    // ABS LGA names per state, from the backend boundaries table. Cached per
+    // state; a failed fetch degrades to a free-text LGA field, never a
+    // blocked form. Same behaviour as the signup page.
+    const _lgaNamesCache = {};
+    async function onRegionStateChange() {
+      const st = $('#regionState').value;
+      const lga = $('#regionLga'), list = $('#regionLgaList');
+      lga.value = ''; $('#regionSuburb').value = '';
+      if (!st) {
+        lga.disabled = true; lga.placeholder = 'Select the state first…'; list.innerHTML = '';
+        applyRegionFields(); return;
+      }
+      lga.disabled = false; lga.placeholder = 'Start typing the council area…';
+      applyRegionFields();
+      if (_lgaNamesCache[st]) { list.innerHTML = _lgaNamesCache[st]; return; }
       try {
-        const [geo, lgaReg] = await Promise.all([
-          fetch('data/boundaries/nsw-lga.geojson', { cache: 'force-cache' }).then((r) => r.json()),
-          fetch('data/boundaries/lga-regions.json', { cache: 'force-cache' }).then((r) => r.json()).catch(() => ({})),
-        ]);
+        const res = await fetch(`${API_BASE}/api/boundaries/lga-names?state=${st}`);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        const opts = (data.names || []).map((n) => `<option value="${esc(n)}">`).join('');
+        _lgaNamesCache[st] = opts;
+        // The state may have changed while this was in flight.
+        if ($('#regionState').value === st) list.innerHTML = opts;
+      } catch (e) { /* suggestions are optional; the field stays free text */ }
+    }
+
+    /** The three fields -> state.location. State + LGA make an area; the
+     *  stored string is "NSW — Penrith — Emu Plains" (suburb optional),
+     *  the same shape signup stores. NSW areas also get a centroid from the
+     *  local boundary file so nearby-incident sorting keeps working; other
+     *  states have no local geometry and store without coordinates. */
+    function applyRegionFields() {
+      const st = $('#regionState').value;
+      const lgaName = $('#regionLga').value.trim();
+      const suburb = $('#regionSuburb').value.trim();
+      const combined = st && lgaName ? [st, lgaName, suburb].filter(Boolean).join(' \u2014 ') : null;
+      let lat = null, lng = null;
+      if (combined && st === 'NSW') {
+        const f = areaFeature(lgaName);
+        if (f) { const c = regionCentroid(f); lat = c[0]; lng = c[1]; }
+      }
+      state.location = { type: 'region', region: combined, lat, lng };
+      refreshLocReadout(); refreshIncidentSuggestions();
+    }
+
+    /** A stored region string back into the fields. New rows are
+     *  "NSW — Penrith — Emu Plains"; legacy rows are a bare NSW LGA name
+     *  (the old picker was NSW-only), which lands in the LGA box under NSW. */
+    async function setRegionFields(regionStr) {
+      const parts = String(regionStr || '').split(' \u2014 ');
+      const st = parts.length > 1 ? parts[0] : 'NSW';
+      const lgaName = parts.length > 1 ? (parts[1] || '') : (parts[0] || '');
+      $('#regionState').value = st;
+      await onRegionStateChange();
+      $('#regionLga').value = lgaName;
+      $('#regionSuburb').value = parts[2] || '';
+      applyRegionFields();
+    }
+
+    async function loadRegions() {
+      $('#regionState').addEventListener('change', onRegionStateChange);
+      $('#regionLga').addEventListener('input', applyRegionFields);
+      $('#regionSuburb').addEventListener('input', applyRegionFields);
+      try {
+        const geo = await fetch('data/boundaries/nsw-lga.geojson', { cache: 'force-cache' }).then((r) => r.json());
         regionsGeo = geo.features || [];
-        const sel = $('#regionSelect');
-        sel.appendChild(buildLgaOptgroups(regionsGeo.map((f) => f.properties.name), lgaReg));
-        sel.addEventListener('change', () => {
-          const f = areaFeature(sel.value);
-          if (!f) { state.location.region = null; refreshLocReadout(); return; }
-          const c = regionCentroid(f);
-          state.location = { type: 'region', region: sel.value, lat: c[0], lng: c[1] };
-          refreshLocReadout(); refreshIncidentSuggestions();
-        });
-      } catch (e) {}
+      } catch (e) { /* no centroids; areas still store fine */ }
     }
 
     // ---- incidents ----
@@ -1023,7 +1080,7 @@
         };
         const isRegion = state.location.type === 'region' && state.location.region;
         setLocMode(isRegion ? 'region' : (state.location.lat != null ? 'pin' : 'none'));
-        if (isRegion) { $('#regionSelect').value = state.location.region; refreshLocReadout(); }
+        if (isRegion) { setRegionFields(state.location.region); }
         else if (state.location.lat != null) setPin(state.location.lat, state.location.lng);
       }
       if (!state.incident && lead.incident) {
@@ -1201,7 +1258,7 @@
       const wasRegion = state.location.type === 'region', wasLat = state.location.lat, wasLng = state.location.lng, wasRegionName = state.location.region;
       setLocMode(hasLoc ? state.location.type : 'none');
       if (hasLoc && !wasRegion && wasLat != null) setPin(wasLat, wasLng);
-      if (hasLoc && wasRegion && wasRegionName) { state.location = { type: 'region', region: wasRegionName, lat: wasLat, lng: wasLng }; $('#regionSelect').value = wasRegionName; refreshLocReadout(); }
+      if (hasLoc && wasRegion && wasRegionName) { setRegionFields(wasRegionName); }
     }
 
     // ---- init ----
