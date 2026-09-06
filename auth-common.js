@@ -216,12 +216,23 @@ function createProfileModal() {
   modal.id = 'profile-modal';
   modal.style.cssText = 'display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:10002; align-items:center; justify-content:center;';
   modal.innerHTML = `
-    <div style="background:#1e293b; border:1px solid rgba(148,163,184,0.2); border-radius:12px; padding:2rem; max-width:560px; width:90%; box-shadow:0 25px 50px -12px rgba(0,0,0,0.7); max-height:90vh; overflow-y:auto;">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.25rem;">
-        <h2 style="margin:0; font-size:1.25rem; font-weight:700; color:#fff;">Your Profile</h2>
-        <button onclick="closeProfileModal()" style="background:none; border:none; color:#94a3b8; font-size:1.5rem; cursor:pointer; padding:0; width:30px; height:30px; display:flex; align-items:center; justify-content:center;">&times;</button>
+    <style>
+      #profile-grid { display:grid; grid-template-columns:1fr 1fr; gap:2.4rem; align-items:start; }
+      @media (max-width: 900px) { #profile-grid { grid-template-columns:1fr; gap:1.4rem; } }
+      #profile-modal .pf-card { background:#1e293b; border:1px solid rgba(148,163,184,0.2); border-radius:12px; padding:1.4rem 1.5rem; margin-bottom:1.2rem; }
+      #profile-modal .pf-col-hd { color:#f97316; font-size:0.72rem; text-transform:uppercase; letter-spacing:0.1em; font-weight:700; margin:0 0 0.8rem; }
+    </style>
+    <div style="background:#0f172a; width:100%; height:100%; overflow-y:auto; padding:1.6rem clamp(1rem, 4vw, 3rem) 3rem; box-sizing:border-box;">
+      <div style="max-width:1180px; margin:0 auto;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.4rem;">
+        <h2 style="margin:0; font-size:1.35rem; font-weight:800; color:#fff;">Your Profile</h2>
+        <button onclick="closeProfileModal()" style="background:rgba(148,163,184,0.12); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#cbd5e1; font-size:1.3rem; cursor:pointer; padding:0; width:34px; height:34px; display:flex; align-items:center; justify-content:center;">&times;</button>
       </div>
 
+      <div id="profile-grid">
+      <div><!-- MAIN settings: who you are -->
+      <div class="pf-col-hd">Profile</div>
+      <div class="pf-card">
       <div style="text-align:center; margin-bottom:1.3rem;">
         <div id="profile-avatar-preview" style="width:82px; height:82px; border-radius:50%; margin:0 auto 0.55rem; background:rgba(249,115,22,0.2); color:#f97316; display:grid; place-items:center; font-size:1.9rem; font-weight:700; overflow:hidden; border:2px solid rgba(148,163,184,0.25);"></div>
         <button type="button" onclick="pickProfileAvatar()" id="profile-avatar-btn" style="padding:0.45rem 0.9rem; background:rgba(148,163,184,0.12); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#e2e8f0; font-size:0.8rem; cursor:pointer; font-family:inherit;"><i class="fas fa-camera"></i> Change picture</button>
@@ -229,18 +240,6 @@ function createProfileModal() {
         <div style="color:#64748b; font-size:0.72rem; margin-top:0.4rem;">Overrides your Discord avatar.</div>
         <div id="profile-stats" style="display:none; justify-content:center; gap:1.4rem; margin-top:0.9rem;"></div>
         <div id="profile-tags" style="display:none; flex-wrap:wrap; justify-content:center; gap:0.35rem; margin-top:0.7rem;"></div>
-      </div>
-
-      <div id="profile-wm-section" style="display:none; margin-bottom:1.3rem;">
-        <label style="display:block; color:#cbd5e1; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem; font-weight:600;">Media watermark</label>
-        <canvas id="profile-wm-preview" width="640" height="480" style="width:100%; border-radius:10px; border:1px solid rgba(148,163,184,0.25); background:#0b1220; display:block;"></canvas>
-        <div style="display:flex; gap:0.5rem; margin-top:0.55rem; align-items:center; flex-wrap:wrap;">
-          <button type="button" onclick="pickProfileWatermark()" style="padding:0.45rem 0.9rem; background:rgba(148,163,184,0.12); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#e2e8f0; font-size:0.8rem; cursor:pointer; font-family:inherit;"><i class="fas fa-stamp"></i> Upload watermark (PNG)</button>
-          <button type="button" id="profile-wm-remove" onclick="removeProfileWatermark()" style="display:none; padding:0.45rem 0.9rem; background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.3); border-radius:8px; color:#fca5a5; font-size:0.8rem; cursor:pointer; font-family:inherit;"><i class="fas fa-trash"></i> Remove</button>
-          <span id="profile-wm-msg" style="color:#64748b; font-size:0.72rem;"></span>
-        </div>
-        <input type="file" id="profile-wm-input" accept="image/png" style="display:none">
-        <div style="color:#64748b; font-size:0.72rem; margin-top:0.4rem;">A transparent PNG, stamped onto the bottom-right of your Wire &amp; Fleet photos when the watermark toggle is on. Without one, your username is used.</div>
       </div>
 
       <div style="margin-bottom:1.2rem;">
@@ -261,7 +260,7 @@ function createProfileModal() {
         </div>
       </div>
 
-      <div style="margin-bottom:1.2rem;">
+      <div style="margin-bottom:0.4rem;">
         <label style="display:block; color:#cbd5e1; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem; font-weight:600;">Social links</label>
         <div style="display:flex; flex-direction:column; gap:0.45rem;">
           <div style="display:flex; align-items:center; gap:0.6rem;"><i class="fab fa-x-twitter" style="color:#94a3b8; width:18px; text-align:center;"></i><input type="text" id="profile-twitter" placeholder="X / Twitter link" style="flex:1; padding:0.55rem 0.7rem; background:rgba(2,6,23,0.5); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#fff; font-size:0.85rem; box-sizing:border-box; font-family:inherit;"></div>
@@ -272,8 +271,26 @@ function createProfileModal() {
         </div>
         <div style="color:#64748b; font-size:0.72rem; margin-top:0.4rem;">Shown on your contributor profile. Click Save to update.</div>
       </div>
+      <div id="profile-message" style="margin-top:0.6rem; font-size:0.85rem; text-align:center; min-height:1.2em;"></div>
+      </div><!-- /pf-card -->
+      </div><!-- /main column -->
 
-      <div style="margin-bottom:1.2rem;">
+      <div><!-- OTHER settings: account + media (more to come) -->
+      <div class="pf-col-hd">Account &amp; media</div>
+
+      <div id="profile-wm-section" class="pf-card" style="display:none;">
+        <label style="display:block; color:#cbd5e1; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem; font-weight:600;">Media watermark</label>
+        <canvas id="profile-wm-preview" width="640" height="480" style="width:100%; border-radius:10px; border:1px solid rgba(148,163,184,0.25); background:#0b1220; display:none; margin-bottom:0.55rem;"></canvas>
+        <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+          <button type="button" onclick="pickProfileWatermark()" style="padding:0.45rem 0.9rem; background:rgba(148,163,184,0.12); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#e2e8f0; font-size:0.8rem; cursor:pointer; font-family:inherit;"><i class="fas fa-stamp"></i> Upload watermark (PNG)</button>
+          <button type="button" id="profile-wm-remove" onclick="removeProfileWatermark()" style="display:none; padding:0.45rem 0.9rem; background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.3); border-radius:8px; color:#fca5a5; font-size:0.8rem; cursor:pointer; font-family:inherit;"><i class="fas fa-trash"></i> Remove</button>
+          <span id="profile-wm-msg" style="color:#64748b; font-size:0.72rem;"></span>
+        </div>
+        <input type="file" id="profile-wm-input" accept="image/png" style="display:none">
+        <div style="color:#64748b; font-size:0.72rem; margin-top:0.4rem;">A transparent PNG, stamped onto the bottom-right of your Wire &amp; Fleet photos when the watermark toggle is on. Without one, your username is used. The preview shows how it will sit on a photo.</div>
+      </div>
+
+      <div class="pf-card">
         <label style="display:block; color:#cbd5e1; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem; font-weight:600;">Linked Accounts</label>
         <div id="profile-email-row" style="display:flex; align-items:center; gap:0.6rem; padding:0.6rem 0.75rem; background:rgba(2,6,23,0.4); border:1px solid rgba(148,163,184,0.15); border-radius:8px; margin-bottom:0.5rem;">
           <i class="fas fa-envelope" style="color:#94a3b8; width:18px; text-align:center;"></i>
@@ -285,21 +302,21 @@ function createProfileModal() {
           <button id="profile-discord-link-btn" onclick="linkDiscordAccount()" style="display:none; padding:0.35rem 0.7rem; background:#5865F2; border:none; border-radius:6px; color:#fff; font-weight:600; cursor:pointer; font-size:0.75rem; font-family:inherit;">Link</button>
           <span id="profile-discord-linked-badge" style="display:none; color:#22c55e; font-size:0.75rem; font-weight:600;"><i class="fas fa-check"></i> Linked</span>
         </div>
+        <a id="profile-change-password" href="change-password.html" style="display:flex; width:100%; padding:0.55rem; background:rgba(148,163,184,0.1); border:1px solid rgba(148,163,184,0.2); border-radius:6px; color:#94a3b8; font-size:0.8rem; cursor:pointer; align-items:center; justify-content:center; gap:0.4rem; font-family:inherit; text-decoration:none; box-sizing:border-box; margin-top:0.7rem;">
+          <i class="fas fa-key"></i> Change Password
+        </a>
       </div>
 
-      <a id="profile-change-password" href="change-password.html" style="display:flex; width:100%; padding:0.55rem; background:rgba(148,163,184,0.1); border:1px solid rgba(148,163,184,0.2); border-radius:6px; color:#94a3b8; font-size:0.8rem; cursor:pointer; align-items:center; justify-content:center; gap:0.4rem; font-family:inherit; text-decoration:none; box-sizing:border-box;">
-        <i class="fas fa-key"></i> Change Password
-      </a>
-
-      <div id="profile-posts-section" style="display:none; margin-top:1.4rem; border-top:1px solid rgba(148,163,184,0.2); padding-top:1.1rem;">
+      <div id="profile-posts-section" class="pf-card" style="display:none;">
         <div style="display:flex; align-items:center; justify-content:space-between; gap:0.6rem; margin-bottom:0.7rem;">
           <label style="color:#cbd5e1; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em; font-weight:600;">My posts</label>
           <div id="profile-posts-filter" style="display:flex; gap:0.25rem;"></div>
         </div>
         <div id="profile-posts-list"></div>
       </div>
-
-      <div id="profile-message" style="margin-top:1rem; font-size:0.85rem; text-align:center; min-height:1.2em;"></div>
+      </div><!-- /other column -->
+      </div><!-- /profile-grid -->
+      </div>
     </div>
   `;
   document.body.appendChild(modal);
@@ -310,6 +327,8 @@ function createProfileModal() {
   if (bioInput) bioInput.addEventListener('input', updateBioCount);
   const avInput = document.getElementById('profile-avatar-input');
   if (avInput) avInput.addEventListener('change', handleProfileAvatar);
+  const wmInput = document.getElementById('profile-wm-input');
+  if (wmInput) wmInput.addEventListener('change', handleProfileWatermarkFile);
 }
 
 // ===================== NOTIFICATIONS (sidebar bell) =====================
@@ -503,6 +522,10 @@ function _wmMsg(text, err) {
 async function drawWatermarkPreview() {
   const canvas = document.getElementById('profile-wm-preview');
   if (!canvas) return;
+  // Hidden until a watermark exists -- an example scene with nothing on it
+  // reads as a stray photo in the panel.
+  if (!_wmPreviewBitmap) { canvas.style.display = 'none'; return; }
+  canvas.style.display = 'block';
   const ctx = canvas.getContext('2d');
   const w = canvas.width, h = canvas.height;
   ctx.clearRect(0, 0, w, h);
@@ -518,21 +541,13 @@ async function drawWatermarkPreview() {
   } catch (e) {
     ctx.fillStyle = '#1e293b'; ctx.fillRect(0, 0, w, h);
   }
-  if (_wmPreviewBitmap) {
-    // Same placement maths the composers use: ~28% of the width, 2.5% pad.
-    const targetW = Math.max(64, Math.round(w * 0.28));
-    const targetH = Math.round(targetW * (_wmPreviewBitmap.height / _wmPreviewBitmap.width));
-    const pad = Math.round(Math.min(w, h) * 0.025);
-    ctx.globalAlpha = 0.95;
-    ctx.drawImage(_wmPreviewBitmap, w - targetW - pad, h - targetH - pad, targetW, targetH);
-    ctx.globalAlpha = 1;
-  } else {
-    ctx.fillStyle = 'rgba(2,6,23,0.55)'; ctx.fillRect(0, 0, w, h);
-    ctx.fillStyle = '#cbd5e1';
-    ctx.font = '600 22px system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('Upload a PNG to preview your watermark', w / 2, h / 2);
-  }
+  // Same placement maths the composers use: ~28% of the width, 2.5% pad.
+  const targetW = Math.max(64, Math.round(w * 0.28));
+  const targetH = Math.round(targetW * (_wmPreviewBitmap.height / _wmPreviewBitmap.width));
+  const pad = Math.round(Math.min(w, h) * 0.025);
+  ctx.globalAlpha = 0.95;
+  ctx.drawImage(_wmPreviewBitmap, w - targetW - pad, h - targetH - pad, targetW, targetH);
+  ctx.globalAlpha = 1;
 }
 
 async function loadProfileWatermark(session) {
@@ -563,10 +578,9 @@ async function removeProfileWatermark() {
   } catch (e) { _wmMsg('Failed to remove.', true); }
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+async function handleProfileWatermarkFile() {
   const inp = document.getElementById('profile-wm-input');
-  if (!inp) return;
-  inp.addEventListener('change', async () => {
+  {
     const file = inp.files && inp.files[0];
     inp.value = '';
     if (!file) return;
@@ -592,8 +606,8 @@ document.addEventListener('DOMContentLoaded', () => {
       _wmMsg('Watermark saved.');
       drawWatermarkPreview();
     } catch (e) { _wmMsg('Upload failed — try again.', true); }
-  });
-});
+  }
+}
 
 // Pending avatar (uploaded to R2 but not yet saved to the profile).
 let _pendingAvatarKey = null, _pendingAvatarUrl = null;
