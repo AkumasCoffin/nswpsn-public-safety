@@ -836,10 +836,10 @@
         specRow('CAFS equipped', typeof sp.cafs === 'boolean' ? (sp.cafs ? 'Yes' : 'No') : null) +
         specRow('BA sets', sp.ba_sets);
       const amboRows = specRow('Stretchers', sp.stretchers);
-      const radioChips = (list) => (list && list.length
-        ? list.map((id) => `<span class="wire-chip" style="font-family:ui-monospace,monospace">${esc(id)}</span>`).join('')
-        : '<span style="color:var(--text-soft);font-size:0.8rem">—</span>');
-      const loc = [v.state, v.lga, v.suburb].filter(Boolean).join(' — ');
+      const radioBlock = (label, list) => (list && list.length
+        ? `<div class="wd-block"><div class="wd-lbl">${label}</div><div class="wire-chips">${list.map((id) => `<span class="wire-chip" style="font-family:ui-monospace,monospace">${esc(id)}</span>`).join('')}</div></div>`
+        : '');
+
       const photo = v.image_url
         ? `<div class="wd-gallery" style="cursor:default"><img src="${esc(v.image_url)}" alt="" style="width:100%;border-radius:12px"></div>`
         : `<div class="wd-gallery" style="display:grid;place-items:center;min-height:220px;color:var(--text-soft)"><i class="fa-solid fa-truck-field" style="font-size:3rem"></i></div>`;
@@ -861,13 +861,15 @@
             <div class="wd-block"><div class="wd-stats">
               <div><div class="n">${fmtViews(v.views)}</div><div class="k">Views</div></div></div></div>
             <div class="wd-block wd-meta-grid">
-              ${specRow('Location', loc)}
+              ${specRow('State', v.state)}
+              ${specRow('LGA', v.lga)}
+              ${specRow('Suburb', v.suburb)}
               ${globalRows}
             </div>
             ${fireRows ? `<div class="wd-block wd-meta-grid"><div class="wd-lbl" style="grid-column:1/-1;color:var(--accent)">Fire appliance</div>${fireRows}</div>` : ''}
             ${amboRows ? `<div class="wd-block wd-meta-grid"><div class="wd-lbl" style="grid-column:1/-1;color:var(--accent)">Ambulance</div>${amboRows}</div>` : ''}
-            <div class="wd-block"><div class="wd-lbl">Radio IDs · in cab</div><div class="wire-chips">${radioChips(v.radio_ids && v.radio_ids.cab)}</div></div>
-            <div class="wd-block"><div class="wd-lbl">Radio IDs · mobile</div><div class="wire-chips">${radioChips(v.radio_ids && v.radio_ids.mobile)}</div></div>
+            ${radioBlock('Radio IDs · in cab', v.radio_ids && v.radio_ids.cab)}
+            ${radioBlock('Radio IDs · mobile', v.radio_ids && v.radio_ids.mobile)}
             ${actions}
           </div>
         </div>`;
