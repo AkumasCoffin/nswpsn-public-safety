@@ -370,12 +370,16 @@
     const onWire = path.endsWith("/wire") || path.endsWith("/wire.html");
     const wrap = document.createElement("div");
     wrap.id = "wire-nav";
-    // One feed since the media/article merge -- a single link, no sub-tabs.
+    // One feed since the media/article merge. Still a dropdown: Articles is
+    // the single entry today, with room for more tabs (e.g. Units) later.
     wrap.innerHTML = `
       <div class="sidebar-section-label">News &amp; Media</div>
-      <a class="agency-item-link${onWire ? " active" : ""}" href="wire" style="display:flex;align-items:center;gap:0.55rem;">
-        <i class="agency-item-icon fa-solid fa-photo-film"></i><span class="agency-item-name">The Wire</span>
-      </a>`;
+      <details class="wire-nav"${onWire ? " open" : ""}>
+        <summary><i class="fa-solid fa-photo-film"></i><span>The Wire</span></summary>
+        <div class="wire-nav-list">
+          <a class="agency-item-link${onWire ? " active" : ""}" href="wire"><i class="agency-item-icon fa-solid fa-newspaper"></i><span class="agency-item-name">Articles</span></a>
+        </div>
+      </details>`;
     mount.parentNode.insertBefore(wrap, mount);
   }
 
