@@ -48,8 +48,10 @@
     .dropzone { border: 1.5px dashed var(--border-subtle); border-radius: 11px; padding: 1.6rem; text-align: center; color: var(--text-muted); cursor: pointer; transition: border-color .15s, color .15s; }
     .dropzone:hover { border-color: var(--accent); color: var(--accent); }
     .dropzone .big { font-size: 1.7rem; margin-bottom: 0.3rem; }
-    .photo-preview { position: relative; display: inline-block; margin-top: 0.7rem; }
-    .photo-preview img { max-width: 320px; max-height: 220px; border-radius: 10px; border: 1px solid var(--border-subtle); display: block; }
+    .photo-grid { display: flex; flex-wrap: wrap; gap: 0.8rem; margin-top: 0.7rem; }
+    .photo-preview { position: relative; width: 200px; }
+    .photo-preview img { width: 200px; height: 140px; object-fit: cover; border-radius: 10px; border: 1px solid var(--border-subtle); display: block; }
+    .photo-preview select { margin-top: 0.4rem; font-size: 0.8rem; padding: 0.4rem 0.5rem; }
     .photo-preview .rm { position: absolute; top: 6px; right: 6px; width: 26px; height: 26px; border-radius: 7px; background: rgba(2,6,23,0.75); border: 1px solid var(--border-subtle); color: #fca5a5; cursor: pointer; }
     .photo-preview .up { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(2,6,23,0.55); border-radius: 10px; color: var(--accent); font-size: 1.3rem; }
     .chips { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.5rem; }
@@ -117,13 +119,13 @@
       <p class="sub">A reference sheet for one vehicle — call sign, agency, specs and radio IDs, with a single photo.</p>
 
       <div class="field">
-        <label>Photo · one image</label>
+        <label>Photos · up to 4</label>
         <div class="dropzone" id="dropzone">
           <div class="big"><i class="fa-solid fa-truck-field"></i></div>
-          <div>Drag an image here, or click to choose</div>
-          <div style="font-size:0.7rem;margin-top:0.3rem">The photo is resized &amp; stripped of GPS/metadata before upload</div>
+          <div>Drag images here, or click to choose</div>
+          <div style="font-size:0.7rem;margin-top:0.3rem">Up to 4 photos — label each with the side of the vehicle it shows. Resized &amp; stripped of GPS/metadata before upload.</div>
         </div>
-        <div id="photoPreview"></div>
+        <div class="photo-grid" id="photoPreview"></div>
       </div>
 
       <div class="field">
@@ -291,9 +293,11 @@
     const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
     const state = {
-      imageKey: null, imageUrl: null, uploading: false,
+      images: [], // {key, url, side, uploading}
       radio: { cab: [], mobile: [] },
     };
+    const MAX_IMAGES = 4;
+    const SIDE_OPTIONS = [['', 'Which side…'], ['front', 'Front'], ['rear', 'Rear'], ['left', 'Left side'], ['right', 'Right side'], ['other', 'Other']];
     let isModerator = false;
     let approvalRequired = true;
     // Watermark: a per-post choice, remembered locally (same key as
@@ -346,15 +350,16 @@
     const filePicker = document.createElement('input');
     filePicker.type = 'file';
     filePicker.accept = 'image/jpeg,image/png,image/webp,image/gif';
+    filePicker.multiple = true;
     filePicker.style.display = 'none';
-    filePicker.addEventListener('change', () => { if (filePicker.files[0]) handleFile(filePicker.files[0]); });
+    filePicker.addEventListener('change', () => { for (const f of [...filePicker.files]) handleFile(f); });
     document.body.appendChild(filePicker);
 
     const dz = $('#dropzone');
     dz.addEventListener('click', () => { filePicker.value = ''; filePicker.click(); });
     dz.addEventListener('dragover', (e) => { e.preventDefault(); dz.style.borderColor = 'var(--accent)'; });
     dz.addEventListener('dragleave', () => (dz.style.borderColor = ''));
-    dz.addEventListener('drop', (e) => { e.preventDefault(); dz.style.borderColor = ''; if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]); });
+    dz.addEventListener('drop', (e) => { e.preventDefault(); dz.style.borderColor = ''; for (const f of [...e.dataTransfer.files]) handleFile(f); });
 
     // Canvas re-encode: downscale + WebP (JPEG fallback). The canvas export
     // carries pixels only, so EXIF/GPS/device metadata never leaves the
@@ -416,21 +421,28 @@
 
     function renderPhoto() {
       const host = $('#photoPreview');
-      if (!state.imageUrl && !state.uploading) { host.innerHTML = ''; return; }
-      host.innerHTML = `<div class="photo-preview">
-        <img src="${esc(state.imageUrl || '')}" alt="">
-        <button type="button" class="rm" title="Remove"><i class="fa-solid fa-xmark"></i></button>
-        ${state.uploading ? '<div class="up"><i class="fa-solid fa-spinner fa-spin"></i></div>' : ''}
-      </div>`;
-      host.querySelector('.rm').addEventListener('click', () => { state.imageKey = null; state.imageUrl = null; renderPhoto(); });
+      host.innerHTML = state.images.map((im, i) => `<div class="photo-preview">
+        <img src="${esc(im.url || '')}" alt="">
+        <button type="button" class="rm" data-i="${i}" title="Remove"><i class="fa-solid fa-xmark"></i></button>
+        ${im.uploading ? '<div class="up"><i class="fa-solid fa-spinner fa-spin"></i></div>' : ''}
+        <select data-side="${i}">${SIDE_OPTIONS.map(([v, l]) => `<option value="${v}"${im.side === v ? ' selected' : ''}>${l}</option>`).join('')}</select>
+      </div>`).join('');
+      host.querySelectorAll('.rm').forEach((b) => b.addEventListener('click', () => {
+        state.images.splice(+b.dataset.i, 1); renderPhoto();
+      }));
+      host.querySelectorAll('select[data-side]').forEach((sel) => sel.addEventListener('change', () => {
+        state.images[+sel.dataset.side].side = sel.value || null;
+      }));
     }
 
     async function handleFile(file) {
       if (!/^image\//.test(file.type)) return;
-      state.uploading = true; state.imageUrl = URL.createObjectURL(file); renderPhoto();
+      if (state.images.length >= MAX_IMAGES) { setMsg(`Up to ${MAX_IMAGES} photos.`, true); return; }
+      const item = { key: null, url: URL.createObjectURL(file), side: null, uploading: true };
+      state.images.push(item); renderPhoto();
       try {
         const blob = await optimizeImage(file, 1600, 0.82);
-        if (!blob) { setMsg("Couldn't process that image — try a different file.", true); state.uploading = false; state.imageUrl = null; renderPhoto(); return; }
+        if (!blob) { setMsg("Couldn't process that image — try a different file.", true); state.images = state.images.filter((x) => x !== item); renderPhoto(); return; }
         // No hash: the once-per-image rule is for news posts, not fleet sheets.
         const r = await fetch(`${API_BASE}/api/wire/upload-url`, { method: 'POST', headers: await userHeaders(true), body: '{}' });
         if (r.status === 503) { setMsg("Image uploads aren't configured on the server yet.", true); throw new Error('503'); }
@@ -438,13 +450,14 @@
         const { uploadURL, key, publicUrl } = await r.json();
         const up = await fetch(uploadURL, { method: 'PUT', body: blob });
         if (!up.ok) throw new Error('r2 put ' + up.status);
-        state.imageKey = key; if (publicUrl) state.imageUrl = publicUrl;
+        item.key = key; if (publicUrl) item.url = publicUrl;
+        item.uploading = false;
         setMsg('');
       } catch (e) {
-        if (e.message !== '503') setMsg('The photo failed to upload (' + e.message + ').', true);
-        state.imageKey = null; state.imageUrl = null;
+        if (e.message !== '503') setMsg('A photo failed to upload (' + e.message + ').', true);
+        state.images = state.images.filter((x) => x !== item);
       }
-      state.uploading = false; renderPhoto();
+      renderPhoto();
     }
 
     // ---- state -> agency list + LGA suggestions ----
@@ -597,7 +610,7 @@
         credit: $('#credit').value.trim() || null,
         rights_affirmed: $('#rightsAffirm').checked,
         watermark: wantsWatermark(),
-        image_key: state.imageKey,
+        images: state.images.filter((im) => im.key).map((im) => ({ key: im.key, side: im.side })),
       };
     }
     function setMsg(m, err) { const el = $('#msg'); el.textContent = m; el.style.color = err ? '#ef4444' : 'var(--text-muted)'; }
@@ -609,7 +622,7 @@
       if (!p.agency) { setMsg('Pick the agency.', true); return; }
       if (!p.lga) { setMsg('Enter the Local Government Area.', true); return; }
       if (!p.rights_affirmed) { setMsg('Please confirm you hold the rights before publishing.', true); return; }
-      if (state.uploading) { setMsg('Wait for the photo to finish uploading.', true); return; }
+      if (state.images.some((im) => im.uploading)) { setMsg('Wait for the photos to finish uploading.', true); return; }
       $('#publishBtn').disabled = true; setMsg('Saving…');
       try {
         const url = editId ? `${API_BASE}/api/wire/fleet/${encodeURIComponent(editId)}` : `${API_BASE}/api/wire/fleet`;
@@ -659,8 +672,7 @@
       $('#credit').value = v.credit || '';
       const wmEl = $('#watermarkToggle'); if (wmEl) wmEl.checked = v.watermark === true;
       $('#rightsAffirm').checked = true; // already affirmed when first published
-      state.imageKey = v.image_key || null;
-      state.imageUrl = v.image_url || null;
+      state.images = (v.images || []).filter((im) => im.key).map((im) => ({ key: im.key, url: im.url, side: im.side || null, uploading: false }));
       renderPhoto();
       $('#formTitle').textContent = 'Edit fleet vehicle';
       $('#publishBtn').textContent = 'Save changes';

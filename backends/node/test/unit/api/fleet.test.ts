@@ -81,7 +81,7 @@ const row = (over: Record<string, unknown> = {}) => ({
   production_year: 2020, crew_capacity: 4,
   radio_ids: { cab: ['1234567'], mobile: [] }, specs: { water_tank_l: 2000, cafs: true },
   license: 'credit', credit: null, rights_affirmed: true, watermark: false,
-  image_key: 'wire/img1.webp', views: 3, status: 'published', review_note: null,
+  images: [{ key: 'wire/img1.webp', side: 'front' }], views: 3, status: 'published', review_note: null,
   created_at: new Date('2026-09-01T00:00:00Z'), updated_at: new Date('2026-09-01T00:00:00Z'),
   ...over,
 });
@@ -108,7 +108,8 @@ describe('fleet list', () => {
     expect(j.vehicles).toHaveLength(1);
     expect(j.vehicles[0].callsign).toBe('P 251');
     expect(j.vehicles[0].image_url).toBe('https://r2.example/wire/img1.webp');
-    expect(j.vehicles[0].image_key).toBeUndefined(); // list never leaks keys
+    expect(j.vehicles[0].images[0].side).toBe('front');
+    expect(j.vehicles[0].images[0].key).toBeUndefined(); // list never leaks keys
     const sql = calls[0]!.sql;
     expect(sql).toContain('state = $');
     expect(sql).toContain('callsign ILIKE');
@@ -184,7 +185,7 @@ describe('fleet detail', () => {
     expect(res.status).toBe(404);
     res = await makeApp('user-1').request('/api/wire/fleet/v1');
     expect(res.status).toBe(200);
-    expect((await res.json()).vehicle.image_key).toBe('wire/img1.webp'); // author gets keys
+    expect((await res.json()).vehicle.images[0].key).toBe('wire/img1.webp'); // author gets keys
   });
 });
 
@@ -197,16 +198,16 @@ describe('fleet edit/delete', () => {
     expect(res.status).toBe(403);
 
     resultQueue = [
-      { rows: [{ author_id: 'user-1', image_key: 'wire/old.webp', status: 'published' }], rowCount: 1 },
+      { rows: [{ author_id: 'user-1', images: [{ key: 'wire/old.webp', side: null }], status: 'published' }], rowCount: 1 },
       { rows: [], rowCount: 1 }, // UPDATE
     ];
     res = await makeApp('user-1').request('/api/wire/fleet/v1', {
       method: 'PUT',
-      body: JSON.stringify({ ...goodBody, image_key: 'wire/new.webp' }),
+      body: JSON.stringify({ ...goodBody, images: [{ key: 'wire/new.webp', side: 'front' }] }),
       headers: { 'Content-Type': 'application/json' },
     });
     expect(res.status).toBe(200);
-    expect(deleteR2).toHaveBeenCalledWith('wire/old.webp'); // replaced photo cleaned up
+    expect(deleteR2).toHaveBeenCalledWith('wire/old.webp'); // dropped photo cleaned up
   });
 
   it('soft-deletes for the author (recoverable; the photo survives)', async () => {

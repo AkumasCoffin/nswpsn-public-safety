@@ -37,6 +37,8 @@ const DB_UNAVAILABLE = { error: 'database unavailable' } as const;
 const STATES = new Set(['NSW', 'VIC', 'QLD', 'WA', 'SA', 'TAS', 'ACT', 'NT']);
 const CATEGORIES = new Set(['police', 'fire', 'ses', 'ambulance', 'marine', 'rescue', 'other']);
 const MAX_RADIO_IDS = 12;
+const MAX_IMAGES = 4;
+const IMAGE_SIDES = new Set(['front', 'rear', 'left', 'right', 'other']);
 
 // ---- context helpers (same shapes as api/wire.ts) --------------------------
 function currentUserId(c: { get: (k: string) => unknown }): string | undefined {
@@ -132,7 +134,7 @@ interface VehicleFields {
   watermark: boolean;
   radio_ids: { cab: string[]; mobile: string[] };
   specs: Record<string, number | boolean | string>;
-  image_key: string | null;
+  images: { key: string; side: string | null }[];
 }
 
 function parseVehicle(data: Record<string, unknown>): VehicleFields | { error: string } {
@@ -200,8 +202,26 @@ function parseVehicle(data: Record<string, unknown>): VehicleFields | { error: s
     watermark: data['watermark'] === true,
     radio_ids: { cab: radioList(radioRaw['cab']), mobile: radioList(radioRaw['mobile']) },
     specs,
-    image_key: str(data['image_key'], 300),
+    images: imageList(data['images']),
   };
+}
+
+/** Up to MAX_IMAGES photos, each optionally labelled with the vehicle side
+ *  it shows. Keys are deduped; unknown side values become null. */
+function imageList(v: unknown): { key: string; side: string | null }[] {
+  if (!Array.isArray(v)) return [];
+  const seen = new Set<string>();
+  const out: { key: string; side: string | null }[] = [];
+  for (const item of v) {
+    const o = item as Record<string, unknown> | null;
+    const key = typeof o?.['key'] === 'string' ? o['key'].trim().slice(0, 300) : '';
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    const sideRaw = typeof o?.['side'] === 'string' ? o['side'].trim().toLowerCase() : '';
+    out.push({ key, side: IMAGE_SIDES.has(sideRaw) ? sideRaw : null });
+    if (out.length >= MAX_IMAGES) break;
+  }
+  return out;
 }
 
 // ---- shaping ---------------------------------------------------------------
@@ -235,8 +255,14 @@ function shapeVehicle(row: any, includeKeys = false): Record<string, unknown> {
       mobile: Array.isArray(radio.mobile) ? radio.mobile : [],
     },
     specs: row.specs && typeof row.specs === 'object' ? row.specs : {},
-    image_url: row.image_key ? r2PublicUrl(row.image_key) : null,
-    ...(includeKeys ? { image_key: row.image_key ?? null } : {}),
+    // The gallery, in upload order. `image_url` stays as the first photo so
+    // cards and the profile rows keep one thing to thumbnail.
+    images: (Array.isArray(row.images) ? row.images : []).map((im: { key?: string; side?: string | null }) => ({
+      url: im.key ? r2PublicUrl(im.key) : null,
+      side: im.side ?? null,
+      ...(includeKeys ? { key: im.key ?? null } : {}),
+    })),
+    image_url: Array.isArray(row.images) && row.images[0]?.key ? r2PublicUrl(row.images[0].key) : null,
     license: row.license || 'credit',
     license_label: licenseLabel(row.license || 'credit'),
     credit: row.credit || null,
@@ -258,18 +284,18 @@ function shapeVehicle(row: any, includeKeys = false): Record<string, unknown> {
 const VEHICLE_COLS = `callsign, state, lga, suburb, agency, agency_category, station, cad_code,
   aerial_id, vehicle_type, registration, make, model, cab_chassis, production_year, crew_capacity,
   license, credit, rights_affirmed, watermark,
-  radio_ids, specs, image_key`;
+  radio_ids, specs, images`;
 
-// The two jsonb values sit at these indexes of vehicleVals -- the INSERT
+// The jsonb values sit at these indexes of vehicleVals -- the INSERT
 // placeholder builder casts them. Keep all three in sync.
-const JSONB_IDX = new Set([20, 21]);
+const JSONB_IDX = new Set([20, 21, 22]);
 
 function vehicleVals(v: VehicleFields): unknown[] {
   return [
     v.callsign, v.state, v.lga, v.suburb, v.agency, v.agency_category, v.station, v.cad_code,
     v.aerial_id, v.vehicle_type, v.registration, v.make, v.model, v.cab_chassis, v.production_year, v.crew_capacity,
     v.license, v.credit, v.rights_affirmed, v.watermark,
-    JSON.stringify(v.radio_ids), JSON.stringify(v.specs), v.image_key,
+    JSON.stringify(v.radio_ids), JSON.stringify(v.specs), JSON.stringify(v.images),
   ];
 }
 
@@ -392,7 +418,7 @@ fleetRouter.put('/api/wire/fleet/:id', async (c) => {
   try {
     const uid = currentUserId(c);
     if (!uid) return c.json({ error: 'unauthorized' }, 401);
-    const prev = await pool.query('SELECT author_id, image_key, status FROM fleet_vehicles WHERE id = $1', [id]);
+    const prev = await pool.query('SELECT author_id, images, status FROM fleet_vehicles WHERE id = $1', [id]);
     if (prev.rowCount === 0) return c.json({ error: 'not found' }, 404);
     const isAuthor = prev.rows[0].author_id === uid;
     if (!isAuthor && !(await canManageUsers(uid))) return c.json({ error: 'forbidden' }, 403);
@@ -404,7 +430,7 @@ fleetRouter.put('/api/wire/fleet/:id', async (c) => {
 
     const cols = VEHICLE_COLS.split(',').map((s) => s.trim());
     const sets = cols.map((col, i) =>
-      `${col} = $${i + 1}${col === 'radio_ids' || col === 'specs' ? '::jsonb' : ''}`);
+      `${col} = $${i + 1}${col === 'radio_ids' || col === 'specs' || col === 'images' ? '::jsonb' : ''}`);
     const vals = vehicleVals(v);
     // An edit also refreshes the author's byline (only for the author's own
     // edits -- an admin fixing a typo mustn't take over the credit).
@@ -414,9 +440,12 @@ fleetRouter.put('/api/wire/fleet/:id', async (c) => {
       `UPDATE fleet_vehicles SET ${sets.join(', ')}, updated_at = now()${nameSet} WHERE id = $${vals.length + 1}`,
       [...vals, id, ...nameVal],
     );
-    // A replaced photo leaves its old object behind — clean it up, best-effort.
-    const oldKey = prev.rows[0].image_key as string | null;
-    if (oldKey && oldKey !== v.image_key) deleteR2Object(oldKey).catch(() => {});
+    // Photos dropped in this edit leave their objects behind — clean up.
+    const prevImages = Array.isArray(prev.rows[0].images) ? (prev.rows[0].images as { key?: string }[]) : [];
+    const keep = new Set(v.images.map((im) => im.key));
+    for (const im of prevImages) {
+      if (im.key && !keep.has(im.key)) deleteR2Object(im.key).catch(() => {});
+    }
     return c.json({ id, success: true });
   } catch (err) {
     log.error({ err, id }, 'fleet: update failed');

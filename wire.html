@@ -934,8 +934,17 @@
         ? `<div class="wd-block"><div class="wd-lbl">${label}</div><div class="wire-chips">${list.map((id) => `<span class="wire-chip" style="font-family:ui-monospace,monospace">${esc(id)}</span>`).join('')}</div></div>`
         : '');
 
-      const photo = v.image_url
-        ? `<div class="wd-gallery" style="cursor:default"><img src="${esc(v.image_url)}" alt="" style="width:100%;border-radius:12px"></div>`
+      const SIDE_LABELS = { front: 'Front', rear: 'Rear', left: 'Left', right: 'Right', other: 'Other' };
+      const gal = (v.images || []).filter((im) => im.url);
+      const photo = gal.length
+        ? `<div class="wd-gallery" style="cursor:default"><img id="fleetMainImg" src="${esc(gal[0].url)}" alt="" style="width:100%;border-radius:12px"></div>` +
+          (gal.length > 1
+            ? `<div style="display:flex; gap:0.5rem; margin-top:0.6rem; flex-wrap:wrap;">` + gal.map((im, i) =>
+              `<button type="button" data-flimg="${i}" style="position:relative; padding:0; background:none; border:2px solid ${i === 0 ? 'var(--accent)' : 'transparent'}; border-radius:9px; cursor:pointer; overflow:hidden;">
+                <img src="${esc(im.url)}" alt="" style="width:96px; height:64px; object-fit:cover; display:block;">
+                ${im.side ? `<span style="position:absolute; bottom:2px; left:2px; right:2px; background:rgba(2,6,23,0.72); color:#e2e8f0; font-size:0.6rem; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; border-radius:5px; padding:1px 0; text-align:center;">${SIDE_LABELS[im.side] || ''}</span>` : ''}
+              </button>`).join('') + `</div>`
+            : (gal[0].side ? `<div style="margin-top:0.4rem; color:var(--text-soft); font-size:0.75rem; text-transform:uppercase; letter-spacing:0.05em;">${SIDE_LABELS[gal[0].side] || ''}</div>` : ''))
         : `<div class="wd-gallery" style="display:grid;place-items:center;min-height:220px;color:var(--text-soft)"><i class="fa-solid fa-truck-field" style="font-size:3rem"></i></div>`;
       const actions = (canEdit || ME.canModerate) ? `<div class="wd-block"><div class="wd-lbl" style="display:flex;justify-content:space-between;align-items:center">Manage ${canEdit ? '<span class="wd-yourpost">Your post</span>' : '<span class="wd-yourpost" style="color:#f59e0b;border-color:rgba(245,158,11,0.45)">Team</span>'}</div><div class="wd-actions">
           ${canEdit ? `<a class="wd-btn" href="fleet-compose?edit=${encodeURIComponent(v.id)}"><i class="fa-solid fa-pen"></i> Edit</a>` : ''}
@@ -970,6 +979,13 @@
           </div>
         </div>`;
       $('#backBtn').addEventListener('click', () => closeDetail());
+      // Thumbnail strip: clicking a photo swaps the main image.
+      $('#detail').querySelectorAll('[data-flimg]').forEach((b) => b.addEventListener('click', () => {
+        const im = gal[+b.dataset.flimg];
+        const main = $('#fleetMainImg');
+        if (im && main) main.src = im.url;
+        $('#detail').querySelectorAll('[data-flimg]').forEach((x) => { x.style.borderColor = x === b ? 'var(--accent)' : 'transparent'; });
+      }));
       const del = $('#detail [data-fact="delete"]');
       if (del) del.addEventListener('click', async () => {
         const ok = await uiConfirm(`"${v.callsign}" will be hidden immediately and permanently deleted in 5 days. Until then you can recover it from your profile's My posts tab.`, { title: 'Delete this vehicle?', okText: 'Delete', danger: true });

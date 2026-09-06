@@ -792,11 +792,11 @@ function _profilePostRow(i) {
   // Only flag what ISN'T live — a published post needs no badge.
   const st = i.status && i.status !== 'published'
     ? `<span style="font-size:0.62rem; text-transform:uppercase; letter-spacing:0.04em; font-weight:700; color:#fbbf24;">${escNotif(i.status)}</span>` : '';
-  return `<a href="${escNotif(profilePostHref(i))}" style="display:flex; gap:0.6rem; align-items:center; padding:0.45rem; border-radius:8px; text-decoration:none; color:inherit;">
-    <div style="width:52px; height:36px; flex-shrink:0; border-radius:6px; overflow:hidden; background:rgba(2,6,23,0.5); display:grid; place-items:center;">${thumb}</div>
+  return `<a href="${escNotif(profilePostHref(i))}" style="display:flex; gap:0.9rem; align-items:center; padding:0.6rem; border-radius:10px; text-decoration:none; color:inherit;" onmouseover="this.style.background='rgba(148,163,184,0.07)'" onmouseout="this.style.background='none'">
+    <div style="width:132px; height:88px; flex-shrink:0; border-radius:9px; overflow:hidden; background:rgba(2,6,23,0.5); display:grid; place-items:center; font-size:1.4rem;">${thumb}</div>
     <div style="min-width:0; flex:1;">
-      <div style="font-size:0.82rem; font-weight:600; color:#e2e8f0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escNotif(i.title || 'Untitled')}</div>
-      <div style="font-size:0.7rem; color:#64748b; display:flex; gap:0.5rem; align-items:center;">
+      <div style="font-size:1rem; font-weight:700; color:#e2e8f0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escNotif(i.title || 'Untitled')}</div>
+      <div style="font-size:0.78rem; color:#64748b; display:flex; gap:0.6rem; align-items:center; margin-top:0.25rem;">
         <span>${escNotif(notifAgo(i.published_at || i.created_at) || '')}</span>
         ${st}
       </div>

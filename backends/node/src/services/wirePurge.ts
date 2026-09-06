@@ -72,15 +72,17 @@ async function purgeArticles(pool: Pool): Promise<number> {
 }
 
 async function purgeFleet(pool: Pool): Promise<number> {
-  const due = await pool.query<{ id: string; image_key: string | null }>(
-    `SELECT id, image_key FROM fleet_vehicles
+  const due = await pool.query<{ id: string; images: { key?: string }[] | null }>(
+    `SELECT id, images FROM fleet_vehicles
       WHERE deleted_at IS NOT NULL AND deleted_at < now() - make_interval(days => $1)
       LIMIT $2`,
     [RECOVERY_DAYS, BATCH],
   );
   for (const row of due.rows) {
     await pool.query('DELETE FROM fleet_vehicles WHERE id = $1', [row.id]);
-    if (row.image_key) await deleteR2Object(row.image_key);
+    for (const im of Array.isArray(row.images) ? row.images : []) {
+      if (im.key) await deleteR2Object(im.key);
+    }
   }
   return due.rowCount ?? 0;
 }
