@@ -181,7 +181,12 @@ const UPSTREAM_TIMEOUT_MS = 12_000;
 const OTR_FILTER = 300;
 const SPEED_FILTER = 15;
 
-const VEH_FRESH_MS = 10_000;
+// 5s, deliberately UNDER the client's 10s tick: at 10s the two clocks
+// beat against each other and consecutive ticks often served the
+// IDENTICAL snapshot (marker freezes 10s, then sprints 20s of travel).
+// At 5s each client tick lands past the fresh window, triggering a
+// background SWR refresh whose result feeds the NEXT tick.
+const VEH_FRESH_MS = 5_000;
 const VEH_STALE_MS = 30_000;
 // Drop vehicles whose last position report is older than this.
 const MAX_VEHICLE_AGE_SEC = 600;
@@ -221,6 +226,12 @@ export interface TransportVehicle {
   aircon: boolean | null;
   model: string | null;
   ageSec: number | null;
+  /** Upstream lastPosition.time (epoch seconds) — when the position was
+   *  REPORTED. Unlike ageSec (age at snapshot build time, which a
+   *  stale-served SWR snapshot understates), this is absolute: the
+   *  client uses it as a per-vehicle monotonic ratchet so an older
+   *  cache cell can never rewind a marker. Null when the feed omits it. */
+  posTime: number | null;
   tripId: string | null;
   /** GTFS shape id — resolves to the route track via /api/transport/shape. */
   shapeId: string | null;
@@ -497,6 +508,7 @@ export function normalizeVehicles(raw: RawVehiclesResponse): TransportVehicle[] 
         typeof pos?.time === 'number' && pos.time > 0
           ? Math.max(0, Math.round(nowSec - pos.time))
           : null,
+      posTime: typeof pos?.time === 'number' && pos.time > 0 ? pos.time : null,
       tripId: trip?.rtTripId ?? trip?.id ?? null,
       shapeId: entry.tripInstance?.shapeId ?? trip?.shapeId ?? null,
       vdap: Number.isFinite(pos?.vdap) ? (pos!.vdap as number) : null,

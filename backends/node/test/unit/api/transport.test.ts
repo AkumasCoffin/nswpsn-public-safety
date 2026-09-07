@@ -156,7 +156,9 @@ describe('transport vehicle normalization', () => {
   });
 
   it('normalizes a full record', async () => {
-    fetchJsonMock.mockResolvedValue({ response: { vehicles: [rawVehicle()] } });
+    const raw = rawVehicle();
+    const posT = (raw.vehicleInstance as { lastPosition: { time: number } }).lastPosition.time;
+    fetchJsonMock.mockResolvedValue({ response: { vehicles: [raw] } });
     const res = await getVehicles(`${CBD}&feeds=bs`);
     const body = await res.json();
     expect(body.count).toBe(1);
@@ -184,6 +186,8 @@ describe('transport vehicle normalization', () => {
     });
     expect(body.vehicles[0].ageSec).toBeGreaterThanOrEqual(11);
     expect(body.vehicles[0].ageSec).toBeLessThan(20);
+    // posTime is the raw upstream report time, passed through absolute.
+    expect(body.vehicles[0].posTime).toBe(posT);
   });
 
   it('handles missing/garbage fields as nulls and drops coord-less vehicles', async () => {
@@ -209,6 +213,7 @@ describe('transport vehicle normalization', () => {
       wheelchair: false, // GTFS 2 = not accessible
       aircon: null,
       headsign: null,
+      posTime: null, // no lastPosition.time on the sparse record
     });
     expect(body.vehicles[0].route.color).toBe(null); // 'red' fails hex check
   });
@@ -227,6 +232,26 @@ describe('transport caching', () => {
     await getVehicles(`${CBD}&feeds=bs`);
     await getVehicles(`${CBD}&feeds=st`);
     expect(fetchJsonMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('serves the cached snapshot within 5s, background-refreshes after', async () => {
+    vi.useFakeTimers(); // fakes Date.now() too
+    try {
+      fetchJsonMock.mockResolvedValue({ response: { vehicles: [rawVehicle()] } });
+      await getVehicles(`${CBD}&feeds=bs`);
+      expect(fetchJsonMock).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(4_000);
+      await getVehicles(`${CBD}&feeds=bs`);
+      expect(fetchJsonMock).toHaveBeenCalledTimes(1); // still fresh — identical snapshot
+      vi.advanceTimersByTime(2_000); // t = +6s: past fresh, inside stale
+      await getVehicles(`${CBD}&feeds=bs`);
+      // SwrCache invokes the fetcher synchronously before its first
+      // await, so the background refresh has already hit upstream.
+      expect(fetchJsonMock).toHaveBeenCalledTimes(2);
+      await vi.runAllTimersAsync(); // drain the background refresh
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

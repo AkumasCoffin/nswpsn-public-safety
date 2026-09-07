@@ -474,6 +474,8 @@ export function applyTfnswPositions(
         p.timestamp != null
           ? Math.max(0, Math.round(nowSec - p.timestamp))
           : v.ageSec,
+      // The position is TfNSW's — never inherit AnyTrip's report time.
+      posTime: p.timestamp ?? null,
     });
   }
 
@@ -525,6 +527,7 @@ export function applyTfnswPositions(
         p.timestamp != null
           ? Math.max(0, Math.round(nowSec - p.timestamp))
           : null,
+      posTime: p.timestamp ?? null,
       tripId: p.tripId,
       // Cached shape lets the frontend keep snapping this train to its
       // route track even on ticks AnyTrip drops it.

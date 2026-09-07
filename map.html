@@ -25,7 +25,6 @@
   <meta name="twitter:description" content="Interactive live map showing RFS fires, traffic incidents, power outages, pager hits, and more across NSW.">
   <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/AusAware_filled_background.jpg">
 
-  <script src="https://kit.fontawesome.com/5d58b9d240.js" crossorigin="anonymous"></script>
   <link rel="stylesheet" href="styles.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -14663,9 +14662,15 @@ function initPagerHoursFromStorage() {
       const expr = _transportLineFilterExpr();
       const glMap = _transportGlLayer && _transportGlLayer.getMaplibreMap && _transportGlLayer.getMaplibreMap();
       if (glMap) {
-        const doIt = () => { try { if (glMap.getLayer('lines-colour')) glMap.setFilter('lines-colour', expr); } catch (e) { /* ignore */ } };
+        // Re-read the expr at fire time so a single queued handler
+        // applies the LATEST pill state; the pending flag stops every
+        // pre-load toggle stacking another once('load') listener.
+        const doIt = () => { try { if (glMap.getLayer('lines-colour')) glMap.setFilter('lines-colour', _transportLineFilterExpr()); } catch (e) { /* ignore */ } };
         if (glMap.getLayer && glMap.getLayer('lines-colour')) doIt();
-        else if (glMap.once) glMap.once('load', doIt);
+        else if (glMap.once && !glMap._tptFilterQueued) {
+          glMap._tptFilterQueued = true;
+          glMap.once('load', () => { glMap._tptFilterQueued = false; doIt(); });
+        }
       }
       if (_transportNetworkMode === 'fallback') {
         const df = _transportNetworkDimmed ? 0.15 : 1;
@@ -14941,7 +14946,9 @@ function initPagerHoursFromStorage() {
     async function loadTransportData() {
       if (map.getZoom() < TRANSPORT_MIN_ZOOM) {
         _clearTransportVehicleMarkers();
-        if (typeof refreshActiveFilterPanel === 'function') refreshActiveFilterPanel();
+        // Only re-render the panel if it's OURS — an unconditional call
+        // here redrew whatever other layer's filter panel was open.
+        if (typeof refreshActiveFilterPanel === 'function' && _activeFilterKey === 'transport') refreshActiveFilterPanel();
         if (Date.now() - _transportZoomHintAt > 60_000 && typeof showToast === 'function') {
           _transportZoomHintAt = Date.now();
           showToast('Zoom in to see live transport', 'info');
@@ -15051,6 +15058,25 @@ function initPagerHoursFromStorage() {
             v.speedEstimated = true;
           }
         }
+        // Position-time ratchet: the backend's SWR cache cells (0.01°
+        // snapped bboxes) age independently, so a pan or filter change
+        // can serve a snapshot OLDER than what's already on screen —
+        // without this every vehicle rewound and the glide animated
+        // them backwards. A report at-or-before the last accepted one
+        // substitutes the newest accepted positional fields and re-runs
+        // the normal pipeline (lane offsets are pixel-space and must
+        // recompute at the current zoom; a same-destination glide
+        // retarget is already a no-op). posTime may be absent (older
+        // backend) — then behaviour is unchanged.
+        const _vt = (typeof v.posTime === 'number' && v.posTime > 0) ? v.posTime : null;
+        if (existing && _vt != null && existing.lastPos && _vt <= existing.lastPos.t) {
+          const lp = existing.lastPos;
+          v.lat = lp.lat; v.lon = lp.lon; v.vdap = lp.vdap;
+          v.shapeId = lp.shapeId; v.posTime = lp.t;
+          if (lp.bearing != null) v.bearing = lp.bearing;
+        } else if (existing && _vt != null) {
+          existing.lastPos = { t: _vt, lat: v.lat, lon: v.lon, vdap: v.vdap, shapeId: v.shapeId, bearing: v.bearing };
+        }
         if (v.shapeId) {
           const shapePts = _transportShapeCache.get(v.shapeId);
           let _vdapPlaced = false;
@@ -15065,11 +15091,32 @@ function initPagerHoursFromStorage() {
             // values (millions of km). If it's beyond the shape, ignore it
             // and fall back to the lat/lon snap below.
             if (v.vdap >= 0 && v.vdap <= total + 50) {
-              const at = _transportPointAtDist(shapePts, cum, v.vdap);
+              // Forward ratchet on vdap, mirroring the lat/lon snap
+              // branch below: even a genuinely NEWER report can carry a
+              // slightly smaller vdap on the SAME shape (GPS/odometer
+              // jitter) — hold at the frontier. Big reversals (>1.5km,
+              // reroute/correction) or ones persisting 45s are real:
+              // accept and SNAP (snapNext) instead of gliding a train
+              // visibly backwards. A changed shapeId resets the baseline.
+              let useVdap = v.vdap;
+              const lv = existing && existing.lastVdap;
+              if (lv && lv.shapeId === v.shapeId && v.vdap < lv.vdap - 1) {
+                if (!existing.backSince) existing.backSince = Date.now();
+                const huge = lv.vdap - v.vdap > 1500; // metres
+                if (!huge && Date.now() - existing.backSince < 45_000) {
+                  useVdap = lv.vdap; // hold at frontier
+                } else {
+                  existing.backSince = null;
+                  existing.snapNext = true; // accepted correction — no reverse glide
+                }
+              } else if (existing) {
+                existing.backSince = null;
+              }
+              if (existing) existing.lastVdap = { shapeId: v.shapeId, vdap: useVdap };
+              const at = _transportPointAtDist(shapePts, cum, useVdap);
               dispLat = at.lat;
               dispLon = at.lon;
               prog = { shapeId: v.shapeId, p: at.p, lat: dispLat, lon: dispLon };
-              if (existing) existing.backSince = null;
               _vdapPlaced = true;
             }
           }
@@ -15147,6 +15194,7 @@ function initPagerHoursFromStorage() {
         }
         const key = _transportIconKey(v);
         if (existing) {
+          const prevProg = existing.prog; // capture BEFORE overwrite — glide fromP needs it
           existing.prog = prog;
           existing.laneSnap = laneSnap;
           if (existing.snapNext) {
@@ -15160,22 +15208,43 @@ function initPagerHoursFromStorage() {
           // start progress comes from the marker's CURRENT position
           // (correct even when retargeting mid-glide).
           let glidePath = null;
+          let placedDirect = false;
           if (prog) {
             const shapePts = _transportShapeCache.get(v.shapeId);
             if (shapePts) {
-              const curLl = existing.marker.getLatLng();
-              const curSnap = snapToPolylinePts(shapePts, curLl.lat, curLl.lng);
-              if (curSnap && curSnap.distDeg < SNAP_MAX_DEG) {
-                glidePath = {
-                  pts: shapePts,
-                  fromP: curSnap.i + curSnap.t,
-                  toP: prog.p,
-                  offset: laneSnap ? laneSnap.offset : 0
-                };
+              // Start progress: prefer the last PLACED progress. On
+              // shapes that loop or double back, nearest-point snapping
+              // the marker's current latlng can pick the wrong limb
+              // (fromP > toP) and drive the marker backwards for 9s.
+              // The 10s tick vs 9s glide means the previous glide has
+              // (near-)finished, so prevProg.p ≈ current progress; any
+              // residual is a tiny forward nudge, never a reversal.
+              let fromP = null;
+              if (prevProg && prevProg.shapeId === prog.shapeId) {
+                fromP = prevProg.p;
+              } else {
+                const curLl = existing.marker.getLatLng();
+                const curSnap = snapToPolylinePts(shapePts, curLl.lat, curLl.lng);
+                if (curSnap && curSnap.distDeg < SNAP_MAX_DEG) fromP = curSnap.i + curSnap.t;
+              }
+              if (fromP != null) {
+                if (fromP > prog.p + 1e-9) {
+                  // A backward walk must never be animated — place directly.
+                  _transportGlides.delete(v.id);
+                  existing.marker.setLatLng([dispLat, dispLon]);
+                  placedDirect = true;
+                } else {
+                  glidePath = {
+                    pts: shapePts,
+                    fromP: fromP,
+                    toP: prog.p,
+                    offset: laneSnap ? laneSnap.offset : 0
+                  };
+                }
               }
             }
           }
-          _transportGlideMarker(v.id, existing.marker, dispLat, dispLon, glidePath);
+          if (!placedDirect) _transportGlideMarker(v.id, existing.marker, dispLat, dispLon, glidePath);
           }
           if (existing.iconKey !== key) {
             existing.marker.setIcon(buildTransportIcon(v));
@@ -15201,7 +15270,14 @@ function initPagerHoursFromStorage() {
             }
           });
           transportLayer.addLayer(marker);
-          _transportMarkers.set(v.id, { marker: marker, iconKey: key, laneSnap: laneSnap, prog: prog, spd: { lat: v.lat, lon: v.lon, t: Date.now() } });
+          _transportMarkers.set(v.id, {
+            marker: marker, iconKey: key, laneSnap: laneSnap, prog: prog,
+            spd: { lat: v.lat, lon: v.lon, t: Date.now() },
+            lastPos: (typeof v.posTime === 'number' && v.posTime > 0)
+              ? { t: v.posTime, lat: v.lat, lon: v.lon, vdap: v.vdap, shapeId: v.shapeId, bearing: v.bearing }
+              : null,
+            lastVdap: null
+          });
         }
       }
       for (const [id, entry] of _transportMarkers) {
@@ -15212,7 +15288,8 @@ function initPagerHoursFromStorage() {
         }
       }
       syncTransportAutoTracks();
-      if (typeof refreshActiveFilterPanel === 'function') refreshActiveFilterPanel();
+      // Match the FIRMS pattern: never redraw another layer's open panel.
+      if (typeof refreshActiveFilterPanel === 'function' && _activeFilterKey === 'transport') refreshActiveFilterPanel();
     }
 
     // On-map labels under each vehicle, mirroring the aircraft layer:
@@ -15309,9 +15386,16 @@ function initPagerHoursFromStorage() {
       }
       // Server ageSec is age at fetch time — add the client-side delta
       // so a tooltip left open doesn't read "3s" forever.
-      const age = v.ageSec != null
-        ? Math.round(v.ageSec + Math.max(0, (Date.now() - _transportFetchedAt) / 1000))
-        : null;
+      // posTime is absolute (epoch secs) → exact age even when the
+      // backend served a stale SWR snapshot (whose ageSec was computed
+      // at that snapshot's BUILD time and understates). The old
+      // ageSec+receipt-delta stays as the fallback for old backends /
+      // TfNSW rows without a timestamp.
+      const age = (typeof v.posTime === 'number' && v.posTime > 0)
+        ? Math.max(0, Math.round(Date.now() / 1000 - v.posTime))
+        : v.ageSec != null
+          ? Math.round(v.ageSec + Math.max(0, (Date.now() - _transportFetchedAt) / 1000))
+          : null;
       const comfort = [
         v.wheelchair === true ? '♿ accessible' : null,
         v.aircon === true ? '❄ air-con' : null
@@ -15520,14 +15604,22 @@ function initPagerHoursFromStorage() {
       };
     }
 
+    let _transportGlProbe = null; // memoized probe result
     function _transportGlAvailable() {
       if (typeof maplibregl === 'undefined' || !L.maplibreGL) return false;
+      if (_transportGlProbe != null) return _transportGlProbe;
       try {
         const c = document.createElement('canvas');
-        return !!(c.getContext('webgl2') || c.getContext('webgl'));
+        const gl = c.getContext('webgl2') || c.getContext('webgl');
+        if (gl) {
+          const lose = gl.getExtension('WEBGL_lose_context');
+          if (lose) lose.loseContext(); // free the probe context immediately
+        }
+        _transportGlProbe = !!gl;
       } catch (e) {
-        return false;
+        _transportGlProbe = false;
       }
+      return _transportGlProbe;
     }
 
     // Fallback for WebGL-less clients: plain Leaflet lines with
