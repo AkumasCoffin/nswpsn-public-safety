@@ -353,7 +353,7 @@ describe('transport au4 (Queensland)', () => {
     expect(url).toContain('modes=au4:trains');
     expect(url).not.toContain('au4:buses');
     expect((await getVehicles(`${BNE}&region=au4&modes=metro`)).status).toBe(400);
-    expect((await getVehicles(`${BNE}&region=au9`)).status).toBe(400);
+    expect((await getVehicles(`${BNE}&region=au42`)).status).toBe(400);
   });
 
   it('collapses au4 mode names onto the shared vocabulary', async () => {
@@ -411,12 +411,12 @@ describe('transport au4 (Queensland)', () => {
     expect(res.status).toBe(200);
     expect(fetchJsonMock.mock.calls[0]?.[0]).toContain('/region/au4/shape/au4:se:x1');
     // Passes the shape regex but not the region map.
-    expect((await transportRouter.request('/api/transport/shape/au9:xx:1')).status).toBe(400);
+    expect((await transportRouter.request('/api/transport/shape/au42:xx:1')).status).toBe(400);
     fetchJsonMock.mockResolvedValue({ response: { departures: [] } });
     await transportRouter.request('/api/transport/departures/au4:600029');
     const depUrl = fetchJsonMock.mock.calls[1]?.[0] as string;
     expect(depUrl).toContain('/region/au4/departures/au4:600029');
-    expect((await transportRouter.request('/api/transport/departures/au9:1')).status).toBe(400);
+    expect((await transportRouter.request('/api/transport/departures/au42:1')).status).toBe(400);
   });
 });
 
@@ -430,5 +430,114 @@ describe('transport trip ids with spaces (QLD timetables)', () => {
     expect(res.status).toBe(200);
     const url = fetchJsonMock.mock.calls[0]?.[0] as string;
     expect(url).toContain('/region/au4/tripInstance/20260907/au4:se:39018846-QR%2026_27-44157-DA49/0');
+  });
+});
+
+describe('transport au3/au5/au9 (VIC, SA, ACT)', () => {
+  const MEL = 'minLat=-37.9&maxLat=-37.7&minLon=144.8&maxLon=145.1';
+  const ADL = 'minLat=-35.0&maxLat=-34.8&minLon=138.5&maxLon=138.7';
+  const CBR = 'minLat=-35.35&maxLat=-35.1&minLon=149.0&maxLon=149.2';
+
+  function rawModal(regionFeed: string, mode: string, id: string) {
+    return {
+      tripInstance: {
+        trip: {
+          id: `${regionFeed}:${id}`,
+          route: { id: `${regionFeed}:${id}`, name: 'X', color: '4E84C4', mode },
+        },
+      },
+      vehicleInstance: {
+        id,
+        lastPosition: {
+          time: Math.floor(Date.now() / 1000) - 12,
+          coordinates: { lat: -37.8, lon: 144.9 },
+        },
+      },
+    };
+  }
+
+  it('au3 filters by modes= alone (no feeds param)', async () => {
+    fetchJsonMock.mockResolvedValue({ response: { vehicles: [] } });
+    const res = await getVehicles(`${MEL}&region=au3`);
+    expect(res.status).toBe(200);
+    const url = decodeURIComponent(fetchJsonMock.mock.calls[0]?.[0] as string);
+    expect(url).toContain('/region/au3/vehicles');
+    expect(url).not.toContain('feeds=');
+    expect(url).toContain('modes=au3:buses,au3:metrotrains,au3:tram,au3:vlinetrains');
+  });
+
+  it('an Adelaide bbox needs region=au5 (outside every other envelope)', async () => {
+    expect((await getVehicles(`${ADL}&feeds=bs`)).status).toBe(400);
+    fetchJsonMock.mockResolvedValue({ response: { vehicles: [] } });
+    expect((await getVehicles(`${ADL}&region=au5`)).status).toBe(200);
+    const url = decodeURIComponent(fetchJsonMock.mock.calls[0]?.[0] as string);
+    expect(url).toContain('/region/au5/vehicles');
+    expect(url).toContain('modes=au5:buses,au5:lightrail,au5:schoolbuses,au5:trains');
+  });
+
+  it('the ACT sits inside au2 — same bbox serves both regions, keyed apart', async () => {
+    fetchJsonMock.mockResolvedValue({ response: { vehicles: [] } });
+    await getVehicles(`${CBR}&feeds=bs`);
+    await getVehicles(`${CBR}&region=au9&modes=lightrail,buses`);
+    expect(fetchJsonMock).toHaveBeenCalledTimes(2);
+    expect(fetchJsonMock.mock.calls[0]?.[0]).toContain('/region/au2/');
+    const au9Url = decodeURIComponent(fetchJsonMock.mock.calls[1]?.[0] as string);
+    expect(au9Url).toContain('/region/au9/vehicles');
+    expect(au9Url).toContain('modes=au9:buses,au9:lightrail');
+    // au9 runs no ferries.
+    expect((await getVehicles(`${CBR}&region=au9&modes=ferries`)).status).toBe(400);
+  });
+
+  it('collapses the new mode names onto the shared vocabulary', async () => {
+    fetchJsonMock.mockResolvedValue({
+      response: {
+        vehicles: [
+          rawModal('au3:ad', 'au3:metrotrains', 'v1'),
+          rawModal('au3:ad', 'au3:tram', 'v2'),
+          rawModal('au3:ad', 'au3:vlinetrains', 'v3'),
+          rawModal('au3:ad', 'au3:buses', 'v4'),
+        ],
+      },
+    });
+    const body = await (await getVehicles(`${MEL}&region=au3`)).json();
+    const modes = body.vehicles.map((v: { mode: string }) => v.mode).sort();
+    expect(modes).toEqual(['buses', 'lightrail', 'nswtrains', 'sydneytrains']);
+  });
+
+  it('au5/au9 school buses ride the buses vocabulary', async () => {
+    fetchJsonMock.mockResolvedValue({
+      response: { vehicles: [rawModal('au9:nw', 'au9:schoolbuses', 'v9')] },
+    });
+    const body = await (await getVehicles(`${CBR}&region=au9`)).json();
+    expect(body.vehicles[0].mode).toBe('buses');
+  });
+
+  it('serves au3 stops and accepts au5 feed-segment stop ids', async () => {
+    fetchJsonMock.mockResolvedValue({
+      response: {
+        stops: [
+          {
+            stop: {
+              id: 'au3:G1058',
+              fullName: 'East Malvern Railway Station',
+              coordinates: { lat: -37.877, lon: 145.041 },
+              modes: ['au3:metrotrains'],
+            },
+          },
+        ],
+      },
+    });
+    const body = await (await getStops(`${MEL}&region=au3&modes=metrotrains,tram`)).json();
+    expect(body.stops[0].modes).toEqual(['sydneytrains']);
+    const url = decodeURIComponent(fetchJsonMock.mock.calls[0]?.[0] as string);
+    expect(url).toContain('/region/au3/stops');
+    expect(url).toContain('au3:metrotrains,au3:tram');
+    // Adelaide stop ids keep a feed segment (au5:ad:50009) — the
+    // departures endpoint must accept the extra colon.
+    fetchJsonMock.mockResolvedValue({ response: { departures: [] } });
+    const dep = await (await import('../../../src/api/transport.js')).transportRouter
+      .request('/api/transport/departures/au5:ad:50009');
+    expect(dep.status).toBe(200);
+    expect(fetchJsonMock.mock.calls[1]?.[0]).toContain('/region/au5/departures/au5:ad:50009');
   });
 });

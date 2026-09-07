@@ -10,12 +10,13 @@
  * sends no CORS headers for our origin, and because the raw payload is
  * enormous (~100 KB for 19 vehicles) — normalization shrinks it ~50×.
  *
- * Two AnyTrip regions are served: au2 (NSW) and au4 (SEQ/Queensland).
- * Viewport endpoints take ?region= (default au2); id-addressed
- * endpoints (shape/trip/departures) derive the region from the id's
- * own au№: prefix. Every cache key carries the region — the two
- * coverage areas overlap around Tweed Heads, so a bbox alone is not a
- * unique key.
+ * Five AnyTrip regions are served: au2 (NSW), au3 (Victoria), au4
+ * (SEQ/Queensland), au5 (SA/Adelaide) and au9 (ACT). Viewport
+ * endpoints take ?region= (default au2); id-addressed endpoints
+ * (shape/trip/departures) derive the region from the id's own au№:
+ * prefix. Every cache key carries the region — coverage areas overlap
+ * (Tweed Heads, the Murray border band, the whole ACT inside au2's
+ * envelope), so a bbox alone is not a unique key.
  *
  * Bbox handling: coords are clamped into the region's coverage bounds
  * (rejecting would break padded coastal/border viewports), then
@@ -58,15 +59,18 @@ interface TransportRegion {
   /** Vehicles: short feed codes → upstream feed ids. au2's feeds are
    *  per-mode, so they double as the vehicle filter there. */
   vehicleFeeds: Record<string, string>;
-  /** au4's single `se` feed carries EVERY mode, so vehicles filter by
-   *  modes= instead; null means feeds= is the whole selector (au2). */
+  /** Modes-filtered regions (au3/au4/au5/au9): the feed(s) carry every
+   *  mode, so vehicles filter by modes= instead; null means feeds= is
+   *  the whole selector (au2). An empty vehicleFeeds map (au3/au5/au9)
+   *  sends modes= alone — the AnyTrip app itself queries them that
+   *  way. */
   vehicleModes: Record<string, string> | null;
   stopModes: Record<string, string>;
 }
 
-// `sp` (school/special services) reports mode au2:buses. Neither
-// region offers 'buses' stops — tens of thousands of bus stops would
-// blow the upstream limit=500 and truncate arbitrarily in dense areas.
+// `sp` (school/special services) reports mode au2:buses. No region
+// offers 'buses' stops — tens of thousands of bus stops would blow
+// the upstream limit=500 and truncate arbitrarily in dense areas.
 const REGIONS: Record<string, TransportRegion> = {
   au2: {
     base: `${ANYTRIP_HOST}/au2`,
@@ -107,6 +111,54 @@ const REGIONS: Record<string, TransportRegion> = {
       ferries: 'au4:ferries',
       lightrail: 'au4:lightrail',
     },
+  },
+  au3: {
+    base: `${ANYTRIP_HOST}/au3`,
+    // Victoria, plus the Murray border band — V/Line reaches Albury
+    // inside au2's envelope, so border viewports query both regions.
+    bounds: { minLat: -39.3, maxLat: -33.8, minLon: 140.8, maxLon: 150.2 },
+    vehicleFeeds: {},
+    vehicleModes: {
+      metrotrains: 'au3:metrotrains',
+      vlinetrains: 'au3:vlinetrains',
+      tram: 'au3:tram',
+      buses: 'au3:buses',
+    },
+    stopModes: {
+      metrotrains: 'au3:metrotrains',
+      vlinetrains: 'au3:vlinetrains',
+      tram: 'au3:tram',
+    },
+  },
+  au5: {
+    base: `${ANYTRIP_HOST}/au5`,
+    // Adelaide Metro's reach: Gawler to Victor Harbor fringe.
+    bounds: { minLat: -36.3, maxLat: -33.7, minLon: 136.7, maxLon: 140.0 },
+    vehicleFeeds: {},
+    vehicleModes: {
+      trains: 'au5:trains',
+      lightrail: 'au5:lightrail',
+      buses: 'au5:buses',
+      schoolbuses: 'au5:schoolbuses',
+    },
+    stopModes: {
+      trains: 'au5:trains',
+      lightrail: 'au5:lightrail',
+    },
+  },
+  au9: {
+    base: `${ANYTRIP_HOST}/au9`,
+    // ACT + surrounds (Transport Canberra buses run to Bungendore).
+    // Sits ENTIRELY inside au2's envelope — Canberra viewports query
+    // both regions, which is correct: NSW coaches pass through.
+    bounds: { minLat: -36.0, maxLat: -34.6, minLon: 148.0, maxLon: 149.8 },
+    vehicleFeeds: {},
+    vehicleModes: {
+      lightrail: 'au9:lightrail',
+      buses: 'au9:buses',
+      schoolbuses: 'au9:schoolbuses',
+    },
+    stopModes: { lightrail: 'au9:lightrail' },
   },
 };
 
@@ -353,11 +405,21 @@ function triState(v: unknown): boolean | null {
 }
 
 /** Strip the region prefix and collapse regional names onto the shared
- *  vocabulary: au4's 'trains' is the same concept the frontend calls
- *  'sydneytrains' (the Trains pill), so the pill set never grows. */
+ *  vocabulary, so the frontend pill set never grows: every network's
+ *  suburban heavy rail rides the Trains pill ('sydneytrains'), V/Line
+ *  rides the regional-trains pill ('nswtrains'), Melbourne trams are
+ *  light rail, and school buses ride with Buses (as NSW's `sp` feed
+ *  already does by reporting mode au2:buses). */
+const MODE_SYNONYMS: Record<string, string> = {
+  trains: 'sydneytrains', // au4 QR / au5 Adelaide Metro
+  metrotrains: 'sydneytrains', // au3 Metro Trains Melbourne
+  vlinetrains: 'nswtrains', // au3 V/Line
+  tram: 'lightrail', // au3 Yarra Trams
+  schoolbuses: 'buses', // au5/au9
+};
 function canonicalModeName(raw: string): string {
   const m = raw.replace(/^au\d+:/, '');
-  return m === 'trains' ? 'sydneytrains' : m;
+  return MODE_SYNONYMS[m] ?? m;
 }
 
 function normMode(raw: string | undefined): TransportMode {
@@ -522,8 +584,9 @@ transportRouter.get('/api/transport/vehicles', async (c) => {
     maxLon: c.req.query('maxLon'),
   }, region.bounds);
   if (typeof bbox === 'string') return c.json({ error: bbox }, 400);
-  // Selector: au2 filters upstream by its per-mode feeds; au4's single
-  // feed carries every mode, so modes= is the filter there.
+  // Selector: au2 filters upstream by its per-mode feeds; the other
+  // regions' feeds carry every mode, so modes= is the filter there
+  // (au4 also names its `se` feed; au3/au5/au9 send modes alone).
   let selector: string[];
   let upstreamFilter: string;
   if (region.vehicleModes) {
@@ -533,7 +596,8 @@ transportRouter.get('/api/transport/vehicles', async (c) => {
     const feedList = Object.values(region.vehicleFeeds).join(',');
     const modeList = modes.map((m) => region.vehicleModes![m]).join(',');
     upstreamFilter =
-      `feeds=${encodeURIComponent(feedList)}&modes=${encodeURIComponent(modeList)}`;
+      (feedList ? `feeds=${encodeURIComponent(feedList)}&` : '') +
+      `modes=${encodeURIComponent(modeList)}`;
   } else {
     const feeds = parseListParam(c.req.query('feeds'), region.vehicleFeeds, 'feed');
     if (typeof feeds === 'string') return c.json({ error: feeds }, 400);
@@ -542,8 +606,9 @@ transportRouter.get('/api/transport/vehicles', async (c) => {
     upstreamFilter = `feeds=${encodeURIComponent(feedList)}`;
   }
 
-  // Region is ALWAYS in the key: the au2/au4 coverage overlap around
-  // Tweed Heads can produce identical snapped bboxes for both.
+  // Region is ALWAYS in the key: overlapping coverage (Tweed Heads,
+  // the Murray band, the ACT) produces identical snapped bboxes for
+  // more than one region.
   const key = `v|${regionId}|${bboxKey(bbox)}|${selector.join(',')}`;
   try {
     const { value } = await vehiclesCache.get(
@@ -740,7 +805,9 @@ export interface TransportDeparturesSnapshot {
 // the trip whitelist admits them; the upstream URL re-encodes a space
 // as %20 while keeping colons raw (upstream 404s on %3A).
 const TRIP_ID_RE = /^au\d+:[a-z]{2}:[A-Za-z0-9 _.:-]+$/;
-const STOP_ID_RE = /^au\d+:[A-Za-z0-9_.-]+$/;
+// au2/au4/au9 stop ids are `au2:200060`-shaped; au3 uses `au3:G1058`
+// and au5 keeps a feed segment (`au5:ad:50009`) — hence the colon.
+const STOP_ID_RE = /^au\d+:[A-Za-z0-9_.:-]+$/;
 const TRIP_FRESH_MS = 15_000;
 const TRIP_STALE_MS = 60_000;
 const DEP_FRESH_MS = 20_000;
