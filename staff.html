@@ -3913,6 +3913,10 @@
         <label>Region</label>
         <div class="value" id="detail-region">-</div>
       </div>
+      <div class="credential-box" id="detail-referred-group" style="display: none; background: rgba(34, 197, 94, 0.08); border-color: rgba(34, 197, 94, 0.3);">
+        <label>🤝 Referred By</label>
+        <div class="value" id="detail-referred">-</div>
+      </div>
       <div class="credential-box" id="detail-setup-group" style="display: none; background: rgba(249, 115, 22, 0.1); border-color: rgba(249, 115, 22, 0.3);">
         <label>📡 Feeder Setup</label>
         <div class="value" id="detail-setup" style="white-space: pre-wrap; font-family: inherit; font-size: 0.95rem; color: var(--text-primary);">-</div>
@@ -13659,6 +13663,7 @@
           (r.email || '').toLowerCase().includes(q) ||
           (r.discord_id || '').toLowerCase().includes(q) ||
           (r.region || '').toLowerCase().includes(q) ||
+          (r.referred_by_name || '').toLowerCase().includes(q) ||
           (r.request_type || []).some(t => t.toLowerCase().includes(q))
         );
       }
@@ -13755,7 +13760,8 @@
 
         return `
           <tr>
-            <td><span class="status-badge ${escapeHtml(req.status)}">${escapeHtml(req.status)}</span></td>
+            <td><span class="status-badge ${escapeHtml(req.status)}">${escapeHtml(req.status)}</span>${req.referred_by
+                  ? ` <span class="status-badge approved" title="Referred by ${escapeHtml(req.referred_by_name || req.referred_by)}"><i class="fas fa-user-plus"></i> Referred</span>` : ''}</td>
             <td>${typesHtml}</td>
             <td>${escapeHtml(req.email)}${emailChip}</td>
             <td>${req.discord_id && fmtDiscordId(req.discord_id) !== 'Not linked'
@@ -14055,6 +14061,16 @@
       document.getElementById('detail-email').textContent = req.email;
       document.getElementById('detail-discord').textContent = fmtDiscordId(req.discord_id);
       document.getElementById('detail-region').textContent = regionLabels[req.region] || req.region || 'Not specified';
+      // Referral attribution: name resolved at submit time; falls back to a
+      // slice of the referrer's user id when the lookup came back empty.
+      const referredGroup = document.getElementById('detail-referred-group');
+      if (req.referred_by) {
+        referredGroup.style.display = 'block';
+        document.getElementById('detail-referred').textContent =
+          req.referred_by_name || (String(req.referred_by).slice(0, 8) + '…');
+      } else {
+        referredGroup.style.display = 'none';
+      }
       
       // Format setup info for pager/radio feeders
       const setupGroup = document.getElementById('detail-setup-group');

@@ -306,6 +306,16 @@ function createProfileModal() {
         <div style="color:#64748b; font-size:0.72rem; margin-top:0.4rem;">A transparent PNG, stamped onto the bottom-right of your Wire &amp; Fleet photos when the watermark toggle is on. Without one, your username is used. The preview shows how it will sit on a photo.</div>
       </div>
 
+      <div id="profile-referral-section" class="pf-card" style="display:none;">
+        <label style="display:block; color:#cbd5e1; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem; font-weight:600;">Referral link</label>
+        <div style="display:flex; align-items:center; gap:0.5rem;">
+          <input type="text" id="profile-referral-link" readonly style="flex:1; min-width:0; padding:0.55rem 0.7rem; background:rgba(2,6,23,0.5); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#e2e8f0; font-size:0.8rem; box-sizing:border-box; font-family:inherit;">
+          <button type="button" onclick="copyProfileReferralLink(this)" title="Copy link" style="padding:0.5rem 0.8rem; background:rgba(148,163,184,0.12); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#e2e8f0; font-size:0.8rem; cursor:pointer; font-family:inherit;"><i class="fas fa-copy"></i></button>
+        </div>
+        <div id="profile-referral-stats" style="color:#64748b; font-size:0.72rem; margin-top:0.4rem;"></div>
+        <div style="color:#64748b; font-size:0.72rem; margin-top:0.3rem;">Send this to someone you'd vouch for as a contributor — their application arrives tagged with your name.</div>
+      </div>
+
       <div class="pf-card">
         <label style="display:block; color:#cbd5e1; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem; font-weight:600;">Linked Accounts</label>
         <div id="profile-email-row" style="display:flex; align-items:center; gap:0.6rem; padding:0.6rem 0.75rem; background:rgba(2,6,23,0.4); border:1px solid rgba(148,163,184,0.15); border-radius:8px; margin-bottom:0.5rem;">
@@ -962,11 +972,63 @@ async function openProfileModal() {
       sect.style.display = 'block';
       loadProfileWatermark(session);
     } else if (sect) { sect.style.display = 'none'; }
+    // Referral link: contributors who can vouch for new applicants. Mirrors
+    // canRefer on the backend (which is the real gate — this only decides
+    // whether to show the card).
+    const REFERRAL_ROLES = ['feeder:radio', 'feeder:pager', 'wire:contributor', 'map:editor'];
+    const refSect = document.getElementById('profile-referral-section');
+    const mayRefer = !!ce.is_owner || REFERRAL_ROLES.some((r) => (ce.roles || []).includes(r));
+    if (refSect) refSect.style.display = mayRefer ? 'block' : 'none';
+    if (mayRefer) loadProfileReferral(session);
   } catch (e) { /* section stays hidden */ }
 
   const msg = document.getElementById('profile-message');
   if (msg) msg.textContent = '';
   document.getElementById('profile-modal').style.display = 'flex';
+}
+
+// Personal referral link + how it's doing. The code is minted server-side on
+// first request (GET /api/referral-code, gated on canRefer).
+async function loadProfileReferral(session) {
+  const sect = document.getElementById('profile-referral-section');
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/referral-code`, {
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const j = await res.json();
+    if (!j.code) throw new Error('no code');
+    const link = document.getElementById('profile-referral-link');
+    if (link) link.value = `${location.origin}/signup?as=contributor&ref=${encodeURIComponent(j.code)}`;
+    const stats = document.getElementById('profile-referral-stats');
+    if (stats) {
+      const uses = j.uses || 0;
+      stats.textContent = `${uses} signup${uses === 1 ? '' : 's'} · ${j.approved || 0} approved`;
+    }
+  } catch (e) {
+    if (sect) sect.style.display = 'none'; // no link is better than a broken one
+  }
+}
+
+function copyProfileReferralLink(btn) {
+  const el = document.getElementById('profile-referral-link');
+  const text = el ? el.value : '';
+  if (!text) return;
+  const done = () => {
+    if (!btn) return;
+    const prev = btn.innerHTML;
+    btn.innerHTML = '<i class="fas fa-check" style="color:#22c55e"></i>';
+    setTimeout(() => { btn.innerHTML = prev; }, 1400);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(() => { if (el) el.select(); });
+  } else {
+    try {
+      el.select();
+      document.execCommand('copy');
+      done();
+    } catch (e) { /* user can copy manually */ }
+  }
 }
 
 function closeProfileModal() {

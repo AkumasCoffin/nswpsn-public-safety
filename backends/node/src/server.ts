@@ -36,6 +36,7 @@ import { wireCommentsRouter } from './api/wireComments.js';
 import { fleetRouter } from './api/fleet.js';
 import { profilesRouter } from './api/profiles.js';
 import { editorRouter } from './api/editor.js';
+import { referralsRouter } from './api/referrals.js';
 import { usersRouter } from './api/users.js';
 // Data-history archive reads (W6).
 import { dataHistoryRouter } from './api/data-history.js';
@@ -381,6 +382,7 @@ export function createApp() {
   app.route('/', fleetRouter);
   app.route('/', profilesRouter);
   app.route('/', editorRouter);
+  app.route('/', referralsRouter);
   app.route('/', usersRouter);
   // Data-history archive reads (W6)
   app.route('/', dataHistoryRouter);
