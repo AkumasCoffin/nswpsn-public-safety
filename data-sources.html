@@ -111,7 +111,7 @@
           <div class="card-tag">Info</div>
         </div>
         <div class="card-body">
-          <p>This site aggregates publicly available data from various NSW government agencies and third-party providers. All data is fetched in near real-time and cached briefly to improve performance. We do not modify or alter the source data beyond formatting for display.</p>
+          <p>This site aggregates publicly available data from government agencies across Australia and third-party providers. All data is fetched in near real-time and cached briefly to improve performance. We do not modify or alter the source data beyond formatting for display.</p>
           <p style="margin-top: 0.8rem;"><strong>Forcequit is not affiliated with any of these data providers.</strong> Data accuracy and availability depends on the source systems.</p>
           <p style="margin-top: 0.8rem; padding: 0.8rem; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 6px;">
             <strong><i class="fa-solid fa-triangle-exclamation"></i> Disclaimer:</strong> This data is provided for informational purposes only. Always verify critical information directly with official sources before making decisions. Data may be delayed, incomplete, or inaccurate. Do not rely solely on this site for emergency situations.
@@ -222,7 +222,7 @@
         <h2 style="font-size: 1.1rem; color: #ef4444; margin: 0; display: flex; align-items: center; gap: 0.5rem;">
           <span><i class="fa-solid fa-fire"></i></span> Fire &amp; Emergency
         </h2>
-        <p style="font-size: 0.85rem; color: #94a3b8; margin: 0.3rem 0 0 0;">Bushfire incidents, hotspots and fire-detection cameras</p>
+        <p style="font-size: 0.85rem; color: #94a3b8; margin: 0.3rem 0 0 0;">Fire and emergency incidents from every state and territory, satellite hotspots and fire-detection cameras</p>
       </div>
 
       <article class="card card-wide">
@@ -260,6 +260,142 @@
             </div>
           </div>
           <p style="margin-top:0.8rem;"><strong>Source:</strong> <a href="https://www.rfs.nsw.gov.au/" target="_blank">rfs.nsw.gov.au</a></p>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title"><i class="fa-solid fa-fire"></i> Queensland Fire Department</div>
+          <div class="card-tag">Emergency</div>
+        </div>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Live incidents and public warnings from the Queensland Fire Department. Combines the current-incidents feed &mdash; every job QFD is turned out to, from bushfires to alarms, rescues and hazmat &mdash; with the public warnings layer, including mapped warning areas.</p>
+          <p><strong>Data:</strong> Incident type, location, status, vehicles assigned / en route / on scene; warning level, advice text, warning area polygons</p>
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap:0.7rem; margin-top:1rem;">
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#f97316;">Current Incidents</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Everything QFD is responding to</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#ef4444;">Public Warnings</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Advice &middot; Watch &amp; Act &middot; Emergency</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#38bdf8;">Warning Areas</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Mapped warning polygons</span>
+            </div>
+          </div>
+          <p style="margin-top:0.8rem;"><strong>Source:</strong> <a href="https://www.fire.qld.gov.au/" target="_blank">fire.qld.gov.au</a></p>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title"><i class="fa-solid fa-fire"></i> VicEmergency</div>
+          <div class="card-tag">Emergency</div>
+        </div>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Victoria&rsquo;s whole-of-state emergency feed &mdash; one feed, five publishers: CFA fires, SES storm and flood jobs, EMV public warnings, DEECA planned burns and ESTA triple-zero dispatches. Events are routed to the matching map layer by what they are (fire, flood, hazard), not by which agency posted them.</p>
+          <p><strong>Data:</strong> Event type and category, alert level on warnings, status, location, size</p>
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap:0.7rem; margin-top:1rem;">
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#f97316;">CFA / SES / ESTA</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Incidents and dispatched calls</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#ef4444;">EMV Warnings</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Australian Warning System levels</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#22c55e;">Planned Burns</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">DEECA burn program</span>
+            </div>
+          </div>
+          <p style="margin-top:0.8rem;"><strong>Source:</strong> <a href="https://www.emergency.vic.gov.au/" target="_blank">emergency.vic.gov.au</a></p>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title"><i class="fa-solid fa-fire"></i> DFES &mdash; Emergency WA</div>
+          <div class="card-tag">Emergency</div>
+        </div>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Western Australia&rsquo;s live incidents and public warnings from Emergency WA (Department of Fire and Emergency Services). The two feeds share an event id, so a fire with a warning shows as one pin wearing the warning&rsquo;s alert level and the incident&rsquo;s status.</p>
+          <p><strong>Data:</strong> Incident type, status, location; warning level, advice text, warning areas</p>
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap:0.7rem; margin-top:1rem;">
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#f97316;">Incidents</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">What DFES is turned out to</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#ef4444;">Warnings</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">What the public is being told</span>
+            </div>
+          </div>
+          <p style="margin-top:0.8rem;"><strong>Source:</strong> <a href="https://www.emergency.wa.gov.au/" target="_blank">emergency.wa.gov.au</a></p>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title"><i class="fa-solid fa-fire"></i> SA Country Fire Service &amp; MFS</div>
+          <div class="card-tag">Emergency</div>
+        </div>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Live dispatch feeds from South Australia&rsquo;s two fire services &mdash; the Country Fire Service across regional SA and the Metropolitan Fire Service in greater Adelaide, split the way the RFS and Fire &amp; Rescue NSW divide NSW.</p>
+          <p><strong>Data:</strong> Incident type, location, status, alert level, responding resources</p>
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap:0.7rem; margin-top:1rem;">
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#f97316;">CFS</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Country South Australia</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#ef4444;">MFS</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Adelaide metropolitan area</span>
+            </div>
+          </div>
+          <p style="margin-top:0.8rem;"><strong>Source:</strong> <a href="https://www.cfs.sa.gov.au/" target="_blank">cfs.sa.gov.au</a> &middot; <a href="https://www.mfs.sa.gov.au/" target="_blank">mfs.sa.gov.au</a></p>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title"><i class="fa-solid fa-fire"></i> NT Fire &amp; Rescue Service</div>
+          <div class="card-tag">Emergency</div>
+        </div>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Incident map data from Northern Territory Police, Fire and Emergency Services &mdash; structure and grass fires, automatic alarms, hazmat and BushfiresNT warnings with mapped fire grounds. Data &copy; NTFRS; polled gently at a fraction of the feed&rsquo;s own refresh rate.</p>
+          <p><strong>Data:</strong> Incident type, location and fire-ground geometry, alert level, status, current situation and advice</p>
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap:0.7rem; margin-top:1rem;">
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#f97316;">NTFRS Incidents</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Fires, alarms, hazmat</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#ef4444;">BushfiresNT</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Warnings with fire grounds</span>
+            </div>
+          </div>
+          <p style="margin-top:0.8rem;"><strong>Source:</strong> <a href="https://pfes.nt.gov.au/" target="_blank">pfes.nt.gov.au</a></p>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title"><i class="fa-solid fa-truck-medical"></i> ACT Emergency Services Agency</div>
+          <div class="card-tag">Emergency</div>
+        </div>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">ACT Ambulance responses from the ESA public incident feed. The feed&rsquo;s fire records duplicate the RFS feed already ingested, so only ACT Ambulance jobs are kept &mdash; and completed responses are dropped.</p>
+          <p><strong>Data:</strong> Response type, suburb, status, time dispatched</p>
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap:0.7rem; margin-top:1rem;">
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#38bdf8;">ACT Ambulance</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Active responses in the ACT</span>
+            </div>
+          </div>
+          <p style="margin-top:0.8rem;"><strong>Source:</strong> <a href="https://esa.act.gov.au/" target="_blank">esa.act.gov.au</a></p>
         </div>
       </article>
 
@@ -523,43 +659,23 @@
 
       <article class="card card-wide">
         <div class="card-header">
-          <div class="card-title"><i class="fa-solid fa-bullhorn"></i> Waze</div>
-          <div class="card-tag">Traffic</div>
+          <div class="card-title"><i class="fa-solid fa-car"></i> QLD Traffic</div>
+          <div class="card-tag">Live</div>
         </div>
         <div class="card-body">
-          <p style="margin-bottom:0.6rem;">Crowd-sourced live traffic reports submitted by Waze drivers across NSW. Reports are ingested in near real-time, plotted on the incident map and pushed to the Discord bot. Being community-submitted, they often surface incidents faster than official feeds — but are less verified, so they are flagged as community reports.</p>
-          <p><strong>Data:</strong> Reported alert type, sub-type, street/location, report age</p>
+          <p style="margin-bottom:0.6rem;">Roadside and flood-monitoring cameras from QLD Traffic&rsquo;s open data: ~137 traffic cameras refreshed upstream about once a minute, plus ~119 cameras watching flood-prone crossings &mdash; many council-supplied and refreshing every 30 minutes.</p>
+          <p><strong>Data:</strong> Camera location, description, direction, district, live image</p>
           <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap:0.7rem; margin-top:1rem;">
             <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
-              <strong style="color:#60a5fa;">Police</strong><br>
-              <span style="font-size:0.8rem; color:#94a3b8;">Visible &amp; hidden police, speed traps</span>
+              <strong style="color:#38bdf8;">Traffic Cameras</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Motorways and main roads</span>
             </div>
             <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
-              <strong style="color:#ef4444;">Accidents</strong><br>
-              <span style="font-size:0.8rem; color:#94a3b8;">Minor &amp; major crashes</span>
-            </div>
-            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
-              <strong style="color:#f97316;">Hazards</strong><br>
-              <span style="font-size:0.8rem; color:#94a3b8;">On-road, shoulder &amp; weather hazards</span>
-            </div>
-            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
-              <strong style="color:#eab308;">Potholes</strong><br>
-              <span style="font-size:0.8rem; color:#94a3b8;">Road surface damage</span>
-            </div>
-            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
-              <strong style="color:#a855f7;">Road Closures</strong><br>
-              <span style="font-size:0.8rem; color:#94a3b8;">Blocked &amp; closed roads</span>
-            </div>
-            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
-              <strong style="color:#22c55e;">Traffic Jams</strong><br>
-              <span style="font-size:0.8rem; color:#94a3b8;">Live congestion &amp; delays</span>
-            </div>
-            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
-              <strong style="color:#38bdf8;">Roadwork</strong><br>
-              <span style="font-size:0.8rem; color:#94a3b8;">Construction &amp; maintenance</span>
+              <strong style="color:#0ea5e9;">Flood Cameras</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Flood-prone crossings and causeways</span>
             </div>
           </div>
-          <p style="margin-top:0.8rem;"><strong>Source:</strong> <a href="https://www.waze.com/live-map" target="_blank">waze.com</a></p>
+          <p style="margin-top:0.8rem;"><strong>Source:</strong> <a href="https://qldtraffic.qld.gov.au/" target="_blank">qldtraffic.qld.gov.au</a></p>
         </div>
       </article>
 
@@ -1079,7 +1195,7 @@
           <div class="card-tag">Output</div>
         </div>
         <div class="card-body">
-          <p style="margin-bottom:0.6rem;">Automated Discord bot providing real-time alerts for RFS fires, BOM warnings, traffic incidents, power outages, fire hotspots, Waze reports, and pager messages to Discord servers.</p>
+          <p style="margin-bottom:0.6rem;">Automated Discord bot providing real-time alerts for RFS fires, BOM warnings, traffic incidents, power outages, fire hotspots, and pager messages to Discord servers.</p>
           <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap:0.6rem; margin-top:1rem;">
             <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
               <strong style="color:#f472b6;">Alert Subscriptions</strong><br>
@@ -1162,10 +1278,9 @@
                 <li>Traffic Cameras & Airport Weather Cameras</li>
                 <li>Central Watch Fire Tower Cameras (27 cameras)</li>
                 <li>RFS Major Incidents</li>
-                <li>Waze Hazards, Police & Traffic Jams</li>
                 <li>MarineTraffic Vessel Positions (AIS)</li>
                 <li>Live Aircraft Positions (ADS-B)</li>
-                <li>Public Transport Vehicles (TfNSW / AnyTrip)</li>
+                <li>Public Transport Vehicles (AnyTrip &mdash; NSW &amp; QLD)</li>
               </ul>
             </div>
             <div>
@@ -1176,6 +1291,7 @@
                 <li>BOM Weather Warnings</li>
                 <li>RFS Fire Danger Ratings</li>
                 <li>NASA FIRMS Fire Hotspots</li>
+                <li>Interstate Fire Services (QLD, VIC, WA, SA, NT, ACT)</li>
               </ul>
             </div>
             <div>
