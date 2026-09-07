@@ -360,8 +360,9 @@
           <span class="hint" style="display:block;margin-top:0.2rem">
             Burned into the file itself, so it survives download. Uses the watermark
             image from your profile if you've uploaded one, otherwise your username.
-            Photos are marked as they upload; videos are marked (username only) while
-            they're processed, a moment after you publish.
+            Switch it on or off whenever you like &mdash; photos you've already added
+            are re-marked to match. Videos are marked (username only) while they're
+            processed, a moment after you publish.
           </span>
         </span>
       </label>
@@ -530,13 +531,34 @@
         const meta = data.session?.user?.user_metadata || {};
         _meName = (meta.display_name || meta.username || meta.full_name || meta.name
                    || (data.session?.user?.email || '').split('@')[0] || '').trim();
-        // Restore the last watermark choice (per-post, but remembered).
+        // Watermark default: an ACCOUNT setting (profile modal), so it follows
+        // the contributor across devices. localStorage is only a cache, applied
+        // first so the box doesn't visibly flip once the profile loads.
         try {
           const wm = $('#watermarkToggle');
-          if (wm && localStorage.getItem(WM_KEY) === '1') wm.checked = true;
-          if (wm) wm.addEventListener('change', () => {
-            try { localStorage.setItem(WM_KEY, wm.checked ? '1' : '0'); } catch (e) {}
-          });
+          if (wm) {
+            if (localStorage.getItem(WM_KEY) === '1') wm.checked = true;
+            fetch(`${API_BASE}/api/profiles/${uid}`, { headers: await userHeaders() })
+              .then((r) => (r.ok ? r.json() : null))
+              .then((p) => {
+                // An edit in progress owns the toggle — don't overwrite it.
+                if (!p || editId) return;
+                // GET /api/profiles/:id wraps the row: { profile, stats, tags }.
+                wm.checked = (p.profile || p).watermark_default === true;
+                try { localStorage.setItem(WM_KEY, wm.checked ? '1' : '0'); } catch (e) {}
+              })
+              .catch(() => {});
+            wm.addEventListener('change', () => {
+              try { localStorage.setItem(WM_KEY, wm.checked ? '1' : '0'); } catch (e) {}
+              // Remember it for next time (best-effort — the post still uses
+              // whatever the box says right now).
+              userHeaders(true).then((h) => fetch(`${API_BASE}/api/profiles/watermark-default`, {
+                method: 'PUT', headers: h, body: JSON.stringify({ enabled: wm.checked }),
+              })).catch(() => {});
+              // Re-mark (or un-mark) photos that are already on the post.
+              reapplyWatermark();
+            });
+          }
         } catch (e) { /* storage blocked — the toggle still works per-post */ }
         try { const s = await fetch(`${API_BASE}/api/wire/settings`, { headers: await userHeaders() }); if (s.ok) approvalRequired = (await s.json()).approval_required !== false; } catch (e) {}
         if (isModerator || !approvalRequired) $('#composeSub').textContent = 'Your post publishes instantly. You can edit or delete it any time.';
@@ -691,12 +713,57 @@
         return { blob: marked || plain, hash };
       } catch (e) { return null; }
     }
+    /**
+     * Re-encode and re-upload photos whose burnt-in watermark no longer matches
+     * the toggle. The watermark is painted into the pixels at upload time, so
+     * flipping the switch afterwards used to do nothing to photos already
+     * added — you had to decide before choosing files. Now the switch is
+     * simply the state of the post: photos catch up either way.
+     *
+     * The identity hash is unchanged (it's taken pre-watermark), so the
+     * once-per-image rule is unaffected.
+     */
+    let _reapplying = false;
+    async function reapplyWatermark() {
+      if (_reapplying) return;
+      const want = !!watermarkText();
+      const todo = state.media.filter((m) => m.kind === 'image' && m.file && !m.uploading && m.marked !== want);
+      if (!todo.length) return;
+      _reapplying = true;
+      todo.forEach((m) => { m.uploading = true; });
+      renderMedia();
+      setMsg(want ? 'Adding your watermark\u2026' : 'Removing the watermark\u2026');
+      let failed = 0;
+      for (const item of todo) {
+        try {
+          const opt = await optimizeImage(item.file, 1600, 0.82);
+          if (!opt) throw new Error('encode');
+          const r = await fetch(`${API_BASE}/api/wire/upload-url`, { method: 'POST', headers: await userHeaders(true), body: JSON.stringify({ hash: opt.hash, exclude_id: editId || '' }) });
+          if (!r.ok) throw new Error('upload-url ' + r.status);
+          const { uploadURL, key, publicUrl } = await r.json();
+          const up = await fetch(uploadURL, { method: 'PUT', body: opt.blob });
+          if (!up.ok) throw new Error('r2 put ' + up.status);
+          item.r2_key = key; item.hash = opt.hash; item.marked = want;
+          if (publicUrl) item.deliveredUrl = publicUrl;
+        } catch (e) {
+          failed++; // keep the photo as it is — it's still a valid upload
+        }
+        item.uploading = false;
+        renderMedia();
+      }
+      _reapplying = false;
+      setMsg(failed ? `${failed} photo${failed === 1 ? '' : 's'} couldn't be updated — remove and re-add ${failed === 1 ? 'it' : 'them'} to change the watermark.` : '', !!failed);
+    }
+
     async function handleFiles(files) {
       const cap = LIMITS[type].img;
       for (const file of files) {
         if (state.media.filter((m) => m.kind === 'image').length >= cap) { setMsg(`Max ${cap} images.`, true); break; }
         if (!/^image\//.test(file.type)) continue;
-        const item = { kind: 'image', r2_key: null, unit: '', is_cover: state.media.length === 0, previewUrl: URL.createObjectURL(file), uploading: true };
+        // `file` is kept so the toggle can re-encode this photo later; `marked`
+        // records the state it was encoded with, so only photos that disagree
+        // with the toggle are re-uploaded.
+        const item = { kind: 'image', file: file, marked: !!watermarkText(), r2_key: null, unit: '', is_cover: state.media.length === 0, previewUrl: URL.createObjectURL(file), uploading: true };
         state.media.push(item); renderMedia();
         try {
           const opt = await optimizeImage(file, 1600, 0.82);
@@ -712,7 +779,7 @@
           // Each image can only be posted once — reject one already on The Wire.
           if (alreadyPosted) { setMsg('That image has already been posted to The Wire — each image can only be posted once.', true); state.media = state.media.filter((m) => m !== item); renderMedia(); continue; }
           const up = await fetch(uploadURL, { method: 'PUT', body: blob }); if (!up.ok) throw new Error('r2 put ' + up.status);
-          item.r2_key = key; item.hash = hash; item.uploading = false; if (publicUrl) item.deliveredUrl = publicUrl;
+          item.r2_key = key; item.hash = hash; item.uploading = false; item.marked = !!watermarkText(); if (publicUrl) item.deliveredUrl = publicUrl;
         } catch (e) {
           setMsg('An image failed to upload (' + e.message + ').', true);
           state.media = state.media.filter((m) => m !== item);
@@ -1189,7 +1256,7 @@
       if (!$('#title').value.trim()) { setMsg('A headline is required.', true); return; }
       if (status === 'published' && !$('#rightsAffirm').checked) { setMsg('Please confirm you hold the rights before publishing.', true); return; }
       if (status === 'published' && !($('#regionState').value && $('#regionLga').value.trim())) { setMsg('A location (state and LGA) is required.', true); return; }
-      if (state.media.some((m) => m.uploading)) { setMsg('Wait for images to finish uploading.', true); return; }
+      if (_reapplying || state.media.some((m) => m.uploading)) { setMsg('Wait for images to finish uploading.', true); return; }
       setBusy(true); setMsg('Saving…');
       const payload = buildPayload(status);
       const url = editId ? `${API_BASE}/api/wire/articles/${encodeURIComponent(editId)}` : `${API_BASE}/api/wire/articles`;

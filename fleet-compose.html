@@ -259,6 +259,8 @@
           <span class="hint" style="display:block;margin-top:0.2rem">
             Burned into the file itself, so it survives download. Uses the watermark
             image from your profile if you've uploaded one, otherwise your username.
+            Switch it on or off whenever you like &mdash; photos you've already added
+            are re-marked to match.
             The photo is marked as it uploads — set this before choosing the image.
           </span>
         </span>
@@ -333,12 +335,30 @@
         const meta = data.session?.user?.user_metadata || {};
         _meName = (meta.display_name || meta.username || meta.full_name || meta.name
                    || (data.session?.user?.email || '').split('@')[0] || '').trim();
+        // Watermark default: an ACCOUNT setting (profile modal) so it follows
+        // the contributor across devices; localStorage is a cache applied first
+        // so the box doesn't visibly flip once the profile loads.
         try {
           const wm = $('#watermarkToggle');
-          if (wm && localStorage.getItem(WM_KEY) === '1') wm.checked = true;
-          if (wm) wm.addEventListener('change', () => {
-            try { localStorage.setItem(WM_KEY, wm.checked ? '1' : '0'); } catch (e) {}
-          });
+          if (wm) {
+            if (localStorage.getItem(WM_KEY) === '1') wm.checked = true;
+            fetch(`${API_BASE}/api/profiles/${uid}`, { headers: await userHeaders() })
+              .then((r) => (r.ok ? r.json() : null))
+              .then((p) => {
+                if (!p || editId) return; // an edit owns the toggle
+                // GET /api/profiles/:id wraps the row: { profile, stats, tags }.
+                wm.checked = (p.profile || p).watermark_default === true;
+                try { localStorage.setItem(WM_KEY, wm.checked ? '1' : '0'); } catch (e) {}
+              })
+              .catch(() => {});
+            wm.addEventListener('change', () => {
+              try { localStorage.setItem(WM_KEY, wm.checked ? '1' : '0'); } catch (e) {}
+              userHeaders(true).then((h) => fetch(`${API_BASE}/api/profiles/watermark-default`, {
+                method: 'PUT', headers: h, body: JSON.stringify({ enabled: wm.checked }),
+              })).catch(() => {});
+              reapplyWatermark();
+            });
+          }
         } catch (e) { /* storage blocked -- the toggle still works per-post */ }
       } catch (e) { showGate('Could not verify your access. Try again.'); return false; }
       return true;
@@ -435,10 +455,49 @@
       }));
     }
 
+    /**
+     * Re-encode and re-upload photos whose burnt-in watermark no longer matches
+     * the toggle — the mark is painted into the pixels at upload time, so
+     * flipping the switch afterwards used to leave existing photos alone.
+     */
+    let _reapplying = false;
+    async function reapplyWatermark() {
+      if (_reapplying) return;
+      const want = wantsWatermark();
+      const todo = state.images.filter((im) => im.file && !im.uploading && im.marked !== want);
+      if (!todo.length) return;
+      _reapplying = true;
+      todo.forEach((im) => { im.uploading = true; });
+      renderPhoto();
+      setMsg(want ? 'Adding your watermark\u2026' : 'Removing the watermark\u2026');
+      let failed = 0;
+      for (const item of todo) {
+        try {
+          const blob = await optimizeImage(item.file, 1600, 0.82);
+          if (!blob) throw new Error('encode');
+          const r = await fetch(`${API_BASE}/api/wire/upload-url`, { method: 'POST', headers: await userHeaders(true), body: '{}' });
+          if (!r.ok) throw new Error('upload-url ' + r.status);
+          const { uploadURL, key, publicUrl } = await r.json();
+          const up = await fetch(uploadURL, { method: 'PUT', body: blob });
+          if (!up.ok) throw new Error('r2 put ' + up.status);
+          item.key = key; item.marked = want;
+          if (publicUrl) item.url = publicUrl;
+        } catch (e) {
+          failed++; // the photo stays as it is
+        }
+        item.uploading = false;
+        renderPhoto();
+      }
+      _reapplying = false;
+      setMsg(failed ? `${failed} photo${failed === 1 ? '' : 's'} couldn't be updated — remove and re-add ${failed === 1 ? 'it' : 'them'} to change the watermark.` : '', !!failed);
+    }
+
     async function handleFile(file) {
       if (!/^image\//.test(file.type)) return;
       if (state.images.length >= MAX_IMAGES) { setMsg(`Up to ${MAX_IMAGES} photos.`, true); return; }
-      const item = { key: null, url: URL.createObjectURL(file), side: null, uploading: true };
+      // `file` is kept so the watermark toggle can re-encode this photo later;
+      // `marked` is the state it was encoded with.
+      const item = { key: null, file: file, marked: wantsWatermark(), url: URL.createObjectURL(file), side: null, uploading: true };
       state.images.push(item); renderPhoto();
       try {
         const blob = await optimizeImage(file, 1600, 0.82);
@@ -451,6 +510,7 @@
         const up = await fetch(uploadURL, { method: 'PUT', body: blob });
         if (!up.ok) throw new Error('r2 put ' + up.status);
         item.key = key; if (publicUrl) item.url = publicUrl;
+        item.marked = wantsWatermark();
         item.uploading = false;
         setMsg('');
       } catch (e) {

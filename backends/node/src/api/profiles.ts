@@ -43,6 +43,7 @@ interface ProfileRow {
   instagram: string | null;
   youtube: string | null;
   website: string | null;
+  watermark_default: boolean | null;
 }
 
 function shapeProfile(userId: string, row?: ProfileRow): Record<string, unknown> {
@@ -59,6 +60,10 @@ function shapeProfile(userId: string, row?: ProfileRow): Record<string, unknown>
     instagram: row?.instagram ?? null,
     youtube: row?.youtube ?? null,
     website: row?.website ?? null,
+    // Compose-page default for "watermark my media" — an account preference
+    // so it follows the contributor across devices (it used to live only in
+    // localStorage). Not sensitive: it says nothing about the media itself.
+    watermark_default: row?.watermark_default === true,
   };
 }
 
@@ -251,6 +256,29 @@ profilesRouter.put('/api/profiles/watermark', requireSupabaseJwt, async (c) => {
   } catch (err) {
     log.error({ err, uid }, 'profiles: watermark save failed');
     return c.json({ error: 'failed to save watermark' }, 500);
+  }
+});
+
+/** Set the caller's "watermark my media by default" preference. Its own
+ *  endpoint on purpose: PUT /api/profiles replaces the whole profile, so a
+ *  compose page writing this through there would wipe the user's bio. */
+profilesRouter.put('/api/profiles/watermark-default', requireSupabaseJwt, async (c) => {
+  const pool = await getPool();
+  if (!pool) return c.json(DB_UNAVAILABLE, 503);
+  const uid = c.get('userId') as string;
+  try {
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    const enabled = body['enabled'] === true;
+    await pool.query(
+      `INSERT INTO user_profiles (user_id, watermark_default, updated_at)
+       VALUES ($1, $2, now())
+       ON CONFLICT (user_id) DO UPDATE SET watermark_default = $2, updated_at = now()`,
+      [uid, enabled],
+    );
+    return c.json({ success: true, watermark_default: enabled });
+  } catch (err) {
+    log.error({ err, uid }, 'profiles: watermark default save failed');
+    return c.json({ error: 'failed to save preference' }, 500);
   }
 });
 

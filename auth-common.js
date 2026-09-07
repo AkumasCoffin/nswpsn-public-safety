@@ -304,6 +304,12 @@ function createProfileModal() {
         </div>
         <input type="file" id="profile-wm-input" accept="image/png" style="display:none">
         <div style="color:#64748b; font-size:0.72rem; margin-top:0.4rem;">A transparent PNG, stamped onto the bottom-right of your Wire &amp; Fleet photos when the watermark toggle is on. Without one, your username is used. The preview shows how it will sit on a photo.</div>
+        <label style="display:flex; gap:0.55rem; align-items:flex-start; margin-top:0.7rem; padding-top:0.7rem; border-top:1px solid rgba(148,163,184,0.15); cursor:pointer;">
+          <input type="checkbox" id="profile-wm-default" onchange="saveWatermarkDefault(this)" style="width:auto; margin-top:0.15rem; accent-color:#38bdf8;">
+          <span style="color:#cbd5e1; font-size:0.82rem;">Watermark my media by default
+            <span style="display:block; color:#64748b; font-size:0.72rem; margin-top:0.15rem;">Starts the watermark switch on when you compose. You can still change it per post.</span>
+          </span>
+        </label>
       </div>
 
       <div id="profile-referral-section" class="pf-card" style="display:none;">
@@ -958,6 +964,8 @@ async function openProfileModal() {
       if (profile && profile.avatar_url && avPrev) avPrev.innerHTML = `<img src="${profile.avatar_url}" style="width:100%;height:100%;object-fit:cover;">`;
       const avRm = document.getElementById('profile-avatar-remove');
       if (avRm) avRm.style.display = profile && profile.has_custom_avatar ? 'inline-block' : 'none';
+      const wmDef = document.getElementById('profile-wm-default');
+      if (wmDef) wmDef.checked = !!(profile && profile.watermark_default);
       renderProfileStats(pj.stats);
       renderProfileTags(pj.tags);
     }
@@ -1029,6 +1037,23 @@ function copyProfileReferralLink(btn) {
       done();
     } catch (e) { /* user can copy manually */ }
   }
+}
+
+// "Watermark my media by default" — an account preference the compose pages
+// read as the initial state of their per-post watermark switch.
+async function saveWatermarkDefault(el) {
+  try {
+    const { data } = await sb.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) return;
+    await fetch(`${API_BASE_URL}/api/profiles/watermark-default`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ enabled: !!el.checked }),
+    });
+    // Keep the compose pages' local cache in step on this device.
+    try { localStorage.setItem('nswpsn:wireWatermark', el.checked ? '1' : '0'); } catch (e) {}
+  } catch (e) { /* preference is best-effort */ }
 }
 
 function closeProfileModal() {
