@@ -1,7 +1,8 @@
 /**
  * Unit tests for the ADS-B aircraft source: emergency-service
- * classifier, raw-record normalization, cross-upstream merge, NSW bbox
- * filter, and the all-upstreams-down failure path.
+ * classifier, raw-record normalization, cross-upstream merge, Australia
+ * bbox filter, circle-shard rotation, rotation holdover, and the
+ * all-upstreams-down failure path.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -196,22 +197,46 @@ describe('adsb.mergeAircraft', () => {
   });
 });
 
-describe('adsb.inNswBbox', () => {
-  it('accepts NSW and buffered border, rejects far away', async () => {
-    const { inNswBbox } = await import('../../../src/sources/adsb.js');
-    expect(inNswBbox(-33.87, 151.21)).toBe(true); // Sydney
-    expect(inNswBbox(-31.95, 141.45)).toBe(true); // Broken Hill
-    expect(inNswBbox(-37.8, 145.0)).toBe(true); // Melbourne fringe — inside 0.3° buffer, like FIRMS
-    expect(inNswBbox(-38.5, 145.2)).toBe(false); // Gippsland — past buffer
-    expect(inNswBbox(-27.47, 153.03)).toBe(false); // Brisbane
-    expect(inNswBbox(-28.9, 154.2)).toBe(false); // off the coast, past buffer
+describe('adsb.inAuBbox', () => {
+  it('accepts Australia and buffered edges, rejects far away', async () => {
+    const { inAuBbox } = await import('../../../src/sources/adsb.js');
+    expect(inAuBbox(-33.87, 151.21)).toBe(true); // Sydney
+    expect(inAuBbox(-31.95, 115.86)).toBe(true); // Perth
+    expect(inAuBbox(-12.46, 130.84)).toBe(true); // Darwin
+    expect(inAuBbox(-42.88, 147.32)).toBe(true); // Hobart
+    expect(inAuBbox(-9.5, 143.0)).toBe(true); // Torres Strait — inside 0.3° buffer
+    expect(inAuBbox(-9.0, 143.0)).toBe(false); // PNG side — past buffer
+    expect(inAuBbox(-22.3, 166.4)).toBe(false); // Nouméa
+    expect(inAuBbox(-41.3, 174.8)).toBe(false); // Wellington
+  });
+});
+
+describe('adsb.shardCircles', () => {
+  it('partitions all circles into equal shards every tick', async () => {
+    const { shardCircles, CIRCLES } = await import('../../../src/sources/adsb.js');
+    for (const tick of [0, 1, 2, 3, 7]) {
+      const shards = [0, 1, 2, 3].map((u) => shardCircles(tick, u));
+      const ids = shards.flat().map((c) => c.id).sort();
+      expect(ids).toEqual([...CIRCLES].map((c) => c.id).sort()); // exact partition
+      for (const sh of shards) expect(sh.length).toBe(CIRCLES.length / 4);
+    }
+  });
+
+  it('rotates each circle through every upstream over 4 ticks', async () => {
+    const { shardCircles, CIRCLES } = await import('../../../src/sources/adsb.js');
+    const first = CIRCLES[0]?.id;
+    const owners = [0, 1, 2, 3].map(
+      (tick) => [0, 1, 2, 3].find((u) => shardCircles(tick, u).some((c) => c.id === first)),
+    );
+    expect([...owners].sort()).toEqual([0, 1, 2, 3]);
   });
 });
 
 describe('adsb.trails', () => {
   beforeEach(async () => {
-    const { _resetAdsbTrailsForTests } = await import('../../../src/sources/adsb.js');
+    const { _resetAdsbTrailsForTests, _resetAdsbHoldoverForTests } = await import('../../../src/sources/adsb.js');
     _resetAdsbTrailsForTests();
+    _resetAdsbHoldoverForTests();
   });
 
   it('DP simplification collapses straight lines and keeps corners', async () => {
@@ -287,9 +312,12 @@ describe('adsb.trails', () => {
 });
 
 describe('adsb.fetchAdsbAircraft', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     fetchJsonMock.mockReset();
     vi.useFakeTimers();
+    const { _resetAdsbHoldoverForTests, _resetAdsbTrailsForTests } = await import('../../../src/sources/adsb.js');
+    _resetAdsbHoldoverForTests();
+    _resetAdsbTrailsForTests();
   });
 
   it('merges upstreams and reports per-upstream status', async () => {
@@ -309,7 +337,7 @@ describe('adsb.fetchAdsbAircraft', () => {
     expect(snap.count).toBe(2);
     expect(snap.aircraft.map((a) => a.hex).sort()).toEqual(['aaa111', 'bbb222']);
     const byId = Object.fromEntries(snap.upstreams.map((u) => [u.id, u]));
-    expect(byId['adsb_lol']).toMatchObject({ ok: true, circles_ok: 4 });
+    expect(byId['adsb_lol']).toMatchObject({ ok: true, circles_ok: 7, circles_total: 7 });
     expect(byId['airplanes_live']).toMatchObject({ ok: false, circles_ok: 0 });
     expect(byId['airplanes_live']?.error).toContain('503');
   });
@@ -329,10 +357,10 @@ describe('adsb.fetchAdsbAircraft', () => {
     expect(snap.aircraft[0]?.sources).toEqual(['adsb_fi']);
   });
 
-  it('filters aircraft outside the NSW bbox', async () => {
+  it('filters aircraft outside the Australia bbox', async () => {
     const { fetchAdsbAircraft } = await import('../../../src/sources/adsb.js');
     fetchJsonMock.mockResolvedValue({
-      ac: [raw({ hex: 'aaa111' }), raw({ hex: 'bbb222', lat: -42.9, lon: 147.3 })],
+      ac: [raw({ hex: 'aaa111' }), raw({ hex: 'bbb222', lat: -22.3, lon: 166.4 })],
     });
     const p = fetchAdsbAircraft();
     await vi.runAllTimersAsync();
@@ -353,6 +381,53 @@ describe('adsb.fetchAdsbAircraft', () => {
     const snap = await p;
     expect(snap.aircraft[0]?.hex).toBe('ddd444');
     expect(snap.emergency_count).toBe(1);
+  });
+
+  it('holds an unseen aircraft over the rotation window, then drops it', async () => {
+    vi.setSystemTime(1_800_000_000_000);
+    const { fetchAdsbAircraft } = await import('../../../src/sources/adsb.js');
+    fetchJsonMock.mockResolvedValue({ ac: [raw({ hex: 'aaa111' })] });
+    let p = fetchAdsbAircraft();
+    await vi.runAllTimersAsync();
+    await p;
+    // Next poll: aircraft absent (its aggregator is out of rotation) —
+    // holdover keeps it, with its age advanced by the elapsed time.
+    vi.setSystemTime(1_800_000_015_000);
+    fetchJsonMock.mockResolvedValue({ ac: [] });
+    p = fetchAdsbAircraft();
+    await vi.runAllTimersAsync();
+    let snap = await p;
+    expect(snap.aircraft.map((a) => a.hex)).toEqual(['aaa111']);
+    expect(snap.aircraft[0]?.ageSec).toBe(16); // 1 s seen_pos + 15 s elapsed
+    // Past 90 s it's gone for real.
+    vi.setSystemTime(1_800_000_095_000);
+    fetchJsonMock.mockResolvedValue({ ac: [] });
+    p = fetchAdsbAircraft();
+    await vi.runAllTimersAsync();
+    snap = await p;
+    expect(snap.aircraft).toEqual([]);
+  });
+
+  it('a re-seen aircraft resets its holdover clock and position', async () => {
+    vi.setSystemTime(1_800_000_000_000);
+    const { fetchAdsbAircraft } = await import('../../../src/sources/adsb.js');
+    fetchJsonMock.mockResolvedValue({ ac: [raw({ hex: 'aaa111' })] });
+    let p = fetchAdsbAircraft();
+    await vi.runAllTimersAsync();
+    await p;
+    vi.setSystemTime(1_800_000_060_000);
+    fetchJsonMock.mockResolvedValue({ ac: [raw({ hex: 'aaa111', lat: -34.1 })] });
+    p = fetchAdsbAircraft();
+    await vi.runAllTimersAsync();
+    await p;
+    // 80 s after the refresh (140 s after first sight) it's still held.
+    vi.setSystemTime(1_800_000_140_000);
+    fetchJsonMock.mockResolvedValue({ ac: [] });
+    p = fetchAdsbAircraft();
+    await vi.runAllTimersAsync();
+    const snap = await p;
+    expect(snap.aircraft.map((a) => a.hex)).toEqual(['aaa111']);
+    expect(snap.aircraft[0]?.lat).toBe(-34.1);
   });
 
   it('throws only when every upstream fails', async () => {

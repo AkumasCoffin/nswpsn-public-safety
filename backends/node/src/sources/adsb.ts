@@ -7,16 +7,24 @@
  * same readsb JSON shape ({ ac: [...] }), so records dedupe cleanly by
  * ICAO hex, keeping whichever aggregator saw the aircraft most recently.
  *
- * Coverage: the 250 nm (~463 km) max radius shared by all three APIs
- * can't span NSW (~1190 × 1066 km) in one query, so a 2×2 quadrant grid
- * of circles covers the state with ~50 km slack at the worst corner.
+ * Coverage: Australia-wide. The 250 nm (~463 km) max radius shared by
+ * all the APIs can't come close to spanning the continent, so a set of
+ * 28 circles covers all Australian land (mainland + Tasmania + near
+ * islands, verified by set-cover: every land point is within 447 km of
+ * a centre). High-traffic circles sit centred on the capitals.
  *
  * Politeness: adsb.fi, airplanes.live and adsb.one ask for ≤1
- * request/second. Upstreams are queried in parallel (different hosts)
- * but the four circles within each upstream are staggered 1 s apart, so
- * the instantaneous per-upstream rate never exceeds 1 req/s and the
- * average is ~0.27 req/s at the 12 s registration interval (the poller
- * re-arms after each run completes, so real cadence lands ~15 s).
+ * request/second, which makes 28 circles × 4 upstreams per poll
+ * impossible at a live cadence. Instead each poll PARTITIONS the
+ * circles into one shard per upstream (7 circles each, staggered 1 s
+ * apart), and the shard↔upstream assignment rotates every poll — so
+ * every circle is fetched from some upstream every poll, and from
+ * every upstream over any 4 polls. Instantaneous per-upstream rate
+ * never exceeds 1 req/s; the average is ~0.5 req/s at the ~15 s
+ * effective cadence (8 s re-arm + ~7 s staggered sweep). Aircraft that
+ * only one aggregator can see would otherwise blink during rotation,
+ * so a short holdover keeps an aircraft's last position for up to 90 s
+ * (one full rotation is ~60 s) — see applyHoldover.
  */
 import { fetchJson } from './shared/http.js';
 import { registerSource } from '../services/sourceRegistry.js';
@@ -24,28 +32,56 @@ import { liveStore } from '../store/live.js';
 import { config } from '../config.js';
 import { log } from '../lib/log.js';
 
-// NSW bbox [W,S,E,N]. Filter applies a 0.3° buffer so aircraft riding
-// the border don't flap in/out between ticks; the API reports the
+// Australia bbox [W,S,E,N]. Filter applies a 0.3° buffer so aircraft
+// riding the edge don't flap in/out between ticks; the API reports the
 // unbuffered box.
-const NSW_BBOX: [number, number, number, number] = [140.9, -37.6, 153.7, -28.0];
+const AU_BBOX: [number, number, number, number] = [112.0, -44.3, 154.3, -9.7];
 const BBOX_BUFFER_DEG = 0.3;
 
-const RADIUS_NM = 250; // max allowed by all three upstreams
+const RADIUS_NM = 250; // max allowed by all the upstreams
 
-// 2×2 quadrant grid over the NSW bbox. Each quadrant is 4.8° lat ×
-// 6.4° lon; worst-case half-diagonal (at -28° where lon degrees are
-// widest) is ~411 km < 463 km, so every corner of the state is inside
-// at least one circle.
+// Australia-wide cover: 28 circles of 250 nm. Derived by greedy
+// set-cover over a 0.4° land-sample grid (mainland + Tasmania
+// polygons + island/extreme must-cover points), seeded with
+// hub-centred circles (the NSW quadrants kept from the NSW-only era,
+// each capital, the QLD coast) then filled and pruned. Worst-case land
+// sample sits 447 km from its nearest centre (< 463 km radius). Keep
+// the count divisible by UPSTREAMS.length so rotation shards stay
+// equal-sized.
 interface Circle {
   id: string;
   lat: number;
   lon: number;
 }
-const CIRCLES: readonly Circle[] = [
-  { id: 'nw', lat: -30.4, lon: 144.1 },
-  { id: 'ne', lat: -30.4, lon: 150.5 },
-  { id: 'sw', lat: -35.2, lon: 144.1 },
-  { id: 'se', lat: -35.2, lon: 150.5 },
+export const CIRCLES: readonly Circle[] = [
+  { id: 'nsw_nw', lat: -30.4, lon: 144.1 },
+  { id: 'nsw_ne', lat: -30.4, lon: 150.5 },
+  { id: 'nsw_sw', lat: -35.2, lon: 144.1 },
+  { id: 'nsw_se', lat: -35.2, lon: 150.5 },
+  { id: 'vic', lat: -37.4, lon: 144.6 },
+  { id: 'tas', lat: -42.0, lon: 146.7 },
+  { id: 'qld_se', lat: -26.8, lon: 152.0 },
+  { id: 'qld_c', lat: -22.5, lon: 148.5 },
+  { id: 'qld_n', lat: -17.8, lon: 145.0 },
+  { id: 'qld_channel', lat: -24.0, lon: 140.5 },
+  { id: 'qld_outback', lat: -27.5, lon: 143.0 },
+  { id: 'gulf_ne', lat: -13.5, lon: 140.0 },
+  { id: 'gulf_sw', lat: -17.5, lon: 138.0 },
+  { id: 'nt_top', lat: -13.2, lon: 132.0 },
+  { id: 'nt_c', lat: -20.0, lon: 134.0 },
+  { id: 'alice', lat: -24.5, lon: 133.5 },
+  { id: 'sa_n', lat: -31.0, lon: 136.5 },
+  { id: 'sa_se', lat: -35.5, lon: 139.0 },
+  { id: 'nullarbor', lat: -31.0, lon: 129.0 },
+  { id: 'wa_sw', lat: -32.5, lon: 117.5 },
+  { id: 'wa_goldfields', lat: -30.5, lon: 123.0 },
+  { id: 'wa_interior', lat: -29.0, lon: 121.0 },
+  { id: 'wa_desert', lat: -24.5, lon: 126.5 },
+  { id: 'gascoyne', lat: -24.5, lon: 117.5 },
+  { id: 'shark_bay', lat: -26.0, lon: 113.5 },
+  { id: 'wa_pilbara', lat: -21.5, lon: 119.5 },
+  { id: 'wa_kimberley', lat: -16.5, lon: 125.5 },
+  { id: 'kimberley_e', lat: -19.5, lon: 127.5 },
 ] as const;
 
 interface Upstream {
@@ -152,10 +188,10 @@ const EMPTY_SNAPSHOT: AdsbSnapshot = {
     id: u.id,
     ok: false,
     circles_ok: 0,
-    circles_total: CIRCLES.length,
+    circles_total: CIRCLES.length / UPSTREAMS.length,
     count: 0,
   })),
-  bbox: NSW_BBOX,
+  bbox: AU_BBOX,
   fetched_at: new Date(0).toISOString(),
 };
 
@@ -253,8 +289,8 @@ export function mergeAircraft(records: AdsbAircraft[]): AdsbAircraft[] {
   return Array.from(byHex.values());
 }
 
-export function inNswBbox(lat: number, lon: number): boolean {
-  const [w, s, e, n] = NSW_BBOX;
+export function inAuBbox(lat: number, lon: number): boolean {
+  const [w, s, e, n] = AU_BBOX;
   return (
     lat >= s - BBOX_BUFFER_DEG &&
     lat <= n + BBOX_BUFFER_DEG &&
@@ -267,19 +303,68 @@ interface UpstreamResult {
   id: string;
   ok: boolean;
   circlesOk: number;
+  circlesTotal: number;
   records: AdsbAircraft[];
   error?: string;
 }
 
 /**
- * Fetch all four circles from one upstream, staggered 1 s apart to
+ * Shard the circle list for one poll: upstream `upstreamIndex` takes
+ * the circles where (i + tick) % UPSTREAMS.length matches. At any tick
+ * the shards partition CIRCLES exactly (28 % 4 === 0), and rotating by
+ * tick walks every circle through every upstream over 4 polls — so no
+ * circle is permanently blind to one aggregator's feeder coverage, and
+ * an upstream outage only ever staleneses a quarter of the map for one
+ * poll.
+ */
+export function shardCircles(tick: number, upstreamIndex: number): Circle[] {
+  const n = UPSTREAMS.length;
+  return CIRCLES.filter((_, i) => (((i + tick) % n) + n) % n === upstreamIndex);
+}
+
+let _pollTick = 0;
+
+// Holdover: each poll sees every circle from ONE aggregator, so an
+// aircraft only a different aggregator's feeders receive would blink
+// in and out on a 4-poll (~60 s) rotation period. Keep the last-known
+// record for up to 90 s (aged by wall clock) to bridge the rotation;
+// genuinely-gone aircraft still clear inside a couple of polls' worth
+// of the old behaviour (MAX_SEEN_POS_SECS already allowed 60 s).
+const HOLDOVER_MAX_AGE_SECS = 90;
+const _lastSeen = new Map<string, { rec: AdsbAircraft; atMs: number }>();
+
+export function applyHoldover(fresh: AdsbAircraft[], nowMs: number): AdsbAircraft[] {
+  const out = new Map<string, AdsbAircraft>();
+  for (const a of fresh) {
+    out.set(a.hex, a);
+    _lastSeen.set(a.hex, { rec: a, atMs: nowMs });
+  }
+  for (const [hex, h] of _lastSeen) {
+    const age = h.rec.ageSec + (nowMs - h.atMs) / 1000;
+    if (age > HOLDOVER_MAX_AGE_SECS) {
+      _lastSeen.delete(hex);
+      continue;
+    }
+    if (!out.has(hex)) out.set(hex, { ...h.rec, ageSec: Math.round(age) });
+  }
+  return Array.from(out.values());
+}
+
+/** TEST-ONLY: reset holdover + rotation state between unit tests. */
+export function _resetAdsbHoldoverForTests(): void {
+  _lastSeen.clear();
+  _pollTick = 0;
+}
+
+/**
+ * Fetch one upstream's shard of circles, staggered 1 s apart to
  * respect the ~1 req/s politeness ceiling. Per-circle failures are
  * tolerated (that circle just contributes nothing); the upstream is
  * only marked down when every circle fails.
  */
-async function fetchUpstream(up: Upstream): Promise<UpstreamResult> {
+async function fetchUpstream(up: Upstream, circles: readonly Circle[]): Promise<UpstreamResult> {
   const results = await Promise.all(
-    CIRCLES.map(async (c, i) => {
+    circles.map(async (c, i) => {
       if (i > 0) await new Promise((r) => setTimeout(r, i * 1000));
       try {
         const body = await fetchJson<ReadsbPointResponse>(up.url(c), {
@@ -316,6 +401,7 @@ async function fetchUpstream(up: Upstream): Promise<UpstreamResult> {
     id: up.id,
     ok: circlesOk > 0,
     circlesOk,
+    circlesTotal: circles.length,
     records,
   };
   if (circlesOk === 0) out.error = errors[0] ?? 'unknown error';
@@ -465,13 +551,17 @@ export function _resetAdsbTrailsForTests(): void {
 
 export async function fetchAdsbAircraft(): Promise<AdsbSnapshot> {
   // Upstreams in parallel — different hosts, no shared rate limit.
-  const results = await Promise.all(UPSTREAMS.map((u) => fetchUpstream(u)));
+  // Each gets this poll's shard of the circle rotation.
+  const tick = _pollTick++;
+  const results = await Promise.all(
+    UPSTREAMS.map((u, i) => fetchUpstream(u, shardCircles(tick, i))),
+  );
 
-  const merged = mergeAircraft(results.flatMap((r) => r.records)).filter((a) =>
-    inNswBbox(a.lat, a.lon),
+  const fresh = mergeAircraft(results.flatMap((r) => r.records)).filter((a) =>
+    inAuBbox(a.lat, a.lon),
   );
   const allDown = results.every((r) => !r.ok);
-  if (allDown && merged.length === 0) {
+  if (allDown && fresh.length === 0) {
     // Real outage — throw so the poller's failure counter and backoff
     // engage. Partial failures never reach here.
     throw new Error(
@@ -481,6 +571,7 @@ export async function fetchAdsbAircraft(): Promise<AdsbSnapshot> {
     );
   }
 
+  const merged = applyHoldover(fresh, Date.now());
   updateTrails(merged, Date.now());
 
   // Stable ordering: emergency services first, then lowest altitude —
@@ -502,13 +593,13 @@ export async function fetchAdsbAircraft(): Promise<AdsbSnapshot> {
         id: r.id,
         ok: r.ok,
         circles_ok: r.circlesOk,
-        circles_total: CIRCLES.length,
+        circles_total: r.circlesTotal,
         count: r.records.length,
       };
       if (r.error !== undefined) u.error = r.error;
       return u;
     }),
-    bbox: NSW_BBOX,
+    bbox: AU_BBOX,
     fetched_at: new Date().toISOString(),
   };
 }
@@ -521,9 +612,10 @@ export default function register(): void {
   registerSource<AdsbSnapshot>({
     name: 'adsb_aircraft',
     family: 'misc',
-    // The poller re-arms *after* each run completes; 12 s + ~3 s of
-    // staggered fetching lands the effective cadence at ~15 s.
-    intervalMs: 12_000,
+    // The poller re-arms *after* each run completes; 8 s + ~7 s of
+    // staggered shard fetching lands the effective cadence at ~15 s
+    // (≤ 1 req/s instantaneous, ~0.5 req/s average per upstream).
+    intervalMs: 8_000,
     fetch: fetchAdsbAircraft,
   });
 }

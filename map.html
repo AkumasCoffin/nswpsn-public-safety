@@ -13591,7 +13591,9 @@ function initPagerHoursFromStorage() {
 
     // ==================== ADS-B AIRCRAFT LAYER ====================
     // Live positions from /api/adsb/aircraft (backend merge of adsb.lol,
-    // adsb.fi, airplanes.live and adsb.one, deduped by ICAO hex).
+    // adsb.fi, airplanes.live and adsb.one, deduped by ICAO hex). The
+    // feed is Australia-wide, so markers are culled to the padded
+    // viewport (pinned aircraft exempt) and rebuilt on moveend.
     // Refreshes on its
     // own 15 s timer while the layer is on — NOT part of the 60 s
     // refreshActiveLayersData loop, which is too coarse for aircraft.
@@ -14014,6 +14016,7 @@ function initPagerHoursFromStorage() {
 
     function _rebuildAdsb() {
       const showGround = map.getZoom() >= ADSB_GROUND_MIN_ZOOM;
+      const view = map.getBounds().pad(0.2);
       const q = _adsbListSearch;
       const seen = new Set();
       let rendered = 0;
@@ -14021,6 +14024,9 @@ function initPagerHoursFromStorage() {
         if (rendered >= ADSB_MAX_RENDER) break;
         if (a.onGround && !showGround) continue;
         if (!isFinite(a.lat) || !isFinite(a.lon)) continue;
+        // Australia-wide feed: only render the padded viewport, except
+        // the pinned aircraft (follow mode pans the camera to it).
+        if (a.hex !== _adsbPinnedHex && !view.contains([a.lat, a.lon])) continue;
         if (!adsbTypeFilter[adsbFilterCategory(a)]) continue;
         // Search filters map markers too, so the map matches the list
         // (same behaviour as AIS).
@@ -14536,6 +14542,9 @@ function initPagerHoursFromStorage() {
 
     // Ground-target visibility depends on zoom; re-diff when the zoom
     // crosses the threshold while the layer is on.
+    registerViewportCuller(() => {
+      if (map.hasLayer(adsbLayer)) _rebuildAdsb();
+    });
     let _adsbLastShowGround = null;
     map.on('zoomend', () => {
       if (!map.hasLayer(adsbLayer)) return;
