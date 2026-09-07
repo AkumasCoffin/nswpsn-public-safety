@@ -10,11 +10,19 @@
  * sends no CORS headers for our origin, and because the raw payload is
  * enormous (~100 KB for 19 vehicles) — normalization shrinks it ~50×.
  *
- * Bbox handling: coords are clamped into NSW (rejecting would break
- * padded coastal/border viewports), then snapped OUTWARD to a 0.01°
- * (~1.1 km) grid. The snapped bbox is both the cache key and the
- * upstream query, so the cached result always covers the requested
- * area and nearby pans re-hit the same cache cell.
+ * Two AnyTrip regions are served: au2 (NSW) and au4 (SEQ/Queensland).
+ * Viewport endpoints take ?region= (default au2); id-addressed
+ * endpoints (shape/trip/departures) derive the region from the id's
+ * own au№: prefix. Every cache key carries the region — the two
+ * coverage areas overlap around Tweed Heads, so a bbox alone is not a
+ * unique key.
+ *
+ * Bbox handling: coords are clamped into the region's coverage bounds
+ * (rejecting would break padded coastal/border viewports), then
+ * snapped OUTWARD to a 0.01° (~1.1 km) grid. The snapped bbox is both
+ * the cache key and the upstream query, so the cached result always
+ * covers the requested area and nearby pans re-hit the same cache
+ * cell.
  *
  * Deliberately NOT in CACHEABLE_PATHS: that middleware matches the
  * pathname ignoring query strings, so a CDN would cross-serve one
@@ -35,30 +43,85 @@ import {
 
 export const transportRouter = new Hono();
 
-const ANYTRIP_BASE = 'https://api-cf-oc2.anytrip.com.au/api/v3/region/au2';
+const ANYTRIP_HOST = 'https://api-cf-oc2.anytrip.com.au/api/v3/region';
 
-// Vehicles use short feed codes, stops use long mode names — two
-// whitelists. `sp` (school/special services) reports mode au2:buses.
-const VEHICLE_FEEDS: Record<string, string> = {
-  bs: 'au2:bs',
-  st: 'au2:st',
-  mt: 'au2:mt',
-  nt: 'au2:nt',
-  fr: 'au2:fr',
-  lr: 'au2:lr',
-  sp: 'au2:sp',
-};
-// No 'buses' here in v1 — tens of thousands of bus stops would blow the
-// upstream limit=500 and truncate arbitrarily in dense areas.
-const STOP_MODES: Record<string, string> = {
-  metro: 'au2:metro',
-  sydneytrains: 'au2:sydneytrains',
-  nswtrains: 'au2:nswtrains',
-  ferries: 'au2:ferries',
-  lightrail: 'au2:lightrail',
+interface RegionBounds {
+  minLat: number;
+  maxLat: number;
+  minLon: number;
+  maxLon: number;
+}
+
+interface TransportRegion {
+  base: string;
+  bounds: RegionBounds;
+  /** Vehicles: short feed codes → upstream feed ids. au2's feeds are
+   *  per-mode, so they double as the vehicle filter there. */
+  vehicleFeeds: Record<string, string>;
+  /** au4's single `se` feed carries EVERY mode, so vehicles filter by
+   *  modes= instead; null means feeds= is the whole selector (au2). */
+  vehicleModes: Record<string, string> | null;
+  stopModes: Record<string, string>;
+}
+
+// `sp` (school/special services) reports mode au2:buses. Neither
+// region offers 'buses' stops — tens of thousands of bus stops would
+// blow the upstream limit=500 and truncate arbitrarily in dense areas.
+const REGIONS: Record<string, TransportRegion> = {
+  au2: {
+    base: `${ANYTRIP_HOST}/au2`,
+    bounds: { minLat: -38, maxLat: -28, minLon: 140, maxLon: 154 },
+    vehicleFeeds: {
+      bs: 'au2:bs',
+      st: 'au2:st',
+      mt: 'au2:mt',
+      nt: 'au2:nt',
+      fr: 'au2:fr',
+      lr: 'au2:lr',
+      sp: 'au2:sp',
+    },
+    vehicleModes: null,
+    stopModes: {
+      metro: 'au2:metro',
+      sydneytrains: 'au2:sydneytrains',
+      nswtrains: 'au2:nswtrains',
+      ferries: 'au2:ferries',
+      lightrail: 'au2:lightrail',
+    },
+  },
+  au4: {
+    base: `${ANYTRIP_HOST}/au4`,
+    // SEQ envelope: Gympie fringe north, Toowoomba west, and a
+    // DELIBERATE overlap with NSW's −28 band down to Tweed Heads —
+    // border viewports legitimately query both regions.
+    bounds: { minLat: -29.5, maxLat: -24.5, minLon: 150.0, maxLon: 154.5 },
+    vehicleFeeds: { se: 'au4:se' },
+    vehicleModes: {
+      trains: 'au4:trains',
+      ferries: 'au4:ferries',
+      lightrail: 'au4:lightrail',
+      buses: 'au4:buses',
+    },
+    stopModes: {
+      trains: 'au4:trains',
+      ferries: 'au4:ferries',
+      lightrail: 'au4:lightrail',
+    },
+  },
 };
 
-const NSW_BOUNDS = { minLat: -38, maxLat: -28, minLon: 140, maxLon: 154 };
+function parseRegion(
+  raw: string | undefined,
+): { id: string; region: TransportRegion } | string {
+  const id = (raw ?? 'au2').trim().toLowerCase();
+  const region = REGIONS[id];
+  return region ? { id, region } : `unknown region: ${id}`;
+}
+
+/** Region config for a prefixed AnyTrip id (shape/trip/stop ids). */
+function regionForId(id: string): TransportRegion | null {
+  return REGIONS[id.split(':')[0] ?? ''] ?? null;
+}
 const MAX_SPAN_DEG = 2.5; // per axis — a zoom-11 viewport is ~0.35°
 const GRID = 0.01; // snap-outward grid (degrees)
 const UPSTREAM_TIMEOUT_MS = 12_000;
@@ -220,7 +283,10 @@ interface Bbox {
 
 /** Parse, clamp into NSW, validate span, snap outward to the grid.
  *  Returns the snapped bbox or an error string. */
-export function parseBbox(q: Record<string, string | undefined>): Bbox | string {
+export function parseBbox(
+  q: Record<string, string | undefined>,
+  bounds: RegionBounds = REGIONS['au2']!.bounds,
+): Bbox | string {
   const minLat = Number(q['minLat']);
   const maxLat = Number(q['maxLat']);
   const minLon = Number(q['minLon']);
@@ -229,14 +295,14 @@ export function parseBbox(q: Record<string, string | undefined>): Bbox | string 
     return 'invalid bbox';
   }
   // Clamp — not reject. The frontend pads its viewport, so legitimate
-  // coastal/border views poke past the NSW envelope.
-  const cMinLat = Math.max(minLat, NSW_BOUNDS.minLat);
-  const cMaxLat = Math.min(maxLat, NSW_BOUNDS.maxLat);
-  const cMinLon = Math.max(minLon, NSW_BOUNDS.minLon);
-  const cMaxLon = Math.min(maxLon, NSW_BOUNDS.maxLon);
-  // Catches inverted boxes AND boxes entirely outside NSW (which clamp
-  // to zero/negative span).
-  if (cMaxLat <= cMinLat || cMaxLon <= cMinLon) return 'bbox outside NSW';
+  // coastal/border views poke past the region's envelope.
+  const cMinLat = Math.max(minLat, bounds.minLat);
+  const cMaxLat = Math.min(maxLat, bounds.maxLat);
+  const cMinLon = Math.max(minLon, bounds.minLon);
+  const cMaxLon = Math.min(maxLon, bounds.maxLon);
+  // Catches inverted boxes AND boxes entirely outside the region
+  // (which clamp to zero/negative span).
+  if (cMaxLat <= cMinLat || cMaxLon <= cMinLon) return 'bbox outside coverage';
   if (cMaxLat - cMinLat > MAX_SPAN_DEG || cMaxLon - cMinLon > MAX_SPAN_DEG) {
     return 'bbox too large';
   }
@@ -286,8 +352,16 @@ function triState(v: unknown): boolean | null {
   return null;
 }
 
+/** Strip the region prefix and collapse regional names onto the shared
+ *  vocabulary: au4's 'trains' is the same concept the frontend calls
+ *  'sydneytrains' (the Trains pill), so the pill set never grows. */
+function canonicalModeName(raw: string): string {
+  const m = raw.replace(/^au\d+:/, '');
+  return m === 'trains' ? 'sydneytrains' : m;
+}
+
 function normMode(raw: string | undefined): TransportMode {
-  const m = (raw ?? '').replace(/^au2:/, '');
+  const m = canonicalModeName(raw ?? '');
   switch (m) {
     case 'buses':
     case 'sydneytrains':
@@ -387,7 +461,7 @@ export function normalizeStops(raw: RawStopsResponse): TransportStop[] {
       name: s.fullName ?? s.name?.station_name ?? s.id,
       lat: lat as number,
       lon: lon as number,
-      modes: (s.modes ?? []).map((m) => m.replace(/^au2:/, '')),
+      modes: (s.modes ?? []).map((m) => canonicalModeName(m)),
       locality: s.locality ?? null,
       wheelchair: typeof s.wheelchair === 'boolean' ? s.wheelchair : null,
       accessibility: s.facilities?.accessibility ?? [],
@@ -438,24 +512,45 @@ transportRouter.get('/api/transport/vehicles', async (c) => {
   };
   if (config.TRANSPORT_DISABLED) return c.json({ ...empty, disabled: true });
 
+  const parsedRegion = parseRegion(c.req.query('region'));
+  if (typeof parsedRegion === 'string') return c.json({ error: parsedRegion }, 400);
+  const { id: regionId, region } = parsedRegion;
   const bbox = parseBbox({
     minLat: c.req.query('minLat'),
     maxLat: c.req.query('maxLat'),
     minLon: c.req.query('minLon'),
     maxLon: c.req.query('maxLon'),
-  });
+  }, region.bounds);
   if (typeof bbox === 'string') return c.json({ error: bbox }, 400);
-  const feeds = parseListParam(c.req.query('feeds'), VEHICLE_FEEDS, 'feed');
-  if (typeof feeds === 'string') return c.json({ error: feeds }, 400);
+  // Selector: au2 filters upstream by its per-mode feeds; au4's single
+  // feed carries every mode, so modes= is the filter there.
+  let selector: string[];
+  let upstreamFilter: string;
+  if (region.vehicleModes) {
+    const modes = parseListParam(c.req.query('modes'), region.vehicleModes, 'mode');
+    if (typeof modes === 'string') return c.json({ error: modes }, 400);
+    selector = modes;
+    const feedList = Object.values(region.vehicleFeeds).join(',');
+    const modeList = modes.map((m) => region.vehicleModes![m]).join(',');
+    upstreamFilter =
+      `feeds=${encodeURIComponent(feedList)}&modes=${encodeURIComponent(modeList)}`;
+  } else {
+    const feeds = parseListParam(c.req.query('feeds'), region.vehicleFeeds, 'feed');
+    if (typeof feeds === 'string') return c.json({ error: feeds }, 400);
+    selector = feeds;
+    const feedList = feeds.map((f) => region.vehicleFeeds[f]).join(',');
+    upstreamFilter = `feeds=${encodeURIComponent(feedList)}`;
+  }
 
-  const key = `v|${bboxKey(bbox)}|${feeds.join(',')}`;
+  // Region is ALWAYS in the key: the au2/au4 coverage overlap around
+  // Tweed Heads can produce identical snapped bboxes for both.
+  const key = `v|${regionId}|${bboxKey(bbox)}|${selector.join(',')}`;
   try {
     const { value } = await vehiclesCache.get(
       key,
       async () => {
-        const feedList = feeds.map((f) => VEHICLE_FEEDS[f]).join(',');
         const url =
-          `${ANYTRIP_BASE}/vehicles?feeds=${encodeURIComponent(feedList)}` +
+          `${region.base}/vehicles?${upstreamFilter}` +
           `&${bboxParams(bbox)}&otrFilter=${OTR_FILTER}&speedFilter=${SPEED_FILTER}`;
         // Positions are AnyTrip-only by default: AnyTrip interpolates its
         // own (smooth, self-consistent) positions from the same TfNSW
@@ -463,10 +558,11 @@ transportRouter.get('/api/transport/vehicles', async (c) => {
         // (which jumped/mis-tracked trains and hit TfNSW's rate limit).
         // The TfNSW position join is off unless TFNSW_POSITIONS_DISABLED
         // is set false; when off we don't even fetch the position feeds.
-        const wantTfnsw = tfnswPositionsEnabled();
+        // TfNSW is NSW-only — never join (or even fetch) it for au4.
+        const wantTfnsw = regionId === 'au2' && tfnswPositionsEnabled();
         const [raw, tfnsw] = await Promise.all([
           fetchJson<RawVehiclesResponse>(url, { timeoutMs: UPSTREAM_TIMEOUT_MS }),
-          wantTfnsw ? fetchTfnswPositions(feeds) : Promise.resolve([]),
+          wantTfnsw ? fetchTfnswPositions(selector) : Promise.resolve([]),
         ]);
         let vehicles = normalizeVehicles(raw);
         const vehiclesBeforeJoin = vehicles.length;
@@ -515,8 +611,9 @@ transportRouter.get('/api/transport/vehicles', async (c) => {
 // Shapes are static per id, so they cache long; the encoded polyline is
 // passed through and decoded client-side (~1.5 KB per route).
 // Tail may itself contain colons — dynamic services use ids like
-// au2:ds:dyn:918-841-289 (verified served by upstream).
-const SHAPE_ID_RE = /^au2:[a-z]{2}:[A-Za-z0-9_.:-]+$/;
+// au2:ds:dyn:918-841-289 (verified served by upstream). The region is
+// derived from the id's own prefix (au2:/au4:), so no ?region= param.
+const SHAPE_ID_RE = /^au\d+:[a-z]{2}:[A-Za-z0-9_.:-]+$/;
 const SHAPE_FRESH_MS = 24 * 3600_000;
 const SHAPE_STALE_MS = 7 * 24 * 3600_000;
 
@@ -528,6 +625,8 @@ transportRouter.get('/api/transport/shape/:id', async (c) => {
   if (config.TRANSPORT_DISABLED) return c.json({ id: '', enc: null, disabled: true });
   const id = c.req.param('id').trim();
   if (!SHAPE_ID_RE.test(id)) return c.json({ error: 'invalid shape id' }, 400);
+  const shapeRegion = regionForId(id);
+  if (!shapeRegion) return c.json({ error: 'unknown region' }, 400);
   try {
     const { value } = await shapeCache.get(
       `sh|${id}`,
@@ -535,7 +634,7 @@ transportRouter.get('/api/transport/shape/:id', async (c) => {
         // Ids go in RAW — upstream 404s on percent-encoded colons, and
         // the SHAPE_ID_RE whitelist already limits to URL-safe chars.
         const raw = await fetchJson<RawShapeResponse>(
-          `${ANYTRIP_BASE}/shape/${id}`,
+          `${shapeRegion.base}/shape/${id}`,
           { timeoutMs: UPSTREAM_TIMEOUT_MS },
         );
         return { id, enc: raw.response?.shape?.enc ?? null };
@@ -637,8 +736,11 @@ export interface TransportDeparturesSnapshot {
   fetched_at: string;
 }
 
-const TRIP_ID_RE = /^au2:[a-z]{2}:[A-Za-z0-9_.:-]+$/;
-const STOP_ID_RE = /^au2:[A-Za-z0-9_.-]+$/;
+// QLD trip ids embed the timetable name WITH SPACES ("QR 26_27"), so
+// the trip whitelist admits them; the upstream URL re-encodes a space
+// as %20 while keeping colons raw (upstream 404s on %3A).
+const TRIP_ID_RE = /^au\d+:[a-z]{2}:[A-Za-z0-9 _.:-]+$/;
+const STOP_ID_RE = /^au\d+:[A-Za-z0-9_.-]+$/;
 const TRIP_FRESH_MS = 15_000;
 const TRIP_STALE_MS = 60_000;
 const DEP_FRESH_MS = 20_000;
@@ -748,6 +850,8 @@ transportRouter.get('/api/transport/trip/:date/:tripId/:instance', async (c) => 
   if (!/^\d{8}$/.test(date)) return c.json({ error: 'invalid date' }, 400);
   if (!TRIP_ID_RE.test(tripId)) return c.json({ error: 'invalid trip id' }, 400);
   if (!/^\d{1,3}$/.test(instance)) return c.json({ error: 'invalid instance' }, 400);
+  const tripRegion = regionForId(tripId);
+  if (!tripRegion) return c.json({ error: 'unknown region' }, 400);
   const key = `t|${date}|${tripId}|${instance}`;
   try {
     const { value } = await tripCache.get(
@@ -755,8 +859,9 @@ transportRouter.get('/api/transport/trip/:date/:tripId/:instance', async (c) => 
       async () => {
         // tripId goes in RAW — upstream 404s on percent-encoded colons;
         // TRIP_ID_RE already restricts it to URL-safe characters.
+        const encTripId = tripId.replace(/ /g, '%20');
         const raw = await fetchJson<RawTripDetailResponse>(
-          `${ANYTRIP_BASE}/tripInstance/${date}/${tripId}/${instance}`,
+          `${tripRegion.base}/tripInstance/${date}/${encTripId}/${instance}`,
           { timeoutMs: UPSTREAM_TIMEOUT_MS },
         );
         const ti = raw.response?.tripInstance;
@@ -849,6 +954,8 @@ transportRouter.get('/api/transport/departures/:stopId', async (c) => {
   if (config.TRANSPORT_DISABLED) return c.json({ error: 'disabled' }, 404);
   const stopId = c.req.param('stopId');
   if (!STOP_ID_RE.test(stopId)) return c.json({ error: 'invalid stop id' }, 400);
+  const stopRegion = regionForId(stopId);
+  if (!stopRegion) return c.json({ error: 'unknown region' }, 400);
   const limit = Math.min(20, Math.max(1, Number(c.req.query('limit')) || 10));
   const key = `d|${stopId}|${limit}`;
   try {
@@ -858,7 +965,7 @@ transportRouter.get('/api/transport/departures/:stopId', async (c) => {
         // stopId raw for the same percent-encoding reason (STOP_ID_RE
         // whitelists it).
         const raw = await fetchJson<RawDeparturesResponse>(
-          `${ANYTRIP_BASE}/departures/${stopId}?limit=${limit}`,
+          `${stopRegion.base}/departures/${stopId}?limit=${limit}`,
           { timeoutMs: UPSTREAM_TIMEOUT_MS },
         );
         const r = raw.response;
@@ -915,11 +1022,14 @@ transportRouter.get('/api/transport/departures/:stopId', async (c) => {
 // gzipped by the compress() middleware; cached a day.
 
 // lines.json only covers greater Sydney; otherrail.json adds the few
-// styled segments outside it (e.g. Canberra light rail). Merged into
-// one FeatureCollection; either file failing alone is tolerated.
+// styled segments outside it (e.g. Canberra light rail); qldlines.json
+// is QR Citytrain (SEQ heavy rail — no G:link, which auto-tracks
+// client-side instead). Merged into one FeatureCollection; any file
+// failing alone is tolerated.
 const LINES_URLS = [
   'https://static.anytrip.com.au/tiles/lines.json',
   'https://static.anytrip.com.au/tiles/otherrail.json',
+  'https://static.anytrip.com.au/tiles/qldlines.json',
 ];
 const LINES_FRESH_MS = 24 * 3600_000;
 const LINES_STALE_MS = 7 * 24 * 3600_000;
@@ -975,24 +1085,27 @@ transportRouter.get('/api/transport/stops', async (c) => {
   };
   if (config.TRANSPORT_DISABLED) return c.json({ ...empty, disabled: true });
 
+  const parsedRegion = parseRegion(c.req.query('region'));
+  if (typeof parsedRegion === 'string') return c.json({ error: parsedRegion }, 400);
+  const { id: regionId, region } = parsedRegion;
   const bbox = parseBbox({
     minLat: c.req.query('minLat'),
     maxLat: c.req.query('maxLat'),
     minLon: c.req.query('minLon'),
     maxLon: c.req.query('maxLon'),
-  });
+  }, region.bounds);
   if (typeof bbox === 'string') return c.json({ error: bbox }, 400);
-  const modes = parseListParam(c.req.query('modes'), STOP_MODES, 'mode');
+  const modes = parseListParam(c.req.query('modes'), region.stopModes, 'mode');
   if (typeof modes === 'string') return c.json({ error: modes }, 400);
 
-  const key = `s|${bboxKey(bbox)}|${modes.join(',')}`;
+  const key = `s|${regionId}|${bboxKey(bbox)}|${modes.join(',')}`;
   try {
     const { value } = await stopsCache.get(
       key,
       async () => {
-        const modeList = modes.map((m) => STOP_MODES[m]).join(',');
+        const modeList = modes.map((m) => region.stopModes[m]).join(',');
         const url =
-          `${ANYTRIP_BASE}/stops?limit=500&modes=${encodeURIComponent(modeList)}` +
+          `${region.base}/stops?limit=500&modes=${encodeURIComponent(modeList)}` +
           `&${bboxParams(bbox)}`;
         const raw = await fetchJson<RawStopsResponse>(url, {
           timeoutMs: UPSTREAM_TIMEOUT_MS,

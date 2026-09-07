@@ -14550,22 +14550,40 @@ function initPagerHoursFromStorage() {
     // Live vehicles + stations from the backend AnyTrip proxy
     // (/api/transport/*). The upstream is viewport-scoped, so data is
     // fetched for the current (padded) bounds on enable, every 10 s,
-    // and on debounced moveend — never NSW-wide. Zoom-gated: vehicles
-    // from zoom 11, stations from zoom 13.
+    // and on debounced moveend — never network-wide. Two AnyTrip
+    // regions are served — au2 (NSW) and au4 (SEQ/Queensland) — and
+    // the viewport decides which to query (both near the border).
+    // Zoom-gated: vehicles from zoom 11, stations from zoom 13.
     const TRANSPORT_MIN_ZOOM = 11;
     const TRANSPORT_STOPS_MIN_ZOOM = 13;
     const TRANSPORT_MAX_RENDER = 500;
     // Colours are AnyTrip's own modecolors map (regions.json), verbatim.
+    // `feeds` selects au2 vehicles; `au4Modes` selects au4 ones (the
+    // backend collapses au4 'trains' onto 'sydneytrains', so one pill
+    // set covers both networks — Metro/NSW Trains stay NSW-only).
     const TRANSPORT_MODES = [
-      { key: 'sydneytrains', label: 'Trains',     color: '#F18500', feeds: ['st'], prio: 0 },
-      { key: 'metro',        label: 'Metro',      color: '#168388', feeds: ['mt'], prio: 1 },
-      { key: 'ferries',      label: 'Ferries',    color: '#5AB031', feeds: ['fr'], prio: 2 },
-      { key: 'lightrail',    label: 'Light Rail', color: '#E62A32', feeds: ['lr'], prio: 3 },
-      { key: 'nswtrains',    label: 'NSW Trains', color: '#F18500', feeds: ['nt'], prio: 4 },
+      { key: 'sydneytrains', label: 'Trains',     color: '#F18500', feeds: ['st'], au4Modes: ['trains'],    prio: 0 },
+      { key: 'metro',        label: 'Metro',      color: '#168388', feeds: ['mt'],                          prio: 1 },
+      { key: 'ferries',      label: 'Ferries',    color: '#5AB031', feeds: ['fr'], au4Modes: ['ferries'],   prio: 2 },
+      { key: 'lightrail',    label: 'Light Rail', color: '#E62A32', feeds: ['lr'], au4Modes: ['lightrail'], prio: 3 },
+      { key: 'nswtrains',    label: 'NSW Trains', color: '#F18500', feeds: ['nt'],                          prio: 4 },
       // 'sp' (school/special services) rides with the Buses pill — its
       // vehicles report mode au2:buses upstream.
-      { key: 'buses',        label: 'Buses',      color: '#00ADE9', feeds: ['bs', 'sp'], prio: 5 }
+      { key: 'buses',        label: 'Buses',      color: '#00ADE9', feeds: ['bs', 'sp'], au4Modes: ['buses'], prio: 5 }
     ];
+    // Mirror of the backend's REGIONS bounds — which AnyTrip regions a
+    // viewport should query. The au2/au4 envelopes deliberately overlap
+    // around Tweed Heads, where both networks run.
+    const TRANSPORT_REGIONS = [
+      { id: 'au2', bounds: { minLat: -38,   maxLat: -28,   minLon: 140,   maxLon: 154   } },
+      { id: 'au4', bounds: { minLat: -29.5, maxLat: -24.5, minLon: 150.0, maxLon: 154.5 } }
+    ];
+    function transportRegionsForView() {
+      const b = map.getBounds().pad(0.15);
+      return TRANSPORT_REGIONS.filter((r) =>
+        b.getSouth() <= r.bounds.maxLat && b.getNorth() >= r.bounds.minLat &&
+        b.getWest() <= r.bounds.maxLon && b.getEast() >= r.bounds.minLon);
+    }
     const TRANSPORT_MODE_BY_KEY = {};
     TRANSPORT_MODES.forEach((m) => { TRANSPORT_MODE_BY_KEY[m.key] = m; });
     // The static network (AnyTrip lines.json) tags features by `stroke`
@@ -14595,7 +14613,16 @@ function initPagerHoursFromStorage() {
       '#4D9C2D': 'lightrail',    // light-rail green variant
       '#BE1622': 'nswtrains',    // regional (otherrail.json)
       '#EE343F': 'nswtrains',
-      '#BD0021': 'nswtrains'
+      '#BD0021': 'nswtrains',
+      // QR Citytrain (qldlines.json) — verified disjoint from every NSW
+      // stroke above, so hex-keyed filtering stays unambiguous. QLD
+      // heavy rail rides the Trains pill.
+      '#E31837': 'sydneytrains', // Beenleigh/Ferny Grove red
+      '#1578BE': 'sydneytrains', // Caboolture/Ipswich blue
+      '#FFC425': 'sydneytrains', // Shorncliffe/Cleveland gold
+      '#00871C': 'sydneytrains', // Airport/Gold Coast green
+      '#A54399': 'sydneytrains', // Springfield/Doomben purple
+      '#00467F': 'sydneytrains'  // Redcliffe/Sunshine Coast navy
     };
     function _transportStrokeMode(stroke) {
       return TRANSPORT_LINE_STROKE_MODE[String(stroke || '').toUpperCase()] || null;
@@ -14738,7 +14765,7 @@ function initPagerHoursFromStorage() {
       // Only where the GL network actually draws this vehicle's
       // corridor; elsewhere (auto-tracks, fallback) lines are un-offset
       // and the centreline snap is already the drawn position.
-      if (!TRANSPORT_TILED_MODES[v.mode] || !_transportInTileBounds(v)) return null;
+      if (!_transportVehicleTiled(v)) return null;
       const cands = _transportLaneCandidates(v);
       let best = null;
       for (const lane of cands) {
@@ -14865,12 +14892,23 @@ function initPagerHoursFromStorage() {
       return 'minLat=' + b.getSouth().toFixed(3) + '&maxLat=' + b.getNorth().toFixed(3) +
         '&minLon=' + b.getWest().toFixed(3) + '&maxLon=' + b.getEast().toFixed(3);
     }
-    function transportEnabledFeeds() {
+    /** Query fragment selecting the enabled modes for one region, or
+     *  null when nothing enabled exists there (e.g. only Metro on in a
+     *  Brisbane viewport). au2 keeps its feeds= contract; au4 filters
+     *  by modes= (its single feed carries every mode). */
+    function transportRegionQuery(regionId) {
+      if (regionId === 'au4') {
+        const modes = [];
+        for (const m of TRANSPORT_MODES) {
+          if (transportModeFilter[m.key] && m.au4Modes) modes.push(...m.au4Modes);
+        }
+        return modes.length ? '&region=au4&modes=' + modes.sort().join(',') : null;
+      }
       const feeds = [];
       for (const m of TRANSPORT_MODES) {
         if (transportModeFilter[m.key]) feeds.push(...m.feeds);
       }
-      return feeds.sort().join(',');
+      return feeds.length ? '&feeds=' + feeds.sort().join(',') : null;
     }
 
     function _clearTransportVehicleMarkers() {
@@ -14890,29 +14928,49 @@ function initPagerHoursFromStorage() {
         }
         return;
       }
-      const feeds = transportEnabledFeeds();
-      if (!feeds) { _clearTransportVehicleMarkers(); return; }
+      const queries = transportRegionsForView()
+        .map((r) => transportRegionQuery(r.id))
+        .filter(Boolean);
+      if (!queries.length) { _clearTransportVehicleMarkers(); return; }
       // Pans + ticks race: two fetches with different bbox URLs can
       // resolve out of order, and the backend's per-cell caches were
       // built at different times — an older response landing last
       // yanked every vehicle BACKWARD then forward again on the next
       // tick. Only the newest-issued fetch may apply.
       const seq = ++_transportFetchSeq;
-      try {
-        const res = await apiFetch(`${PROXY_BASE}/api/transport/vehicles?` + transportBboxParams() + '&feeds=' + feeds);
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
-        if (seq !== _transportFetchSeq) return; // superseded by a newer fetch
-        // Empty is a legitimate viewport state (rural, 2am) and must
-        // clear the map — deliberately NOT the ADS-B keep-stale guard.
-        // Only fetch errors keep the previous markers.
-        _transportVehicles = Array.isArray(data.vehicles) ? data.vehicles : [];
-        _transportNetworkCounts = data.network_counts || null;
-        _transportFetchedAt = Date.now();
-        _rebuildTransport();
-      } catch (e) {
-        console.warn('[transport] failed to load:', e);
+      const bboxQ = transportBboxParams();
+      // Per-region isolation: one region failing (e.g. a backend that
+      // doesn't serve au4 yet) must never blank the other — warn, skip,
+      // render what succeeded. Only when EVERY region fails do we keep
+      // the previous markers (the old single-fetch catch behaviour).
+      const results = await Promise.allSettled(queries.map((q) =>
+        apiFetch(`${PROXY_BASE}/api/transport/vehicles?` + bboxQ + q).then(async (res) => {
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          return res.json();
+        })));
+      if (seq !== _transportFetchSeq) return; // superseded by a newer fetch
+      const vehicles = [];
+      let counts = null;
+      let anyOk = false;
+      for (const r of results) {
+        if (r.status !== 'fulfilled') {
+          console.warn('[transport] region failed to load:', r.reason);
+          continue;
+        }
+        anyOk = true;
+        // Ids are region-prefixed (au2:/au4:) — concat needs no dedupe.
+        if (Array.isArray(r.value.vehicles)) vehicles.push(...r.value.vehicles);
+        // Only the au2 response carries TfNSW network_counts.
+        if (r.value.network_counts) counts = r.value.network_counts;
       }
+      if (!anyOk) return;
+      // Empty is a legitimate viewport state (rural, 2am) and must
+      // clear the map — deliberately NOT the ADS-B keep-stale guard.
+      // Only fetch errors keep the previous markers.
+      _transportVehicles = vehicles;
+      _transportNetworkCounts = counts;
+      _transportFetchedAt = Date.now();
+      _rebuildTransport();
     }
 
     function _rebuildTransport() {
@@ -15267,13 +15325,31 @@ function initPagerHoursFromStorage() {
       }
       const key = transportBboxParams();
       if (key === _transportStopsKey) return;
+      // Which regions to ask is a function of the same bbox as `key`.
+      // au4 offers no metro/nswtrains; buses stay excluded everywhere.
+      const stopQueries = transportRegionsForView().map((r) => r.id === 'au4'
+        ? '&region=au4&modes=trains,ferries,lightrail'
+        : '&modes=metro,sydneytrains,nswtrains,ferries,lightrail');
       try {
-        const res = await apiFetch(`${PROXY_BASE}/api/transport/stops?` + key + '&modes=metro,sydneytrains,nswtrains,ferries,lightrail');
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
+        const results = await Promise.allSettled(stopQueries.map((q) =>
+          apiFetch(`${PROXY_BASE}/api/transport/stops?` + key + q).then(async (res) => {
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            return res.json();
+          })));
+        const stops = [];
+        let anyOk = false;
+        for (const r of results) {
+          if (r.status !== 'fulfilled') {
+            console.warn('[transport] stops region failed:', r.reason);
+            continue;
+          }
+          anyOk = true;
+          if (Array.isArray(r.value.stops)) stops.push(...r.value.stops);
+        }
+        if (!anyOk) throw new Error('all stop regions failed');
         _transportStopsKey = key;
         transportStopsLayer.clearLayers();
-        for (const s of (data.stops || [])) {
+        for (const s of stops) {
           if (!isFinite(s.lat) || !isFinite(s.lon)) continue;
           const color = transportModeColor((s.modes || []).find((m) => TRANSPORT_MODE_BY_KEY[m]) || 'other');
           const icon = L.divIcon({
@@ -15668,7 +15744,7 @@ function initPagerHoursFromStorage() {
       const v = _transportVehicles.find((x) => x.shapeId === shapeId);
       let cands = null;
       if (v && TRANSPORT_MODE_BY_KEY[v.mode]) {
-        if (!TRANSPORT_TILED_MODES[v.mode]) return null;
+        if (!_transportVehicleTiled(v)) return null;
         cands = _transportLaneCandidates(v);
       } else if (color) {
         const c = String(color).toUpperCase();
@@ -15797,18 +15873,25 @@ function initPagerHoursFromStorage() {
     const _transportAutoTracks = new Map();
     const TRANSPORT_AUTO_TRACK_CAP = 100;  // max shapes wanted per sync
     const TRANSPORT_AUTO_TRACK_KEEP = 200; // retention cap before LRU pruning
-    // Bounds of AnyTrip's static network tiles (greater Sydney). Rail /
-    // metro / light-rail corridors inside them are already drawn by the
-    // network layer — auto-drawing those shapes too stacked two lines in
-    // the same corridor and read as inconsistent track thickness.
-    const TRANSPORT_TILE_BOUNDS = { minLat: -34.9, maxLat: -32.0, minLon: 149.6, maxLon: 151.8 };
-    // nswtrains included: intercity services share the tiled rail
-    // corridors through Sydney — auto-drawing their raw GTFS shapes on
-    // top of the tiles doubled the corridor with diverging geometry.
-    const TRANSPORT_TILED_MODES = { sydneytrains: 1, metro: 1, lightrail: 1, nswtrains: 1 };
-    function _transportInTileBounds(v) {
-      return v.lat >= TRANSPORT_TILE_BOUNDS.minLat && v.lat <= TRANSPORT_TILE_BOUNDS.maxLat &&
-        v.lon >= TRANSPORT_TILE_BOUNDS.minLon && v.lon <= TRANSPORT_TILE_BOUNDS.maxLon;
+    // Areas covered by AnyTrip's static network tiles, each with the
+    // modes those tiles draw. Corridors inside them are already drawn
+    // by the network layer — auto-drawing those shapes too stacked two
+    // lines in the same corridor and read as inconsistent thickness.
+    // Sydney: lines.json (rail/metro/light rail; nswtrains included
+    // because intercity services share the tiled corridors). SEQ:
+    // qldlines.json is QR heavy rail ONLY — G:link, CityCats and buses
+    // keep their auto-drawn tracks there.
+    const TRANSPORT_TILE_AREAS = [
+      { bounds: { minLat: -34.9, maxLat: -32.0, minLon: 149.6, maxLon: 151.8 },
+        tiled: { sydneytrains: 1, metro: 1, lightrail: 1, nswtrains: 1 } },
+      { bounds: { minLat: -28.3, maxLat: -25.9, minLon: 151.9, maxLon: 153.6 },
+        tiled: { sydneytrains: 1 } }
+    ];
+    function _transportVehicleTiled(v) {
+      return TRANSPORT_TILE_AREAS.some((a) =>
+        a.tiled[v.mode] &&
+        v.lat >= a.bounds.minLat && v.lat <= a.bounds.maxLat &&
+        v.lon >= a.bounds.minLon && v.lon <= a.bounds.maxLon);
     }
     function syncTransportAutoTracks() {
       const want = new Map(); // shapeId → { color, mode }
@@ -15823,7 +15906,7 @@ function initPagerHoursFromStorage() {
         // the vehicle's own un-offset GTFS shape on top stacked parallel
         // routes into overlapping blobs — the fanned network is the only
         // track drawing for tiled modes.
-        if (TRANSPORT_TILED_MODES[v.mode] && _transportInTileBounds(v)) continue;
+        if (_transportVehicleTiled(v)) continue;
         if (!want.has(v.shapeId) && want.size < TRANSPORT_AUTO_TRACK_CAP) {
           want.set(v.shapeId, {
             color: (v.route && v.route.color) || transportModeColor(v.mode),

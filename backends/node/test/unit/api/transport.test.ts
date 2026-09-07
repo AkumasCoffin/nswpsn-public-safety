@@ -308,3 +308,127 @@ describe('transport stops', () => {
     expect(decodeURIComponent(url)).toContain('au2:metro,au2:sydneytrains');
   });
 });
+
+describe('transport au4 (Queensland)', () => {
+  const BNE = 'minLat=-27.6&maxLat=-27.3&minLon=152.9&maxLon=153.2';
+
+  function rawAu4Vehicle(mode: string, id: string) {
+    return rawVehicle({
+      tripInstance: {
+        shapeId: 'au4:se:7600294',
+        trip: {
+          id: `au4:se:${id}`,
+          route: { id: `au4:se:${id}`, name: 'T4', color: '4E84C4', mode },
+        },
+      },
+      vehicleInstance: {
+        id,
+        lastPosition: {
+          time: Math.floor(Date.now() / 1000) - 12,
+          coordinates: { lat: -27.47, lon: 153.02 },
+        },
+      },
+    });
+  }
+
+  it('rejects a Brisbane bbox without region=au4, serves it with', async () => {
+    expect((await getVehicles(`${BNE}&feeds=bs`)).status).toBe(400);
+    fetchJsonMock.mockResolvedValue({ response: { vehicles: [] } });
+    const res = await getVehicles(`${BNE}&region=au4`);
+    expect(res.status).toBe(200);
+    const url = fetchJsonMock.mock.calls[0]?.[0] as string;
+    expect(url).toContain('/region/au4/vehicles');
+    // The single SEQ feed carries every mode; modes= is the filter.
+    expect(decodeURIComponent(url)).toContain('feeds=au4:se');
+    expect(decodeURIComponent(url)).toContain(
+      'modes=au4:buses,au4:ferries,au4:lightrail,au4:trains',
+    );
+    expect(url).toContain('otrFilter=300');
+  });
+
+  it('filters au4 vehicles by modes= and rejects unknown values', async () => {
+    fetchJsonMock.mockResolvedValue({ response: { vehicles: [] } });
+    await getVehicles(`${BNE}&region=au4&modes=trains`);
+    const url = decodeURIComponent(fetchJsonMock.mock.calls[0]?.[0] as string);
+    expect(url).toContain('modes=au4:trains');
+    expect(url).not.toContain('au4:buses');
+    expect((await getVehicles(`${BNE}&region=au4&modes=metro`)).status).toBe(400);
+    expect((await getVehicles(`${BNE}&region=au9`)).status).toBe(400);
+  });
+
+  it('collapses au4 mode names onto the shared vocabulary', async () => {
+    fetchJsonMock.mockResolvedValue({
+      response: {
+        vehicles: [rawAu4Vehicle('au4:trains', 'v1'), rawAu4Vehicle('au4:buses', 'v2')],
+      },
+    });
+    const body = await (await getVehicles(`${BNE}&region=au4`)).json();
+    const modes = body.vehicles.map((v: { mode: string }) => v.mode).sort();
+    expect(modes).toEqual(['buses', 'sydneytrains']);
+  });
+
+  it('keeps au2 and au4 cache entries apart in the border overlap band', async () => {
+    // Tweed-ish bbox valid in BOTH regions — same snapped coords, so
+    // only the region in the key separates them.
+    const tweed = 'minLat=-28.4&maxLat=-28.1&minLon=153.3&maxLon=153.6';
+    fetchJsonMock.mockResolvedValue({ response: { vehicles: [] } });
+    await getVehicles(`${tweed}&feeds=bs`);
+    await getVehicles(`${tweed}&region=au4&modes=buses`);
+    expect(fetchJsonMock).toHaveBeenCalledTimes(2);
+    expect(fetchJsonMock.mock.calls[0]?.[0]).toContain('/region/au2/');
+    expect(fetchJsonMock.mock.calls[1]?.[0]).toContain('/region/au4/');
+  });
+
+  it('serves au4 stops with au4 mode ids and canonical output modes', async () => {
+    fetchJsonMock.mockResolvedValue({
+      response: {
+        stops: [
+          {
+            stop: {
+              id: 'au4:600029',
+              fullName: 'Roma Street station',
+              coordinates: { lat: -27.4655, lon: 153.0185 },
+              modes: ['au4:trains'],
+            },
+          },
+        ],
+      },
+    });
+    const body = await (await getStops(`${BNE}&region=au4&modes=trains,ferries,lightrail`)).json();
+    expect(body.stops[0].modes).toEqual(['sydneytrains']);
+    const url = decodeURIComponent(fetchJsonMock.mock.calls[0]?.[0] as string);
+    expect(url).toContain('/region/au4/stops');
+    expect(url).toContain('au4:ferries,au4:lightrail,au4:trains');
+    // au4 has no metro; buses stay excluded in every region.
+    expect((await getStops(`${BNE}&region=au4&modes=metro`)).status).toBe(400);
+    expect((await getStops(`${BNE}&region=au4&modes=buses`)).status).toBe(400);
+  });
+
+  it('routes id-addressed endpoints by the id prefix', async () => {
+    const { transportRouter } = await import('../../../src/api/transport.js');
+    fetchJsonMock.mockResolvedValue({ response: { shape: { id: 'au4:se:x1', enc: 'abc' } } });
+    const res = await transportRouter.request('/api/transport/shape/au4:se:x1');
+    expect(res.status).toBe(200);
+    expect(fetchJsonMock.mock.calls[0]?.[0]).toContain('/region/au4/shape/au4:se:x1');
+    // Passes the shape regex but not the region map.
+    expect((await transportRouter.request('/api/transport/shape/au9:xx:1')).status).toBe(400);
+    fetchJsonMock.mockResolvedValue({ response: { departures: [] } });
+    await transportRouter.request('/api/transport/departures/au4:600029');
+    const depUrl = fetchJsonMock.mock.calls[1]?.[0] as string;
+    expect(depUrl).toContain('/region/au4/departures/au4:600029');
+    expect((await transportRouter.request('/api/transport/departures/au9:1')).status).toBe(400);
+  });
+});
+
+describe('transport trip ids with spaces (QLD timetables)', () => {
+  it('accepts them and %20-encodes only the space upstream', async () => {
+    const { transportRouter } = await import('../../../src/api/transport.js');
+    fetchJsonMock.mockResolvedValue({ response: { tripInstance: { trip: {} } } });
+    const id = 'au4:se:39018846-QR 26_27-44157-DA49';
+    const res = await transportRouter.request(
+      `/api/transport/trip/20260907/${encodeURIComponent(id)}/0`);
+    expect(res.status).toBe(200);
+    const url = fetchJsonMock.mock.calls[0]?.[0] as string;
+    expect(url).toContain('/region/au4/tripInstance/20260907/au4:se:39018846-QR%2026_27-44157-DA49/0');
+  });
+});
