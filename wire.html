@@ -518,7 +518,8 @@
     if (window.marked && marked.setOptions) marked.setOptions({ gfm: true, breaks: true });
 
     /**
-     * A line of --- or === directly under text is a SETEXT HEADING in Markdown,
+     * A line of dashes or equals directly under text is a SETEXT HEADING in
+     * Markdown (even a single '-'),
      * so plain-text posts that use dashes as a section divider silently turned
      * the whole preceding paragraph into a big bold heading. Authors mean a
      * divider, so give them one: insert the blank line that makes it an <hr>
@@ -529,8 +530,15 @@
       const lines = String(src == null ? '' : src).split('\n');
       const out = [];
       for (let i = 0; i < lines.length; i++) {
-        if (i > 0 && lines[i - 1].trim() !== '' && /^\s{0,3}(-{3,}|={3,})\s*$/.test(lines[i])) out.push('');
-        out.push(lines[i]);
+        const line = lines[i].replace(/\r$/, '');
+        // A setext underline is ANY run of - or = (a single '-' counts), so a
+        // one-dash divider silently made a heading too. Normalise every such
+        // line to a real rule, blank-separated, which is what was meant.
+        if (i > 0 && lines[i - 1].trim() !== '' && /^[ \t]{0,3}[-=]+[ \t]*$/.test(line)) {
+          out.push('', '---', '');
+          continue;
+        }
+        out.push(line);
       }
       return out.join('\n');
     }
