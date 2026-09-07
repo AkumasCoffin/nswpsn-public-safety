@@ -14843,6 +14843,16 @@ function initPagerHoursFromStorage() {
         marker.setLatLng([toLat, toLon]);
         return;
       }
+      // A pathless glide is a straight-line lerp between the two fixes.
+      // Over a short hop (bus between ticks) that's invisible, but over
+      // hundreds of metres it cuts every curve — a train visibly leaves
+      // the rails for 9s. Shape warm-up and stale→fresh forward jumps
+      // produced km-long chords; snap those instead of animating.
+      if (!path && d2 > 0.0035 * 0.0035) { // ~390 m
+        _transportGlides.delete(id);
+        marker.setLatLng([toLat, toLon]);
+        return;
+      }
       _transportGlides.set(id, {
         marker: marker, fromLat: cur.lat, fromLon: cur.lng,
         toLat: toLat, toLon: toLon, path: path || null, t0: performance.now()
@@ -15212,15 +15222,24 @@ function initPagerHoursFromStorage() {
           if (prog) {
             const shapePts = _transportShapeCache.get(v.shapeId);
             if (shapePts) {
-              // Start progress: prefer the last PLACED progress. On
-              // shapes that loop or double back, nearest-point snapping
-              // the marker's current latlng can pick the wrong limb
-              // (fromP > toP) and drive the marker backwards for 9s.
-              // The 10s tick vs 9s glide means the previous glide has
-              // (near-)finished, so prevProg.p ≈ current progress; any
-              // residual is a tiny forward nudge, never a reversal.
+              // Start progress, best source first:
+              // 1. An in-flight glide on the SAME shape knows exactly
+              //    where the marker is (its eased progress at now) —
+              //    a retarget mid-glide must continue from there, not
+              //    from the previous DESTINATION (which teleported the
+              //    marker forward by the unfinished remainder).
+              // 2. Otherwise the last PLACED progress: on shapes that
+              //    loop or double back, nearest-point snapping the
+              //    marker's latlng can pick the wrong limb (fromP > toP)
+              //    and drive the marker backwards for 9s.
+              // 3. Snap as the last resort (shape churn).
               let fromP = null;
-              if (prevProg && prevProg.shapeId === prog.shapeId) {
+              const inflight = _transportGlides.get(v.id);
+              if (inflight && inflight.path && inflight.path.pts === shapePts) {
+                const gt = (performance.now() - inflight.t0) / TRANSPORT_GLIDE_MS;
+                const ge = gt >= 1 ? 1 : (gt < 0.8 ? gt : 0.8 + (1 - Math.pow(1 - (gt - 0.8) / 0.2, 2)) * 0.2);
+                fromP = inflight.path.fromP + (inflight.path.toP - inflight.path.fromP) * ge;
+              } else if (prevProg && prevProg.shapeId === prog.shapeId) {
                 fromP = prevProg.p;
               } else {
                 const curLl = existing.marker.getLatLng();
