@@ -516,6 +516,25 @@
     // Full GitHub-flavoured Markdown for article bodies: tables, task lists,
     // strikethrough, autolinks, and single-newline line breaks.
     if (window.marked && marked.setOptions) marked.setOptions({ gfm: true, breaks: true });
+
+    /**
+     * A line of --- or === directly under text is a SETEXT HEADING in Markdown,
+     * so plain-text posts that use dashes as a section divider silently turned
+     * the whole preceding paragraph into a big bold heading. Authors mean a
+     * divider, so give them one: insert the blank line that makes it an <hr>
+     * (deliberate `#`/`##` headings, bold, lists and spaced-out `---` rules are
+     * all untouched).
+     */
+    function mdDividerFix(src) {
+      const lines = String(src == null ? '' : src).split('\n');
+      const out = [];
+      for (let i = 0; i < lines.length; i++) {
+        if (i > 0 && lines[i - 1].trim() !== '' && /^\s{0,3}(-{3,}|={3,})\s*$/.test(lines[i])) out.push('');
+        out.push(lines[i]);
+      }
+      return out.join('\n');
+    }
+
     let API_KEY = null;
     let ME = { userId: null, canFeed: false, canModerate: false, isOwner: false };
     // ONE article feed since the media/article merge; ?tab=fleet switches
@@ -1100,7 +1119,7 @@
       // gallery panel (3:2, contained) on the left, the info rail on the right.
       // Articles render their Markdown body under the gallery.
       const left = isArticle
-        ? `${galleryMedia.length ? galleryPane() : ''}<div class="wd-article">${DOMPurify.sanitize(marked.parse(item.body || ''))}</div>`
+        ? `${galleryMedia.length ? galleryPane() : ''}<div class="wd-article">${DOMPurify.sanitize(marked.parse(mdDividerFix(item.body)))}</div>`
         : `${galleryPane()}<p class="wd-caption">${esc(item.caption || '')}</p>`;
       $('#detail').innerHTML = `${back}${eyebrow}${draftBanner}
         <div class="wd-grid${isArticle ? ' wd-grid-article' : ''}">

@@ -449,8 +449,25 @@
       const seg = document.getElementById('mdToggle');
       if (!ta || !prev || !seg) return;
       if (window.marked && marked.setOptions) marked.setOptions({ gfm: true, breaks: true });
+    /**
+     * A line of --- or === directly under text is a SETEXT HEADING in Markdown,
+     * so plain-text posts that use dashes as a section divider silently turned
+     * the whole preceding paragraph into a big bold heading. Authors mean a
+     * divider, so give them one: insert the blank line that makes it an <hr>
+     * (deliberate `#`/`##` headings, bold, lists and spaced-out `---` rules are
+     * all untouched).
+     */
+    function mdDividerFix(src) {
+      const lines = String(src == null ? '' : src).split('\n');
+      const out = [];
+      for (let i = 0; i < lines.length; i++) {
+        if (i > 0 && lines[i - 1].trim() !== '' && /^\s{0,3}(-{3,}|={3,})\s*$/.test(lines[i])) out.push('');
+        out.push(lines[i]);
+      }
+      return out.join('\n');
+    }
       function render() {
-        try { prev.innerHTML = DOMPurify.sanitize(marked.parse(ta.value || '')); }
+        try { prev.innerHTML = DOMPurify.sanitize(marked.parse(mdDividerFix(ta.value))); }
         catch (e) { prev.textContent = ta.value || ''; }
       }
       function show(mode) {

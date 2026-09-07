@@ -5104,6 +5104,23 @@
       };
     }
 
+    /**
+     * A line of --- or === directly under text is a SETEXT HEADING in Markdown,
+     * so an update typed with dashes as a section divider silently turned the
+     * whole preceding paragraph into a big bold heading. Authors mean a
+     * divider, so give them one: insert the blank line that makes it an <hr>.
+     * Deliberate `#` headings, bold, lists and spaced-out `---` are untouched.
+     */
+    function mdDividerFix(src) {
+      const lines = String(src == null ? '' : src).split('\n');
+      const out = [];
+      for (let i = 0; i < lines.length; i++) {
+        if (i > 0 && lines[i - 1].trim() !== '' && /^\s{0,3}(-{3,}|={3,})\s*$/.test(lines[i])) out.push('');
+        out.push(lines[i]);
+      }
+      return out.join('\n');
+    }
+
     function escapeHtml(str) {
       if (!str) return '';
       return String(str)
@@ -7912,7 +7929,7 @@ function initPagerHoursFromStorage() {
               updatesHtml = `<div class="update-timeline">` + updates.map(u => `
                 <div class="update-item">
                   <div class="update-time">${new Date(u.created_at).toLocaleString()}${u.created_by_name ? ` · ${escapeHtml(u.created_by_name)}` : ""}</div>
-                  <div class="update-msg markdown-body">${DOMPurify.sanitize(marked.parse(u.message))}</div>
+                  <div class="update-msg markdown-body">${DOMPurify.sanitize(marked.parse(mdDividerFix(u.message)))}</div>
                 </div>`).join('') + `</div>`;
             } else {
               updatesHtml = '<div style="font-size:0.85rem; color:var(--text-soft); margin-top:1rem; font-style:italic;">No user updates yet.</div>';
@@ -7998,7 +8015,7 @@ function initPagerHoursFromStorage() {
             updatesHtml = `<div class="update-timeline">` + updates.map(u => `
               <div class="update-item">
                 <div class="update-time">${new Date(u.created_at).toLocaleString()}${u.created_by_name ? ` · ${escapeHtml(u.created_by_name)}` : ""}</div>
-                <div class="update-msg markdown-body">${DOMPurify.sanitize(marked.parse(u.message))}</div>
+                <div class="update-msg markdown-body">${DOMPurify.sanitize(marked.parse(mdDividerFix(u.message)))}</div>
               </div>`).join('') + `</div>`;
           } else {
             updatesHtml = '<div style="font-size:0.85rem; color:var(--text-soft); margin-top:1rem; font-style:italic;">No user updates yet.</div>';
