@@ -49,7 +49,7 @@
 
     /* "I want to be a…" role rows: keep the role name on one line and let the
        description take the remaining width (wrapping instead of squeezing the
-       name onto two lines — e.g. "Media Feeder", "Other"). */
+       name onto two lines — e.g. "Wire Contributor", "Other"). */
     label:has(> input[name="request-type"]) { align-items: flex-start !important; }
     input[name="request-type"] { flex-shrink: 0; margin-top: 0.15rem; }
     input[name="request-type"] + span { white-space: nowrap; }
@@ -459,7 +459,7 @@
               </label>
               <label style="display: flex; align-items: center; gap: 0.6rem; cursor: pointer;">
                 <input type="checkbox" name="request-type" value="media_feeder" onchange="toggleFeederSetup()" style="width: 18px; height: 18px; accent-color: var(--accent);">
-                <span>📸 Media Feeder</span>
+                <span>📸 Wire Contributor</span>
                 <span style="color: #64748b; font-size: 0.8rem;">- Post photos, video &amp; articles to The Wire</span>
               </label>
               <label style="display: flex; align-items: center; gap: 0.6rem; cursor: pointer;">
