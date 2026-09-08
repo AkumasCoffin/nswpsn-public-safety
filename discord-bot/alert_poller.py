@@ -66,6 +66,9 @@ class AlertPoller:
             'sa_cfs': '/api/sa-fire/cfs',
             'sa_mfs': '/api/sa-fire/mfs',
             'nt_fire': '/api/nt-fire/incidents',
+            'qld_warning': '/api/qld-fire/warnings',
+            'wa_warning': '/api/wa-emergency/warnings',
+            'act_ambulance': '/api/act-ambulance/incidents',
             'wire_article': '/api/wire/articles?limit=30',
             'wire_fleet': '/api/wire/fleet?limit=30',
         }
@@ -189,6 +192,16 @@ class AlertPoller:
                 return f"{alert_type}_{suburb}_{street}"
             return hashlib.md5(str(item).encode(), usedforsecurity=False).hexdigest()[:16]
 
+        elif alert_type in ('qld_warning', 'wa_warning'):
+            props = item.get('properties', {})
+            guid = props.get('guid', '') or props.get('title', '')
+            return f"{alert_type}_{guid}_{props.get('alertLevel', '')}"
+
+        elif alert_type == 'act_ambulance':
+            # ESA shape has no guid; id + status mirrors the incident feeds.
+            props = item.get('properties', {})
+            return f"act_ambulance_{props.get('id', '')}_{props.get('status', '')}"
+
         elif alert_type in ('cfa', 'deeca', 'qfd', 'dfes',
                             'sa_cfs', 'sa_mfs', 'nt_fire'):
             # Interstate fire feeds are RFS-shaped: guid + status, so a status
@@ -310,13 +323,19 @@ class AlertPoller:
                 if ts:
                     return _aware(datetime.fromisoformat(str(ts).replace('Z', '+00:00')))
 
-            elif alert_type in ('cfa', 'deeca', 'qfd', 'dfes',
-                                'sa_cfs', 'sa_mfs', 'nt_fire'):
+            elif alert_type in ('cfa', 'deeca', 'qfd', 'dfes', 'sa_cfs',
+                                'sa_mfs', 'nt_fire', 'qld_warning', 'wa_warning'):
                 # RFS-shaped updatedISO. May be '' (SA rows whose wall-clock
                 # date failed to parse) — falls through to now() below.
                 ts = item.get('properties', {}).get('updatedISO', '')
                 if ts:
                     return _aware(datetime.fromisoformat(str(ts).replace('Z', '+00:00')))
+
+            elif alert_type == 'act_ambulance':
+                # ESA carries an epoch-seconds `timestamp`, no updatedISO.
+                ts = item.get('properties', {}).get('timestamp')
+                if ts:
+                    return datetime.fromtimestamp(float(ts), tz=timezone.utc)
 
             elif alert_type.startswith('endeavour_'):
                 # The backend emits startTime + estimatedRestoration (the
@@ -871,8 +890,9 @@ class AlertPoller:
             return [f for f in feats
                     if str((f.get('properties') or {}).get('agency') or '').upper() == want]
 
-        elif alert_type in ('qfd', 'dfes', 'sa_cfs', 'sa_mfs', 'nt_fire'):
-            # RFS-shaped GeoJSON FeatureCollections.
+        elif alert_type in ('qfd', 'dfes', 'sa_cfs', 'sa_mfs', 'nt_fire',
+                            'qld_warning', 'wa_warning', 'act_ambulance'):
+            # GeoJSON FeatureCollections served from backend snapshots.
             return data.get('features', []) or []
 
         elif alert_type == 'wire_article':

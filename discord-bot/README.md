@@ -108,6 +108,8 @@ Canonical keys (the source of truth is `ALERT_TYPES` in `bot.py`):
 | `dfes` | DFES (WA) incidents |
 | `sa_cfs` / `sa_mfs` | SA Country Fire Service / Metropolitan Fire Service |
 | `nt_fire` | NT Fire & Rescue incidents |
+| `qld_warning` / `wa_warning` | QFD / DFES public warnings |
+| `act_ambulance` | ACT Ambulance incidents |
 | `wire_article` | New articles on The Wire (only while The Wire is live) |
 | `wire_fleet` | New fleet vehicles on The Wire (same gate) |
 | `user_incident` | User-submitted incidents |

@@ -102,6 +102,9 @@ ALERT_TYPES = {
     'sa_cfs': 'SA CFS',
     'sa_mfs': 'SA MFS',
     'nt_fire': 'NT Fire & Rescue',
+    'qld_warning': 'QFD Warnings',
+    'wa_warning': 'DFES Warnings',
+    'act_ambulance': 'ACT Ambulance',
     'wire_article': 'Wire Articles',
     'wire_fleet': 'Wire Fleet Additions',
     'user_incident': 'User Incidents',
@@ -150,6 +153,8 @@ _SEVERITY_SCALES = {
     'sa_cfs': ['advice', 'watch_and_act', 'emergency'],
     'sa_mfs': ['advice', 'watch_and_act', 'emergency'],
     'nt_fire': ['advice', 'watch_and_act', 'emergency'],
+    'qld_warning': ['advice', 'watch_and_act', 'emergency'],
+    'wa_warning': ['advice', 'watch_and_act', 'emergency'],
     # BOM real-world values are severe/warning/watch/advice/info but the
     # dashboard contract uses minor/moderate/major. We accept BOTH on input
     # via _SEVERITY_BOM_MAP and normalise to the canonical scale below.
@@ -196,13 +201,14 @@ def _alert_text_haystack(alert_type: str, alert_data: dict) -> str:
             if s:
                 bits.append(s)
 
-    if alert_type in ('rfs', 'user_incident', 'cfa', 'deeca', 'qfd',
-                      'dfes', 'sa_cfs', 'sa_mfs', 'nt_fire'):
+    if alert_type in ('rfs', 'user_incident', 'cfa', 'deeca', 'qfd', 'dfes',
+                      'sa_cfs', 'sa_mfs', 'nt_fire', 'qld_warning',
+                      'wa_warning', 'act_ambulance'):
         props = alert_data.get('properties') if alert_type != 'user_incident' else None
         # RFS: properties.{title,description,location,councilArea,fireType,status}
         if isinstance(props, dict):
-            for k in ('title', 'description', 'location', 'councilArea',
-                      'fireType', 'status', 'alertLevel'):
+            for k in ('title', 'description', 'location', 'location_text',
+                      'councilArea', 'fireType', 'status', 'alertLevel'):
                 _push(props.get(k))
         else:
             for k in ('title', 'description', 'location'):
@@ -251,8 +257,9 @@ def _alert_lat_lng(alert_type: str, alert_data: dict):
 
     # GeoJSON-style geometry.coordinates = [lng, lat] for rfs, traffic_*
     # and the interstate fire feeds.
-    if alert_type in ('rfs', 'cfa', 'deeca', 'qfd', 'dfes',
-                      'sa_cfs', 'sa_mfs', 'nt_fire') \
+    if alert_type in ('rfs', 'cfa', 'deeca', 'qfd', 'dfes', 'sa_cfs',
+                      'sa_mfs', 'nt_fire', 'qld_warning', 'wa_warning',
+                      'act_ambulance') \
             or (alert_type or '').startswith('traffic_'):
         geom = alert_data.get('geometry') or {}
         coords = geom.get('coordinates') if isinstance(geom, dict) else None
@@ -390,8 +397,8 @@ def _alert_severity_token(alert_type: str, alert_data: dict):
     """Map raw alert severity to a token in _SEVERITY_SCALES[alert_type]."""
     if not isinstance(alert_data, dict):
         return None
-    if alert_type in ('rfs', 'cfa', 'deeca', 'qfd', 'dfes',
-                      'sa_cfs', 'sa_mfs', 'nt_fire'):
+    if alert_type in ('rfs', 'cfa', 'deeca', 'qfd', 'dfes', 'sa_cfs',
+                      'sa_mfs', 'nt_fire', 'qld_warning', 'wa_warning'):
         props = alert_data.get('properties') or {}
         raw = (props.get('alertLevel') or '').strip().lower()
         return _SEVERITY_RFS_MAP.get(raw)

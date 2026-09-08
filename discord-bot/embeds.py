@@ -404,6 +404,9 @@ class EmbedBuilder:
         'sa_cfs': 0xEA580C,
         'sa_mfs': 0x0EA5E9,
         'nt_fire': 0xF97316,
+        'qld_warning': 0xDC2626,
+        'wa_warning': 0xE11D48,
+        'act_ambulance': 0x38BDF8,
     }
     
     # Colors for specific incident types extracted from title
@@ -496,6 +499,9 @@ class EmbedBuilder:
         'sa_cfs': '🔥',
         'sa_mfs': '🚒',
         'nt_fire': '🔥',
+        'qld_warning': '⚠️',
+        'wa_warning': '⚠️',
+        'act_ambulance': '🚑',
     }
     
     # BOM category icons
@@ -646,6 +652,9 @@ class EmbedBuilder:
         'sa_cfs': 'SA CFS',
         'sa_mfs': 'SA MFS',
         'nt_fire': 'NT Fire & Rescue',
+        'qld_warning': 'QFD Warnings',
+        'wa_warning': 'DFES Warnings',
+        'act_ambulance': 'ACT Ambulance',
         'wire_article': 'Wire Articles',
         'wire_fleet': 'Wire Fleet Additions',
         'user_incident': 'User Incidents',
@@ -1267,8 +1276,9 @@ class EmbedBuilder:
               or alert_type == 'ausgrid'
               or alert_type.startswith('essential_')):
             return self.build_power_container(data, alert_type)
-        elif alert_type in ('cfa', 'deeca', 'qfd', 'dfes',
-                            'sa_cfs', 'sa_mfs', 'nt_fire'):
+        elif alert_type in ('cfa', 'deeca', 'qfd', 'dfes', 'sa_cfs',
+                            'sa_mfs', 'nt_fire', 'qld_warning', 'wa_warning',
+                            'act_ambulance'):
             return self.build_interstate_fire_container(data, alert_type)
         elif alert_type == 'wire_article':
             return self.build_wire_article_container(data)
@@ -1623,6 +1633,9 @@ class EmbedBuilder:
         'sa_cfs': 'SA CFS',
         'sa_mfs': 'SA MFS',
         'nt_fire': 'NT Fire & Rescue',
+        'qld_warning': 'QLD Fire Dept',
+        'wa_warning': 'DFES (WA)',
+        'act_ambulance': 'ACT Ambulance',
     }
 
     def build_interstate_fire_container(self, data: Dict[str, Any], alert_type: str):
@@ -1652,14 +1665,24 @@ class EmbedBuilder:
                 content=self._clip_text(' · '.join(meta_bits))
             ))
 
-        location = (props.get('location') or '').strip()
+        location = (props.get('location') or props.get('location_text') or '').strip()
         if location:
             container.add_item(discord.ui.TextDisplay(
                 content=self._clip_text(f"📍 {location}")
             ))
 
+        # WA warnings put the public instruction in `action` (status is '').
+        action = (props.get('action') or '').strip()
+        if action:
+            container.add_item(discord.ui.TextDisplay(
+                content=self._clip_text(f"❗ {action}")
+            ))
+
         footer_bits = []
-        dt_upd = parse_timestamp_to_datetime(props.get('updatedISO', ''))
+        # ACT has no updatedISO — an epoch-seconds `timestamp` instead;
+        # parse_timestamp_to_datetime handles both.
+        dt_upd = parse_timestamp_to_datetime(
+            props.get('updatedISO') or props.get('timestamp') or '')
         if dt_upd:
             footer_bits.append(f"🕐 <t:{int(dt_upd.timestamp())}:R>")
         # Point features carry [lng, lat]; NT warnings can be a Polygon —
