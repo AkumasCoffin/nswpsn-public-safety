@@ -337,6 +337,19 @@
       }
     }
   </style>
+  <style>
+    /* Custom LGA dropdown — the native <datalist> popup is unstylable (it
+       renders as a giant white list pinned to the screen edge), so suggestions
+       live in our own positioned, filter-as-you-type list under the field. */
+    .lga-combo { position: relative; display: block; }
+    .lga-dd { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 1200;
+      max-height: 230px; overflow-y: auto; background: #0f172a;
+      border: 1px solid var(--border-subtle, #334155); border-radius: 8px;
+      box-shadow: 0 10px 26px rgba(0,0,0,0.5); display: none; }
+    .lga-dd.open { display: block; }
+    .lga-dd .lga-opt { padding: 0.45rem 0.7rem; cursor: pointer; font-size: 0.85rem; color: var(--text-primary, #e2e8f0); }
+    .lga-dd .lga-opt:hover { background: rgba(125,211,252,0.12); }
+  </style>
 </head>
 <body>
   <div class="container">
@@ -596,10 +609,12 @@
             <label class="form-label">
               Local Government Area <span class="required">*</span>
             </label>
-            <input type="text" id="region-lga" class="form-input" list="region-lga-list"
-                   placeholder="Select your state first..." autocomplete="off" disabled
-                   data-manual-disable="1">
-            <datalist id="region-lga-list"></datalist>
+            <span class="lga-combo">
+              <input type="text" id="region-lga" class="form-input"
+                     placeholder="Select your state first..." autocomplete="off" disabled
+                     data-manual-disable="1">
+              <div id="region-lga-dd" class="lga-dd"></div>
+            </span>
           </div>
           <div class="form-group" data-contributor-only>
             <label class="form-label">
@@ -873,45 +888,75 @@
     // --- Location: State -> LGA suggestions --------------------------------
     // ABS LGA names per state, from the boundaries table. Cached per state;
     // a failed fetch degrades to a free-text LGA field, never a blocked form.
+    // Custom LGA dropdown: renders the suggestions in a styled .lga-dd list
+    // under the field (the native <datalist> popup can't be styled). Picks on
+    // mousedown — it fires BEFORE the input's blur hides the list — and
+    // re-dispatches 'input' so existing listeners stay in sync.
+    function lgaCombo(inputId, ddId, getNames) {
+      const input = document.getElementById(inputId);
+      const dd = document.getElementById(ddId);
+      if (!input || !dd) return;
+      const show = () => {
+        if (input.disabled) return;
+        const q = input.value.trim().toLowerCase();
+        const matches = (getNames() || []).filter(n => n.toLowerCase().includes(q));
+        dd.innerHTML = matches.map(n => {
+          const e = n.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+          return `<div class="lga-opt" data-lga="${e}">${e}</div>`;
+        }).join('');
+        dd.classList.toggle('open', matches.length > 0);
+      };
+      const hide = () => dd.classList.remove('open');
+      input.addEventListener('input', show);
+      input.addEventListener('focus', show);
+      input.addEventListener('blur', hide);
+      dd.addEventListener('mousedown', (e) => {
+        const opt = e.target.closest('.lga-opt');
+        if (!opt) return;
+        e.preventDefault();
+        input.value = opt.getAttribute('data-lga') || '';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        hide();
+      });
+    }
     const _lgaNamesCache = {};
+    let _lgaNames = [];
     async function onRegionStateChange() {
       const state = document.getElementById('region-state').value;
       bgOnStateChange();
       const lga = document.getElementById('region-lga');
-      const list = document.getElementById('region-lga-list');
-      if (!lga || !list) return;
+      if (!lga) return;
       lga.value = '';
+      _lgaNames = [];
       if (!state) {
         lga.disabled = true;
         // Tells syncHiddenFieldValidation this is OUR rule, not stale state.
         lga.dataset.manualDisable = '1';
         lga.placeholder = 'Select your state first...';
-        list.innerHTML = '';
         return;
       }
       lga.disabled = false;
       delete lga.dataset.manualDisable;
       lga.placeholder = 'Start typing your council area...';
       if (_lgaNamesCache[state]) {
-        list.innerHTML = _lgaNamesCache[state];
+        _lgaNames = _lgaNamesCache[state];
         return;
       }
       try {
         const res = await fetch(`${API_BASE_URL}/api/boundaries/lga-names?state=${state}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        const opts = (data.names || [])
-          .map(n => `<option value="${n.replace(/"/g, '&quot;')}">`)
-          .join('');
-        _lgaNamesCache[state] = opts;
+        const names = Array.isArray(data.names) ? data.names : [];
+        _lgaNamesCache[state] = names;
         // The user may have changed state while this was in flight.
-        if (document.getElementById('region-state').value === state) list.innerHTML = opts;
+        if (document.getElementById('region-state').value === state) _lgaNames = names;
       } catch (e) {
         // No suggestions is fine — the field is a plain text input either
         // way, and blocking signup on a lookup would be backwards.
         console.warn('LGA suggestions unavailable:', e.message);
       }
     }
+    lgaCombo('region-lga', 'region-lga-dd', () => _lgaNames);
 
     /** The stored region string: "NSW — Penrith — Emu Plains" (suburb optional). */
     function combinedRegion() {

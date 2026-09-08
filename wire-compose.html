@@ -172,6 +172,19 @@
     .topbar a { color: var(--text-muted); text-decoration: none; font-size: 0.85rem; }
     .topbar a:hover { color: var(--accent); }
   </style>
+  <style>
+    /* Custom LGA dropdown — the native <datalist> popup is unstylable (it
+       renders as a giant white list pinned to the screen edge), so suggestions
+       live in our own positioned, filter-as-you-type list under the field. */
+    .lga-combo { position: relative; display: block; }
+    .lga-dd { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 1200;
+      max-height: 230px; overflow-y: auto; background: #0f172a;
+      border: 1px solid var(--border-subtle, #334155); border-radius: 8px;
+      box-shadow: 0 10px 26px rgba(0,0,0,0.5); display: none; }
+    .lga-dd.open { display: block; }
+    .lga-dd .lga-opt { padding: 0.45rem 0.7rem; cursor: pointer; font-size: 0.85rem; color: var(--text-primary, #e2e8f0); }
+    .lga-dd .lga-opt:hover { background: rgba(125,211,252,0.12); }
+  </style>
 </head>
 <body>
 
@@ -301,8 +314,10 @@
             <option value="VIC">Victoria</option>
             <option value="WA">Western Australia</option>
           </select>
-          <input type="text" id="regionLga" list="regionLgaList" placeholder="Select the state first…" autocomplete="off" disabled style="margin-bottom:0.5rem">
-          <datalist id="regionLgaList"></datalist>
+          <span class="lga-combo" style="margin-bottom:0.5rem;">
+            <input type="text" id="regionLga" placeholder="Select the state first…" autocomplete="off" disabled style="margin-bottom:0; width:100%; box-sizing:border-box;">
+            <div id="regionLgaDd" class="lga-dd"></div>
+          </span>
           <input type="text" id="regionSuburb" placeholder="Suburb · optional" maxlength="80">
         </div>
         <div class="toggle2" id="locToggle" style="margin-top:0.6rem">
@@ -940,28 +955,62 @@
     // ABS LGA names per state, from the backend boundaries table. Cached per
     // state; a failed fetch degrades to a free-text LGA field, never a
     // blocked form. Same behaviour as the signup page.
+    // Custom LGA dropdown: renders the suggestions in a styled .lga-dd list
+    // under the field (the native <datalist> popup can't be styled). Picks on
+    // mousedown — it fires BEFORE the input's blur hides the list — and
+    // re-dispatches 'input' so existing listeners stay in sync.
+    function lgaCombo(inputId, ddId, getNames) {
+      const input = document.getElementById(inputId);
+      const dd = document.getElementById(ddId);
+      if (!input || !dd) return;
+      const show = () => {
+        if (input.disabled) return;
+        const q = input.value.trim().toLowerCase();
+        const matches = (getNames() || []).filter(n => n.toLowerCase().includes(q));
+        dd.innerHTML = matches.map(n => {
+          const e = n.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+          return `<div class="lga-opt" data-lga="${e}">${e}</div>`;
+        }).join('');
+        dd.classList.toggle('open', matches.length > 0);
+      };
+      const hide = () => dd.classList.remove('open');
+      input.addEventListener('input', show);
+      input.addEventListener('focus', show);
+      input.addEventListener('blur', hide);
+      dd.addEventListener('mousedown', (e) => {
+        const opt = e.target.closest('.lga-opt');
+        if (!opt) return;
+        e.preventDefault();
+        input.value = opt.getAttribute('data-lga') || '';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        hide();
+      });
+    }
     const _lgaNamesCache = {};
+    let _lgaNames = [];
     async function onRegionStateChange() {
       const st = $('#regionState').value;
-      const lga = $('#regionLga'), list = $('#regionLgaList');
+      const lga = $('#regionLga');
       lga.value = ''; $('#regionSuburb').value = '';
+      _lgaNames = [];
       if (!st) {
-        lga.disabled = true; lga.placeholder = 'Select the state first…'; list.innerHTML = '';
+        lga.disabled = true; lga.placeholder = 'Select the state first…';
         applyRegionFields(); return;
       }
       lga.disabled = false; lga.placeholder = 'Start typing the council area…';
       applyRegionFields();
-      if (_lgaNamesCache[st]) { list.innerHTML = _lgaNamesCache[st]; return; }
+      if (_lgaNamesCache[st]) { _lgaNames = _lgaNamesCache[st]; return; }
       try {
         const res = await fetch(`${API_BASE}/api/boundaries/lga-names?state=${st}`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();
-        const opts = (data.names || []).map((n) => `<option value="${esc(n)}">`).join('');
-        _lgaNamesCache[st] = opts;
+        const names = Array.isArray(data.names) ? data.names : [];
+        _lgaNamesCache[st] = names;
         // The state may have changed while this was in flight.
-        if ($('#regionState').value === st) list.innerHTML = opts;
+        if ($('#regionState').value === st) _lgaNames = names;
       } catch (e) { /* suggestions are optional; the field stays free text */ }
     }
+    lgaCombo('regionLga', 'regionLgaDd', () => _lgaNames);
 
     /** The three fields -> state.location. State + LGA make an area; the
      *  stored string is "NSW — Penrith — Emu Plains" (suburb optional),

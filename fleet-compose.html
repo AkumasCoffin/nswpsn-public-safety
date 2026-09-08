@@ -70,6 +70,19 @@
     .coming-soon h1 span { color: var(--accent); }
     .coming-soon p { color: var(--text-muted); }
   </style>
+  <style>
+    /* Custom LGA dropdown — the native <datalist> popup is unstylable (it
+       renders as a giant white list pinned to the screen edge), so suggestions
+       live in our own positioned, filter-as-you-type list under the field. */
+    .lga-combo { position: relative; display: block; }
+    .lga-dd { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 1200;
+      max-height: 230px; overflow-y: auto; background: #0f172a;
+      border: 1px solid var(--border-subtle, #334155); border-radius: 8px;
+      box-shadow: 0 10px 26px rgba(0,0,0,0.5); display: none; }
+    .lga-dd.open { display: block; }
+    .lga-dd .lga-opt { padding: 0.45rem 0.7rem; cursor: pointer; font-size: 0.85rem; color: var(--text-primary, #e2e8f0); }
+    .lga-dd .lga-opt:hover { background: rgba(125,211,252,0.12); }
+  </style>
 </head>
 <body>
 
@@ -156,8 +169,10 @@
           </div>
           <div class="field">
             <label for="fLga">Local Government Area <span style="color:var(--accent)">*</span></label>
-            <input type="text" id="fLga" list="fLgaList" placeholder="Select the state first…" autocomplete="off" disabled>
-            <datalist id="fLgaList"></datalist>
+            <span class="lga-combo">
+              <input type="text" id="fLga" placeholder="Select the state first…" autocomplete="off" disabled style="width:100%; box-sizing:border-box;">
+              <div id="fLgaDd" class="lga-dd"></div>
+            </span>
           </div>
           <div class="field">
             <label for="fSuburb">Suburb · optional</label>
@@ -521,7 +536,39 @@
     }
 
     // ---- state -> agency list + LGA suggestions ----
+    // Custom LGA dropdown: renders the suggestions in a styled .lga-dd list
+    // under the field (the native <datalist> popup can't be styled). Picks on
+    // mousedown — it fires BEFORE the input's blur hides the list — and
+    // re-dispatches 'input' so existing listeners stay in sync.
+    function lgaCombo(inputId, ddId, getNames) {
+      const input = document.getElementById(inputId);
+      const dd = document.getElementById(ddId);
+      if (!input || !dd) return;
+      const show = () => {
+        if (input.disabled) return;
+        const q = input.value.trim().toLowerCase();
+        const matches = (getNames() || []).filter(n => n.toLowerCase().includes(q));
+        dd.innerHTML = matches.map(n => {
+          const e = n.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+          return `<div class="lga-opt" data-lga="${e}">${e}</div>`;
+        }).join('');
+        dd.classList.toggle('open', matches.length > 0);
+      };
+      const hide = () => dd.classList.remove('open');
+      input.addEventListener('input', show);
+      input.addEventListener('focus', show);
+      input.addEventListener('blur', hide);
+      dd.addEventListener('mousedown', (e) => {
+        const opt = e.target.closest('.lga-opt');
+        if (!opt) return;
+        e.preventDefault();
+        input.value = opt.getAttribute('data-lga') || '';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        hide();
+      });
+    }
     const _lgaCache = {};
+    let _lgaNames = [];
     function fillAgencies(st, keep) {
       const sel = $('#fAgency');
       const list = (window.FleetVocab && FleetVocab.departments[st]) || [];
@@ -538,20 +585,22 @@
     async function onStateChange(keepAgency) {
       const st = $('#fState').value;
       fillAgencies(st, keepAgency);
-      const lga = $('#fLga'), list = $('#fLgaList');
+      const lga = $('#fLga');
       if (!keepAgency) lga.value = '';
-      if (!st) { lga.disabled = true; lga.placeholder = 'Select the state first…'; list.innerHTML = ''; return; }
+      _lgaNames = [];
+      if (!st) { lga.disabled = true; lga.placeholder = 'Select the state first…'; return; }
       lga.disabled = false; lga.placeholder = 'Start typing the council area…';
-      if (_lgaCache[st]) { list.innerHTML = _lgaCache[st]; return; }
+      if (_lgaCache[st]) { _lgaNames = _lgaCache[st]; return; }
       try {
         const res = await fetch(`${API_BASE}/api/boundaries/lga-names?state=${st}`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();
-        const opts = (data.names || []).map((n) => `<option value="${esc(n)}">`).join('');
-        _lgaCache[st] = opts;
-        if ($('#fState').value === st) list.innerHTML = opts;
+        const names = Array.isArray(data.names) ? data.names : [];
+        _lgaCache[st] = names;
+        if ($('#fState').value === st) _lgaNames = names;
       } catch (e) { /* suggestions optional; the field stays free text */ }
     }
+    lgaCombo('fLga', 'fLgaDd', () => _lgaNames);
     /** The chosen agency's category shows/hides the fire & ambulance sections. */
     function applyCategory() {
       const cat = window.FleetVocab
