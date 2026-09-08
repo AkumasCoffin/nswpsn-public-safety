@@ -637,11 +637,11 @@ nodeIngestRouter.post('/api/node-ingest/site-snapshots', async (c) => {
 // POST /api/node-ingest/pager-upload
 //
 // A PAGER feeder node decodes POCSAG locally (rtl_fm | multimon-ng) and relays
-// each decoded message here. We forward it into the ONE central Pagermon with
-// the server-held apikey (see globalConfig.getPagerIngest / config.PAGERMON_
-// INGEST_*), so the Pagermon key stays server-side and the node's feed toggle
-// cuts the feed — the SAME relay model as call-upload. Body is JSON (messages
-// are tiny), NOT multipart.
+// each decoded message here. We forward it into the central Pagermon for the
+// NODE'S STATE (one per state — see globalConfig.getPagerIngest /
+// config.PAGERMON_INGEST_*) with the server-held apikey, so the Pagermon keys
+// stay server-side and the node's feed toggle cuts the feed — the SAME relay
+// model as call-upload. Body is JSON (messages are tiny), NOT multipart.
 // ---------------------------------------------------------------------------
 
 // A pager message is small — a few hundred bytes. Cap hard well below that so a
@@ -677,14 +677,10 @@ const PagerMsgSchema = z.object({
 });
 
 nodeIngestRouter.post('/api/node-ingest/pager-upload', async (c) => {
-  // 1. Forward target must be configured (DB row first, then env).
-  const ingest = await getPagerIngest();
-  if (!ingest.url || !ingest.apiKey) {
-    return c.json({ error: 'pagermon ingest not configured' }, 503);
-  }
-
-  // 2-3. Node credentials + per-node token resolve (role gated), TOFU install
-  //      match — identical to call-upload.
+  // 1-2. Node credentials + per-node token resolve (role gated), TOFU install
+  //      match — identical to call-upload. Auth comes FIRST: the forward
+  //      target depends on which STATE this node is in, so it can only be
+  //      resolved after the node is known.
   const token = c.req.header('X-Node-Token');
   const installId = c.req.header('X-Node-Install');
   if (!token || !installId) {
@@ -706,6 +702,17 @@ nodeIngestRouter.post('/api/node-ingest/pager-upload', async (c) => {
     return c.json({ error: 'not a pager node' }, 403);
   }
   const node = { id: r.nodeId, feed_enabled: r.feedEnabled };
+
+  // 3. Resolve the forward target for THIS node's state (NSW: DB row → legacy
+  //    env; other states: their env pair). The row is also the source name for
+  //    the forward below. A state without a configured Pagermon 503s loudly —
+  //    never cross-feed another state's server — and the agent's queue holds
+  //    the messages until it's configured.
+  const nodeRow = await getNode(node.id).catch(() => null);
+  const ingest = await getPagerIngest(nodeRow?.state);
+  if (!ingest.url || !ingest.apiKey) {
+    return c.json({ error: `pagermon ingest not configured for state ${nodeRow?.state ?? 'NSW'}` }, 503);
+  }
 
   // 3b. Per-node rate limit — a compromised node with feed on could otherwise
   //     flood central Pagermon + the DB. Generous vs. real paging (a few/min);
@@ -810,10 +817,10 @@ nodeIngestRouter.post('/api/node-ingest/pager-upload', async (c) => {
   // 7. Forward to central Pagermon. Its ingest API is POST /api/messages with
   //    address/message/datetime/source. We send the apikey both as the
   //    Authorization header (Pagermon 1.x) and an `apikey` field (older) for
-  //    compatibility. The `source` is the NODE'S NAME (authoritative, set here)
-  //    so each page in Pagermon is attributable to the node that heard it —
-  //    falling back to the agent-reported label if the row can't be read.
-  const nodeRow = await getNode(node.id).catch(() => null);
+  //    compatibility. The `source` is the NODE'S NAME (authoritative, from the
+  //    row read in step 3) so each page in Pagermon is attributable to the node
+  //    that heard it — falling back to the agent-reported label if the row
+  //    couldn't be read.
   const source = nodeRow?.name || parsed.source;
   const datetime = normalisePagerDatetime(parsed.timestamp);
   const body = new URLSearchParams({

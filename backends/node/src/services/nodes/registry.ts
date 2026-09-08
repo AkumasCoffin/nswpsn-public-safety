@@ -56,7 +56,15 @@ export interface NodeRow {
   lon: number | null;
   // Required NSW RFS zone (coarse area) the node covers. Null only on legacy rows
   // created before zones existed; the API/UI require it going forward.
+  // RADIO nodes only — pager nodes record state + lga instead.
   zone: string | null;
+  // Australian state the node operates in (AU_STATES). Selects which state's
+  // Pagermon the relay forwards into and which frequency plan the node gets.
+  // Backfilled 'NSW' by migration 097; required on pager-node create.
+  state: string | null;
+  // Coarse locality (ABS LGA name, same vocabulary as the boundaries table).
+  // Pager nodes only; display/attribution, not validated against the DB.
+  lga: string | null;
 }
 
 export interface HelloMeta {
@@ -70,7 +78,7 @@ export interface HelloMeta {
 
 const NODE_COLS = `id, kind, user_id, install_id, name, enabled, feed_enabled, config_override,
   config_version, agent_version, sdrtrunk_version, rdio_version, os, arch,
-  last_seen_at, notes, created_at, token_prefix, lat, lon, zone`;
+  last_seen_at, notes, created_at, token_prefix, lat, lon, zone, state, lga`;
 
 /** Max distinct installs (nodes) one contributor may register. `install_id` is
  *  an attacker-chosen header, so without a cap a single token could create
@@ -107,16 +115,16 @@ export async function createNode(
   kind: string,
   tokenHash: string,
   tokenPrefix: string,
-  zone: string,
+  loc: { zone: string | null; state: string | null; lga: string | null },
 ): Promise<NodeRow | null> {
   const pool = await getPool();
   if (!pool) return null;
   const cleanName = clampMeta(name, 120) || `${kind}-node`;
   const res = await pool.query<NodeRow>(
-    `INSERT INTO nodes (user_id, kind, name, token_hash, token_prefix, zone)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO nodes (user_id, kind, name, token_hash, token_prefix, zone, state, lga)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING ${NODE_COLS}`,
-    [userId, kind, cleanName, tokenHash, tokenPrefix, zone],
+    [userId, kind, cleanName, tokenHash, tokenPrefix, loc.zone, loc.state, loc.lga],
   );
   return res.rows[0] ?? null;
 }
@@ -304,18 +312,39 @@ export async function updateNode(
 }
 
 /**
- * Set a node's location: its required RFS `zone` (coarse area) plus the OPTIONAL
- * exact antenna pin (lat/lon — null = zone only). Staff/owner-visible only.
+ * Set a node's location plus the OPTIONAL exact antenna pin (lat/lon — null =
+ * area only). Radio nodes set the RFS `zone`; pager nodes set `state` + `lga`.
+ * A field left undefined keeps its stored value (so the pager path never
+ * clears zone and vice versa). Staff/owner-visible only.
  */
 export async function setNodeLocation(
   id: string,
-  loc: { zone: string; lat: number | null; lon: number | null },
+  loc: {
+    zone?: string | null;
+    state?: string | null;
+    lga?: string | null;
+    lat?: number | null;
+    lon?: number | null;
+  },
 ): Promise<NodeRow | null> {
   const pool = await getPool();
   if (!pool) return null;
   const res = await pool.query<NodeRow>(
-    `UPDATE nodes SET zone = $2, lat = $3, lon = $4 WHERE id = $1 RETURNING ${NODE_COLS}`,
-    [id, loc.zone, loc.lat, loc.lon],
+    `UPDATE nodes SET
+       zone  = CASE WHEN $2::boolean  THEN $3  ELSE zone  END,
+       state = CASE WHEN $4::boolean  THEN $5  ELSE state END,
+       lga   = CASE WHEN $6::boolean  THEN $7  ELSE lga   END,
+       lat   = CASE WHEN $8::boolean  THEN $9  ELSE lat   END,
+       lon   = CASE WHEN $10::boolean THEN $11 ELSE lon   END
+     WHERE id = $1 RETURNING ${NODE_COLS}`,
+    [
+      id,
+      loc.zone !== undefined, loc.zone ?? null,
+      loc.state !== undefined, loc.state ?? null,
+      loc.lga !== undefined, loc.lga ?? null,
+      loc.lat !== undefined, loc.lat ?? null,
+      loc.lon !== undefined, loc.lon ?? null,
+    ],
   );
   return res.rows[0] ?? null;
 }
@@ -323,11 +352,12 @@ export async function setNodeLocation(
 /**
  * Set a pager node's single-SDR primary frequency preference, merged into the
  * JSONB config_override (so it persists across restarts/updates and other
- * override keys are untouched). Guarded to kind='pager'. Returns the updated row.
+ * override keys are untouched). Guarded to kind='pager'. Returns the updated
+ * row. Label validity (against the node's STATE's plan) is the API layer's job.
  */
 export async function setPagerPrimary(
   id: string,
-  primary: 'NSWRFS' | 'FRNSW',
+  primary: string,
 ): Promise<NodeRow | null> {
   const pool = await getPool();
   if (!pool) return null;

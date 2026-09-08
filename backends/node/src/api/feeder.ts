@@ -38,6 +38,8 @@ import { getUsername } from './users.js';
 import { hub } from '../services/nodes/hub.js';
 import { liveCallWindow } from '../services/nodeCallWindow.js';
 import { getZoneGroups, isValidZone } from '../services/nodes/rfsZones.js';
+import { AU_STATES } from '../lib/stateMask.js';
+import { pushConfigToNode } from '../services/nodes/configPush.js';
 import { getPool } from '../db/pool.js';
 import { feederRadioStats } from './node-data.js';
 
@@ -129,6 +131,8 @@ function feederNodeView(n: NodeRow) {
     lat: n.lat,
     lon: n.lon,
     zone: n.zone,
+    state: n.state,
+    lga: n.lga,
     online,
     lastSeenAt: n.last_seen_at,
     agentVersion: n.agent_version,
@@ -187,13 +191,27 @@ feederRouter.get('/api/feeder/me', async (c) => {
 // POST /api/feeder/nodes — the contributor creates their own node (name + type).
 // Mints the node's own token, returned ONCE (bake into the installer now).
 // ---------------------------------------------------------------------------
-const CreateNodeSchema = z.object({
-  // Nodes are always auto-named {kind}-{user}-{uuid}. A coarse RFS `zone` is
-  // REQUIRED at creation; the exact antenna pin (lat/lon) stays optional and is
-  // set/updated separately via PUT .../location.
-  kind: z.string().refine(isNodeKind, 'invalid node kind'),
-  zone: z.string().min(1).refine(isValidZone, 'unknown zone'),
-});
+const CreateNodeSchema = z
+  .object({
+    // Nodes are always auto-named {kind}-{user}-{uuid}. A coarse area is
+    // REQUIRED at creation — RADIO nodes give the NSW RFS `zone`; PAGER nodes
+    // give `state` (routes their Pagermon relay + frequency plan) and `lga`.
+    // The exact antenna pin (lat/lon) stays optional, set via PUT .../location.
+    kind: z.string().refine(isNodeKind, 'invalid node kind'),
+    zone: z.string().min(1).refine(isValidZone, 'unknown zone').optional(),
+    state: z.enum(AU_STATES as unknown as [string, ...string[]]).optional(),
+    // Free text on purpose (ABS LGA vocabulary via the UI's datalist, but ACT
+    // has no LGAs and a dev DB may have no boundaries table).
+    lga: z.string().trim().min(1).max(120).optional(),
+  })
+  .superRefine((v, ctx) => {
+    if (v.kind === 'pager') {
+      if (!v.state) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['state'], message: 'state required for pager nodes' });
+      if (!v.lga) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['lga'], message: 'lga required for pager nodes' });
+    } else if (!v.zone) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['zone'], message: 'zone required' });
+    }
+  });
 feederRouter.post('/api/feeder/nodes', async (c) => {
   const userId = c.get('userId') as string;
   try {
@@ -212,7 +230,12 @@ feederRouter.post('/api/feeder/nodes', async (c) => {
     }
     const name = autoNodeName(parsed.data.kind, await getUsername(userId));
     const { token, tokenHash, tokenPrefix } = mintNodeToken();
-    const node = await createNode(userId, name, parsed.data.kind, tokenHash, tokenPrefix, parsed.data.zone);
+    const isPagerKind = parsed.data.kind === 'pager';
+    const node = await createNode(userId, name, parsed.data.kind, tokenHash, tokenPrefix, {
+      zone: isPagerKind ? null : parsed.data.zone ?? null,
+      state: isPagerKind ? parsed.data.state ?? null : 'NSW',
+      lga: isPagerKind ? parsed.data.lga ?? null : null,
+    });
     if (!node) return c.json({ error: 'registry unavailable' }, 503);
     c.header('Cache-Control', 'no-store');
     return c.json({ node: feederNodeView(node), token });
@@ -573,22 +596,34 @@ feederRouter.get('/api/feeder/zones', (c) => {
 });
 
 // ---------------------------------------------------------------------------
-// PUT /api/feeder/nodes/:id/location — set the node's location: its REQUIRED RFS
-// `zone` (coarse area) plus the OPTIONAL exact antenna pin (lat/lon for coverage
-// + channel tuning). Pass null lat/lon for "zone only".
+// PUT /api/feeder/nodes/:id/location — set the node's location: its REQUIRED
+// coarse area (RFS `zone` for radio nodes; `state` + `lga` for pager nodes)
+// plus the OPTIONAL exact antenna pin (lat/lon for coverage + channel tuning).
+// Pass null lat/lon for "area only".
 // ---------------------------------------------------------------------------
-const LocationSchema = z.object({
+const RadioLocationSchema = z.object({
   zone: z.string().min(1).refine(isValidZone, 'unknown zone'),
+  lat: z.number().min(-90).max(90).nullable(),
+  lon: z.number().min(-180).max(180).nullable(),
+});
+const PagerLocationSchema = z.object({
+  state: z.enum(AU_STATES as unknown as [string, ...string[]]),
+  lga: z.string().trim().min(1).max(120),
   lat: z.number().min(-90).max(90).nullable(),
   lon: z.number().min(-180).max(180).nullable(),
 });
 feederRouter.put('/api/feeder/nodes/:id/location', async (c) => {
   const node = await ownedNode(c);
   if (!node) return c.json({ error: 'not your node' }, 404);
-  const parsed = LocationSchema.safeParse(await c.req.json().catch(() => ({})));
+  const body = await c.req.json().catch(() => ({}));
+  const parsed =
+    node.kind === 'pager' ? PagerLocationSchema.safeParse(body) : RadioLocationSchema.safeParse(body);
   if (!parsed.success) return c.json({ error: 'invalid location' }, 400);
   try {
     const updated = await setNodeLocation(node.id, parsed.data);
+    // A pager node's state selects its frequency plan — re-push so a state
+    // change retunes the node live (no-op when offline or unchanged).
+    if (node.kind === 'pager') await pushConfigToNode(node.id).catch(() => {});
     return c.json({ node: updated ? feederNodeView(updated) : null });
   } catch (err) {
     log.error({ err, id: node.id }, 'Error setting node location');

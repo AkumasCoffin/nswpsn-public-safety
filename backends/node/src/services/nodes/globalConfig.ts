@@ -828,19 +828,36 @@ export async function setAutoUpdate(enabled: boolean): Promise<void> {
 }
 
 // ── Pagermon ingest target (SERVER-ONLY secret) ──────────────────────────────
-// The central Pagermon the pager-node relay forwards INTO. Stored on the
-// singleton row (owner-set in staff) so it's editable without a redeploy, but
-// deliberately kept OUT of GlobalConfigSchema / buildConfigPayload — it is never
-// fanned out to agents. Falls back to env (config.PAGERMON_INGEST_*).
+// The central Pagermon the pager-node relay forwards INTO — one per Australian
+// state, selected by the NODE's state (nodes.state). NSW is the original
+// deployment: its target is stored on the singleton row (owner-set in staff) so
+// it's editable without a redeploy, falling back to the legacy unsuffixed env
+// pair. Every other state is env-only (PAGERMON_INGEST_URL_<STATE>). All of it
+// is deliberately kept OUT of GlobalConfigSchema / buildConfigPayload — the
+// keys are never fanned out to agents.
 
 export interface PagerIngest {
   url: string | null;
   apiKey: string | null;
 }
 
-/** Read the Pagermon ingest URL + key: DB row first, then env fallback. Never
- *  throws — returns nulls when the DB is down and env is unset. */
-export async function getPagerIngest(): Promise<PagerIngest> {
+// Env pairs for the non-NSW states. A state absent here (or with its pair
+// unset) has no Pagermon yet — the relay 503s its nodes rather than cross-feed
+// another state's server.
+const STATE_INGEST_ENV: Record<string, { url: string | undefined; apiKey: string | undefined }> = {
+  QLD: { url: config.PAGERMON_INGEST_URL_QLD, apiKey: config.PAGERMON_INGEST_API_KEY_QLD },
+};
+
+/** Read the Pagermon ingest URL + key for a node's state. NSW (or null/unknown
+ *  state — the pre-097 backfill default) keeps the legacy behaviour: DB row
+ *  first, then env fallback. Never throws — returns nulls when nothing is
+ *  configured for the state. */
+export async function getPagerIngest(state?: string | null): Promise<PagerIngest> {
+  const s = (state ?? 'NSW').trim().toUpperCase();
+  if (s !== 'NSW' && s !== '') {
+    const pair = STATE_INGEST_ENV[s];
+    return { url: pair?.url ?? null, apiKey: pair?.apiKey ?? null };
+  }
   const envUrl = config.PAGERMON_INGEST_URL ?? null;
   const envKey = config.PAGERMON_INGEST_API_KEY ?? null;
   const pool = await getPool();

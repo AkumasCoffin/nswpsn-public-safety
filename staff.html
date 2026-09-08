@@ -8525,7 +8525,7 @@
             <span>install <span class="node-mono">${installShort}</span></span>
           </div>
           <div class="dev-card-secondary">
-            <span><i class="fas fa-map"></i> region ${node.zone ? `<strong>${escapeHtml(node.zone)}</strong>` : '<span style="color:#fbbf24">not set</span>'}${(typeof node.lat === 'number') ? ' · <i class="fas fa-location-dot" title="Exact pin set"></i> pin' : ''}</span>
+            <span><i class="fas fa-map"></i> region ${(() => { const a = isPager ? [node.state, node.lga].filter(Boolean).join(' · ') : node.zone; return a ? `<strong>${escapeHtml(a)}</strong>` : '<span style="color:#fbbf24">not set</span>'; })()}${(typeof node.lat === 'number') ? ' · <i class="fas fa-location-dot" title="Exact pin set"></i> pin' : ''}</span>
           </div>
           ${statusRow}
         </div>`;
@@ -8655,8 +8655,9 @@
       const node = allNodes.find(n => String(n.id) === String(id));
       if (!node) return;
       const hasPin = typeof node.lat === 'number' && typeof node.lon === 'number';
-      const zoneLine = node.zone
-        ? `<div class="loc-view-note"><i class="fas fa-map"></i> Region: <b>${escapeHtml(node.zone)}</b></div>`
+      const areaLabel = node.kind === 'pager' ? [node.state, node.lga].filter(Boolean).join(' · ') : node.zone;
+      const zoneLine = areaLabel
+        ? `<div class="loc-view-note"><i class="fas fa-map"></i> Region: <b>${escapeHtml(areaLabel)}</b></div>`
         : `<div class="loc-view-note" style="color:#fbbf24">No region set for this node.</div>`;
       // Zone-only node (no exact pin) — show the zone, no map.
       if (!hasPin) {
@@ -9454,9 +9455,10 @@
       const feedEnabled = n.feedEnabled === true;
       const isPager = (n.kind || 'radio') === 'pager';
       const located = typeof n.lat === 'number';
-      const hasLoc = located || !!n.zone;
-      const locTitle = n.zone
-        ? `Region: ${escapeHtml(n.zone)}${located ? ' · exact pin set' : ' · no exact pin'}`
+      const areaLabel = isPager ? [n.state, n.lga].filter(Boolean).join(' · ') : n.zone;
+      const hasLoc = located || !!areaLabel;
+      const locTitle = areaLabel
+        ? `Region: ${escapeHtml(areaLabel)}${located ? ' · exact pin set' : ' · no exact pin'}`
         : 'No location set';
       const feedTitle = isPager
         ? 'Forward decoded pages to central Pagermon. Off keeps the node decoding (reception still counts) but stops uploading.'
@@ -9526,7 +9528,14 @@
       }
 
       // Single-SDR primary frequency (persisted; 2 SDRs run both regardless).
-      const primary = nFresh.pagerPrimary === 'FRNSW' ? 'FRNSW' : 'NSWRFS';
+      // The valid choices come from the node's STATE's frequency plan
+      // (pagerPrimaryOptions, backend-supplied) — never hardcoded here.
+      const primaryOpts = (Array.isArray(nFresh.pagerPrimaryOptions) && nFresh.pagerPrimaryOptions.length)
+        ? nFresh.pagerPrimaryOptions
+        : [{ label: 'NSWRFS', mhz: 148.5875 }, { label: 'FRNSW', mhz: 148.9875 }];
+      const primary = primaryOpts.some(o => o.label === nFresh.pagerPrimary) ? nFresh.pagerPrimary : primaryOpts[0].label;
+      const nodeState = nFresh.state || 'NSW';
+      const nodeLga = nFresh.lga || '';
       const gainVal = (nFresh.pagerGain == null) ? '' : String(nFresh.pagerGain);
       const ppmVal = (nFresh.pagerPpm == null) ? '' : String(nFresh.pagerPpm);
       // Supported gain steps the agent reports for this SDR (dB) → a dropdown of
@@ -9537,7 +9546,7 @@
       // unconditional innerHTML rebuild snaps an open <select> shut and wipes a
       // half-typed field mid-tune, so skip when nothing shown here changed.
       const sig = JSON.stringify([online, readers.map(r => r.label + ':' + r.state),
-        _ndAudioLabel, msgs, qd, primary, gainVal, ppmVal, gains]);
+        _ndAudioLabel, msgs, qd, primary, gainVal, ppmVal, gains, nodeState, nodeLga, primaryOpts]);
       if (sig === _ndReadersSig) return;
       _ndReadersSig = sig;
 
@@ -9559,11 +9568,20 @@
 
       el.innerHTML = `
         <div class="nd-switch-row" style="margin-bottom:0.7rem;">
+          <span title="Which state's Pagermon this node feeds — also selects its frequency plan.">State / LGA</span>
+          <span style="display:flex; gap:0.35rem; align-items:center;">
+            <select id="nd-pager-state" class="nd-write-input" style="${tuneInput} width:auto; text-align:left;">
+              ${['NSW','VIC','QLD','SA','WA','TAS','NT','ACT'].map(s => `<option value="${s}" ${s === nodeState ? 'selected' : ''}>${s}</option>`).join('')}
+            </select>
+            <input id="nd-pager-lga" type="text" class="nd-write-input" value="${escapeHtml(nodeLga)}" placeholder="LGA" maxlength="120" style="${tuneInput} width:8rem; text-align:left;">
+            <button class="btn btn-secondary btn-sm nd-write" onclick="_ndSetPagerState(this)" title="Save state + LGA — re-pushes the node's frequency plan">Save</button>
+          </span>
+        </div>
+        <div class="nd-switch-row" style="margin-bottom:0.7rem;">
           <span>Single-SDR frequency</span>
-          <select class="nd-write-input" onchange="_ndSetPagerPrimary(this.value, this)" style="background:rgba(255,255,255,0.05); color:var(--text-primary,#e2e8f0); border:1px solid var(--border-subtle,#334155); border-radius:6px; padding:0.25rem 0.4rem; font-size:0.8rem;">
-            <option value="NSWRFS" ${primary === 'FRNSW' ? '' : 'selected'}>NSW RFS (148.5875)</option>
-            <option value="FRNSW" ${primary === 'FRNSW' ? 'selected' : ''}>Fire &amp; Rescue (148.9875)</option>
-          </select>
+          ${primaryOpts.length > 1 ? `<select class="nd-write-input" onchange="_ndSetPagerPrimary(this.value, this)" style="background:rgba(255,255,255,0.05); color:var(--text-primary,#e2e8f0); border:1px solid var(--border-subtle,#334155); border-radius:6px; padding:0.25rem 0.4rem; font-size:0.8rem;">
+            ${primaryOpts.map(o => `<option value="${escapeHtml(o.label)}" ${o.label === primary ? 'selected' : ''}>${escapeHtml(o.label)} (${o.mhz})</option>`).join('')}
+          </select>` : `<span>${escapeHtml(primaryOpts[0].label)} (${primaryOpts[0].mhz})</span>`}
         </div>
         <div class="nd-switch-row" style="margin-bottom:0.5rem;">
           <span title="Tuner gain for all readers. Default = agent default (49.6); Auto = hardware AGC; or pick a supported step.">Gain (dB)</span>
@@ -9597,10 +9615,37 @@
           body: JSON.stringify({ primary }),
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        showToast(`Single-SDR frequency set to ${primary === 'FRNSW' ? 'Fire & Rescue' : 'NSW RFS'}.`, 'success');
+        showToast(`Single-SDR frequency set to ${primary}.`, 'success');
         await loadNodes();
       } catch (e) {
         showToast(`Could not change frequency: ${e.message}`, 'error');
+      } finally {
+        if (el) el.disabled = false;
+      }
+    }
+
+    // Staff: move a pager node to another state (+ its LGA tag). The state
+    // routes which Pagermon the node's pages feed into AND selects its
+    // frequency plan, which is re-pushed live by the backend.
+    async function _ndSetPagerState(el) {
+      const state = document.getElementById('nd-pager-state')?.value || '';
+      const lga = (document.getElementById('nd-pager-lga')?.value || '').trim();
+      if (!state || !lga) { showToast('Both state and LGA are required.', 'error'); return; }
+      // The frequency plan (and so the reader labels) can change — stop any
+      // running audio monitor so it doesn't get stranded on a dead label.
+      if (_ndAudioLabel != null) _ndAudioStop();
+      if (el) el.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/${_ndNodeId}/state`, {
+          method: 'PUT',
+          headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ state, lga }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        showToast(`Node moved to ${state} — frequency plan re-pushed.`, 'success');
+        await loadNodes();
+      } catch (e) {
+        showToast(`Could not set state: ${e.message}`, 'error');
       } finally {
         if (el) el.disabled = false;
       }

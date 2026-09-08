@@ -133,23 +133,43 @@ export interface ConfigPayload {
   pager?: PagerConfig;
 }
 
-// Fixed pager plan (decided with the operator). NSW RFS + Fire & Rescue NSW.
-// The list is sent in PRIORITY ORDER: with a single SDR the agent runs only the
-// FIRST frequency; with two SDRs it runs both. Which one is first is a per-node
-// preference (config_override.pagerPrimary), default NSWRFS.
-const PAGER_FREQUENCIES: PagerFreq[] = [
-  { label: 'NSWRFS', mhz: 148.5875 },
-  { label: 'FRNSW', mhz: 148.9875 },
-];
+// Fixed pager plans (decided with the operator), one per Australian state —
+// selected by the node's `state` column. Each list is sent in PRIORITY ORDER:
+// with a single SDR the agent runs only the FIRST frequency; with two SDRs it
+// runs the first two. Which one is first is a per-node preference
+// (config_override.pagerPrimary), defaulting to the plan's first entry.
+const PAGER_PLANS: Record<string, PagerFreq[]> = {
+  NSW: [
+    { label: 'NSWRFS', mhz: 148.5875 },
+    { label: 'FRNSW', mhz: 148.9875 },
+  ],
+  QLD: [{ label: 'QFES', mhz: 148.6375 }],
+};
 const PAGER_PROTOCOLS = ['POCSAG512', 'POCSAG1200', 'POCSAG2400'];
-export const PAGER_PRIMARY_LABELS = ['NSWRFS', 'FRNSW'] as const;
-export type PagerPrimary = (typeof PAGER_PRIMARY_LABELS)[number];
+
+/** The frequency plan for a node's state. NSW for null/unknown — every
+ *  pre-097 node is a NSW deployment (the migration backfills them, but a
+ *  DB-less test row or a raced read must not change a node's plan). */
+export function pagerPlanFor(state?: string | null): PagerFreq[] {
+  return PAGER_PLANS[(state ?? '').trim().toUpperCase()] ?? PAGER_PLANS['NSW']!;
+}
+
+/** The valid pagerPrimary labels for a state (for API validation + the staff
+ *  select — with MHz so the UI never duplicates the frequency table). */
+export function pagerPrimaryOptionsFor(state?: string | null): PagerFreq[] {
+  return pagerPlanFor(state);
+}
 
 /** The per-node primary (single-SDR) frequency label — read from the persisted
- *  config_override so it survives restarts/updates. Defaults to NSWRFS. */
-export function pagerPrimaryOf(node: NodeRow): PagerPrimary {
+ *  config_override so it survives restarts/updates. An override only counts
+ *  when it belongs to the node's state's plan (a stale FRNSW on a node moved
+ *  to QLD harmlessly falls back); default is the plan's first entry. */
+export function pagerPrimaryOf(node: NodeRow): string {
   const co = (node.config_override ?? {}) as Record<string, unknown>;
-  return co['pagerPrimary'] === 'FRNSW' ? 'FRNSW' : 'NSWRFS';
+  const plan = pagerPlanFor(node.state);
+  const wanted = co['pagerPrimary'];
+  if (typeof wanted === 'string' && plan.some((f) => f.label === wanted)) return wanted;
+  return plan[0]!.label;
 }
 
 /** The per-node tuner-gain override ("auto" or a number-as-string, dB), or
@@ -170,12 +190,14 @@ export function pagerPpmOf(node: NodeRow): number | undefined {
   return typeof p === 'number' && Number.isFinite(p) ? p : undefined;
 }
 
-/** Frequencies in priority order for this node: the chosen primary first. */
+/** Frequencies in priority order for this node: its state's plan with the
+ *  chosen primary first. */
 function pagerFrequencies(node: NodeRow): PagerFreq[] {
+  const plan = pagerPlanFor(node.state);
   const primary = pagerPrimaryOf(node);
-  const first = PAGER_FREQUENCIES.find((f) => f.label === primary);
-  const rest = PAGER_FREQUENCIES.filter((f) => f.label !== primary);
-  return first ? [first, ...rest] : [...PAGER_FREQUENCIES];
+  const first = plan.find((f) => f.label === primary);
+  const rest = plan.filter((f) => f.label !== primary);
+  return first ? [first, ...rest] : [...plan];
 }
 
 /** Build the lean config payload a PAGER node receives. No presets/rdio/SDR-Trunk
