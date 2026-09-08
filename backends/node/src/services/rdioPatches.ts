@@ -45,6 +45,7 @@ const EMPTY: PatchLookup = { byTalkgroup: new Map(), all: [] };
 
 let _pool: Pool | null = null;
 let _cache: { at: number; lookup: PatchLookup } | null = null;
+let _inflight: Promise<PatchLookup> | null = null;
 
 /** ~60s, matching the other config-shaped lookups. Patches change by hand, so
  *  a minute of staleness is irrelevant and the read stays off the hot path. */
@@ -53,7 +54,13 @@ const TTL_MS = 60_000;
 function pool(): Pool | null {
   if (!config.RDIO_DATABASE_URL) return null;
   if (!_pool) {
-    _pool = new Pool({ connectionString: config.RDIO_DATABASE_URL, max: 2 });
+    _pool = new Pool({
+      connectionString: config.RDIO_DATABASE_URL,
+      max: 2,
+      // The query here is tiny; a hung one must never hold one of the two
+      // connections open indefinitely against rdio's own database.
+      statement_timeout: 10_000,
+    });
     _pool.on('error', (err) => log.warn({ err }, 'rdioPatches: idle client error'));
   }
   return _pool;
@@ -87,6 +94,17 @@ function parseMembers(raw: unknown): number[] {
  */
 export async function rdioPatches(): Promise<PatchLookup> {
   if (_cache && Date.now() - _cache.at < TTL_MS) return _cache.lookup;
+  // Single-flight: at TTL expiry every in-flight call-upload reaches this
+  // point together — one refresh serves them all, instead of each issuing
+  // its own copy of the query to queue on the max-2 pool.
+  if (_inflight) return _inflight;
+  _inflight = _refreshPatches().finally(() => {
+    _inflight = null;
+  });
+  return _inflight;
+}
+
+async function _refreshPatches(): Promise<PatchLookup> {
   const p = pool();
   if (!p) {
     _cache = { at: Date.now(), lookup: EMPTY };

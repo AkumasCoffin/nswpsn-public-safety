@@ -20,6 +20,7 @@ import { log } from '../lib/log.js';
 
 let _pool: Pool | null = null;
 let _cache: { at: number; ids: Set<number> } | null = null;
+let _inflight: Promise<Set<number>> | null = null;
 
 /** ~60s, matching rdioPatches. The talkgroup list changes by hand. */
 const TTL_MS = 60_000;
@@ -27,7 +28,13 @@ const TTL_MS = 60_000;
 function pool(): Pool | null {
   if (!config.RDIO_DATABASE_URL) return null;
   if (!_pool) {
-    _pool = new Pool({ connectionString: config.RDIO_DATABASE_URL, max: 2 });
+    _pool = new Pool({
+      connectionString: config.RDIO_DATABASE_URL,
+      max: 2,
+      // Tiny query; a hang must never hold a connection open indefinitely
+      // against rdio's own database.
+      statement_timeout: 10_000,
+    });
     _pool.on('error', (err) => log.warn({ err }, 'rdioTalkgroups: idle client error'));
   }
   return _pool;
@@ -45,6 +52,16 @@ function pool(): Pool | null {
  */
 export async function programmedTalkgroupIds(): Promise<Set<number>> {
   if (_cache && Date.now() - _cache.at < TTL_MS) return _cache.ids;
+  // Single-flight: concurrent ingest at TTL expiry shares ONE refresh
+  // rather than each queueing its own query on the max-2 pool.
+  if (_inflight) return _inflight;
+  _inflight = _refreshProgrammed().finally(() => {
+    _inflight = null;
+  });
+  return _inflight;
+}
+
+async function _refreshProgrammed(): Promise<Set<number>> {
   const p = pool();
   if (!p) {
     const empty = new Set<number>();
@@ -74,4 +91,5 @@ export async function programmedTalkgroupIds(): Promise<Set<number>> {
 /** Test seam: drop the cache so the next call re-reads. */
 export function _resetRdioTalkgroupsCache(): void {
   _cache = null;
+  _inflight = null;
 }
