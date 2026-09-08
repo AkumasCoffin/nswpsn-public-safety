@@ -37,6 +37,17 @@ vi.mock('../../../src/db/pool.js', () => ({
   getPool: vi.fn(async () => (getPoolReturn === 'pool' ? fakePool : null)),
 }));
 
+// Point-in-polygon lookup used to stamp state/lga/suburb — stubbed so the
+// CRUD tests don't see boundary SELECTs in `calls`. Geo-specific tests
+// override the implementation.
+const boundaryForPointMock = vi.fn(
+  async (_kind: string, _lon: number, _lat: number): Promise<unknown> => null,
+);
+vi.mock('../../../src/api/boundaries.js', () => ({
+  boundaryForPoint: (...a: unknown[]) =>
+    boundaryForPointMock(...(a as [string, number, number])),
+}));
+
 // Mutating incident routes are editor-gated (requireRole(canEditIncidents)),
 // and edit/delete additionally require creator-or-admin. Stub the DB-backed
 // role checks: canEditIncidents→true (any editor) and canManageUsers→true
@@ -75,6 +86,8 @@ beforeEach(() => {
   getPoolReturn = 'pool';
   canManageUsersMock.mockReset();
   canManageUsersMock.mockResolvedValue(true);
+  boundaryForPointMock.mockReset();
+  boundaryForPointMock.mockResolvedValue(null);
   fakePool.query.mockClear();
 });
 
@@ -209,6 +222,92 @@ describe('POST /api/incidents', () => {
   });
 });
 
+describe('POST /api/incidents geo stamping', () => {
+  const lookups: Record<string, { name: string; shortName: string | null; state: string | null }> = {
+    state: { name: 'New South Wales', shortName: 'NSW', state: 'NSW' },
+    lga: { name: 'Blacktown', shortName: 'BLACKTOWN', state: 'NSW' },
+    locality: { name: 'KELLYVILLE RIDGE', shortName: null, state: 'NSW' },
+  };
+
+  it('stamps state/lga/suburb resolved from the pin coordinates', async () => {
+    boundaryForPointMock.mockImplementation(async (kind: string) => lookups[kind] ?? null);
+    nextResult = { rows: [{ id: 'geo-1' }] };
+    const app = makeApp();
+    await app.request('/api/incidents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Fire', lat: -33.7, lng: 150.92 }),
+    });
+    const ins = callWith('INSERT INTO incidents');
+    expect(ins?.sql).toContain('state, lga, suburb');
+    // No-id INSERT appends geo after created_by: state=12, lga=13, suburb=14.
+    expect(ins?.params?.[12]).toBe('NSW');
+    expect(ins?.params?.[13]).toBe('Blacktown');
+    expect(ins?.params?.[14]).toBe('KELLYVILLE RIDGE');
+  });
+
+  it('client-supplied suburb/state win over the lookup (suburb pick)', async () => {
+    boundaryForPointMock.mockImplementation(async (kind: string) => lookups[kind] ?? null);
+    nextResult = { rows: [{ id: 'geo-2' }] };
+    const app = makeApp();
+    await app.request('/api/incidents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'F', lat: -33.7, lng: 150.92, suburb: 'Kellyville', state: 'NSW' }),
+    });
+    const ins = callWith('INSERT INTO incidents');
+    expect(ins?.params?.[12]).toBe('NSW');
+    expect(ins?.params?.[13]).toBe('Blacktown'); // lga still resolved
+    expect(ins?.params?.[14]).toBe('Kellyville'); // supplied, not the lookup's
+    // Only the missing kind was looked up for suburb/state.
+    const kinds = boundaryForPointMock.mock.calls.map((c) => c[0]);
+    expect(kinds).toContain('lga');
+    expect(kinds).not.toContain('locality');
+    expect(kinds).not.toContain('state');
+  });
+
+  it('a zero/zero pin stays unstamped without hitting the lookup', async () => {
+    nextResult = { rows: [{ id: 'geo-3' }] };
+    const app = makeApp();
+    await app.request('/api/incidents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'F' }),
+    });
+    expect(boundaryForPointMock).not.toHaveBeenCalled();
+    const ins = callWith('INSERT INTO incidents');
+    expect(ins?.params?.[12]).toBeNull();
+  });
+
+  it('PUT with new coordinates re-resolves the geo columns', async () => {
+    boundaryForPointMock.mockImplementation(async (kind: string) => lookups[kind] ?? null);
+    nextResult = { rows: [{ created_by: 'editor-1', lat: -30, lng: 150 }], rowCount: 1 };
+    const app = makeApp();
+    await app.request('/api/incidents/inc-geo', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lat: -33.7, lng: 150.92 }),
+    });
+    const upd = callWith('UPDATE incidents SET');
+    expect(upd?.sql).toContain('state = $3');
+    expect(upd?.sql).toContain('lga = $4');
+    expect(upd?.sql).toContain('suburb = $5');
+    expect(upd?.params).toEqual([-33.7, 150.92, 'NSW', 'Blacktown', 'KELLYVILLE RIDGE', 'inc-geo']);
+  });
+
+  it('PUT without coordinates leaves the geo columns alone', async () => {
+    nextResult = { rows: [{ created_by: 'editor-1', lat: -30, lng: 150 }], rowCount: 1 };
+    const app = makeApp();
+    await app.request('/api/incidents/inc-geo', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'T' }),
+    });
+    expect(boundaryForPointMock).not.toHaveBeenCalled();
+    expect(callWith('UPDATE incidents SET')?.sql).not.toContain('state =');
+  });
+});
+
 describe('PUT /api/incidents/:id', () => {
   it('returns 400 when no fields are supplied', async () => {
     const app = makeApp();
@@ -235,7 +334,7 @@ describe('PUT /api/incidents/:id', () => {
     expect(upd?.sql).toContain('type = $2');
     expect(upd?.params).toEqual(['New', '["fire"]', 'inc1']);
     // The gate SELECT ran first.
-    expect(callWith('SELECT created_by FROM incidents')?.params).toEqual(['inc1']);
+    expect(callWith('SELECT created_by, lat, lng FROM incidents')?.params).toEqual(['inc1']);
   });
 
   it('sanitizes units (trim/uppercase/dedupe) and upserts the callsign dictionary', async () => {

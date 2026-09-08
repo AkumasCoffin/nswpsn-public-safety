@@ -7965,6 +7965,10 @@ function initPagerHoursFromStorage() {
       const status = data.status || 'Unknown';
       const size = data.size || '-';
       const location = data.location || data.LOCATION || 'Unknown location';
+      // Resolved by the backend from the pin coordinates (or from the
+      // suburb pick) — absent on incidents created before the columns.
+      const areaBits = [data.suburb, data.lga, data.state].filter(Boolean).join(' \u00b7 ');
+      const areaLine = areaBits ? `<strong>Area:</strong> ${escapeHtml(areaBits)}<br>` : '';
 
       const agencyBadges = agencies.length
         ? agencies.map(getAgencyClass).map((cls, idx) => {
@@ -7980,7 +7984,7 @@ function initPagerHoursFromStorage() {
         <h2 style="margin:0 0 0.5rem 0; font-size:1.6rem; color:#fff;">${escapeHtml(data.title || 'User incident')}</h2>
         <div style="background:rgba(255,255,255,0.05); padding:1rem; border-radius:0.5rem; margin-bottom:1rem; font-size:0.9rem; line-height:1.6; color:#cbd5e1;">
           <strong>Location:</strong> ${escapeHtml(location)}<br>
-          <strong>Status:</strong> ${escapeHtml(status)}<br>
+          ${areaLine}<strong>Status:</strong> ${escapeHtml(status)}<br>
           <strong>Type:</strong> ${escapeHtml(typeRaw)}<br>
           <strong>Size:</strong> ${escapeHtml(size)}
           ${(Array.isArray(data.units) && data.units.length)
@@ -18443,6 +18447,6 @@ function initPagerHoursFromStorage() {
   <script src="ui-dialogs.js"></script>
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
-  <script src="map-editor-module.js?v=42"></script>
+  <script src="map-editor-module.js?v=43"></script>
 </body>
 </html>

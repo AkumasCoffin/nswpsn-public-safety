@@ -602,8 +602,10 @@
       
       // Display location (read-only, auto-generated from coordinates)
       const locationText = inc.location || '';
-      document.getElementById('edit-location-text').textContent = locationText || 'No location data';
-      document.getElementById('location-group').style.display = locationText ? 'block' : 'none';
+      const areaBits = [inc.suburb, inc.lga, inc.state].filter(Boolean).join(' \u00b7 ');
+      document.getElementById('edit-location-text').textContent =
+        (locationText || 'No location data') + (areaBits ? ' \u2014 ' + areaBits : '');
+      document.getElementById('location-group').style.display = (locationText || areaBits) ? 'block' : 'none';
 
       document.getElementById('title-group').style.display = 'block';
       document.getElementById('status-size-group').style.display = 'grid';
@@ -2100,7 +2102,7 @@
       });
     }
 
-    async function createIncidentAtLocation(lat, lng, presetLocation) {
+    async function createIncidentAtLocation(lat, lng, presetLocation, extraFields) {
       // Ask for the title via an in-page menu (not a native browser prompt).
       const title = await askIncidentTitle();
       if (!title) { if (addMode) toggleAddMode(); return; }
@@ -2123,7 +2125,8 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             title, lat, lng, location: location || '', type: [], description: '',
-            status: 'Going', size: '-', responding_agencies: [], expires_at: expireTime
+            status: 'Going', size: '-', responding_agencies: [], expires_at: expireTime,
+            ...(extraFields || {})
           })
         });
         // Always reset add-mode so the next map click doesn't create another.
@@ -2713,7 +2716,8 @@
           const state = (info && info.state) ? ' ' + info.state : '';
           endSuburbPick();
           await createIncidentAtLocation(center.lat, center.lng,
-            name + state + ' (suburb-level, approx.)');
+            name + state + ' (suburb-level, approx.)',
+            { suburb: name, state: (info && info.state) || undefined });
         },
         // showIncidentDetails(incident, pagerDetails) — raw incident row.
         openUser(incident, pagerDetails) {
