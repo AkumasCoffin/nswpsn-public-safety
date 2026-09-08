@@ -4906,9 +4906,7 @@
       }
     }
 
-    // Extra series colours beyond the shared radio/pager pair, for a 3rd+
-    // whisper backend. Failures are always the dashed red line.
-    const ND2_WH_COLORS = [ND2_RADIO_COLOR, ND2_PAGER_COLOR, '#8b5cf6', '#10b981'];
+    // Failures are always the dashed red line on the whisper charts.
     const ND2_WH_FAIL_COLOR = '#dc2626';
 
     /**
@@ -4922,6 +4920,11 @@
      */
     function nd2RenderWhisperCharts(rows, hours) {
       if (typeof Chart === 'undefined') return;
+      // Series colours: the shared radio/pager pair first, extras for a 3rd+
+      // backend. Built HERE, not at top level — ND2_RADIO_COLOR is declared
+      // further down the script, and a top-level read crashed the whole page
+      // at load (TDZ), which took the login bootstrap down with it.
+      const ND2_WH_COLORS = [ND2_RADIO_COLOR, ND2_PAGER_COLOR, '#8b5cf6', '#10b981'];
       const tpCanvas = document.getElementById('nd2-wh-tp-chart');
       const latCanvas = document.getElementById('nd2-wh-lat-chart');
       if (!tpCanvas || !latCanvas) return;
