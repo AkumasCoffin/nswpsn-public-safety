@@ -464,6 +464,22 @@
        (otherwise the zone names render unreadable). */
     .loc-field select option { background: #0f172a; color: var(--text-primary); }
     .loc-field select optgroup { background: #0f172a; color: #7dd3fc; font-weight: 700; }
+    .loc-field .lga-combo input {
+      width: 100%; background: rgba(0,0,0,0.25);
+      border: 1px solid var(--border-subtle); border-radius: 8px;
+      color: var(--text-primary); padding: 0.55rem 0.7rem; font-family: inherit; font-size: 0.9rem;
+    }
+    /* Custom LGA dropdown — the native <datalist> popup is unstylable (it
+       renders as a giant white list pinned to the screen edge), so suggestions
+       live in our own positioned, filter-as-you-type list under the field. */
+    .lga-combo { position: relative; display: block; }
+    .lga-dd { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 1200;
+      max-height: 230px; overflow-y: auto; background: #0f172a;
+      border: 1px solid var(--border-subtle, #334155); border-radius: 8px;
+      box-shadow: 0 10px 26px rgba(0,0,0,0.5); display: none; }
+    .lga-dd.open { display: block; }
+    .lga-dd .lga-opt { padding: 0.45rem 0.7rem; cursor: pointer; font-size: 0.85rem; color: var(--text-primary, #e2e8f0); }
+    .lga-dd .lga-opt:hover { background: rgba(125,211,252,0.12); }
     .loc-pin-toggle { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.9rem; font-size: 0.9rem; cursor: pointer; }
     .loc-pin-toggle input { width: 16px; height: 16px; flex: 0 0 auto; }
     #loc-map { height: 340px; border-radius: 8px; margin-bottom: 1rem; border: 1px solid var(--border-subtle); }
@@ -756,29 +772,46 @@
       return `<option value="" ${selected ? '' : 'selected'} disabled>Select your state…</option>`
         + AU_STATES.map(s => `<option value="${s}" ${s === selected ? 'selected' : ''}>${s}</option>`).join('');
     }
-    // ABS LGA names per state (same source as signup) for the LGA datalist.
+    // ABS LGA names per state (same source as signup) for the LGA dropdown.
     // Cached per state; a failed fetch degrades to free text, never a blocked
     // form. keepValue preserves the stored LGA on the initial (edit) fill.
+    // Suggestions render in our own styled .lga-dd list (see _lgaShow) — the
+    // native <datalist> popup can't be styled to match the site.
     const _lgaNamesCache = {};
+    let _lgaNames = [];
     async function _locOnStateChange(keepValue) {
       const state = document.getElementById('loc-state')?.value || '';
       const lga = document.getElementById('loc-lga');
-      const list = document.getElementById('loc-lga-list');
-      if (!lga || !list) return;
+      if (!lga) return;
       if (!keepValue) lga.value = '';
       lga.disabled = !state;
       lga.placeholder = state ? 'Start typing your council area…' : 'Select your state first…';
-      if (!state) { list.innerHTML = ''; return; }
-      if (_lgaNamesCache[state]) { list.innerHTML = _lgaNamesCache[state]; return; }
+      _lgaNames = [];
+      _lgaHide();
+      if (!state) return;
+      if (_lgaNamesCache[state]) { _lgaNames = _lgaNamesCache[state]; return; }
       try {
         const res = await fetch(`${API_BASE_URL}/api/boundaries/lga-names?state=${state}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        const opts = (data.names || []).map(n => `<option value="${n.replace(/"/g, '&quot;')}">`).join('');
-        _lgaNamesCache[state] = opts;
+        const names = Array.isArray(data.names) ? data.names : [];
+        _lgaNamesCache[state] = names;
         // The user may have changed state while this was in flight.
-        if ((document.getElementById('loc-state')?.value || '') === state) list.innerHTML = opts;
+        if ((document.getElementById('loc-state')?.value || '') === state) _lgaNames = names;
       } catch (e) { /* no suggestions is fine — the field is free text either way */ }
+    }
+    function _lgaShow() {
+      const input = document.getElementById('loc-lga');
+      const dd = document.getElementById('loc-lga-dd');
+      if (!input || !dd || input.disabled) return;
+      const q = input.value.trim().toLowerCase();
+      const matches = _lgaNames.filter(n => n.toLowerCase().includes(q));
+      dd.innerHTML = matches.map(n => `<div class="lga-opt" data-lga="${escapeHtml(n)}">${escapeHtml(n)}</div>`).join('');
+      dd.classList.toggle('open', matches.length > 0);
+    }
+    function _lgaHide() {
+      const dd = document.getElementById('loc-lga-dd');
+      if (dd) dd.classList.remove('open');
     }
 
     function renderRadioCard(data) {
@@ -1319,8 +1352,11 @@
           </label>
           <label class="loc-field">
             <span>Council area (LGA) <span style="color:#f87171">*</span></span>
-            <input id="loc-lga" list="loc-lga-list" value="${escapeHtml(node.lga || '')}" maxlength="120" autocomplete="off" placeholder="Select your state first…">
-            <datalist id="loc-lga-list"></datalist>
+            <span class="lga-combo">
+              <input id="loc-lga" value="${escapeHtml(node.lga || '')}" maxlength="120" autocomplete="off" placeholder="Select your state first…"
+                oninput="_lgaShow()" onfocus="_lgaShow()" onblur="_lgaHide()">
+              <div id="loc-lga-dd" class="lga-dd"></div>
+            </span>
           </label>` : `
           <label class="loc-field">
             <span>Region <span style="color:#f87171">*</span></span>
@@ -1339,8 +1375,20 @@
         </div>`;
       document.body.appendChild(overlay);
       if (hasPin) _locInitMap([node.lat, node.lon], true);
-      // Pre-fill the LGA suggestions for the stored state (edit mode).
-      if (isPager) _locOnStateChange(true);
+      // Pre-fill the LGA suggestions for the stored state (edit mode) and wire
+      // the dropdown: pick on mousedown, which fires BEFORE the input's blur.
+      if (isPager) {
+        _locOnStateChange(true);
+        const dd = document.getElementById('loc-lga-dd');
+        if (dd) dd.addEventListener('mousedown', (e) => {
+          const opt = e.target.closest('.lga-opt');
+          if (!opt) return;
+          e.preventDefault();
+          const input = document.getElementById('loc-lga');
+          if (input) input.value = opt.getAttribute('data-lga') || '';
+          _lgaHide();
+        });
+      }
     }
 
     // Lazily build the Leaflet pin map (only when the pin section is shown, so a

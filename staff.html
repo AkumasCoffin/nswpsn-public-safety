@@ -447,6 +447,17 @@
     #loc-view-map { height: 320px; border-radius: 8px; border: 1px solid var(--border-subtle, #334155); }
     #loc-view-map, #loc-view-map * { box-sizing: initial; }
     .loc-view-note { font-size: 0.75rem; color: var(--text-soft, #94a3b8); margin-top: 0.6rem; }
+    /* Custom LGA dropdown — the native <datalist> popup is unstylable (it
+       renders as a giant white list pinned to the screen edge), so suggestions
+       live in our own positioned, filter-as-you-type list under the field. */
+    .lga-combo { position: relative; display: block; }
+    .lga-dd { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 1200;
+      max-height: 230px; overflow-y: auto; background: #0f172a;
+      border: 1px solid var(--border-subtle, #334155); border-radius: 8px;
+      box-shadow: 0 10px 26px rgba(0,0,0,0.5); display: none; }
+    .lga-dd.open { display: block; }
+    .lga-dd .lga-opt { padding: 0.45rem 0.7rem; cursor: pointer; font-size: 0.85rem; color: var(--text-primary, #e2e8f0); }
+    .lga-dd .lga-opt:hover { background: rgba(125,211,252,0.12); }
     .leaflet-container { background: #0b1220; }
 
     /* Primary metric — the one number that matters most for this card. */
@@ -8655,10 +8666,28 @@
       const node = allNodes.find(n => String(n.id) === String(id));
       if (!node) return;
       const hasPin = typeof node.lat === 'number' && typeof node.lon === 'number';
-      const areaLabel = node.kind === 'pager' ? [node.state, node.lga].filter(Boolean).join(' · ') : node.zone;
-      const zoneLine = areaLabel
-        ? `<div class="loc-view-note"><i class="fas fa-map"></i> Region: <b>${escapeHtml(areaLabel)}</b></div>`
-        : `<div class="loc-view-note" style="color:#fbbf24">No region set for this node.</div>`;
+      const isPagerNode = node.kind === 'pager';
+      const areaLabel = isPagerNode ? [node.state, node.lga].filter(Boolean).join(' · ') : node.zone;
+      // Pager nodes: the area is editable right HERE — the one location surface.
+      // The state routes the node's Pagermon feed AND selects its frequency
+      // plan (re-pushed live on save). Radio stays read-only (owner-set zone).
+      const editStyle = 'background:rgba(255,255,255,0.05); color:var(--text-primary,#e2e8f0); border:1px solid var(--border-subtle,#334155); border-radius:6px; padding:0.25rem 0.4rem; font-size:0.8rem;';
+      const zoneLine = isPagerNode
+        ? `<div class="loc-view-note" style="display:flex; gap:0.4rem; align-items:center; flex-wrap:wrap;">
+            <i class="fas fa-map"></i> State / LGA:
+            <select id="loc-edit-state" class="nd-write-input" onchange="_locEditStateChanged()" style="${editStyle}">
+              ${['NSW','VIC','QLD','SA','WA','TAS','NT','ACT'].map(s => `<option value="${s}" ${s === (node.state || 'NSW') ? 'selected' : ''}>${s}</option>`).join('')}
+            </select>
+            <span class="lga-combo" style="flex:1; min-width:15rem;">
+              <input id="loc-edit-lga" class="nd-write-input" value="${escapeHtml(node.lga || '')}" placeholder="Start typing the council area…" maxlength="120" autocomplete="off" style="${editStyle} width:100%; box-sizing:border-box;"
+                oninput="_staffLgaShow()" onfocus="_staffLgaShow()" onblur="_staffLgaHide()">
+              <div id="loc-edit-lga-dd" class="lga-dd"></div>
+            </span>
+            <button class="btn btn-secondary btn-sm nd-write" onclick="_savePagerNodeState('${jsArg(node.id)}', this)" title="Save state + LGA — re-pushes the node's frequency plan">Save</button>
+          </div>`
+        : (areaLabel
+          ? `<div class="loc-view-note"><i class="fas fa-map"></i> Region: <b>${escapeHtml(areaLabel)}</b></div>`
+          : `<div class="loc-view-note" style="color:#fbbf24">No region set for this node.</div>`);
       // Zone-only node (no exact pin) — show the zone, no map.
       if (!hasPin) {
         const overlay = document.createElement('div');
@@ -8675,6 +8704,7 @@
           </div>`;
         overlay.addEventListener('click', (e) => { if (e.target === overlay) closeNodeLocation(); });
         document.body.appendChild(overlay);
+        if (isPagerNode) { _locEditLoadLgas(node.state || 'NSW'); _locEditWireDd(); }
         return;
       }
       const overlay = document.createElement('div');
@@ -8692,6 +8722,7 @@
         </div>`;
       overlay.addEventListener('click', (e) => { if (e.target === overlay) closeNodeLocation(); });
       document.body.appendChild(overlay);
+      if (isPagerNode) { _locEditLoadLgas(node.state || 'NSW'); _locEditWireDd(); }
       const c = [node.lat, node.lon];
       const dark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?key=cb1_29rl_1_764d57ded0436220d836abc9', { subdomains: 'abcd', maxZoom: 19, attribution: '© CartoDB' });
       const sat = L.tileLayer('https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', { subdomains: ['mt0', 'mt1', 'mt2', 'mt3'], maxZoom: 21, maxNativeZoom: 19, attribution: '© Google' });
@@ -9534,8 +9565,6 @@
         ? nFresh.pagerPrimaryOptions
         : [{ label: 'NSWRFS', mhz: 148.5875 }, { label: 'FRNSW', mhz: 148.9875 }];
       const primary = primaryOpts.some(o => o.label === nFresh.pagerPrimary) ? nFresh.pagerPrimary : primaryOpts[0].label;
-      const nodeState = nFresh.state || 'NSW';
-      const nodeLga = nFresh.lga || '';
       const gainVal = (nFresh.pagerGain == null) ? '' : String(nFresh.pagerGain);
       const ppmVal = (nFresh.pagerPpm == null) ? '' : String(nFresh.pagerPpm);
       // Supported gain steps the agent reports for this SDR (dB) → a dropdown of
@@ -9546,7 +9575,7 @@
       // unconditional innerHTML rebuild snaps an open <select> shut and wipes a
       // half-typed field mid-tune, so skip when nothing shown here changed.
       const sig = JSON.stringify([online, readers.map(r => r.label + ':' + r.state),
-        _ndAudioLabel, msgs, qd, primary, gainVal, ppmVal, gains, nodeState, nodeLga, primaryOpts]);
+        _ndAudioLabel, msgs, qd, primary, gainVal, ppmVal, gains, primaryOpts]);
       if (sig === _ndReadersSig) return;
       _ndReadersSig = sig;
 
@@ -9567,16 +9596,6 @@
       }
 
       el.innerHTML = `
-        <div class="nd-switch-row" style="margin-bottom:0.7rem;">
-          <span title="Which state's Pagermon this node feeds — also selects its frequency plan.">State / LGA</span>
-          <span style="display:flex; gap:0.35rem; align-items:center;">
-            <select id="nd-pager-state" class="nd-write-input" style="${tuneInput} width:auto; text-align:left;">
-              ${['NSW','VIC','QLD','SA','WA','TAS','NT','ACT'].map(s => `<option value="${s}" ${s === nodeState ? 'selected' : ''}>${s}</option>`).join('')}
-            </select>
-            <input id="nd-pager-lga" type="text" class="nd-write-input" value="${escapeHtml(nodeLga)}" placeholder="LGA" maxlength="120" style="${tuneInput} width:8rem; text-align:left;">
-            <button class="btn btn-secondary btn-sm nd-write" onclick="_ndSetPagerState(this)" title="Save state + LGA — re-pushes the node's frequency plan">Save</button>
-          </span>
-        </div>
         <div class="nd-switch-row" style="margin-bottom:0.7rem;">
           <span>Single-SDR frequency</span>
           ${primaryOpts.length > 1 ? `<select class="nd-write-input" onchange="_ndSetPagerPrimary(this.value, this)" style="background:rgba(255,255,255,0.05); color:var(--text-primary,#e2e8f0); border:1px solid var(--border-subtle,#334155); border-radius:6px; padding:0.25rem 0.4rem; font-size:0.8rem;">
@@ -9624,25 +9643,77 @@
       }
     }
 
-    // Staff: move a pager node to another state (+ its LGA tag). The state
-    // routes which Pagermon the node's pages feed into AND selects its
-    // frequency plan, which is re-pushed live by the backend.
-    async function _ndSetPagerState(el) {
-      const state = document.getElementById('nd-pager-state')?.value || '';
-      const lga = (document.getElementById('nd-pager-lga')?.value || '').trim();
+    // ABS LGA names per state for the location modal's LGA dropdown (our own
+    // styled filter-as-you-type list). Cached per state; a failed fetch
+    // degrades to free text, never a blocked save.
+    const _staffLgaCache = {};
+    let _staffLgaNames = [];
+    async function _locEditLoadLgas(state) {
+      _staffLgaNames = [];
+      if (!state) return;
+      if (_staffLgaCache[state]) { _staffLgaNames = _staffLgaCache[state]; return; }
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/boundaries/lga-names?state=${state}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const names = Array.isArray(data.names) ? data.names : [];
+        _staffLgaCache[state] = names;
+        // The state may have changed while this was in flight.
+        if ((document.getElementById('loc-edit-state')?.value || '') === state) _staffLgaNames = names;
+      } catch (e) { /* suggestions are optional; the field stays free text */ }
+    }
+    function _staffLgaShow() {
+      const input = document.getElementById('loc-edit-lga');
+      const dd = document.getElementById('loc-edit-lga-dd');
+      if (!input || !dd) return;
+      const q = input.value.trim().toLowerCase();
+      const matches = _staffLgaNames.filter(n => n.toLowerCase().includes(q));
+      dd.innerHTML = matches.map(n => `<div class="lga-opt" data-lga="${escapeHtml(n)}">${escapeHtml(n)}</div>`).join('');
+      dd.classList.toggle('open', matches.length > 0);
+    }
+    function _staffLgaHide() {
+      const dd = document.getElementById('loc-edit-lga-dd');
+      if (dd) dd.classList.remove('open');
+    }
+    // Pick on mousedown — it fires BEFORE the input's blur hides the list.
+    function _locEditWireDd() {
+      const dd = document.getElementById('loc-edit-lga-dd');
+      if (dd) dd.addEventListener('mousedown', (e) => {
+        const opt = e.target.closest('.lga-opt');
+        if (!opt) return;
+        e.preventDefault();
+        const input = document.getElementById('loc-edit-lga');
+        if (input) input.value = opt.getAttribute('data-lga') || '';
+        _staffLgaHide();
+      });
+    }
+    function _locEditStateChanged() {
+      const lga = document.getElementById('loc-edit-lga');
+      if (lga) lga.value = '';
+      _staffLgaHide();
+      _locEditLoadLgas(document.getElementById('loc-edit-state')?.value || '');
+    }
+
+    // Staff: move a pager node to another state (+ its LGA tag), from the
+    // location modal. The state routes which Pagermon the node's pages feed
+    // into AND selects its frequency plan, which is re-pushed live.
+    async function _savePagerNodeState(id, el) {
+      const state = document.getElementById('loc-edit-state')?.value || '';
+      const lga = (document.getElementById('loc-edit-lga')?.value || '').trim();
       if (!state || !lga) { showToast('Both state and LGA are required.', 'error'); return; }
       // The frequency plan (and so the reader labels) can change — stop any
       // running audio monitor so it doesn't get stranded on a dead label.
       if (_ndAudioLabel != null) _ndAudioStop();
       if (el) el.disabled = true;
       try {
-        const res = await fetch(`${API_BASE_URL}/api/nodes/${_ndNodeId}/state`, {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/${id}/state`, {
           method: 'PUT',
           headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json' },
           body: JSON.stringify({ state, lga }),
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         showToast(`Node moved to ${state} — frequency plan re-pushed.`, 'success');
+        closeNodeLocation();
         await loadNodes();
       } catch (e) {
         showToast(`Could not set state: ${e.message}`, 'error');
