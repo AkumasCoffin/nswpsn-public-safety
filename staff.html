@@ -1019,7 +1019,10 @@
     /* Narrow screens: single-column panel grid; spectrum stays full-width. */
     @media (max-width: 720px) {
       .node-drawer-body { padding: 0.9rem 0.8rem 2.5rem; }
-      .nd-panels { grid-template-columns: 1fr; }
+      /* .nd-panels is a flex column — grid-template-columns does nothing on
+         it. The grid that actually needs collapsing is the split row, whose
+         minmax(320px, …) tracks overflow a phone that has ~290px to give. */
+      .nd-panels-split { grid-template-columns: 1fr; }
       #nd-trace { height: 90px; }
       #nd-waterfall { height: 190px; }
     }
@@ -2525,15 +2528,33 @@
         margin: 0 -1rem 1.25rem;
         padding: 0.85rem 1rem;
         flex-wrap: wrap;
+        gap: 0.6rem;
       }
-      .header-actions { flex-wrap: wrap; }
+      /* The title is nowrap, so at 1.35rem it and the role chip alone ate a
+         phone's width and shoved the buttons off. */
+      .header h1 { font-size: 1.1rem; }
+      .header-actions { flex-wrap: wrap; flex-shrink: 1; width: 100%; }
+      .header-actions .btn { flex: 1 1 auto; justify-content: center; }
 
+      /* The tab bar WRAPS here rather than scrolling sideways. overflow-x:auto
+         made it a scroll container, and a scroll container CLIPS its
+         absolutely-positioned descendants — so the Requests / Auth / Data
+         dropdowns were cut to the height of the bar and everything inside
+         them (Data changes, Wire approvals, Members, Radio / Pager /
+         Transcripts) was unreachable on a phone. Wrapping also stops tabs
+         hiding off-screen behind a scrollbar nobody can see. */
       .tab-nav {
         display: flex;
         width: 100%;
-        overflow-x: auto;
+        flex-wrap: wrap;
+        overflow: visible;
+        position: relative;
       }
-      .tab-btn { flex-shrink: 0; }
+      .tab-btn { flex-shrink: 0; min-height: 40px; }
+      /* Anchor the menus to the whole bar and let them span it, so a menu
+         under a right-hand tab can't hang off the screen edge. */
+      .tab-dd { position: static; }
+      .tab-dd-menu { left: 0; right: 0; width: auto; min-width: 0; }
 
       .requests-table { display: block; overflow-x: auto; }
       /* Same horizontal-scroll treatment for the node-config tables so they
@@ -2541,11 +2562,47 @@
       .nd-readers-table, .nd-table, .nd-ch-table, .nd-dc-ts-table, .gc-table {
         display: block; overflow-x: auto; -webkit-overflow-scrolling: touch;
       }
+      /* ...except the ones already scrolling inside .nd2-table-wrap. Making
+         those display:block nests a second scroller inside the first and
+         drops the sticky header row — the wrapper carries overflow-y:clip
+         precisely so thead can stick to the page while rows scroll. */
+      .nd2-table-wrap .nd-table { display: table; overflow: visible; }
 
-      .search-box { min-width: 0; flex: 1 1 100%; }
+      /* Several of these boxes carry an inline style="min-width:NNNpx", which
+         outranks a plain rule — hence !important, or they stay stuck at their
+         desktop width and the filter bar reads as ragged half-rows. */
+      .search-box { min-width: 0 !important; flex: 1 1 100% !important; }
       .filter-spacer { display: none; }
 
+      .modal { padding: 1rem 0.75rem; }
       .modal-content { padding: 1.4rem 1.25rem 1.5rem; }
+      /* 96vw x 92vh left the global-settings shell almost no usable room once
+         its own head, sidebar and padding were taken out. */
+      .modal-content.gc-shell { width: 100%; height: 100%; }
+
+      /* Status hero: stack the badge above its description. The card clips
+         overflow, so a 1.5rem uppercase badge beside the meta text simply cut
+         the text off mid-sentence. */
+      .dev-overall { flex-wrap: wrap; gap: 0.9rem; padding: 1.15rem 1.15rem; }
+      .dev-overall-badge { font-size: 1.15rem; padding: 0.45rem 0.85rem; }
+      .dev-overall-meta { font-size: 0.85rem; }
+
+      .filter-btn { min-height: 38px; }
+    }
+
+    /* Phones proper. Several auto-fill grids have track minimums wider than a
+       small handset's content box (300px tracks in a ~288px column), and a
+       track that can't shrink below its minimum overflows the page instead. */
+    @media (max-width: 480px) {
+      .header h1 { font-size: 1rem; }
+      .stats-bar { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 0.7rem; }
+      .stat-card { padding: 0.85rem 0.9rem; }
+      .stat-card .stat-value { font-size: 1.45rem; }
+      .tab-btn { padding: 0.5rem 0.8rem; font-size: 0.82rem; }
+      .dev-card-grid, #nodes-grid { grid-template-columns: 1fr; }
+      .dev-overall { padding: 1rem; }
+      .node-drawer-head { padding: 0.9rem 1rem; }
+      .gc-body { grid-template-rows: auto 1fr; }
     }
 
     /* ------------------------------------------------------------------ *
