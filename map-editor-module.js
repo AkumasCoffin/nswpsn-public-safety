@@ -2015,7 +2015,19 @@
         if (newId) {
           try {
             const one = await apiFetch(`${PROXY_BASE}/api/incidents/${newId}`);
-            if (one.ok) selectIncident(await one.json());
+            if (one.ok) {
+              const fresh = await one.json();
+              // Go through the page's own user-pin opener so the shared
+              // panel gets its header + body reset AND the .open class —
+              // selectIncident alone fills a panel nothing has opened
+              // (the very map click that placed the pin also closes it).
+              if (typeof showIncidentDetails === 'function') {
+                showIncidentDetails(fresh);
+              } else {
+                selectIncident(fresh);
+                openEditorSheet();
+              }
+            }
           } catch (e) { /* pin still created; user can click it */ }
         }
         showToast('Incident created.', 'success');
@@ -2413,6 +2425,17 @@
     dragGhost = L.marker([inc.lat, inc.lng], { icon, draggable: true, zIndexOffset: 2000 }).addTo(map);
     wireGhostDragClass(dragGhost);
     dragGhost.bindTooltip('Drag to move this pin', { direction: 'top', offset: [0, -14], opacity: 0.9 });
+    // The handle covers the pin marker while an incident is selected, so a
+    // plain CLICK on the pin actually lands here — pass it through as
+    // "open this pin's details" instead of swallowing it. (Leaflet doesn't
+    // fire click after a real drag, so moves are unaffected.)
+    dragGhost.on('click', () => {
+      if (typeof showIncidentDetails === 'function') {
+        showIncidentDetails(inc);
+      } else {
+        try { selectIncident(inc); openEditorSheet(); } catch (e) { /* noop */ }
+      }
+    });
     dragGhost.on('dragend', async (e) => {
       const pos = e.target.getLatLng();
       try {
