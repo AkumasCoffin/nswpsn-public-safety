@@ -2250,7 +2250,7 @@
         } else if (item.source === 'pager') {
           const agency = data.agency || item.category || '';
           const incidentId = data.incident_id || '';
-          const message = data.message || '';
+          const message = stripPagerDate(data.message || '');
           const capcode = data.capcode || item.subcategory || '';
           if (agency) extraInfo += `<span class="lg-badge" style="--badge:#22c55e">${escapeHtml(agency)}</span>`;
           // Label the capcode so it reads as a pager address rather than an
@@ -2840,7 +2840,7 @@
             // Pager specific display
             const snapData = snapshot.data || {};
             const alias = snapData.alias || snapshot.title || 'Unknown';
-            const message = snapData.message || '';
+            const message = stripPagerDate(snapData.message || '');
             const agency = snapData.agency || snapshot.category || '';
             const capcode = snapData.capcode || snapshot.subcategory || '';
             
@@ -3006,7 +3006,7 @@
                       pager_msg_id: r.data?.id,
                       alias: r.data?.alias || r.title,
                       agency: r.data?.agency || r.category,
-                      message: r.data?.message || '',
+                      message: stripPagerDate(r.data?.message || ''),
                       incident_time: r.source_timestamp
                     }
                   }));
@@ -3078,7 +3078,7 @@
                 const props = pager.properties || {};
                 const pagerId = props.id || props.pager_msg_id || '';
                 const alias = props.alias || 'Unknown';
-                const message = props.message || '';
+                const message = stripPagerDate(props.message || '');
                 const agency = props.agency || '';
                 const timestamp = props.incident_time || '';
                 
@@ -3194,7 +3194,7 @@
               const pagerData = pager.data || {};
               const pagerSourceId = pager.source_id || '';
               const alias = pagerData.alias || pager.subcategory || 'Unknown';
-              const message = pagerData.message || pager.title || '';
+              const message = stripPagerDate(pagerData.message || pager.title || '');
               const timestamp = pager.source_timestamp || (pager.fetched_at_iso ? new Date(pager.fetched_at_iso).toLocaleString() : '');
               
               html += `<div onclick="scrollToIncident('${jsArg(pagerSourceId)}', 'pager')" class="lg-update is-click" style="--c:#22c55e" onmouseover="this.style.transform='translateX(2px)'" onmouseout="this.style.transform='translateX(0)'">
@@ -3773,7 +3773,7 @@
         html += `<div class="lg-mb8">
           <div style="color:#22c55e; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;"><i class="fas fa-envelope"></i>Raw Message</div>
           <div style="background:rgba(34,197,94,0.08); border:1px solid rgba(34,197,94,0.2); border-radius:6px; padding:8px;">
-            <div style="color:#e2e8f0; font-size:10px; line-height:1.5; font-family:monospace; word-break:break-all; white-space:pre-wrap;">${escapeHtml(data.message)}</div>
+            <div style="color:#e2e8f0; font-size:10px; line-height:1.5; font-family:monospace; word-break:break-all; white-space:pre-wrap;">${escapeHtml(stripPagerDate(data.message))}</div>
           </div>
         </div>`;
       }
@@ -4192,6 +4192,18 @@
       }
     }
     
+    // Strip a leading 'DD Month YYYY HH:MM:SS' / 'HH:MM:SS' dispatch date
+    // from a pager body (new CAD lines embed one; each row already has its
+    // own timestamp). Mirrors the backend's stripLeadingPagerDate — needed
+    // here because /api/data/history serves archived rows verbatim, including
+    // ones archived before the backend started stripping.
+    function stripPagerDate(s) {
+      return String(s || '')
+        .replace(/^\s*\d{1,2}\s+[A-Za-z]+\s+\d{4}\s+\d{1,2}:\d{2}:\d{2}\s+/, '')
+        .replace(/^\s*\d{1,2}:\d{2}:\d{2}\s+/, '')
+        .trim();
+    }
+
     function escapeHtml(str) {
       if (!str) return '';
       return String(str)

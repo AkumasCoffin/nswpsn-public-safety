@@ -125,18 +125,29 @@ const STOP_RE =
 const CALL_CLASS_RE =
   /^(FIRECALL|INCIDENT CALL|CFR CALL|STRUCTURE CALL|MEDICAL|RESCUE|[A-Z]{2,}(?: [A-Z]{2,})? CALL)$/i;
 
+/** Strip a leading `DD Month YYYY HH:MM:SS` / `HH:MM:SS` timestamp from a
+ *  pager body. Newer CAD lines embed the full dispatch date ahead of the
+ *  station mnemonic (`08 September 2026 14:31:37 CVDO - 26-126950 - …`);
+ *  every message already carries its own timestamp field, so the prefix is
+ *  pure noise for both display and parsing. Exported so the archive read
+ *  path can clean rows stored before this existed. */
+export function stripLeadingPagerDate(message: string): string {
+  let t = (message || '').trim();
+  t = t.replace(/^\d{1,2}\s+[A-Za-z]+\s+\d{4}\s+\d{1,2}:\d{2}:\d{2}\s+/, '');
+  t = t.replace(/^\d{1,2}:\d{2}:\d{2}\s+/, '');
+  return t.trim();
+}
+
 /** Remove zero-width chars, trailing `[lon,lat]` (even if truncated) and a
- *  leading `DD Month YYYY HH:MM:SS` / `HH:MM:SS` timestamp, so the remainder
- *  is just the `CAP - ID - TYPE - ...` payload. */
+ *  leading timestamp (stripLeadingPagerDate), so the remainder is just the
+ *  `CAP - ID - TYPE - ...` payload. */
 function stripBodyDecorations(message: string): string {
   let t = (message || '').replace(/[‎‏‪‬­]/g, '');
   t = t.replace(/[‐-―−⁃]/g, '-');
   t = t.trim();
   t = t.replace(/\s*\[[\d.,\-\s]*\]?\s*$/, '').trim(); // trailing coords
   t = t.replace(/\s*-\s*$/, '').trim(); // dangling `-` separator left by coord removal
-  t = t.replace(/^\d{1,2}\s+[A-Za-z]+\s+\d{4}\s+\d{1,2}:\d{2}:\d{2}\s+/, '');
-  t = t.replace(/^\d{1,2}:\d{2}:\d{2}\s+/, '');
-  return t.trim();
+  return stripLeadingPagerDate(t);
 }
 
 export function parsePagerStop(message: string): boolean {
@@ -338,7 +349,9 @@ export async function fetchPager(): Promise<PagerSnapshot> {
           incidentTime = null;
         }
       }
-      const body = asString(m.message);
+      // Serve the body without the embedded dispatch date (new CAD lines
+      // lead with one) — the timestamp fields below carry the time.
+      const body = stripLeadingPagerDate(asString(m.message));
       const { type, callClass } = parsePagerType(body);
       out.push({
         id: typeof pagerMsgId === 'string' || typeof pagerMsgId === 'number' ? pagerMsgId : String(pagerMsgId),

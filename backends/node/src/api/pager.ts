@@ -12,7 +12,7 @@
 import { Hono } from 'hono';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
-import { pagerSnapshot, type PagerMessage } from '../sources/pager.js';
+import { pagerSnapshot, stripLeadingPagerDate, type PagerMessage } from '../sources/pager.js';
 import { SwrCache } from '../services/swrCache.js';
 
 export const pagerRouter = new Hono();
@@ -247,7 +247,9 @@ async function fetchPagerHitsFromDb(opts: {
         capcode: r.subcategory ?? (typeof data['capcode'] === 'string' ? data['capcode'] : null),
         alias: typeof data['alias'] === 'string' ? data['alias'] : null,
         agency: r.category ?? (typeof data['agency'] === 'string' ? data['agency'] : null),
-        message: typeof data['message'] === 'string' ? data['message'] : '',
+        // Rows archived before the snapshot stripped embedded dispatch dates
+        // still carry them — clean at read time so display stays uniform.
+        message: typeof data['message'] === 'string' ? stripLeadingPagerDate(data['message']) : '',
         type: typeof data['type'] === 'string' ? data['type'] : '',
         call_class: typeof data['call_class'] === 'string' ? data['call_class'] : '',
         is_stop: data['is_stop'] === true,
