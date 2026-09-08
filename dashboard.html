@@ -408,6 +408,10 @@
     .chip-row {
       display: flex; flex-wrap: wrap; gap: 0.4rem;
     }
+    /* Coming-soon types: visible so people know they're on the way, but
+       clearly inert. */
+    .chip.soon { opacity: 0.55; border-style: dashed; cursor: default; }
+    .pv-count.pv-soon { color: var(--text-muted); font-style: italic; }
     .chip {
       display: inline-flex; align-items: center; gap: 0.4rem;
       padding: 0.35rem 0.75rem;
@@ -1507,6 +1511,29 @@ const PROVIDERS = [
     types: [
       { key: 'firms', label: 'Fire Hotspots' },
     ] },
+  // Interstate fire services (labels + colours mirror fire-vocab.js AGENCIES).
+  { key: 'vic',         name: 'VicEmergency',           icon: 'fire',  color: '#6366f1',
+    types: [
+      { key: 'cfa',   label: 'CFA' },
+      { key: 'deeca', label: 'DEECA' },
+    ] },
+  { key: 'qfd',         name: 'QLD Fire Department',    icon: 'fire',  color: '#dc2626',
+    types: [
+      { key: 'qfd', label: 'Incidents' },
+    ] },
+  { key: 'dfes',        name: 'DFES (WA)',              icon: 'fire',  color: '#e11d48',
+    types: [
+      { key: 'dfes', label: 'Incidents' },
+    ] },
+  { key: 'safire',      name: 'SA Fire Services',       icon: 'fire',  color: '#ea580c',
+    types: [
+      { key: 'sa_cfs', label: 'CFS' },
+      { key: 'sa_mfs', label: 'MFS' },
+    ] },
+  { key: 'ntfrs',       name: 'NT Fire & Rescue',       icon: 'fire',  color: '#f97316',
+    types: [
+      { key: 'nt_fire', label: 'Incidents' },
+    ] },
   { key: 'bom',         name: 'Bureau of Meteorology',  icon: 'cloud', color: '#3b82f6',
     types: [
       { key: 'bom_land',   label: 'Land Warnings' },
@@ -1547,19 +1574,24 @@ const PROVIDERS = [
     types: [
       { key: 'radio_summary', label: 'Hourly Summaries' },
     ] },
-  // The Wire — AusAware's own reporting. The bot only posts these while the
-  // owner has The Wire live (the backend's soft-launch gate answers
-  // visible:false otherwise and the poller skips), so configuring them
-  // before launch is safe: they simply hold fire until launch day.
+  // The Wire — AusAware's own reporting. Marked `soon` until launch: the
+  // chips render as coming-soon and can't be enabled, so the backend never
+  // receives the keys before its whitelist knows them. At launch, delete
+  // the `soon` flags (the bot's poller additionally honours the wire-live
+  // toggle server-side, so even a stale dashboard can't cause early posts).
   { key: 'wire',        name: 'The Wire',               icon: 'newspaper', color: '#f97316',
     types: [
-      { key: 'wire_article', label: 'Articles' },
-      { key: 'wire_fleet',   label: 'Fleet Additions' },
+      { key: 'wire_article', label: 'Articles',        soon: true },
+      { key: 'wire_fleet',   label: 'Fleet Additions', soon: true },
     ] },
 ];
 
 const ALERT_TYPES = PROVIDERS.flatMap(p => p.types.map(t => t.key));
-const _DASH_ALERT_TYPES = ALERT_TYPES;
+// Types marked `soon` are shown but not yet enableable (The Wire hasn't
+// launched) — excluded from Select all and every payload we send.
+const _SOON_TYPES = new Set(
+  PROVIDERS.flatMap(p => p.types.filter(t => t.soon).map(t => t.key)));
+const _DASH_ALERT_TYPES = ALERT_TYPES.filter(k => !_SOON_TYPES.has(k));
 const ALERT_TYPE_LABELS = Object.fromEntries(
   PROVIDERS.flatMap(p => p.types.map(t => [t.key, t.label]))
 );
@@ -2604,8 +2636,11 @@ function setProviderOpen(presetId, providerKey, open) {
 function _renderProviderSection(provider, selected, opts) {
   // opts: { onToggleType(typeKey), onSelectAll(), presetId, expanded, onExpand(open) }
   const types = provider.types || [];
-  const selectedCount = types.filter(t => selected.has(t.key)).length;
-  const totalCount = types.length;
+  // `soon` types are visible but not enableable — they don't count and the
+  // per-provider power toggle ignores them.
+  const selectable = types.filter(t => !t.soon);
+  const selectedCount = selectable.filter(t => selected.has(t.key)).length;
+  const totalCount = selectable.length;
   const hasSelected = selectedCount > 0;
   const allSelected = selectedCount === totalCount && totalCount > 0;
   const expanded = !!opts.expanded;
@@ -2632,10 +2667,13 @@ function _renderProviderSection(provider, selected, opts) {
       el('i', { class: `fa-solid fa-${provider.icon || 'circle'}`,
                 style: `color:${provider.color || '#94a3b8'}` })),
     el('span', { class: 'pv-name' }, provider.name),
-    el('span', { class: 'pv-count' + (hasSelected ? ' has-selected' : '') },
-      `${selectedCount}/${totalCount}`),
-    // Per-source on/off — flips every type in the provider.
-    el('button', {
+    totalCount > 0
+      ? el('span', { class: 'pv-count' + (hasSelected ? ' has-selected' : '') },
+          `${selectedCount}/${totalCount}`)
+      : el('span', { class: 'pv-count pv-soon' }, 'soon'),
+    // Per-source on/off — flips every enableable type in the provider.
+    // Hidden while a provider is all-soon (nothing to flip).
+    ...(totalCount > 0 ? [el('button', {
       class: 'pv-toggle' + (allSelected ? ' on' : (hasSelected ? ' partial' : '')),
       type: 'button',
       title: allSelected
@@ -2647,16 +2685,16 @@ function _renderProviderSection(provider, selected, opts) {
       },
     }, [
       el('i', { class: 'fa-solid fa-power-off' }),
-    ]),
+    ])] : []),
     el('i', { class: 'fa-solid fa-chevron-right pv-caret' }),
   ]);
   section.appendChild(header);
 
   if (expanded) {
     const body = el('div', { class: 'provider-body' });
-    // Toolbar: Select all / Clear (per provider).
+    // Toolbar: Select all / Clear (per provider). Hidden while all-soon.
     const allSelected = selectedCount === totalCount && totalCount > 0;
-    body.appendChild(el('div', { class: 'provider-toolbar' }, [
+    if (totalCount > 0) body.appendChild(el('div', { class: 'provider-toolbar' }, [
       el('button', {
         class: 'link-btn',
         onclick: (e) => { e.stopPropagation(); opts.onSelectAll(!allSelected); },
@@ -2668,6 +2706,20 @@ function _renderProviderSection(provider, selected, opts) {
     // tooltips / quick debug.
     const row = el('div', { class: 'chip-row' });
     for (const t of types) {
+      if (t.soon) {
+        // Not enableable yet — never sent to the backend, which would
+        // reject an unknown key with bad_request on an older deploy.
+        row.appendChild(el('button', {
+          class: 'chip soon',
+          onclick: (e) => {
+            e.stopPropagation();
+            toast('Coming soon — The Wire has not launched yet.', 'info');
+          },
+          title: `${t.key} — coming soon`,
+          type: 'button',
+        }, `${t.label || t.key} · soon`));
+        continue;
+      }
       const active = selected.has(t.key);
       row.appendChild(el('button', {
         class: 'chip' + (active ? ' active' : ''),
@@ -2701,6 +2753,7 @@ function renderAlertTypeChips(preset) {
         // Compute the next alert_types array off the current preset state.
         const cur = new Set(preset.alert_types || []);
         for (const t of provider.types) {
+          if (t.soon) continue;
           if (turnOn) cur.add(t.key); else cur.delete(t.key);
         }
         patchPreset(preset.id, { alert_types: Array.from(cur) });
@@ -4338,6 +4391,7 @@ function renderWizardStep3() {
       },
       onSelectAll: (turnOn) => {
         for (const t of provider.types) {
+          if (t.soon) continue;
           if (turnOn) w.types.add(t.key); else w.types.delete(t.key);
         }
         renderWizardBodyOnly();

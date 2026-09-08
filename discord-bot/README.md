@@ -103,6 +103,11 @@ Canonical keys (the source of truth is `ALERT_TYPES` in `bot.py`):
 | `endeavour_current` / `endeavour_planned` | Endeavour Energy outages |
 | `ausgrid` | Ausgrid power outages |
 | `essential_planned` / `essential_future` | Essential Energy outages |
+| `cfa` / `deeca` | VicEmergency incidents (split by publishing agency) |
+| `qfd` | QLD Fire Department incidents |
+| `dfes` | DFES (WA) incidents |
+| `sa_cfs` / `sa_mfs` | SA Country Fire Service / Metropolitan Fire Service |
+| `nt_fire` | NT Fire & Rescue incidents |
 | `wire_article` | New articles on The Wire (only while The Wire is live) |
 | `wire_fleet` | New fleet vehicles on The Wire (same gate) |
 | `user_incident` | User-submitted incidents |
@@ -145,6 +150,7 @@ This bot uses the AusAware API which aggregates data from:
 - Bureau of Meteorology (BOM)
 - Live Traffic NSW
 - Endeavour Energy / Ausgrid / Essential Energy
+- VicEmergency (CFA/DEECA), QLD Fire Department, DFES (WA), SA CFS/MFS, NT Fire & Rescue
 - The Wire (AusAware's own reporting: articles + fleet)
 - User-submitted incidents & the radio scanner
 - Pager feed data

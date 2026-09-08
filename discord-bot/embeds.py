@@ -395,6 +395,15 @@ class EmbedBuilder:
         'user_incident': 0x9333EA,   # Purple for user incidents
         'wire_article': 0xF59E0B,    # Amber — The Wire's press accent
         'wire_fleet': 0x14B8A6,      # Teal — fleet additions
+        # Interstate fire services — hexes from fire-vocab.js AGENCIES so the
+        # bot's accents match the site's map layers exactly.
+        'cfa': 0x6366F1,
+        'deeca': 0x84CC16,
+        'qfd': 0xDC2626,
+        'dfes': 0xE11D48,
+        'sa_cfs': 0xEA580C,
+        'sa_mfs': 0x0EA5E9,
+        'nt_fire': 0xF97316,
     }
     
     # Colors for specific incident types extracted from title
@@ -480,6 +489,13 @@ class EmbedBuilder:
         'user_incident': '📢',
         'wire_article': '📰',
         'wire_fleet': '🚒',
+        'cfa': '🔥',
+        'deeca': '🌲',
+        'qfd': '🔥',
+        'dfes': '🔥',
+        'sa_cfs': '🔥',
+        'sa_mfs': '🚒',
+        'nt_fire': '🔥',
     }
     
     # BOM category icons
@@ -623,6 +639,13 @@ class EmbedBuilder:
         'ausgrid': 'Ausgrid Outages',
         'essential_planned': 'Essential Energy Planned Outages',
         'essential_future': 'Essential Energy Future Outages',
+        'cfa': 'CFA (Vic)',
+        'deeca': 'DEECA (Vic)',
+        'qfd': 'QLD Fire Dept',
+        'dfes': 'DFES (WA)',
+        'sa_cfs': 'SA CFS',
+        'sa_mfs': 'SA MFS',
+        'nt_fire': 'NT Fire & Rescue',
         'wire_article': 'Wire Articles',
         'wire_fleet': 'Wire Fleet Additions',
         'user_incident': 'User Incidents',
@@ -968,7 +991,7 @@ class EmbedBuilder:
         return container
 
     # ============================================================
-    # /summary command — Components V2 dashboard for NSW incident totals.
+    # /overview command — Components V2 dashboard of incident totals.
     # Backed by GET /api/stats/summary. Each section becomes its own
     # colour-accented Container so the feed reads top-to-bottom rather
     # than squeezing 10+ inline fields into a single embed.
@@ -1074,7 +1097,7 @@ class EmbedBuilder:
         now_local = _dt.now().astimezone()
         header = discord.ui.Container(accent_colour=self._SUMMARY_HEADER_COLOR)
         header.add_item(discord.ui.TextDisplay(
-            content="# 📊 NSW Incident Summary"
+            content="# 📊 Incident Summary"
         ))
         header.add_item(discord.ui.Separator(visible=False))
         header.add_item(discord.ui.TextDisplay(
@@ -1244,6 +1267,9 @@ class EmbedBuilder:
               or alert_type == 'ausgrid'
               or alert_type.startswith('essential_')):
             return self.build_power_container(data, alert_type)
+        elif alert_type in ('cfa', 'deeca', 'qfd', 'dfes',
+                            'sa_cfs', 'sa_mfs', 'nt_fire'):
+            return self.build_interstate_fire_container(data, alert_type)
         elif alert_type == 'wire_article':
             return self.build_wire_article_container(data)
         elif alert_type == 'wire_fleet':
@@ -1583,6 +1609,77 @@ class EmbedBuilder:
                 footer_bits.append(f"[🗺️ Map]({map_url})")
 
         self._append_container_footer(container, footer_bits, source="Live Traffic NSW")
+        return container
+
+    # ---- Interstate fire services -------------------------------
+    # All of these serve RFS-shaped GeoJSON properties (title / status /
+    # alertLevel / location / fireType / updatedISO / url), so one builder
+    # covers every agency — only the accent colour and source label differ.
+    _INTERSTATE_SOURCES = {
+        'cfa': 'CFA (Vic)',
+        'deeca': 'DEECA (Vic)',
+        'qfd': 'QLD Fire Dept',
+        'dfes': 'DFES (WA)',
+        'sa_cfs': 'SA CFS',
+        'sa_mfs': 'SA MFS',
+        'nt_fire': 'NT Fire & Rescue',
+    }
+
+    def build_interstate_fire_container(self, data: Dict[str, Any], alert_type: str):
+        """Components V2 container for an interstate fire-service incident."""
+        data = data or {}
+        props = data.get('properties') or {}
+        color = self.COLORS.get(alert_type, 0xEF4444)
+        container = discord.ui.Container(accent_colour=color)
+        icon = self.ICONS.get(alert_type, '🔥')
+        title = props.get('title') or 'Incident'
+        container.add_item(discord.ui.TextDisplay(
+            content=self._clip_text(f"### {icon} {title}")
+        ))
+
+        meta_bits = []
+        status = (props.get('status') or '').strip()
+        if status:
+            meta_bits.append(f"Status: **{status}**")
+        level = (props.get('alertLevel') or '').strip()
+        if level:
+            meta_bits.append(f"⚠️ {level}")
+        ftype = (props.get('fireType') or '').strip()
+        if ftype:
+            meta_bits.append(ftype)
+        if meta_bits:
+            container.add_item(discord.ui.TextDisplay(
+                content=self._clip_text(' · '.join(meta_bits))
+            ))
+
+        location = (props.get('location') or '').strip()
+        if location:
+            container.add_item(discord.ui.TextDisplay(
+                content=self._clip_text(f"📍 {location}")
+            ))
+
+        footer_bits = []
+        dt_upd = parse_timestamp_to_datetime(props.get('updatedISO', ''))
+        if dt_upd:
+            footer_bits.append(f"🕐 <t:{int(dt_upd.timestamp())}:R>")
+        # Point features carry [lng, lat]; NT warnings can be a Polygon —
+        # unwrap nested rings to a representative pair for the map link.
+        coords = (data.get('geometry') or {}).get('coordinates')
+        while (isinstance(coords, (list, tuple)) and coords
+               and isinstance(coords[0], (list, tuple))):
+            coords = coords[len(coords) // 2]
+        if isinstance(coords, (list, tuple)) and len(coords) >= 2:
+            try:
+                map_url = build_map_url(float(coords[1]), float(coords[0]),
+                                        label=title, layer="incidents")
+                footer_bits.append(f"[🗺️ Map]({map_url})")
+            except (TypeError, ValueError):
+                pass
+        url = (props.get('url') or '').strip()
+        if url:
+            footer_bits.append(f"[🔗 Details]({url})")
+        source = self._INTERSTATE_SOURCES.get(alert_type, 'Interstate feed')
+        self._append_container_footer(container, footer_bits, source=source)
         return container
 
     # ---- The Wire ----------------------------------------------

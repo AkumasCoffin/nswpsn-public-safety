@@ -32,6 +32,12 @@ class AlertPoller:
         #     come back as 'endeavour_current').
         #   - 'essential_planned'/'essential_future' point at the Essential
         #     Energy backend endpoints.
+        #   - 'cfa'/'deeca' share /api/vic-emergency/events — one feed
+        #     carries every Victorian publisher; _extract_items splits on
+        #     properties.agency (SES/EMV/ESTA items are not alertable types).
+        #   - The interstate feeds are all RFS-shaped GeoJSON, refreshed
+        #     upstream every 2 min (NT: 5 min) — the 60s cycle just sees an
+        #     unchanged snapshot on the off-beats; seen-dedup absorbs it.
         #   - 'wire_article'/'wire_fleet' poll The Wire's public lists. While
         #     The Wire is not live the backend answers visible:false (an API
         #     key alone carries no user session) and check_alerts skips them
@@ -53,6 +59,13 @@ class AlertPoller:
             'ausgrid': '/api/ausgrid/outages',
             'essential_planned': '/api/essential/planned',
             'essential_future': '/api/essential/future',
+            'cfa': '/api/vic-emergency/events',
+            'deeca': '/api/vic-emergency/events',
+            'qfd': '/api/qld-fire/incidents',
+            'dfes': '/api/wa-emergency/incidents',
+            'sa_cfs': '/api/sa-fire/cfs',
+            'sa_mfs': '/api/sa-fire/mfs',
+            'nt_fire': '/api/nt-fire/incidents',
             'wire_article': '/api/wire/articles?limit=30',
             'wire_fleet': '/api/wire/fleet?limit=30',
         }
@@ -176,6 +189,15 @@ class AlertPoller:
                 return f"{alert_type}_{suburb}_{street}"
             return hashlib.md5(str(item).encode(), usedforsecurity=False).hexdigest()[:16]
 
+        elif alert_type in ('cfa', 'deeca', 'qfd', 'dfes',
+                            'sa_cfs', 'sa_mfs', 'nt_fire'):
+            # Interstate fire feeds are RFS-shaped: guid + status, so a status
+            # transition re-alerts exactly like RFS above. guids arrive
+            # source-namespaced (vic:…, qfd:…, wa:…, sa:cfs:…, ntf:…).
+            props = item.get('properties', {})
+            guid = props.get('guid', '') or props.get('title', '')
+            return f"{alert_type}_{guid}_{props.get('status', '')}"
+
         elif alert_type in ('wire_article', 'wire_fleet'):
             # One Wire post = one alert. Keyed on the row id alone so edits
             # (which bump updated_at, never the id) can never re-alert.
@@ -285,6 +307,14 @@ class AlertPoller:
             elif alert_type == 'wire_fleet':
                 # Fleet rows have no published_at; the feed orders by created_at.
                 ts = item.get('created_at') or ''
+                if ts:
+                    return _aware(datetime.fromisoformat(str(ts).replace('Z', '+00:00')))
+
+            elif alert_type in ('cfa', 'deeca', 'qfd', 'dfes',
+                                'sa_cfs', 'sa_mfs', 'nt_fire'):
+                # RFS-shaped updatedISO. May be '' (SA rows whose wall-clock
+                # date failed to parse) — falls through to now() below.
+                ts = item.get('properties', {}).get('updatedISO', '')
                 if ts:
                     return _aware(datetime.fromisoformat(str(ts).replace('Z', '+00:00')))
 
@@ -832,6 +862,19 @@ class AlertPoller:
                     return v
             return []
 
+        elif alert_type in ('cfa', 'deeca'):
+            # One VicEmergency feed carries every Victorian publisher — split
+            # per agency here. SES/EMV/ESTA items exist in the feed but are
+            # not alertable types, so they simply never match.
+            want = 'CFA' if alert_type == 'cfa' else 'DEECA'
+            feats = data.get('features', []) or []
+            return [f for f in feats
+                    if str((f.get('properties') or {}).get('agency') or '').upper() == want]
+
+        elif alert_type in ('qfd', 'dfes', 'sa_cfs', 'sa_mfs', 'nt_fire'):
+            # RFS-shaped GeoJSON FeatureCollections.
+            return data.get('features', []) or []
+
         elif alert_type == 'wire_article':
             # The Wire's public article feed: {articles: [...]}. The not-live
             # visible:false case never reaches here (gated in check_alerts).
@@ -905,7 +948,7 @@ class AlertPoller:
         return new_messages
     
     async def _fetch_pager_from_api(self) -> List[Dict[str, Any]]:
-        """Fetch recent pager messages from the NSW PSN API"""
+        """Fetch recent pager messages (NSW paging network) from the backend"""
         url = f"{self.api_base_url}/api/pager/hits"
         headers = {
             'Authorization': f'Bearer {self.api_key}',

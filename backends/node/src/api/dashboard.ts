@@ -96,6 +96,7 @@ const ALERT_TYPES: readonly string[] = [
   'endeavour_current', 'endeavour_planned',
   'ausgrid',
   'essential_planned', 'essential_future',
+  'cfa', 'deeca', 'qfd', 'dfes', 'sa_cfs', 'sa_mfs', 'nt_fire',
   'wire_article', 'wire_fleet',
   'user_incident',
   'radio_summary',

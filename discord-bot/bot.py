@@ -95,6 +95,13 @@ ALERT_TYPES = {
     'ausgrid': 'Ausgrid Outages',
     'essential_planned': 'Essential Energy Planned Outages',
     'essential_future': 'Essential Energy Future Outages',
+    'cfa': 'CFA (Vic)',
+    'deeca': 'DEECA (Vic)',
+    'qfd': 'QLD Fire Dept',
+    'dfes': 'DFES (WA)',
+    'sa_cfs': 'SA CFS',
+    'sa_mfs': 'SA MFS',
+    'nt_fire': 'NT Fire & Rescue',
     'wire_article': 'Wire Articles',
     'wire_fleet': 'Wire Fleet Additions',
     'user_incident': 'User Incidents',
@@ -135,6 +142,14 @@ WEBSITE_URL = "https://nswpsn.forcequit.xyz/"
 # bypass the severity filter entirely.
 _SEVERITY_SCALES = {
     'rfs': ['advice', 'watch_and_act', 'emergency'],
+    # Interstate fire feeds publish the same three-level vocabulary as RFS.
+    'cfa': ['advice', 'watch_and_act', 'emergency'],
+    'deeca': ['advice', 'watch_and_act', 'emergency'],
+    'qfd': ['advice', 'watch_and_act', 'emergency'],
+    'dfes': ['advice', 'watch_and_act', 'emergency'],
+    'sa_cfs': ['advice', 'watch_and_act', 'emergency'],
+    'sa_mfs': ['advice', 'watch_and_act', 'emergency'],
+    'nt_fire': ['advice', 'watch_and_act', 'emergency'],
     # BOM real-world values are severe/warning/watch/advice/info but the
     # dashboard contract uses minor/moderate/major. We accept BOTH on input
     # via _SEVERITY_BOM_MAP and normalise to the canonical scale below.
@@ -181,8 +196,9 @@ def _alert_text_haystack(alert_type: str, alert_data: dict) -> str:
             if s:
                 bits.append(s)
 
-    if alert_type == 'rfs' or alert_type == 'user_incident':
-        props = alert_data.get('properties') if alert_type == 'rfs' else None
+    if alert_type in ('rfs', 'user_incident', 'cfa', 'deeca', 'qfd',
+                      'dfes', 'sa_cfs', 'sa_mfs', 'nt_fire'):
+        props = alert_data.get('properties') if alert_type != 'user_incident' else None
         # RFS: properties.{title,description,location,councilArea,fireType,status}
         if isinstance(props, dict):
             for k in ('title', 'description', 'location', 'councilArea',
@@ -233,18 +249,22 @@ def _alert_lat_lng(alert_type: str, alert_data: dict):
     if not isinstance(alert_data, dict):
         return (None, None)
 
-    # GeoJSON-style geometry.coordinates = [lng, lat] for rfs, traffic_*, waze_*.
-    if alert_type == 'rfs' or (alert_type or '').startswith('traffic_') \
-            or (alert_type or '').startswith('waze_'):
+    # GeoJSON-style geometry.coordinates = [lng, lat] for rfs, traffic_*
+    # and the interstate fire feeds.
+    if alert_type in ('rfs', 'cfa', 'deeca', 'qfd', 'dfes',
+                      'sa_cfs', 'sa_mfs', 'nt_fire') \
+            or (alert_type or '').startswith('traffic_'):
         geom = alert_data.get('geometry') or {}
         coords = geom.get('coordinates') if isinstance(geom, dict) else None
         if isinstance(coords, (list, tuple)) and len(coords) >= 1:
-            # LineString (waze jams): list of [lng,lat] pairs — use the
-            # midpoint so the geofilter has a real point to test.
-            if isinstance(coords[0], (list, tuple)):
-                mid = coords[len(coords) // 2]
-                coords = mid if isinstance(mid, (list, tuple)) else coords
-            if len(coords) >= 2:
+            # LineString: list of [lng,lat] pairs — take the midpoint so the
+            # geofilter has a real point to test. Polygon (NT warnings):
+            # rings nest one level deeper — keep unwrapping until we hold a
+            # bare [lng, lat] pair.
+            while (isinstance(coords, (list, tuple)) and coords
+                   and isinstance(coords[0], (list, tuple))):
+                coords = coords[len(coords) // 2]
+            if isinstance(coords, (list, tuple)) and len(coords) >= 2:
                 try:
                     return (float(coords[1]), float(coords[0]))
                 except (TypeError, ValueError):
@@ -370,7 +390,8 @@ def _alert_severity_token(alert_type: str, alert_data: dict):
     """Map raw alert severity to a token in _SEVERITY_SCALES[alert_type]."""
     if not isinstance(alert_data, dict):
         return None
-    if alert_type == 'rfs':
+    if alert_type in ('rfs', 'cfa', 'deeca', 'qfd', 'dfes',
+                      'sa_cfs', 'sa_mfs', 'nt_fire'):
         props = alert_data.get('properties') or {}
         raw = (props.get('alertLevel') or '').strip().lower()
         return _SEVERITY_RFS_MAP.get(raw)
@@ -683,14 +704,17 @@ class NSWPSNBot(commands.Bot):
         self._permission_error_channels[channel_id] = now
         return should_log
 
-    def _describe_channel(self, channel, channel_id: int) -> str:
+    def _describe_channel(self, channel, channel_id: int,
+                          config_id: Optional[int] = None) -> str:
         """Human-readable '#channel in "Guild" (owner: …, channel id)' for
         log messages.
 
         Falls back progressively when names aren't available (e.g. a
-        deleted channel on a 404): channel arg → cache lookup → bare id.
-        The owner name needs the member cached; otherwise we show the
-        owner id, which the guild always carries.
+        deleted channel on a 404): channel arg → cache lookup → preset's
+        guild (via config_id — a deleted channel is gone from the cache,
+        but the guild it lived in usually is not) → bare id. The owner
+        name needs the member cached; otherwise we show the owner id,
+        which the guild always carries.
         """
         ch = channel if channel is not None else self.get_channel(channel_id)
         if ch is not None:
@@ -712,6 +736,19 @@ class NSWPSNBot(commands.Bot):
                 return f'#{ch_name} in "{guild_name}" (owner: {owner_str}, channel {channel_id})'
             if ch_name:
                 return f'#{ch_name} ({channel_id})'
+        # Channel gone from the cache — name the SERVER via the preset so the
+        # operator knows where to look without pasting ids into Discord.
+        if config_id is not None:
+            try:
+                preset = self.db.get_preset(int(config_id))
+                gid = int(preset.get('guild_id') or 0) if preset else 0
+                if gid:
+                    gname = getattr(self.get_guild(gid), 'name', None)
+                    if gname:
+                        return f'channel {channel_id} in "{gname}" ({gid})'
+                    return f'channel {channel_id} in guild {gid}'
+            except Exception:
+                pass
         return f'channel {channel_id}'
 
     async def setup_hook(self):
@@ -789,7 +826,7 @@ class NSWPSNBot(commands.Bot):
         await self.change_presence(
             activity=discord.Activity(
                 type=discord.ActivityType.watching,
-                name="NSW Emergency Alerts"
+                name="Australian Emergency Alerts"
             )
         )
     
@@ -933,7 +970,7 @@ class NSWPSNBot(commands.Bot):
             # (the preset may cover many alert types). Dashboard cleanup path.
             if self._record_send_error(channel_id):
                 logger.warning(
-                    f"{self._describe_channel(channel, channel_id)} returned 404 "
+                    f"{self._describe_channel(channel, channel_id, config_id)} returned 404 "
                     f"(preset {config_id}) — channel may be deleted or inaccessible. "
                     f"Not auto-removing; delete the preset from the dashboard if permanent."
                 )
@@ -941,7 +978,7 @@ class NSWPSNBot(commands.Bot):
         except discord.Forbidden:
             if self._record_send_error(channel_id):
                 logger.warning(
-                    f"No permission to send to {self._describe_channel(channel, channel_id)}"
+                    f"No permission to send to {self._describe_channel(channel, channel_id, config_id)}"
                 )
             return 'skip'
         except discord.HTTPException as e:
@@ -3554,9 +3591,10 @@ _HELP_CATEGORIES: Dict[str, Dict[str, Any]] = {
         "title": "📚 AusAware Alert Bot",
         "lines": [
             "Real-time alerts for emergencies, traffic, weather warnings, "
-            "pager messages and The Wire — sourced from RFS, NASA FIRMS, BOM, "
-            "TfNSW, Ausgrid, Endeavour, Essential Energy, our radio scanner "
-            "and AusAware's own reporting.",
+            "pager messages and The Wire — sourced from NSW RFS, CFA, DEECA, "
+            "QFD, DFES, SA CFS/MFS, NT Fire & Rescue, NASA FIRMS, BOM, TfNSW, "
+            "Ausgrid, Endeavour, Essential Energy, our radio scanner and "
+            "AusAware's own reporting.",
             "",
             f"🌐 Website: [nswpsn.forcequit.xyz]({WEBSITE_URL})",
             "",
@@ -3609,7 +3647,7 @@ _HELP_CATEGORIES: Dict[str, Dict[str, Any]] = {
         "title": "📊 Info",
         "commands": [
             ("/overview",
-             "Dashboard of current incidents across NSW (formerly /summary)."),
+             "Dashboard of current incidents across Australia (formerly /summary)."),
             ("/dashboard",
              "Open the web dashboard to manage alerts, pager config, and roles in a GUI."),
             ("/status",
@@ -3629,8 +3667,8 @@ _HELP_CATEGORIES: Dict[str, Dict[str, Any]] = {
             ("/alert-list",
              "List every alert + pager subscription in this server."),
             ("/pager",
-             "Subscribe a channel to NSW pager messages with an optional "
-             "comma-separated capcode filter + role to ping."),
+             "Subscribe a channel to NSW paging-network messages with an "
+             "optional comma-separated capcode filter + role to ping."),
             ("/pager-remove",
              "Remove the pager subscription from a channel."),
         ],
@@ -4070,7 +4108,7 @@ async def summary_command(
     await pager.send_initial(interaction)
 
 
-@bot.tree.command(name="overview", description="Dashboard of current incidents across NSW")
+@bot.tree.command(name="overview", description="Dashboard of current incidents across Australia")
 # User-install support: /overview works in guilds, DMs, group DMs, and any
 # channel the invoking user has access to (via user-install). Output is
 # public — it's a broadcast snapshot, no reason to hide it.
