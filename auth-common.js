@@ -31,7 +31,7 @@ function injectAuthSection() {
     authSection.innerHTML = `
       <div class="sidebar-section-label">Account</div>
       <div id="auth-logged-out">
-        <a href="login.html" style="width:100%; padding:0.6rem 1rem; background:rgba(249,115,22,0.15); border:1px solid rgba(249,115,22,0.3); border-radius:8px; color:#f97316; font-size:0.85rem; font-weight:500; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:0.5rem; font-family:inherit; text-decoration:none; box-sizing:border-box;">
+        <a href="login" style="width:100%; padding:0.6rem 1rem; background:rgba(249,115,22,0.15); border:1px solid rgba(249,115,22,0.3); border-radius:8px; color:#f97316; font-size:0.85rem; font-weight:500; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:0.5rem; font-family:inherit; text-decoration:none; box-sizing:border-box;">
           <i class="fas fa-sign-in-alt"></i> Login
         </a>
       </div>
@@ -76,8 +76,8 @@ function injectAuthSection() {
     legal.innerHTML = `
       <div class="sidebar-section-label">Legal</div>
       <nav class="sidebar-nav">
-        <a href="terms.html"${location.pathname.endsWith('/terms.html') ? ' class="active"' : ''}>Terms &amp; Conditions</a>
-        <a href="privacy.html"${location.pathname.endsWith('/privacy.html') ? ' class="active"' : ''}>Privacy Policy</a>
+        <a href="terms"${location.pathname.endsWith('/terms') ? ' class="active"' : ''}>Terms &amp; Conditions</a>
+        <a href="privacy"${location.pathname.endsWith('/privacy') ? ' class="active"' : ''}>Privacy Policy</a>
       </nav>
     `;
     sidebarFooter.parentNode.insertBefore(legal, sidebarFooter);
@@ -122,7 +122,7 @@ function createAuthModals() {
         <div id="login-error" style="color:#ef4444; font-size:0.85rem; margin-top:1.2rem; text-align:center; min-height:1.2em;"></div>
         <div style="border-top:1px solid rgba(148,163,184,0.2); margin-top:1.5rem; padding-top:1.5rem; text-align:center;">
           <p style="color:#94a3b8; font-size:0.85rem; margin:0 0 0.75rem 0;">Don't have an account?</p>
-          <a href="signup.html" style="display:block; width:100%; padding:0.8rem; background:transparent; border:1px solid #f97316; border-radius:8px; color:#f97316; font-weight:700; cursor:pointer; text-transform:uppercase; letter-spacing:0.05em; font-size:0.9rem; text-decoration:none; text-align:center; box-sizing:border-box; font-family:inherit; transition:all 0.2s;">Request Access</a>
+          <a href="signup" style="display:block; width:100%; padding:0.8rem; background:transparent; border:1px solid #f97316; border-radius:8px; color:#f97316; font-weight:700; cursor:pointer; text-transform:uppercase; letter-spacing:0.05em; font-size:0.9rem; text-decoration:none; text-align:center; box-sizing:border-box; font-family:inherit; transition:all 0.2s;">Request Access</a>
         </div>
       </div>
     `;
@@ -205,7 +205,7 @@ async function doLogin() {
   // Check if user needs to change password on first login
   if (data?.user?.user_metadata?.force_password_change) {
     closeLoginModal();
-    window.location.href = 'change-password.html';
+    window.location.href = 'change-password';
     return;
   }
   
@@ -335,7 +335,7 @@ function createProfileModal() {
           <span id="profile-discord-linked-badge" style="display:none; color:#22c55e; font-size:0.75rem; font-weight:600;"><i class="fas fa-check"></i> Linked</span>
           <button id="profile-discord-unlink-btn" onclick="unlinkDiscordAccount()" style="display:none; padding:0.35rem 0.7rem; background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.3); border-radius:6px; color:#fca5a5; font-weight:600; cursor:pointer; font-size:0.75rem; font-family:inherit;">Unlink</button>
         </div>
-        <a id="profile-change-password" href="change-password.html" style="display:flex; width:100%; padding:0.55rem; background:rgba(148,163,184,0.1); border:1px solid rgba(148,163,184,0.2); border-radius:6px; color:#94a3b8; font-size:0.8rem; cursor:pointer; align-items:center; justify-content:center; gap:0.4rem; font-family:inherit; text-decoration:none; box-sizing:border-box; margin-top:0.7rem;">
+        <a id="profile-change-password" href="change-password" style="display:flex; width:100%; padding:0.55rem; background:rgba(148,163,184,0.1); border:1px solid rgba(148,163,184,0.2); border-radius:6px; color:#94a3b8; font-size:0.8rem; cursor:pointer; align-items:center; justify-content:center; gap:0.4rem; font-family:inherit; text-decoration:none; box-sizing:border-box; margin-top:0.7rem;">
           <i class="fas fa-key"></i> Change Password
         </a>
       </div>
@@ -1363,13 +1363,13 @@ async function checkAuthState() {
       if (roleData.is_team_member || roleData.is_owner ||
           _hasAny('staff', 'team_member', 'feeder:monitor', 'node_monitor',
                   'feeder:manager', 'wire:manager', 'map:manager')) {
-        buttons += menuItem('staff.html', 'fa-users-cog', 'Staff', '#fb923c');
+        buttons += menuItem('staff', 'fa-users-cog', 'Staff', '#fb923c');
       }
 
       // Radio Feeder - for radio contributors (links to their node
       // download + status page). Distinct sky accent from Staff.
       if (_hasAny('feeder:radio', 'radio_contributor', 'feeder:pager', 'pager_contributor')) {
-        buttons += menuItem('feeder.html', 'fa-satellite-dish', 'Feeder', '#38bdf8');
+        buttons += menuItem('feeder', 'fa-satellite-dish', 'Feeder', '#38bdf8');
       }
 
       const rolesSlot = document.getElementById('auth-menu-roles');
@@ -1463,7 +1463,7 @@ async function handlePasswordResetRequest(event) {
   
   try {
     const { error } = await sb.auth.resetPasswordForEmail(email, {
-      redirectTo: window.location.origin + '/reset-password.html'
+      redirectTo: window.location.origin + '/reset-password'
     });
     
     if (error) {

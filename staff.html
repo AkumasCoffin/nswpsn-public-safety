@@ -12,14 +12,14 @@
   <meta name="author" content="Forcequit">
 
   <meta property="og:type" content="website">
-  <meta property="og:url" content="https://nswpsn.forcequit.xyz/staff.html">
+  <meta property="og:url" content="https://nswpsn.forcequit.xyz/staff">
   <meta property="og:title" content="Admin – Forcequit">
   <meta property="og:description" content="Admin panel for managing AusAware editor requests and user permissions.">
   <meta property="og:image" content="https://nswpsn.forcequit.xyz/assets/AusAware_filled_background.jpg">
   <meta property="og:site_name" content="AusAware">
 
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/staff.html">
+  <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/staff">
   <meta name="twitter:title" content="Admin – Forcequit">
   <meta name="twitter:description" content="Admin panel for managing AusAware editor requests and user permissions.">
   <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/AusAware_filled_background.jpg">
@@ -2578,7 +2578,7 @@
 <body>
   <div id="login-overlay" class="login-overlay">
     <div class="login-card">
-      <a href="map.html" style="display: inline-flex; align-items: center; gap: 0.4rem; color: var(--text-soft); text-decoration: none; font-size: 0.85rem; margin-bottom: 1rem;">
+      <a href="map" style="display: inline-flex; align-items: center; gap: 0.4rem; color: var(--text-soft); text-decoration: none; font-size: 0.85rem; margin-bottom: 1rem;">
         <i class="fas fa-arrow-left"></i> Back to Map
       </a>
       <h2>Forcequit <span>Admin</span></h2>
@@ -2618,7 +2618,7 @@
           <button class="btn btn-secondary" onclick="refreshAll()">
             <i class="fas fa-sync-alt"></i> Refresh
           </button>
-          <a href="map.html" class="btn btn-secondary">
+          <a href="map" class="btn btn-secondary">
             <i class="fas fa-map"></i> Map
           </a>
           <button class="btn btn-danger" onclick="doLogout()">
@@ -12625,7 +12625,7 @@
       
       // Check if user needs to change password first
       if (session.user.user_metadata?.force_password_change) {
-        window.location.href = 'change-password.html';
+        window.location.href = 'change-password';
         return;
       }
       

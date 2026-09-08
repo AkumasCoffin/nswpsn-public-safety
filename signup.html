@@ -10,7 +10,7 @@
   
   <!-- Open Graph / Facebook -->
   <meta property="og:type" content="website">
-  <meta property="og:url" content="https://nswpsn.forcequit.xyz/signup.html">
+  <meta property="og:url" content="https://nswpsn.forcequit.xyz/signup">
   <meta property="og:title" content="Become a Forcequit Editor">
   <meta property="og:site_name" content="AusAware">
   <meta property="og:description" content="Request editor access to contribute to AusAware - real-time emergency services mapping for Australia.">
@@ -18,7 +18,7 @@
   
   <!-- Twitter -->
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/signup.html">
+  <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/signup">
   <meta name="twitter:title" content="Become a Forcequit Editor">
   <meta name="twitter:description" content="Request editor access to contribute to AusAware - real-time emergency services mapping for Australia.">
   <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/AusAware_filled_background.jpg">
@@ -363,7 +363,7 @@
     
     <div class="card">
       <div id="form-container">
-        <a href="login.html" style="display: inline-flex; align-items: center; gap: 0.4rem; color: var(--text-soft); text-decoration: none; font-size: 0.85rem; margin-bottom: 1rem; transition: color 0.2s;">
+        <a href="login" style="display: inline-flex; align-items: center; gap: 0.4rem; color: var(--text-soft); text-decoration: none; font-size: 0.85rem; margin-bottom: 1rem; transition: color 0.2s;">
           <i class="fas fa-arrow-left"></i> Back to Login
         </a>
         <div class="card-title">
@@ -679,7 +679,7 @@
            Your account is ready to sign in with now — editor/feeder features switch on once you're approved.</p>
         <p id="success-confirm-note" style="display:none; color: var(--accent); margin-top:0.5rem;"><i class="fas fa-envelope"></i> One more step: check your email and confirm your address so you can sign in.</p>
         <div style="margin-top: 1.5rem;">
-          <a href="map.html" class="btn" style="background: rgba(255,255,255,0.1); border: 1px solid var(--border-subtle);">
+          <a href="map" class="btn" style="background: rgba(255,255,255,0.1); border: 1px solid var(--border-subtle);">
             <i class="fas fa-map"></i>
             View Live Map
           </a>
@@ -688,10 +688,10 @@
     </div>
     
     <div class="footer-links">
-      <a href="map.html">
+      <a href="map">
         <i class="fas fa-map"></i> Live Map
       </a>
-      <a href="login.html">
+      <a href="login">
         <i class="fas fa-sign-in-alt"></i> Login
       </a>
       <a href="https://discord.forcequit.xyz" target="_blank">
@@ -1417,7 +1417,7 @@
         if (suError) {
           const already = /already|registered|exists/i.test(suError.message || '');
           messageEl.innerHTML = already
-            ? 'This email already has an account — <a href="login.html" style="color:var(--accent);">sign in</a> instead.'
+            ? 'This email already has an account — <a href="login" style="color:var(--accent);">sign in</a> instead.'
             : escapeHtmlSignup(suError.message || 'Could not create your account.');
           messageEl.className = 'message error';
           submitBtn.disabled = false;
@@ -1458,7 +1458,7 @@
       if (m) {
         m.innerHTML = needsConfirm
           ? 'Account created. Check your inbox for a confirmation link, then sign in.'
-          : 'Your account is ready. <a href="index.html" style="color:var(--accent);">Start exploring</a>, or apply to contribute any time from your profile.';
+          : 'Your account is ready. <a href="/" style="color:var(--accent);">Start exploring</a>, or apply to contribute any time from your profile.';
       }
     }
 
@@ -1628,7 +1628,7 @@
           if (suError) {
             const already = /already|registered|exists/i.test(suError.message || '');
             messageEl.innerHTML = already
-              ? 'This email already has an account — <a href="login.html?redirect=/signup.html" style="color:var(--accent);">sign in</a> and then submit your request.'
+              ? 'This email already has an account — <a href="login?redirect=/signup" style="color:var(--accent);">sign in</a> and then submit your request.'
               : escapeHtmlSignup(suError.message || 'Could not create your account.');
             messageEl.className = 'message error';
             submitBtn.disabled = false;

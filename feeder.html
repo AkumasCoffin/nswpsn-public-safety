@@ -12,7 +12,7 @@
   <meta name="author" content="Forcequit">
 
   <meta property="og:type" content="website">
-  <meta property="og:url" content="https://nswpsn.forcequit.xyz/feeder.html">
+  <meta property="og:url" content="https://nswpsn.forcequit.xyz/feeder">
   <meta property="og:title" content="Radio Feeder – AusAware">
   <meta property="og:description" content="Download and run your AusAware radio feeder node.">
   <meta property="og:image" content="https://nswpsn.forcequit.xyz/assets/AusAware_filled_background.jpg">
@@ -541,7 +541,7 @@
     <div class="header">
       <h1>Radio <span>Feeder</span></h1>
       <div class="header-actions">
-        <a href="map.html" class="btn btn-secondary"><i class="fas fa-map"></i> Map</a>
+        <a href="map" class="btn btn-secondary"><i class="fas fa-map"></i> Map</a>
         <button class="btn btn-danger" onclick="doLogout()"><i class="fas fa-sign-out-alt"></i> Logout</button>
       </div>
     </div>
@@ -643,7 +643,7 @@
     async function doLogout() {
       if (typeof umami !== 'undefined') umami.track('logout');
       await sb.auth.signOut();
-      window.location.href = 'login.html';
+      window.location.href = 'login';
     }
 
     // --- Boot: require a session, else bounce to the login page (keeping a
@@ -651,7 +651,7 @@
     async function boot() {
       const { data } = await sb.auth.getSession();
       if (!data.session) {
-        window.location.href = 'login.html?redirect=' + encodeURIComponent('/feeder.html');
+        window.location.href = 'login?redirect=' + encodeURIComponent('/feeder');
         return;
       }
       await loadFeeder();
@@ -662,7 +662,7 @@
       try {
         const token = await getToken();
         if (!token) {
-          window.location.href = 'login.html?redirect=' + encodeURIComponent('/feeder.html');
+          window.location.href = 'login?redirect=' + encodeURIComponent('/feeder');
           return;
         }
         const res = await fetch(`${API_BASE_URL}/api/feeder/me`, {
@@ -700,7 +700,7 @@
             scanner audio, request access below and a staff member will set you up.
           </p>
           <div class="dl-row">
-            <a class="dl-btn" href="signup.html" style="text-decoration:none;">
+            <a class="dl-btn" href="signup" style="text-decoration:none;">
               <i class="fas fa-user-plus"></i> Request feeder access
             </a>
           </div>
@@ -1480,7 +1480,7 @@
       try {
         if (createMode) {
           const jwt = await getToken();
-          if (!jwt) { window.location.href = 'login.html?redirect=' + encodeURIComponent('/feeder.html'); return; }
+          if (!jwt) { window.location.href = 'login?redirect=' + encodeURIComponent('/feeder'); return; }
           const res = await fetch(`${API_BASE_URL}/api/feeder/nodes`, {
             method: 'POST',
             headers: { 'Authorization': 'Bearer ' + jwt, 'Content-Type': 'application/json' },
@@ -1540,7 +1540,7 @@
       if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing…'; }
       try {
         const jwt = await getToken();
-        if (!jwt) { window.location.href = 'login.html?redirect=' + encodeURIComponent('/feeder.html'); return; }
+        if (!jwt) { window.location.href = 'login?redirect=' + encodeURIComponent('/feeder'); return; }
         let token = _nodeTokens[nodeId];
         if (!token) {
           // The key is shown once (hash-only at rest) and kept only in memory,
