@@ -1547,6 +1547,15 @@ const PROVIDERS = [
     types: [
       { key: 'radio_summary', label: 'Hourly Summaries' },
     ] },
+  // The Wire — AusAware's own reporting. The bot only posts these while the
+  // owner has The Wire live (the backend's soft-launch gate answers
+  // visible:false otherwise and the poller skips), so configuring them
+  // before launch is safe: they simply hold fire until launch day.
+  { key: 'wire',        name: 'The Wire',               icon: 'newspaper', color: '#f97316',
+    types: [
+      { key: 'wire_article', label: 'Articles' },
+      { key: 'wire_fleet',   label: 'Fleet Additions' },
+    ] },
 ];
 
 const ALERT_TYPES = PROVIDERS.flatMap(p => p.types.map(t => t.key));

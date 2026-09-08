@@ -86,7 +86,7 @@ export const dashboardRouter = new Hono();
 const MANAGE_CHANNELS = 0x10n;
 const ADMINISTRATOR = 0x8n;
 
-// Mirror of discord-bot/bot.py ALERT_TYPES (python line 16156-16167).
+// Mirror of discord-bot/bot.py ALERT_TYPES.
 const ALERT_TYPES: readonly string[] = [
   'rfs',
   'firms',
@@ -96,6 +96,7 @@ const ALERT_TYPES: readonly string[] = [
   'endeavour_current', 'endeavour_planned',
   'ausgrid',
   'essential_planned', 'essential_future',
+  'wire_article', 'wire_fleet',
   'user_incident',
   'radio_summary',
 ];

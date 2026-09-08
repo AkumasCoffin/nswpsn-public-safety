@@ -88,17 +88,25 @@ python bot.py
 
 ## Alert Types
 
+Canonical keys (the source of truth is `ALERT_TYPES` in `bot.py`):
+
 | Type | Description |
 |------|-------------|
 | `rfs` | RFS bush fire incidents |
-| `bom` | BOM weather warnings (land, marine, and general) |
-| `traffic_incidents` | Traffic incidents (crashes, hazards) |
+| `firms` | NASA FIRMS satellite fire hotspots |
+| `bom_land` / `bom_marine` | BOM weather warnings |
+| `traffic_incident` | Traffic incidents (crashes, hazards) |
 | `traffic_roadwork` | Road work alerts |
 | `traffic_flood` | Flood hazards |
 | `traffic_fire` | Fire-related road hazards |
-| `traffic_major` | Major events affecting traffic |
-| `power_endeavour` | Endeavour Energy power outages |
-| `power_ausgrid` | Ausgrid power outages |
+| `traffic_majorevent` | Major events affecting traffic |
+| `endeavour_current` / `endeavour_planned` | Endeavour Energy outages |
+| `ausgrid` | Ausgrid power outages |
+| `essential_planned` / `essential_future` | Essential Energy outages |
+| `wire_article` | New articles on The Wire (only while The Wire is live) |
+| `wire_fleet` | New fleet vehicles on The Wire (same gate) |
+| `user_incident` | User-submitted incidents |
+| `radio_summary` | Hourly radio scanner summaries |
 
 ## Pager Capcodes
 
@@ -131,12 +139,14 @@ Leave capcodes empty to receive ALL pager messages.
 
 ## Data Sources
 
-This bot uses the NSW PSN API which aggregates data from:
+This bot uses the AusAware API which aggregates data from:
 - NSW Rural Fire Service (RFS)
+- NASA FIRMS satellite hotspots
 - Bureau of Meteorology (BOM)
 - Live Traffic NSW
-- Endeavour Energy
-- Ausgrid
+- Endeavour Energy / Ausgrid / Essential Energy
+- The Wire (AusAware's own reporting: articles + fleet)
+- User-submitted incidents & the radio scanner
 - Pager feed data
 
 ## License

@@ -95,10 +95,8 @@ ALERT_TYPES = {
     'ausgrid': 'Ausgrid Outages',
     'essential_planned': 'Essential Energy Planned Outages',
     'essential_future': 'Essential Energy Future Outages',
-    'waze_hazard': 'Waze Hazards',
-    'waze_jam': 'Waze Traffic Jams',
-    'waze_police': 'Waze Police',
-    'waze_roadwork': 'Waze Roadwork',
+    'wire_article': 'Wire Articles',
+    'wire_fleet': 'Wire Fleet Additions',
     'user_incident': 'User Incidents',
     'radio_summary': 'Radio Summary',
 }
@@ -202,11 +200,12 @@ def _alert_text_haystack(alert_type: str, alert_data: dict) -> str:
                   'incidentType', 'otherAdvice', 'adviceA', 'adviceB',
                   'affectedDirection'):
             _push(props.get(k))
-    elif alert_type and alert_type.startswith('waze_'):
-        props = alert_data.get('properties') or {}
-        for k in ('title', 'displayType', 'wazeSubtype', 'street',
-                  'city', 'location'):
-            _push(props.get(k))
+    elif alert_type in ('wire_article', 'wire_fleet'):
+        for k in ('title', 'excerpt', 'callsign', 'agency', 'station',
+                  'state', 'lga', 'suburb'):
+            _push(alert_data.get(k))
+        for a in (alert_data.get('agencies') or []):
+            _push(a)
     elif alert_type and (alert_type.startswith('endeavour_')
                          or alert_type == 'ausgrid'
                          or alert_type.startswith('essential_')):
@@ -3554,9 +3553,10 @@ _HELP_CATEGORIES: Dict[str, Dict[str, Any]] = {
     "intro": {
         "title": "📚 AusAware Alert Bot",
         "lines": [
-            "Real-time alerts for NSW emergencies, traffic, weather warnings, "
-            "and pager messages — sourced from RFS, BOM, TfNSW, Ausgrid, "
-            "Endeavour, and Waze.",
+            "Real-time alerts for emergencies, traffic, weather warnings, "
+            "pager messages and The Wire — sourced from RFS, NASA FIRMS, BOM, "
+            "TfNSW, Ausgrid, Endeavour, Essential Energy, our radio scanner "
+            "and AusAware's own reporting.",
             "",
             f"🌐 Website: [nswpsn.forcequit.xyz]({WEBSITE_URL})",
             "",
@@ -3634,14 +3634,10 @@ _HELP_CATEGORIES: Dict[str, Dict[str, Any]] = {
             ("/pager-remove",
              "Remove the pager subscription from a channel."),
         ],
-        "footer": (
-            "Alert types: rfs · bom_land · bom_marine · traffic_incident · "
-            "traffic_roadwork · traffic_flood · traffic_fire · "
-            "traffic_majorevent · endeavour_current · endeavour_planned · "
-            "ausgrid · essential_planned · essential_future · "
-            "waze_hazard · waze_jam · waze_police · waze_roadwork · "
-            "user_incident · radio_summary"
-        ),
+        # Derived from ALERT_TYPES so the list can never drift again
+        # (the old hand-written copy still advertised retired Waze types
+        # and omitted firms).
+        "footer": "Alert types: " + " · ".join(ALERT_TYPES.keys()),
     },
 }
 
