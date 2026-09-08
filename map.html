@@ -33,6 +33,7 @@
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="livetraffic-vocab.js?v=1"></script>
   <script src="fire-vocab.js?v=3"></script>
+  <script src="fleet-vocab.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js" integrity="sha384-948ahk4ZmxYVYOc+rxN1H2gM1EJ2Duhp7uHtZ4WSLkV4Vtx5MUqnV+l7u9B+jFv+" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
 
@@ -4714,6 +4715,20 @@
     let pagerHours = 12; // Pager hits lookback window in hours (controlled by slider)
     const PAGER_HOURS_STORAGE_KEY = 'pager_hours_window';
     const AGENCY_COLORS = { 'RFS': '#ff6600', 'FRNSW': '#ef4444', 'NSWAS': '#3b82f6', 'SES': '#eab308', 'POLICE': '#3b82f6', 'VRA': '#000000', 'AVIATION': '#a855f7' };
+    // User incidents now carry full Aus-wide agency names (fleet-vocab):
+    // exact legacy codes first, then keyword rules.
+    function _userAgencyColor(a) {
+      const u = String(a || '').toUpperCase();
+      if (AGENCY_COLORS[u]) return AGENCY_COLORS[u];
+      if (/\bRFS\b|RURAL FIRE|COUNTRY FIRE/.test(u)) return '#ff6600';
+      if (u.includes('POLICE')) return '#3b82f6';
+      if (/\bSES\b|STATE EMERGENCY SERVICE/.test(u)) return '#eab308';
+      if (/AMBULANCE|ST JOHN|SOUTHCARE/.test(u)) return '#3b82f6';
+      if (u.includes('FIRE')) return '#ef4444';
+      if (u.includes('VRA')) return '#000000';
+      if (/MARINE|SURF/.test(u)) return '#0ea5e9';
+      return null;
+    }
     const TYPE_COLORS = { 'FIRE': '#ef4444', 'RESCUE': '#ff6600', 'HAZARD': '#eab308', 'POLICE': '#3b82f6', 'MEDICAL': '#3b82f6', 'DEFAULT': '#000000' };
 
     function generateRfsId(url) {
@@ -8126,13 +8141,14 @@ function initPagerHoursFromStorage() {
     }
 
     function getAgencyClass(agency) {
-      const a = agency.toUpperCase();
-      if (a.includes('RFS')) return 'pill pill-agency-rfs';
+      const a = String(agency || '').toUpperCase();
+      if (/\bRFS\b|RURAL FIRE|COUNTRY FIRE/.test(a)) return 'pill pill-agency-rfs';
       if (a.includes('FRNSW')) return 'pill pill-agency-frnsw';
-      if (a.includes('NSWAS')) return 'pill pill-agency-amb';
-      if (a.includes('SES')) return 'pill pill-agency-ses';
       if (a.includes('POLICE')) return 'pill pill-blue';
+      if (/\bSES\b|STATE EMERGENCY SERVICE/.test(a)) return 'pill pill-agency-ses';
+      if (/NSWAS|AMBULANCE|ST JOHN|SOUTHCARE/.test(a)) return 'pill pill-agency-amb';
       if (a.includes('VRA')) return 'pill pill-white';
+      if (a.includes('FIRE')) return 'pill pill-agency-frnsw';
       return 'pill pill-agency-util';
     }
 
@@ -8140,7 +8156,7 @@ function initPagerHoursFromStorage() {
       let colors = [];
       if (inc.responding_agencies && inc.responding_agencies.length > 0) {
         inc.responding_agencies.forEach(a => {
-          const c = AGENCY_COLORS[a.toUpperCase()];
+          const c = _userAgencyColor(a);
           if (c) colors.push(c);
         });
       }
@@ -17998,6 +18014,19 @@ function initPagerHoursFromStorage() {
       const cfg = _boundaryCfg[kind];
       // Upstream shouts some locality and LGA names; states come cased.
       const name = raw === raw.toUpperCase() ? _titleCaseName(raw) : raw;
+      // Editor suburb-level placement: hand the pick to the editor module
+      // and skip the popup. The centre of the shape stands in for the
+      // unknown exact spot.
+      if (kind === 'locality' && window.__editorActive && window.NSWPSNEditorHooks
+          && typeof NSWPSNEditorHooks.suburbPickArmed === 'function' && NSWPSNEditorHooks.suburbPickArmed()
+          && typeof NSWPSNEditorHooks.pickSuburb === 'function') {
+        _suppressBoundaryClear = true;
+        setTimeout(() => { _suppressBoundaryClear = false; }, 0);
+        let center = e.latlng;
+        try { if (lyr && lyr.getBounds) center = lyr.getBounds().getCenter(); } catch (_) { /* click point then */ }
+        NSWPSNEditorHooks.pickSuburb({ name, state: props.state || '' }, center);
+        return;
+      }
       const sub = props.state && kind !== 'state' ? cfg.subtitle + ' · ' + props.state : cfg.subtitle;
       _clearBoundaryHi();
       try { lyr.setStyle(cfg.highlight); } catch (_) { /* ignore */ }
@@ -18136,6 +18165,9 @@ function initPagerHoursFromStorage() {
         if (opt) opt.classList.remove('loading');
       }
     }
+
+    /** The boundary kind currently switched on (editor suburb-pick reads this). */
+    function getActiveBoundary() { return _boundaryActive; }
 
     function onBoundaryKey(ev, kind) {
       if (ev.key === 'Enter' || ev.key === ' ' || ev.key === 'Spacebar') {
@@ -18411,6 +18443,6 @@ function initPagerHoursFromStorage() {
   <script src="ui-dialogs.js"></script>
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
-  <script src="map-editor-module.js?v=41"></script>
+  <script src="map-editor-module.js?v=42"></script>
 </body>
 </html>

@@ -70,6 +70,96 @@
       'VRA': '#ffffff',
       'AVIATION': '#a855f7'
     };
+    // Pin colour by agency: exact legacy codes first, then keyword rules
+    // that understand the full Aus-wide fleet-vocab names.
+    function agencyColor(a) {
+      const u = String(a || '').toUpperCase();
+      if (AGENCY_COLORS[u]) return AGENCY_COLORS[u];
+      if (/\bRFS\b|RURAL FIRE|COUNTRY FIRE/.test(u)) return '#ff6600';
+      if (u.includes('POLICE')) return '#3b82f6';
+      if (/\bSES\b|STATE EMERGENCY SERVICE/.test(u)) return '#eab308';
+      if (/AMBULANCE|ST JOHN|SOUTHCARE/.test(u)) return '#3b82f6';
+      if (u.includes('FIRE')) return '#ef4444';
+      if (u.includes('VRA')) return '#ffffff';
+      if (/MARINE|SURF/.test(u)) return '#0ea5e9';
+      return null;
+    }
+    // Older incidents stored NSW short codes; the picker now stores full
+    // fleet-vocab names. Normalising ticks the right boxes on old pins and
+    // stops suggestion diffs flagging a pure rename as a change.
+    const LEGACY_AGENCY_MAP = {
+      'RFS': 'NSW Rural Fire Service (RFS)',
+      'FRNSW': 'Fire and Rescue NSW (FRNSW)',
+      'NSWAS': 'NSW Ambulance',
+      'SES': 'NSW State Emergency Service (SES)',
+      'Police': 'NSW Police Force',
+      'VRA': 'VRA Rescue NSW'
+    };
+    function normalizeAgencies(list) {
+      return (Array.isArray(list) ? list : []).map(a => LEGACY_AGENCY_MAP[a] || a);
+    }
+    // Aus-wide responding agencies, per state, from fleet-vocab.js — the
+    // same list fleet vehicles use. Falls back to the old NSW six if the
+    // vocab script ever fails to load.
+    function agencyDepartments() {
+      if (window.FleetVocab && FleetVocab.departments) return FleetVocab.departments;
+      return { NSW: Object.values(LEGACY_AGENCY_MAP).map(name => ({ name })) };
+    }
+    const AGENCY_HD_STYLE = 'flex-basis:100%; font-size:0.62rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); font-weight:700; margin:0.35rem 0 0.1rem;';
+    // State-grouped agency checkboxes. The editor panel and the suggest
+    // panel share this markup; the suggest panel tags its inputs with a
+    // class instead of relying on the container id.
+    function agencyGroupsHtml(selected, inputClass) {
+      const sel = new Set(selected || []);
+      const deps = agencyDepartments();
+      const cls = inputClass ? ` class="${inputClass}"` : '';
+      const seen = new Set();
+      let html = '';
+      Object.keys(deps).forEach(st => {
+        const rows = deps[st] || [];
+        if (!rows.length) return;
+        html += `<div class="agency-state-hd" style="${AGENCY_HD_STYLE}">${escapeHtml(st)}</div>`;
+        rows.forEach(d => {
+          seen.add(d.name);
+          const checked = sel.has(d.name) ? ' checked' : '';
+          html += `<label class="pill-checkbox"><input type="checkbox"${cls} value="${escapeHtml(d.name)}"${checked}> ${escapeHtml(d.name)}</label>`;
+        });
+      });
+      // Anything on the incident the list doesn't know (hand-entered, or
+      // from an older vocab) still shows, checked, so a save can't
+      // silently drop it.
+      const extras = (selected || []).filter(a => !seen.has(a));
+      if (extras.length) {
+        html += `<div class="agency-state-hd" style="${AGENCY_HD_STYLE}">Other</div>`;
+        extras.forEach(a => {
+          html += `<label class="pill-checkbox"><input type="checkbox"${cls} value="${escapeHtml(a)}" checked> ${escapeHtml(a)}</label>`;
+        });
+      }
+      return html;
+    }
+    function renderAgencyCheckboxes(container, selected, inputClass) {
+      if (container) container.innerHTML = agencyGroupsHtml(selected, inputClass);
+    }
+    // Filter-as-you-type over a rendered agency box: hides pills that
+    // don't match and any state header left with nothing under it.
+    function wireAgencyFilter(input, box) {
+      if (!input || !box) return;
+      input.addEventListener('input', () => {
+        const q = input.value.trim().toLowerCase();
+        let hd = null, hdHasVisible = false;
+        Array.from(box.children).forEach(el => {
+          if (el.classList.contains('agency-state-hd')) {
+            if (hd) hd.style.display = hdHasVisible ? '' : 'none';
+            hd = el; hdHasVisible = false;
+            return;
+          }
+          const show = !q || el.textContent.toLowerCase().includes(q);
+          el.style.display = show ? '' : 'none';
+          if (show) hdHasVisible = true;
+        });
+        if (hd) hd.style.display = hdHasVisible ? '' : 'none';
+      });
+    }
     const TYPE_COLORS = {
       'FIRE': '#ef4444',
       'RESCUE': '#ff6600',
@@ -557,13 +647,13 @@
       const photosGroup = document.getElementById('photos-group');
       if (photosGroup) photosGroup.style.display = 'block';
 
-      const agencyInputs = document.querySelectorAll('#agency-checkboxes input');
-      agencyInputs.forEach(cb => cb.checked = false);
-      if (inc.responding_agencies) {
-        inc.responding_agencies.forEach(agency => {
-          const match = Array.from(agencyInputs).find(i => i.value === agency);
-          if (match) match.checked = true;
-        });
+      renderAgencyCheckboxes(
+        document.getElementById('agency-checkboxes'),
+        normalizeAgencies(inc.responding_agencies), null);
+      const agencyFilter = document.getElementById('agency-filter');
+      if (agencyFilter && agencyFilter.value) {
+        agencyFilter.value = '';
+        agencyFilter.dispatchEvent(new Event('input'));
       }
 
       // --- Ownership-aware UI ---
@@ -642,12 +732,8 @@
         return `<label class="pill-checkbox"><input type="checkbox" class="sugg-type" value="${escapeHtml(t)}"${checked}> ${escapeHtml(t)}</label>`;
       }).join('');
 
-      const AGENCIES = ['RFS','FRNSW','NSWAS','SES','Police','VRA'];
-      const incAgencies = Array.isArray(inc.responding_agencies) ? inc.responding_agencies : [];
-      const agencyHtml = AGENCIES.map(a => {
-        const checked = incAgencies.includes(a) ? ' checked' : '';
-        return `<label class="pill-checkbox"><input type="checkbox" class="sugg-agency" value="${escapeHtml(a)}"${checked}> ${escapeHtml(a)}</label>`;
-      }).join('');
+      const agencyHtml = agencyGroupsHtml(
+        normalizeAgencies(inc.responding_agencies), 'sugg-agency');
 
       clearSuggestMove();
       panel.style.display = 'block';
@@ -674,7 +760,7 @@
           </div>
           <div class="form-group">
             <div class="form-label">Responding Agencies</div>
-            <div style="display:flex; flex-wrap:wrap; gap:0.5rem;">${agencyHtml}</div>
+            <div style="display:flex; flex-wrap:wrap; gap:0.4rem; align-content:flex-start; max-height:160px; overflow-y:auto; background:rgba(0,0,0,0.2); padding:0.5rem; border-radius:6px; border:1px solid var(--border-subtle);">${agencyHtml}</div>
           </div>
           <div class="form-group">
             <div class="form-label">Location</div>
@@ -720,7 +806,7 @@
       if (!arraysEqualUnordered(newTypes, oldTypes)) changes.type = newTypes;
 
       const newAgencies = Array.from(document.querySelectorAll('.sugg-agency:checked')).map(cb => cb.value);
-      const oldAgencies = Array.isArray(inc.responding_agencies) ? inc.responding_agencies : [];
+      const oldAgencies = normalizeAgencies(inc.responding_agencies);
       if (!arraysEqualUnordered(newAgencies, oldAgencies)) changes.responding_agencies = newAgencies;
 
       // Proposed pin move (set by dragging the blue suggest-ghost).
@@ -1014,7 +1100,7 @@
       let colors = [];
       if (inc.responding_agencies && inc.responding_agencies.length > 0) {
         inc.responding_agencies.forEach(a => {
-          const c = AGENCY_COLORS[a.toUpperCase()];
+          const c = agencyColor(a);
           if (c) colors.push(c);
         });
       }
@@ -1884,15 +1970,53 @@
       }
     }
 
+    // --- Suburb-level placement: for incidents with no exact location,
+    // the pin lands on the middle of a picked suburb instead of a map
+    // click. Arming turns the Suburbs borders on (and remembers what
+    // border overlay was showing so it can be put back after).
+    let suburbMode = false;
+    let _suburbPrevBoundary = null;
+
+    function paintFabMode() {
+      const fab = document.getElementById('editor-mobile-fab');
+      if (!fab) return;
+      fab.style.background = addMode ? '#22c55e' : (suburbMode ? '#a78bfa' : '#f97316');
+      fab.title = addMode ? 'Click the map to place the pin (click again to cancel)'
+        : (suburbMode ? 'Tap a suburb to place the incident (click again to cancel)' : 'Add a map pin');
+    }
+
+    function startSuburbPick() {
+      if (addMode) toggleAddMode();
+      suburbMode = true;
+      paintFabMode();
+      try {
+        _suburbPrevBoundary = (typeof getActiveBoundary === 'function') ? getActiveBoundary() : null;
+        if (_suburbPrevBoundary !== 'locality' && typeof selectBoundary === 'function') selectBoundary('locality');
+      } catch (e) { /* borders are a convenience, not a requirement */ }
+      if (typeof showToast === 'function') showToast('Tap a suburb to place the incident there', 'success');
+    }
+
+    function endSuburbPick() {
+      if (!suburbMode) return;
+      suburbMode = false;
+      paintFabMode();
+      // Put the border overlay back how it was: selecting the active kind
+      // toggles it off; selecting the remembered kind switches back.
+      try {
+        if (typeof selectBoundary === 'function' && typeof getActiveBoundary === 'function'
+            && getActiveBoundary() === 'locality' && _suburbPrevBoundary !== 'locality') {
+          selectBoundary(_suburbPrevBoundary || 'locality');
+        }
+      } catch (e) { /* leave whatever is showing */ }
+      _suburbPrevBoundary = null;
+    }
+
     function toggleAddMode() {
       addMode = !addMode;
       // The floating pin button IS the add-pin control (the panel no
       // longer carries one): green while armed, back to orange when not.
-      const fab = document.getElementById('editor-mobile-fab');
-      if (fab) {
-        fab.style.background = addMode ? '#22c55e' : '#f97316';
-        fab.title = addMode ? 'Click the map to place the pin (click again to cancel)' : 'Add a map pin';
-      }
+      if (addMode && suburbMode) endSuburbPick();
+      paintFabMode();
       document.getElementById('map').style.cursor = addMode ? 'crosshair' : '';
       // Crosshair means nothing on touch -- say what happens next.
       if (addMode && typeof showToast === 'function') {
@@ -1976,7 +2100,7 @@
       });
     }
 
-    async function createIncidentAtLocation(lat, lng) {
+    async function createIncidentAtLocation(lat, lng, presetLocation) {
       // Ask for the title via an in-page menu (not a native browser prompt).
       const title = await askIncidentTitle();
       if (!title) { if (addMode) toggleAddMode(); return; }
@@ -1992,7 +2116,7 @@
       });
       const tempMarker = L.marker([lat, lng], { icon: tempIcon, zIndexOffset: 1000, interactive: false }).addTo(map);
       try {
-        const location = await reverseGeocode(lat, lng);
+        const location = presetLocation || await reverseGeocode(lat, lng);
         const expireTime = new Date(Date.now() + 2 * 3600000); // Default: 2 hours
         const res = await apiFetch(`${PROXY_BASE}/api/incidents`, {
           method: 'POST',
@@ -2310,7 +2434,7 @@
   // --- DOM injection (CSS + floating panel), done only on activation ---
   const EDITOR_CSS = '    /* One panel for every role: the editor tools section rides inside\n       #incident-info-panel, below the read-only body. The whole panel\n       scrolls as one, so the body stops being its own scroll region\n       while the tools are mounted. */\n    #incident-info-panel.editor-hosted { overflow-y: auto; }\n    #incident-info-panel.editor-hosted .ais-list-body { flex: 0 0 auto; overflow: visible; min-height: auto; }\n    #editor-panel { display: none; padding: 4px 12px 12px; border-top: 1px solid rgba(148,163,184,0.18); }\n    /* --- Editor sidebar custom scrollbar --- */\n    #editor-panel {\n      scrollbar-width: thin;\n      scrollbar-color: transparent transparent; /* Firefox default: hidden */\n    }\n    /* Desktop: Map Controls is the top SECTION of the single #right-dock\n       card (map.html owns the card chrome) — flat background, divider\n       below separating it from the vessels/aircraft section. A\n       floating-card fallback covers the rare case the dock is missing.\n       Mobile keeps its bottom-sheet. */\n    @media (min-width: 901px) {\n      #right-dock #editor-panel.map-sidebar {\n        position: static;\n        transform: none;\n        visibility: visible;\n        width: 100%;\n        height: auto;\n        max-height: none;\n        flex: 0 1 auto;\n        min-height: 0;\n        padding: 12px;\n        order: 0;\n        background: transparent;\n        border: 0;\n        border-bottom: 1px solid rgba(148, 163, 184, 0.18);\n        border-radius: 0;\n        box-shadow: none;\n        backdrop-filter: none;\n      }\n      #right-dock #editor-panel.map-sidebar:not(.open) { display: none; }\n      .map-container > #editor-panel.map-sidebar {\n        right: 14px;\n        top: 96px;\n        height: auto;\n        max-height: calc(100% - 110px);\n        border: 1px solid rgba(125, 211, 252, 0.35);\n        border-radius: 10px;\n        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);\n      }\n      #editor-panel h3 {\n        margin: 0 0 10px;\n        font-size: 13px;\n        font-weight: 600;\n        color: #7dd3fc;\n        letter-spacing: 0.02em;\n      }\n    }\n    #editor-panel::-webkit-scrollbar {\n      width: 10px;\n    }\n    #editor-panel::-webkit-scrollbar-track {\n      background: transparent;\n    }\n    #editor-panel::-webkit-scrollbar-thumb {\n      background: transparent;\n      border-radius: 999px;\n      border: 2px solid transparent;\n      box-shadow: none;\n      transition: background 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;\n    }\n    /* Show + animate thumb while hovering or actively scrolling */\n    #editor-panel:hover,\n    #editor-panel.scrolling {\n      scrollbar-color: #4ade80 rgba(15,23,42,0.9); /* Firefox thumb + track */\n    }\n    #editor-panel:hover::-webkit-scrollbar-thumb,\n    #editor-panel.scrolling::-webkit-scrollbar-thumb {\n      background: linear-gradient(180deg, #22c55e, #0ea5e9);\n      border-color: rgba(15,23,42,0.9);\n      box-shadow: 0 0 8px rgba(34,197,94,0.8);\n    }\n    /* Extra glow animation while scrolling */\n    #editor-panel.scrolling::-webkit-scrollbar-thumb {\n      animation: sidebarScrollGlow 1.2s infinite alternate;\n    }\n    @keyframes sidebarScrollGlow {\n      0% { box-shadow: 0 0 4px rgba(34,197,94,0.4); }\n      100% { box-shadow: 0 0 14px rgba(34,197,94,1); }\n    }\n    \n    .pill-checkbox {\n      display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px;\n      border-radius: 20px; border: 1px solid rgba(255,255,255,0.2);\n      background: rgba(255,255,255,0.05); color: #cbd5e1; font-size: 0.75rem;\n      cursor: pointer; user-select: none; transition: all 0.2s;\n    }\n    .pill-checkbox:hover { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.4); color: #fff; }\n    .pill-checkbox input { accent-color: var(--accent); }\n    .pill-checkbox:has(input:checked) { background: rgba(249, 115, 22, 0.2); border-color: #f97316; color: #fdba74; }\n\n    /* Incident Type(s) toggle pills + group headings */\n    .type-group-label {\n      width: 100%; font-size: 0.62rem; font-weight: 700; letter-spacing: 0.08em;\n      text-transform: uppercase; color: var(--text-soft); margin: 0.45rem 0 0.15rem;\n    }\n    .type-group-label:first-child { margin-top: 0; }\n    .type-pill {\n      display: inline-flex; align-items: center; padding: 5px 11px; border-radius: 999px;\n      border: 1px solid rgba(148,163,184,0.3); background: rgba(255,255,255,0.04);\n      color: #cbd5e1; font-size: 0.72rem; font-weight: 500; cursor: pointer;\n      user-select: none; transition: background 0.15s, border-color 0.15s, color 0.15s;\n    }\n    .type-pill:hover { background: rgba(255,255,255,0.09); border-color: rgba(148,163,184,0.5); color: #fff; }\n    .type-pill input { position: absolute; opacity: 0; width: 0; height: 0; pointer-events: none; }\n    .type-pill:has(input:checked) {\n      background: rgba(56,189,248,0.18); border-color: rgba(56,189,248,0.6); color: #7dd3fc;\n    }\n    .type-pill:focus-within { outline: 2px solid rgba(56,189,248,0.5); outline-offset: 1px; }\n    \n    /* Auto-remove slider */\n    .expiry-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.5rem; }\n    .expiry-value {\n      font-size: 0.8rem; font-weight: 700; color: #7dd3fc;\n      background: rgba(56,189,248,0.12); border: 1px solid rgba(56,189,248,0.35);\n      padding: 0.1rem 0.55rem; border-radius: 999px;\n    }\n    .expiry-range {\n      -webkit-appearance: none; appearance: none; width: 100%; height: 6px;\n      border-radius: 4px; outline: none; margin: 0.1rem 0;\n      background: rgba(255,255,255,0.15);\n    }\n    .expiry-range::-webkit-slider-runnable-track {\n      height: 6px; border-radius: 4px;\n      background: linear-gradient(90deg, #38bdf8 var(--percent, 50%), rgba(255,255,255,0.15) var(--percent, 50%));\n    }\n    .expiry-range::-moz-range-track {\n      height: 6px; border-radius: 4px;\n      background: linear-gradient(90deg, #38bdf8 var(--percent, 50%), rgba(255,255,255,0.15) var(--percent, 50%));\n    }\n    .expiry-range::-webkit-slider-thumb {\n      -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;\n      background: #38bdf8; border: 2px solid #e0f2fe; cursor: pointer; margin-top: -5px;\n      box-shadow: 0 0 8px rgba(56,189,248,0.7);\n    }\n    .expiry-range::-moz-range-thumb {\n      width: 16px; height: 16px; border-radius: 50%; background: #38bdf8;\n      border: 2px solid #e0f2fe; cursor: pointer; box-shadow: 0 0 8px rgba(56,189,248,0.7);\n    }\n    .expiry-scale {\n      display: flex; justify-content: space-between; margin-top: 0.25rem;\n      font-size: 0.62rem; color: var(--text-soft);\n    }\n\n    /* Pin-move grab overlay: sized like the user pin icon so the ring\n       hugs the pin exactly. Hidden until hovered/dragged (the suggest\n       flow adds .always since its UI copy references the handle). */\n    .editor-move-ghost { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; cursor: move; }\n    .editor-move-ghost .ghost-ring { width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--ghost-color, #a855f7); box-shadow: 0 0 10px var(--ghost-glow, rgba(168, 85, 247, 0.8)); opacity: 0; transition: opacity 0.15s; }\n    .editor-move-ghost.always .ghost-ring,\n    .editor-move-ghost:hover .ghost-ring,\n    .ghost-dragging .editor-move-ghost .ghost-ring { opacity: 1; }\n    /* Neutral (non-orange) primary buttons inside the editor panel;\n       danger buttons keep their red. */\n    #editor-panel .btn-primary {\n      background: rgba(148, 163, 184, 0.12);\n      border: 1px solid rgba(148, 163, 184, 0.4);\n      color: #cbd5e1;\n    }\n    #editor-panel .btn-primary:hover {\n      background: rgba(125, 211, 252, 0.12);\n      border-color: #7dd3fc;\n      color: #e0f2fe;\n    }';
 
-  const PANEL_HTML = '      <div id="editor-panel">\n        <div id="selection-editor" style="display:none;">\n          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;" id="edit-header">\n            <h4 style="margin:0; color:var(--accent);">Edit Incident</h4>\n            <span style="font-size:0.7rem; color:var(--text-soft);" id="edit-id-display"></span>\n          </div>\n          <input type="hidden" id="edit-id">\n          <div class="form-group" id="title-group">\n            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">\n              <label class="form-label" for="edit-title" style="margin-bottom:0;">Title</label>\n              <button class="btn btn-secondary" style="padding:0.25rem 0.5rem; font-size:0.7rem;" onclick="checkGrammarForTitle()" title="Check grammar">✓ Grammar</button>\n            </div>\n            <input type="text" id="edit-title" class="form-input">\n            <div id="title-grammar-results" style="display:none; margin-top:0.5rem;"></div>\n          </div>\n          \n          <div class="form-group" id="location-group" style="display:none;">\n            <label class="form-label">Location</label>\n            <div id="edit-location-display" style="color:#94a3b8; font-size:0.85rem; padding:0.5rem; background:rgba(0,0,0,0.2); border-radius:6px; border:1px solid var(--border-subtle);">\n              <i class="fa-solid fa-location-dot" style="margin-right:0.4rem; color:#f59e0b;"></i>\n              <span id="edit-location-text">-</span>\n            </div>\n          </div>\n          \n          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.5rem;" id="status-size-group">\n            <div class="form-group">\n              <label class="form-label" for="edit-status">Status</label>\n              <select id="edit-status" class="form-select">\n                <option value="Going">Going</option>\n                <option value="In Route">In Route</option>\n                <option value="On Scene">On Scene</option>\n                <option value="Out of Control">Out of Control</option>\n                <option value="Being Controlled">Being Controlled</option>\n                <option value="Emergency Warning">Emergency Warning</option>\n                <option value="Watch and Act">Watch and Act</option>\n                <option value="Advice">Advice</option>\n                <option value="Under Control">Under Control</option>\n                <option value="Pending">Pending</option>\n                <option value="Investigation">Investigation</option>\n                <option value="Monitor">Monitor</option>\n                <option value="Patrol">Patrol</option>\n                <option value="Off Scene">Off Scene</option>\n                <option value="Safe">Safe</option>\n              </select>\n            </div>\n            <div class="form-group">\n              <label class="form-label" for="edit-size">Size</label>\n              <input type="text" id="edit-size" class="form-input" placeholder="e.g. 5 ha">\n            </div>\n          </div>\n\n          <div class="form-group" id="expiry-group">\n            <div class="expiry-head">\n              <label class="form-label" for="edit-expiry-range" style="margin-bottom:0;">Auto-Remove In</label>\n              <span id="edit-expiry-label" class="expiry-value">2 hours</span>\n            </div>\n            <input type="range" id="edit-expiry-range" class="expiry-range" min="0" max="10" step="1" value="5" oninput="updateExpiryLabel()">\n            <div class="expiry-scale"><span>20 min</span><span>12 hrs</span></div>\n          </div>\n          <div class="form-group" id="type-group">\n            <div class="form-label">Incident Type(s)</div>\n            <div id="type-checkboxes" style="display:flex; flex-wrap:wrap; gap:0.4rem; max-height:150px; overflow-y:auto; background:rgba(0,0,0,0.2); padding:0.5rem; border-radius:6px; border:1px solid var(--border-subtle);"></div>\n          </div>\n          <div class="form-group" id="agency-group">\n            <div class="form-label">Responding Agencies</div>\n            <div style="display:flex; flex-wrap:wrap; gap:0.5rem;" id="agency-checkboxes">\n              <label class="pill-checkbox"><input type="checkbox" value="RFS"> RFS</label>\n              <label class="pill-checkbox"><input type="checkbox" value="FRNSW"> FRNSW</label>\n              <label class="pill-checkbox"><input type="checkbox" value="NSWAS"> NSWAS</label>\n              <label class="pill-checkbox"><input type="checkbox" value="SES"> SES</label>\n              <label class="pill-checkbox"><input type="checkbox" value="Police"> Police</label>\n              <label class="pill-checkbox"><input type="checkbox" value="VRA"> VRA</label>\n            </div>\n          </div>\n          <div class="form-group" id="units-group">\n            <div class="form-label">Attached Units</div>\n            <div id="unit-chips" style="display:flex; flex-wrap:wrap; gap:0.4rem; margin-bottom:0.4rem;"></div>\n            <input type="text" id="unit-input" class="form-input" placeholder="Callsign - Enter adds, Tab completes" autocomplete="off">\n          </div>\n          <div class="form-group" id="photos-group">\n            <div class="form-label">Photos <span id="photo-count" style="color:#94a3b8; font-weight:400;"></span></div>\n            <div id="photo-tiles" style="display:flex; flex-wrap:wrap; gap:0.4rem;"></div>\n            <input type="file" id="photo-input" accept="image/jpeg,image/png,image/webp,image/gif" style="display:none;">\n          </div>\n          <div class="form-group" id="desc-group">\n            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">\n              <label class="form-label" for="edit-desc" style="margin-bottom:0;">Description (Markdown)</label>\n              <button class="btn btn-secondary" style="padding:0.25rem 0.5rem; font-size:0.7rem;" onclick="checkGrammarForDescription()" title="Check grammar">✓ Grammar</button>\n            </div>\n            <textarea id="edit-desc" class="form-textarea" placeholder="Use **bold**, *italics*, or lists..."></textarea>\n            <div id="description-grammar-results" style="display:none; margin-top:0.5rem;"></div>\n          </div>\n          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.5rem; margin-bottom:1.5rem;" id="save-delete-group">\n            <button class="btn btn-primary" onclick="saveIncident()">Save Changes</button>\n            <button class="btn btn-danger" onclick="deleteIncident()">Delete Pin</button>\n          </div>\n          <button class="btn btn-secondary btn-block" id="btn-archive" style="display:none; margin-bottom:1.5rem;" onclick="archiveIncident()" title="Staff only - preserves this incident forever">\n            <i class="fa-solid fa-box-archive"></i> Archive Incident\n          </button>\n\n          <!-- Ownership-aware panels (rebuilt per-selection in selectIncident):\n               - ownership-notice: shown to non-owners in place of direct edit.\n               - suggest-panel: non-owners propose edits / notes.\n               - suggestions-review-panel: owners/admins review pending items. -->\n          <div id="ownership-notice" style="display:none; background:rgba(59,130,246,0.08); border:1px solid rgba(59,130,246,0.3); color:#93c5fd; padding:0.7rem 0.8rem; border-radius:6px; margin-bottom:1rem; font-size:0.8rem;"></div>\n          <div id="suggest-panel" style="display:none; margin-bottom:1.5rem;"></div>\n          <div id="suggestions-review-panel" style="display:none; margin-bottom:1.5rem;"></div>\n\n          <div class="form-group" style="margin-top:1.5rem; border-top:1px solid rgba(255,255,255,0.1); padding-top:1rem;" id="log-section">\n            <div class="form-label">Incident Logs</div>\n            <div id="editor-logs-container" style="max-height: 250px; overflow-y: auto; background: rgba(0,0,0,0.2); border: 1px solid var(--border-subtle); border-radius: 6px; margin-bottom:0.8rem;">\n              <div style="padding:1rem; color:var(--text-soft); font-size:0.8rem;">Loading...</div>\n            </div>\n            <div style="background:rgba(255,255,255,0.03); padding:0.8rem; border-radius:8px;">\n              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">\n                <label class="form-label" for="new-update-msg" style="margin-bottom:0;">New Log Entry</label>\n                <button class="btn btn-secondary" style="padding:0.25rem 0.5rem; font-size:0.7rem;" onclick="checkGrammarForNew()" title="Check grammar">✓ Grammar</button>\n              </div>\n              <textarea id="new-update-msg" class="form-textarea" placeholder="Type update here..." style="min-height:50px; font-size:0.85rem; margin-bottom:0.5rem;"></textarea>\n              <div id="new-log-grammar-results" style="display:none; margin-top:0.5rem;"></div>\n              <button class="btn btn-secondary btn-block" style="padding:0.4rem;" onclick="addUpdate()">Post Update</button>\n            </div>\n          </div>\n\n        </div>\n        <div id="instruction-text" style="color:var(--text-soft); font-size:0.9rem; text-align:center; margin-top:0.5rem;">\n          Select a pin to edit,<br>or use the floating <strong>pin button</strong> to add one.\n        </div>\n      </div>';
+  const PANEL_HTML = '      <div id="editor-panel">\n        <div id="selection-editor" style="display:none;">\n          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;" id="edit-header">\n            <h4 style="margin:0; color:var(--accent);">Edit Incident</h4>\n            <span style="font-size:0.7rem; color:var(--text-soft);" id="edit-id-display"></span>\n          </div>\n          <input type="hidden" id="edit-id">\n          <div class="form-group" id="title-group">\n            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">\n              <label class="form-label" for="edit-title" style="margin-bottom:0;">Title</label>\n              <button class="btn btn-secondary" style="padding:0.25rem 0.5rem; font-size:0.7rem;" onclick="checkGrammarForTitle()" title="Check grammar">✓ Grammar</button>\n            </div>\n            <input type="text" id="edit-title" class="form-input">\n            <div id="title-grammar-results" style="display:none; margin-top:0.5rem;"></div>\n          </div>\n          \n          <div class="form-group" id="location-group" style="display:none;">\n            <label class="form-label">Location</label>\n            <div id="edit-location-display" style="color:#94a3b8; font-size:0.85rem; padding:0.5rem; background:rgba(0,0,0,0.2); border-radius:6px; border:1px solid var(--border-subtle);">\n              <i class="fa-solid fa-location-dot" style="margin-right:0.4rem; color:#f59e0b;"></i>\n              <span id="edit-location-text">-</span>\n            </div>\n          </div>\n          \n          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.5rem;" id="status-size-group">\n            <div class="form-group">\n              <label class="form-label" for="edit-status">Status</label>\n              <select id="edit-status" class="form-select">\n                <option value="Going">Going</option>\n                <option value="In Route">In Route</option>\n                <option value="On Scene">On Scene</option>\n                <option value="Out of Control">Out of Control</option>\n                <option value="Being Controlled">Being Controlled</option>\n                <option value="Emergency Warning">Emergency Warning</option>\n                <option value="Watch and Act">Watch and Act</option>\n                <option value="Advice">Advice</option>\n                <option value="Under Control">Under Control</option>\n                <option value="Pending">Pending</option>\n                <option value="Investigation">Investigation</option>\n                <option value="Monitor">Monitor</option>\n                <option value="Patrol">Patrol</option>\n                <option value="Off Scene">Off Scene</option>\n                <option value="Safe">Safe</option>\n              </select>\n            </div>\n            <div class="form-group">\n              <label class="form-label" for="edit-size">Size</label>\n              <input type="text" id="edit-size" class="form-input" placeholder="e.g. 5 ha">\n            </div>\n          </div>\n\n          <div class="form-group" id="expiry-group">\n            <div class="expiry-head">\n              <label class="form-label" for="edit-expiry-range" style="margin-bottom:0;">Auto-Remove In</label>\n              <span id="edit-expiry-label" class="expiry-value">2 hours</span>\n            </div>\n            <input type="range" id="edit-expiry-range" class="expiry-range" min="0" max="10" step="1" value="5" oninput="updateExpiryLabel()">\n            <div class="expiry-scale"><span>20 min</span><span>12 hrs</span></div>\n          </div>\n          <div class="form-group" id="type-group">\n            <div class="form-label">Incident Type(s)</div>\n            <div id="type-checkboxes" style="display:flex; flex-wrap:wrap; gap:0.4rem; max-height:150px; overflow-y:auto; background:rgba(0,0,0,0.2); padding:0.5rem; border-radius:6px; border:1px solid var(--border-subtle);"></div>\n          </div>\n          <div class="form-group" id="agency-group">\n            <div class="form-label">Responding Agencies</div>\n            <input type="text" id="agency-filter" class="form-input" placeholder="Filter agencies..." autocomplete="off" style="margin-bottom:0.4rem;">\n            <div style="display:flex; flex-wrap:wrap; gap:0.4rem; align-content:flex-start; max-height:190px; overflow-y:auto; background:rgba(0,0,0,0.2); padding:0.5rem; border-radius:6px; border:1px solid var(--border-subtle);" id="agency-checkboxes"></div>\n          </div>\n          <div class="form-group" id="units-group">\n            <div class="form-label">Attached Units</div>\n            <div id="unit-chips" style="display:flex; flex-wrap:wrap; gap:0.4rem; margin-bottom:0.4rem;"></div>\n            <input type="text" id="unit-input" class="form-input" placeholder="Callsign - Enter adds, Tab completes" autocomplete="off">\n          </div>\n          <div class="form-group" id="photos-group">\n            <div class="form-label">Photos <span id="photo-count" style="color:#94a3b8; font-weight:400;"></span></div>\n            <div id="photo-tiles" style="display:flex; flex-wrap:wrap; gap:0.4rem;"></div>\n            <input type="file" id="photo-input" accept="image/jpeg,image/png,image/webp,image/gif" style="display:none;">\n          </div>\n          <div class="form-group" id="desc-group">\n            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">\n              <label class="form-label" for="edit-desc" style="margin-bottom:0;">Description (Markdown)</label>\n              <button class="btn btn-secondary" style="padding:0.25rem 0.5rem; font-size:0.7rem;" onclick="checkGrammarForDescription()" title="Check grammar">✓ Grammar</button>\n            </div>\n            <textarea id="edit-desc" class="form-textarea" placeholder="Use **bold**, *italics*, or lists..."></textarea>\n            <div id="description-grammar-results" style="display:none; margin-top:0.5rem;"></div>\n          </div>\n          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.5rem; margin-bottom:1.5rem;" id="save-delete-group">\n            <button class="btn btn-primary" onclick="saveIncident()">Save Changes</button>\n            <button class="btn btn-danger" onclick="deleteIncident()">Delete Pin</button>\n          </div>\n          <button class="btn btn-secondary btn-block" id="btn-archive" style="display:none; margin-bottom:1.5rem;" onclick="archiveIncident()" title="Staff only - preserves this incident forever">\n            <i class="fa-solid fa-box-archive"></i> Archive Incident\n          </button>\n\n          <!-- Ownership-aware panels (rebuilt per-selection in selectIncident):\n               - ownership-notice: shown to non-owners in place of direct edit.\n               - suggest-panel: non-owners propose edits / notes.\n               - suggestions-review-panel: owners/admins review pending items. -->\n          <div id="ownership-notice" style="display:none; background:rgba(59,130,246,0.08); border:1px solid rgba(59,130,246,0.3); color:#93c5fd; padding:0.7rem 0.8rem; border-radius:6px; margin-bottom:1rem; font-size:0.8rem;"></div>\n          <div id="suggest-panel" style="display:none; margin-bottom:1.5rem;"></div>\n          <div id="suggestions-review-panel" style="display:none; margin-bottom:1.5rem;"></div>\n\n          <div class="form-group" style="margin-top:1.5rem; border-top:1px solid rgba(255,255,255,0.1); padding-top:1rem;" id="log-section">\n            <div class="form-label">Incident Logs</div>\n            <div id="editor-logs-container" style="max-height: 250px; overflow-y: auto; background: rgba(0,0,0,0.2); border: 1px solid var(--border-subtle); border-radius: 6px; margin-bottom:0.8rem;">\n              <div style="padding:1rem; color:var(--text-soft); font-size:0.8rem;">Loading...</div>\n            </div>\n            <div style="background:rgba(255,255,255,0.03); padding:0.8rem; border-radius:8px;">\n              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">\n                <label class="form-label" for="new-update-msg" style="margin-bottom:0;">New Log Entry</label>\n                <button class="btn btn-secondary" style="padding:0.25rem 0.5rem; font-size:0.7rem;" onclick="checkGrammarForNew()" title="Check grammar">✓ Grammar</button>\n              </div>\n              <textarea id="new-update-msg" class="form-textarea" placeholder="Type update here..." style="min-height:50px; font-size:0.85rem; margin-bottom:0.5rem;"></textarea>\n              <div id="new-log-grammar-results" style="display:none; margin-top:0.5rem;"></div>\n              <button class="btn btn-secondary btn-block" style="padding:0.4rem;" onclick="addUpdate()">Post Update</button>\n            </div>\n          </div>\n\n        </div>\n        <div id="instruction-text" style="color:var(--text-soft); font-size:0.9rem; text-align:center; margin-top:0.5rem;">\n          Select a pin to edit,<br>or use the floating <strong>pin button</strong> to add one.\n        </div>\n      </div>';
 
   function injectEditorDom() {
     if (document.getElementById('editor-panel')) return;
@@ -2346,11 +2470,54 @@
     fab.innerHTML = '<i class="fa-solid fa-map-pin"></i>';
     fab.style.cssText = 'display:none; position:fixed; bottom:calc(84px + env(safe-area-inset-bottom, 0px)); right:12px; z-index:1004; width:48px; height:48px; border-radius:50%; background:#f97316; color:#fff; border:none; box-shadow:0 6px 20px rgba(0,0,0,0.5); font-size:1.05rem; align-items:center; justify-content:center; cursor:pointer;';
     fab.onclick = () => {
-      if (typeof window.toggleAddMode === 'function') window.toggleAddMode();
+      // While a placement mode is armed the button is a cancel.
+      if (addMode) { toggleAddMode(); return; }
+      if (suburbMode) { endSuburbPick(); return; }
+      toggleFabMenu();
     };
     // The fab is position:fixed -- keep it out of the dock (display:none
     // on mobile) so it can always show.
     mapContainer.appendChild(fab);
+
+    // Placement chooser: exact pin drop, or suburb-level for incidents
+    // whose precise location isn't known.
+    const fabMenu = document.createElement('div');
+    fabMenu.id = 'editor-fab-menu';
+    fabMenu.style.cssText = 'display:none; position:fixed; right:12px; bottom:calc(140px + env(safe-area-inset-bottom, 0px)); z-index:1005; background:#1e293b; border:1px solid rgba(148,163,184,0.25); border-radius:10px; box-shadow:0 10px 30px rgba(0,0,0,0.5); overflow:hidden; min-width:230px;';
+    const fabBtnCss = 'display:block; width:100%; text-align:left; background:none; border:none; color:#e2e8f0; padding:0.65rem 0.9rem; cursor:pointer; font-family:inherit; font-size:0.85rem;';
+    const fabSubCss = 'display:block; font-size:0.7rem; color:#94a3b8; margin-top:2px;';
+    fabMenu.innerHTML =
+      '<button type="button" id="fab-mode-pin" style="' + fabBtnCss + '">' +
+        '<i class="fa-solid fa-map-pin" style="color:#f97316; width:1.1rem;"></i> Exact spot' +
+        '<span style="' + fabSubCss + '">Tap the map to drop the pin</span></button>' +
+      '<button type="button" id="fab-mode-suburb" style="' + fabBtnCss + 'border-top:1px solid rgba(148,163,184,0.15);">' +
+        '<i class="fa-solid fa-house-chimney" style="color:#a78bfa; width:1.1rem;"></i> Suburb only' +
+        '<span style="' + fabSubCss + '">Exact spot unknown — pick a suburb</span></button>';
+    mapContainer.appendChild(fabMenu);
+    fabMenu.querySelector('#fab-mode-pin').onclick = () => { hideFabMenu(); toggleAddMode(); };
+    fabMenu.querySelector('#fab-mode-suburb').onclick = () => { hideFabMenu(); startSuburbPick(); };
+    // Click-away closes the chooser (capture so the map doesn't eat it).
+    document.addEventListener('click', (ev) => {
+      const m = document.getElementById('editor-fab-menu');
+      if (!m || m.style.display === 'none') return;
+      if (ev.target === fab || fab.contains(ev.target) || m.contains(ev.target)) return;
+      m.style.display = 'none';
+    }, true);
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key !== 'Escape') return;
+      hideFabMenu();
+      if (suburbMode) endSuburbPick();
+      else if (addMode) toggleAddMode();
+    });
+  }
+
+  function hideFabMenu() {
+    const m = document.getElementById('editor-fab-menu');
+    if (m) m.style.display = 'none';
+  }
+  function toggleFabMenu() {
+    const m = document.getElementById('editor-fab-menu');
+    if (m) m.style.display = (m.style.display === 'none') ? 'block' : 'none';
   }
 
   // --- Map click: place pin in add-mode (snap to pager cluster when the
@@ -2522,6 +2689,8 @@
 
       injectEditorDom();
       renderTypeCheckboxes();
+      renderAgencyCheckboxes(document.getElementById('agency-checkboxes'), [], null);
+      wireAgencyFilter(document.getElementById('agency-filter'), document.getElementById('agency-checkboxes'));
       wireUnitInput();
       wirePhotoInput();
       renderPhotoTiles();
@@ -2536,6 +2705,16 @@
       // then calls these.
       window.__editorActive = true;
       window.NSWPSNEditorHooks = {
+        // Suburb-level placement: while armed, map.html's boundary click
+        // handler calls pickSuburb instead of showing the name popup.
+        suburbPickArmed() { return suburbMode; },
+        async pickSuburb(info, center) {
+          const name = (info && info.name) || 'Unknown suburb';
+          const state = (info && info.state) ? ' ' + info.state : '';
+          endSuburbPick();
+          await createIncidentAtLocation(center.lat, center.lng,
+            name + state + ' (suburb-level, approx.)');
+        },
         // showIncidentDetails(incident, pagerDetails) — raw incident row.
         openUser(incident, pagerDetails) {
           try { selectIncident(incident, pagerDetails); openEditorSheet(); } catch (e) { console.warn('[editor] openUser', e); }
