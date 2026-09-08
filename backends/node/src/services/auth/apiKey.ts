@@ -94,6 +94,7 @@ export const PUBLIC_ENDPOINT_PREFIXES: readonly string[] = [
   // gate. rdio has an API key field of its own to put NSWPSN_API_KEY in, and
   // an endpoint that spends GPU time should not be the one open route.
   '/api/whisper/status',
+  '/api/whisper/history',
   '/api/whisper/drain',
   // LGA names for the signup form's State -> LGA flow. Signup runs before any
   // auth exists, and the list is ABS public data.

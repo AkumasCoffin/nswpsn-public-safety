@@ -476,3 +476,181 @@ describe('per-backend stats enrichment', () => {
     expect(body.backends[1].stats).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Durable hourly stats (whisper_hourly) + the history endpoint.
+// ---------------------------------------------------------------------------
+// The setups above mock config WITHOUT DATABASE_URL, so the real
+// getWriterPool() returns null and recording no-ops — which is why none of
+// the earlier tests needed to change. Here the pool module is mocked so the
+// upserts (fire-and-forget from whisperForward) become observable.
+
+const statsQueryMock = vi.fn(async () => ({ rows: [] as unknown[] }));
+
+async function setupWithDb(backends = `pc=${PC},vm=${VM}`) {
+  vi.resetModules();
+  vi.doMock('../../../src/config.js', () => ({
+    config: {
+      WHISPER_BACKENDS: backends,
+      WHISPER_ADMIN_TOKEN: ADMIN,
+      NSWPSN_API_KEY: SITE_KEY,
+    },
+  }));
+  vi.doMock('../../../src/db/pool.js', () => ({
+    getPool: async () => ({ query: statsQueryMock }),
+    getWriterPool: async () => ({ query: statsQueryMock }),
+    closePool: async () => undefined,
+  }));
+  const svc = await import('../../../src/services/whisperRouter.js');
+  const { whisperRouter } = await import('../../../src/api/whisper.js');
+  const app = new Hono();
+  app.use('*', async (c, next) => {
+    c.set('userId', 'u1');
+    await next();
+  });
+  app.route('/', whisperRouter);
+  return { app, svc };
+}
+
+/** Recording is fire-and-forget (void async) — give it a macrotask to land. */
+const flushStats = () => new Promise((r) => setTimeout(r, 0));
+
+/** The whisper_hourly upsert calls only (history reads use SELECT). */
+const upserts = () =>
+  statsQueryMock.mock.calls.filter((c) => String(c[0]).includes('INSERT INTO whisper_hourly'));
+
+describe('whisper_hourly recording', () => {
+  beforeEach(() => {
+    statsQueryMock.mockClear();
+    statsQueryMock.mockImplementation(async () => ({ rows: [] }));
+  });
+
+  it('a served transcription upserts one success row for the serving backend', async () => {
+    const { app, svc } = await setupWithDb();
+    await probeOnce(svc);
+    statsQueryMock.mockClear(); // drop anything from the probe path
+    const res = await app.request('/api/whisper/v1/audio/transcriptions', post());
+    expect(res.status).toBe(200);
+    await flushStats();
+    const calls = upserts();
+    expect(calls).toHaveLength(1);
+    const sql = String(calls[0]![0]);
+    // Bucketing happens in SQL so app clocks never skew the hour.
+    expect(sql).toContain("date_trunc('hour', now())");
+    expect(sql).toContain('ON CONFLICT (hour, backend)');
+    const params = calls[0]![1] as unknown[];
+    expect(params[0]).toBe('pc');
+    expect(params[1]).toBe(0); // no failure
+    expect(typeof params[2]).toBe('number'); // success latency, ms
+  });
+
+  it('a failover writes a failure row for pc and a success row for vm', async () => {
+    const { app, svc } = await setupWithDb();
+    pc.fail = true;
+    await probeOnce(svc);
+    statsQueryMock.mockClear();
+    const res = await app.request('/api/whisper/v1/audio/transcriptions', post());
+    expect(res.status).toBe(200);
+    await flushStats();
+    const rows = upserts().map((c) => c[1] as unknown[]);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toEqual(['pc', 1, 0]); // failed attempt: no latency recorded
+    expect(rows[1]![0]).toBe('vm');
+    expect(rows[1]![1]).toBe(0);
+  });
+
+  it("no backend available records a single 'none' failure", async () => {
+    const { app, svc } = await setupWithDb();
+    pc.up = vm.up = false;
+    await probeOnce(svc);
+    statsQueryMock.mockClear();
+    const res = await app.request('/api/whisper/v1/audio/transcriptions', post());
+    expect(res.status).toBe(503);
+    await flushStats();
+    const rows = upserts().map((c) => c[1] as unknown[]);
+    expect(rows).toEqual([['none', 1, 0]]);
+  });
+
+  it('a stats write failure never touches the transcription response', async () => {
+    const { app, svc } = await setupWithDb();
+    statsQueryMock.mockRejectedValue(new Error('db down'));
+    await probeOnce(svc);
+    const res = await app.request('/api/whisper/v1/audio/transcriptions', post());
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ text: 'hello from pc' });
+    await flushStats();
+  });
+});
+
+describe('GET /api/whisper/history', () => {
+  beforeEach(() => {
+    statsQueryMock.mockClear();
+    statsQueryMock.mockImplementation(async () => ({ rows: [] }));
+  });
+
+  it('needs a session or the admin token (real gate: public path, role inside)', async () => {
+    // Mount the REAL api-key gate the way server.ts does: /api/whisper/history
+    // is a public path, so the request reaches the handler where the role
+    // check rejects an anonymous caller.
+    vi.resetModules();
+    vi.doMock('../../../src/config.js', () => ({
+      config: { WHISPER_BACKENDS: `pc=${PC}`, WHISPER_ADMIN_TOKEN: ADMIN, NSWPSN_API_KEY: SITE_KEY },
+    }));
+    vi.doMock('../../../src/db/pool.js', () => ({
+      getPool: async () => ({ query: statsQueryMock }),
+      getWriterPool: async () => ({ query: statsQueryMock }),
+      closePool: async () => undefined,
+    }));
+    const { whisperRouter } = await import('../../../src/api/whisper.js');
+    const { requireApiKey } = await import('../../../src/services/auth/apiKey.js');
+    const app = new Hono();
+    app.use('*', requireApiKey);
+    app.route('/', whisperRouter);
+    const res = await app.request('/api/whisper/history');
+    expect([401, 403]).toContain(res.status);
+    // The admin token short-circuits the role gate, same as /status.
+    const ok = await app.request('/api/whisper/history', { headers: { 'x-whisper-token': ADMIN } });
+    expect(ok.status).toBe(200);
+  });
+
+  it('serves rows with computed avgMs (null when every attempt failed)', async () => {
+    const { app } = await setupWithDb();
+    statsQueryMock.mockResolvedValueOnce({
+      rows: [
+        { hour: new Date('2026-09-09T03:00:00Z'), backend: 'pc', requests: 5, failures: 2, total_ms: '3000' },
+        { hour: new Date('2026-09-09T03:00:00Z'), backend: 'vm', requests: 2, failures: 2, total_ms: '0' },
+      ],
+    } as never);
+    const res = await app.request('/api/whisper/history?hours=24');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.configured).toBe(true);
+    expect(body.rows).toEqual([
+      { hour: '2026-09-09T03:00:00.000Z', backend: 'pc', requests: 5, failures: 2, avgMs: 1000 },
+      { hour: '2026-09-09T03:00:00.000Z', backend: 'vm', requests: 2, failures: 2, avgMs: null },
+    ]);
+  });
+
+  it('clamps hours to 1..720 and defaults to 24', async () => {
+    const { app } = await setupWithDb();
+    const hoursParam = async (qs: string) => {
+      statsQueryMock.mockClear();
+      await app.request(`/api/whisper/history${qs}`);
+      const sel = statsQueryMock.mock.calls.find((c) => String(c[0]).includes('FROM whisper_hourly'));
+      return (sel?.[1] as unknown[] | undefined)?.[0];
+    };
+    expect(await hoursParam('')).toBe(24);
+    expect(await hoursParam('?hours=0')).toBe(1);
+    expect(await hoursParam('?hours=9999')).toBe(720);
+    expect(await hoursParam('?hours=168')).toBe(168);
+  });
+
+  it('reports configured:false without touching the DB when whisper is off', async () => {
+    const { app } = await setupWithDb('');
+    const res = await app.request('/api/whisper/history');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toEqual({ configured: false, hours: 24, rows: [] });
+    expect(statsQueryMock).not.toHaveBeenCalled();
+  });
+});

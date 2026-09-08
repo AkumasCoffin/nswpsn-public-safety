@@ -3066,30 +3066,41 @@
 
         <!-- ===== Systems view (list › system overview › site overview) ===== -->
         <!-- Transcripts: not a Radio/Pager sibling with its own pill row —
-             a single view opened straight from the Data dropdown. Whisper
-             server status on top (same card the Nodes tab renders, one shared
-             renderer), the transcript stream under it. -->
+             a single view opened straight from the Data dropdown. It's a
+             WHISPER DASHBOARD, not a transcript reader: server health on top
+             (same card the Nodes tab renders, one shared renderer) and hourly
+             throughput/latency charts from /api/whisper/history — our own
+             whisper_hourly table, never the rdio DB, so it always loads
+             fast. The old searchable transcript table (and its backend
+             route) was removed: its unbounded scans over the rdio DB are
+             what made this page hang. -->
         <div id="nd2-view-transcripts" style="display:none">
           <div class="wh-card" id="nd2-whisper-card" style="display:none;">
             <div class="wh-head"><i class="fas fa-microphone"></i> Whisper servers
               <span class="wh-sub" id="nd2-whisper-sub"></span></div>
             <div class="wh-rows" id="nd2-whisper-rows"></div>
           </div>
-          <div class="nd2-controls" style="margin-bottom:0.75rem;">
-            <input type="text" id="nd2-ts-q" class="nd-input" placeholder="Search transcripts... (empty = latest)"
-                   style="min-width:260px;" oninput="nd2TsInputChanged()">
-            <input type="text" id="nd2-ts-tg" class="nd-input" placeholder="Talkgroup" inputmode="numeric"
-                   style="width:110px;" oninput="nd2TsInputChanged()">
-            <span class="nd-sub" id="nd2-ts-count"></span>
+          <div class="nd2-card nd2-chart-card">
+            <div class="nd2-card-h">
+              <i class="fas fa-chart-line"></i>
+              <span>Transcriptions</span>
+              <span class="nd2-note" id="nd2-wh-tp-note"></span>
+            </div>
+            <div class="nd2-chart-wrap">
+              <canvas id="nd2-wh-tp-chart" aria-label="Transcriptions processed per hour" role="img"></canvas>
+            </div>
+            <div class="nd2-empty" id="nd2-wh-tp-empty" style="display: none;">No transcriptions in this window yet.</div>
           </div>
-          <div class="nd2-card">
-            <table class="data-table">
-              <thead><tr><th style="width:90px;">Time</th><th style="width:200px;">Talkgroup</th>
-                <th style="width:90px;">RID</th><th>Transcript</th></tr></thead>
-              <tbody id="nd2-ts-body">
-                <tr><td colspan="4" class="nd2-empty">Loading…</td></tr>
-              </tbody>
-            </table>
+          <div class="nd2-card nd2-chart-card">
+            <div class="nd2-card-h">
+              <i class="fas fa-stopwatch"></i>
+              <span>Transcription latency</span>
+              <span class="nd2-note" id="nd2-wh-lat-note"></span>
+            </div>
+            <div class="nd2-chart-wrap">
+              <canvas id="nd2-wh-lat-chart" aria-label="Average transcription latency per hour" role="img"></canvas>
+            </div>
+            <div class="nd2-empty" id="nd2-wh-lat-empty" style="display: none;">No latency data in this window yet.</div>
           </div>
         </div>
         <div id="nd2-view-live" style="display: none;">
@@ -4528,6 +4539,8 @@
     let _nd2Chart = null;        // live Chart.js instance (destroyed on re-render)
     let _nd2SysChart = null;     // system-detail chart
     let _nd2SiteChart = null;    // site-detail chart
+    let _nd2WhTpChart = null;    // whisper dashboard: transcriptions/hour
+    let _nd2WhLatChart = null;   // whisper dashboard: avg latency/hour
     let _nd2PovChart = null;     // pager-overview chart
     let _nd2EvDebounce = null;   // debounce handle for the text filter inputs
     let _nd2TgDebounce = null;
@@ -4590,11 +4603,7 @@
             break;
           case 'events': if (nd2.evOffset === 0) nd2LoadEvents(); break;
           case 'poverview': nd2LoadPagerOverview(); break;
-          case 'transcripts':
-            // Do not clobber an active search mid-typing: auto-refresh only
-            // the default (browse) stream, mirroring the offset===0 guards.
-            if (!nd2TsVal('nd2-ts-q') && !nd2TsVal('nd2-ts-tg')) nd2LoadTranscripts();
-            break;
+          case 'transcripts': nd2LoadTranscripts(); break;
           case 'capcodes': if (nd2.capLevel === 'list' && nd2.cap.offset === 0) nd2LoadCapcodes(); break;
         }
       }, _nd2IntervalMs);
@@ -4757,9 +4766,9 @@
       // state. (Aliases used to be windowless on the grounds that an alias is
       // durable identity; but the table lists radios HEARD, so it follows the
       // window like its siblings and `All` restores the full history.)
-      // Transcripts too: its list has its own limit and search, so the
-      // window pills would be controls that do nothing.
-      const windowless = view === 'live' || view === 'transcripts';
+      // Transcripts (the whisper dashboard) takes it too: it is the range of
+      // the throughput/latency charts.
+      const windowless = view === 'live';
       const winRow = document.getElementById('nd2-window-row') || document.querySelector('[data-nd2-window]')?.parentElement;
       if (winRow) winRow.style.visibility = windowless ? 'hidden' : '';
       // `All` is offered wherever the backend can answer it: the rollup views
@@ -4862,22 +4871,12 @@
     let _nd2OverviewInflight = false;
 
 
-    // --- Data > Transcripts -------------------------------------------------
-    const nd2TsVal = (id) => (document.getElementById(id)?.value || '').trim();
-    let _nd2TsDebounce = null;
-    function nd2TsInputChanged() {
-      clearTimeout(_nd2TsDebounce);
-      _nd2TsDebounce = setTimeout(() => { if (nd2.view === 'transcripts') nd2LoadTranscripts(); }, 350);
-    }
-
+    // --- Data > Transcripts (whisper dashboard) -----------------------------
     async function nd2LoadTranscripts() {
-      const body = document.getElementById('nd2-ts-body');
-      const count = document.getElementById('nd2-ts-count');
-      if (!body) return;
       const seq = ++nd2.reqSeq;
 
       // The whisper server status rides along, fire-and-forget: a slow status
-      // must never delay the stream, and vice versa.
+      // must never delay the charts, and vice versa.
       (async () => {
         const card = document.getElementById('nd2-whisper-card');
         const rows = document.getElementById('nd2-whisper-rows');
@@ -4892,38 +4891,130 @@
       })();
 
       try {
-        const params = new URLSearchParams({ limit: '50' });
-        const q = nd2TsVal('nd2-ts-q');
-        const tg = nd2TsVal('nd2-ts-tg');
-        if (q) params.set('q', q);
-        if (tg && /^\d+$/.test(tg)) params.set('talkgroup', tg);
-        const res = await fetch(`${API_BASE_URL}/api/rdio/transcripts/search?${params}`, {
+        const hours = { '24h': 24, '7d': 168, '30d': 720 }[nd2.window] ?? 24;
+        const res = await fetch(`${API_BASE_URL}/api/whisper/history?hours=${hours}`, {
           headers: { 'Authorization': await authHeader() }
         });
         if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status });
         const data = await res.json();
-        if (seq !== nd2.reqSeq) return;   // a newer request owns the table
-
-        if (count) count.textContent = `${data.total.toLocaleString()} transcript${data.total === 1 ? '' : 's'}${q || tg ? ' matching' : ''}`;
-        const rows = data.results || [];
-        if (!rows.length) {
-          body.innerHTML = `<tr><td colspan="4" class="nd2-empty">${q || tg ? 'No transcripts match.' : 'No transcripts yet.'}</td></tr>`;
-          return;
-        }
-        body.innerHTML = rows.map(r => {
-          const tgLabel = r.talkgroup_label || (r.talkgroup != null ? `TG ${r.talkgroup}` : '—');
-          return `<tr>
-            <td><span class="nd-sub">${escapeHtml(whShortTime(r.datetime))}</span></td>
-            <td>${escapeHtml(tgLabel)}${r.talkgroup != null && r.talkgroup_label ? ` <span class="nd-sub">${r.talkgroup}</span>` : ''}</td>
-            <td><span class="nd-sub">${escapeHtml(r.radio_label || (r.radio_id != null ? String(r.radio_id) : '—'))}</span></td>
-            <td>${escapeHtml(r.transcript || '')}</td>
-          </tr>`;
-        }).join('');
+        if (seq !== nd2.reqSeq) return;   // a newer request owns the charts
+        nd2RenderWhisperCharts(data.configured === false ? [] : (data.rows || []), hours);
       } catch (e) {
         if (seq !== nd2.reqSeq) return;
-        console.error('Error loading transcripts:', e);
-        body.innerHTML = `<tr><td colspan="4" class="nd2-empty">Could not load transcripts: ${escapeHtml(e.message)}</td></tr>`;
+        console.error('Error loading whisper history:', e);
+        nd2RenderWhisperCharts([], { '24h': 24, '7d': 168, '30d': 720 }[nd2.window] ?? 24);
       }
+    }
+
+    // Extra series colours beyond the shared radio/pager pair, for a 3rd+
+    // whisper backend. Failures are always the dashed red line.
+    const ND2_WH_COLORS = [ND2_RADIO_COLOR, ND2_PAGER_COLOR, '#8b5cf6', '#10b981'];
+    const ND2_WH_FAIL_COLOR = '#dc2626';
+
+    /**
+     * Render both dashboard charts from /api/whisper/history rows
+     * ({hour, backend, requests, failures, avgMs}). The client densifies:
+     * a full hour axis for the window with zero-filled gaps, one line per
+     * real backend (successful transcriptions), plus a dashed failures
+     * line summed across every row INCLUDING backend 'none' (= calls no
+     * server could take). Latency chart: avg seconds per backend, 'none'
+     * excluded (it has no latency by definition).
+     */
+    function nd2RenderWhisperCharts(rows, hours) {
+      if (typeof Chart === 'undefined') return;
+      const tpCanvas = document.getElementById('nd2-wh-tp-chart');
+      const latCanvas = document.getElementById('nd2-wh-lat-chart');
+      if (!tpCanvas || !latCanvas) return;
+
+      // Hour axis, oldest → newest, aligned to the hour like the rows are.
+      const HOUR = 3600 * 1000;
+      const end = Math.floor(Date.now() / HOUR) * HOUR;
+      const axis = [];
+      for (let t = end - (hours - 1) * HOUR; t <= end; t += HOUR) axis.push(t);
+      const idx = new Map(axis.map((t, i) => [t, i]));
+
+      const backends = [...new Set(rows.filter(r => r.backend !== 'none').map(r => r.backend))].sort();
+      const ok = new Map(backends.map(b => [b, new Array(axis.length).fill(0)]));
+      const lat = new Map(backends.map(b => [b, new Array(axis.length).fill(null)]));
+      const fails = new Array(axis.length).fill(0);
+      for (const r of rows) {
+        const t = Date.parse(r.hour);
+        const i = idx.get(t);
+        if (i === undefined) continue;
+        fails[i] += r.failures || 0;
+        if (r.backend === 'none') continue;
+        ok.get(r.backend)[i] += Math.max(0, (r.requests || 0) - (r.failures || 0));
+        if (r.avgMs != null) lat.get(r.backend)[i] = r.avgMs / 1000;
+      }
+
+      const labels = axis.map(t => {
+        const d = new Date(t);
+        return nd2.window === '24h'
+          ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : d.toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit' });
+      });
+
+      const darkOpts = (yPrecision) => ({
+        responsive: true, maintainAspectRatio: false, animation: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { display: true, labels: { color: '#94a3b8', boxWidth: 10,
+            font: { family: "'Space Grotesk', sans-serif", size: 10 } } },
+          tooltip: {
+            backgroundColor: '#121e33', borderColor: 'rgba(148,163,184,0.25)', borderWidth: 1,
+            titleColor: '#f1f5f9', bodyColor: '#94a3b8', padding: 10,
+          },
+        },
+        scales: {
+          x: { grid: { display: false }, border: { color: 'rgba(148,163,184,0.16)' },
+               ticks: { color: '#64748b', maxTicksLimit: 8, maxRotation: 0,
+                        font: { family: "'Space Grotesk', sans-serif", size: 10 } } },
+          y: { beginAtZero: true, grid: { color: 'rgba(148,163,184,0.07)' }, border: { display: false },
+               ticks: { color: '#64748b', ...(yPrecision ? { precision: 0 } : {}), maxTicksLimit: 5,
+                        font: { family: "'Space Grotesk', sans-serif", size: 10 } } },
+        },
+      });
+
+      const mkLine = (label, data, color, extra) => ({
+        label, data,
+        borderColor: color, backgroundColor: color + '14',
+        borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, pointHitRadius: 12,
+        fill: false, tension: 0.3, spanGaps: true,
+        ...(extra || {}),
+      });
+
+      const hasTp = backends.some(b => ok.get(b).some(v => v > 0)) || fails.some(v => v > 0);
+      const tpEmpty = document.getElementById('nd2-wh-tp-empty');
+      const tpNote = document.getElementById('nd2-wh-tp-note');
+      if (tpEmpty) tpEmpty.style.display = hasTp ? 'none' : '';
+      if (tpNote) tpNote.textContent = 'transcriptions per hour';
+      if (_nd2WhTpChart) { _nd2WhTpChart.destroy(); _nd2WhTpChart = null; }
+      _nd2WhTpChart = new Chart(tpCanvas, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            ...backends.map((b, i) => mkLine(b, ok.get(b), ND2_WH_COLORS[i % ND2_WH_COLORS.length], { fill: true })),
+            mkLine('Failed', fails, ND2_WH_FAIL_COLOR, { borderDash: [5, 4] }),
+          ],
+        },
+        options: darkOpts(true),
+      });
+
+      const hasLat = backends.some(b => lat.get(b).some(v => v != null));
+      const latEmpty = document.getElementById('nd2-wh-lat-empty');
+      const latNote = document.getElementById('nd2-wh-lat-note');
+      if (latEmpty) latEmpty.style.display = hasLat ? 'none' : '';
+      if (latNote) latNote.textContent = 'avg seconds per call';
+      if (_nd2WhLatChart) { _nd2WhLatChart.destroy(); _nd2WhLatChart = null; }
+      _nd2WhLatChart = new Chart(latCanvas, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: backends.map((b, i) => mkLine(b, lat.get(b), ND2_WH_COLORS[i % ND2_WH_COLORS.length])),
+        },
+        options: darkOpts(false),
+      });
     }
 
     async function nd2LoadOverview() {

@@ -3599,10 +3599,6 @@ _HELP_CATEGORIES: Dict[str, Dict[str, Any]] = {
              "View the latest hourly radio summary, with arrows to walk back "
              "up to 24 hours. Pass `date` (YYYY-MM-DD) to step through every "
              "summary on that day instead. Works in DMs and via user-install."),
-            ("/ts",
-             "Search rdio-scanner radio transcripts. One phrase, or "
-             "comma-separated for OR (e.g. `fire,crash,police`). "
-             "Optional `date` (YYYY-MM-DD). Works in DMs and via user-install."),
         ],
         "footer": (
             "Live radio-summary pushes are available as an alert type — "
@@ -3714,7 +3710,7 @@ class HelpView(discord.ui.View):
             discord.SelectOption(label="Mute", value="mute", emoji="🔕",
                                  description="Silence pings or whole alerts"),
             discord.SelectOption(label="Radio", value="radio", emoji="📻",
-                                 description="Search radio transcripts"),
+                                 description="Hourly radio summaries"),
             discord.SelectOption(label="Info", value="info", emoji="📊",
                                  description="Summary, status, help"),
             discord.SelectOption(label="Manual", value="manual", emoji="🔧",
@@ -3744,247 +3740,6 @@ async def help_command(interaction: discord.Interaction):
         view=view,
         allowed_mentions=discord.AllowedMentions.none(),
     )
-
-
-# ==================== /ts RADIO TRANSCRIPT SEARCH ====================
-
-_TS_PAGE_SIZE = 10
-_TS_MAX_TRANSCRIPT_CHARS = 240  # trim long transmissions in the embed
-_TS_LOCAL_TZ_NAME = os.getenv('SUMMARY_TZ', 'Australia/Sydney')
-
-
-async def _ts_fetch_page(query: str, date: Optional[str], offset: int) -> Optional[dict]:
-    """Hit /api/rdio/transcripts/search. Returns None on failure."""
-    params = {
-        'q': query,
-        'limit': _TS_PAGE_SIZE,
-        'offset': offset,
-        'order': 'desc',
-    }
-    if date:
-        params['date'] = date
-    headers = {
-        'Authorization': f'Bearer {API_KEY}',
-        'User-Agent': 'AusAwareBot/1.0',
-        'X-Client-Type': 'discord-bot',
-    }
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                f"{API_BASE_URL}/api/rdio/transcripts/search",
-                headers=headers, params=params, timeout=60,
-            ) as resp:
-                if resp.status != 200:
-                    logger.warning(f"/ts got {resp.status} from backend")
-                    return None
-                return await resp.json()
-    except Exception as e:
-        logger.error(f"/ts fetch error: {type(e).__name__}: {e!r}", exc_info=True)
-        return None
-
-
-def _ts_format_local_time(iso_str: Optional[str]) -> str:
-    if not iso_str:
-        return '??:??'
-    try:
-        dt = datetime.fromisoformat(iso_str.replace('Z', '+00:00'))
-        try:
-            from zoneinfo import ZoneInfo
-            dt = dt.astimezone(ZoneInfo(_TS_LOCAL_TZ_NAME))
-        except Exception:
-            pass
-        return dt.strftime('%Y-%m-%d %H:%M:%S')
-    except Exception:
-        return iso_str[:19].replace('T', ' ')
-
-
-def _ts_build_embed(data: dict, query: str, date: Optional[str]) -> discord.Embed:
-    total = int(data.get('total') or 0)
-    offset = int(data.get('offset') or 0)
-    limit = int(data.get('limit') or _TS_PAGE_SIZE) or _TS_PAGE_SIZE
-    results = data.get('results') or []
-
-    title = f"🔎 Transcripts · \"{query}\""
-    if total == 0:
-        embed = discord.Embed(
-            title=title,
-            description="No matching transmissions found.",
-            color=0x94a3b8,
-        )
-        if date:
-            embed.set_footer(text=f"date: {date}")
-        return embed
-
-    page = (offset // limit) + 1
-    total_pages = max(1, (total + limit - 1) // limit)
-
-    lines = []
-    for r in results:
-        when = _ts_format_local_time(r.get('datetime'))
-        tg = r.get('talkgroup_label') or f"TG {r.get('talkgroup') or '?'}"
-        rid_label = r.get('radio_label')
-        rid = r.get('radio_id')
-        who = rid_label or (f"RID {rid}" if rid else None)
-        transcript = (r.get('transcript') or '').strip().replace('\n', ' ')
-        if len(transcript) > _TS_MAX_TRANSCRIPT_CHARS:
-            transcript = transcript[:_TS_MAX_TRANSCRIPT_CHARS - 1].rstrip() + '…'
-        url = r.get('call_url') or f"https://radio.forcequit.xyz/?call={r.get('id')}"
-        header = f"🕐 `{when}` · **{tg}**"
-        if who:
-            header += f" · {who}"
-        header += f" · [#{r.get('id')}]({url})"
-        lines.append(f"{header}\n> {transcript}")
-
-    description = '\n\n'.join(lines)
-    # Hard cap — Discord rejects descriptions > 4096 chars
-    if len(description) > 4000:
-        description = description[:3997] + '…'
-
-    embed = discord.Embed(
-        title=title,
-        description=description,
-        color=0x3498db,
-    )
-    footer = f"Page {page}/{total_pages} · {total} total"
-    if date:
-        footer += f" · {date}"
-    embed.set_footer(text=footer)
-    return embed
-
-
-class TsPager(discord.ui.View):
-    def __init__(self, invoker_id: int, query: str, date: Optional[str], total: int):
-        super().__init__(timeout=300)
-        self.invoker_id = invoker_id
-        self.query = query
-        self.date = date
-        self.offset = 0
-        self.total = total
-        self._refresh_buttons()
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.invoker_id:
-            await interaction.response.send_message(
-                "This pager belongs to someone else — run `/ts` yourself to search.",
-                ephemeral=True,
-            )
-            return False
-        return True
-
-    def _refresh_buttons(self):
-        has_prev = self.offset > 0
-        has_next = (self.offset + _TS_PAGE_SIZE) < self.total
-        # Reference buttons by attribute name (not child index) so adding
-        # First/Last doesn't silently break disable logic.
-        self.first_button.disabled = not has_prev
-        self.prev_button.disabled = not has_prev
-        self.next_button.disabled = not has_next
-        self.last_button.disabled = not has_next
-
-    async def _update(self, interaction: discord.Interaction):
-        data = await _ts_fetch_page(self.query, self.date, self.offset)
-        if data is None:
-            await interaction.response.send_message(
-                "❌ Backend error fetching transcripts.", ephemeral=True,
-            )
-            return
-        self.total = int(data.get('total') or 0)
-        self._refresh_buttons()
-        embed = _ts_build_embed(data, self.query, self.date)
-        await interaction.response.edit_message(embed=embed, view=self)
-
-    @discord.ui.button(label="|◀ First", style=discord.ButtonStyle.secondary)
-    async def first_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.offset = 0
-        await self._update(interaction)
-
-    @discord.ui.button(label="◀ Prev", style=discord.ButtonStyle.secondary)
-    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.offset = max(0, self.offset - _TS_PAGE_SIZE)
-        await self._update(interaction)
-
-    @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.secondary)
-    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.offset += _TS_PAGE_SIZE
-        await self._update(interaction)
-
-    @discord.ui.button(label="Last ▶|", style=discord.ButtonStyle.secondary)
-    async def last_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Jump to the offset that starts the final page.
-        if self.total <= 0:
-            self.offset = 0
-        else:
-            total_pages = max(1, (self.total + _TS_PAGE_SIZE - 1) // _TS_PAGE_SIZE)
-            self.offset = (total_pages - 1) * _TS_PAGE_SIZE
-        await self._update(interaction)
-
-    @discord.ui.button(label="Close", style=discord.ButtonStyle.danger)
-    async def close_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        for child in self.children:
-            child.disabled = True
-        # Ephemeral messages from followup.send() can't always be edited
-        # via interaction.response.edit_message — try that first, then
-        # fall back to editing the original response directly.
-        try:
-            await interaction.response.edit_message(view=self)
-        except (discord.InteractionResponded, discord.HTTPException):
-            try:
-                await interaction.edit_original_response(view=self)
-            except Exception as e:
-                logger.warning(f"/ts close fallback failed: {type(e).__name__}: {e}")
-        self.stop()
-
-
-@bot.tree.command(name="ts", description="Search rdio-scanner radio transcripts")
-@app_commands.describe(
-    query="Keyword(s) — one phrase, or comma-separated for OR (e.g. 'fire,crash,police')",
-    date="Optional date YYYY-MM-DD (local time)",
-)
-# User-install support: /ts is available in guilds, DMs, group DMs, and any
-# channel the invoking user is in (via user-install). Output is public so
-# anyone in the channel can see the result; the pager buttons are still
-# owner-locked via TsPager.interaction_check.
-@app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-@app_commands.allowed_installs(guilds=True, users=True)
-async def ts_command(
-    interaction: discord.Interaction,
-    query: str,
-    date: Optional[str] = None,
-):
-    query = (query or '').strip()
-    # Comma mode: at least one segment must be >= 2 chars after stripping.
-    valid_terms = [t.strip() for t in query.split(',') if len(t.strip()) >= 2]
-    if not valid_terms:
-        await interaction.response.send_message(
-            "❌ Query must contain at least one term of 2+ characters "
-            "(comma-separate for multiple: `fire,crash,police`).",
-            ephemeral=True,
-        )
-        return
-
-    # Public defer — result is visible to the whole channel. Validation errors
-    # stay ephemeral (above) so we don't spam the channel with bad-query noise.
-    await interaction.response.defer(ephemeral=False, thinking=True)
-
-    data = await _ts_fetch_page(query, date, offset=0)
-    if data is None:
-        # Backend error is still ephemeral — noise to show publicly.
-        await interaction.followup.send(
-            "❌ Backend error fetching transcripts. Try again shortly.",
-            ephemeral=True,
-        )
-        return
-
-    total = int(data.get('total') or 0)
-    embed = _ts_build_embed(data, query, date)
-
-    if total <= _TS_PAGE_SIZE:
-        # No pagination needed — send a plain embed
-        await interaction.followup.send(embed=embed, ephemeral=False)
-        return
-
-    view = TsPager(invoker_id=interaction.user.id, query=query, date=date, total=total)
-    await interaction.followup.send(embed=embed, view=view, ephemeral=False)
 
 
 # ---------------------------------------------------------------------------
@@ -4044,7 +3799,7 @@ class SummaryPager(discord.ui.LayoutView):
     point: nav follows the user's eye, not the original send position.
 
     Newest-first list. index 0 is the most recent summary.
-    Owner-locked via interaction_check, mirroring TsPager."""
+    Owner-locked via interaction_check."""
 
     def __init__(self, invoker_id: int, summaries: List[Dict[str, Any]],
                  date: Optional[str] = None):

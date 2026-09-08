@@ -35,6 +35,7 @@
 import { config } from '../config.js';
 import { log } from '../lib/log.js';
 import { describeRelayError } from '../lib/relayError.js';
+import { recordWhisperAttempt } from './whisperStats.js';
 
 /**
  * What a whisper server reports about ITSELF (GET /v1/stats on
@@ -286,6 +287,7 @@ export async function whisperForward(
 ): Promise<ForwardResult> {
   const candidates = whisperCandidates();
   if (candidates.length === 0) {
+    recordWhisperAttempt('none', false, null); // durable hourly stats (whisper_hourly)
     return { status: 503, body: new ArrayBuffer(0), contentType: null, backend: null,
       detail: 'no whisper backend available' };
   }
@@ -318,11 +320,13 @@ export async function whisperForward(
         b.lastError = `HTTP ${r.status}`;
         detail = `${b.name}: HTTP ${r.status}`;
         noteWorkFailure(b);
+        recordWhisperAttempt(b.name, false, null);
         log.warn({ backend: b.name, status: r.status }, 'whisper backend errored — trying next');
         continue;
       }
       b.workFailures = 0;
       b.quarantinedUntil = null;
+      recordWhisperAttempt(b.name, true, Date.now() - started);
       return {
         status: r.status,
         body: buf,
@@ -336,6 +340,7 @@ export async function whisperForward(
       b.lastError = describeRelayError(err);
       detail = `${b.name}: ${b.lastError}`;
       noteWorkFailure(b);
+      recordWhisperAttempt(b.name, false, null);
       log.warn(
         { backend: b.name, cause: b.lastError, ms: Date.now() - started },
         'whisper backend failed — trying next',
@@ -343,6 +348,7 @@ export async function whisperForward(
     }
   }
 
+  recordWhisperAttempt('none', false, null); // every candidate failed — the CALL got no transcript
   return { status: 502, body: new ArrayBuffer(0), contentType: null, backend: null, detail };
 }
 

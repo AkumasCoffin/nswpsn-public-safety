@@ -485,7 +485,6 @@ export function createApp() {
           '/api/check-admin/{userId}',
         ],
         rdio: [
-          '/api/rdio/transcripts/search',
           '/api/rdio/calls/{callId}',
           '/api/summaries/{latest,trigger}',
         ],

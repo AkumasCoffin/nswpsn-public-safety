@@ -197,7 +197,7 @@ const Schema = z.object({
     .transform((v) => (v === undefined ? -1000 : Number(v)))
     .pipe(z.number().int().min(-60_000).max(60_000)),
 
-  // Timezone for rdio summary windows + transcripts/search day-bounds.
+  // Timezone for rdio summary windows.
   // Mirrors python's SUMMARY_TZ env var; default to Sydney since this
   // is an NSW-focused service.
   SUMMARY_TZ: z.string().default('Australia/Sydney'),

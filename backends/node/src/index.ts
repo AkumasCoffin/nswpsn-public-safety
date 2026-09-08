@@ -163,7 +163,7 @@ async function preflight(): Promise<void> {
 
   // Best-effort warm of the rdio unit-label CSV. Routes call
   // ensureUnitLabelsLoaded() lazily but doing it here means the first
-  // /api/rdio/transcripts/search request doesn't pay the disk read.
+  // /api/rdio/calls/:id request doesn't pay the disk read.
   try {
     await ensureUnitLabelsLoaded();
   } catch (err) {
