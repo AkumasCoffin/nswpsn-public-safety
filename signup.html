@@ -585,7 +585,8 @@
 
           <!-- Location: State -> LGA -> Suburb. Stored as one readable
                string (the backend's `region` column is free text), combined
-               at submit time. LGA is a datalist combo rather than a select:
+               at submit time. LGA is a filter-as-you-type combo (lgaCombo) rather
+               than a select:
                a state has 100+ LGAs, and if the suggestion fetch ever fails
                the field still works as plain text instead of bricking
                signup. -->
