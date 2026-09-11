@@ -37,6 +37,7 @@ import { randomBytes } from 'node:crypto';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { config } from '../config.js';
+import { notifyStaff } from '../services/staffNotify.js';
 import {
   getUserRoles,
   canonicalRoles,
@@ -246,6 +247,13 @@ editorRouter.post('/api/editor-requests', async (c) => {
           referredBy, referredByName, existingRow.id],
       );
       log.info({ requestId: existingRow.id, email, requestType, linkedUserId }, 'Editor request updated');
+      notifyStaff(pool, {
+        kind: 'signup_request',
+        event: 'new',
+        ref: String(existingRow.id),
+        title: requestTypeStr || 'Access request',
+        subtitle: region ? `${region} · resubmitted` : 'resubmitted',
+      });
       return c.json({ success: true, message: 'Request submitted successfully', request_id: existingRow.id }, 200);
     }
 
@@ -262,6 +270,14 @@ editorRouter.post('/api/editor-requests', async (c) => {
     );
     const requestId = inserted.rows[0]?.id;
     log.info({ requestId, email, requestType, linkedUserId }, 'New editor request');
+    // Type + region only: enough to triage, nothing that identifies anyone.
+    notifyStaff(pool, {
+      kind: 'signup_request',
+      event: 'new',
+      ref: String(requestId ?? ''),
+      title: requestTypeStr || 'Access request',
+      subtitle: region || null,
+    });
     return c.json({ success: true, message: 'Request submitted successfully', request_id: requestId }, 201);
   } catch (err) {
     log.error({ err }, 'Error submitting editor request');
@@ -521,6 +537,14 @@ editorRouter.post('/api/editor-requests/:id/approve', requireRole(canManageUsers
     );
 
     log.info({ requestId, email: req.email, roles }, 'Approved editor request');
+    notifyStaff(pool, {
+      kind: 'signup_request',
+      event: 'resolved',
+      ref: String(requestId),
+      title: (req.request_type || 'Access request'),
+      status: 'approved',
+      actor: (c.get('userName') as string | undefined) ?? null,
+    });
 
     const result: Record<string, unknown> = {
       success: true,
@@ -572,6 +596,14 @@ editorRouter.post('/api/editor-requests/:id/reject', requireRole(canManageUsers)
     );
 
     log.info({ requestId, email: req.email }, 'Rejected editor request');
+    notifyStaff(pool, {
+      kind: 'signup_request',
+      event: 'resolved',
+      ref: String(requestId),
+      title: (req.request_type || 'Access request'),
+      status: 'rejected',
+      actor: (c.get('userName') as string | undefined) ?? null,
+    });
     return c.json({ success: true, message: 'Request rejected' });
   } catch (err) {
     log.error({ err }, 'Error rejecting editor request');

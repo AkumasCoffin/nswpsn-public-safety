@@ -387,6 +387,21 @@ class Database:
                 ''')
                 c.execute('CREATE INDEX IF NOT EXISTS idx_pending_bot_actions_status ON pending_bot_actions(status, requested_at)')
 
+                # Staff moderation notifications: remembers which message was
+                # posted for which item, so approving/rejecting later EDITS
+                # that message instead of adding a second one. Keyed on
+                # (kind, ref) because refs are only unique within a kind.
+                c.execute('''
+                    CREATE TABLE IF NOT EXISTS staff_notify_messages (
+                        kind       TEXT NOT NULL,
+                        ref        TEXT NOT NULL,
+                        channel_id BIGINT NOT NULL,
+                        message_id BIGINT NOT NULL,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                        PRIMARY KEY (kind, ref)
+                    )
+                ''')
+
                 # Live-DB migration for the per-preset filters column.
                 c.execute("ALTER TABLE alert_presets ADD COLUMN IF NOT EXISTS filters JSONB NOT NULL DEFAULT '{}'::jsonb")
                 # Live-DB migration: HMAC signature column for bot-action rows.
@@ -1207,6 +1222,59 @@ class Database:
             conn.close()
         return count
     
+    # ==================== STAFF NOTIFICATIONS ====================
+
+    def record_staff_message(self, kind: str, ref: str, channel_id: int, message_id: int):
+        """Remember the message posted for a staff item so a later
+        resolution can edit it. Upserts: if an item somehow gets posted
+        twice, the newest message is the one we'll edit."""
+        self._require_postgres()
+        conn = self._connect()
+        try:
+            c = conn.cursor()
+            c.execute(
+                '''INSERT INTO staff_notify_messages (kind, ref, channel_id, message_id)
+                   VALUES (%s, %s, %s, %s)
+                   ON CONFLICT (kind, ref) DO UPDATE
+                     SET channel_id = EXCLUDED.channel_id,
+                         message_id = EXCLUDED.message_id,
+                         created_at = now()''',
+                (kind, ref, int(channel_id), int(message_id)),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_staff_message(self, kind: str, ref: str):
+        """The message previously posted for this item, or None."""
+        self._require_postgres()
+        conn = self._connect()
+        try:
+            c = conn.cursor()
+            c.execute(
+                'SELECT channel_id, message_id FROM staff_notify_messages WHERE kind = %s AND ref = %s',
+                (kind, ref),
+            )
+            row = c.fetchone()
+        finally:
+            conn.close()
+        return dict(row) if row else None
+
+    def cleanup_old_staff_messages(self, days: int = 90):
+        """Trim the message map. Only affects our ability to EDIT an old
+        item in place; the Discord messages themselves are untouched."""
+        self._require_postgres()
+        conn = self._connect()
+        try:
+            c = conn.cursor()
+            c.execute(
+                "DELETE FROM staff_notify_messages WHERE created_at < NOW() - INTERVAL '1 day' * %s",
+                (days,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
     def cleanup_old_incident_messages(self, days: int = 14):
         conn = self._connect()
         try:

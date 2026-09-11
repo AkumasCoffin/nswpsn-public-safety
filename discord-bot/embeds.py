@@ -6,12 +6,70 @@ import os
 import re
 import html
 import discord
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 from urllib.parse import quote
 
 # Base URL for the map
 MAP_BASE_URL = "https://nswpsn.forcequit.xyz"
+
+# --- Staff moderation notifications ---------------------------------------
+# Label + accent per kind, and the accent a resolved item switches to.
+STAFF_NOTIFY_KINDS = {
+    'signup_request': ('Signup request', '\U0001F4E5', 0x38BDF8),
+    'wire_approval': ('Wire approval', '\U0001F4F0', 0xF97316),
+    'wire_takedown': ('Wire takedown', '\u2696\uFE0F', 0xEF4444),
+}
+_STAFF_STATUS_COLOR = {
+    'approved': 0x22C55E,
+    'upheld': 0x22C55E,
+    'rejected': 0x64748B,
+}
+
+
+def build_staff_notify_embed(kind: str, params: Dict[str, Any]) -> discord.Embed:
+    """Embed for a staff moderation notification.
+
+    These carry NO personal data by design - the backend sends a short
+    non-identifying summary plus a link to the staff page, because Discord
+    history is searchable, screenshottable and outside our control. See
+    backends/node/src/services/staffNotify.ts.
+
+    A plain Embed rather than a Components V2 container: resolution edits
+    this message in place, and embeds edit cleanly.
+    """
+    label, icon, base_color = STAFF_NOTIFY_KINDS.get(
+        kind, ('Staff notification', '\U0001F514', 0x94A3B8))
+    title = (params.get('title') or '').strip() or label
+    subtitle = (params.get('subtitle') or '').strip()
+    status = (params.get('status') or '').strip().lower()
+    actor = (params.get('actor') or '').strip()
+    url = (params.get('url') or '').strip()
+
+    resolved = bool(status)
+    color = _STAFF_STATUS_COLOR.get(status, base_color) if resolved else base_color
+
+    heading = f"{icon} {label}"
+    if resolved:
+        heading = f"{heading} \u00b7 {status.title()}"
+
+    embed = discord.Embed(
+        title=heading[:256],
+        description=title[:4096],
+        color=color,
+        url=url or None,
+        timestamp=datetime.now(timezone.utc),
+    )
+    if subtitle:
+        embed.add_field(name='\u200b', value=subtitle[:1024], inline=False)
+    if resolved:
+        embed.add_field(
+            name='Handled by',
+            value=(actor or 'a staff member')[:1024],
+            inline=True,
+        )
+    embed.set_footer(text='AusAware staff' if not resolved else 'AusAware staff \u00b7 resolved')
+    return embed
 
 
 def strip_html(text: str) -> str:

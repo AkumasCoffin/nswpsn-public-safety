@@ -27,7 +27,7 @@ from discord.ext import commands, tasks
 import database
 from database import Database
 from alert_poller import AlertPoller
-from embeds import EmbedBuilder
+from embeds import EmbedBuilder, build_staff_notify_embed, STAFF_NOTIFY_KINDS
 
 # Configure logging
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO').upper()
@@ -1170,6 +1170,8 @@ class NSWPSNBot(commands.Bot):
                 result = await self._exec_action_cleanup(params)
             elif kind == 'broadcast':
                 result = await self._exec_action_broadcast(params)
+            elif kind == 'staff_notify':
+                result = await self._exec_action_staff_notify(params)
             else:
                 raise ValueError(f"unknown action: {kind}")
             await loop.run_in_executor(
@@ -1189,6 +1191,79 @@ class NSWPSNBot(commands.Bot):
     async def _exec_action_sync(self):
         synced = await self.tree.sync()
         return {'synced_global': len(synced)}
+
+    async def _exec_action_staff_notify(self, params):
+        """Post - or update - a staff moderation notification.
+
+        Pushed by the backend when a signup request, Wire submission or
+        takedown notice arrives or is actioned. On resolution we EDIT the
+        message the arrival posted rather than adding a second one, which
+        keeps the channel a clean worklist.
+
+        No slash command configures this: the target channel is chosen on
+        the staff page and arrives in params.
+        """
+        kind = (params.get('kind') or '').strip()
+        if kind not in STAFF_NOTIFY_KINDS:
+            raise ValueError(f'unknown staff notify kind: {kind}')
+        event = (params.get('event') or 'new').strip()
+        ref = (params.get('ref') or '').strip()
+        try:
+            gid = int(params.get('guild_id') or 0)
+            cid = int(params.get('channel_id') or 0)
+        except (TypeError, ValueError):
+            raise ValueError('bad guild_id/channel_id')
+        if not cid:
+            raise ValueError('channel_id required')
+
+        loop = asyncio.get_event_loop()
+        embed = build_staff_notify_embed(kind, params)
+
+        # Cache first, then REST. _exec_action_broadcast is cache-only,
+        # which silently reports 'channel_not_found' for a channel the bot
+        # hasn't touched since boot - not acceptable for moderation traffic.
+        channel = self.get_channel(cid)
+        if channel is None:
+            try:
+                channel = await self.fetch_channel(cid)
+            except discord.NotFound:
+                raise ValueError(f'channel_not_found (guild {gid}, channel {cid})')
+            except discord.Forbidden:
+                raise ValueError(f'forbidden (guild {gid}, channel {cid})')
+
+        if event == 'resolved' and ref:
+            prior = None
+            try:
+                prior = await loop.run_in_executor(
+                    None, lambda: self.db.get_staff_message(kind, ref))
+            except Exception as e:
+                logger.warning(f"staff_notify: message lookup failed for {kind}/{ref}: {e}")
+            if prior:
+                try:
+                    msg = await channel.fetch_message(int(prior['message_id']))
+                    await msg.edit(embed=embed)
+                    return {'kind': kind, 'ref': ref, 'edited': True,
+                            'message_id': str(msg.id)}
+                except discord.NotFound:
+                    # Message deleted - fall through and post a fresh one so
+                    # the resolution isn't lost entirely.
+                    logger.info(
+                        f"staff_notify: original message for {kind}/{ref} is gone; posting anew")
+                except discord.Forbidden:
+                    raise ValueError(f'forbidden editing in channel {cid}')
+
+        msg = await channel.send(embed=embed)
+        if ref:
+            try:
+                await loop.run_in_executor(
+                    None,
+                    lambda: self.db.record_staff_message(kind, ref, cid, msg.id))
+            except Exception as e:
+                # The post succeeded; only the ability to edit it later is
+                # lost, so this must not fail the action.
+                logger.warning(f"staff_notify: could not record message id for {kind}/{ref}: {e}")
+        logger.info(f"staff_notify: {kind}/{ref} -> channel {cid} ({event})")
+        return {'kind': kind, 'ref': ref, 'edited': False, 'message_id': str(msg.id)}
 
     async def _exec_action_broadcast(self, params):
         """Send an embed to a list of channels. Uses channel.send() so

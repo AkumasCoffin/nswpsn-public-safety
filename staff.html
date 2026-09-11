@@ -1069,6 +1069,20 @@
     .nd-cfg-rowhead .nd-strong { flex: 1; }
     .nd-input-wide { width: 100%; }
 
+    /* --- Discord notification settings (Requests -> Discord notifications).
+       Own classes rather than .nd-fld: that one's 0.6rem uppercase labels are
+       sized for the dense node-config grid and read as illegible here. --- */
+    .dn-fld { display: flex; flex-direction: column; gap: 0.35rem; margin-bottom: 1.1rem; max-width: 420px; }
+    .dn-fld > label { font-size: 0.78rem; font-weight: 600; color: var(--text-primary); }
+    .dn-fld select {
+      width: 100%; background: rgba(0, 0, 0, 0.3);
+      border: 1px solid var(--border-subtle); border-radius: 8px;
+      color: var(--text-primary); padding: 0.5rem 0.6rem;
+      font-family: inherit; font-size: 0.85rem;
+    }
+    .dn-fld select:focus { outline: none; border-color: var(--accent-border); }
+    .dn-hint { color: var(--text-soft); font-size: 0.76rem; }
+
     /* --- Global settings modal (P3) --- */
     .modal-content.wide { max-width: 940px; }
     .gc-toolbar { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.8rem; flex-wrap: wrap; }
@@ -2698,6 +2712,7 @@
             <button class="tab-dd-item" role="menuitem" data-kind="approvals" onclick="openRequestsView('approvals')"><i class="fas fa-clock"></i> Wire approvals <span class="dd-count" id="dd-approvals-badge" style="display:none;"></span></button>
             <button class="tab-dd-item" role="menuitem" data-kind="takedowns" onclick="openRequestsView('takedowns')"><i class="fas fa-flag"></i> Wire takedowns <span class="dd-count" id="dd-takedowns-badge" style="display:none;"></span></button>
             <button class="tab-dd-item" role="menuitem" data-kind="restrictions" onclick="openRequestsView('restrictions')"><i class="fas fa-comment-slash"></i> Comment restrictions <span class="dd-count" id="dd-restrictions-badge" style="display:none;"></span></button>
+            <button class="tab-dd-item" role="menuitem" data-kind="discord" onclick="openRequestsView('discord')"><i class="fab fa-discord"></i> Discord notifications</button>
           </div>
         </div>
         <div class="tab-dd" id="auth-dd">
@@ -2791,6 +2806,25 @@
         <div id="requests-restrictions-view" style="display:none;">
           <div id="restrictions-container">
             <div class="loading"><i class="fas fa-spinner"></i></div>
+          </div>
+        </div>
+
+        <!-- Where the three staff queues above get announced in Discord.
+             Owner-only: these channels carry moderation traffic, so the
+             gate is staff roles, not Discord's "Manage Channels". -->
+        <div id="requests-discord-view" style="display:none;">
+          <div class="dev-section-h">Discord notifications</div>
+          <div class="dev-card" style="max-width:760px;">
+            <p style="color:var(--text-soft); font-size:0.88rem; line-height:1.6; margin-bottom:1rem;">
+              Announce new signup requests, Wire approvals and takedown notices in Discord.
+              Messages carry a short summary and a link back here &mdash; never an email,
+              Discord handle or the body of a notice.
+              When an item is actioned, its original message is edited to show who handled it.
+            </p>
+            <div id="dn-status" style="margin-bottom:1rem;"></div>
+            <div id="dn-body">
+              <div class="loading"><i class="fas fa-spinner"></i></div>
+            </div>
           </div>
         </div>
 
@@ -12861,12 +12895,13 @@
     let _dcFilter = 'pending';
     let _reqKind = 'signup';
     function switchRequestsView(kind) {
-      const views = { signup: 'requests-signup-view', data: 'requests-datachanges-view', approvals: 'requests-approvals-view', takedowns: 'requests-takedowns-view', restrictions: 'requests-restrictions-view' };
+      const views = { signup: 'requests-signup-view', data: 'requests-datachanges-view', approvals: 'requests-approvals-view', takedowns: 'requests-takedowns-view', restrictions: 'requests-restrictions-view', discord: 'requests-discord-view' };
       Object.entries(views).forEach(([k, id]) => { const el = document.getElementById(id); if (el) el.style.display = (k === kind) ? 'block' : 'none'; });
       if (kind === 'data') loadDataChanges();
       else if (kind === 'approvals') loadApprovals();
       else if (kind === 'takedowns') loadTakedowns();
       else if (kind === 'restrictions') loadRestrictions();
+      else if (kind === 'discord') loadDiscordNotify();
     }
     // Requests dropdown lives in the tab bar and behaves exactly like the Data
     // tab dropdown (toggleDataMenu/openDataMode).
@@ -12885,6 +12920,163 @@
       const btn = document.getElementById('requests-tab-btn');
       if (btn) btn.setAttribute('aria-expanded', 'false');
     }
+    // ---- Discord notifications ---------------------------------------
+    // One channel per kind. Saves on change; the server validates that each
+    // id is a snowflake and stores it in app_settings (not an env file).
+    const DN_KINDS = [
+      ['signup_request', 'Signup requests', 'New access requests, and their approval or rejection.'],
+      ['wire_approval', 'Wire approvals', 'Posts entering the approval queue, and the decision.'],
+      ['wire_takedown', 'Wire takedowns', 'Takedown notices filed, upheld or rejected.'],
+    ];
+    let _dnState = { guild_id: null, channels: {}, guilds: [], channelList: [], delivery: {} };
+
+    async function _dnFetch(path, opts) {
+      const res = await fetch(`${API_BASE_URL}/api/staff/discord-notify${path}`, {
+        ...(opts || {}),
+        headers: {
+          'Authorization': await authHeader(),
+          ...((opts && opts.body) ? { 'Content-Type': 'application/json' } : {}),
+          ...((opts && opts.headers) || {}),
+        },
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      return body;
+    }
+
+    async function loadDiscordNotify() {
+      const body = document.getElementById('dn-body');
+      const status = document.getElementById('dn-status');
+      if (!body) return;
+      body.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i></div>';
+      if (status) status.innerHTML = '';
+      try {
+        const d = await _dnFetch('');
+        _dnState.guild_id = d.guild_id || null;
+        _dnState.channels = d.channels || {};
+        _dnState.delivery = d.delivery || {};
+        try {
+          _dnState.guilds = await _dnFetch('/guilds');
+        } catch (e) {
+          _dnState.guilds = [];
+          _dnNote('warn', `Could not list servers from Discord: ${e.message}`);
+        }
+        _dnState.channelList = [];
+        if (_dnState.guild_id) {
+          try {
+            _dnState.channelList = await _dnFetch(`/channels?guild_id=${_dnState.guild_id}`);
+          } catch (e) {
+            _dnNote('warn', `Could not list channels: ${e.message}`);
+          }
+        }
+        _dnRender();
+      } catch (e) {
+        body.innerHTML = '';
+        _dnNote('error', e.message === 'forbidden'
+          ? 'Only the site owner can change where staff notifications are sent.'
+          : `Could not load settings: ${e.message}`);
+      }
+    }
+
+    function _dnNote(level, text) {
+      const status = document.getElementById('dn-status');
+      if (!status) return;
+      const tone = level === 'error'
+        ? 'background:rgba(239,68,68,0.10); border:1px solid rgba(239,68,68,0.35); color:#fca5a5;'
+        : level === 'warn'
+          ? 'background:rgba(245,158,11,0.10); border:1px solid rgba(245,158,11,0.35); color:#fcd34d;'
+          : 'background:var(--accent-soft); border:1px solid var(--accent-border); color:#7dd3fc;';
+      const div = document.createElement('div');
+      div.style.cssText = `padding:0.6rem 0.8rem; border-radius:8px; font-size:0.82rem; margin-bottom:0.5rem; ${tone}`;
+      div.textContent = text;
+      status.appendChild(div);
+    }
+
+    function _dnRender() {
+      const body = document.getElementById('dn-body');
+      if (!body) return;
+
+      // Say plainly when the delivery path can't work, rather than looking
+      // configured but silently dropping every notification.
+      if (_dnState.delivery && _dnState.delivery.bot_db === false) {
+        _dnNote('error', 'The bot database is not configured on this backend (BOT_DATA_DATABASE_URL), so notifications cannot be queued.');
+      }
+      if (_dnState.delivery && _dnState.delivery.signed === false) {
+        _dnNote('warn', 'BOT_ACTION_SIGNING_SECRET is unset, so queued actions are unsigned and the bot accepts them unverified. Set it in both the backend and the bot before relying on this.');
+      }
+
+      const guildOpts = ['<option value="">Select a server\u2026</option>'].concat(
+        (_dnState.guilds || []).map(g =>
+          `<option value="${escapeHtml(g.id)}"${String(g.id) === String(_dnState.guild_id) ? ' selected' : ''}>${escapeHtml(g.name || g.id)}</option>`)
+      );
+      // A saved server the bot can no longer see would otherwise vanish from
+      // the list and look unset.
+      if (_dnState.guild_id && !(_dnState.guilds || []).some(g => String(g.id) === String(_dnState.guild_id))) {
+        guildOpts.push(`<option value="${escapeHtml(_dnState.guild_id)}" selected>Server ${escapeHtml(_dnState.guild_id)} (bot not in it?)</option>`);
+      }
+
+      let html = `
+        <div class="dn-fld">
+          <label for="dn-guild">Discord server</label>
+          <select id="dn-guild" onchange="dnSetGuild(this.value)">${guildOpts.join('')}</select>
+        </div>`;
+
+      if (!_dnState.guild_id) {
+        html += '<div style="color:var(--text-soft); font-size:0.85rem;">Pick a server to choose channels.</div>';
+        body.innerHTML = html;
+        return;
+      }
+
+      const chanOpts = (selected) => ['<option value="">Off \u2014 don\u2019t notify</option>'].concat(
+        (_dnState.channelList || []).map(ch =>
+          `<option value="${escapeHtml(ch.id)}"${String(ch.id) === String(selected) ? ' selected' : ''}>#${escapeHtml(ch.name || ch.id)}</option>`)
+      ).join('');
+
+      for (const [kind, label, hint] of DN_KINDS) {
+        const cur = _dnState.channels[kind] || '';
+        html += `
+          <div class="dn-fld">
+            <label for="dn-ch-${kind}">${escapeHtml(label)}</label>
+            <select id="dn-ch-${kind}" onchange="dnSetChannel('${kind}', this.value)">${chanOpts(cur)}</select>
+            <div class="dn-hint">${escapeHtml(hint)}</div>
+          </div>`;
+      }
+      body.innerHTML = html;
+    }
+
+    async function dnSetGuild(guildId) {
+      try {
+        // Channel ids belong to a server, so switching servers clears them
+        // rather than leaving ids that don't exist in the new one.
+        await _dnFetch('', {
+          method: 'PUT',
+          body: JSON.stringify({
+            guild_id: guildId || null,
+            channels: { signup_request: null, wire_approval: null, wire_takedown: null },
+          }),
+        });
+        showToast(guildId ? 'Server set — now pick channels.' : 'Discord notifications turned off.', 'success');
+        await loadDiscordNotify();
+      } catch (e) {
+        showToast(`Could not save: ${e.message}`, 'error');
+        await loadDiscordNotify();
+      }
+    }
+
+    async function dnSetChannel(kind, channelId) {
+      try {
+        const d = await _dnFetch('', {
+          method: 'PUT',
+          body: JSON.stringify({ channels: { [kind]: channelId || null } }),
+        });
+        _dnState.channels = d.channels || _dnState.channels;
+        showToast(channelId ? 'Channel saved.' : 'Notification turned off.', 'success');
+      } catch (e) {
+        showToast(`Could not save: ${e.message}`, 'error');
+        await loadDiscordNotify();
+      }
+    }
+
     function openRequestsView(kind) {
       _reqKind = kind;
       closeRequestsMenu();
