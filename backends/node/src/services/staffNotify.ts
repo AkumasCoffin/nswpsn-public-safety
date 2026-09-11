@@ -29,7 +29,12 @@ import { getBotDbPool } from './botDb.js';
 import { getBotActionSecret, signBotAction } from './botActionSign.js';
 import { log } from '../lib/log.js';
 
-export type StaffNotifyKind = 'signup_request' | 'wire_approval' | 'wire_takedown';
+export type StaffNotifyKind =
+  | 'signup_request'
+  | 'wire_approval'
+  | 'wire_takedown'
+  | 'new_user'
+  | 'new_node';
 
 /** app_settings keys. One channel per kind, plus the guild they live in. */
 export const NOTIFY_GUILD_KEY = 'discord_notify_guild_id';
@@ -37,6 +42,8 @@ export const NOTIFY_CHANNEL_KEYS: Record<StaffNotifyKind, string> = {
   signup_request: 'discord_notify_channel_signup',
   wire_approval: 'discord_notify_channel_wire_approval',
   wire_takedown: 'discord_notify_channel_wire_takedown',
+  new_user: 'discord_notify_channel_new_user',
+  new_node: 'discord_notify_channel_new_node',
 };
 
 /** Which staff view each kind deep-links to. */
@@ -44,6 +51,8 @@ const STAFF_VIEW: Record<StaffNotifyKind, string> = {
   signup_request: 'signup',
   wire_approval: 'approvals',
   wire_takedown: 'takedowns',
+  new_user: 'users',
+  new_node: 'nodes',
 };
 
 function publicBase(): string {

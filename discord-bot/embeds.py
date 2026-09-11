@@ -19,6 +19,8 @@ STAFF_NOTIFY_KINDS = {
     'signup_request': ('Signup request', '\U0001F4E5', 0x38BDF8),
     'wire_approval': ('Wire approval', '\U0001F4F0', 0xF97316),
     'wire_takedown': ('Wire takedown', '\u2696\uFE0F', 0xEF4444),
+    'new_user': ('New account', '\U0001F464', 0xA855F7),
+    'new_node': ('New node', '\U0001F4E1', 0x22C55E),
 }
 _STAFF_STATUS_COLOR = {
     'approved': 0x22C55E,

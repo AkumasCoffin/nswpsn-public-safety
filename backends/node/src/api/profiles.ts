@@ -15,6 +15,7 @@ import { requireSupabaseJwt } from '../services/auth/supabaseJwt.js';
 import { invalidateUserRolesCache } from '../services/auth/roles.js';
 import { avatarUrl, createImageUploadUrl, r2Configured, readR2ObjectBytes, deleteR2Object } from '../services/wire.js';
 import { tagsFor } from '../services/userTags.js';
+import { notifyStaff } from '../services/staffNotify.js';
 
 export const profilesRouter = new Hono();
 
@@ -196,7 +197,19 @@ profilesRouter.post('/api/profiles/sync', requireSupabaseJwt, async (c) => {
        ON CONFLICT (user_id, role) DO NOTHING`,
       [uid],
     );
-    if ((granted.rowCount ?? 0) > 0) invalidateUserRolesCache(uid);
+    if ((granted.rowCount ?? 0) > 0) {
+      invalidateUserRolesCache(uid);
+      // First time this account has ever been seen. Deliberately nameless:
+      // a new account's display name is taken straight off the Discord JWT,
+      // so it is usually the Discord handle.
+      notifyStaff(pool, {
+        kind: 'new_user',
+        event: 'new',
+        ref: '',
+        title: 'New account',
+        subtitle: 'Someone signed up',
+      });
+    }
 
     if (!discordAvatar && !jwtName) return c.json({ success: true, skipped: 'nothing to sync' });
     await pool.query(

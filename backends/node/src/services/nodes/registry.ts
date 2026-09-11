@@ -6,6 +6,7 @@
  */
 import { getPool } from '../../db/pool.js';
 import { randomUUID } from 'node:crypto';
+import { notifyStaff } from '../staffNotify.js';
 
 /** Feeder node types. Only 'radio' has a working agent today; 'pager'/'adsb'
  *  are provisionable now so their future agents slot in. */
@@ -126,7 +127,21 @@ export async function createNode(
      RETURNING ${NODE_COLS}`,
     [userId, kind, cleanName, tokenHash, tokenPrefix, loc.zone, loc.state, loc.lga],
   );
-  return res.rows[0] ?? null;
+  const row = res.rows[0] ?? null;
+  if (row) {
+    // Emitted here rather than in the two routes that call this, so neither
+    // path can be missed. Kind + area only: the node NAME is built from a
+    // slug of the owner's username (see autoNodeName above).
+    const where = [loc.lga, loc.state, loc.zone].filter(Boolean).join(' \u00b7 ');
+    notifyStaff(pool, {
+      kind: 'new_node',
+      event: 'new',
+      ref: '',
+      title: `${kind} node`,
+      subtitle: where || null,
+    });
+  }
+  return row;
 }
 
 export type BindResult = 'bound' | 'match' | 'mismatch';

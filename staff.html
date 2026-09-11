@@ -12820,6 +12820,27 @@
       if (userPermissions.tabs.requests) {
         await loadRequests();
       }
+      _applyDeepLink();
+    }
+
+    /**
+     * ?view=... from a Discord notification. Only navigates to a tab the
+     * viewer may actually open, so a deep link can never strand someone on
+     * a hidden panel.
+     */
+    function _applyDeepLink() {
+      let view = '';
+      try { view = new URLSearchParams(location.search).get('view') || ''; } catch (e) { return; }
+      if (!view) return;
+      const tabs = userPermissions.tabs || {};
+      const requestViews = { signup: 1, data: 1, approvals: 1, takedowns: 1, restrictions: 1, discord: 1 };
+      if (requestViews[view]) {
+        if (tabs.requests) openRequestsView(view);
+      } else if (view === 'users' || view === 'members') {
+        if (tabs.users) openAuthView(view === 'members' ? 'members' : 'users');
+      } else if (view === 'nodes') {
+        if (tabs.nodes) switchTab('nodes');
+      }
     }
     
     function applyPermissionRestrictions() {
@@ -12927,6 +12948,8 @@
       ['signup_request', 'Signup requests', 'New access requests, and their approval or rejection.'],
       ['wire_approval', 'Wire approvals', 'Posts entering the approval queue, and the decision.'],
       ['wire_takedown', 'Wire takedowns', 'Takedown notices filed, upheld or rejected.'],
+      ['new_user', 'New accounts', 'Someone creates an account. No name is sent \u2014 just the signal.'],
+      ['new_node', 'New feeder nodes', 'A contributor creates a radio or pager node.'],
     ];
     let _dnState = { guild_id: null, channels: {}, guilds: [], channelList: [], delivery: {} };
 
@@ -13052,7 +13075,7 @@
           method: 'PUT',
           body: JSON.stringify({
             guild_id: guildId || null,
-            channels: { signup_request: null, wire_approval: null, wire_takedown: null },
+            channels: Object.fromEntries(DN_KINDS.map(([k]) => [k, null])),
           }),
         });
         showToast(guildId ? 'Server set — now pick channels.' : 'Discord notifications turned off.', 'success');

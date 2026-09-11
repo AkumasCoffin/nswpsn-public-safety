@@ -58,6 +58,8 @@ function configureAll() {
     { key: NOTIFY_CHANNEL_KEYS.signup_request, value: '222222222222222222' },
     { key: NOTIFY_CHANNEL_KEYS.wire_approval, value: '333333333333333333' },
     { key: NOTIFY_CHANNEL_KEYS.wire_takedown, value: '444444444444444444' },
+    { key: NOTIFY_CHANNEL_KEYS.new_user, value: '555555555555555555' },
+    { key: NOTIFY_CHANNEL_KEYS.new_node, value: '666666666666666666' },
   ];
 }
 
@@ -181,6 +183,77 @@ describe('notifyStaffAsync', () => {
     await notifyStaffAsync(mainPool, { kind: 'wire_takedown', event: 'new', ref: 'x', title: 'T' });
     const sent = sentParams();
     expect(sent.url).toContain('/staff?view=takedowns');
+  });
+});
+
+describe('new_user / new_node', () => {
+  it('each gets its own channel', async () => {
+    configureAll();
+    await notifyStaffAsync(mainPool, { kind: 'new_user', event: 'new', ref: '', title: 'New account' });
+    expect(sentParams().channel_id).toBe('555555555555555555');
+
+    vi.clearAllMocks();
+    invalidateStaffNotifySettings();
+    configureAll();
+    await notifyStaffAsync(mainPool, { kind: 'new_node', event: 'new', ref: '', title: 'pager node' });
+    expect(sentParams().channel_id).toBe('666666666666666666');
+  });
+
+  it('a new account sends no name — the display name is the Discord handle', async () => {
+    configureAll();
+    await notifyStaffAsync(mainPool, {
+      kind: 'new_user',
+      event: 'new',
+      ref: '',
+      title: 'New account',
+      subtitle: 'Someone signed up',
+    });
+    const sent = sentParams();
+    expect(sent.title).toBe('New account');
+    // An empty ref means nothing identifying is written to the bot's
+    // message map either — there is no resolution to edit later.
+    expect(sent.ref).toBe('');
+    expect(sent.actor).toBe('');
+    expect(sent.status).toBe('');
+  });
+
+  it('a new node sends kind and area but never the node name', async () => {
+    configureAll();
+    // autoNodeName() builds names like `pager-jordansmith-a1b2c3d4`, so the
+    // name would leak the owner's username.
+    await notifyStaffAsync(mainPool, {
+      kind: 'new_node',
+      event: 'new',
+      ref: '',
+      title: 'pager node',
+      subtitle: 'Brisbane · QLD',
+    });
+    const sent = sentParams();
+    expect(sent.title).toBe('pager node');
+    expect(sent.subtitle).toBe('Brisbane · QLD');
+    expect(JSON.stringify(sent)).not.toContain('jordansmith');
+  });
+
+  it('deep-links to the tab each one belongs to', async () => {
+    configureAll();
+    await notifyStaffAsync(mainPool, { kind: 'new_user', event: 'new', ref: '', title: 'x' });
+    expect(sentParams().url).toContain('/staff?view=users');
+
+    vi.clearAllMocks();
+    invalidateStaffNotifySettings();
+    configureAll();
+    await notifyStaffAsync(mainPool, { kind: 'new_node', event: 'new', ref: '', title: 'x' });
+    expect(sentParams().url).toContain('/staff?view=nodes');
+  });
+
+  it('stays silent when only the other kinds are configured', async () => {
+    settingsRows = [
+      { key: NOTIFY_GUILD_KEY, value: '111111111111111111' },
+      { key: NOTIFY_CHANNEL_KEYS.signup_request, value: '222222222222222222' },
+    ];
+    expect(await notifyStaffAsync(mainPool, { kind: 'new_user', event: 'new', ref: '', title: 'x' })).toBe(false);
+    expect(await notifyStaffAsync(mainPool, { kind: 'new_node', event: 'new', ref: '', title: 'x' })).toBe(false);
+    expect(botQuery).not.toHaveBeenCalled();
   });
 });
 
