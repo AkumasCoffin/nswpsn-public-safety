@@ -3199,7 +3199,11 @@ class SetupRolesSubmenuView(discord.ui.View):
         # 25-option ceiling and chunking it gave pages of unrelated agencies.
         # A "Pager" pseudo-provider carries the pager row, which is not an
         # alert type (it runs off the pager_enabled column).
-        self._providers = alert_catalog.providers_with_types()
+        # Every type, including radio summary and the not-yet-live Wire:
+        # assigning a ping role is not the same as subscribing, and roles were
+        # assignable for those before this menu was grouped by provider.
+        self._providers = alert_catalog.providers_with_types(
+            include_soon=True, general_only=False)
         # Carried across rebuilds so picking a type does not bounce the user
         # back to the first source in the list.
         self._active_provider = active_provider or (

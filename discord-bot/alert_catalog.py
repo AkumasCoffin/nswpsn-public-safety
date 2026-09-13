@@ -166,14 +166,22 @@ def types_for_provider(provider_key: str) -> List[Dict[str, Any]]:
     return [t for t in TYPE_DEFS if t['provider'] == provider_key]
 
 
-def providers_with_types(include_soon: bool = False) -> List[Dict[str, Any]]:
-    """Providers that have at least one selectable type, in catalog order."""
+def providers_with_types(include_soon: bool = False,
+                         general_only: bool = True) -> List[Dict[str, Any]]:
+    """Providers that have at least one selectable type, in catalog order.
+
+    The defaults suit the SUBSCRIPTION picker: no `soon` types (The Wire has
+    not launched) and no generalPicker:false types (radio summary has its own
+    setup flow). The roles picker passes both off — assigning a ping role to a
+    type is not the same as subscribing to it, and roles were assignable for
+    radio summary and the Wire types before this was grouped by provider.
+    """
     out = []
     for p in PROVIDERS:
         types = [
             t for t in types_for_provider(p['key'])
             if (include_soon or not t.get('soon'))
-            and t.get('generalPicker', True)
+            and (not general_only or t.get('generalPicker', True))
         ]
         if types:
             out.append({**p, 'types': types})
