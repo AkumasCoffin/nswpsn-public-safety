@@ -11,6 +11,7 @@ from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Optional
 
 from dotenv import load_dotenv
+import alert_catalog
 
 load_dotenv()
 
@@ -44,34 +45,10 @@ class AlertPoller:
         #     WITHOUT consuming the bootstrap — see the gate there.
         #   - 'firms' returns thousands of satellite fire pixels; _extract_items
         #     collapses them into ~100m clusters per pass (see _cluster_firms).
-        self.endpoints = {
-            'rfs': '/api/rfs/incidents',
-            'firms': '/api/firms/hotspots',
-            'bom_land': '/api/bom/warnings',
-            'bom_marine': '/api/bom/warnings',
-            'traffic_incident': '/api/traffic/incidents',
-            'traffic_roadwork': '/api/traffic/roadwork',
-            'traffic_flood': '/api/traffic/flood',
-            'traffic_fire': '/api/traffic/fire',
-            'traffic_majorevent': '/api/traffic/majorevent',
-            'endeavour_current': '/api/endeavour/current',
-            'endeavour_planned': '/api/endeavour/planned',
-            'ausgrid': '/api/ausgrid/outages',
-            'essential_planned': '/api/essential/planned',
-            'essential_future': '/api/essential/future',
-            'cfa': '/api/vic-emergency/events',
-            'deeca': '/api/vic-emergency/events',
-            'qfd': '/api/qld-fire/incidents',
-            'dfes': '/api/wa-emergency/incidents',
-            'sa_cfs': '/api/sa-fire/cfs',
-            'sa_mfs': '/api/sa-fire/mfs',
-            'nt_fire': '/api/nt-fire/incidents',
-            'qld_warning': '/api/qld-fire/warnings',
-            'wa_warning': '/api/wa-emergency/warnings',
-            'act_ambulance': '/api/act-ambulance/incidents',
-            'wire_article': '/api/wire/articles?limit=30',
-            'wire_fleet': '/api/wire/fleet?limit=30',
-        }
+        # Endpoint per alert type, from shared/alert-catalog.json. Types with
+        # a bespoke checker (user_incident, radio_summary) have no endpoint and
+        # are deliberately absent — see _check_user_incidents / _check_radio_summary.
+        self.endpoints = dict(alert_catalog.ENDPOINTS)
         
         # Track last seen pager message ID
         self.last_pager_id = 0
@@ -192,7 +169,7 @@ class AlertPoller:
                 return f"{alert_type}_{suburb}_{street}"
             return hashlib.md5(str(item).encode(), usedforsecurity=False).hexdigest()[:16]
 
-        elif alert_type in ('qld_warning', 'wa_warning'):
+        elif alert_type in alert_catalog.keys_with_shape('geo_fire_warning'):
             props = item.get('properties', {})
             guid = props.get('guid', '') or props.get('title', '')
             return f"{alert_type}_{guid}_{props.get('alertLevel', '')}"
@@ -202,8 +179,7 @@ class AlertPoller:
             props = item.get('properties', {})
             return f"act_ambulance_{props.get('id', '')}_{props.get('status', '')}"
 
-        elif alert_type in ('cfa', 'deeca', 'qfd', 'dfes',
-                            'sa_cfs', 'sa_mfs', 'nt_fire'):
+        elif alert_type in alert_catalog.keys_with_shape('geo_fire'):
             # Interstate fire feeds are RFS-shaped: guid + status, so a status
             # transition re-alerts exactly like RFS above. guids arrive
             # source-namespaced (vic:…, qfd:…, wa:…, sa:cfs:…, ntf:…).
@@ -323,8 +299,8 @@ class AlertPoller:
                 if ts:
                     return _aware(datetime.fromisoformat(str(ts).replace('Z', '+00:00')))
 
-            elif alert_type in ('cfa', 'deeca', 'qfd', 'dfes', 'sa_cfs',
-                                'sa_mfs', 'nt_fire', 'qld_warning', 'wa_warning'):
+            elif alert_type in alert_catalog.keys_with_shape(
+                    'geo_fire', 'geo_fire_warning'):
                 # RFS-shaped updatedISO. May be '' (SA rows whose wall-clock
                 # date failed to parse) — falls through to now() below.
                 ts = item.get('properties', {}).get('updatedISO', '')
@@ -461,13 +437,20 @@ class AlertPoller:
                 continue  # Skip if no one is subscribed
             subscribed.append((alert_type, endpoint))
 
-        fetched = await asyncio.gather(
-            *[self._fetch(ep) for (_, ep) in subscribed],
+        # Fetch each DISTINCT endpoint once. Several alert types can share an
+        # upstream feed — the five Victorian agencies all come off
+        # /api/vic-emergency/events, and NT Fire & Rescue shares one with
+        # Bushfires NT — so fetching per type pulled the same feed once per
+        # subscribed agency, every cycle.
+        unique_endpoints = list(dict.fromkeys(ep for (_, ep) in subscribed))
+        results = await asyncio.gather(
+            *[self._fetch(ep) for ep in unique_endpoints],
             return_exceptions=True,
         )
+        by_endpoint = dict(zip(unique_endpoints, results))
 
-        for idx, (alert_type, _endpoint) in enumerate(subscribed):
-            data = fetched[idx]
+        for alert_type, _endpoint in subscribed:
+            data = by_endpoint.get(_endpoint)
             # _fetch swallows its own errors and returns None, but gather can
             # still surface an unexpected exception — treat it like no data.
             if isinstance(data, Exception):
@@ -826,89 +809,37 @@ class AlertPoller:
             logger.debug(f"Error fetching incident logs: {e}")
             return []
     
-    def _extract_items(self, alert_type: str, data: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Extract individual items from API response.
+    def _extract_items(self, alert_type: str, data: Any) -> List[Dict[str, Any]]:
+        """Pull this alert type's records out of its endpoint's response.
 
-        Some endpoints return a mixed feed that the dispatcher splits across
-        canonical alert_types — handled inline here by inspecting each item:
-          - bom_land vs bom_marine: single /api/bom/warnings response, split
-            on `category` ('land' | 'marine').
+        Driven entirely by shared/alert-catalog.json: `itemsPath` names the
+        wrapping key and `discriminator` narrows a feed shared by several
+        types (the five Victorian agencies, NT Fire & Rescue vs Bushfires NT,
+        BOM land vs marine).
+
+        This used to be a hand-written if/elif ladder ending in a bare
+        `return []`, so a type that was wired up but missing a branch failed
+        SILENTLY and simply never alerted. Anything unrecognised is now loud.
         """
-        if alert_type == 'rfs':
-            # GeoJSON format
-            return data.get('features', [])
-
-        elif alert_type == 'firms':
-            # NASA FIRMS hotspots — GeoJSON FeatureCollection of satellite fire
-            # pixels. Cluster to ~100m so one fire = one alert (see
-            # _cluster_firms); each returned item is a cluster representative.
-            return self._cluster_firms(data.get('features', []) or [])
-
-        elif alert_type == 'bom_land':
-            # Single BOM endpoint returns both land + marine; route per-item.
-            warnings = data.get('warnings', []) or []
-            return [w for w in warnings
-                    if str(w.get('category', '')).lower() != 'marine']
-
-        elif alert_type == 'bom_marine':
-            warnings = data.get('warnings', []) or []
-            return [w for w in warnings
-                    if str(w.get('category', '')).lower() == 'marine']
-
-        elif alert_type.startswith('traffic_'):
-            # GeoJSON format
-            return data.get('features', [])
-
-        elif alert_type.startswith('endeavour_'):
-            # Endeavour format - array of outages (current + planned share shape)
-            return data if isinstance(data, list) else []
-
-        elif alert_type == 'ausgrid':
-            # Ausgrid format - {'Markers': [...], 'Polygons': [...]}
-            if isinstance(data, list):
-                return data
-            # API returns PascalCase 'Markers' key
-            return data.get('Markers', []) or data.get('markers', []) or []
-
-        elif alert_type.startswith('essential_'):
-            # Essential Energy — accept either bare list or dict with common keys
-            if isinstance(data, list):
-                return data
-            for key in ('outages', 'Outages', 'results', 'data',
-                        'plannedOutages', 'futureOutages'):
-                v = data.get(key) if isinstance(data, dict) else None
-                if isinstance(v, list):
-                    return v
+        t = alert_catalog.type_def(alert_type)
+        if t is None:
+            logger.error(
+                "No catalog entry for alert type %r — cannot extract items. "
+                "Add it to shared/alert-catalog.json.", alert_type
+            )
             return []
 
-        elif alert_type in ('cfa', 'deeca'):
-            # One VicEmergency feed carries every Victorian publisher — split
-            # per agency here. SES/EMV/ESTA items exist in the feed but are
-            # not alertable types, so they simply never match.
-            want = 'CFA' if alert_type == 'cfa' else 'DEECA'
-            feats = data.get('features', []) or []
-            return [f for f in feats
-                    if str((f.get('properties') or {}).get('agency') or '').upper() == want]
+        if t.get('extract') == 'firms_cluster':
+            # NASA FIRMS ships satellite fire PIXELS; cluster to ~100m so one
+            # fire is one alert. Each returned item is a cluster representative.
+            return self._cluster_firms(alert_catalog.items_from(data, alert_type))
 
-        elif alert_type in ('qfd', 'dfes', 'sa_cfs', 'sa_mfs', 'nt_fire',
-                            'qld_warning', 'wa_warning', 'act_ambulance'):
-            # GeoJSON FeatureCollections served from backend snapshots.
-            return data.get('features', []) or []
+        if t.get('extract') == 'bespoke':
+            # user_incident / radio_summary never reach here — they have their
+            # own checkers and no endpoint to poll.
+            return []
 
-        elif alert_type == 'wire_article':
-            # The Wire's public article feed: {articles: [...]}. The not-live
-            # visible:false case never reaches here (gated in check_alerts).
-            return data.get('articles', []) or []
-
-        elif alert_type == 'wire_fleet':
-            # The Wire's fleet feed: {vehicles: [...]}.
-            return data.get('vehicles', []) or []
-
-        elif alert_type == 'user_incident':
-            # User incidents from Supabase - already a list
-            return data if isinstance(data, list) else []
-
-        return []
+        return alert_catalog.items_from(data, alert_type)
     
     async def check_pager(self) -> List[Dict[str, Any]]:
         """Check for new pager messages from API"""

@@ -12,6 +12,7 @@ import logging
 import threading
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
+import alert_catalog
 
 # Defensive: load .env here too so this module can be imported standalone
 # (e.g. from migrate_sqlite_to_postgres.py or the Python REPL) and still
@@ -586,16 +587,29 @@ class Database:
         return [dict(row) for row in rows]
 
     def get_presets_for_alert_type(self, alert_type: str) -> List[Dict[str, Any]]:
-        """All presets subscribed to alert_type (GIN array-contains). Mute state NOT applied."""
+        """All presets subscribed to alert_type. Mute state NOT applied.
+
+        Matches the canonical key OR any retired spelling of it. A preset saved
+        before a rename still holds the old string until
+        migrate_canonical_alert_types.py rewrites it, and matching the
+        canonical key alone would silently drop those subscribers until then.
+
+        Overlap (&&) rather than contains (@>) so one query covers all
+        spellings; the GIN index on alert_types serves both.
+        """
         self._require_postgres()
+        keys = alert_catalog.accepted_keys(alert_type)
         conn = self._connect()
         try:
             c = conn.cursor()
-            c.execute('SELECT * FROM alert_presets WHERE alert_types @> ARRAY[%s]::TEXT[]', (alert_type,))
+            c.execute(
+                'SELECT * FROM alert_presets WHERE alert_types && %s::TEXT[]',
+                (keys,),
+            )
             rows = c.fetchall()
         finally:
             conn.close()
-        logger.debug(f"get_presets_for_alert_type {alert_type!r} -> {len(rows)} rows")
+        logger.debug(f"get_presets_for_alert_type {keys!r} -> {len(rows)} rows")
         return [dict(row) for row in rows]
 
     def get_presets_for_pager(self) -> List[Dict[str, Any]]:

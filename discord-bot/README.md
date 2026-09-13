@@ -88,32 +88,50 @@ python bot.py
 
 ## Alert Types
 
-Canonical keys (the source of truth is `ALERT_TYPES` in `bot.py`):
+<!-- BEGIN GENERATED ALERT TYPES -->
 
-| Type | Description |
-|------|-------------|
-| `rfs` | RFS bush fire incidents |
-| `firms` | NASA FIRMS satellite fire hotspots |
-| `bom_land` / `bom_marine` | BOM weather warnings |
-| `traffic_incident` | Traffic incidents (crashes, hazards) |
-| `traffic_roadwork` | Road work alerts |
-| `traffic_flood` | Flood hazards |
-| `traffic_fire` | Fire-related road hazards |
-| `traffic_majorevent` | Major events affecting traffic |
-| `endeavour_current` / `endeavour_planned` | Endeavour Energy outages |
-| `ausgrid` | Ausgrid power outages |
-| `essential_planned` / `essential_future` | Essential Energy outages |
-| `cfa` / `deeca` | VicEmergency incidents (split by publishing agency) |
-| `qfd` | QLD Fire Department incidents |
-| `dfes` | DFES (WA) incidents |
-| `sa_cfs` / `sa_mfs` | SA Country Fire Service / Metropolitan Fire Service |
-| `nt_fire` | NT Fire & Rescue incidents |
-| `qld_warning` / `wa_warning` | QFD / DFES public warnings |
-| `act_ambulance` | ACT Ambulance incidents |
-| `wire_article` | New articles on The Wire (only while The Wire is live) |
-| `wire_fleet` | New fleet vehicles on The Wire (same gate) |
-| `user_incident` | User-submitted incidents |
-| `radio_summary` | Hourly radio scanner summaries |
+_Generated from `shared/alert-catalog.json` by `gen_readme_alert_types.py` — do not edit by hand._
+
+| Provider | Type | Agency | Description |
+|----------|------|--------|-------------|
+| NSW Rural Fire Service | `rfs` | NSW RFS | RFS Major Incidents |
+| NASA FIRMS | `firms` | NASA FIRMS | FIRMS Fire Hotspots |
+| VIC Emergency | `cfa` | CFA (Vic) | CFA (Vic) |
+| VIC Emergency | `deeca` | DEECA (Vic) | DEECA (Vic) |
+| VIC Emergency | `vicses` | SES | VICSES (Vic) |
+| VIC Emergency | `emv` | EMV (Vic) | EMV (Vic) |
+| VIC Emergency | `esta` | Triple Zero Vic (dispatch) | Triple Zero Vic (dispatch) |
+| QLD Fire Department | `qfd` | QLD Fire Dept | QFD Incidents |
+| QLD Fire Department | `qfd_warning` | QLD Fire Dept | QFD Warnings |
+| DFES (WA) | `dfes` | DFES (WA) | DFES Incidents |
+| DFES (WA) | `dfes_warning` | DFES (WA) | DFES Warnings |
+| SA Fire Services | `sa_cfs` | SA CFS | SA CFS |
+| SA Fire Services | `sa_mfs` | SA MFS | SA MFS |
+| NT Fire & Rescue | `nt_fire` | NT Fire & Rescue | NT Fire & Rescue |
+| NT Fire & Rescue | `nt_bushfires` | Bushfires NT | Bushfires NT |
+| ACT Ambulance | `act_ambulance` | ACT Ambulance Service | ACT Ambulance |
+| Bureau of Meteorology | `bom_land` | Bureau of Meteorology | BOM Land Warnings |
+| Bureau of Meteorology | `bom_marine` | Bureau of Meteorology | BOM Marine Warnings |
+| LiveTraffic NSW | `traffic_incident` | Transport for NSW | Traffic Incidents |
+| LiveTraffic NSW | `traffic_roadwork` | Transport for NSW | Traffic Roadwork |
+| LiveTraffic NSW | `traffic_flood` | Transport for NSW | Flood Hazards |
+| LiveTraffic NSW | `traffic_fire` | Transport for NSW | Traffic Fires |
+| LiveTraffic NSW | `traffic_majorevent` | Transport for NSW | Major Events |
+| LiveTraffic NSW | `traffic_alpine` | Transport for NSW | Alpine Conditions |
+| LiveTraffic NSW | `traffic_lga` | Transport for NSW | Council Roads |
+| LiveTraffic NSW | `traffic_works` | Transport for NSW | Roadwork & Works |
+| Endeavour Energy | `endeavour_current` | Endeavour Energy | Endeavour Current Outages |
+| Endeavour Energy | `endeavour_planned` | Endeavour Energy | Endeavour Planned Outages |
+| Ausgrid | `ausgrid` | Ausgrid | Ausgrid Outages |
+| Essential Energy | `essential_unplanned` | Essential Energy | Essential Energy Unplanned Outages |
+| Essential Energy | `essential_planned` | Essential Energy | Essential Energy Planned Outages |
+| Essential Energy | `essential_future` | Essential Energy | Essential Energy Future Outages |
+| User Submissions | `user_incident` | User Submissions | User Incidents |
+| Radio Scanner | `radio_summary` | Radio Scanner | Radio Summary |
+| The Wire | `wire_article` | The Wire | Wire Articles _(not yet live)_ |
+| The Wire | `wire_fleet` | The Wire | Wire Fleet Additions _(not yet live)_ |
+
+<!-- END GENERATED ALERT TYPES -->
 
 ## Pager Capcodes
 

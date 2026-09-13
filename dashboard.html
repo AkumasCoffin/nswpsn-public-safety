@@ -1500,107 +1500,65 @@
 const API = 'https://api.forcequit.xyz';
 window.API = API;
 
-// Provider-grouped alert type catalog. Keep in sync with discord-bot
-// ALERT_TYPES and the data_history `source` values.
-const PROVIDERS = [
-  { key: 'rfs',         name: 'NSW Rural Fire Service', icon: 'fire',  color: '#ef4444',
-    types: [
-      { key: 'rfs', label: 'NSW RFS' },
-    ] },
-  { key: 'firms',       name: 'NASA FIRMS',             icon: 'fire',  color: '#f97316',
-    types: [
-      { key: 'firms', label: 'Fire Hotspots' },
-    ] },
-  // Interstate fire services (labels + colours mirror fire-vocab.js AGENCIES).
-  { key: 'vic',         name: 'VicEmergency',           icon: 'fire',  color: '#6366f1',
-    types: [
-      { key: 'cfa',   label: 'CFA' },
-      { key: 'deeca', label: 'DEECA' },
-    ] },
-  { key: 'qfd',         name: 'QLD Fire Department',    icon: 'fire',  color: '#dc2626',
-    types: [
-      { key: 'qfd',         label: 'Incidents' },
-      { key: 'qld_warning', label: 'Warnings' },
-    ] },
-  { key: 'dfes',        name: 'DFES (WA)',              icon: 'fire',  color: '#e11d48',
-    types: [
-      { key: 'dfes',       label: 'Incidents' },
-      { key: 'wa_warning', label: 'Warnings' },
-    ] },
-  { key: 'safire',      name: 'SA Fire Services',       icon: 'fire',  color: '#ea580c',
-    types: [
-      { key: 'sa_cfs', label: 'CFS' },
-      { key: 'sa_mfs', label: 'MFS' },
-    ] },
-  { key: 'ntfrs',       name: 'NT Fire & Rescue',       icon: 'fire',  color: '#f97316',
-    types: [
-      { key: 'nt_fire', label: 'Incidents' },
-    ] },
-  { key: 'actas',       name: 'ACT Ambulance',          icon: 'truck-medical', color: '#38bdf8',
-    types: [
-      { key: 'act_ambulance', label: 'Incidents' },
-    ] },
-  { key: 'bom',         name: 'Bureau of Meteorology',  icon: 'cloud', color: '#3b82f6',
-    types: [
-      { key: 'bom_land',   label: 'Land Warnings' },
-      { key: 'bom_marine', label: 'Marine Warnings' },
-    ] },
-  { key: 'livetraffic', name: 'LiveTraffic NSW',        icon: 'road',  color: '#f97316',
-    types: [
-      { key: 'traffic_incident',   label: 'Incidents' },
-      { key: 'traffic_roadwork',   label: 'Roadwork' },
-      { key: 'traffic_flood',      label: 'Flooding' },
-      { key: 'traffic_fire',       label: 'Fires' },
-      { key: 'traffic_majorevent', label: 'Major Events' },
-    ] },
-  { key: 'endeavour',   name: 'Endeavour Energy',       icon: 'bolt',  color: '#fbbf24',
-    types: [
-      { key: 'endeavour_current', label: 'Current Outages' },
-      { key: 'endeavour_planned', label: 'Planned Outages' },
-    ] },
-  { key: 'ausgrid',     name: 'Ausgrid',                icon: 'plug',  color: '#f59e0b',
-    types: [
-      { key: 'ausgrid', label: 'Outages' },
-    ] },
-  { key: 'essential',   name: 'Essential Energy',       icon: 'bolt',  color: '#06b6d4',
-    types: [
-      { key: 'essential_planned', label: 'Planned Outages' },
-      { key: 'essential_future',  label: 'Future Outages' },
-    ] },
-  // Waze removed as an alertable source — the userscript ingest is retired,
-  // so nothing new arrives and any alert configured against it would simply
-  // never fire. Existing saved filters referencing waze_* keys stay in the
-  // database and are inert; the archived history is untouched and still
-  // browsable on the logs page.
-  { key: 'user',        name: 'User Submissions',       icon: 'user',  color: '#a855f7',
-    types: [
-      { key: 'user_incident', label: 'User Incidents' },
-    ] },
-  { key: 'rdio',        name: 'Radio Scanner',          icon: 'radio', color: '#10b981',
-    types: [
-      { key: 'radio_summary', label: 'Hourly Summaries' },
-    ] },
-  // The Wire — AusAware's own reporting. Marked `soon` until launch: the
-  // chips render as coming-soon and can't be enabled, so the backend never
-  // receives the keys before its whitelist knows them. At launch, delete
-  // the `soon` flags (the bot's poller additionally honours the wire-live
-  // toggle server-side, so even a stale dashboard can't cause early posts).
-  { key: 'wire',        name: 'The Wire',               icon: 'newspaper', color: '#f97316',
-    types: [
-      { key: 'wire_article', label: 'Articles',        soon: true },
-      { key: 'wire_fleet',   label: 'Fleet Additions', soon: true },
-    ] },
-];
-
-const ALERT_TYPES = PROVIDERS.flatMap(p => p.types.map(t => t.key));
+// Provider-grouped alert type catalog — FETCHED from the API, never declared
+// here. This used to be a literal kept in sync with the bot and the backend
+// whitelist by hand. It drifted: the page offered keys a stale backend build
+// did not know, and because a chip click resends the whole array, one unknown
+// key made every save fail with bad_request.
+//
+// Fetching it means the page can only ever offer what this exact server
+// accepts — the two read the same file in the same process.
+//
+// These stay mutable and are filled IN PLACE by applyAlertCatalog(), so the
+// module-scope bindings every consumer already closes over stay valid.
+let PROVIDERS = [];
+const ALERT_TYPES = [];
 // Types marked `soon` are shown but not yet enableable (The Wire hasn't
 // launched) — excluded from Select all and every payload we send.
-const _SOON_TYPES = new Set(
-  PROVIDERS.flatMap(p => p.types.filter(t => t.soon).map(t => t.key)));
-const _DASH_ALERT_TYPES = ALERT_TYPES.filter(k => !_SOON_TYPES.has(k));
-const ALERT_TYPE_LABELS = Object.fromEntries(
-  PROVIDERS.flatMap(p => p.types.map(t => [t.key, t.label]))
-);
+const _SOON_TYPES = new Set();
+const _DASH_ALERT_TYPES = [];
+const ALERT_TYPE_LABELS = {};
+
+function applyAlertCatalog(cat) {
+  PROVIDERS = (cat.providers || []).map(p => ({
+    key: p.key,
+    name: p.label,
+    icon: p.icon,
+    color: p.color,
+    types: (p.types || []).map(t => ({
+      key: t.key,
+      label: t.label,
+      ...(t.soon ? { soon: true } : {}),
+    })),
+  }));
+
+  ALERT_TYPES.length = 0;
+  _SOON_TYPES.clear();
+  _DASH_ALERT_TYPES.length = 0;
+  for (const k of Object.keys(ALERT_TYPE_LABELS)) delete ALERT_TYPE_LABELS[k];
+
+  for (const p of PROVIDERS) {
+    for (const t of p.types) {
+      ALERT_TYPES.push(t.key);
+      ALERT_TYPE_LABELS[t.key] = t.label;
+      if (t.soon) _SOON_TYPES.add(t.key);
+      else _DASH_ALERT_TYPES.push(t.key);
+    }
+  }
+
+  _BOTCTL_ALERT_TYPES.length = 0;
+  _BOTCTL_ALERT_TYPES.push(
+    { value: 'all', label: 'All alert types' },
+    ..._DASH_ALERT_TYPES.map(t => ({ value: t, label: ALERT_TYPE_LABELS[t] || t })),
+    { value: 'pager', label: 'Pager' },
+  );
+}
+
+async function loadAlertCatalog() {
+  const res = await fetch(API + '/api/dashboard/alert-catalog', { credentials: 'include' });
+  if (!res.ok) throw new Error('alert-catalog ' + res.status);
+  applyAlertCatalog(await res.json());
+}
 const MOBILE_BREAKPOINT = 1024;
 const MAX_ROLES = 5;
 
@@ -1749,6 +1707,16 @@ function confirmDialog(title, body, okLabel='Confirm', okDanger=true) {
 /* -------------------- Bootstrap -------------------- */
 
 async function bootstrap() {
+  // Before anything renders: without the catalog there are no chips to draw.
+  try {
+    await loadAlertCatalog();
+  } catch (e) {
+    console.error('Could not load the alert catalog', e);
+    handleApiError(e, 'Could not load the alert type list.');
+    render();
+    return;
+  }
+
   try {
     const me = await api('/api/dashboard/me');
     state.user = me.user;
@@ -5170,11 +5138,8 @@ const botctl = {
   actions: { loading: false, items: [] },
 };
 
-const _BOTCTL_ALERT_TYPES = [
-  { value: 'all', label: 'All alert types' },
-  ..._DASH_ALERT_TYPES.map(t => ({ value: t, label: ALERT_TYPE_LABELS[t] || t })),
-  { value: 'pager', label: 'Pager' },
-];
+// Filled by applyAlertCatalog() once the catalog arrives — see above.
+const _BOTCTL_ALERT_TYPES = [];
 
 async function enqueueBotAction(action, params) {
   try {

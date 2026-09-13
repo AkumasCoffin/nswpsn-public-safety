@@ -9,6 +9,7 @@ import discord
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 from urllib.parse import quote
+import alert_catalog
 
 # Base URL for the map
 MAP_BASE_URL = "https://nswpsn.forcequit.xyz"
@@ -435,38 +436,16 @@ class EmbedBuilder:
     """Builds beautiful Discord embeds for different alert types"""
     
     # Color scheme for different alert types
+    # Embed accents, from shared/alert-catalog.json — the same hexes the map
+    # layers and incident cards use, so an agency is one colour everywhere.
+    # pager/pager_stop are not alert types (pager runs off the pager_enabled
+    # column), so they stay hand-listed here.
     COLORS = {
-        'rfs': 0xFF4500,
-        'firms': 0xF97316,           # Orange — matches the map's Fire Hotspots layer
-        'traffic_fire': 0xFF6347,
-        'bom_land': 0x1E90FF,
-        'bom_marine': 0x4169E1,
-        'traffic_incident': 0xFFA500,
-        'traffic_roadwork': 0xFFD700,
-        'traffic_flood': 0x00CED1,
-        'traffic_majorevent': 0xFF8C00,
-        'endeavour_current': 0x8B008B,
-        'endeavour_planned': 0x6A1B9A,
+        **{k: v for k, v in (
+            (t['key'], alert_catalog.color(t['key']))
+            for t in alert_catalog.TYPE_DEFS) if v is not None},
         'pager': 0x32CD32,
         'pager_stop': 0x228B22,
-        'ausgrid': 0xE67E22,         # Orange for Ausgrid
-        'essential_planned': 0x06B6D4,
-        'essential_future': 0x0891B2,
-        'user_incident': 0x9333EA,   # Purple for user incidents
-        'wire_article': 0xF59E0B,    # Amber — The Wire's press accent
-        'wire_fleet': 0x14B8A6,      # Teal — fleet additions
-        # Interstate fire services — hexes from fire-vocab.js AGENCIES so the
-        # bot's accents match the site's map layers exactly.
-        'cfa': 0x6366F1,
-        'deeca': 0x84CC16,
-        'qfd': 0xDC2626,
-        'dfes': 0xE11D48,
-        'sa_cfs': 0xEA580C,
-        'sa_mfs': 0x0EA5E9,
-        'nt_fire': 0xF97316,
-        'qld_warning': 0xDC2626,
-        'wa_warning': 0xE11D48,
-        'act_ambulance': 0x38BDF8,
     }
     
     # Colors for specific incident types extracted from title
@@ -534,34 +513,8 @@ class EmbedBuilder:
     }
     
     ICONS = {
-        'rfs': '🔥',
-        'firms': '🛰️',
-        'bom_land': '⛈️',
-        'bom_marine': '🌊',
-        'traffic_incident': '🚗',
-        'traffic_roadwork': '🚧',
-        'traffic_flood': '🌊',
-        'traffic_fire': '🔥',
-        'traffic_majorevent': '🎉',
-        'endeavour_current': '⚡',
-        'endeavour_planned': '🔧',
-        'ausgrid': '⚡',
-        'essential_planned': '🔧',
-        'essential_future': '📅',
+        **{t['key']: t['icon'] for t in alert_catalog.TYPE_DEFS if t.get('icon')},
         'pager': '📟',
-        'user_incident': '📢',
-        'wire_article': '📰',
-        'wire_fleet': '🚒',
-        'cfa': '🔥',
-        'deeca': '🌲',
-        'qfd': '🔥',
-        'dfes': '🔥',
-        'sa_cfs': '🔥',
-        'sa_mfs': '🚒',
-        'nt_fire': '🔥',
-        'qld_warning': '⚠️',
-        'wa_warning': '⚠️',
-        'act_ambulance': '🚑',
     }
     
     # BOM category icons
@@ -690,36 +643,9 @@ class EmbedBuilder:
     # Human-readable labels for alert_type values. Mirrored from bot.ALERT_TYPES
     # — duplicated here to avoid a circular import. Keep in sync when new
     # alert types are added.
-    _ALERT_TYPE_LABELS = {
-        'rfs': 'RFS Major Incidents',
-        'firms': 'FIRMS Fire Hotspots',
-        'bom_land': 'BOM Land Warnings',
-        'bom_marine': 'BOM Marine Warnings',
-        'traffic_incident': 'Traffic Incidents',
-        'traffic_roadwork': 'Traffic Roadwork',
-        'traffic_flood': 'Flood Hazards',
-        'traffic_fire': 'Traffic Fires',
-        'traffic_majorevent': 'Major Events',
-        'endeavour_current': 'Endeavour Current Outages',
-        'endeavour_planned': 'Endeavour Planned Outages',
-        'ausgrid': 'Ausgrid Outages',
-        'essential_planned': 'Essential Energy Planned Outages',
-        'essential_future': 'Essential Energy Future Outages',
-        'cfa': 'CFA (Vic)',
-        'deeca': 'DEECA (Vic)',
-        'qfd': 'QLD Fire Dept',
-        'dfes': 'DFES (WA)',
-        'sa_cfs': 'SA CFS',
-        'sa_mfs': 'SA MFS',
-        'nt_fire': 'NT Fire & Rescue',
-        'qld_warning': 'QFD Warnings',
-        'wa_warning': 'DFES Warnings',
-        'act_ambulance': 'ACT Ambulance',
-        'wire_article': 'Wire Articles',
-        'wire_fleet': 'Wire Fleet Additions',
-        'user_incident': 'User Incidents',
-        'radio_summary': 'Radio Summary',
-    }
+    # Labels from shared/alert-catalog.json — a duplicate of bot.py
+    # ALERT_TYPES until both were pointed at the catalog.
+    _ALERT_TYPE_LABELS = dict(alert_catalog.LABELS)
 
     _ALERT_LIST_COLOR = 0x3498db  # blue accent for /alert-list containers
 

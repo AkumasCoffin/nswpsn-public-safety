@@ -353,6 +353,59 @@ describe('Preset CRUD', () => {
     expect(body.error).toBe('empty_preset');
   });
 
+  it('POST /presets names the offending alert type instead of the whole list', async () => {
+    // One unknown key used to reject the entire array, and because the
+    // dashboard resends every type on each chip click that un-saved the
+    // types which were already working.
+    const cookie = makeSessionCookie('42');
+    queryQueue.push({ rows: [{ guild_id: '111' }] });
+    const app = makeApp();
+    const res = await app.request('/api/dashboard/guilds/111/presets', {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        channel_id: '999',
+        name: 'x',
+        alert_types: ['rfs', 'not_a_real_type'],
+      }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string; message: string };
+    expect(body.error).toBe('bad_request');
+    expect(body.message).toContain('not_a_real_type');
+  });
+
+  it('POST /presets folds a retired alert type rather than rejecting it', async () => {
+    // A preset saved before the agency-naming rename must keep working.
+    const cookie = makeSessionCookie('42');
+    queryQueue.push({ rows: [{ guild_id: '111' }] });
+    queryQueue.push({
+      rows: [
+        {
+          id: 7, guild_id: '111', channel_id: '999', name: 'x',
+          alert_types: ['qfd_warning'], pager_enabled: false,
+          pager_capcodes: null, role_ids: [], enabled: true,
+          enabled_ping: true, type_overrides: {}, filters: {},
+          created_at: new Date(), updated_at: new Date(),
+        },
+      ],
+    });
+    const app = makeApp();
+    const res = await app.request('/api/dashboard/guilds/111/presets', {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        channel_id: '999', name: 'x', alert_types: ['qld_warning'],
+      }),
+    });
+    expect(res.status).toBe(201);
+    // The INSERT must carry the canonical key, not the retired one.
+    const insert = queryCalls.find((q) => /insert into alert_presets/i.test(q.sql));
+    expect(insert).toBeTruthy();
+    expect(JSON.stringify(insert?.params)).toContain("qfd_warning");
+    expect(JSON.stringify(insert?.params)).not.toContain("qld_warning");
+  });
+
   it('DELETE /presets/:id 404s when row missing', async () => {
     const cookie = makeSessionCookie('42');
     queryQueue.push({ rows: [{ guild_id: '111' }] });
@@ -493,5 +546,22 @@ describe('admin gate', () => {
     const body = (await res.json()) as { id: number; action: string };
     expect(body.id).toBe(99);
     expect(body.action).toBe('sync');
+  });
+});
+
+describe('GET /api/dashboard/alert-catalog', () => {
+  it('serves the catalog the dashboard renders from, unauthenticated', async () => {
+    // Public on purpose: it is a taxonomy, and the page needs it before the
+    // session check so the UI can only ever offer keys this server accepts.
+    const res = await makeApp().request('/api/dashboard/alert-catalog');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      providers: Array<{ key: string; types: Array<{ key: string }> }>;
+    };
+    expect(body.providers.length).toBeGreaterThan(0);
+    const keys = body.providers.flatMap((p) => p.types.map((t) => t.key));
+    expect(keys).toContain('vicses');
+    expect(keys).toContain('qfd_warning');
+    expect(keys).not.toContain('qld_warning');
   });
 });

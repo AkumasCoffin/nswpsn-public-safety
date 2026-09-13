@@ -28,6 +28,7 @@ import database
 from database import Database
 from alert_poller import AlertPoller
 from embeds import EmbedBuilder, build_staff_notify_embed, STAFF_NOTIFY_KINDS
+import alert_catalog
 
 # Configure logging
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO').upper()
@@ -78,50 +79,26 @@ def safe_add_containers(view, group) -> int:
             logger.exception("Container rejected by LayoutView — skipping it")
     return added
 
-# Alert types available (canonical, singular, provider-prefixed where it
-# helps — kept in sync with the dashboard PROVIDERS list and data_history).
-ALERT_TYPES = {
-    'rfs': 'RFS Major Incidents',
-    'firms': 'FIRMS Fire Hotspots',
-    'bom_land': 'BOM Land Warnings',
-    'bom_marine': 'BOM Marine Warnings',
-    'traffic_incident': 'Traffic Incidents',
-    'traffic_roadwork': 'Traffic Roadwork',
-    'traffic_flood': 'Flood Hazards',
-    'traffic_fire': 'Traffic Fires',
-    'traffic_majorevent': 'Major Events',
-    'endeavour_current': 'Endeavour Current Outages',
-    'endeavour_planned': 'Endeavour Planned Outages',
-    'ausgrid': 'Ausgrid Outages',
-    'essential_planned': 'Essential Energy Planned Outages',
-    'essential_future': 'Essential Energy Future Outages',
-    'cfa': 'CFA (Vic)',
-    'deeca': 'DEECA (Vic)',
-    'qfd': 'QLD Fire Dept',
-    'dfes': 'DFES (WA)',
-    'sa_cfs': 'SA CFS',
-    'sa_mfs': 'SA MFS',
-    'nt_fire': 'NT Fire & Rescue',
-    'qld_warning': 'QFD Warnings',
-    'wa_warning': 'DFES Warnings',
-    'act_ambulance': 'ACT Ambulance',
-    'wire_article': 'Wire Articles',
-    'wire_fleet': 'Wire Fleet Additions',
-    'user_incident': 'User Incidents',
-    'radio_summary': 'Radio Summary',
-}
+# Alert types — from shared/alert-catalog.json via alert_catalog.py.
+# This was a hand-written dict kept "in sync" with the dashboard and the
+# backend whitelist by hand; it drifted, and the backend started rejecting
+# keys the dashboard offered. All three now read the one file.
+ALERT_TYPES = alert_catalog.LABELS
 
 # Alert types shown in the generic /setup alerts dropdown + "Enable All".
-# Radio summary has its own dedicated setup flow (see SetupRadioSummarySubmenuView).
-_GENERAL_ALERT_TYPES = {
-    k: v for k, v in ALERT_TYPES.items() if k != 'radio_summary'
-}
+# Radio summary opts out in the catalog (generalPicker:false) because it has
+# its own dedicated setup flow (see SetupRadioSummarySubmenuView).
+_GENERAL_ALERT_TYPES = alert_catalog.general_picker_types()
 
 # Discord hard-caps a slash-command choice list AND a select menu at 25
 # options (and max_values at 25). ALERT_TYPES passed that when the
 # interstate sources were added, which failed command sync and crash-looped
 # the bot. Anything built from ALERT_TYPES must chunk or autocomplete.
 DISCORD_SELECT_MAX = 25
+
+# Pager is not an alert type — it runs off the pager_enabled column — but the
+# roles submenu assigns roles to it alongside them, so it gets a pseudo-provider.
+PAGER_PROVIDER_KEY = '__pager__'
 
 
 def _chunk_options(options):
@@ -3208,7 +3185,8 @@ class SetupRolesSubmenuView(discord.ui.View):
     """Pick roles for one or more alert types at once."""
 
     def __init__(self, invoker_id: int, channel: discord.TextChannel,
-                 selected_types: Optional[List[str]] = None):
+                 selected_types: Optional[List[str]] = None,
+                 active_provider: Optional[str] = None):
         super().__init__(timeout=180)
         self.invoker_id = invoker_id
         self.channel = channel
@@ -3216,54 +3194,115 @@ class SetupRolesSubmenuView(discord.ui.View):
         self.selected_role_ids: List[int] = []
         self._roles_touched = False
 
-        # Row 0 — multi-select alert-type picker (+ pager).
-        selected_set = set(self.selected_types)
-        type_options = [
-            discord.SelectOption(
-                label=name, value=key,
-                default=(key in selected_set),
-            )
-            for key, name in ALERT_TYPES.items()
-        ]
-        type_options.append(discord.SelectOption(
-            label='Pager Messages', value='pager', emoji='📟',
-            default=('pager' in selected_set),
-        ))
-        # Chunked: 28 alert types + pager is 29 options, past Discord's 25.
-        # min_values is 0 rather than 1 because requiring a pick from EVERY
-        # chunk would make it impossible to choose a single type.
-        chunks = _chunk_options(type_options)
+        # Provider first, then that provider's types — the same shape as the
+        # alerts submenu, and the same reason: the flat list is past Discord's
+        # 25-option ceiling and chunking it gave pages of unrelated agencies.
+        # A "Pager" pseudo-provider carries the pager row, which is not an
+        # alert type (it runs off the pager_enabled column).
+        self._providers = alert_catalog.providers_with_types()
+        # Carried across rebuilds so picking a type does not bounce the user
+        # back to the first source in the list.
+        self._active_provider = active_provider or (
+            self._providers[0]['key'] if self._providers else PAGER_PROVIDER_KEY)
+        self._provider_select = None
+        self._type_selects: List[discord.ui.Select] = []
+        self._role_select = None
+        self._rebuild()
+
+    def _rebuild(self):
+        for item in [self._provider_select, *self._type_selects, self._role_select]:
+            if item is not None:
+                self.remove_item(item)
         self._type_selects = []
-        for i, chunk in enumerate(chunks):
-            placeholder = ("1. Pick one or more alert types" if len(chunks) == 1
-                           else f"1. Pick alert types ({i + 1} of {len(chunks)})")
+
+        selected = set(self.selected_types)
+
+        prov_options = []
+        for p in self._providers:
+            keys = [t['key'] for t in p['types']]
+            on = sum(1 for k in keys if k in selected)
+            prov_options.append(discord.SelectOption(
+                label=p['label'][:100], value=p['key'],
+                description=(f"{on} of {len(keys)} picked" if on else f"{len(keys)} available"),
+                default=(p['key'] == self._active_provider),
+            ))
+        prov_options.append(discord.SelectOption(
+            label='Pager Messages', value=PAGER_PROVIDER_KEY, emoji='📟',
+            description=('picked' if 'pager' in selected else 'Pager alerts'),
+            default=(self._active_provider == PAGER_PROVIDER_KEY),
+        ))
+        self._provider_select = discord.ui.Select(
+            placeholder="1. Pick a source", options=prov_options,
+            min_values=1, max_values=1, row=0,
+        )
+        self._provider_select.callback = self._on_provider_picked
+        self.add_item(self._provider_select)
+
+        if self._active_provider == PAGER_PROVIDER_KEY:
+            type_options = [discord.SelectOption(
+                label='Pager Messages', value='pager', emoji='📟',
+                default=('pager' in selected))]
+            active_label = 'Pager'
+        else:
+            active = next((p for p in self._providers
+                           if p['key'] == self._active_provider), None)
+            active_label = active['label'] if active else ''
+            type_options = [
+                discord.SelectOption(
+                    label=t['label'][:100], value=t['key'],
+                    description=(t.get('agencyLabel') or '')[:100] or None,
+                    default=(t['key'] in selected),
+                )
+                for t in (active['types'] if active else [])
+            ]
+
+        next_row = 1
+        for chunk in _chunk_options(type_options):
+            if not chunk:
+                continue
             sel = discord.ui.Select(
-                placeholder=placeholder,
+                placeholder=f"2. {active_label} — pick types",
                 min_values=0, max_values=len(chunk),
-                options=chunk,
-                row=i,
+                options=chunk, row=next_row,
             )
             sel.callback = self._on_types_picked
             self.add_item(sel)
             self._type_selects.append(sel)
+            next_row += 1
 
-        # Role picker sits under however many type rows there turned out to be.
         role_select = discord.ui.RoleSelect(
-            placeholder="2. Pick up to 5 roles (empty + Save = no change)",
+            placeholder="3. Pick up to 5 roles (empty + Save = no change)",
             min_values=0, max_values=5,
-            row=len(chunks),
+            row=next_row,
         )
         role_select.callback = self._on_roles_picked
         self.add_item(role_select)
         self._role_select = role_select
 
+    async def _on_provider_picked(self, interaction: discord.Interaction):
+        self._active_provider = self._provider_select.values[0]
+        self._rebuild()
+        await interaction.response.edit_message(view=self)
+
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return interaction.user.id == self.invoker_id
 
     async def _on_types_picked(self, interaction: discord.Interaction):
-        picked = _merge_select_values(self._type_selects, interaction)
+        # Only the ACTIVE provider's slice is replaced — the select says
+        # nothing about types belonging to any other provider.
+        if self._active_provider == PAGER_PROVIDER_KEY:
+            owned = {'pager'}
+        else:
+            active = next((p for p in self._providers
+                           if p['key'] == self._active_provider), None)
+            owned = {t['key'] for t in (active['types'] if active else [])}
+        chosen = [k for k in _merge_select_values(self._type_selects, interaction)
+                  if k in owned]
+        picked = [k for k in self.selected_types if k not in owned] + chosen
         # Rebuild so the embed reflects current roles for each selected type.
-        new_view = SetupRolesSubmenuView(self.invoker_id, self.channel, selected_types=picked)
+        new_view = SetupRolesSubmenuView(
+            self.invoker_id, self.channel, selected_types=picked,
+            active_provider=self._active_provider)
         embed = _build_roles_embed(self.channel, interaction.guild_id, picked)
         await interaction.response.edit_message(embed=embed, view=new_view)
 
@@ -3473,31 +3512,91 @@ class SetupAlertsSubmenuView(discord.ui.View):
         self.channel = channel
         self.selected_alert_types: List[str] = existing_types[:]
 
-        # Chunked for the same reason as the roles submenu: 27 general
-        # types is past Discord's 25-option / 25-max_values ceiling.
-        existing_set = set(existing_types)
-        all_options = [
-            discord.SelectOption(label=name, value=key, default=(key in existing_set))
-            for key, name in _GENERAL_ALERT_TYPES.items()
+        self._providers = alert_catalog.providers_with_types()
+        self._active_provider = self._providers[0]['key'] if self._providers else None
+        self._provider_select = None
+        self._type_selects: List[discord.ui.Select] = []
+        self._rebuild()
+
+    def _rebuild(self):
+        """Provider first, then that provider's types.
+
+        The alert list is past Discord's 25-option select ceiling, and chunking
+        it gave two pages of alphabetically unrelated agencies. Grouping by
+        provider matches how the dashboard and the logs page already present
+        these, and the cap stops mattering however many agencies are added.
+        """
+        for item in [self._provider_select, *self._type_selects]:
+            if item is not None:
+                self.remove_item(item)
+        self._type_selects = []
+
+        selected = set(self.selected_alert_types)
+
+        prov_options = []
+        for p in self._providers:
+            keys = [t['key'] for t in p['types']]
+            on = sum(1 for k in keys if k in selected)
+            prov_options.append(discord.SelectOption(
+                label=p['label'][:100],
+                value=p['key'],
+                description=(f"{on} of {len(keys)} on" if on else f"{len(keys)} available"),
+                default=(p['key'] == self._active_provider),
+            ))
+        self._provider_select = discord.ui.Select(
+            placeholder="1. Pick a source",
+            options=prov_options or [discord.SelectOption(label="None", value="none")],
+            min_values=1, max_values=1, row=0,
+        )
+        self._provider_select.callback = self._on_provider_picked
+        self.add_item(self._provider_select)
+
+        active = next((p for p in self._providers
+                       if p['key'] == self._active_provider), None)
+        types = active['types'] if active else []
+        type_options = [
+            discord.SelectOption(
+                label=t['label'][:100],
+                value=t['key'],
+                description=(t.get('agencyLabel') or '')[:100] or None,
+                default=(t['key'] in selected),
+            )
+            for t in types
         ]
-        chunks = _chunk_options(all_options)
-        self._alert_selects = []
-        for i, chunk in enumerate(chunks):
-            placeholder = ("Select alert types to enable" if len(chunks) == 1
-                           else f"Select alert types ({i + 1} of {len(chunks)})")
+        if not type_options:
+            return
+
+        # _chunk_options stays as the safety net for a provider that ever
+        # grows past 25 types on its own; today the largest has eight.
+        for idx, chunk in enumerate(_chunk_options(type_options)):
             sel = discord.ui.Select(
-                placeholder=placeholder,
+                placeholder=f"2. {active['label']} — pick types",
                 min_values=0, max_values=len(chunk),
                 options=chunk,
-                row=i,
+                row=1 + idx,
             )
             sel.callback = self._on_alerts_picked
             self.add_item(sel)
-            self._alert_selects.append(sel)
+            self._type_selects.append(sel)
+
+    async def _on_provider_picked(self, interaction: discord.Interaction):
+        self._active_provider = self._provider_select.values[0]
+        self._rebuild()
+        await interaction.response.edit_message(view=self)
 
     async def _on_alerts_picked(self, interaction: discord.Interaction):
-        self.selected_alert_types = _merge_select_values(self._alert_selects, interaction)
-        await interaction.response.defer(ephemeral=True)
+        # Replace only the ACTIVE provider's slice of the selection — a select
+        # reports nothing about types belonging to any other provider, so
+        # anything picked elsewhere has to be carried over untouched.
+        active = next((p for p in self._providers
+                       if p['key'] == self._active_provider), None)
+        owned = {t['key'] for t in (active['types'] if active else [])}
+        picked = [k for k in _merge_select_values(self._type_selects, interaction)
+                  if k in owned]
+        kept = [k for k in self.selected_alert_types if k not in owned]
+        self.selected_alert_types = kept + picked
+        self._rebuild()
+        await interaction.response.edit_message(view=self)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return interaction.user.id == self.invoker_id
