@@ -141,7 +141,7 @@ export interface ConfigPayload {
 const PAGER_PLANS: Record<string, PagerFreq[]> = {
   NSW: [
     { label: 'NSWRFS', mhz: 148.5875 },
-    { label: 'FRNSW', mhz: 148.9875 },
+    { label: 'FRNSW', mhz: 148.9625 },
   ],
   QLD: [{ label: 'QFES', mhz: 148.6375 }],
 };

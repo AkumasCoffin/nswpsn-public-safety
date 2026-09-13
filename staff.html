@@ -9765,7 +9765,7 @@
       // (pagerPrimaryOptions, backend-supplied) — never hardcoded here.
       const primaryOpts = (Array.isArray(nFresh.pagerPrimaryOptions) && nFresh.pagerPrimaryOptions.length)
         ? nFresh.pagerPrimaryOptions
-        : [{ label: 'NSWRFS', mhz: 148.5875 }, { label: 'FRNSW', mhz: 148.9875 }];
+        : [{ label: 'NSWRFS', mhz: 148.5875 }, { label: 'FRNSW', mhz: 148.9625 }];
       const primary = primaryOpts.some(o => o.label === nFresh.pagerPrimary) ? nFresh.pagerPrimary : primaryOpts[0].label;
       const gainVal = (nFresh.pagerGain == null) ? '' : String(nFresh.pagerGain);
       const ppmVal = (nFresh.pagerPpm == null) ? '' : String(nFresh.pagerPpm);
