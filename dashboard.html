@@ -1708,13 +1708,16 @@ function confirmDialog(title, body, okLabel='Confirm', okDanger=true) {
 
 async function bootstrap() {
   // Before anything renders: without the catalog there are no chips to draw.
+  // Non-fatal on purpose. The page deploys on push but the API is deployed
+  // separately, so there is a window where this endpoint is not live yet —
+  // during it the rest of the dashboard (guilds, channels, presets) still
+  // works and only the alert-type chips are missing, with a banner saying so.
   try {
     await loadAlertCatalog();
   } catch (e) {
     console.error('Could not load the alert catalog', e);
-    handleApiError(e, 'Could not load the alert type list.');
-    render();
-    return;
+    state.catalogError = 'Could not load the alert type list. If the API was '
+      + 'just updated, reload in a moment.';
   }
 
   try {
@@ -2711,6 +2714,12 @@ function _renderProviderSection(provider, selected, opts) {
 function renderAlertTypeChips(preset) {
   const selected = new Set(preset.alert_types || []);
   const wrap = el('div', { class: 'provider-list' });
+  if (state.catalogError) {
+    // The catalog is fetched, so with no catalog there are no chips to draw.
+    // Say why rather than showing an empty box that looks like "no sources".
+    wrap.appendChild(el('div', { class: 'empty' }, state.catalogError));
+    return wrap;
+  }
   for (const provider of PROVIDERS) {
     const hasSelected = provider.types.some(t => selected.has(t.key));
     const expanded = isProviderOpen(preset.id, provider.key, hasSelected);
