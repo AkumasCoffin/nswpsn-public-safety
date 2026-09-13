@@ -117,6 +117,38 @@ _GENERAL_ALERT_TYPES = {
     k: v for k, v in ALERT_TYPES.items() if k != 'radio_summary'
 }
 
+# Discord hard-caps a slash-command choice list AND a select menu at 25
+# options (and max_values at 25). ALERT_TYPES passed that when the
+# interstate sources were added, which failed command sync and crash-looped
+# the bot. Anything built from ALERT_TYPES must chunk or autocomplete.
+DISCORD_SELECT_MAX = 25
+
+
+def _chunk_options(options):
+    """Split into runs of at most DISCORD_SELECT_MAX, never an empty list."""
+    if not options:
+        return [[]]
+    return [options[i:i + DISCORD_SELECT_MAX]
+            for i in range(0, len(options), DISCORD_SELECT_MAX)]
+
+
+def _merge_select_values(selects, interaction):
+    """Union the picks across chunked selects.
+
+    Discord only reports values for the menu that actually fired; the others
+    arrive empty. Reading those back from their `default` flags is what stops
+    the view forgetting a selection made in a different chunk - while still
+    honouring a deliberate clear-out of the menu that did fire.
+    """
+    fired = (interaction.data or {}).get('custom_id')
+    picked = []
+    for sel in selects:
+        if sel.custom_id == fired:
+            picked.extend(sel.values)
+        else:
+            picked.extend(o.value for o in sel.options if o.default)
+    return list(dict.fromkeys(picked))
+
 WEBSITE_URL = "https://nswpsn.forcequit.xyz/"
 
 
@@ -1979,15 +2011,30 @@ bot = NSWPSNBot()
 # ==================== SLASH COMMANDS ====================
 
 @bot.tree.command(name="alert", description="Set up alerts for a channel")
+async def _alert_type_autocomplete(interaction: discord.Interaction, current: str):
+    """Suggest alert types as the user types.
+
+    Replaces a fixed `choices` list, which Discord caps at 25 - exceeded once
+    the interstate sources landed, and a hard failure at command sync rather
+    than a degraded picker. Autocomplete caps only the SUGGESTIONS, so the
+    underlying set can keep growing.
+    """
+    cur = (current or '').lower().strip()
+    out = []
+    for key, name in ALERT_TYPES.items():
+        if not cur or cur in key.lower() or cur in name.lower():
+            out.append(app_commands.Choice(name=name, value=key))
+            if len(out) >= DISCORD_SELECT_MAX:
+                break
+    return out
+
+
 @app_commands.describe(
     channel="The channel to send alerts to",
     alert_type="The type of alert to receive (leave empty for ALL alerts)",
     role="Optional role to ping when alerts are sent"
 )
-@app_commands.choices(alert_type=[
-    app_commands.Choice(name=name, value=key) 
-    for key, name in ALERT_TYPES.items()
-])
+@app_commands.autocomplete(alert_type=_alert_type_autocomplete)
 @app_commands.default_permissions(manage_channels=True)
 async def alert_command(
     interaction: discord.Interaction,
@@ -3182,22 +3229,29 @@ class SetupRolesSubmenuView(discord.ui.View):
             label='Pager Messages', value='pager', emoji='📟',
             default=('pager' in selected_set),
         ))
-        max_types = len(type_options)
-        type_select = discord.ui.Select(
-            placeholder="1. Pick one or more alert types",
-            min_values=1, max_values=max_types,
-            options=type_options,
-            row=0,
-        )
-        type_select.callback = self._on_types_picked
-        self.add_item(type_select)
-        self._type_select = type_select
+        # Chunked: 28 alert types + pager is 29 options, past Discord's 25.
+        # min_values is 0 rather than 1 because requiring a pick from EVERY
+        # chunk would make it impossible to choose a single type.
+        chunks = _chunk_options(type_options)
+        self._type_selects = []
+        for i, chunk in enumerate(chunks):
+            placeholder = ("1. Pick one or more alert types" if len(chunks) == 1
+                           else f"1. Pick alert types ({i + 1} of {len(chunks)})")
+            sel = discord.ui.Select(
+                placeholder=placeholder,
+                min_values=0, max_values=len(chunk),
+                options=chunk,
+                row=i,
+            )
+            sel.callback = self._on_types_picked
+            self.add_item(sel)
+            self._type_selects.append(sel)
 
-        # Row 1 — role picker. Always shown but only meaningful once types are chosen.
+        # Role picker sits under however many type rows there turned out to be.
         role_select = discord.ui.RoleSelect(
             placeholder="2. Pick up to 5 roles (empty + Save = no change)",
             min_values=0, max_values=5,
-            row=1,
+            row=len(chunks),
         )
         role_select.callback = self._on_roles_picked
         self.add_item(role_select)
@@ -3207,7 +3261,7 @@ class SetupRolesSubmenuView(discord.ui.View):
         return interaction.user.id == self.invoker_id
 
     async def _on_types_picked(self, interaction: discord.Interaction):
-        picked = list(self._type_select.values)
+        picked = _merge_select_values(self._type_selects, interaction)
         # Rebuild so the embed reflects current roles for each selected type.
         new_view = SetupRolesSubmenuView(self.invoker_id, self.channel, selected_types=picked)
         embed = _build_roles_embed(self.channel, interaction.guild_id, picked)
@@ -3240,7 +3294,7 @@ class SetupRolesSubmenuView(discord.ui.View):
         bot.db.update_preset(preset['id'], role_ids=role_ids)
         return 1
 
-    @discord.ui.button(label="Save", style=discord.ButtonStyle.green, row=2)
+    @discord.ui.button(label="Save", style=discord.ButtonStyle.green, row=4)
     async def save(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.selected_types:
             await interaction.response.send_message(
@@ -3291,7 +3345,7 @@ class SetupRolesSubmenuView(discord.ui.View):
             view=SetupHomeView(self.invoker_id, self.channel),
         )
 
-    @discord.ui.button(label="Clear Roles", style=discord.ButtonStyle.danger, row=2)
+    @discord.ui.button(label="Clear Roles", style=discord.ButtonStyle.danger, row=4)
     async def clear(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.selected_types:
             await interaction.response.send_message(
@@ -3318,7 +3372,7 @@ class SetupRolesSubmenuView(discord.ui.View):
         embed = _build_roles_embed(self.channel, guild_id, atypes)
         await interaction.response.edit_message(embed=embed, view=new_view)
 
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, row=4)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
         loop = asyncio.get_event_loop()
         home_embed = await loop.run_in_executor(
@@ -3419,24 +3473,36 @@ class SetupAlertsSubmenuView(discord.ui.View):
         self.channel = channel
         self.selected_alert_types: List[str] = existing_types[:]
 
-        self.alert_select.options = [
-            discord.SelectOption(label=name, value=key, default=(key in set(existing_types)))
+        # Chunked for the same reason as the roles submenu: 27 general
+        # types is past Discord's 25-option / 25-max_values ceiling.
+        existing_set = set(existing_types)
+        all_options = [
+            discord.SelectOption(label=name, value=key, default=(key in existing_set))
             for key, name in _GENERAL_ALERT_TYPES.items()
         ]
+        chunks = _chunk_options(all_options)
+        self._alert_selects = []
+        for i, chunk in enumerate(chunks):
+            placeholder = ("Select alert types to enable" if len(chunks) == 1
+                           else f"Select alert types ({i + 1} of {len(chunks)})")
+            sel = discord.ui.Select(
+                placeholder=placeholder,
+                min_values=0, max_values=len(chunk),
+                options=chunk,
+                row=i,
+            )
+            sel.callback = self._on_alerts_picked
+            self.add_item(sel)
+            self._alert_selects.append(sel)
+
+    async def _on_alerts_picked(self, interaction: discord.Interaction):
+        self.selected_alert_types = _merge_select_values(self._alert_selects, interaction)
+        await interaction.response.defer(ephemeral=True)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return interaction.user.id == self.invoker_id
 
-    @discord.ui.select(
-        placeholder="Select alert types to enable",
-        min_values=0,
-        max_values=len(_GENERAL_ALERT_TYPES)
-    )
-    async def alert_select(self, interaction: discord.Interaction, select: discord.ui.Select):
-        self.selected_alert_types = list(select.values)
-        await interaction.response.defer(ephemeral=True)
-
-    @discord.ui.button(label="Save", style=discord.ButtonStyle.green)
+    @discord.ui.button(label="Save", style=discord.ButtonStyle.green, row=4)
     async def save(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         guild_id = interaction.guild_id
@@ -3471,7 +3537,7 @@ class SetupAlertsSubmenuView(discord.ui.View):
         home_embed = await loop.run_in_executor(None, _sync_work)
         await _edit_or_send(interaction, embed=home_embed, view=SetupHomeView(self.invoker_id, self.channel))
 
-    @discord.ui.button(label="Enable All Alerts", style=discord.ButtonStyle.green)
+    @discord.ui.button(label="Enable All Alerts", style=discord.ButtonStyle.green, row=4)
     async def enable_all(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         guild_id = interaction.guild_id
@@ -3501,7 +3567,7 @@ class SetupAlertsSubmenuView(discord.ui.View):
         home_embed = await loop.run_in_executor(None, _sync_work)
         await _edit_or_send(interaction, embed=home_embed, view=SetupHomeView(self.invoker_id, self.channel))
 
-    @discord.ui.button(label="Turn Alerts Off", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="Turn Alerts Off", style=discord.ButtonStyle.danger, row=4)
     async def turn_off(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         guild_id = interaction.guild_id
@@ -3522,7 +3588,7 @@ class SetupAlertsSubmenuView(discord.ui.View):
         home_embed = await loop.run_in_executor(None, _sync_work)
         await _edit_or_send(interaction, embed=home_embed, view=SetupHomeView(self.invoker_id, self.channel))
 
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, row=4)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
         loop = asyncio.get_event_loop()
         home_embed = await loop.run_in_executor(
