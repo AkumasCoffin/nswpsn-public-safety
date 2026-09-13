@@ -50,9 +50,25 @@ export interface AlertType {
   subtypeAware: boolean;
 }
 
+export interface SeverityOption {
+  value: string;
+  label: string;
+}
+
+/**
+ * A severity scale owns everything about reading a severity: where the raw
+ * value sits on a record, what the floor options are (worst last) and how
+ * upstream's wording maps onto them.
+ */
+export interface SeverityScale {
+  field: string;
+  options: SeverityOption[];
+  map: Record<string, string>;
+}
+
 export interface AlertCatalog {
   version: number;
-  severityScales: Record<string, string[]>;
+  severityScales: Record<string, SeverityScale>;
   providers: AlertProvider[];
   types: AlertType[];
 }
@@ -145,13 +161,27 @@ export function alertTypeDef(key: string): AlertType | undefined {
   return canon ? BY_KEY.get(canon) : undefined;
 }
 
-/** Providers with their types nested — the shape the dashboard renders from. */
+/** Ordered severity tokens for a scale, worst last. */
+export function severityTokens(scale: string): string[] {
+  return (catalog.severityScales[scale]?.options ?? []).map((o) => o.value);
+}
+
+/**
+ * Providers with their types nested — the shape the dashboard renders from.
+ *
+ * severityScales rides along so the page can build its per-source floor
+ * dropdowns from the same definition the server validates against, rather
+ * than from its own copy of the options (which is why the interstate
+ * agencies had no severity filter even once the server accepted one).
+ */
 export function catalogForClient(): {
   version: number;
+  severityScales: Record<string, SeverityScale>;
   providers: Array<AlertProvider & { types: AlertType[] }>;
 } {
   return {
     version: catalog.version,
+    severityScales: catalog.severityScales,
     providers: catalog.providers.map((p) => ({
       ...p,
       types: catalog.types.filter((t) => t.provider === p.key),

@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   ALERT_TYPES,
+  severityTokens,
   ALERT_TYPE_DEFS,
   ALERT_PROVIDERS,
   catalog,
@@ -107,7 +108,57 @@ describe('canonical folding', () => {
   });
 });
 
+describe('severity scales', () => {
+  it('every scale maps only onto its own options', () => {
+    for (const [name, scale] of Object.entries(catalog.severityScales)) {
+      const values = new Set(scale.options.map((o) => o.value));
+      for (const [raw, token] of Object.entries(scale.map)) {
+        expect(values, `${name}.map[${raw}] -> ${token}`).toContain(token);
+      }
+      expect(raw_is_lowercased(scale.map)).toBe(true);
+    }
+  });
+
+  it('gives every fire agency its own floor, not just RFS', () => {
+    // The severity list named only RFS/BOM/traffic_majorevent, so the
+    // interstate agencies carried an alertLevel nothing could filter on.
+    const fireAgencies = [
+      'rfs', 'cfa', 'deeca', 'vicses', 'emv', 'esta',
+      'qfd', 'qfd_warning', 'dfes', 'dfes_warning',
+      'sa_cfs', 'sa_mfs', 'nt_fire', 'nt_bushfires',
+    ];
+    for (const key of fireAgencies) {
+      expect(alertTypeDef(key)?.severityScale, key).toBe('fire');
+      expect(severityTokens('fire')).toEqual(['advice', 'watch_and_act', 'emergency']);
+    }
+  });
+
+  it('does not offer a floor for types with no severity', () => {
+    for (const k of ['ausgrid', 'endeavour_current', 'user_incident', 'wire_article']) {
+      expect(alertTypeDef(k)?.severityScale, k).toBeNull();
+    }
+  });
+
+  it('no retired waze key is still marked sub-type aware', () => {
+    const aware = ALERT_TYPE_DEFS.filter((t) => t.subtypeAware).map((t) => t.key);
+    expect(aware.filter((k) => k.startsWith('waze'))).toEqual([]);
+  });
+});
+
+function raw_is_lowercased(map: Record<string, string>): boolean {
+  // Lookups lowercase the upstream value, so an uppercase key can never match.
+  return Object.keys(map).every((k) => k === k.toLowerCase());
+}
+
 describe('the shape the dashboard renders from', () => {
+  it('carries the severity scales the filters card builds its dropdowns from', () => {
+    const client = catalogForClient();
+    expect(Object.keys(client.severityScales)).toContain('fire');
+    expect(client.severityScales.fire?.options.map((o) => o.label)).toEqual([
+      'Advice', 'Watch & Act', 'Emergency',
+    ]);
+  });
+
   it('nests every type under its provider, losing none', () => {
     const client = catalogForClient();
     const flat = client.providers.flatMap((p) => p.types.map((t) => t.key));
@@ -135,6 +186,21 @@ describe('no hardcoded alert-type list has come back', () => {
     const src = read('dashboard.html');
     expect(src).toMatch(/loadAlertCatalog/);
     expect(src).not.toMatch(/const PROVIDERS\s*=\s*\[\s*\n\s*\{\s*key:/);
+  });
+
+  it('dashboard.html derives its filter lists rather than listing them', () => {
+    const src = read('dashboard.html');
+    // The literals that made the interstate agencies filter-less.
+    expect(src).not.toMatch(/_DASH_SEVERITY_PER_TYPE = \{[^}]*rfs:/);
+    expect(src).not.toMatch(/_DASH_SUBTYPE_AWARE_TYPES = new Set\(\[[^\]]*'rfs'/);
+    expect(src).toMatch(/_DASH_FILTER_SEVERITY_TYPES\.add/);
+  });
+
+  it('bot.py no longer hand-maps raw severity values', () => {
+    const src = read('discord-bot/bot.py');
+    expect(src).not.toMatch(/^_SEVERITY_RFS_MAP = \{/m);
+    expect(src).not.toMatch(/^_SEVERITY_BOM_MAP = \{/m);
+    expect(src).toMatch(/alert_catalog\.severity_token/);
   });
 
   it('embeds.py derives its three maps', () => {

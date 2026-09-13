@@ -62,7 +62,7 @@ CATALOG: Dict[str, Any] = _load()
 
 PROVIDERS: List[Dict[str, Any]] = CATALOG['providers']
 TYPE_DEFS: List[Dict[str, Any]] = CATALOG['types']
-SEVERITY_SCALES: Dict[str, List[str]] = CATALOG['severityScales']
+SEVERITY_SCALES: Dict[str, Dict[str, Any]] = CATALOG['severityScales']
 
 BY_KEY: Dict[str, Dict[str, Any]] = {t['key']: t for t in TYPE_DEFS}
 PROVIDER_BY_KEY: Dict[str, Dict[str, Any]] = {p['key']: p for p in PROVIDERS}
@@ -109,6 +109,36 @@ def canonical(key: str) -> Optional[str]:
     if key in BY_KEY:
         return key
     return ALIASES.get(key)
+
+
+def severity_scale_for(key: str) -> Optional[Dict[str, Any]]:
+    """The severity scale a type uses, or None if it has no severity."""
+    t = type_def(key)
+    if not t or not t.get('severityScale'):
+        return None
+    return SEVERITY_SCALES.get(t['severityScale'])
+
+
+def severity_tokens(key: str) -> List[str]:
+    """Ordered floor tokens for a type, worst last. Empty if it has none."""
+    scale = severity_scale_for(key)
+    return [o['value'] for o in scale['options']] if scale else []
+
+
+def severity_token(key: str, item: Any) -> Optional[str]:
+    """Read a record's severity and map it onto its type's scale.
+
+    Returns None when the record carries no usable severity — callers treat
+    that as "no severity available" and let the floor pass rather than
+    dropping an alert over missing upstream metadata.
+    """
+    scale = severity_scale_for(key)
+    if not scale or not isinstance(item, dict):
+        return None
+    raw = _get_field(item, scale['field'])
+    if raw is None:
+        return None
+    return scale['map'].get(str(raw).strip().lower())
 
 
 def accepted_keys(key: str) -> List[str]:

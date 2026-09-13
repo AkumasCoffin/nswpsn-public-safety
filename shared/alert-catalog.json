@@ -16,10 +16,51 @@
     "The logs page groups by archiveSource; Discord alerts key on `key`."
   ],
 
+  "_severityComment": [
+    "A scale owns everything about reading a severity: WHERE the raw value is",
+    "on a record (field), what the floor options are (options, worst last),",
+    "and how upstream's wording maps onto them (map, matched lowercased).",
+    "An unmapped raw value means 'no severity available' and the floor passes",
+    "rather than blocking — never drop an alert over missing metadata."
+  ],
   "severityScales": {
-    "fire": ["advice", "watch_and_act", "emergency"],
-    "bom": ["minor", "moderate", "major"],
-    "event": ["minor", "moderate", "major"]
+    "fire": {
+      "field": "properties.alertLevel",
+      "options": [
+        { "value": "advice", "label": "Advice" },
+        { "value": "watch_and_act", "label": "Watch & Act" },
+        { "value": "emergency", "label": "Emergency" }
+      ],
+      "map": {
+        "advice": "advice",
+        "watch and act": "watch_and_act",
+        "watch_and_act": "watch_and_act",
+        "emergency warning": "emergency",
+        "emergency": "emergency"
+      }
+    },
+    "bom": {
+      "field": "severity",
+      "options": [
+        { "value": "minor", "label": "Minor" },
+        { "value": "moderate", "label": "Moderate" },
+        { "value": "major", "label": "Major" }
+      ],
+      "map": {
+        "severe": "major", "warning": "moderate", "watch": "moderate",
+        "advice": "minor", "info": "minor",
+        "minor": "minor", "moderate": "moderate", "major": "major"
+      }
+    },
+    "event": {
+      "field": "properties.severity",
+      "options": [
+        { "value": "minor", "label": "Minor" },
+        { "value": "moderate", "label": "Moderate" },
+        { "value": "major", "label": "Major" }
+      ],
+      "map": { "minor": "minor", "moderate": "moderate", "major": "major" }
+    }
   },
 
   "providers": [
@@ -29,7 +70,7 @@
     { "key": "qfd",         "label": "QLD Fire Department",    "icon": "fire",          "color": "#dc2626" },
     { "key": "dfes",        "label": "DFES (WA)",              "icon": "fire",          "color": "#e11d48" },
     { "key": "safire",      "label": "SA Fire Services",       "icon": "fire",          "color": "#ea580c" },
-    { "key": "ntfrs",       "label": "NT Fire & Rescue",       "icon": "fire",          "color": "#f97316" },
+    { "key": "ntfrs",       "label": "NT Emergency",           "icon": "fire",          "color": "#f97316" },
     { "key": "actas",       "label": "ACT Ambulance",          "icon": "truck-medical", "color": "#38bdf8" },
     { "key": "bom",         "label": "Bureau of Meteorology",  "icon": "cloud",         "color": "#3b82f6" },
     { "key": "livetraffic", "label": "LiveTraffic NSW",        "icon": "road",          "color": "#f97316" },
@@ -147,7 +188,7 @@
     },
 
     {
-      "key": "nt_fire", "provider": "ntfrs", "label": "NTFRS", "botLabel": "NT Fire & Rescue",
+      "key": "nt_fire", "provider": "ntfrs", "label": "NT Fire & Rescue", "botLabel": "NT Fire & Rescue",
       "agency": "NTFRS", "agencyLabel": "NT Fire & Rescue",
       "feedShape": "geo_fire",
       "archiveSource": "nt_fire", "endpoint": "/api/nt-fire/incidents", "itemsPath": "features",

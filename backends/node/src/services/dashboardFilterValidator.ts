@@ -13,7 +13,7 @@
  * out structurally identical.
  */
 
-import { ALERT_TYPE_DEFS, catalog } from './alertCatalog.js';
+import { ALERT_TYPE_DEFS, severityTokens } from './alertCatalog.js';
 
 export class FilterValidationError extends Error {
   constructor(message: string) {
@@ -29,7 +29,7 @@ export class FilterValidationError extends Error {
 const SEVERITY_SCALES: Record<string, ReadonlySet<string>> = Object.fromEntries(
   ALERT_TYPE_DEFS.filter((t) => t.severityScale).map((t) => [
     t.key,
-    new Set(catalog.severityScales[t.severityScale as string]),
+    new Set(severityTokens(t.severityScale as string)),
   ]),
 );
 
