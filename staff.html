@@ -9739,6 +9739,15 @@
       const online = !!nFresh.online;
       const msgs = Number(nFresh.messagesLast10m || 0);
       const qd = (st && typeof st.queueDepth === 'number') ? st.queueDepth : null;
+      // The status frame names a reader by agency only (component key
+      // "reader:FRNSW"), so the MHz has to come from the node's STATE plan.
+      // pagerPrimaryOptions IS that plan, backend-supplied — so a plan change
+      // (FRNSW moving to 148.9625) shows up here with nothing else to edit,
+      // and a QLD node shows its own frequency rather than NSW's.
+      const freqByLabel = new Map(
+        (Array.isArray(nFresh.pagerPrimaryOptions) ? nFresh.pagerPrimaryOptions : [])
+          .filter(o => o && o.label != null && typeof o.mhz === 'number')
+          .map(o => [String(o.label), o.mhz]));
 
       let rows;
       if (!online) {
@@ -9750,7 +9759,7 @@
           const running = /run/i.test(r.state);
           const listening = _ndAudioLabel === r.label;
           return `<tr>
-            <td>${escapeHtml(r.label)}</td>
+            <td>${escapeHtml(r.label)}${freqByLabel.has(r.label) ? ` <span class="nd-sub">${freqByLabel.get(r.label).toFixed(4)} MHz</span>` : ''}</td>
             <td class="${running ? 'r-run' : 'r-stop'}">${running ? 'running' : 'stopped'}${listening ? ' <span style="color:var(--accent,#38bdf8);font-weight:600;"><i class="fas fa-headphones"></i> monitoring</span>' : ''}</td>
             <td style="text-align:right; white-space:nowrap;">
               <button class="btn ${listening ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="_ndAudioToggle('${jsArg(r.label)}')" title="${listening ? 'Stop audio monitor' : 'Listen to this reader for tuning (restarts it ~2s)'}"><i class="fas fa-${listening ? 'stop' : 'headphones'}"></i></button>
