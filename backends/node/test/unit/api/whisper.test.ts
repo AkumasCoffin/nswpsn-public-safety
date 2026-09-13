@@ -29,7 +29,15 @@ const PC = 'http://pc.local:8000';
 const VM = 'http://vm.local:8000';
 
 /** Per-backend behaviour the fake fetch obeys. */
-type Fake = { up: boolean; fail: boolean; hits: number };
+type Fake = {
+  up: boolean; fail: boolean; hits: number;
+  /** Live and peak simultaneous transcriptions, for the cap assertions. */
+  concurrent: number; maxConcurrent: number;
+  /** Awaited inside a transcription, to hold it open. */
+  hold: Promise<void> | null;
+};
+/** What pc claims it can run in parallel on /v1/stats. */
+let pcWorkers = 2;
 let pc: Fake;
 let vm: Fake;
 
@@ -53,7 +61,7 @@ function stubBackends() {
           return new Response(JSON.stringify({
             model: 'large-v3', device: 'cuda', computeType: 'float16',
             waiting: 1, active: 2, totalOk: 40, totalFailed: 0,
-            avgS: 0.98, p95S: 3.2, uptimeS: 600,
+            avgS: 0.98, p95S: 3.2, uptimeS: 600, numWorkers: pcWorkers,
           }), { status: 200 });
         }
         return new Response('', { status: 404 });
@@ -61,12 +69,22 @@ function stubBackends() {
       // A transcription.
       if (!who.up) throw new TypeError('fetch failed');
       who.hits += 1;
+      who.concurrent += 1;
+      who.maxConcurrent = Math.max(who.maxConcurrent, who.concurrent);
       void init;
-      if (who.fail) return new Response('{"error":"boom"}', { status: 500 });
-      return new Response(JSON.stringify({ text: `hello from ${name}` }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      });
+      try {
+        // `hold` lets a test keep a call open, which is the only way to
+        // observe the cap: without it every request completes before the
+        // next begins and nothing is ever concurrent.
+        if (who.hold) await who.hold;
+        if (who.fail) return new Response('{"error":"boom"}', { status: 500 });
+        return new Response(JSON.stringify({ text: `hello from ${name}` }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      } finally {
+        who.concurrent -= 1;
+      }
     }),
   );
 }
@@ -128,8 +146,9 @@ const post = (body = 'RIFFfake') => ({
 });
 
 beforeEach(() => {
-  pc = { up: true, fail: false, hits: 0 };
-  vm = { up: true, fail: false, hits: 0 };
+  pc = { up: true, fail: false, hits: 0, concurrent: 0, maxConcurrent: 0, hold: null };
+  vm = { up: true, fail: false, hits: 0, concurrent: 0, maxConcurrent: 0, hold: null };
+  pcWorkers = 2;
   stubBackends();
 });
 
@@ -652,5 +671,131 @@ describe('GET /api/whisper/history', () => {
     const body = await res.json();
     expect(body).toEqual({ configured: false, hours: 24, rows: [] });
     expect(statsQueryMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The fault this cap exists to prevent: the router had no concurrency limit
+ * and its selection ignored load entirely, so it handed the preferred
+ * backend every call it had. With that backend decoding one at a time, the
+ * queue formed INSIDE whisper — where the router could not see it, could not
+ * manage it, and where a 180s abort left work running that nobody would
+ * collect, slowing the next call and causing the next abort.
+ */
+describe('per-backend concurrency cap', () => {
+  it('never exceeds what the backend says it can run at once', async () => {
+    const { app, svc } = await setup(`pc=${PC}`);
+    await probeOnce(svc);              // pc reports numWorkers: 2
+
+    let release!: () => void;
+    pc.hold = new Promise<void>((r) => { release = r; });
+    const calls = Array.from({ length: 6 }, () => app.request('/api/whisper/v1/audio/transcriptions', post()));
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Six in, two allowed through; the rest are parked in the router.
+    expect(pc.maxConcurrent).toBeLessThanOrEqual(2);
+    release();
+    await Promise.all(calls);
+    // All six still got transcribed — queued, not shed.
+    expect(pc.hits).toBe(6);
+    expect(pc.maxConcurrent).toBeLessThanOrEqual(2);
+  });
+
+  it('follows the backend when it reports a different parallelism', async () => {
+    pcWorkers = 4;
+    const { app, svc } = await setup(`pc=${PC}`);
+    await probeOnce(svc);
+
+    let release!: () => void;
+    pc.hold = new Promise<void>((r) => { release = r; });
+    const calls = Array.from({ length: 8 }, () => app.request('/api/whisper/v1/audio/transcriptions', post()));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(pc.maxConcurrent).toBe(4);
+    release();
+    await Promise.all(calls);
+  });
+
+  it('an explicit @N in WHISPER_BACKENDS overrides what the server reports', async () => {
+    pcWorkers = 8;
+    const { app, svc } = await setup(`pc=${PC}@1`);
+    await probeOnce(svc);
+
+    let release!: () => void;
+    pc.hold = new Promise<void>((r) => { release = r; });
+    const calls = Array.from({ length: 4 }, () => app.request('/api/whisper/v1/audio/transcriptions', post()));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(pc.maxConcurrent).toBe(1);
+    release();
+    await Promise.all(calls);
+  });
+
+  it('still parses a plain name=url with no suffix', async () => {
+    const { svc } = await setup(`pc=${PC},vm=${VM}`);
+    const names = svc.whisperBackends().map((b) => b.name);
+    expect(names).toEqual(['pc', 'vm']);
+    expect(svc.whisperBackends()[0]!.url).toBe(PC);
+  });
+
+  it('spills to the second backend rather than queueing behind a full first', async () => {
+    const { app, svc } = await setup(`pc=${PC}@1,vm=${VM}@1`);
+    await probeOnce(svc);
+
+    let release!: () => void;
+    pc.hold = new Promise<void>((r) => { release = r; });
+    const calls = [
+      app.request('/api/whisper/v1/audio/transcriptions', post()),
+      app.request('/api/whisper/v1/audio/transcriptions', post()),
+    ];
+    await new Promise((r) => setTimeout(r, 10));
+    // Second call went to vm because pc's single slot was taken — the whole
+    // point: a busy preferred backend is skipped, not piled onto.
+    expect(vm.hits).toBe(1);
+    release();
+    await Promise.all(calls);
+  });
+
+  it('releases the slot when a call fails, so the backend is not wedged', async () => {
+    const { app, svc } = await setup(`pc=${PC}@1`);
+    await probeOnce(svc);
+
+    pc.fail = true;                    // 500s, which frees the slot via finally
+    await app.request('/api/whisper/v1/audio/transcriptions', post());
+    pc.fail = false;
+    const res = await app.request('/api/whisper/v1/audio/transcriptions', post());
+    // A leaked permit would leave this waiting until SLOT_WAIT_MS.
+    expect(res.status).toBe(200);
+    expect(svc.whisperStatus().backends[0]!.inFlight).toBe(0);
+  });
+});
+
+describe('latency the panel can trust', () => {
+  it('reports avg and p95 from the same population, so avg <= p95', async () => {
+    const { app, svc } = await setup(`pc=${PC}`);
+    await probeOnce(svc);
+    for (let i = 0; i < 5; i++) {
+      await app.request('/api/whisper/v1/audio/transcriptions', post());
+    }
+    const b = svc.whisperStatus().backends[0]!;
+    expect(b.avgMs).not.toBeNull();
+    expect(b.p95Ms).not.toBeNull();
+    // The invariant the old row violated: it showed 39.7s avg beside a
+    // 1117.4s p95 by mixing a router mean with a server percentile.
+    expect(b.avgMs!).toBeLessThanOrEqual(b.p95Ms!);
+  });
+
+  it('counts a failed call in the latency ring instead of hiding it', async () => {
+    const { app, svc } = await setup(`pc=${PC},vm=${VM}`);
+    await probeOnce(svc);
+    pc.fail = true;
+    await app.request('/api/whisper/v1/audio/transcriptions', post());
+    const b = svc.whisperStatus().backends.find((x) => x.name === 'pc')!;
+    // Previously only the response path appended, so the slow calls that
+    // define an outage were structurally invisible in the average.
+    expect(b.avgMs).not.toBeNull();
+  });
+
+  it('exposes the cap so the panel can show in-flight against capacity', async () => {
+    const { svc } = await setup(`pc=${PC}@3`);
+    expect(svc.whisperStatus().backends[0]!.maxInFlight).toBe(3);
   });
 });

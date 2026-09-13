@@ -8488,8 +8488,20 @@
           : b.healthy ? ['ok', 'up']
           : ['bad', 'down'];
         const bits = [];
-        if (b.inFlight > 0) bits.push(`${b.inFlight} in flight`);
+        // Capacity alongside the count, because "8 in flight" means nothing
+        // without knowing what this backend can actually run at once.
+        if (b.inFlight > 0) {
+          bits.push(b.maxInFlight ? `${b.inFlight}/${b.maxInFlight} in flight` : `${b.inFlight} in flight`);
+        }
+        // avg and p95 are BOTH the router's own ring now, so they describe
+        // the same calls and the same clock — end to end, as rdio
+        // experienced them, timeouts included. Previously this line paired a
+        // router-side mean with a server-side p95, which is how it could
+        // show 39.7s avg beside p95 1117.4s: arithmetically impossible for
+        // one population, and the giveaway that a queue had formed inside
+        // whisper where nothing could see it.
         if (b.avgMs != null) bits.push(`${(b.avgMs / 1000).toFixed(1)}s avg`);
+        if (b.p95Ms != null) bits.push(`p95 ${(b.p95Ms / 1000).toFixed(1)}s`);
         if (b.requests) bits.push(`${b.requests} calls`);
         if (b.failures) bits.push(`${b.failures} failed`);
         // The server's own /v1/stats, when it exposes them. Queue depth is
@@ -8498,10 +8510,15 @@
         let queueHtml = '';
         if (b.stats) {
           if (b.stats.model) bits.push(`${b.stats.model} ${b.stats.device || ''}`.trim());
-          if (b.stats.p95S != null) bits.push(`p95 ${b.stats.p95S.toFixed(1)}s`);
           if (b.stats.waiting > 0) {
             queueHtml = `<span class="nd-ready bad">queue ${b.stats.waiting}</span>`;
           }
+        }
+        // Calls parked in the ROUTER waiting for a slot. Distinct from the
+        // chip above: that one is a backlog inside whisper, this one is the
+        // cap doing its job and holding work back.
+        if (b.waiting > 0) {
+          queueHtml += `<span class="nd-ready updating">${b.waiting} queued</span>`;
         }
         const since = b.stateSince ? ` since ${whShortTime(b.stateSince)}` : '';
         return `<div class="wh-row${b.name === d.current ? ' wh-current' : ''}">

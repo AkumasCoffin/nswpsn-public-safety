@@ -54,6 +54,11 @@ export interface BackendStats {
   avgS: number | null;
   p95S: number | null;
   uptimeS: number;
+  /** How many transcriptions this server can genuinely run at once
+   *  (faster-whisper's num_workers). The router caps itself at this rather
+   *  than duplicating the value in its own config, so the two cannot drift.
+   *  Null on a server too old to report it. */
+  numWorkers: number | null;
 }
 
 export interface WhisperBackend {
@@ -83,6 +88,14 @@ export interface WhisperBackend {
   workFailures: number;
   /** Until when this backend is excluded for failing real work. */
   quarantinedUntil: number | null;
+  /**
+   * Hard ceiling on concurrent requests to this backend, from an explicit
+   * `@N` in WHISPER_BACKENDS. Null means "follow whatever the server says
+   * it can do" (stats.numWorkers), falling back to DEFAULT_MAX_IN_FLIGHT.
+   */
+  maxInFlightCfg: number | null;
+  /** Callbacks waiting for a slot, oldest first. */
+  waiters: Array<() => void>;
 }
 
 /** How often each backend is probed, and how long a probe may take. */
@@ -121,10 +134,36 @@ const RECENT_SAMPLES = 50;
 const WORK_FAIL_THRESHOLD = 3;
 const QUARANTINE_MS = 60_000;
 
+/**
+ * Concurrency ceiling used until a backend reports its own `numWorkers`.
+ *
+ * Deliberately small. Over-committing is the failure this whole mechanism
+ * exists to prevent, and a backend that can take more will say so on its
+ * next 5s probe — whereas guessing high re-creates the queue-inside-whisper
+ * problem for the few seconds before the first probe lands.
+ */
+const DEFAULT_MAX_IN_FLIGHT = 2;
+
+/**
+ * How long a call will wait for a slot before giving up.
+ *
+ * Queueing here rather than shedding is deliberate: a dropped transcript is
+ * gone for good, and a call that waits is only slow. This is bounded so a
+ * total stall surfaces as an error instead of holding rdio's connection
+ * open indefinitely.
+ */
+const SLOT_WAIT_MS = 120_000;
+
 let _backends: WhisperBackend[] | null = null;
 let _timer: NodeJS.Timeout | null = null;
 
-/** "name=url,name=url", order significant. */
+/**
+ * "name=url,name=url", order significant.
+ *
+ * A url may carry an optional `@N` concurrency ceiling — `pc=http://x:8000@2`.
+ * Omit it and the backend follows whatever it reports as its own num_workers,
+ * which is the preferred arrangement: one source of truth, on the box.
+ */
 function parseBackends(spec: string): WhisperBackend[] {
   const out: WhisperBackend[] = [];
   for (const [i, part] of spec.split(',').map((p) => p.trim()).entries()) {
@@ -134,9 +173,22 @@ function parseBackends(spec: string): WhisperBackend[] {
       log.warn({ entry: part }, 'WHISPER_BACKENDS entry is not name=url — ignored');
       continue;
     }
+    let rawUrl = part.slice(eq + 1).trim();
+    let maxInFlightCfg: number | null = null;
+    // Matched at the END only, so it cannot eat an '@' inside credentials.
+    const at = /@(\d+)$/.exec(rawUrl);
+    if (at) {
+      const n = Number(at[1]);
+      if (Number.isFinite(n) && n >= 1) {
+        maxInFlightCfg = n;
+        rawUrl = rawUrl.slice(0, at.index);
+      } else {
+        log.warn({ entry: part }, 'WHISPER_BACKENDS @concurrency must be >= 1 — ignored');
+      }
+    }
     out.push({
       name: part.slice(0, eq).trim(),
-      url: part.slice(eq + 1).trim().replace(/\/$/, ''),
+      url: rawUrl.replace(/\/$/, ''),
       priority: i,
       healthy: false,
       draining: false,
@@ -153,9 +205,79 @@ function parseBackends(spec: string): WhisperBackend[] {
       quarantinedUntil: null,
       stats: null,
       statsAt: null,
+      maxInFlightCfg,
+      waiters: [],
     });
   }
   return out;
+}
+
+/**
+ * The live ceiling for a backend: explicit config, else what the server says
+ * it can run in parallel, else the conservative default.
+ */
+export function maxInFlightFor(b: WhisperBackend): number {
+  if (b.maxInFlightCfg !== null) return b.maxInFlightCfg;
+  const n = b.stats?.numWorkers;
+  if (typeof n === 'number' && Number.isFinite(n) && n >= 1) return n;
+  return DEFAULT_MAX_IN_FLIGHT;
+}
+
+function hasFreeSlot(b: WhisperBackend): boolean {
+  return b.inFlight < maxInFlightFor(b);
+}
+
+/** Take a slot. Callers MUST pair this with releaseSlot in a finally. */
+function takeSlot(b: WhisperBackend): void {
+  b.inFlight += 1;
+}
+
+/**
+ * Give a slot back and hand it to the longest-waiting caller, if any.
+ *
+ * Single release point on purpose: inFlight used to be decremented in two
+ * separate places (the response path and the catch), which is exactly how a
+ * permit leaks the first time a third path is added.
+ */
+function releaseSlot(b: WhisperBackend): void {
+  b.inFlight -= 1;
+  const next = b.waiters.shift();
+  if (next) next();
+}
+
+/**
+ * Wait until any of `candidates` has a free slot. Resolves with that backend,
+ * or null if nothing freed within SLOT_WAIT_MS.
+ */
+async function waitForSlot(candidates: WhisperBackend[]): Promise<WhisperBackend | null> {
+  if (!candidates.length) return null;
+  return new Promise<WhisperBackend | null>((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      // Leave no dangling callbacks behind: a waiter that fired after the
+      // timeout would consume a slot nobody is going to use.
+      for (const b of candidates) {
+        const i = b.waiters.indexOf(wake);
+        if (i >= 0) b.waiters.splice(i, 1);
+      }
+      resolve(null);
+    }, SLOT_WAIT_MS);
+
+    function wake(): void {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      for (const b of candidates) {
+        const i = b.waiters.indexOf(wake);
+        if (i >= 0) b.waiters.splice(i, 1);
+      }
+      resolve(candidates.find((b) => hasFreeSlot(b)) ?? null);
+    }
+
+    for (const b of candidates) b.waiters.push(wake);
+  });
 }
 
 export function whisperBackends(): WhisperBackend[] {
@@ -228,10 +350,33 @@ async function probeStats(b: WhisperBackend): Promise<void> {
       avgS: numOrNull(raw['avgS']),
       p95S: numOrNull(raw['p95S']),
       uptimeS: num(raw['uptimeS']),
+      numWorkers: numOrNull(raw['numWorkers']),
     };
     b.statsAt = Date.now();
   } catch {
     b.stats = null;
+  }
+}
+
+/**
+ * Record how long a call actually took, success or failure.
+ *
+ * Both outcomes go in: from rdio's point of view a call that timed out after
+ * 180s really did take 180s, and leaving those out is what made the panel's
+ * average look comfortable while a third of calls were failing.
+ */
+/** Nearest-rank percentile over a copy; null when there is nothing to rank. */
+function percentile(values: number[], q: number): number | null {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil(q * sorted.length) - 1));
+  return Math.round(sorted[idx]!);
+}
+
+function noteLatency(b: WhisperBackend, ms: number): void {
+  b.recentMs.push(ms);
+  if (b.recentMs.length > RECENT_SAMPLES) {
+    b.recentMs.splice(0, b.recentMs.length - RECENT_SAMPLES);
   }
 }
 
@@ -293,10 +438,31 @@ export async function whisperForward(
   }
 
   let detail = 'no backend attempted';
-  for (const b of candidates) {
-    b.inFlight += 1;
+  // Each backend is tried at most once, in preference order, exactly as
+  // before — the change is that a backend already at its ceiling is skipped
+  // rather than piled onto, and we wait for a slot instead of over-committing.
+  const untried = [...candidates];
+
+  while (untried.length) {
+    let b = untried.find((c) => hasFreeSlot(c)) ?? null;
+    if (!b) {
+      // Everything is busy. Queue rather than shed: a slow transcript beats
+      // a lost one, and over-committing here is precisely what buries a
+      // queue inside whisper where nothing can see or manage it.
+      const freed = await waitForSlot(untried);
+      if (!freed) {
+        detail = `all backends busy for ${Math.round(SLOT_WAIT_MS / 1000)}s`;
+        log.warn({ waited: SLOT_WAIT_MS }, 'whisper: gave up waiting for a slot');
+        break;
+      }
+      b = freed;
+    }
+    // Remove from the not-yet-tried list whichever backend we settled on.
+    untried.splice(untried.indexOf(b), 1);
+
     b.requests += 1;
     const started = Date.now();
+    takeSlot(b);
     try {
       const r = await fetch(`${b.url}/v1/audio/transcriptions`, {
         method: 'POST',
@@ -307,9 +473,7 @@ export async function whisperForward(
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
       const buf = await r.arrayBuffer();
-      b.inFlight -= 1;
-      b.recentMs.push(Date.now() - started);
-      if (b.recentMs.length > RECENT_SAMPLES) b.recentMs.splice(0, b.recentMs.length - RECENT_SAMPLES);
+      noteLatency(b, Date.now() - started);
 
       // A 5xx is the backend saying it could not do the job, which the other
       // one might manage. A 4xx is the REQUEST being wrong, and sending it
@@ -326,7 +490,11 @@ export async function whisperForward(
       }
       b.workFailures = 0;
       b.quarantinedUntil = null;
-      recordWhisperAttempt(b.name, true, Date.now() - started);
+      // A 4xx is a rejected REQUEST, not a transcript and not a backend
+      // fault. Recording it as a success made whisper_hourly count malformed
+      // uploads as work done; recording it as a failure would blame a
+      // healthy server. It is neither, so it is not recorded at all.
+      if (r.status < 400) recordWhisperAttempt(b.name, true, Date.now() - started);
       return {
         status: r.status,
         body: buf,
@@ -334,7 +502,10 @@ export async function whisperForward(
         backend: b.name,
       };
     } catch (err) {
-      b.inFlight -= 1;
+      // The slow calls ARE the problem, so they belong in the latency ring.
+      // Omitting them censored the displayed average at the top: it could
+      // never exceed the timeout, and sat far below it.
+      noteLatency(b, Date.now() - started);
       b.failures += 1;
       b.lastErrorAt = Date.now();
       b.lastError = describeRelayError(err);
@@ -345,6 +516,10 @@ export async function whisperForward(
         { backend: b.name, cause: b.lastError, ms: Date.now() - started },
         'whisper backend failed — trying next',
       );
+    } finally {
+      // Single release point, and in a finally so neither the timeout path
+      // nor an early return can leak a permit.
+      releaseSlot(b);
     }
   }
 
@@ -386,9 +561,16 @@ export function whisperStatus() {
       inFlight: b.inFlight,
       requests: b.requests,
       failures: b.failures,
+      // avg and p95 come from the SAME ring on purpose. They used to be a
+      // router-side mean beside a server-side p95 — two processes, two
+      // populations — which could report a p95 arithmetically impossible
+      // beside its own average.
       avgMs: b.recentMs.length
         ? Math.round(b.recentMs.reduce((a, n) => a + n, 0) / b.recentMs.length)
         : null,
+      p95Ms: percentile(b.recentMs, 0.95),
+      maxInFlight: maxInFlightFor(b),
+      waiting: b.waiters.length,
       lastOkAt: b.lastOkAt ? new Date(b.lastOkAt).toISOString() : null,
       lastErrorAt: b.lastErrorAt ? new Date(b.lastErrorAt).toISOString() : null,
       lastError: b.lastError,
