@@ -412,6 +412,13 @@ fleetRouter.post('/api/wire/fleet', requireRole(canFeedMedia), async (c) => {
         ref: `fleet:${ins.rows[0]!.id}`,
         title: v.callsign || 'Fleet vehicle',
         subtitle: 'Fleet vehicle awaiting approval',
+        fields: [
+          { name: 'Submitted by', value: currentUserName(c) },
+          { name: 'Agency', value: v.agency },
+          { name: 'Type', value: v.vehicle_type },
+          { name: 'Rego', value: v.registration },
+          { name: 'Station', value: v.station },
+        ],
       });
     }
     return c.json({ id: ins.rows[0]!.id, success: true, status }, 201);
@@ -549,6 +556,7 @@ async function review(c: any, action: 'approve' | 'reject') {
       title: 'Fleet vehicle',
       status: action === 'approve' ? 'approved' : 'rejected',
       actor: currentUserName(c),
+      fields: [{ name: 'Review note', value: note, inline: false }],
     });
     return c.json({ success: true, status });
   } catch (err) {

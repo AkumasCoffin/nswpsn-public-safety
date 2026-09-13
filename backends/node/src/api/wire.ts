@@ -1095,6 +1095,11 @@ wireRouter.post('/api/wire/articles', requireRole(canFeedMedia), async (c) => {
         ref: `article:${newId}`,
         title: title || 'Untitled article',
         subtitle: 'Article awaiting approval',
+        fields: [
+          { name: 'Author', value: currentUserName(c) },
+          { name: 'Slug', value: slug },
+          { name: 'Units', value: (mv.units || []).join(', ') },
+        ],
       });
     }
     return c.json({ id: newId, slug, success: true, status }, 201);
@@ -1431,6 +1436,7 @@ async function reviewPost(c: any, cfg: EntityCfg, action: 'approve' | 'reject') 
       title: cfg.parentType === 'article' ? 'Article' : 'Fleet vehicle',
       status: action === 'approve' ? 'approved' : 'rejected',
       actor: currentUserName(c),
+      fields: [{ name: 'Review note', value: note, inline: false }],
     });
     return c.json({ success: true });
   } catch (err) {
@@ -1538,14 +1544,23 @@ wireRouter.post('/api/wire/takedown', async (c) => {
       [targetType, targetId, title, name, email, org, complaint, originalUrl],
     );
     log.warn({ targetType, targetId }, 'wire: takedown notice filed');
-    // Target title only. The reporter's name, email, organisation and the
-    // complaint text are third-party personal data and stay out of Discord.
+    // The notice itself, in the private staff channel: a takedown cannot be
+    // assessed without knowing who filed it and what they are claiming, and
+    // staff have to be able to reply to the reporter.
     notifyStaff(pool, {
       kind: 'wire_takedown',
       event: 'new',
       ref: String(td.rows[0]?.id ?? ''),
       title: title || 'Untitled post',
       subtitle: 'Takedown notice filed',
+      fields: [
+        { name: 'Target', value: `${targetType} ${targetId}` },
+        { name: 'Reporter', value: name },
+        { name: 'Organisation', value: org },
+        { name: 'Email', value: email },
+        { name: 'Original URL', value: originalUrl, inline: false },
+        { name: 'Complaint', value: complaint, inline: false },
+      ],
     });
     return c.json({ success: true });
   } catch (err) {
@@ -1628,6 +1643,7 @@ wireRouter.post('/api/wire/takedowns/:id/uphold', requireRole(canModerateWire), 
       title: 'Takedown notice',
       status: 'upheld',
       actor: currentUserName(c),
+      fields: [{ name: 'Target', value: `${row.target_type} ${row.target_id}` }],
     });
     return c.json({ success: true });
   } catch (err) {
@@ -1655,6 +1671,7 @@ wireRouter.post('/api/wire/takedowns/:id/reject', requireRole(canModerateWire), 
       title: 'Takedown notice',
       status: 'rejected',
       actor: currentUserName(c),
+      fields: [{ name: 'Reason', value: note, inline: false }],
     });
     return c.json({ success: true });
   } catch (err) {

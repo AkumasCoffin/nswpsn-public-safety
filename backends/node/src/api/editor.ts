@@ -119,6 +119,45 @@ function normaliseRequest(row: EditorRequestRow): Record<string, unknown> {
 // ---------------------------------------------------------------------------
 // POST /api/editor-requests  — public submission
 // ---------------------------------------------------------------------------
+
+/**
+ * Detail rows for a signup request.
+ *
+ * These land in a private staff channel, so they carry what someone actually
+ * needs to make the call — who is asking, where from, what they already run —
+ * rather than a type and a region that only told you a request existed.
+ * The free-text answers go last and full-width; packFields truncates them.
+ */
+function signupFields(r: {
+  email?: string | null;
+  discordId?: string | null;
+  website?: string | null;
+  about?: string | null;
+  region?: string | null;
+  background?: string | null;
+  backgroundDetails?: string | null;
+  hasExistingSetup?: unknown;
+  setupDetails?: string | null;
+  techExperienceStr?: unknown;
+  experienceLevel?: unknown;
+  referredByName?: string | null;
+}) {
+  return [
+    { name: 'Email', value: r.email },
+    { name: 'Discord', value: r.discordId },
+    { name: 'Region', value: r.region },
+    { name: 'Experience', value: r.experienceLevel },
+    { name: 'Background', value: r.background },
+    { name: 'Existing setup', value: r.hasExistingSetup },
+    { name: 'Tech', value: r.techExperienceStr },
+    { name: 'Referred by', value: r.referredByName },
+    { name: 'Website', value: r.website },
+    { name: 'Setup details', value: r.setupDetails, inline: false },
+    { name: 'Background details', value: r.backgroundDetails, inline: false },
+    { name: 'About', value: r.about, inline: false },
+  ];
+}
+
 editorRouter.post('/api/editor-requests', async (c) => {
   let data: Record<string, unknown>;
   try {
@@ -253,6 +292,11 @@ editorRouter.post('/api/editor-requests', async (c) => {
         ref: String(existingRow.id),
         title: requestTypeStr || 'Access request',
         subtitle: region ? `${region} · resubmitted` : 'resubmitted',
+        fields: signupFields({
+          email, discordId, website, about, region, background, backgroundDetails,
+          hasExistingSetup, setupDetails, techExperienceStr, experienceLevel,
+          referredByName,
+        }),
       });
       return c.json({ success: true, message: 'Request submitted successfully', request_id: existingRow.id }, 200);
     }
@@ -270,13 +314,17 @@ editorRouter.post('/api/editor-requests', async (c) => {
     );
     const requestId = inserted.rows[0]?.id;
     log.info({ requestId, email, requestType, linkedUserId }, 'New editor request');
-    // Type + region only: enough to triage, nothing that identifies anyone.
     notifyStaff(pool, {
       kind: 'signup_request',
       event: 'new',
       ref: String(requestId ?? ''),
       title: requestTypeStr || 'Access request',
       subtitle: region || null,
+      fields: signupFields({
+        email, discordId, website, about, region, background, backgroundDetails,
+        hasExistingSetup, setupDetails, techExperienceStr, experienceLevel,
+        referredByName,
+      }),
     });
     return c.json({ success: true, message: 'Request submitted successfully', request_id: requestId }, 201);
   } catch (err) {
@@ -544,6 +592,12 @@ editorRouter.post('/api/editor-requests/:id/approve', requireRole(canManageUsers
       title: (req.request_type || 'Access request'),
       status: 'approved',
       actor: (c.get('userName') as string | undefined) ?? null,
+      fields: [
+        { name: 'Applicant', value: req.email },
+        { name: 'Region', value: req.region },
+        { name: 'Roles granted', value: roles.join(', ') },
+        { name: 'Notes', value: notes, inline: false },
+      ],
     });
 
     const result: Record<string, unknown> = {
@@ -603,6 +657,11 @@ editorRouter.post('/api/editor-requests/:id/reject', requireRole(canManageUsers)
       title: (req.request_type || 'Access request'),
       status: 'rejected',
       actor: (c.get('userName') as string | undefined) ?? null,
+      fields: [
+        { name: 'Applicant', value: req.email },
+        { name: 'Region', value: req.region },
+        { name: 'Reason', value: reason, inline: false },
+      ],
     });
     return c.json({ success: true, message: 'Request rejected' });
   } catch (err) {

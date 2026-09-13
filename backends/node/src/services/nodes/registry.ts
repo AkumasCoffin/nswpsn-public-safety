@@ -130,15 +130,24 @@ export async function createNode(
   const row = res.rows[0] ?? null;
   if (row) {
     // Emitted here rather than in the two routes that call this, so neither
-    // path can be missed. Kind + area only: the node NAME is built from a
-    // slug of the owner's username (see autoNodeName above).
+    // path can be missed. The node NAME is a slug of the owner's username
+    // (see autoNodeName above), which is exactly what makes it useful here:
+    // these land in a private staff channel, not anywhere public.
     const where = [loc.lga, loc.state, loc.zone].filter(Boolean).join(' \u00b7 ');
     notifyStaff(pool, {
       kind: 'new_node',
       event: 'new',
-      ref: '',
+      ref: String(row.id ?? ''),
       title: `${kind} node`,
       subtitle: where || null,
+      fields: [
+        { name: 'Name', value: cleanName },
+        { name: 'Kind', value: kind },
+        { name: 'State', value: loc.state },
+        { name: 'LGA', value: loc.lga },
+        { name: 'Zone', value: loc.zone },
+        { name: 'Key prefix', value: tokenPrefix },
+      ],
     });
   }
   return row;

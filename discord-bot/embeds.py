@@ -3,11 +3,12 @@ Embed Builder - Creates beautiful Discord embeds for various alert types.
 """
 
 import os
+import json
 import re
 import html
 import discord
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 from urllib.parse import quote
 import alert_catalog
 
@@ -30,13 +31,33 @@ _STAFF_STATUS_COLOR = {
 }
 
 
+def _parse_notify_fields(raw: Any) -> List[Dict[str, Any]]:
+    """Decode the JSON-encoded detail rows.
+
+    Every pending_bot_actions param is a string so the canonical signing form
+    matches byte-for-byte across the language boundary, so the field list
+    arrives as JSON text. Malformed input yields no rows rather than losing
+    the whole notification.
+    """
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return [f for f in raw if isinstance(f, dict)]
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    return [f for f in parsed if isinstance(f, dict)] if isinstance(parsed, list) else []
+
+
 def build_staff_notify_embed(kind: str, params: Dict[str, Any]) -> discord.Embed:
     """Embed for a staff moderation notification.
 
-    These carry NO personal data by design - the backend sends a short
-    non-identifying summary plus a link to the staff page, because Discord
-    history is searchable, screenshottable and outside our control. See
-    backends/node/src/services/staffNotify.ts.
+    These go to a PRIVATE staff channel, so they carry the detail needed to
+    triage without opening the site. The backend decides what to include and
+    has already dropped empties, truncated long values and capped the count
+    (packFields in backends/node/src/services/staffNotify.ts) - this only
+    renders whatever survived.
 
     A plain Embed rather than a Components V2 container: resolution edits
     this message in place, and embeds edit cleanly.
@@ -65,6 +86,13 @@ def build_staff_notify_embed(kind: str, params: Dict[str, Any]) -> discord.Embed
     )
     if subtitle:
         embed.add_field(name='\u200b', value=subtitle[:1024], inline=False)
+    for f in _parse_notify_fields(params.get('fields')):
+        embed.add_field(
+            name=str(f.get('name') or '-')[:256],
+            value=str(f.get('value') or '')[:1024],
+            inline=bool(f.get('inline', True)),
+        )
+
     if resolved:
         embed.add_field(
             name='Handled by',

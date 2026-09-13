@@ -104,7 +104,7 @@ describe('notifyStaffAsync', () => {
     expect(sent.channel_id).toBe('444444444444444444');
   });
 
-  it('carries no personal data — only the fields the caller passed', async () => {
+  it('sends a fixed, closed set of keys', async () => {
     configureAll();
     await notifyStaffAsync(mainPool, {
       kind: 'signup_request',
@@ -114,14 +114,57 @@ describe('notifyStaffAsync', () => {
       subtitle: 'QLD',
     });
     const sent = sentParams();
-    // The payload is a fixed, closed set of keys. If someone adds a field
-    // that could carry an email or a complaint body, this fails.
     expect(Object.keys(sent).sort()).toEqual(
-      ['actor', 'channel_id', 'event', 'guild_id', 'kind', 'ref', 'status', 'subtitle', 'title', 'url'],
+      ['actor', 'channel_id', 'event', 'fields', 'guild_id', 'kind', 'ref',
+       'status', 'subtitle', 'title', 'url'],
     );
-    const blob = JSON.stringify(sent).toLowerCase();
-    expect(blob).not.toContain('@');           // no email address
-    expect(blob).not.toContain('password');    // editor_requests.notes holds one
+    // Every value stays a string so the canonical signing form is identical
+    // either side of the language boundary.
+    for (const v of Object.values(sent)) expect(typeof v).toBe('string');
+    expect(sent.fields).toBe('[]');
+  });
+
+  it('carries detail rows — these go to a private staff channel', async () => {
+    configureAll();
+    await notifyStaffAsync(mainPool, {
+      kind: 'signup_request',
+      event: 'new',
+      ref: '7',
+      title: 'Pager Feeder',
+      subtitle: 'QLD',
+      fields: [
+        { name: 'Email', value: 'someone@example.com' },
+        { name: 'Experience', value: 3 },
+        { name: 'Existing setup', value: true },
+      ],
+    });
+    const fields = JSON.parse(sentParams().fields) as Array<{ name: string; value: string }>;
+    expect(fields.map((f) => f.name)).toEqual(['Email', 'Experience', 'Existing setup']);
+    // Coerced to strings; booleans read as Yes/No rather than "true".
+    expect(fields[1]?.value).toBe('3');
+    expect(fields[2]?.value).toBe('Yes');
+  });
+
+  it('drops empty rows, truncates long ones and caps the count', async () => {
+    configureAll();
+    await notifyStaffAsync(mainPool, {
+      kind: 'signup_request',
+      event: 'new',
+      ref: '7',
+      title: 'x',
+      fields: [
+        { name: 'Gone', value: '' },
+        { name: 'Gone too', value: null },
+        { name: 'Long', value: 'y'.repeat(5000) },
+        ...Array.from({ length: 30 }, (_, i) => ({ name: `f${i}`, value: 'v' })),
+      ],
+    });
+    const fields = JSON.parse(sentParams().fields) as Array<{ name: string; value: string }>;
+    expect(fields.map((f) => f.name)).not.toContain('Gone');
+    expect(fields.map((f) => f.name)).not.toContain('Gone too');
+    // Comfortably inside Discord's 25-field / 1024-char embed limits.
+    expect(fields.length).toBeLessThanOrEqual(12);
+    for (const f of fields) expect(f.value.length).toBeLessThanOrEqual(400);
   });
 
   it('does nothing when the kind has no channel configured', async () => {
@@ -199,39 +242,39 @@ describe('new_user / new_node', () => {
     expect(sentParams().channel_id).toBe('666666666666666666');
   });
 
-  it('a new account sends no name — the display name is the Discord handle', async () => {
+  it('a new account names the account, so the notification is actionable', async () => {
     configureAll();
     await notifyStaffAsync(mainPool, {
       kind: 'new_user',
       event: 'new',
-      ref: '',
-      title: 'New account',
+      ref: 'uid-123',
+      title: 'jordansmith',
       subtitle: 'Someone signed up',
+      fields: [{ name: 'Display name', value: 'jordansmith' }],
     });
     const sent = sentParams();
-    expect(sent.title).toBe('New account');
-    // An empty ref means nothing identifying is written to the bot's
-    // message map either — there is no resolution to edit later.
-    expect(sent.ref).toBe('');
-    expect(sent.actor).toBe('');
-    expect(sent.status).toBe('');
+    expect(sent.title).toBe('jordansmith');
+    expect(sent.ref).toBe('uid-123');
+    expect(sent.fields).toContain('jordansmith');
   });
 
-  it('a new node sends kind and area but never the node name', async () => {
+  it('a new node names the node and where it is', async () => {
     configureAll();
-    // autoNodeName() builds names like `pager-jordansmith-a1b2c3d4`, so the
-    // name would leak the owner's username.
     await notifyStaffAsync(mainPool, {
       kind: 'new_node',
       event: 'new',
-      ref: '',
+      ref: '42',
       title: 'pager node',
       subtitle: 'Brisbane · QLD',
+      fields: [
+        { name: 'Name', value: 'pager-jordansmith-a1b2c3d4' },
+        { name: 'State', value: 'QLD' },
+      ],
     });
     const sent = sentParams();
     expect(sent.title).toBe('pager node');
     expect(sent.subtitle).toBe('Brisbane · QLD');
-    expect(JSON.stringify(sent)).not.toContain('jordansmith');
+    expect(sent.fields).toContain('pager-jordansmith-a1b2c3d4');
   });
 
   it('deep-links to the tab each one belongs to', async () => {

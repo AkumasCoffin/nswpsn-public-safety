@@ -159,6 +159,47 @@ export interface StaffNotifyInput {
   status?: string | null;
   /** For 'resolved': display name of the staff member who actioned it. */
   actor?: string | null;
+  /**
+   * Detail rows for the embed. These notifications go to a PRIVATE staff
+   * channel, so they carry what staff actually need to triage without
+   * opening the site — the earlier summary-only form made almost every
+   * notification a prompt to go and look the request up.
+   *
+   * Still bounded: empty values are dropped, each value is truncated, and
+   * the whole set is capped, so one long free-text answer cannot blow the
+   * embed limit or bury the rest.
+   */
+  fields?: Array<{ name: string; value: unknown; inline?: boolean }>;
+}
+
+/** Discord allows 25 fields / 1024 chars each; stay well inside both. */
+const MAX_FIELDS = 12;
+const MAX_FIELD_VALUE = 400;
+
+/**
+ * Drop empties, coerce, truncate, cap. Returns [] when nothing survives, so
+ * a caller can pass everything it has and let this decide what is worth
+ * sending.
+ */
+function packFields(fields: StaffNotifyInput['fields']): Array<{
+  name: string;
+  value: string;
+  inline: boolean;
+}> {
+  if (!Array.isArray(fields)) return [];
+  const out: Array<{ name: string; value: string; inline: boolean }> = [];
+  for (const f of fields) {
+    if (!f || !f.name) continue;
+    let v: string;
+    if (typeof f.value === 'boolean') v = f.value ? 'Yes' : 'No';
+    else if (f.value == null) continue;
+    else v = String(f.value).trim();
+    if (!v) continue;
+    if (v.length > MAX_FIELD_VALUE) v = `${v.slice(0, MAX_FIELD_VALUE - 1)}…`;
+    out.push({ name: String(f.name).slice(0, 256), value: v, inline: f.inline !== false });
+    if (out.length >= MAX_FIELDS) break;
+  }
+  return out;
 }
 
 /**
@@ -197,6 +238,9 @@ export async function notifyStaffAsync(pool: Pool | null, input: StaffNotifyInpu
     subtitle: input.subtitle ?? '',
     status: input.status ?? '',
     actor: input.actor ?? '',
+    // JSON in a string: every param stays a string so the canonical signing
+    // form is identical either side of the language boundary.
+    fields: JSON.stringify(packFields(input.fields)),
     url: `${publicBase()}/staff?view=${STAFF_VIEW[input.kind]}`,
   };
 
