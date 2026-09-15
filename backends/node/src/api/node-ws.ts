@@ -143,15 +143,20 @@ export function attachNodeWebSockets(server: Server): void {
     void (async () => {
       for (const a of hub.agentList()) {
         try {
-          if (!(await hasRole(a.userId, ['feeder:radio']))) {
-            hub.forceDisconnectAgent(a.nodeId, 'role revoked');
-            continue;
-          }
           // A DELETED node (hard revoke) must be cut off; a DISABLED node stays
           // connected (enabled now controls capture via config, not the socket).
           const node = await getNode(a.nodeId);
           if (!node) {
             hub.forceDisconnectAgent(a.nodeId, 'node deleted');
+            continue;
+          }
+          // Kind-aware, matching the upgrade gate (resolveNodeToken) and
+          // roleForKind: pager nodes need feeder:pager. This used to check
+          // feeder:radio for every kind, so a healthy pager node was revoked
+          // at every sweep — connect, helloAck ok, cut ~60s later, repeat.
+          const needed = node.kind === 'pager' ? 'feeder:pager' : 'feeder:radio';
+          if (!(await hasRole(a.userId, [needed]))) {
+            hub.forceDisconnectAgent(a.nodeId, 'role revoked');
           }
         } catch (err) {
           log.warn({ err, nodeId: a.nodeId }, 'agent auth revalidation failed (transient)');
