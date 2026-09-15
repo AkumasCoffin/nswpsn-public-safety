@@ -51,15 +51,6 @@
         "advice": "minor", "info": "minor",
         "minor": "minor", "moderate": "moderate", "major": "major"
       }
-    },
-    "event": {
-      "field": "properties.severity",
-      "options": [
-        { "value": "minor", "label": "Minor" },
-        { "value": "moderate", "label": "Moderate" },
-        { "value": "major", "label": "Major" }
-      ],
-      "map": { "minor": "minor", "moderate": "moderate", "major": "major" }
     }
   },
 
@@ -262,7 +253,7 @@
       "agency": "TFNSW", "agencyLabel": "Transport for NSW",
       "feedShape": "geo_traffic",
       "archiveSource": "traffic_majorevent", "endpoint": "/api/traffic/majorevent", "itemsPath": "features",
-      "color": "#ff8c00", "icon": "🎉", "severityScale": "event", "subtypeAware": true
+      "color": "#ff8c00", "icon": "🎉", "severityScale": null, "subtypeAware": true
     },
     {
       "key": "traffic_alpine", "provider": "livetraffic", "label": "Alpine", "botLabel": "Alpine Conditions",

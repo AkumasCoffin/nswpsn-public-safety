@@ -107,8 +107,8 @@ _Generated from `shared/alert-catalog.json` by `gen_readme_alert_types.py` — d
 | DFES (WA) | `dfes_warning` | DFES (WA) | DFES Warnings |
 | SA Fire Services | `sa_cfs` | SA CFS | SA CFS |
 | SA Fire Services | `sa_mfs` | SA MFS | SA MFS |
-| NT Fire & Rescue | `nt_fire` | NT Fire & Rescue | NT Fire & Rescue |
-| NT Fire & Rescue | `nt_bushfires` | Bushfires NT | Bushfires NT |
+| NT Emergency | `nt_fire` | NT Fire & Rescue | NT Fire & Rescue |
+| NT Emergency | `nt_bushfires` | Bushfires NT | Bushfires NT |
 | ACT Ambulance | `act_ambulance` | ACT Ambulance Service | ACT Ambulance |
 | Bureau of Meteorology | `bom_land` | Bureau of Meteorology | BOM Land Warnings |
 | Bureau of Meteorology | `bom_marine` | Bureau of Meteorology | BOM Marine Warnings |

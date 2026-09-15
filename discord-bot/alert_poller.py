@@ -159,8 +159,13 @@ class AlertPoller:
 
         elif alert_type.startswith('essential_'):
             # Essential Energy outages — best-effort key off id-ish fields
-            outage_id = (item.get('id') or item.get('outageId')
-                         or item.get('OutageId') or item.get('reference'))
+            # The live shape keys on incidentId (e.g. "INCD-43264-w") — the
+            # id/outageId spellings never matched, so every item fell through
+            # to the md5-of-the-whole-dict fallback, and any field change
+            # (customersAffected, lastUpdated) re-alerted as a new outage.
+            outage_id = (item.get('incidentId') or item.get('id')
+                         or item.get('outageId') or item.get('OutageId')
+                         or item.get('reference'))
             if outage_id:
                 return f"{alert_type}_{outage_id}"
             suburb = item.get('suburb') or item.get('Suburb') or ''
@@ -330,10 +335,13 @@ class AlertPoller:
                     return _aware(datetime.fromisoformat(start_time.replace('Z', '+00:00')))
 
             elif alert_type.startswith('essential_'):
-                # Essential Energy — try common ISO fields
-                ts = (item.get('startTime') or item.get('StartTime')
-                      or item.get('start_time') or item.get('plannedStart')
-                      or item.get('scheduledStart') or '')
+                # Essential Energy — sourceTimestamp is the ISO field the
+                # backend actually stamps; the startTime spellings never
+                # matched the live shape, so every item sorted as "now".
+                ts = (item.get('sourceTimestamp') or item.get('startTime')
+                      or item.get('StartTime') or item.get('start_time')
+                      or item.get('plannedStart') or item.get('scheduledStart')
+                      or '')
                 if ts:
                     try:
                         return _aware(datetime.fromisoformat(str(ts).replace('Z', '+00:00')))
