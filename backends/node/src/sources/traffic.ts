@@ -12,6 +12,7 @@
  */
 import { createHash } from 'node:crypto';
 import { fetchJson } from './shared/http.js';
+import { htmlToProse } from './shared/prose.js';
 import { registerSource } from '../services/sourceRegistry.js';
 import { liveStore } from '../store/live.js';
 import { log } from '../lib/log.js';
@@ -227,15 +228,7 @@ function asString(v: unknown): string {
  * of the three frontends.
  */
 function asProse(v: unknown): string {
-  return asString(v)
-    .replace(/<br\s*\/?>/gi, ' ')
-    .replace(/<[^>]*>/g, '')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return htmlToProse(v);
 }
 
 function asArray(v: unknown): unknown[] {

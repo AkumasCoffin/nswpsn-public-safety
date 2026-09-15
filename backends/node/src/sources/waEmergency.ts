@@ -40,6 +40,7 @@
  *    record vanished.
  */
 import { fetchJson } from './shared/http.js';
+import { htmlToProse } from './shared/prose.js';
 import { registerSource } from '../services/sourceRegistry.js';
 import { liveStore } from '../store/live.js';
 
@@ -120,18 +121,7 @@ function firstOf(v: unknown): string {
  * the tags come out and the entities come back.
  */
 export function stripHtml(v: unknown): string {
-  return asString(v)
-    .replace(/<\s*br\s*\/?\s*>/gi, ' ')
-    .replace(/<\s*\/\s*(p|li|ul|ol|div)\s*>/gi, ' ')
-    .replace(/<[^>]*>/g, '')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/g, '\'')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return htmlToProse(v);
 }
 
 /**
