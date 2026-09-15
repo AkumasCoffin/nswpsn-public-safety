@@ -4,11 +4,15 @@ Migrate alert_presets.alert_types to the canonical, singular alert_type names.
 
 WHEN TO RUN:
     Run this once after deploying the bot with the renamed alert_type
-    strings (see ALERT_TYPES in bot.py). Existing presets will still
-    carry the old keys ('waze_hazards', 'traffic_incidents',
+    strings (the catalog at shared/alert-catalog.json). Existing presets
+    will still carry the old keys ('waze_hazards', 'traffic_incidents',
     'traffic_major', 'power_ausgrid', 'user_incidents', 'bom',
-    'power_endeavour'); this script rewrites each row's alert_types
-    array to the new canonical form.
+    'power_endeavour', 'qld_warning', 'wa_warning'); this script rewrites
+    each row's alert_types array to the new canonical form.
+
+    NOT urgent: every renamed key is also folded to its canonical form at
+    the API boundary, so an unmigrated preset keeps alerting correctly.
+    This only tidies what is stored.
 
 IDEMPOTENT:
     Re-running on already-canonical data is a no-op — the renames map
@@ -56,6 +60,13 @@ RENAMES = {
     'power_endeavour':   ['endeavour_current', 'endeavour_planned'],
     'power_ausgrid':     ['ausgrid'],
     'user_incidents':    ['user_incident'],
+    # Agency-named, not state-named: the key names the AGENCY and the suffix
+    # names the stream, so QFD's and DFES's warning feeds sit beside their
+    # incident feeds. Both old keys are also folded at the API boundary
+    # (see canonicalAlertType in backends/node/src/services/alertCatalog.ts),
+    # so an unmigrated row keeps working — this just tidies the stored data.
+    'qld_warning':       ['qfd_warning'],
+    'wa_warning':        ['dfes_warning'],
 }
 
 

@@ -37,6 +37,7 @@ import { randomBytes } from 'node:crypto';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { config } from '../config.js';
+import { notifyStaff } from '../services/staffNotify.js';
 import {
   getUserRoles,
   canonicalRoles,
@@ -50,6 +51,7 @@ import {
   isKnownRole,
 } from '../services/auth/roles.js';
 import { accountIsIncomplete, deleteAccount } from '../services/orphanCleanup.js';
+import { getUsername } from './users.js';
 
 export const editorRouter = new Hono();
 
@@ -74,6 +76,8 @@ interface EditorRequestRow {
   reviewed_at: number | string | null;
   notes: string | null;
   supabase_user_id: string | null;
+  referred_by: string | null;
+  referred_by_name: string | null;
 }
 
 function splitCsv(s: string | null | undefined): string[] {
@@ -107,12 +111,53 @@ function normaliseRequest(row: EditorRequestRow): Record<string, unknown> {
     reviewed_at: row.reviewed_at,
     notes: row.notes,
     supabase_user_id: row.supabase_user_id ?? null,
+    referred_by: row.referred_by ?? null,
+    referred_by_name: row.referred_by_name ?? null,
   };
 }
 
 // ---------------------------------------------------------------------------
 // POST /api/editor-requests  — public submission
 // ---------------------------------------------------------------------------
+
+/**
+ * Detail rows for a signup request.
+ *
+ * These land in a private staff channel, so they carry what someone actually
+ * needs to make the call — who is asking, where from, what they already run —
+ * rather than a type and a region that only told you a request existed.
+ * The free-text answers go last and full-width; packFields truncates them.
+ */
+function signupFields(r: {
+  email?: string | null;
+  discordId?: string | null;
+  website?: string | null;
+  about?: string | null;
+  region?: string | null;
+  background?: string | null;
+  backgroundDetails?: string | null;
+  hasExistingSetup?: unknown;
+  setupDetails?: string | null;
+  techExperienceStr?: unknown;
+  experienceLevel?: unknown;
+  referredByName?: string | null;
+}) {
+  return [
+    { name: 'Email', value: r.email },
+    { name: 'Discord', value: r.discordId },
+    { name: 'Region', value: r.region },
+    { name: 'Experience', value: r.experienceLevel },
+    { name: 'Background', value: r.background },
+    { name: 'Existing setup', value: r.hasExistingSetup },
+    { name: 'Tech', value: r.techExperienceStr },
+    { name: 'Referred by', value: r.referredByName },
+    { name: 'Website', value: r.website },
+    { name: 'Setup details', value: r.setupDetails, inline: false },
+    { name: 'Background details', value: r.backgroundDetails, inline: false },
+    { name: 'About', value: r.about, inline: false },
+  ];
+}
+
 editorRouter.post('/api/editor-requests', async (c) => {
   let data: Record<string, unknown>;
   try {
@@ -185,6 +230,34 @@ editorRouter.post('/api/editor-requests', async (c) => {
     const techExperienceStr = techExperience.length > 0 ? techExperience.join(',') : null;
     const createdAt = Math.floor(Date.now() / 1000);
 
+    // Referral attribution (best-effort — an unknown/invalid code, a
+    // self-referral, or a lookup failure must never fail the signup).
+    // Codes are stored uppercase; uppercasing the input makes them
+    // case-insensitive to use. The lookup only fires for a plausibly
+    // shaped code, so codeless submissions issue no extra query.
+    let referredBy: string | null = null;
+    let referredByName: string | null = null;
+    const rawRefCode = typeof data['referral_code'] === 'string'
+      ? data['referral_code'].trim().toUpperCase()
+      : '';
+    if (/^[A-Z0-9]{4,32}$/.test(rawRefCode)) {
+      try {
+        const rr = await pool.query<{ user_id: string }>(
+          'SELECT user_id FROM referral_codes WHERE code = $1',
+          [rawRefCode],
+        );
+        const refOwner = rr.rows[0]?.user_id ?? null;
+        if (refOwner && refOwner !== linkedUserId) { // self-referral ignored
+          referredBy = refOwner;
+          // Resolved once at submit time (048 precedent); null is fine —
+          // the staff UI falls back to a slice of the id.
+          referredByName = await getUsername(refOwner);
+        }
+      } catch {
+        /* attribution dropped, signup proceeds */
+      }
+    }
+
     // Find this person's existing request — their linked account first, then
     // email — preferring a pending one, so a re-submit updates it in place
     // rather than erroring/duplicating.
@@ -204,12 +277,27 @@ editorRouter.post('/api/editor-requests', async (c) => {
            email = $1, discord_id = $2, website = $3, about = $4, request_type = $5,
            region = $6, background = $7, background_details = $8, has_existing_setup = $9,
            setup_details = $10, tech_experience = $11, experience_level = $12,
-           supabase_user_id = COALESCE($13, supabase_user_id)
-         WHERE id = $14`,
+           supabase_user_id = COALESCE($13, supabase_user_id),
+           referred_by = COALESCE(referred_by, $14),
+           referred_by_name = COALESCE(referred_by_name, $15)
+         WHERE id = $16`,
         [email, discordId, website, about, requestTypeStr, region, background, backgroundDetails,
-          hasExistingSetup, setupDetails, techExperienceStr, experienceLevel, linkedUserId, existingRow.id],
+          hasExistingSetup, setupDetails, techExperienceStr, experienceLevel, linkedUserId,
+          referredBy, referredByName, existingRow.id],
       );
       log.info({ requestId: existingRow.id, email, requestType, linkedUserId }, 'Editor request updated');
+      notifyStaff(pool, {
+        kind: 'signup_request',
+        event: 'new',
+        ref: String(existingRow.id),
+        title: requestTypeStr || 'Access request',
+        subtitle: region ? `${region} · resubmitted` : 'resubmitted',
+        fields: signupFields({
+          email, discordId, website, about, region, background, backgroundDetails,
+          hasExistingSetup, setupDetails, techExperienceStr, experienceLevel,
+          referredByName,
+        }),
+      });
       return c.json({ success: true, message: 'Request submitted successfully', request_id: existingRow.id }, 200);
     }
 
@@ -217,15 +305,27 @@ editorRouter.post('/api/editor-requests', async (c) => {
       `INSERT INTO editor_requests
         (email, discord_id, website, about, request_type, region, background, background_details,
          has_existing_setup, setup_details, tech_experience, experience_level, status, created_at,
-         supabase_user_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'pending',$13,$14)
+         supabase_user_id, referred_by, referred_by_name)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'pending',$13,$14,$15,$16)
        RETURNING id`,
       [email, discordId, website, about, requestTypeStr, region, background, backgroundDetails,
         hasExistingSetup, setupDetails, techExperienceStr, experienceLevel, createdAt,
-        linkedUserId],
+        linkedUserId, referredBy, referredByName],
     );
     const requestId = inserted.rows[0]?.id;
     log.info({ requestId, email, requestType, linkedUserId }, 'New editor request');
+    notifyStaff(pool, {
+      kind: 'signup_request',
+      event: 'new',
+      ref: String(requestId ?? ''),
+      title: requestTypeStr || 'Access request',
+      subtitle: region || null,
+      fields: signupFields({
+        email, discordId, website, about, region, background, backgroundDetails,
+        hasExistingSetup, setupDetails, techExperienceStr, experienceLevel,
+        referredByName,
+      }),
+    });
     return c.json({ success: true, message: 'Request submitted successfully', request_id: requestId }, 201);
   } catch (err) {
     log.error({ err }, 'Error submitting editor request');
@@ -485,6 +585,20 @@ editorRouter.post('/api/editor-requests/:id/approve', requireRole(canManageUsers
     );
 
     log.info({ requestId, email: req.email, roles }, 'Approved editor request');
+    notifyStaff(pool, {
+      kind: 'signup_request',
+      event: 'resolved',
+      ref: String(requestId),
+      title: (req.request_type || 'Access request'),
+      status: 'approved',
+      actor: (c.get('userName') as string | undefined) ?? null,
+      fields: [
+        { name: 'Applicant', value: req.email },
+        { name: 'Region', value: req.region },
+        { name: 'Roles granted', value: roles.join(', ') },
+        { name: 'Notes', value: notes, inline: false },
+      ],
+    });
 
     const result: Record<string, unknown> = {
       success: true,
@@ -536,6 +650,19 @@ editorRouter.post('/api/editor-requests/:id/reject', requireRole(canManageUsers)
     );
 
     log.info({ requestId, email: req.email }, 'Rejected editor request');
+    notifyStaff(pool, {
+      kind: 'signup_request',
+      event: 'resolved',
+      ref: String(requestId),
+      title: (req.request_type || 'Access request'),
+      status: 'rejected',
+      actor: (c.get('userName') as string | undefined) ?? null,
+      fields: [
+        { name: 'Applicant', value: req.email },
+        { name: 'Region', value: req.region },
+        { name: 'Reason', value: reason, inline: false },
+      ],
+    });
     return c.json({ success: true, message: 'Request rejected' });
   } catch (err) {
     log.error({ err }, 'Error rejecting editor request');

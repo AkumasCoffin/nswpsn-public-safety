@@ -113,6 +113,7 @@ interface LabelCache {
 
 const LABEL_TTL_MS = 5 * 60_000;
 let labelCache: LabelCache | null = null;
+let labelRefreshInflight: Promise<void> | null = null;
 
 function tgKey(systemId: number, talkgroupId: number): string {
   return `${systemId}|${talkgroupId}`;
@@ -159,7 +160,16 @@ export async function resolveLabels(
 ): Promise<{ systemLabel: string | null; talkgroupLabel: string | null }> {
   if (!labelCache || Date.now() - labelCache.fetchedAt > LABEL_TTL_MS) {
     try {
-      await refreshLabelCache();
+      // Single-flight: a batch of rows resolving concurrently at TTL expiry
+      // must share ONE refresh (two table scans), not fire one pair each —
+      // that stampede once amplified a 50-row response into ~100 queries
+      // against the max-5 pool.
+      if (!labelRefreshInflight) {
+        labelRefreshInflight = refreshLabelCache().finally(() => {
+          labelRefreshInflight = null;
+        });
+      }
+      await labelRefreshInflight;
     } catch (err) {
       log.warn({ err: (err as Error).message }, 'rdio label cache refresh failed');
     }
@@ -245,6 +255,7 @@ export function allUnitLabels(): Iterable<string> {
 
 export function _resetRdioCachesForTests(): void {
   labelCache = null;
+  labelRefreshInflight = null;
   unitLabels.clear();
   unitLabelsLoaded = false;
 }

@@ -20,6 +20,7 @@ import { Hono } from 'hono';
 import type { Pool, PoolClient } from 'pg';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
+import { notifyStaff } from '../services/staffNotify.js';
 import { config } from '../config.js';
 import {
   requireRole,
@@ -1087,6 +1088,20 @@ wireRouter.post('/api/wire/articles', requireRole(canFeedMedia), async (c) => {
     }
     await rememberCallsigns(pool, mv.units);
     await maybeAwardPostingTags(pool, authorId, status);
+    if (status === 'pending') {
+      notifyStaff(pool, {
+        kind: 'wire_approval',
+        event: 'new',
+        ref: `article:${newId}`,
+        title: title || 'Untitled article',
+        subtitle: 'Article awaiting approval',
+        fields: [
+          { name: 'Author', value: currentUserName(c) },
+          { name: 'Slug', value: slug },
+          { name: 'Units', value: (mv.units || []).join(', ') },
+        ],
+      });
+    }
     return c.json({ id: newId, slug, success: true, status }, 201);
   } catch (err) {
     log.error({ err }, 'wire: create article failed');
@@ -1414,6 +1429,15 @@ async function reviewPost(c: any, cfg: EntityCfg, action: 'approve' | 'reject') 
       [newStatus, currentUserId(c) ?? null, currentUserName(c), note, id],
     );
     if (r.rowCount === 0) return c.json({ error: 'not found or already reviewed' }, 404);
+    notifyStaff(pool, {
+      kind: 'wire_approval',
+      event: 'resolved',
+      ref: `${cfg.parentType}:${id}`,
+      title: cfg.parentType === 'article' ? 'Article' : 'Fleet vehicle',
+      status: action === 'approve' ? 'approved' : 'rejected',
+      actor: currentUserName(c),
+      fields: [{ name: 'Review note', value: note, inline: false }],
+    });
     return c.json({ success: true });
   } catch (err) {
     log.error({ err, id, table: cfg.table, action }, 'wire: review failed');
@@ -1514,12 +1538,30 @@ wireRouter.post('/api/wire/takedown', async (c) => {
       const t = await pool.query<{ title: string }>(`SELECT title FROM ${TARGET_TABLE[targetType]} WHERE id = $1`, [targetId]);
       title = t.rows[0]?.title ?? null;
     } catch { /* leave null */ }
-    await pool.query(
+    const td = await pool.query<{ id: string }>(
       `INSERT INTO wire_takedowns (target_type, target_id, target_title, reporter_name, reporter_email, reporter_org, complaint, original_url, good_faith, accuracy)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,true,true)`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,true,true) RETURNING id`,
       [targetType, targetId, title, name, email, org, complaint, originalUrl],
     );
     log.warn({ targetType, targetId }, 'wire: takedown notice filed');
+    // The notice itself, in the private staff channel: a takedown cannot be
+    // assessed without knowing who filed it and what they are claiming, and
+    // staff have to be able to reply to the reporter.
+    notifyStaff(pool, {
+      kind: 'wire_takedown',
+      event: 'new',
+      ref: String(td.rows[0]?.id ?? ''),
+      title: title || 'Untitled post',
+      subtitle: 'Takedown notice filed',
+      fields: [
+        { name: 'Target', value: `${targetType} ${targetId}` },
+        { name: 'Reporter', value: name },
+        { name: 'Organisation', value: org },
+        { name: 'Email', value: email },
+        { name: 'Original URL', value: originalUrl, inline: false },
+        { name: 'Complaint', value: complaint, inline: false },
+      ],
+    });
     return c.json({ success: true });
   } catch (err) {
     log.error({ err }, 'wire: takedown intake failed');
@@ -1594,6 +1636,15 @@ wireRouter.post('/api/wire/takedowns/:id/uphold', requireRole(canModerateWire), 
     } catch (e) {
       log.warn({ e, id }, 'wire: takedown media purge failed (bytes may remain)');
     }
+    notifyStaff(pool, {
+      kind: 'wire_takedown',
+      event: 'resolved',
+      ref: String(id),
+      title: 'Takedown notice',
+      status: 'upheld',
+      actor: currentUserName(c),
+      fields: [{ name: 'Target', value: `${row.target_type} ${row.target_id}` }],
+    });
     return c.json({ success: true });
   } catch (err) {
     log.error({ err, id }, 'wire: uphold takedown failed');
@@ -1613,6 +1664,15 @@ wireRouter.post('/api/wire/takedowns/:id/reject', requireRole(canModerateWire), 
       [note, currentUserId(c) ?? null, currentUserName(c), id],
     );
     if (r.rowCount === 0) return c.json({ error: 'not found or already reviewed' }, 404);
+    notifyStaff(pool, {
+      kind: 'wire_takedown',
+      event: 'resolved',
+      ref: String(id),
+      title: 'Takedown notice',
+      status: 'rejected',
+      actor: currentUserName(c),
+      fields: [{ name: 'Reason', value: note, inline: false }],
+    });
     return c.json({ success: true });
   } catch (err) {
     log.error({ err, id }, 'wire: reject takedown failed');

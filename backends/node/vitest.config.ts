@@ -2,6 +2,17 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
+    // Several suites open with `await import('../../../src/server.js')`, which
+    // cold-transforms a 59-import module graph. Alone that is fast, but with
+    // 100+ test files running in parallel it intermittently passed vitest's
+    // 5s default and timed out — the suite failed roughly one run in four,
+    // always on whichever file happened to import the server first.
+    //
+    // The cost is transform time in the dev/CI environment, not anything the
+    // product does, so the timeout is the thing that was wrong. 20s still
+    // catches a genuine hang by a wide margin.
+    testTimeout: 20_000,
+    hookTimeout: 20_000,
     // Env vars exposed to ALL tests before any module is imported.
     // Critical because src/config.ts parses process.env at module load
     // time — anything set in a beforeAll() is too late.

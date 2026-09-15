@@ -29,7 +29,15 @@ const PC = 'http://pc.local:8000';
 const VM = 'http://vm.local:8000';
 
 /** Per-backend behaviour the fake fetch obeys. */
-type Fake = { up: boolean; fail: boolean; hits: number };
+type Fake = {
+  up: boolean; fail: boolean; hits: number;
+  /** Live and peak simultaneous transcriptions, for the cap assertions. */
+  concurrent: number; maxConcurrent: number;
+  /** Awaited inside a transcription, to hold it open. */
+  hold: Promise<void> | null;
+};
+/** What pc claims it can run in parallel on /v1/stats. */
+let pcWorkers = 2;
 let pc: Fake;
 let vm: Fake;
 
@@ -53,7 +61,7 @@ function stubBackends() {
           return new Response(JSON.stringify({
             model: 'large-v3', device: 'cuda', computeType: 'float16',
             waiting: 1, active: 2, totalOk: 40, totalFailed: 0,
-            avgS: 0.98, p95S: 3.2, uptimeS: 600,
+            avgS: 0.98, p95S: 3.2, uptimeS: 600, numWorkers: pcWorkers,
           }), { status: 200 });
         }
         return new Response('', { status: 404 });
@@ -61,12 +69,22 @@ function stubBackends() {
       // A transcription.
       if (!who.up) throw new TypeError('fetch failed');
       who.hits += 1;
+      who.concurrent += 1;
+      who.maxConcurrent = Math.max(who.maxConcurrent, who.concurrent);
       void init;
-      if (who.fail) return new Response('{"error":"boom"}', { status: 500 });
-      return new Response(JSON.stringify({ text: `hello from ${name}` }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      });
+      try {
+        // `hold` lets a test keep a call open, which is the only way to
+        // observe the cap: without it every request completes before the
+        // next begins and nothing is ever concurrent.
+        if (who.hold) await who.hold;
+        if (who.fail) return new Response('{"error":"boom"}', { status: 500 });
+        return new Response(JSON.stringify({ text: `hello from ${name}` }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      } finally {
+        who.concurrent -= 1;
+      }
     }),
   );
 }
@@ -128,8 +146,9 @@ const post = (body = 'RIFFfake') => ({
 });
 
 beforeEach(() => {
-  pc = { up: true, fail: false, hits: 0 };
-  vm = { up: true, fail: false, hits: 0 };
+  pc = { up: true, fail: false, hits: 0, concurrent: 0, maxConcurrent: 0, hold: null };
+  vm = { up: true, fail: false, hits: 0, concurrent: 0, maxConcurrent: 0, hold: null };
+  pcWorkers = 2;
   stubBackends();
 });
 
@@ -474,5 +493,309 @@ describe('per-backend stats enrichment', () => {
     const body = await (await app.request('/api/whisper/status')).json();
     expect(body.backends[0].stats.model).toBe('large-v3');
     expect(body.backends[1].stats).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Durable hourly stats (whisper_hourly) + the history endpoint.
+// ---------------------------------------------------------------------------
+// The setups above mock config WITHOUT DATABASE_URL, so the real
+// getWriterPool() returns null and recording no-ops — which is why none of
+// the earlier tests needed to change. Here the pool module is mocked so the
+// upserts (fire-and-forget from whisperForward) become observable.
+
+const statsQueryMock = vi.fn(async () => ({ rows: [] as unknown[] }));
+
+async function setupWithDb(backends = `pc=${PC},vm=${VM}`) {
+  vi.resetModules();
+  vi.doMock('../../../src/config.js', () => ({
+    config: {
+      WHISPER_BACKENDS: backends,
+      WHISPER_ADMIN_TOKEN: ADMIN,
+      NSWPSN_API_KEY: SITE_KEY,
+    },
+  }));
+  vi.doMock('../../../src/db/pool.js', () => ({
+    getPool: async () => ({ query: statsQueryMock }),
+    getWriterPool: async () => ({ query: statsQueryMock }),
+    closePool: async () => undefined,
+  }));
+  const svc = await import('../../../src/services/whisperRouter.js');
+  const { whisperRouter } = await import('../../../src/api/whisper.js');
+  const app = new Hono();
+  app.use('*', async (c, next) => {
+    c.set('userId', 'u1');
+    await next();
+  });
+  app.route('/', whisperRouter);
+  return { app, svc };
+}
+
+/** Recording is fire-and-forget (void async) — give it a macrotask to land. */
+const flushStats = () => new Promise((r) => setTimeout(r, 0));
+
+/** The whisper_hourly upsert calls only (history reads use SELECT). */
+const upserts = () =>
+  statsQueryMock.mock.calls.filter((c) => String(c[0]).includes('INSERT INTO whisper_hourly'));
+
+describe('whisper_hourly recording', () => {
+  beforeEach(() => {
+    statsQueryMock.mockClear();
+    statsQueryMock.mockImplementation(async () => ({ rows: [] }));
+  });
+
+  it('a served transcription upserts one success row for the serving backend', async () => {
+    const { app, svc } = await setupWithDb();
+    await probeOnce(svc);
+    statsQueryMock.mockClear(); // drop anything from the probe path
+    const res = await app.request('/api/whisper/v1/audio/transcriptions', post());
+    expect(res.status).toBe(200);
+    await flushStats();
+    const calls = upserts();
+    expect(calls).toHaveLength(1);
+    const sql = String(calls[0]![0]);
+    // Bucketing happens in SQL so app clocks never skew the hour.
+    expect(sql).toContain("date_trunc('hour', now())");
+    expect(sql).toContain('ON CONFLICT (hour, backend)');
+    const params = calls[0]![1] as unknown[];
+    expect(params[0]).toBe('pc');
+    expect(params[1]).toBe(0); // no failure
+    expect(typeof params[2]).toBe('number'); // success latency, ms
+  });
+
+  it('a failover writes a failure row for pc and a success row for vm', async () => {
+    const { app, svc } = await setupWithDb();
+    pc.fail = true;
+    await probeOnce(svc);
+    statsQueryMock.mockClear();
+    const res = await app.request('/api/whisper/v1/audio/transcriptions', post());
+    expect(res.status).toBe(200);
+    await flushStats();
+    const rows = upserts().map((c) => c[1] as unknown[]);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toEqual(['pc', 1, 0]); // failed attempt: no latency recorded
+    expect(rows[1]![0]).toBe('vm');
+    expect(rows[1]![1]).toBe(0);
+  });
+
+  it("no backend available records a single 'none' failure", async () => {
+    const { app, svc } = await setupWithDb();
+    pc.up = vm.up = false;
+    await probeOnce(svc);
+    statsQueryMock.mockClear();
+    const res = await app.request('/api/whisper/v1/audio/transcriptions', post());
+    expect(res.status).toBe(503);
+    await flushStats();
+    const rows = upserts().map((c) => c[1] as unknown[]);
+    expect(rows).toEqual([['none', 1, 0]]);
+  });
+
+  it('a stats write failure never touches the transcription response', async () => {
+    const { app, svc } = await setupWithDb();
+    statsQueryMock.mockRejectedValue(new Error('db down'));
+    await probeOnce(svc);
+    const res = await app.request('/api/whisper/v1/audio/transcriptions', post());
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ text: 'hello from pc' });
+    await flushStats();
+  });
+});
+
+describe('GET /api/whisper/history', () => {
+  beforeEach(() => {
+    statsQueryMock.mockClear();
+    statsQueryMock.mockImplementation(async () => ({ rows: [] }));
+  });
+
+  it('needs a session or the admin token (real gate: public path, role inside)', async () => {
+    // Mount the REAL api-key gate the way server.ts does: /api/whisper/history
+    // is a public path, so the request reaches the handler where the role
+    // check rejects an anonymous caller.
+    vi.resetModules();
+    vi.doMock('../../../src/config.js', () => ({
+      config: { WHISPER_BACKENDS: `pc=${PC}`, WHISPER_ADMIN_TOKEN: ADMIN, NSWPSN_API_KEY: SITE_KEY },
+    }));
+    vi.doMock('../../../src/db/pool.js', () => ({
+      getPool: async () => ({ query: statsQueryMock }),
+      getWriterPool: async () => ({ query: statsQueryMock }),
+      closePool: async () => undefined,
+    }));
+    const { whisperRouter } = await import('../../../src/api/whisper.js');
+    const { requireApiKey } = await import('../../../src/services/auth/apiKey.js');
+    const app = new Hono();
+    app.use('*', requireApiKey);
+    app.route('/', whisperRouter);
+    const res = await app.request('/api/whisper/history');
+    expect([401, 403]).toContain(res.status);
+    // The admin token short-circuits the role gate, same as /status.
+    const ok = await app.request('/api/whisper/history', { headers: { 'x-whisper-token': ADMIN } });
+    expect(ok.status).toBe(200);
+  });
+
+  it('serves rows with computed avgMs (null when every attempt failed)', async () => {
+    const { app } = await setupWithDb();
+    statsQueryMock.mockResolvedValueOnce({
+      rows: [
+        { hour: new Date('2026-09-09T03:00:00Z'), backend: 'pc', requests: 5, failures: 2, total_ms: '3000' },
+        { hour: new Date('2026-09-09T03:00:00Z'), backend: 'vm', requests: 2, failures: 2, total_ms: '0' },
+      ],
+    } as never);
+    const res = await app.request('/api/whisper/history?hours=24');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.configured).toBe(true);
+    expect(body.rows).toEqual([
+      { hour: '2026-09-09T03:00:00.000Z', backend: 'pc', requests: 5, failures: 2, avgMs: 1000 },
+      { hour: '2026-09-09T03:00:00.000Z', backend: 'vm', requests: 2, failures: 2, avgMs: null },
+    ]);
+  });
+
+  it('clamps hours to 1..720 and defaults to 24', async () => {
+    const { app } = await setupWithDb();
+    const hoursParam = async (qs: string) => {
+      statsQueryMock.mockClear();
+      await app.request(`/api/whisper/history${qs}`);
+      const sel = statsQueryMock.mock.calls.find((c) => String(c[0]).includes('FROM whisper_hourly'));
+      return (sel?.[1] as unknown[] | undefined)?.[0];
+    };
+    expect(await hoursParam('')).toBe(24);
+    expect(await hoursParam('?hours=0')).toBe(1);
+    expect(await hoursParam('?hours=9999')).toBe(720);
+    expect(await hoursParam('?hours=168')).toBe(168);
+  });
+
+  it('reports configured:false without touching the DB when whisper is off', async () => {
+    const { app } = await setupWithDb('');
+    const res = await app.request('/api/whisper/history');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toEqual({ configured: false, hours: 24, rows: [] });
+    expect(statsQueryMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The fault this cap exists to prevent: the router had no concurrency limit
+ * and its selection ignored load entirely, so it handed the preferred
+ * backend every call it had. With that backend decoding one at a time, the
+ * queue formed INSIDE whisper — where the router could not see it, could not
+ * manage it, and where a 180s abort left work running that nobody would
+ * collect, slowing the next call and causing the next abort.
+ */
+describe('per-backend concurrency cap', () => {
+  it('never exceeds what the backend says it can run at once', async () => {
+    const { app, svc } = await setup(`pc=${PC}`);
+    await probeOnce(svc);              // pc reports numWorkers: 2
+
+    let release!: () => void;
+    pc.hold = new Promise<void>((r) => { release = r; });
+    const calls = Array.from({ length: 6 }, () => app.request('/api/whisper/v1/audio/transcriptions', post()));
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Six in, two allowed through; the rest are parked in the router.
+    expect(pc.maxConcurrent).toBeLessThanOrEqual(2);
+    release();
+    await Promise.all(calls);
+    // All six still got transcribed — queued, not shed.
+    expect(pc.hits).toBe(6);
+    expect(pc.maxConcurrent).toBeLessThanOrEqual(2);
+  });
+
+  it('follows the backend when it reports a different parallelism', async () => {
+    pcWorkers = 4;
+    const { app, svc } = await setup(`pc=${PC}`);
+    await probeOnce(svc);
+
+    let release!: () => void;
+    pc.hold = new Promise<void>((r) => { release = r; });
+    const calls = Array.from({ length: 8 }, () => app.request('/api/whisper/v1/audio/transcriptions', post()));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(pc.maxConcurrent).toBe(4);
+    release();
+    await Promise.all(calls);
+  });
+
+  it('an explicit @N in WHISPER_BACKENDS overrides what the server reports', async () => {
+    pcWorkers = 8;
+    const { app, svc } = await setup(`pc=${PC}@1`);
+    await probeOnce(svc);
+
+    let release!: () => void;
+    pc.hold = new Promise<void>((r) => { release = r; });
+    const calls = Array.from({ length: 4 }, () => app.request('/api/whisper/v1/audio/transcriptions', post()));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(pc.maxConcurrent).toBe(1);
+    release();
+    await Promise.all(calls);
+  });
+
+  it('still parses a plain name=url with no suffix', async () => {
+    const { svc } = await setup(`pc=${PC},vm=${VM}`);
+    const names = svc.whisperBackends().map((b) => b.name);
+    expect(names).toEqual(['pc', 'vm']);
+    expect(svc.whisperBackends()[0]!.url).toBe(PC);
+  });
+
+  it('spills to the second backend rather than queueing behind a full first', async () => {
+    const { app, svc } = await setup(`pc=${PC}@1,vm=${VM}@1`);
+    await probeOnce(svc);
+
+    let release!: () => void;
+    pc.hold = new Promise<void>((r) => { release = r; });
+    const calls = [
+      app.request('/api/whisper/v1/audio/transcriptions', post()),
+      app.request('/api/whisper/v1/audio/transcriptions', post()),
+    ];
+    await new Promise((r) => setTimeout(r, 10));
+    // Second call went to vm because pc's single slot was taken — the whole
+    // point: a busy preferred backend is skipped, not piled onto.
+    expect(vm.hits).toBe(1);
+    release();
+    await Promise.all(calls);
+  });
+
+  it('releases the slot when a call fails, so the backend is not wedged', async () => {
+    const { app, svc } = await setup(`pc=${PC}@1`);
+    await probeOnce(svc);
+
+    pc.fail = true;                    // 500s, which frees the slot via finally
+    await app.request('/api/whisper/v1/audio/transcriptions', post());
+    pc.fail = false;
+    const res = await app.request('/api/whisper/v1/audio/transcriptions', post());
+    // A leaked permit would leave this waiting until SLOT_WAIT_MS.
+    expect(res.status).toBe(200);
+    expect(svc.whisperStatus().backends[0]!.inFlight).toBe(0);
+  });
+});
+
+describe('latency the panel can trust', () => {
+  it('reports avg and p95 from the same population, so avg <= p95', async () => {
+    const { app, svc } = await setup(`pc=${PC}`);
+    await probeOnce(svc);
+    for (let i = 0; i < 5; i++) {
+      await app.request('/api/whisper/v1/audio/transcriptions', post());
+    }
+    const b = svc.whisperStatus().backends[0]!;
+    expect(b.avgMs).not.toBeNull();
+    expect(b.p95Ms).not.toBeNull();
+    // The invariant the old row violated: it showed 39.7s avg beside a
+    // 1117.4s p95 by mixing a router mean with a server percentile.
+    expect(b.avgMs!).toBeLessThanOrEqual(b.p95Ms!);
+  });
+
+  it('counts a failed call in the latency ring instead of hiding it', async () => {
+    const { app, svc } = await setup(`pc=${PC},vm=${VM}`);
+    await probeOnce(svc);
+    pc.fail = true;
+    await app.request('/api/whisper/v1/audio/transcriptions', post());
+    const b = svc.whisperStatus().backends.find((x) => x.name === 'pc')!;
+    // Previously only the response path appended, so the slow calls that
+    // define an outage were structurally invisible in the average.
+    expect(b.avgMs).not.toBeNull();
+  });
+
+  it('exposes the cap so the panel can show in-flight against capacity', async () => {
+    const { svc } = await setup(`pc=${PC}@3`);
+    expect(svc.whisperStatus().backends[0]!.maxInFlight).toBe(3);
   });
 });

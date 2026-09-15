@@ -39,6 +39,7 @@ import {
   whisperSetDrain,
   whisperStatus,
 } from '../services/whisperRouter.js';
+import { getPool } from '../db/pool.js';
 
 export const whisperRouter = new Hono();
 
@@ -122,6 +123,61 @@ whisperRouter.get(
     return requireRole(canViewNodeData)(c, next);
   },
   (c) => c.json(statusBody()),
+);
+
+/**
+ * Hourly throughput history for the staff dashboard's graphs. Read from
+ * whisper_hourly (migration 098; written per-attempt by whisperStats), so
+ * this is a tiny PK range scan on OUR Postgres — never the rdio DB. The
+ * current hour is live in the table (upserts land as calls happen), so the
+ * client needs no live-hour merge. `backend` 'none' rows = calls no backend
+ * could take at all. Same auth pairing as /status.
+ */
+const HISTORY_MAX_HOURS = 720; // 30 days — matches the staff window pills
+
+const historyBody = async (hours: number) => {
+  if (!whisperConfigured()) return { configured: false, hours, rows: [] };
+  const pool = await getPool();
+  if (!pool) return { configured: true, hours, rows: [] };
+  const res = await pool.query<{
+    hour: string; backend: string; requests: number; failures: number; total_ms: string;
+  }>(
+    `SELECT hour, backend, requests, failures, total_ms
+       FROM whisper_hourly
+      WHERE hour >= now() - make_interval(hours => $1)
+      ORDER BY hour`,
+    [hours],
+  );
+  const rows = res.rows.map((r) => {
+    const ok = r.requests - r.failures;
+    return {
+      hour: new Date(r.hour).toISOString(),
+      backend: r.backend,
+      requests: r.requests,
+      failures: r.failures,
+      avgMs: ok > 0 ? Math.round(Number(r.total_ms) / ok) : null,
+    };
+  });
+  return { configured: true, hours, rows };
+};
+
+whisperRouter.get(
+  '/api/whisper/history',
+  async (c, next) => {
+    if (adminAuthorised(c)) return next();
+    return requireRole(canViewNodeData)(c, next);
+  },
+  async (c) => {
+    let hours = Number.parseInt(c.req.query('hours') ?? '24', 10);
+    if (!Number.isFinite(hours)) hours = 24;
+    hours = Math.min(Math.max(hours, 1), HISTORY_MAX_HOURS);
+    try {
+      return c.json(await historyBody(hours));
+    } catch (err) {
+      log.error({ err }, '/api/whisper/history error');
+      return c.json({ error: 'failed to load whisper history' }, 500);
+    }
+  },
 );
 
 /**

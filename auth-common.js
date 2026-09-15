@@ -31,7 +31,7 @@ function injectAuthSection() {
     authSection.innerHTML = `
       <div class="sidebar-section-label">Account</div>
       <div id="auth-logged-out">
-        <a href="login.html" style="width:100%; padding:0.6rem 1rem; background:rgba(249,115,22,0.15); border:1px solid rgba(249,115,22,0.3); border-radius:8px; color:#f97316; font-size:0.85rem; font-weight:500; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:0.5rem; font-family:inherit; text-decoration:none; box-sizing:border-box;">
+        <a href="login" style="width:100%; padding:0.6rem 1rem; background:rgba(249,115,22,0.15); border:1px solid rgba(249,115,22,0.3); border-radius:8px; color:#f97316; font-size:0.85rem; font-weight:500; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:0.5rem; font-family:inherit; text-decoration:none; box-sizing:border-box;">
           <i class="fas fa-sign-in-alt"></i> Login
         </a>
       </div>
@@ -76,8 +76,8 @@ function injectAuthSection() {
     legal.innerHTML = `
       <div class="sidebar-section-label">Legal</div>
       <nav class="sidebar-nav">
-        <a href="terms.html"${location.pathname.endsWith('/terms.html') ? ' class="active"' : ''}>Terms &amp; Conditions</a>
-        <a href="privacy.html"${location.pathname.endsWith('/privacy.html') ? ' class="active"' : ''}>Privacy Policy</a>
+        <a href="terms"${location.pathname.endsWith('/terms') ? ' class="active"' : ''}>Terms &amp; Conditions</a>
+        <a href="privacy"${location.pathname.endsWith('/privacy') ? ' class="active"' : ''}>Privacy Policy</a>
       </nav>
     `;
     sidebarFooter.parentNode.insertBefore(legal, sidebarFooter);
@@ -122,7 +122,7 @@ function createAuthModals() {
         <div id="login-error" style="color:#ef4444; font-size:0.85rem; margin-top:1.2rem; text-align:center; min-height:1.2em;"></div>
         <div style="border-top:1px solid rgba(148,163,184,0.2); margin-top:1.5rem; padding-top:1.5rem; text-align:center;">
           <p style="color:#94a3b8; font-size:0.85rem; margin:0 0 0.75rem 0;">Don't have an account?</p>
-          <a href="signup.html" style="display:block; width:100%; padding:0.8rem; background:transparent; border:1px solid #f97316; border-radius:8px; color:#f97316; font-weight:700; cursor:pointer; text-transform:uppercase; letter-spacing:0.05em; font-size:0.9rem; text-decoration:none; text-align:center; box-sizing:border-box; font-family:inherit; transition:all 0.2s;">Request Access</a>
+          <a href="signup" style="display:block; width:100%; padding:0.8rem; background:transparent; border:1px solid #f97316; border-radius:8px; color:#f97316; font-weight:700; cursor:pointer; text-transform:uppercase; letter-spacing:0.05em; font-size:0.9rem; text-decoration:none; text-align:center; box-sizing:border-box; font-family:inherit; transition:all 0.2s;">Request Access</a>
         </div>
       </div>
     `;
@@ -205,7 +205,7 @@ async function doLogin() {
   // Check if user needs to change password on first login
   if (data?.user?.user_metadata?.force_password_change) {
     closeLoginModal();
-    window.location.href = 'change-password.html';
+    window.location.href = 'change-password';
     return;
   }
   
@@ -304,6 +304,22 @@ function createProfileModal() {
         </div>
         <input type="file" id="profile-wm-input" accept="image/png" style="display:none">
         <div style="color:#64748b; font-size:0.72rem; margin-top:0.4rem;">A transparent PNG, stamped onto the bottom-right of your Wire &amp; Fleet photos when the watermark toggle is on. Without one, your username is used. The preview shows how it will sit on a photo.</div>
+        <label style="display:flex; gap:0.55rem; align-items:flex-start; margin-top:0.7rem; padding-top:0.7rem; border-top:1px solid rgba(148,163,184,0.15); cursor:pointer;">
+          <input type="checkbox" id="profile-wm-default" onchange="saveWatermarkDefault(this)" style="width:auto; margin-top:0.15rem; accent-color:#38bdf8;">
+          <span style="color:#cbd5e1; font-size:0.82rem;">Watermark my media by default
+            <span style="display:block; color:#64748b; font-size:0.72rem; margin-top:0.15rem;">Starts the watermark switch on when you compose. You can still change it per post.</span>
+          </span>
+        </label>
+      </div>
+
+      <div id="profile-referral-section" class="pf-card" style="display:none;">
+        <label style="display:block; color:#cbd5e1; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem; font-weight:600;">Referral link</label>
+        <div style="display:flex; align-items:center; gap:0.5rem;">
+          <input type="text" id="profile-referral-link" readonly style="flex:1; min-width:0; padding:0.55rem 0.7rem; background:rgba(2,6,23,0.5); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#e2e8f0; font-size:0.8rem; box-sizing:border-box; font-family:inherit;">
+          <button type="button" onclick="copyProfileReferralLink(this)" title="Copy link" style="padding:0.5rem 0.8rem; background:rgba(148,163,184,0.12); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#e2e8f0; font-size:0.8rem; cursor:pointer; font-family:inherit;"><i class="fas fa-copy"></i></button>
+        </div>
+        <div id="profile-referral-stats" style="color:#64748b; font-size:0.72rem; margin-top:0.4rem;"></div>
+        <div style="color:#64748b; font-size:0.72rem; margin-top:0.3rem;">Send this to someone you'd vouch for as a contributor — their application arrives tagged with your name.</div>
       </div>
 
       <div class="pf-card">
@@ -319,7 +335,7 @@ function createProfileModal() {
           <span id="profile-discord-linked-badge" style="display:none; color:#22c55e; font-size:0.75rem; font-weight:600;"><i class="fas fa-check"></i> Linked</span>
           <button id="profile-discord-unlink-btn" onclick="unlinkDiscordAccount()" style="display:none; padding:0.35rem 0.7rem; background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.3); border-radius:6px; color:#fca5a5; font-weight:600; cursor:pointer; font-size:0.75rem; font-family:inherit;">Unlink</button>
         </div>
-        <a id="profile-change-password" href="change-password.html" style="display:flex; width:100%; padding:0.55rem; background:rgba(148,163,184,0.1); border:1px solid rgba(148,163,184,0.2); border-radius:6px; color:#94a3b8; font-size:0.8rem; cursor:pointer; align-items:center; justify-content:center; gap:0.4rem; font-family:inherit; text-decoration:none; box-sizing:border-box; margin-top:0.7rem;">
+        <a id="profile-change-password" href="change-password" style="display:flex; width:100%; padding:0.55rem; background:rgba(148,163,184,0.1); border:1px solid rgba(148,163,184,0.2); border-radius:6px; color:#94a3b8; font-size:0.8rem; cursor:pointer; align-items:center; justify-content:center; gap:0.4rem; font-family:inherit; text-decoration:none; box-sizing:border-box; margin-top:0.7rem;">
           <i class="fas fa-key"></i> Change Password
         </a>
       </div>
@@ -948,6 +964,8 @@ async function openProfileModal() {
       if (profile && profile.avatar_url && avPrev) avPrev.innerHTML = `<img src="${profile.avatar_url}" style="width:100%;height:100%;object-fit:cover;">`;
       const avRm = document.getElementById('profile-avatar-remove');
       if (avRm) avRm.style.display = profile && profile.has_custom_avatar ? 'inline-block' : 'none';
+      const wmDef = document.getElementById('profile-wm-default');
+      if (wmDef) wmDef.checked = !!(profile && profile.watermark_default);
       renderProfileStats(pj.stats);
       renderProfileTags(pj.tags);
     }
@@ -962,11 +980,80 @@ async function openProfileModal() {
       sect.style.display = 'block';
       loadProfileWatermark(session);
     } else if (sect) { sect.style.display = 'none'; }
+    // Referral link: contributors who can vouch for new applicants. Mirrors
+    // canRefer on the backend (which is the real gate — this only decides
+    // whether to show the card).
+    const REFERRAL_ROLES = ['feeder:radio', 'feeder:pager', 'wire:contributor', 'map:editor'];
+    const refSect = document.getElementById('profile-referral-section');
+    const mayRefer = !!ce.is_owner || REFERRAL_ROLES.some((r) => (ce.roles || []).includes(r));
+    if (refSect) refSect.style.display = mayRefer ? 'block' : 'none';
+    if (mayRefer) loadProfileReferral(session);
   } catch (e) { /* section stays hidden */ }
 
   const msg = document.getElementById('profile-message');
   if (msg) msg.textContent = '';
   document.getElementById('profile-modal').style.display = 'flex';
+}
+
+// Personal referral link + how it's doing. The code is minted server-side on
+// first request (GET /api/referral-code, gated on canRefer).
+async function loadProfileReferral(session) {
+  const sect = document.getElementById('profile-referral-section');
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/referral-code`, {
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const j = await res.json();
+    if (!j.code) throw new Error('no code');
+    const link = document.getElementById('profile-referral-link');
+    if (link) link.value = `${location.origin}/signup?as=contributor&ref=${encodeURIComponent(j.code)}`;
+    const stats = document.getElementById('profile-referral-stats');
+    if (stats) {
+      const uses = j.uses || 0;
+      stats.textContent = `${uses} signup${uses === 1 ? '' : 's'} · ${j.approved || 0} approved`;
+    }
+  } catch (e) {
+    if (sect) sect.style.display = 'none'; // no link is better than a broken one
+  }
+}
+
+function copyProfileReferralLink(btn) {
+  const el = document.getElementById('profile-referral-link');
+  const text = el ? el.value : '';
+  if (!text) return;
+  const done = () => {
+    if (!btn) return;
+    const prev = btn.innerHTML;
+    btn.innerHTML = '<i class="fas fa-check" style="color:#22c55e"></i>';
+    setTimeout(() => { btn.innerHTML = prev; }, 1400);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(() => { if (el) el.select(); });
+  } else {
+    try {
+      el.select();
+      document.execCommand('copy');
+      done();
+    } catch (e) { /* user can copy manually */ }
+  }
+}
+
+// "Watermark my media by default" — an account preference the compose pages
+// read as the initial state of their per-post watermark switch.
+async function saveWatermarkDefault(el) {
+  try {
+    const { data } = await sb.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) return;
+    await fetch(`${API_BASE_URL}/api/profiles/watermark-default`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ enabled: !!el.checked }),
+    });
+    // Keep the compose pages' local cache in step on this device.
+    try { localStorage.setItem('nswpsn:wireWatermark', el.checked ? '1' : '0'); } catch (e) {}
+  } catch (e) { /* preference is best-effort */ }
 }
 
 function closeProfileModal() {
@@ -1276,13 +1363,13 @@ async function checkAuthState() {
       if (roleData.is_team_member || roleData.is_owner ||
           _hasAny('staff', 'team_member', 'feeder:monitor', 'node_monitor',
                   'feeder:manager', 'wire:manager', 'map:manager')) {
-        buttons += menuItem('staff.html', 'fa-users-cog', 'Staff', '#fb923c');
+        buttons += menuItem('staff', 'fa-users-cog', 'Staff', '#fb923c');
       }
 
       // Radio Feeder - for radio contributors (links to their node
       // download + status page). Distinct sky accent from Staff.
       if (_hasAny('feeder:radio', 'radio_contributor', 'feeder:pager', 'pager_contributor')) {
-        buttons += menuItem('feeder.html', 'fa-satellite-dish', 'Feeder', '#38bdf8');
+        buttons += menuItem('feeder', 'fa-satellite-dish', 'Feeder', '#38bdf8');
       }
 
       const rolesSlot = document.getElementById('auth-menu-roles');
@@ -1376,7 +1463,7 @@ async function handlePasswordResetRequest(event) {
   
   try {
     const { error } = await sb.auth.resetPasswordForEmail(email, {
-      redirectTo: window.location.origin + '/reset-password.html'
+      redirectTo: window.location.origin + '/reset-password'
     });
     
     if (error) {

@@ -32,7 +32,7 @@ describe('buildConfigPayload (pager)', () => {
   it('returns a lean pager payload: NSW RFS + FRNSW frequencies, POCSAG rates, no rdio doc', async () => {
     const p = await buildConfigPayload(pagerNode());
     expect(p.pager).toBeDefined();
-    expect(p.pager!.frequencies.map((f) => f.mhz)).toEqual([148.5875, 148.9875]);
+    expect(p.pager!.frequencies.map((f) => f.mhz)).toEqual([148.5875, 148.9625]);
     expect(p.pager!.frequencies[0]!.label).toBe('NSWRFS');
     expect(p.pager!.protocols).toEqual(['POCSAG512', 'POCSAG1200', 'POCSAG2400']);
     // No radio payload leaks into a pager node.
@@ -42,6 +42,32 @@ describe('buildConfigPayload (pager)', () => {
     expect(p.rdioConfig).toEqual({});
     expect(p.streamTargets).toEqual([]);
     expect(p.configVersion).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('QLD node gets the single QFES frequency, regardless of any primary override', async () => {
+    const qld = await buildConfigPayload(pagerNode({ state: 'QLD' }));
+    expect(qld.pager!.frequencies).toEqual([{ label: 'QFES', mhz: 148.6375 }]);
+    // A stale NSW override (node moved states) must not resurrect NSW freqs.
+    const stale = await buildConfigPayload(
+      pagerNode({ state: 'QLD', config_override: { pagerPrimary: 'FRNSW' } }),
+    );
+    expect(stale.pager!.frequencies).toEqual([{ label: 'QFES', mhz: 148.6375 }]);
+  });
+
+  it('null/unknown state falls back to the NSW plan (pre-097 rows keep working)', async () => {
+    const nullState = await buildConfigPayload(pagerNode({ state: null }));
+    const unknown = await buildConfigPayload(pagerNode({ state: 'XX' }));
+    const nsw = await buildConfigPayload(pagerNode({ state: 'NSW' }));
+    expect(nullState.pager!.frequencies.map((f) => f.label)).toEqual(['NSWRFS', 'FRNSW']);
+    // Identical payloads → identical configVersion → NO fleet-wide re-push on deploy.
+    expect(nullState.configVersion).toEqual(nsw.configVersion);
+    expect(unknown.configVersion).toEqual(nsw.configVersion);
+  });
+
+  it('changing state changes the configVersion (so the node re-syncs live)', async () => {
+    const nsw = await buildConfigPayload(pagerNode({ state: 'NSW' }));
+    const qld = await buildConfigPayload(pagerNode({ state: 'QLD' }));
+    expect(nsw.configVersion).not.toEqual(qld.configVersion);
   });
 
   it('capture/feed reflect the node flags and change the config version', async () => {

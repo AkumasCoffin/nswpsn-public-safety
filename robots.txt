@@ -57,13 +57,13 @@ Disallow: /
 User-agent: Googlebot
 Allow: /
 # Token-bound pages — would 404 / show stale state without the token.
-Disallow: /reset-password.html
-Disallow: /verify-email.html
+Disallow: /reset-password
+Disallow: /verify-email
 # Authenticated-only pages.
-Disallow: /change-password.html
-Disallow: /dashboard.html
-Disallow: /map-editor.html
-Disallow: /staff.html
+Disallow: /change-password
+Disallow: /dashboard
+Disallow: /map-editor
+Disallow: /staff
 # Internal data + backend artefacts.
 Disallow: /backends/
 Disallow: /data/
@@ -76,13 +76,13 @@ User-agent: *
 Content-Signal: search=yes,ai-train=no
 Allow: /
 # Token-bound pages — would 404 / show stale state without the token.
-Disallow: /reset-password.html
-Disallow: /verify-email.html
+Disallow: /reset-password
+Disallow: /verify-email
 # Authenticated-only pages.
-Disallow: /change-password.html
-Disallow: /dashboard.html
-Disallow: /map-editor.html
-Disallow: /staff.html
+Disallow: /change-password
+Disallow: /dashboard
+Disallow: /map-editor
+Disallow: /staff
 # Internal data + backend artefacts.
 Disallow: /backends/
 Disallow: /data/

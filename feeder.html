@@ -12,7 +12,7 @@
   <meta name="author" content="Forcequit">
 
   <meta property="og:type" content="website">
-  <meta property="og:url" content="https://nswpsn.forcequit.xyz/feeder.html">
+  <meta property="og:url" content="https://nswpsn.forcequit.xyz/feeder">
   <meta property="og:title" content="Radio Feeder – AusAware">
   <meta property="og:description" content="Download and run your AusAware radio feeder node.">
   <meta property="og:image" content="https://nswpsn.forcequit.xyz/assets/AusAware_filled_background.jpg">
@@ -464,6 +464,22 @@
        (otherwise the zone names render unreadable). */
     .loc-field select option { background: #0f172a; color: var(--text-primary); }
     .loc-field select optgroup { background: #0f172a; color: #7dd3fc; font-weight: 700; }
+    .loc-field .lga-combo input {
+      width: 100%; background: rgba(0,0,0,0.25);
+      border: 1px solid var(--border-subtle); border-radius: 8px;
+      color: var(--text-primary); padding: 0.55rem 0.7rem; font-family: inherit; font-size: 0.9rem;
+    }
+    /* Custom LGA dropdown — the native <datalist> popup is unstylable (it
+       renders as a giant white list pinned to the screen edge), so suggestions
+       live in our own positioned, filter-as-you-type list under the field. */
+    .lga-combo { position: relative; display: block; }
+    .lga-dd { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 1200;
+      max-height: 230px; overflow-y: auto; background: #0f172a;
+      border: 1px solid var(--border-subtle, #334155); border-radius: 8px;
+      box-shadow: 0 10px 26px rgba(0,0,0,0.5); display: none; }
+    .lga-dd.open { display: block; }
+    .lga-dd .lga-opt { padding: 0.45rem 0.7rem; cursor: pointer; font-size: 0.85rem; color: var(--text-primary, #e2e8f0); }
+    .lga-dd .lga-opt:hover { background: rgba(125,211,252,0.12); }
     .loc-pin-toggle { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.9rem; font-size: 0.9rem; cursor: pointer; }
     .loc-pin-toggle input { width: 16px; height: 16px; flex: 0 0 auto; }
     #loc-map { height: 340px; border-radius: 8px; margin-bottom: 1rem; border: 1px solid var(--border-subtle); }
@@ -525,7 +541,7 @@
     <div class="header">
       <h1>Radio <span>Feeder</span></h1>
       <div class="header-actions">
-        <a href="map.html" class="btn btn-secondary"><i class="fas fa-map"></i> Map</a>
+        <a href="map" class="btn btn-secondary"><i class="fas fa-map"></i> Map</a>
         <button class="btn btn-danger" onclick="doLogout()"><i class="fas fa-sign-out-alt"></i> Logout</button>
       </div>
     </div>
@@ -627,7 +643,7 @@
     async function doLogout() {
       if (typeof umami !== 'undefined') umami.track('logout');
       await sb.auth.signOut();
-      window.location.href = 'login.html';
+      window.location.href = 'login';
     }
 
     // --- Boot: require a session, else bounce to the login page (keeping a
@@ -635,7 +651,7 @@
     async function boot() {
       const { data } = await sb.auth.getSession();
       if (!data.session) {
-        window.location.href = 'login.html?redirect=' + encodeURIComponent('/feeder.html');
+        window.location.href = 'login?redirect=' + encodeURIComponent('/feeder');
         return;
       }
       await loadFeeder();
@@ -646,7 +662,7 @@
       try {
         const token = await getToken();
         if (!token) {
-          window.location.href = 'login.html?redirect=' + encodeURIComponent('/feeder.html');
+          window.location.href = 'login?redirect=' + encodeURIComponent('/feeder');
           return;
         }
         const res = await fetch(`${API_BASE_URL}/api/feeder/me`, {
@@ -684,7 +700,7 @@
             scanner audio, request access below and a staff member will set you up.
           </p>
           <div class="dl-row">
-            <a class="dl-btn" href="signup.html" style="text-decoration:none;">
+            <a class="dl-btn" href="signup" style="text-decoration:none;">
               <i class="fas fa-user-plus"></i> Request feeder access
             </a>
           </div>
@@ -748,6 +764,54 @@
         out += `</optgroup>`;
       }
       return out;
+    }
+
+    // Australian states for PAGER node location (radio nodes use the RFS zone).
+    const AU_STATES = ['NSW', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'NT', 'ACT'];
+    function _stateOptionsHtml(selected) {
+      return `<option value="" ${selected ? '' : 'selected'} disabled>Select your state…</option>`
+        + AU_STATES.map(s => `<option value="${s}" ${s === selected ? 'selected' : ''}>${s}</option>`).join('');
+    }
+    // ABS LGA names per state (same source as signup) for the LGA dropdown.
+    // Cached per state; a failed fetch degrades to free text, never a blocked
+    // form. keepValue preserves the stored LGA on the initial (edit) fill.
+    // Suggestions render in our own styled .lga-dd list (see _lgaShow) — the
+    // native <datalist> popup can't be styled to match the site.
+    const _lgaNamesCache = {};
+    let _lgaNames = [];
+    async function _locOnStateChange(keepValue) {
+      const state = document.getElementById('loc-state')?.value || '';
+      const lga = document.getElementById('loc-lga');
+      if (!lga) return;
+      if (!keepValue) lga.value = '';
+      lga.disabled = !state;
+      lga.placeholder = state ? 'Start typing your council area…' : 'Select your state first…';
+      _lgaNames = [];
+      _lgaHide();
+      if (!state) return;
+      if (_lgaNamesCache[state]) { _lgaNames = _lgaNamesCache[state]; return; }
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/boundaries/lga-names?state=${state}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const names = Array.isArray(data.names) ? data.names : [];
+        _lgaNamesCache[state] = names;
+        // The user may have changed state while this was in flight.
+        if ((document.getElementById('loc-state')?.value || '') === state) _lgaNames = names;
+      } catch (e) { /* no suggestions is fine — the field is free text either way */ }
+    }
+    function _lgaShow() {
+      const input = document.getElementById('loc-lga');
+      const dd = document.getElementById('loc-lga-dd');
+      if (!input || !dd || input.disabled) return;
+      const q = input.value.trim().toLowerCase();
+      const matches = _lgaNames.filter(n => n.toLowerCase().includes(q));
+      dd.innerHTML = matches.map(n => `<div class="lga-opt" data-lga="${escapeHtml(n)}">${escapeHtml(n)}</div>`).join('');
+      dd.classList.toggle('open', matches.length > 0);
+    }
+    function _lgaHide() {
+      const dd = document.getElementById('loc-lga-dd');
+      if (dd) dd.classList.remove('open');
     }
 
     function renderRadioCard(data) {
@@ -893,8 +957,10 @@
       const located = typeof node.lat === 'number' && typeof node.lon === 'number';
       const statusText = updating ? 'Updating…' : (online ? 'Online' : 'Offline');
       const statusCls = updating ? 'st-upd' : (online ? 'st-on' : 'st-off');
-      const regionItem = node.zone
-        ? `<span class="nl-item"><i class="fas fa-map"></i> ${escapeHtml(node.zone)}</span>`
+      // Pager nodes locate by State + LGA; radio nodes by RFS zone.
+      const areaLabel = isPager ? [node.state, node.lga].filter(Boolean).join(' · ') : node.zone;
+      const regionItem = areaLabel
+        ? `<span class="nl-item"><i class="fas fa-map"></i> ${escapeHtml(areaLabel)}</span>`
         : `<span class="nl-item nl-warn"><i class="fas fa-map"></i> no region set</span>`;
       const pinItem = located ? `<span class="nl-item"><i class="fas fa-location-dot"></i> exact pin</span>` : '';
       const keyItem = node.tokenPrefix ? `<span class="nl-item nl-key">key <code>${escapeHtml(node.tokenPrefix)}…</code></span>` : '';
@@ -917,7 +983,7 @@
           ${statsBtn}
           ${msgsBtn}
           ${dl}
-          <button class="mini-btn" title="Set region / exact pin" onclick="openLocationPicker('${node.id}')"><i class="fas fa-location-dot"></i> ${node.zone ? 'Location' : 'Set region'}</button>
+          <button class="mini-btn" title="Set region / exact pin" onclick="openLocationPicker('${node.id}')"><i class="fas fa-location-dot"></i> ${areaLabel ? 'Location' : 'Set region'}</button>
           <button class="mini-btn" title="Re-issue key (invalidates the old installer)" onclick="rotateNode('${node.id}',this)"><i class="fas fa-key"></i></button>
           <button class="mini-btn danger" title="Delete node (cuts it off)" onclick="deleteFeederNode('${node.id}',this)"><i class="fas fa-trash"></i></button>
         </div>`;
@@ -1138,9 +1204,10 @@
       const m = document.getElementById('stats-modal'); if (m) m.remove();
     }
 
-    // Create a node. A zone is REQUIRED, so we collect it (plus an optional exact
-    // pin) in the picker FIRST — the node is created on Save (see saveLocation),
-    // not before, so cancelling creates nothing. Then continue to the installer.
+    // Create a node. A coarse area is REQUIRED (radio: RFS zone; pager: State +
+    // LGA), so we collect it (plus an optional exact pin) in the picker FIRST —
+    // the node is created on Save (see saveLocation), not before, so cancelling
+    // creates nothing. Then continue to the installer.
     async function addNode(btn) {
       const kind = document.getElementById('new-node-kind').value;
       const orig = btn ? btn.innerHTML : '';
@@ -1245,9 +1312,10 @@
       document.body.appendChild(el);
     }
 
-    // Location picker: a REQUIRED RFS zone (coarse area) + an OPTIONAL exact
-    // antenna pin (for coverage + channel tuning). Used both to create a node
-    // (opts.createKind — node is created on Save) and to edit an existing one.
+    // Location picker: a REQUIRED coarse area (radio: NSW RFS zone; pager:
+    // State + LGA — the state routes the node's Pagermon feed AND selects its
+    // frequency plan) plus an OPTIONAL exact antenna pin. Used both to create a
+    // node (opts.createKind — created on Save) and to edit an existing one.
     async function openLocationPicker(nodeId, opts) {
       closeLocationPicker(); // never stack two pickers
       opts = opts || {};
@@ -1259,11 +1327,14 @@
       const createMode = !!_loc.createKind;
       const hasPin = typeof node.lat === 'number' && typeof node.lon === 'number';
       const curZone = node.zone || '';
-      const zones = await loadZones();
-      if (!zones.length) {
-        // No zones = can't pick one = can't create/save. Don't open a dead modal.
-        showToast('Could not load the region list. Check your connection and try again.', 'error');
-        return;
+      const isPager = (_loc.createKind || node.kind) === 'pager';
+      if (!isPager) {
+        const zones = await loadZones();
+        if (!zones.length) {
+          // No zones = can't pick one = can't create/save. Don't open a dead modal.
+          showToast('Could not load the region list. Check your connection and try again.', 'error');
+          return;
+        }
       }
       const overlay = document.createElement('div');
       overlay.id = 'loc-modal';
@@ -1271,13 +1342,26 @@
       overlay.innerHTML = `
         <div class="modal loc-modal">
           <h3><i class="fas fa-location-dot"></i> Node location</h3>
-          <p>Every node needs a <b>region</b> (its NSW RFS area). Optionally drop an
-             <b>exact antenna pin</b> — it improves <b>coverage</b> estimates and
-             <b>channel tuning</b>. The pin and region are staff/owner only, never public.</p>
+          <p>${isPager
+            ? `Every pager node needs its <b>state</b> and <b>council area (LGA)</b> — the state decides which Pagermon network it feeds and what frequencies it scans. Optionally drop an <b>exact antenna pin</b> for <b>coverage</b> estimates. The location is staff/owner only, never public.`
+            : `Every node needs a <b>region</b> (its NSW RFS area). Optionally drop an <b>exact antenna pin</b> — it improves <b>coverage</b> estimates and <b>channel tuning</b>. The pin and region are staff/owner only, never public.`}</p>
+          ${isPager ? `
+          <label class="loc-field">
+            <span>State <span style="color:#f87171">*</span></span>
+            <select id="loc-state" onchange="_locOnStateChange()">${_stateOptionsHtml(node.state || '')}</select>
+          </label>
+          <label class="loc-field">
+            <span>Council area (LGA) <span style="color:#f87171">*</span></span>
+            <span class="lga-combo">
+              <input id="loc-lga" value="${escapeHtml(node.lga || '')}" maxlength="120" autocomplete="off" placeholder="Select your state first…"
+                oninput="_lgaShow()" onfocus="_lgaShow()" onblur="_lgaHide()">
+              <div id="loc-lga-dd" class="lga-dd"></div>
+            </span>
+          </label>` : `
           <label class="loc-field">
             <span>Region <span style="color:#f87171">*</span></span>
             <select id="loc-zone">${_zoneOptionsHtml(curZone)}</select>
-          </label>
+          </label>`}
           <label class="loc-pin-toggle">
             <input type="checkbox" id="loc-pin-on" ${hasPin ? 'checked' : ''} onchange="_locTogglePin(this.checked)">
             <span>Set an exact antenna pin (optional)</span>
@@ -1291,6 +1375,20 @@
         </div>`;
       document.body.appendChild(overlay);
       if (hasPin) _locInitMap([node.lat, node.lon], true);
+      // Pre-fill the LGA suggestions for the stored state (edit mode) and wire
+      // the dropdown: pick on mousedown, which fires BEFORE the input's blur.
+      if (isPager) {
+        _locOnStateChange(true);
+        const dd = document.getElementById('loc-lga-dd');
+        if (dd) dd.addEventListener('mousedown', (e) => {
+          const opt = e.target.closest('.lga-opt');
+          if (!opt) return;
+          e.preventDefault();
+          const input = document.getElementById('loc-lga');
+          if (input) input.value = opt.getAttribute('data-lga') || '';
+          _lgaHide();
+        });
+      }
     }
 
     // Lazily build the Leaflet pin map (only when the pin section is shown, so a
@@ -1348,9 +1446,22 @@
     }
 
     async function saveLocation(btn) {
-      const zoneSel = document.getElementById('loc-zone');
-      const zone = zoneSel ? zoneSel.value : '';
-      if (!zone) { showToast('Please select your region.', 'error'); return; }
+      // Per-kind area fields: pager = state + lga, radio = RFS zone. `area` is
+      // spread into both the create body and putLocation.
+      const isPager = (_loc.createKind || (_loc.node && _loc.node.kind)) === 'pager';
+      let area;
+      if (isPager) {
+        const state = document.getElementById('loc-state')?.value || '';
+        const lga = (document.getElementById('loc-lga')?.value || '').trim();
+        if (!state) { showToast('Please select your state.', 'error'); return; }
+        if (!lga) { showToast('Please enter your council area (LGA).', 'error'); return; }
+        area = { state, lga };
+      } else {
+        const zoneSel = document.getElementById('loc-zone');
+        const zone = zoneSel ? zoneSel.value : '';
+        if (!zone) { showToast('Please select your region.', 'error'); return; }
+        area = { zone };
+      }
       const pinOn = document.getElementById('loc-pin-on');
       let lat = null, lon = null;
       if (pinOn && pinOn.checked) {
@@ -1369,22 +1480,22 @@
       try {
         if (createMode) {
           const jwt = await getToken();
-          if (!jwt) { window.location.href = 'login.html?redirect=' + encodeURIComponent('/feeder.html'); return; }
+          if (!jwt) { window.location.href = 'login?redirect=' + encodeURIComponent('/feeder'); return; }
           const res = await fetch(`${API_BASE_URL}/api/feeder/nodes`, {
             method: 'POST',
             headers: { 'Authorization': 'Bearer ' + jwt, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ kind: _loc.createKind, zone }),
+            body: JSON.stringify({ kind: _loc.createKind, ...area }),
           });
           const data = await res.json().catch(() => ({}));
           if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
           _nodeTokens[data.node.id] = data.token;
-          if (lat !== null) await putLocation(data.node.id, { zone, lat, lon });
+          if (lat !== null) await putLocation(data.node.id, { ...area, lat, lon });
           closeLocationPicker();
           await refreshNodes();
           showInstallModal(data.node);
         } else {
           const nodeId = _loc.nodeId;
-          await putLocation(nodeId, { zone, lat, lon });
+          await putLocation(nodeId, { ...area, lat, lon });
           showToast('Location saved.', 'success');
           closeLocationPicker();
           await refreshNodes();
@@ -1396,14 +1507,24 @@
       }
     }
 
-    // Remove just the exact pin, keeping the (required) zone.
+    // Remove just the exact pin, keeping the (required) coarse area.
     async function clearLocation(btn) {
-      const zoneSel = document.getElementById('loc-zone');
-      const zone = zoneSel ? zoneSel.value : ((_loc.node && _loc.node.zone) || '');
-      if (!zone) { showToast('Select a region first.', 'error'); return; }
+      const n = _loc.node || {};
+      let area;
+      if (n.kind === 'pager') {
+        const state = document.getElementById('loc-state')?.value || n.state || '';
+        const lga = (document.getElementById('loc-lga')?.value || n.lga || '').trim();
+        if (!state || !lga) { showToast('Select your state and council area first.', 'error'); return; }
+        area = { state, lga };
+      } else {
+        const zoneSel = document.getElementById('loc-zone');
+        const zone = zoneSel ? zoneSel.value : (n.zone || '');
+        if (!zone) { showToast('Select a region first.', 'error'); return; }
+        area = { zone };
+      }
       btn.disabled = true;
       try {
-        await putLocation(_loc.nodeId, { zone, lat: null, lon: null });
+        await putLocation(_loc.nodeId, { ...area, lat: null, lon: null });
         showToast('Pin removed.', 'success');
         closeLocationPicker();
         await refreshNodes();
@@ -1419,7 +1540,7 @@
       if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing…'; }
       try {
         const jwt = await getToken();
-        if (!jwt) { window.location.href = 'login.html?redirect=' + encodeURIComponent('/feeder.html'); return; }
+        if (!jwt) { window.location.href = 'login?redirect=' + encodeURIComponent('/feeder'); return; }
         let token = _nodeTokens[nodeId];
         if (!token) {
           // The key is shown once (hash-only at rest) and kept only in memory,

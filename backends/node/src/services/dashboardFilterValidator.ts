@@ -13,6 +13,8 @@
  * out structurally identical.
  */
 
+import { ALERT_TYPE_DEFS, severityTokens } from './alertCatalog.js';
+
 export class FilterValidationError extends Error {
   constructor(message: string) {
     super(message);
@@ -20,13 +22,16 @@ export class FilterValidationError extends Error {
   }
 }
 
-// Per-alert-type severity scales. Mirrors python lines 17302-17307.
-const SEVERITY_SCALES: Record<string, ReadonlySet<string>> = {
-  rfs: new Set(['advice', 'watch_and_act', 'emergency']),
-  bom_land: new Set(['minor', 'moderate', 'major']),
-  bom_marine: new Set(['minor', 'moderate', 'major']),
-  traffic_majorevent: new Set(['minor', 'moderate', 'major']),
-};
+// Per-alert-type severity scales, derived from shared/alert-catalog.json.
+// Hand-listed until now, which is why every interstate fire agency carried an
+// alertLevel but had no scale, so severity filtering was silently unavailable
+// for all of them.
+const SEVERITY_SCALES: Record<string, ReadonlySet<string>> = Object.fromEntries(
+  ALERT_TYPE_DEFS.filter((t) => t.severityScale).map((t) => [
+    t.key,
+    new Set(severityTokens(t.severityScale as string)),
+  ]),
+);
 
 // Flat union of every severity token across scales — used to validate the
 // legacy single-string severity_min form (no per-type context).
@@ -34,15 +39,11 @@ const ALL_SEVERITIES: ReadonlySet<string> = new Set(
   Object.values(SEVERITY_SCALES).flatMap((s) => Array.from(s)),
 );
 
-// Canonical alert_types that carry a meaningful sub-type field. Mirrors
-// python lines 17315-17322.
-const SUBTYPE_AWARE_TYPES: ReadonlySet<string> = new Set([
-  'rfs',
-  'bom_land', 'bom_marine',
-  'traffic_incident', 'traffic_roadwork', 'traffic_flood',
-  'traffic_fire', 'traffic_majorevent',
-  'user_incident',
-]);
+// Canonical alert_types that carry a meaningful sub-type field, derived from
+// shared/alert-catalog.json.
+const SUBTYPE_AWARE_TYPES: ReadonlySet<string> = new Set(
+  ALERT_TYPE_DEFS.filter((t) => t.subtypeAware).map((t) => t.key),
+);
 
 const KNOWN_KEYS: ReadonlySet<string> = new Set([
   'keywords_include', 'keywords_exclude',

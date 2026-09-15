@@ -12,6 +12,7 @@ import logging
 import threading
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
+import alert_catalog
 
 # Defensive: load .env here too so this module can be imported standalone
 # (e.g. from migrate_sqlite_to_postgres.py or the Python REPL) and still
@@ -387,6 +388,21 @@ class Database:
                 ''')
                 c.execute('CREATE INDEX IF NOT EXISTS idx_pending_bot_actions_status ON pending_bot_actions(status, requested_at)')
 
+                # Staff moderation notifications: remembers which message was
+                # posted for which item, so approving/rejecting later EDITS
+                # that message instead of adding a second one. Keyed on
+                # (kind, ref) because refs are only unique within a kind.
+                c.execute('''
+                    CREATE TABLE IF NOT EXISTS staff_notify_messages (
+                        kind       TEXT NOT NULL,
+                        ref        TEXT NOT NULL,
+                        channel_id BIGINT NOT NULL,
+                        message_id BIGINT NOT NULL,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                        PRIMARY KEY (kind, ref)
+                    )
+                ''')
+
                 # Live-DB migration for the per-preset filters column.
                 c.execute("ALTER TABLE alert_presets ADD COLUMN IF NOT EXISTS filters JSONB NOT NULL DEFAULT '{}'::jsonb")
                 # Live-DB migration: HMAC signature column for bot-action rows.
@@ -571,16 +587,29 @@ class Database:
         return [dict(row) for row in rows]
 
     def get_presets_for_alert_type(self, alert_type: str) -> List[Dict[str, Any]]:
-        """All presets subscribed to alert_type (GIN array-contains). Mute state NOT applied."""
+        """All presets subscribed to alert_type. Mute state NOT applied.
+
+        Matches the canonical key OR any retired spelling of it. A preset saved
+        before a rename still holds the old string until
+        migrate_canonical_alert_types.py rewrites it, and matching the
+        canonical key alone would silently drop those subscribers until then.
+
+        Overlap (&&) rather than contains (@>) so one query covers all
+        spellings; the GIN index on alert_types serves both.
+        """
         self._require_postgres()
+        keys = alert_catalog.accepted_keys(alert_type)
         conn = self._connect()
         try:
             c = conn.cursor()
-            c.execute('SELECT * FROM alert_presets WHERE alert_types @> ARRAY[%s]::TEXT[]', (alert_type,))
+            c.execute(
+                'SELECT * FROM alert_presets WHERE alert_types && %s::TEXT[]',
+                (keys,),
+            )
             rows = c.fetchall()
         finally:
             conn.close()
-        logger.debug(f"get_presets_for_alert_type {alert_type!r} -> {len(rows)} rows")
+        logger.debug(f"get_presets_for_alert_type {keys!r} -> {len(rows)} rows")
         return [dict(row) for row in rows]
 
     def get_presets_for_pager(self) -> List[Dict[str, Any]]:
@@ -1207,6 +1236,59 @@ class Database:
             conn.close()
         return count
     
+    # ==================== STAFF NOTIFICATIONS ====================
+
+    def record_staff_message(self, kind: str, ref: str, channel_id: int, message_id: int):
+        """Remember the message posted for a staff item so a later
+        resolution can edit it. Upserts: if an item somehow gets posted
+        twice, the newest message is the one we'll edit."""
+        self._require_postgres()
+        conn = self._connect()
+        try:
+            c = conn.cursor()
+            c.execute(
+                '''INSERT INTO staff_notify_messages (kind, ref, channel_id, message_id)
+                   VALUES (%s, %s, %s, %s)
+                   ON CONFLICT (kind, ref) DO UPDATE
+                     SET channel_id = EXCLUDED.channel_id,
+                         message_id = EXCLUDED.message_id,
+                         created_at = now()''',
+                (kind, ref, int(channel_id), int(message_id)),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_staff_message(self, kind: str, ref: str):
+        """The message previously posted for this item, or None."""
+        self._require_postgres()
+        conn = self._connect()
+        try:
+            c = conn.cursor()
+            c.execute(
+                'SELECT channel_id, message_id FROM staff_notify_messages WHERE kind = %s AND ref = %s',
+                (kind, ref),
+            )
+            row = c.fetchone()
+        finally:
+            conn.close()
+        return dict(row) if row else None
+
+    def cleanup_old_staff_messages(self, days: int = 90):
+        """Trim the message map. Only affects our ability to EDIT an old
+        item in place; the Discord messages themselves are untouched."""
+        self._require_postgres()
+        conn = self._connect()
+        try:
+            c = conn.cursor()
+            c.execute(
+                "DELETE FROM staff_notify_messages WHERE created_at < NOW() - INTERVAL '1 day' * %s",
+                (days,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
     def cleanup_old_incident_messages(self, days: int = 14):
         conn = self._connect()
         try:

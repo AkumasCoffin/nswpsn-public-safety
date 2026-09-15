@@ -27,7 +27,8 @@ from discord.ext import commands, tasks
 import database
 from database import Database
 from alert_poller import AlertPoller
-from embeds import EmbedBuilder
+from embeds import EmbedBuilder, build_staff_notify_embed, STAFF_NOTIFY_KINDS
+import alert_catalog
 
 # Configure logging
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO').upper()
@@ -78,36 +79,52 @@ def safe_add_containers(view, group) -> int:
             logger.exception("Container rejected by LayoutView — skipping it")
     return added
 
-# Alert types available (canonical, singular, provider-prefixed where it
-# helps — kept in sync with the dashboard PROVIDERS list and data_history).
-ALERT_TYPES = {
-    'rfs': 'RFS Major Incidents',
-    'firms': 'FIRMS Fire Hotspots',
-    'bom_land': 'BOM Land Warnings',
-    'bom_marine': 'BOM Marine Warnings',
-    'traffic_incident': 'Traffic Incidents',
-    'traffic_roadwork': 'Traffic Roadwork',
-    'traffic_flood': 'Flood Hazards',
-    'traffic_fire': 'Traffic Fires',
-    'traffic_majorevent': 'Major Events',
-    'endeavour_current': 'Endeavour Current Outages',
-    'endeavour_planned': 'Endeavour Planned Outages',
-    'ausgrid': 'Ausgrid Outages',
-    'essential_planned': 'Essential Energy Planned Outages',
-    'essential_future': 'Essential Energy Future Outages',
-    'waze_hazard': 'Waze Hazards',
-    'waze_jam': 'Waze Traffic Jams',
-    'waze_police': 'Waze Police',
-    'waze_roadwork': 'Waze Roadwork',
-    'user_incident': 'User Incidents',
-    'radio_summary': 'Radio Summary',
-}
+# Alert types — from shared/alert-catalog.json via alert_catalog.py.
+# This was a hand-written dict kept "in sync" with the dashboard and the
+# backend whitelist by hand; it drifted, and the backend started rejecting
+# keys the dashboard offered. All three now read the one file.
+ALERT_TYPES = alert_catalog.LABELS
 
 # Alert types shown in the generic /setup alerts dropdown + "Enable All".
-# Radio summary has its own dedicated setup flow (see SetupRadioSummarySubmenuView).
-_GENERAL_ALERT_TYPES = {
-    k: v for k, v in ALERT_TYPES.items() if k != 'radio_summary'
-}
+# Radio summary opts out in the catalog (generalPicker:false) because it has
+# its own dedicated setup flow (see SetupRadioSummarySubmenuView).
+_GENERAL_ALERT_TYPES = alert_catalog.general_picker_types()
+
+# Discord hard-caps a slash-command choice list AND a select menu at 25
+# options (and max_values at 25). ALERT_TYPES passed that when the
+# interstate sources were added, which failed command sync and crash-looped
+# the bot. Anything built from ALERT_TYPES must chunk or autocomplete.
+DISCORD_SELECT_MAX = 25
+
+# Pager is not an alert type — it runs off the pager_enabled column — but the
+# roles submenu assigns roles to it alongside them, so it gets a pseudo-provider.
+PAGER_PROVIDER_KEY = '__pager__'
+
+
+def _chunk_options(options):
+    """Split into runs of at most DISCORD_SELECT_MAX, never an empty list."""
+    if not options:
+        return [[]]
+    return [options[i:i + DISCORD_SELECT_MAX]
+            for i in range(0, len(options), DISCORD_SELECT_MAX)]
+
+
+def _merge_select_values(selects, interaction):
+    """Union the picks across chunked selects.
+
+    Discord only reports values for the menu that actually fired; the others
+    arrive empty. Reading those back from their `default` flags is what stops
+    the view forgetting a selection made in a different chunk - while still
+    honouring a deliberate clear-out of the menu that did fire.
+    """
+    fired = (interaction.data or {}).get('custom_id')
+    picked = []
+    for sel in selects:
+        if sel.custom_id == fired:
+            picked.extend(sel.values)
+        else:
+            picked.extend(o.value for o in sel.options if o.default)
+    return list(dict.fromkeys(picked))
 
 WEBSITE_URL = "https://nswpsn.forcequit.xyz/"
 
@@ -135,37 +152,14 @@ WEBSITE_URL = "https://nswpsn.forcequit.xyz/"
 # Per-source severity scales, lowest-to-highest. Severity floor passes when the
 # alert's severity index is >= the floor's index. Sources without a scale here
 # bypass the severity filter entirely.
+# Per-alert-type severity scales, from shared/alert-catalog.json. These were
+# three hand-written dicts (the scales plus an RFS and a BOM raw-value map)
+# that listed only the original NSW types, so every interstate agency carried
+# an alertLevel the floor filter could not read.
 _SEVERITY_SCALES = {
-    'rfs': ['advice', 'watch_and_act', 'emergency'],
-    # BOM real-world values are severe/warning/watch/advice/info but the
-    # dashboard contract uses minor/moderate/major. We accept BOTH on input
-    # via _SEVERITY_BOM_MAP and normalise to the canonical scale below.
-    # Both bom_land and bom_marine share the same per-type scale.
-    'bom_land': ['minor', 'moderate', 'major'],
-    'bom_marine': ['minor', 'moderate', 'major'],
-    'traffic_majorevent': ['minor', 'moderate', 'major'],
-}
-
-# RFS alertLevel raw → snake_case. Anything not matching is treated as "no
-# severity available" and the filter passes (don't block on missing data).
-_SEVERITY_RFS_MAP = {
-    'advice': 'advice',
-    'watch and act': 'watch_and_act',
-    'emergency warning': 'emergency',
-    'emergency': 'emergency',
-}
-
-# BOM data severity → canonical minor/moderate/major bucket.
-_SEVERITY_BOM_MAP = {
-    'severe': 'major',
-    'warning': 'moderate',
-    'watch': 'moderate',
-    'advice': 'minor',
-    'info': 'minor',
-    # Pass through canonical values too, so filter-on-major works either way.
-    'minor': 'minor',
-    'moderate': 'moderate',
-    'major': 'major',
+    k: alert_catalog.severity_tokens(k)
+    for k in alert_catalog.LABELS
+    if alert_catalog.severity_tokens(k)
 }
 
 
@@ -183,12 +177,14 @@ def _alert_text_haystack(alert_type: str, alert_data: dict) -> str:
             if s:
                 bits.append(s)
 
-    if alert_type == 'rfs' or alert_type == 'user_incident':
-        props = alert_data.get('properties') if alert_type == 'rfs' else None
+    if alert_type in ('rfs', 'user_incident', 'cfa', 'deeca', 'qfd', 'dfes',
+                      'sa_cfs', 'sa_mfs', 'nt_fire', 'qld_warning',
+                      'wa_warning', 'act_ambulance'):
+        props = alert_data.get('properties') if alert_type != 'user_incident' else None
         # RFS: properties.{title,description,location,councilArea,fireType,status}
         if isinstance(props, dict):
-            for k in ('title', 'description', 'location', 'councilArea',
-                      'fireType', 'status', 'alertLevel'):
+            for k in ('title', 'description', 'location', 'location_text',
+                      'councilArea', 'fireType', 'status', 'alertLevel'):
                 _push(props.get(k))
         else:
             for k in ('title', 'description', 'location'):
@@ -202,11 +198,12 @@ def _alert_text_haystack(alert_type: str, alert_data: dict) -> str:
                   'incidentType', 'otherAdvice', 'adviceA', 'adviceB',
                   'affectedDirection'):
             _push(props.get(k))
-    elif alert_type and alert_type.startswith('waze_'):
-        props = alert_data.get('properties') or {}
-        for k in ('title', 'displayType', 'wazeSubtype', 'street',
-                  'city', 'location'):
-            _push(props.get(k))
+    elif alert_type in ('wire_article', 'wire_fleet'):
+        for k in ('title', 'excerpt', 'callsign', 'agency', 'station',
+                  'state', 'lga', 'suburb'):
+            _push(alert_data.get(k))
+        for a in (alert_data.get('agencies') or []):
+            _push(a)
     elif alert_type and (alert_type.startswith('endeavour_')
                          or alert_type == 'ausgrid'
                          or alert_type.startswith('essential_')):
@@ -234,18 +231,23 @@ def _alert_lat_lng(alert_type: str, alert_data: dict):
     if not isinstance(alert_data, dict):
         return (None, None)
 
-    # GeoJSON-style geometry.coordinates = [lng, lat] for rfs, traffic_*, waze_*.
-    if alert_type == 'rfs' or (alert_type or '').startswith('traffic_') \
-            or (alert_type or '').startswith('waze_'):
+    # GeoJSON-style geometry.coordinates = [lng, lat] for rfs, traffic_*
+    # and the interstate fire feeds.
+    if alert_type in ('rfs', 'cfa', 'deeca', 'qfd', 'dfes', 'sa_cfs',
+                      'sa_mfs', 'nt_fire', 'qld_warning', 'wa_warning',
+                      'act_ambulance') \
+            or (alert_type or '').startswith('traffic_'):
         geom = alert_data.get('geometry') or {}
         coords = geom.get('coordinates') if isinstance(geom, dict) else None
         if isinstance(coords, (list, tuple)) and len(coords) >= 1:
-            # LineString (waze jams): list of [lng,lat] pairs — use the
-            # midpoint so the geofilter has a real point to test.
-            if isinstance(coords[0], (list, tuple)):
-                mid = coords[len(coords) // 2]
-                coords = mid if isinstance(mid, (list, tuple)) else coords
-            if len(coords) >= 2:
+            # LineString: list of [lng,lat] pairs — take the midpoint so the
+            # geofilter has a real point to test. Polygon (NT warnings):
+            # rings nest one level deeper — keep unwrapping until we hold a
+            # bare [lng, lat] pair.
+            while (isinstance(coords, (list, tuple)) and coords
+                   and isinstance(coords[0], (list, tuple))):
+                coords = coords[len(coords) // 2]
+            if isinstance(coords, (list, tuple)) and len(coords) >= 2:
                 try:
                     return (float(coords[1]), float(coords[0]))
                 except (TypeError, ValueError):
@@ -368,23 +370,13 @@ def _alert_subtype_token(alert_type: str, alert_data: dict):
 
 
 def _alert_severity_token(alert_type: str, alert_data: dict):
-    """Map raw alert severity to a token in _SEVERITY_SCALES[alert_type]."""
-    if not isinstance(alert_data, dict):
-        return None
-    if alert_type == 'rfs':
-        props = alert_data.get('properties') or {}
-        raw = (props.get('alertLevel') or '').strip().lower()
-        return _SEVERITY_RFS_MAP.get(raw)
-    if alert_type and alert_type.startswith('bom_'):
-        raw = str(alert_data.get('severity') or '').strip().lower()
-        return _SEVERITY_BOM_MAP.get(raw)
-    if alert_type == 'traffic_majorevent':
-        # No native severity field on Live Traffic — inspect props.severity if
-        # ever present. Returning None means the floor filter passes through.
-        props = alert_data.get('properties') or {}
-        raw = str(props.get('severity') or '').strip().lower()
-        return raw if raw in _SEVERITY_SCALES['traffic_majorevent'] else None
-    return None
+    """Map a record's raw severity onto a token in its type's scale.
+
+    Where to read it and how to map it both come from the catalog, so a newly
+    added agency inherits its scale instead of needing a branch here. None
+    means "no severity available" and the floor passes through.
+    """
+    return alert_catalog.severity_token(alert_type, alert_data)
 
 
 def alert_passes_severity(alert_type: str, alert_data: dict, severity_min) -> bool:
@@ -684,14 +676,17 @@ class NSWPSNBot(commands.Bot):
         self._permission_error_channels[channel_id] = now
         return should_log
 
-    def _describe_channel(self, channel, channel_id: int) -> str:
+    def _describe_channel(self, channel, channel_id: int,
+                          config_id: Optional[int] = None) -> str:
         """Human-readable '#channel in "Guild" (owner: …, channel id)' for
         log messages.
 
         Falls back progressively when names aren't available (e.g. a
-        deleted channel on a 404): channel arg → cache lookup → bare id.
-        The owner name needs the member cached; otherwise we show the
-        owner id, which the guild always carries.
+        deleted channel on a 404): channel arg → cache lookup → preset's
+        guild (via config_id — a deleted channel is gone from the cache,
+        but the guild it lived in usually is not) → bare id. The owner
+        name needs the member cached; otherwise we show the owner id,
+        which the guild always carries.
         """
         ch = channel if channel is not None else self.get_channel(channel_id)
         if ch is not None:
@@ -713,6 +708,19 @@ class NSWPSNBot(commands.Bot):
                 return f'#{ch_name} in "{guild_name}" (owner: {owner_str}, channel {channel_id})'
             if ch_name:
                 return f'#{ch_name} ({channel_id})'
+        # Channel gone from the cache — name the SERVER via the preset so the
+        # operator knows where to look without pasting ids into Discord.
+        if config_id is not None:
+            try:
+                preset = self.db.get_preset(int(config_id))
+                gid = int(preset.get('guild_id') or 0) if preset else 0
+                if gid:
+                    gname = getattr(self.get_guild(gid), 'name', None)
+                    if gname:
+                        return f'channel {channel_id} in "{gname}" ({gid})'
+                    return f'channel {channel_id} in guild {gid}'
+            except Exception:
+                pass
         return f'channel {channel_id}'
 
     async def setup_hook(self):
@@ -790,7 +798,7 @@ class NSWPSNBot(commands.Bot):
         await self.change_presence(
             activity=discord.Activity(
                 type=discord.ActivityType.watching,
-                name="NSW Emergency Alerts"
+                name="Australian Emergency Alerts"
             )
         )
     
@@ -934,7 +942,7 @@ class NSWPSNBot(commands.Bot):
             # (the preset may cover many alert types). Dashboard cleanup path.
             if self._record_send_error(channel_id):
                 logger.warning(
-                    f"{self._describe_channel(channel, channel_id)} returned 404 "
+                    f"{self._describe_channel(channel, channel_id, config_id)} returned 404 "
                     f"(preset {config_id}) — channel may be deleted or inaccessible. "
                     f"Not auto-removing; delete the preset from the dashboard if permanent."
                 )
@@ -942,7 +950,7 @@ class NSWPSNBot(commands.Bot):
         except discord.Forbidden:
             if self._record_send_error(channel_id):
                 logger.warning(
-                    f"No permission to send to {self._describe_channel(channel, channel_id)}"
+                    f"No permission to send to {self._describe_channel(channel, channel_id, config_id)}"
                 )
             return 'skip'
         except discord.HTTPException as e:
@@ -1127,6 +1135,8 @@ class NSWPSNBot(commands.Bot):
                 result = await self._exec_action_cleanup(params)
             elif kind == 'broadcast':
                 result = await self._exec_action_broadcast(params)
+            elif kind == 'staff_notify':
+                result = await self._exec_action_staff_notify(params)
             else:
                 raise ValueError(f"unknown action: {kind}")
             await loop.run_in_executor(
@@ -1146,6 +1156,79 @@ class NSWPSNBot(commands.Bot):
     async def _exec_action_sync(self):
         synced = await self.tree.sync()
         return {'synced_global': len(synced)}
+
+    async def _exec_action_staff_notify(self, params):
+        """Post - or update - a staff moderation notification.
+
+        Pushed by the backend when a signup request, Wire submission or
+        takedown notice arrives or is actioned. On resolution we EDIT the
+        message the arrival posted rather than adding a second one, which
+        keeps the channel a clean worklist.
+
+        No slash command configures this: the target channel is chosen on
+        the staff page and arrives in params.
+        """
+        kind = (params.get('kind') or '').strip()
+        if kind not in STAFF_NOTIFY_KINDS:
+            raise ValueError(f'unknown staff notify kind: {kind}')
+        event = (params.get('event') or 'new').strip()
+        ref = (params.get('ref') or '').strip()
+        try:
+            gid = int(params.get('guild_id') or 0)
+            cid = int(params.get('channel_id') or 0)
+        except (TypeError, ValueError):
+            raise ValueError('bad guild_id/channel_id')
+        if not cid:
+            raise ValueError('channel_id required')
+
+        loop = asyncio.get_event_loop()
+        embed = build_staff_notify_embed(kind, params)
+
+        # Cache first, then REST. _exec_action_broadcast is cache-only,
+        # which silently reports 'channel_not_found' for a channel the bot
+        # hasn't touched since boot - not acceptable for moderation traffic.
+        channel = self.get_channel(cid)
+        if channel is None:
+            try:
+                channel = await self.fetch_channel(cid)
+            except discord.NotFound:
+                raise ValueError(f'channel_not_found (guild {gid}, channel {cid})')
+            except discord.Forbidden:
+                raise ValueError(f'forbidden (guild {gid}, channel {cid})')
+
+        if event == 'resolved' and ref:
+            prior = None
+            try:
+                prior = await loop.run_in_executor(
+                    None, lambda: self.db.get_staff_message(kind, ref))
+            except Exception as e:
+                logger.warning(f"staff_notify: message lookup failed for {kind}/{ref}: {e}")
+            if prior:
+                try:
+                    msg = await channel.fetch_message(int(prior['message_id']))
+                    await msg.edit(embed=embed)
+                    return {'kind': kind, 'ref': ref, 'edited': True,
+                            'message_id': str(msg.id)}
+                except discord.NotFound:
+                    # Message deleted - fall through and post a fresh one so
+                    # the resolution isn't lost entirely.
+                    logger.info(
+                        f"staff_notify: original message for {kind}/{ref} is gone; posting anew")
+                except discord.Forbidden:
+                    raise ValueError(f'forbidden editing in channel {cid}')
+
+        msg = await channel.send(embed=embed)
+        if ref:
+            try:
+                await loop.run_in_executor(
+                    None,
+                    lambda: self.db.record_staff_message(kind, ref, cid, msg.id))
+            except Exception as e:
+                # The post succeeded; only the ability to edit it later is
+                # lost, so this must not fail the action.
+                logger.warning(f"staff_notify: could not record message id for {kind}/{ref}: {e}")
+        logger.info(f"staff_notify: {kind}/{ref} -> channel {cid} ({event})")
+        return {'kind': kind, 'ref': ref, 'edited': False, 'message_id': str(msg.id)}
 
     async def _exec_action_broadcast(self, params):
         """Send an embed to a list of channels. Uses channel.send() so
@@ -1861,15 +1944,30 @@ bot = NSWPSNBot()
 # ==================== SLASH COMMANDS ====================
 
 @bot.tree.command(name="alert", description="Set up alerts for a channel")
+async def _alert_type_autocomplete(interaction: discord.Interaction, current: str):
+    """Suggest alert types as the user types.
+
+    Replaces a fixed `choices` list, which Discord caps at 25 - exceeded once
+    the interstate sources landed, and a hard failure at command sync rather
+    than a degraded picker. Autocomplete caps only the SUGGESTIONS, so the
+    underlying set can keep growing.
+    """
+    cur = (current or '').lower().strip()
+    out = []
+    for key, name in ALERT_TYPES.items():
+        if not cur or cur in key.lower() or cur in name.lower():
+            out.append(app_commands.Choice(name=name, value=key))
+            if len(out) >= DISCORD_SELECT_MAX:
+                break
+    return out
+
+
 @app_commands.describe(
     channel="The channel to send alerts to",
     alert_type="The type of alert to receive (leave empty for ALL alerts)",
     role="Optional role to ping when alerts are sent"
 )
-@app_commands.choices(alert_type=[
-    app_commands.Choice(name=name, value=key) 
-    for key, name in ALERT_TYPES.items()
-])
+@app_commands.autocomplete(alert_type=_alert_type_autocomplete)
 @app_commands.default_permissions(manage_channels=True)
 async def alert_command(
     interaction: discord.Interaction,
@@ -3043,7 +3141,8 @@ class SetupRolesSubmenuView(discord.ui.View):
     """Pick roles for one or more alert types at once."""
 
     def __init__(self, invoker_id: int, channel: discord.TextChannel,
-                 selected_types: Optional[List[str]] = None):
+                 selected_types: Optional[List[str]] = None,
+                 active_provider: Optional[str] = None):
         super().__init__(timeout=180)
         self.invoker_id = invoker_id
         self.channel = channel
@@ -3051,47 +3150,119 @@ class SetupRolesSubmenuView(discord.ui.View):
         self.selected_role_ids: List[int] = []
         self._roles_touched = False
 
-        # Row 0 — multi-select alert-type picker (+ pager).
-        selected_set = set(self.selected_types)
-        type_options = [
-            discord.SelectOption(
-                label=name, value=key,
-                default=(key in selected_set),
-            )
-            for key, name in ALERT_TYPES.items()
-        ]
-        type_options.append(discord.SelectOption(
-            label='Pager Messages', value='pager', emoji='📟',
-            default=('pager' in selected_set),
-        ))
-        max_types = len(type_options)
-        type_select = discord.ui.Select(
-            placeholder="1. Pick one or more alert types",
-            min_values=1, max_values=max_types,
-            options=type_options,
-            row=0,
-        )
-        type_select.callback = self._on_types_picked
-        self.add_item(type_select)
-        self._type_select = type_select
+        # Provider first, then that provider's types — the same shape as the
+        # alerts submenu, and the same reason: the flat list is past Discord's
+        # 25-option ceiling and chunking it gave pages of unrelated agencies.
+        # A "Pager" pseudo-provider carries the pager row, which is not an
+        # alert type (it runs off the pager_enabled column).
+        # Every type, including radio summary and the not-yet-live Wire:
+        # assigning a ping role is not the same as subscribing, and roles were
+        # assignable for those before this menu was grouped by provider.
+        self._providers = alert_catalog.providers_with_types(
+            include_soon=True, general_only=False)
+        # Carried across rebuilds so picking a type does not bounce the user
+        # back to the first source in the list.
+        self._active_provider = active_provider or (
+            self._providers[0]['key'] if self._providers else PAGER_PROVIDER_KEY)
+        self._provider_select = None
+        self._type_selects: List[discord.ui.Select] = []
+        self._role_select = None
+        self._rebuild()
 
-        # Row 1 — role picker. Always shown but only meaningful once types are chosen.
+    def _rebuild(self):
+        for item in [self._provider_select, *self._type_selects, self._role_select]:
+            if item is not None:
+                self.remove_item(item)
+        self._type_selects = []
+
+        selected = set(self.selected_types)
+
+        prov_options = []
+        for p in self._providers:
+            keys = [t['key'] for t in p['types']]
+            on = sum(1 for k in keys if k in selected)
+            prov_options.append(discord.SelectOption(
+                label=p['label'][:100], value=p['key'],
+                description=(f"{on} of {len(keys)} picked" if on else f"{len(keys)} available"),
+                default=(p['key'] == self._active_provider),
+            ))
+        prov_options.append(discord.SelectOption(
+            label='Pager Messages', value=PAGER_PROVIDER_KEY, emoji='📟',
+            description=('picked' if 'pager' in selected else 'Pager alerts'),
+            default=(self._active_provider == PAGER_PROVIDER_KEY),
+        ))
+        self._provider_select = discord.ui.Select(
+            placeholder="1. Pick a source", options=prov_options,
+            min_values=1, max_values=1, row=0,
+        )
+        self._provider_select.callback = self._on_provider_picked
+        self.add_item(self._provider_select)
+
+        if self._active_provider == PAGER_PROVIDER_KEY:
+            type_options = [discord.SelectOption(
+                label='Pager Messages', value='pager', emoji='📟',
+                default=('pager' in selected))]
+            active_label = 'Pager'
+        else:
+            active = next((p for p in self._providers
+                           if p['key'] == self._active_provider), None)
+            active_label = active['label'] if active else ''
+            type_options = [
+                discord.SelectOption(
+                    label=t['label'][:100], value=t['key'],
+                    description=(t.get('agencyLabel') or '')[:100] or None,
+                    default=(t['key'] in selected),
+                )
+                for t in (active['types'] if active else [])
+            ]
+
+        next_row = 1
+        for chunk in _chunk_options(type_options):
+            if not chunk:
+                continue
+            sel = discord.ui.Select(
+                placeholder=f"2. {active_label} — pick types",
+                min_values=0, max_values=len(chunk),
+                options=chunk, row=next_row,
+            )
+            sel.callback = self._on_types_picked
+            self.add_item(sel)
+            self._type_selects.append(sel)
+            next_row += 1
+
         role_select = discord.ui.RoleSelect(
-            placeholder="2. Pick up to 5 roles (empty + Save = no change)",
+            placeholder="3. Pick up to 5 roles (empty + Save = no change)",
             min_values=0, max_values=5,
-            row=1,
+            row=next_row,
         )
         role_select.callback = self._on_roles_picked
         self.add_item(role_select)
         self._role_select = role_select
 
+    async def _on_provider_picked(self, interaction: discord.Interaction):
+        self._active_provider = self._provider_select.values[0]
+        self._rebuild()
+        await interaction.response.edit_message(view=self)
+
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return interaction.user.id == self.invoker_id
 
     async def _on_types_picked(self, interaction: discord.Interaction):
-        picked = list(self._type_select.values)
+        # Only the ACTIVE provider's slice is replaced — the select says
+        # nothing about types belonging to any other provider.
+        if self._active_provider == PAGER_PROVIDER_KEY:
+            owned = {'pager'}
+        else:
+            active = next((p for p in self._providers
+                           if p['key'] == self._active_provider), None)
+            owned = {t['key'] for t in (active['types'] if active else [])}
+        chosen = [k for k in _merge_select_values(self._type_selects, interaction)
+                  if k in owned]
+        picked = [k for k in self.selected_types if k not in owned] + chosen
         # Rebuild so the embed reflects current roles for each selected type.
-        new_view = SetupRolesSubmenuView(self.invoker_id, self.channel, selected_types=picked)
+        new_view = SetupRolesSubmenuView(
+            self.invoker_id, self.channel, selected_types=picked,
+            active_provider=self._active_provider)
         embed = _build_roles_embed(self.channel, interaction.guild_id, picked)
         await interaction.response.edit_message(embed=embed, view=new_view)
 
@@ -3122,7 +3293,7 @@ class SetupRolesSubmenuView(discord.ui.View):
         bot.db.update_preset(preset['id'], role_ids=role_ids)
         return 1
 
-    @discord.ui.button(label="Save", style=discord.ButtonStyle.green, row=2)
+    @discord.ui.button(label="Save", style=discord.ButtonStyle.green, row=4)
     async def save(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.selected_types:
             await interaction.response.send_message(
@@ -3173,7 +3344,7 @@ class SetupRolesSubmenuView(discord.ui.View):
             view=SetupHomeView(self.invoker_id, self.channel),
         )
 
-    @discord.ui.button(label="Clear Roles", style=discord.ButtonStyle.danger, row=2)
+    @discord.ui.button(label="Clear Roles", style=discord.ButtonStyle.danger, row=4)
     async def clear(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.selected_types:
             await interaction.response.send_message(
@@ -3200,7 +3371,7 @@ class SetupRolesSubmenuView(discord.ui.View):
         embed = _build_roles_embed(self.channel, guild_id, atypes)
         await interaction.response.edit_message(embed=embed, view=new_view)
 
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, row=4)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
         loop = asyncio.get_event_loop()
         home_embed = await loop.run_in_executor(
@@ -3301,24 +3472,96 @@ class SetupAlertsSubmenuView(discord.ui.View):
         self.channel = channel
         self.selected_alert_types: List[str] = existing_types[:]
 
-        self.alert_select.options = [
-            discord.SelectOption(label=name, value=key, default=(key in set(existing_types)))
-            for key, name in _GENERAL_ALERT_TYPES.items()
+        self._providers = alert_catalog.providers_with_types()
+        self._active_provider = self._providers[0]['key'] if self._providers else None
+        self._provider_select = None
+        self._type_selects: List[discord.ui.Select] = []
+        self._rebuild()
+
+    def _rebuild(self):
+        """Provider first, then that provider's types.
+
+        The alert list is past Discord's 25-option select ceiling, and chunking
+        it gave two pages of alphabetically unrelated agencies. Grouping by
+        provider matches how the dashboard and the logs page already present
+        these, and the cap stops mattering however many agencies are added.
+        """
+        for item in [self._provider_select, *self._type_selects]:
+            if item is not None:
+                self.remove_item(item)
+        self._type_selects = []
+
+        selected = set(self.selected_alert_types)
+
+        prov_options = []
+        for p in self._providers:
+            keys = [t['key'] for t in p['types']]
+            on = sum(1 for k in keys if k in selected)
+            prov_options.append(discord.SelectOption(
+                label=p['label'][:100],
+                value=p['key'],
+                description=(f"{on} of {len(keys)} on" if on else f"{len(keys)} available"),
+                default=(p['key'] == self._active_provider),
+            ))
+        self._provider_select = discord.ui.Select(
+            placeholder="1. Pick a source",
+            options=prov_options or [discord.SelectOption(label="None", value="none")],
+            min_values=1, max_values=1, row=0,
+        )
+        self._provider_select.callback = self._on_provider_picked
+        self.add_item(self._provider_select)
+
+        active = next((p for p in self._providers
+                       if p['key'] == self._active_provider), None)
+        types = active['types'] if active else []
+        type_options = [
+            discord.SelectOption(
+                label=t['label'][:100],
+                value=t['key'],
+                description=(t.get('agencyLabel') or '')[:100] or None,
+                default=(t['key'] in selected),
+            )
+            for t in types
         ]
+        if not type_options:
+            return
+
+        # _chunk_options stays as the safety net for a provider that ever
+        # grows past 25 types on its own; today the largest has eight.
+        for idx, chunk in enumerate(_chunk_options(type_options)):
+            sel = discord.ui.Select(
+                placeholder=f"2. {active['label']} — pick types",
+                min_values=0, max_values=len(chunk),
+                options=chunk,
+                row=1 + idx,
+            )
+            sel.callback = self._on_alerts_picked
+            self.add_item(sel)
+            self._type_selects.append(sel)
+
+    async def _on_provider_picked(self, interaction: discord.Interaction):
+        self._active_provider = self._provider_select.values[0]
+        self._rebuild()
+        await interaction.response.edit_message(view=self)
+
+    async def _on_alerts_picked(self, interaction: discord.Interaction):
+        # Replace only the ACTIVE provider's slice of the selection — a select
+        # reports nothing about types belonging to any other provider, so
+        # anything picked elsewhere has to be carried over untouched.
+        active = next((p for p in self._providers
+                       if p['key'] == self._active_provider), None)
+        owned = {t['key'] for t in (active['types'] if active else [])}
+        picked = [k for k in _merge_select_values(self._type_selects, interaction)
+                  if k in owned]
+        kept = [k for k in self.selected_alert_types if k not in owned]
+        self.selected_alert_types = kept + picked
+        self._rebuild()
+        await interaction.response.edit_message(view=self)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return interaction.user.id == self.invoker_id
 
-    @discord.ui.select(
-        placeholder="Select alert types to enable",
-        min_values=0,
-        max_values=len(_GENERAL_ALERT_TYPES)
-    )
-    async def alert_select(self, interaction: discord.Interaction, select: discord.ui.Select):
-        self.selected_alert_types = list(select.values)
-        await interaction.response.defer(ephemeral=True)
-
-    @discord.ui.button(label="Save", style=discord.ButtonStyle.green)
+    @discord.ui.button(label="Save", style=discord.ButtonStyle.green, row=4)
     async def save(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         guild_id = interaction.guild_id
@@ -3353,7 +3596,7 @@ class SetupAlertsSubmenuView(discord.ui.View):
         home_embed = await loop.run_in_executor(None, _sync_work)
         await _edit_or_send(interaction, embed=home_embed, view=SetupHomeView(self.invoker_id, self.channel))
 
-    @discord.ui.button(label="Enable All Alerts", style=discord.ButtonStyle.green)
+    @discord.ui.button(label="Enable All Alerts", style=discord.ButtonStyle.green, row=4)
     async def enable_all(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         guild_id = interaction.guild_id
@@ -3383,7 +3626,7 @@ class SetupAlertsSubmenuView(discord.ui.View):
         home_embed = await loop.run_in_executor(None, _sync_work)
         await _edit_or_send(interaction, embed=home_embed, view=SetupHomeView(self.invoker_id, self.channel))
 
-    @discord.ui.button(label="Turn Alerts Off", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="Turn Alerts Off", style=discord.ButtonStyle.danger, row=4)
     async def turn_off(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         guild_id = interaction.guild_id
@@ -3404,7 +3647,7 @@ class SetupAlertsSubmenuView(discord.ui.View):
         home_embed = await loop.run_in_executor(None, _sync_work)
         await _edit_or_send(interaction, embed=home_embed, view=SetupHomeView(self.invoker_id, self.channel))
 
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, row=4)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
         loop = asyncio.get_event_loop()
         home_embed = await loop.run_in_executor(
@@ -3554,9 +3797,11 @@ _HELP_CATEGORIES: Dict[str, Dict[str, Any]] = {
     "intro": {
         "title": "📚 AusAware Alert Bot",
         "lines": [
-            "Real-time alerts for NSW emergencies, traffic, weather warnings, "
-            "and pager messages — sourced from RFS, BOM, TfNSW, Ausgrid, "
-            "Endeavour, and Waze.",
+            "Real-time alerts for emergencies, traffic, weather warnings, "
+            "pager messages and The Wire — sourced from NSW RFS, CFA, DEECA, "
+            "QFD, DFES, SA CFS/MFS, NT Fire & Rescue, NASA FIRMS, BOM, TfNSW, "
+            "Ausgrid, Endeavour, Essential Energy, our radio scanner and "
+            "AusAware's own reporting.",
             "",
             f"🌐 Website: [nswpsn.forcequit.xyz]({WEBSITE_URL})",
             "",
@@ -3599,10 +3844,6 @@ _HELP_CATEGORIES: Dict[str, Dict[str, Any]] = {
              "View the latest hourly radio summary, with arrows to walk back "
              "up to 24 hours. Pass `date` (YYYY-MM-DD) to step through every "
              "summary on that day instead. Works in DMs and via user-install."),
-            ("/ts",
-             "Search rdio-scanner radio transcripts. One phrase, or "
-             "comma-separated for OR (e.g. `fire,crash,police`). "
-             "Optional `date` (YYYY-MM-DD). Works in DMs and via user-install."),
         ],
         "footer": (
             "Live radio-summary pushes are available as an alert type — "
@@ -3613,7 +3854,7 @@ _HELP_CATEGORIES: Dict[str, Dict[str, Any]] = {
         "title": "📊 Info",
         "commands": [
             ("/overview",
-             "Dashboard of current incidents across NSW (formerly /summary)."),
+             "Dashboard of current incidents across Australia (formerly /summary)."),
             ("/dashboard",
              "Open the web dashboard to manage alerts, pager config, and roles in a GUI."),
             ("/status",
@@ -3633,19 +3874,15 @@ _HELP_CATEGORIES: Dict[str, Dict[str, Any]] = {
             ("/alert-list",
              "List every alert + pager subscription in this server."),
             ("/pager",
-             "Subscribe a channel to NSW pager messages with an optional "
-             "comma-separated capcode filter + role to ping."),
+             "Subscribe a channel to NSW paging-network messages with an "
+             "optional comma-separated capcode filter + role to ping."),
             ("/pager-remove",
              "Remove the pager subscription from a channel."),
         ],
-        "footer": (
-            "Alert types: rfs · bom_land · bom_marine · traffic_incident · "
-            "traffic_roadwork · traffic_flood · traffic_fire · "
-            "traffic_majorevent · endeavour_current · endeavour_planned · "
-            "ausgrid · essential_planned · essential_future · "
-            "waze_hazard · waze_jam · waze_police · waze_roadwork · "
-            "user_incident · radio_summary"
-        ),
+        # Derived from ALERT_TYPES so the list can never drift again
+        # (the old hand-written copy still advertised retired Waze types
+        # and omitted firms).
+        "footer": "Alert types: " + " · ".join(ALERT_TYPES.keys()),
     },
 }
 
@@ -3714,7 +3951,7 @@ class HelpView(discord.ui.View):
             discord.SelectOption(label="Mute", value="mute", emoji="🔕",
                                  description="Silence pings or whole alerts"),
             discord.SelectOption(label="Radio", value="radio", emoji="📻",
-                                 description="Search radio transcripts"),
+                                 description="Hourly radio summaries"),
             discord.SelectOption(label="Info", value="info", emoji="📊",
                                  description="Summary, status, help"),
             discord.SelectOption(label="Manual", value="manual", emoji="🔧",
@@ -3744,247 +3981,6 @@ async def help_command(interaction: discord.Interaction):
         view=view,
         allowed_mentions=discord.AllowedMentions.none(),
     )
-
-
-# ==================== /ts RADIO TRANSCRIPT SEARCH ====================
-
-_TS_PAGE_SIZE = 10
-_TS_MAX_TRANSCRIPT_CHARS = 240  # trim long transmissions in the embed
-_TS_LOCAL_TZ_NAME = os.getenv('SUMMARY_TZ', 'Australia/Sydney')
-
-
-async def _ts_fetch_page(query: str, date: Optional[str], offset: int) -> Optional[dict]:
-    """Hit /api/rdio/transcripts/search. Returns None on failure."""
-    params = {
-        'q': query,
-        'limit': _TS_PAGE_SIZE,
-        'offset': offset,
-        'order': 'desc',
-    }
-    if date:
-        params['date'] = date
-    headers = {
-        'Authorization': f'Bearer {API_KEY}',
-        'User-Agent': 'AusAwareBot/1.0',
-        'X-Client-Type': 'discord-bot',
-    }
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                f"{API_BASE_URL}/api/rdio/transcripts/search",
-                headers=headers, params=params, timeout=60,
-            ) as resp:
-                if resp.status != 200:
-                    logger.warning(f"/ts got {resp.status} from backend")
-                    return None
-                return await resp.json()
-    except Exception as e:
-        logger.error(f"/ts fetch error: {type(e).__name__}: {e!r}", exc_info=True)
-        return None
-
-
-def _ts_format_local_time(iso_str: Optional[str]) -> str:
-    if not iso_str:
-        return '??:??'
-    try:
-        dt = datetime.fromisoformat(iso_str.replace('Z', '+00:00'))
-        try:
-            from zoneinfo import ZoneInfo
-            dt = dt.astimezone(ZoneInfo(_TS_LOCAL_TZ_NAME))
-        except Exception:
-            pass
-        return dt.strftime('%Y-%m-%d %H:%M:%S')
-    except Exception:
-        return iso_str[:19].replace('T', ' ')
-
-
-def _ts_build_embed(data: dict, query: str, date: Optional[str]) -> discord.Embed:
-    total = int(data.get('total') or 0)
-    offset = int(data.get('offset') or 0)
-    limit = int(data.get('limit') or _TS_PAGE_SIZE) or _TS_PAGE_SIZE
-    results = data.get('results') or []
-
-    title = f"🔎 Transcripts · \"{query}\""
-    if total == 0:
-        embed = discord.Embed(
-            title=title,
-            description="No matching transmissions found.",
-            color=0x94a3b8,
-        )
-        if date:
-            embed.set_footer(text=f"date: {date}")
-        return embed
-
-    page = (offset // limit) + 1
-    total_pages = max(1, (total + limit - 1) // limit)
-
-    lines = []
-    for r in results:
-        when = _ts_format_local_time(r.get('datetime'))
-        tg = r.get('talkgroup_label') or f"TG {r.get('talkgroup') or '?'}"
-        rid_label = r.get('radio_label')
-        rid = r.get('radio_id')
-        who = rid_label or (f"RID {rid}" if rid else None)
-        transcript = (r.get('transcript') or '').strip().replace('\n', ' ')
-        if len(transcript) > _TS_MAX_TRANSCRIPT_CHARS:
-            transcript = transcript[:_TS_MAX_TRANSCRIPT_CHARS - 1].rstrip() + '…'
-        url = r.get('call_url') or f"https://radio.forcequit.xyz/?call={r.get('id')}"
-        header = f"🕐 `{when}` · **{tg}**"
-        if who:
-            header += f" · {who}"
-        header += f" · [#{r.get('id')}]({url})"
-        lines.append(f"{header}\n> {transcript}")
-
-    description = '\n\n'.join(lines)
-    # Hard cap — Discord rejects descriptions > 4096 chars
-    if len(description) > 4000:
-        description = description[:3997] + '…'
-
-    embed = discord.Embed(
-        title=title,
-        description=description,
-        color=0x3498db,
-    )
-    footer = f"Page {page}/{total_pages} · {total} total"
-    if date:
-        footer += f" · {date}"
-    embed.set_footer(text=footer)
-    return embed
-
-
-class TsPager(discord.ui.View):
-    def __init__(self, invoker_id: int, query: str, date: Optional[str], total: int):
-        super().__init__(timeout=300)
-        self.invoker_id = invoker_id
-        self.query = query
-        self.date = date
-        self.offset = 0
-        self.total = total
-        self._refresh_buttons()
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.invoker_id:
-            await interaction.response.send_message(
-                "This pager belongs to someone else — run `/ts` yourself to search.",
-                ephemeral=True,
-            )
-            return False
-        return True
-
-    def _refresh_buttons(self):
-        has_prev = self.offset > 0
-        has_next = (self.offset + _TS_PAGE_SIZE) < self.total
-        # Reference buttons by attribute name (not child index) so adding
-        # First/Last doesn't silently break disable logic.
-        self.first_button.disabled = not has_prev
-        self.prev_button.disabled = not has_prev
-        self.next_button.disabled = not has_next
-        self.last_button.disabled = not has_next
-
-    async def _update(self, interaction: discord.Interaction):
-        data = await _ts_fetch_page(self.query, self.date, self.offset)
-        if data is None:
-            await interaction.response.send_message(
-                "❌ Backend error fetching transcripts.", ephemeral=True,
-            )
-            return
-        self.total = int(data.get('total') or 0)
-        self._refresh_buttons()
-        embed = _ts_build_embed(data, self.query, self.date)
-        await interaction.response.edit_message(embed=embed, view=self)
-
-    @discord.ui.button(label="|◀ First", style=discord.ButtonStyle.secondary)
-    async def first_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.offset = 0
-        await self._update(interaction)
-
-    @discord.ui.button(label="◀ Prev", style=discord.ButtonStyle.secondary)
-    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.offset = max(0, self.offset - _TS_PAGE_SIZE)
-        await self._update(interaction)
-
-    @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.secondary)
-    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.offset += _TS_PAGE_SIZE
-        await self._update(interaction)
-
-    @discord.ui.button(label="Last ▶|", style=discord.ButtonStyle.secondary)
-    async def last_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Jump to the offset that starts the final page.
-        if self.total <= 0:
-            self.offset = 0
-        else:
-            total_pages = max(1, (self.total + _TS_PAGE_SIZE - 1) // _TS_PAGE_SIZE)
-            self.offset = (total_pages - 1) * _TS_PAGE_SIZE
-        await self._update(interaction)
-
-    @discord.ui.button(label="Close", style=discord.ButtonStyle.danger)
-    async def close_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        for child in self.children:
-            child.disabled = True
-        # Ephemeral messages from followup.send() can't always be edited
-        # via interaction.response.edit_message — try that first, then
-        # fall back to editing the original response directly.
-        try:
-            await interaction.response.edit_message(view=self)
-        except (discord.InteractionResponded, discord.HTTPException):
-            try:
-                await interaction.edit_original_response(view=self)
-            except Exception as e:
-                logger.warning(f"/ts close fallback failed: {type(e).__name__}: {e}")
-        self.stop()
-
-
-@bot.tree.command(name="ts", description="Search rdio-scanner radio transcripts")
-@app_commands.describe(
-    query="Keyword(s) — one phrase, or comma-separated for OR (e.g. 'fire,crash,police')",
-    date="Optional date YYYY-MM-DD (local time)",
-)
-# User-install support: /ts is available in guilds, DMs, group DMs, and any
-# channel the invoking user is in (via user-install). Output is public so
-# anyone in the channel can see the result; the pager buttons are still
-# owner-locked via TsPager.interaction_check.
-@app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-@app_commands.allowed_installs(guilds=True, users=True)
-async def ts_command(
-    interaction: discord.Interaction,
-    query: str,
-    date: Optional[str] = None,
-):
-    query = (query or '').strip()
-    # Comma mode: at least one segment must be >= 2 chars after stripping.
-    valid_terms = [t.strip() for t in query.split(',') if len(t.strip()) >= 2]
-    if not valid_terms:
-        await interaction.response.send_message(
-            "❌ Query must contain at least one term of 2+ characters "
-            "(comma-separate for multiple: `fire,crash,police`).",
-            ephemeral=True,
-        )
-        return
-
-    # Public defer — result is visible to the whole channel. Validation errors
-    # stay ephemeral (above) so we don't spam the channel with bad-query noise.
-    await interaction.response.defer(ephemeral=False, thinking=True)
-
-    data = await _ts_fetch_page(query, date, offset=0)
-    if data is None:
-        # Backend error is still ephemeral — noise to show publicly.
-        await interaction.followup.send(
-            "❌ Backend error fetching transcripts. Try again shortly.",
-            ephemeral=True,
-        )
-        return
-
-    total = int(data.get('total') or 0)
-    embed = _ts_build_embed(data, query, date)
-
-    if total <= _TS_PAGE_SIZE:
-        # No pagination needed — send a plain embed
-        await interaction.followup.send(embed=embed, ephemeral=False)
-        return
-
-    view = TsPager(invoker_id=interaction.user.id, query=query, date=date, total=total)
-    await interaction.followup.send(embed=embed, view=view, ephemeral=False)
 
 
 # ---------------------------------------------------------------------------
@@ -4044,7 +4040,7 @@ class SummaryPager(discord.ui.LayoutView):
     point: nav follows the user's eye, not the original send position.
 
     Newest-first list. index 0 is the most recent summary.
-    Owner-locked via interaction_check, mirroring TsPager."""
+    Owner-locked via interaction_check."""
 
     def __init__(self, invoker_id: int, summaries: List[Dict[str, Any]],
                  date: Optional[str] = None):
@@ -4319,7 +4315,7 @@ async def summary_command(
     await pager.send_initial(interaction)
 
 
-@bot.tree.command(name="overview", description="Dashboard of current incidents across NSW")
+@bot.tree.command(name="overview", description="Dashboard of current incidents across Australia")
 # User-install support: /overview works in guilds, DMs, group DMs, and any
 # channel the invoking user has access to (via user-install). Output is
 # public — it's a broadcast snapshot, no reason to hide it.

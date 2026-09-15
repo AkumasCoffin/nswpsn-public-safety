@@ -12,14 +12,14 @@
   <meta name="author" content="Forcequit">
 
   <meta property="og:type" content="website">
-  <meta property="og:url" content="https://nswpsn.forcequit.xyz/staff.html">
+  <meta property="og:url" content="https://nswpsn.forcequit.xyz/staff">
   <meta property="og:title" content="Admin – Forcequit">
   <meta property="og:description" content="Admin panel for managing AusAware editor requests and user permissions.">
   <meta property="og:image" content="https://nswpsn.forcequit.xyz/assets/AusAware_filled_background.jpg">
   <meta property="og:site_name" content="AusAware">
 
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/staff.html">
+  <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/staff">
   <meta name="twitter:title" content="Admin – Forcequit">
   <meta name="twitter:description" content="Admin panel for managing AusAware editor requests and user permissions.">
   <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/AusAware_filled_background.jpg">
@@ -447,6 +447,17 @@
     #loc-view-map { height: 320px; border-radius: 8px; border: 1px solid var(--border-subtle, #334155); }
     #loc-view-map, #loc-view-map * { box-sizing: initial; }
     .loc-view-note { font-size: 0.75rem; color: var(--text-soft, #94a3b8); margin-top: 0.6rem; }
+    /* Custom LGA dropdown — the native <datalist> popup is unstylable (it
+       renders as a giant white list pinned to the screen edge), so suggestions
+       live in our own positioned, filter-as-you-type list under the field. */
+    .lga-combo { position: relative; display: block; }
+    .lga-dd { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 1200;
+      max-height: 230px; overflow-y: auto; background: #0f172a;
+      border: 1px solid var(--border-subtle, #334155); border-radius: 8px;
+      box-shadow: 0 10px 26px rgba(0,0,0,0.5); display: none; }
+    .lga-dd.open { display: block; }
+    .lga-dd .lga-opt { padding: 0.45rem 0.7rem; cursor: pointer; font-size: 0.85rem; color: var(--text-primary, #e2e8f0); }
+    .lga-dd .lga-opt:hover { background: rgba(125,211,252,0.12); }
     .leaflet-container { background: #0b1220; }
 
     /* Primary metric — the one number that matters most for this card. */
@@ -1008,7 +1019,10 @@
     /* Narrow screens: single-column panel grid; spectrum stays full-width. */
     @media (max-width: 720px) {
       .node-drawer-body { padding: 0.9rem 0.8rem 2.5rem; }
-      .nd-panels { grid-template-columns: 1fr; }
+      /* .nd-panels is a flex column — grid-template-columns does nothing on
+         it. The grid that actually needs collapsing is the split row, whose
+         minmax(320px, …) tracks overflow a phone that has ~290px to give. */
+      .nd-panels-split { grid-template-columns: 1fr; }
       #nd-trace { height: 90px; }
       #nd-waterfall { height: 190px; }
     }
@@ -1054,6 +1068,20 @@
     .nd-cfg-rowhead { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.55rem; }
     .nd-cfg-rowhead .nd-strong { flex: 1; }
     .nd-input-wide { width: 100%; }
+
+    /* --- Discord notification settings (Requests -> Discord notifications).
+       Own classes rather than .nd-fld: that one's 0.6rem uppercase labels are
+       sized for the dense node-config grid and read as illegible here. --- */
+    .dn-fld { display: flex; flex-direction: column; gap: 0.35rem; margin-bottom: 1.1rem; max-width: 420px; }
+    .dn-fld > label { font-size: 0.78rem; font-weight: 600; color: var(--text-primary); }
+    .dn-fld select {
+      width: 100%; background: rgba(0, 0, 0, 0.3);
+      border: 1px solid var(--border-subtle); border-radius: 8px;
+      color: var(--text-primary); padding: 0.5rem 0.6rem;
+      font-family: inherit; font-size: 0.85rem;
+    }
+    .dn-fld select:focus { outline: none; border-color: var(--accent-border); }
+    .dn-hint { color: var(--text-soft); font-size: 0.76rem; }
 
     /* --- Global settings modal (P3) --- */
     .modal-content.wide { max-width: 940px; }
@@ -2514,15 +2542,33 @@
         margin: 0 -1rem 1.25rem;
         padding: 0.85rem 1rem;
         flex-wrap: wrap;
+        gap: 0.6rem;
       }
-      .header-actions { flex-wrap: wrap; }
+      /* The title is nowrap, so at 1.35rem it and the role chip alone ate a
+         phone's width and shoved the buttons off. */
+      .header h1 { font-size: 1.1rem; }
+      .header-actions { flex-wrap: wrap; flex-shrink: 1; width: 100%; }
+      .header-actions .btn { flex: 1 1 auto; justify-content: center; }
 
+      /* The tab bar WRAPS here rather than scrolling sideways. overflow-x:auto
+         made it a scroll container, and a scroll container CLIPS its
+         absolutely-positioned descendants — so the Requests / Auth / Data
+         dropdowns were cut to the height of the bar and everything inside
+         them (Data changes, Wire approvals, Members, Radio / Pager /
+         Transcripts) was unreachable on a phone. Wrapping also stops tabs
+         hiding off-screen behind a scrollbar nobody can see. */
       .tab-nav {
         display: flex;
         width: 100%;
-        overflow-x: auto;
+        flex-wrap: wrap;
+        overflow: visible;
+        position: relative;
       }
-      .tab-btn { flex-shrink: 0; }
+      .tab-btn { flex-shrink: 0; min-height: 40px; }
+      /* Anchor the menus to the whole bar and let them span it, so a menu
+         under a right-hand tab can't hang off the screen edge. */
+      .tab-dd { position: static; }
+      .tab-dd-menu { left: 0; right: 0; width: auto; min-width: 0; }
 
       .requests-table { display: block; overflow-x: auto; }
       /* Same horizontal-scroll treatment for the node-config tables so they
@@ -2530,11 +2576,47 @@
       .nd-readers-table, .nd-table, .nd-ch-table, .nd-dc-ts-table, .gc-table {
         display: block; overflow-x: auto; -webkit-overflow-scrolling: touch;
       }
+      /* ...except the ones already scrolling inside .nd2-table-wrap. Making
+         those display:block nests a second scroller inside the first and
+         drops the sticky header row — the wrapper carries overflow-y:clip
+         precisely so thead can stick to the page while rows scroll. */
+      .nd2-table-wrap .nd-table { display: table; overflow: visible; }
 
-      .search-box { min-width: 0; flex: 1 1 100%; }
+      /* Several of these boxes carry an inline style="min-width:NNNpx", which
+         outranks a plain rule — hence !important, or they stay stuck at their
+         desktop width and the filter bar reads as ragged half-rows. */
+      .search-box { min-width: 0 !important; flex: 1 1 100% !important; }
       .filter-spacer { display: none; }
 
+      .modal { padding: 1rem 0.75rem; }
       .modal-content { padding: 1.4rem 1.25rem 1.5rem; }
+      /* 96vw x 92vh left the global-settings shell almost no usable room once
+         its own head, sidebar and padding were taken out. */
+      .modal-content.gc-shell { width: 100%; height: 100%; }
+
+      /* Status hero: stack the badge above its description. The card clips
+         overflow, so a 1.5rem uppercase badge beside the meta text simply cut
+         the text off mid-sentence. */
+      .dev-overall { flex-wrap: wrap; gap: 0.9rem; padding: 1.15rem 1.15rem; }
+      .dev-overall-badge { font-size: 1.15rem; padding: 0.45rem 0.85rem; }
+      .dev-overall-meta { font-size: 0.85rem; }
+
+      .filter-btn { min-height: 38px; }
+    }
+
+    /* Phones proper. Several auto-fill grids have track minimums wider than a
+       small handset's content box (300px tracks in a ~288px column), and a
+       track that can't shrink below its minimum overflows the page instead. */
+    @media (max-width: 480px) {
+      .header h1 { font-size: 1rem; }
+      .stats-bar { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 0.7rem; }
+      .stat-card { padding: 0.85rem 0.9rem; }
+      .stat-card .stat-value { font-size: 1.45rem; }
+      .tab-btn { padding: 0.5rem 0.8rem; font-size: 0.82rem; }
+      .dev-card-grid, #nodes-grid { grid-template-columns: 1fr; }
+      .dev-overall { padding: 1rem; }
+      .node-drawer-head { padding: 0.9rem 1rem; }
+      .gc-body { grid-template-rows: auto 1fr; }
     }
 
     /* ------------------------------------------------------------------ *
@@ -2567,7 +2649,7 @@
 <body>
   <div id="login-overlay" class="login-overlay">
     <div class="login-card">
-      <a href="map.html" style="display: inline-flex; align-items: center; gap: 0.4rem; color: var(--text-soft); text-decoration: none; font-size: 0.85rem; margin-bottom: 1rem;">
+      <a href="map" style="display: inline-flex; align-items: center; gap: 0.4rem; color: var(--text-soft); text-decoration: none; font-size: 0.85rem; margin-bottom: 1rem;">
         <i class="fas fa-arrow-left"></i> Back to Map
       </a>
       <h2>Forcequit <span>Admin</span></h2>
@@ -2607,7 +2689,7 @@
           <button class="btn btn-secondary" onclick="refreshAll()">
             <i class="fas fa-sync-alt"></i> Refresh
           </button>
-          <a href="map.html" class="btn btn-secondary">
+          <a href="map" class="btn btn-secondary">
             <i class="fas fa-map"></i> Map
           </a>
           <button class="btn btn-danger" onclick="doLogout()">
@@ -2630,6 +2712,7 @@
             <button class="tab-dd-item" role="menuitem" data-kind="approvals" onclick="openRequestsView('approvals')"><i class="fas fa-clock"></i> Wire approvals <span class="dd-count" id="dd-approvals-badge" style="display:none;"></span></button>
             <button class="tab-dd-item" role="menuitem" data-kind="takedowns" onclick="openRequestsView('takedowns')"><i class="fas fa-flag"></i> Wire takedowns <span class="dd-count" id="dd-takedowns-badge" style="display:none;"></span></button>
             <button class="tab-dd-item" role="menuitem" data-kind="restrictions" onclick="openRequestsView('restrictions')"><i class="fas fa-comment-slash"></i> Comment restrictions <span class="dd-count" id="dd-restrictions-badge" style="display:none;"></span></button>
+            <button class="tab-dd-item" role="menuitem" data-kind="discord" onclick="openRequestsView('discord')"><i class="fab fa-discord"></i> Discord notifications</button>
           </div>
         </div>
         <div class="tab-dd" id="auth-dd">
@@ -2723,6 +2806,25 @@
         <div id="requests-restrictions-view" style="display:none;">
           <div id="restrictions-container">
             <div class="loading"><i class="fas fa-spinner"></i></div>
+          </div>
+        </div>
+
+        <!-- Where the three staff queues above get announced in Discord.
+             Owner-only: these channels carry moderation traffic, so the
+             gate is staff roles, not Discord's "Manage Channels". -->
+        <div id="requests-discord-view" style="display:none;">
+          <div class="dev-section-h">Discord notifications</div>
+          <div class="dev-card" style="max-width:760px;">
+            <p style="color:var(--text-soft); font-size:0.88rem; line-height:1.6; margin-bottom:1rem;">
+              Announce new signup requests, Wire approvals and takedown notices in Discord.
+              Messages carry a short summary and a link back here &mdash; never an email,
+              Discord handle or the body of a notice.
+              When an item is actioned, its original message is edited to show who handled it.
+            </p>
+            <div id="dn-status" style="margin-bottom:1rem;"></div>
+            <div id="dn-body">
+              <div class="loading"><i class="fas fa-spinner"></i></div>
+            </div>
           </div>
         </div>
 
@@ -3055,30 +3157,41 @@
 
         <!-- ===== Systems view (list › system overview › site overview) ===== -->
         <!-- Transcripts: not a Radio/Pager sibling with its own pill row —
-             a single view opened straight from the Data dropdown. Whisper
-             server status on top (same card the Nodes tab renders, one shared
-             renderer), the transcript stream under it. -->
+             a single view opened straight from the Data dropdown. It's a
+             WHISPER DASHBOARD, not a transcript reader: server health on top
+             (same card the Nodes tab renders, one shared renderer) and hourly
+             throughput/latency charts from /api/whisper/history — our own
+             whisper_hourly table, never the rdio DB, so it always loads
+             fast. The old searchable transcript table (and its backend
+             route) was removed: its unbounded scans over the rdio DB are
+             what made this page hang. -->
         <div id="nd2-view-transcripts" style="display:none">
           <div class="wh-card" id="nd2-whisper-card" style="display:none;">
             <div class="wh-head"><i class="fas fa-microphone"></i> Whisper servers
               <span class="wh-sub" id="nd2-whisper-sub"></span></div>
             <div class="wh-rows" id="nd2-whisper-rows"></div>
           </div>
-          <div class="nd2-controls" style="margin-bottom:0.75rem;">
-            <input type="text" id="nd2-ts-q" class="nd-input" placeholder="Search transcripts... (empty = latest)"
-                   style="min-width:260px;" oninput="nd2TsInputChanged()">
-            <input type="text" id="nd2-ts-tg" class="nd-input" placeholder="Talkgroup" inputmode="numeric"
-                   style="width:110px;" oninput="nd2TsInputChanged()">
-            <span class="nd-sub" id="nd2-ts-count"></span>
+          <div class="nd2-card nd2-chart-card">
+            <div class="nd2-card-h">
+              <i class="fas fa-chart-line"></i>
+              <span>Transcriptions</span>
+              <span class="nd2-note" id="nd2-wh-tp-note"></span>
+            </div>
+            <div class="nd2-chart-wrap">
+              <canvas id="nd2-wh-tp-chart" aria-label="Transcriptions processed per hour" role="img"></canvas>
+            </div>
+            <div class="nd2-empty" id="nd2-wh-tp-empty" style="display: none;">No transcriptions in this window yet.</div>
           </div>
-          <div class="nd2-card">
-            <table class="data-table">
-              <thead><tr><th style="width:90px;">Time</th><th style="width:200px;">Talkgroup</th>
-                <th style="width:90px;">RID</th><th>Transcript</th></tr></thead>
-              <tbody id="nd2-ts-body">
-                <tr><td colspan="4" class="nd2-empty">Loading…</td></tr>
-              </tbody>
-            </table>
+          <div class="nd2-card nd2-chart-card">
+            <div class="nd2-card-h">
+              <i class="fas fa-stopwatch"></i>
+              <span>Transcription latency</span>
+              <span class="nd2-note" id="nd2-wh-lat-note"></span>
+            </div>
+            <div class="nd2-chart-wrap">
+              <canvas id="nd2-wh-lat-chart" aria-label="Average transcription latency per hour" role="img"></canvas>
+            </div>
+            <div class="nd2-empty" id="nd2-wh-lat-empty" style="display: none;">No latency data in this window yet.</div>
           </div>
         </div>
         <div id="nd2-view-live" style="display: none;">
@@ -3913,6 +4026,10 @@
         <label>Region</label>
         <div class="value" id="detail-region">-</div>
       </div>
+      <div class="credential-box" id="detail-referred-group" style="display: none; background: rgba(34, 197, 94, 0.08); border-color: rgba(34, 197, 94, 0.3);">
+        <label>🤝 Referred By</label>
+        <div class="value" id="detail-referred">-</div>
+      </div>
       <div class="credential-box" id="detail-setup-group" style="display: none; background: rgba(249, 115, 22, 0.1); border-color: rgba(249, 115, 22, 0.3);">
         <label>📡 Feeder Setup</label>
         <div class="value" id="detail-setup" style="white-space: pre-wrap; font-family: inherit; font-size: 0.95rem; color: var(--text-primary);">-</div>
@@ -4513,6 +4630,8 @@
     let _nd2Chart = null;        // live Chart.js instance (destroyed on re-render)
     let _nd2SysChart = null;     // system-detail chart
     let _nd2SiteChart = null;    // site-detail chart
+    let _nd2WhTpChart = null;    // whisper dashboard: transcriptions/hour
+    let _nd2WhLatChart = null;   // whisper dashboard: avg latency/hour
     let _nd2PovChart = null;     // pager-overview chart
     let _nd2EvDebounce = null;   // debounce handle for the text filter inputs
     let _nd2TgDebounce = null;
@@ -4575,11 +4694,7 @@
             break;
           case 'events': if (nd2.evOffset === 0) nd2LoadEvents(); break;
           case 'poverview': nd2LoadPagerOverview(); break;
-          case 'transcripts':
-            // Do not clobber an active search mid-typing: auto-refresh only
-            // the default (browse) stream, mirroring the offset===0 guards.
-            if (!nd2TsVal('nd2-ts-q') && !nd2TsVal('nd2-ts-tg')) nd2LoadTranscripts();
-            break;
+          case 'transcripts': nd2LoadTranscripts(); break;
           case 'capcodes': if (nd2.capLevel === 'list' && nd2.cap.offset === 0) nd2LoadCapcodes(); break;
         }
       }, _nd2IntervalMs);
@@ -4742,9 +4857,9 @@
       // state. (Aliases used to be windowless on the grounds that an alias is
       // durable identity; but the table lists radios HEARD, so it follows the
       // window like its siblings and `All` restores the full history.)
-      // Transcripts too: its list has its own limit and search, so the
-      // window pills would be controls that do nothing.
-      const windowless = view === 'live' || view === 'transcripts';
+      // Transcripts (the whisper dashboard) takes it too: it is the range of
+      // the throughput/latency charts.
+      const windowless = view === 'live';
       const winRow = document.getElementById('nd2-window-row') || document.querySelector('[data-nd2-window]')?.parentElement;
       if (winRow) winRow.style.visibility = windowless ? 'hidden' : '';
       // `All` is offered wherever the backend can answer it: the rollup views
@@ -4847,22 +4962,12 @@
     let _nd2OverviewInflight = false;
 
 
-    // --- Data > Transcripts -------------------------------------------------
-    const nd2TsVal = (id) => (document.getElementById(id)?.value || '').trim();
-    let _nd2TsDebounce = null;
-    function nd2TsInputChanged() {
-      clearTimeout(_nd2TsDebounce);
-      _nd2TsDebounce = setTimeout(() => { if (nd2.view === 'transcripts') nd2LoadTranscripts(); }, 350);
-    }
-
+    // --- Data > Transcripts (whisper dashboard) -----------------------------
     async function nd2LoadTranscripts() {
-      const body = document.getElementById('nd2-ts-body');
-      const count = document.getElementById('nd2-ts-count');
-      if (!body) return;
       const seq = ++nd2.reqSeq;
 
       // The whisper server status rides along, fire-and-forget: a slow status
-      // must never delay the stream, and vice versa.
+      // must never delay the charts, and vice versa.
       (async () => {
         const card = document.getElementById('nd2-whisper-card');
         const rows = document.getElementById('nd2-whisper-rows');
@@ -4877,38 +4982,133 @@
       })();
 
       try {
-        const params = new URLSearchParams({ limit: '50' });
-        const q = nd2TsVal('nd2-ts-q');
-        const tg = nd2TsVal('nd2-ts-tg');
-        if (q) params.set('q', q);
-        if (tg && /^\d+$/.test(tg)) params.set('talkgroup', tg);
-        const res = await fetch(`${API_BASE_URL}/api/rdio/transcripts/search?${params}`, {
+        const hours = { '24h': 24, '7d': 168, '30d': 720 }[nd2.window] ?? 24;
+        const res = await fetch(`${API_BASE_URL}/api/whisper/history?hours=${hours}`, {
           headers: { 'Authorization': await authHeader() }
         });
         if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status });
         const data = await res.json();
-        if (seq !== nd2.reqSeq) return;   // a newer request owns the table
-
-        if (count) count.textContent = `${data.total.toLocaleString()} transcript${data.total === 1 ? '' : 's'}${q || tg ? ' matching' : ''}`;
-        const rows = data.results || [];
-        if (!rows.length) {
-          body.innerHTML = `<tr><td colspan="4" class="nd2-empty">${q || tg ? 'No transcripts match.' : 'No transcripts yet.'}</td></tr>`;
-          return;
-        }
-        body.innerHTML = rows.map(r => {
-          const tgLabel = r.talkgroup_label || (r.talkgroup != null ? `TG ${r.talkgroup}` : '—');
-          return `<tr>
-            <td><span class="nd-sub">${escapeHtml(whShortTime(r.datetime))}</span></td>
-            <td>${escapeHtml(tgLabel)}${r.talkgroup != null && r.talkgroup_label ? ` <span class="nd-sub">${r.talkgroup}</span>` : ''}</td>
-            <td><span class="nd-sub">${escapeHtml(r.radio_label || (r.radio_id != null ? String(r.radio_id) : '—'))}</span></td>
-            <td>${escapeHtml(r.transcript || '')}</td>
-          </tr>`;
-        }).join('');
+        if (seq !== nd2.reqSeq) return;   // a newer request owns the charts
+        nd2RenderWhisperCharts(data.configured === false ? [] : (data.rows || []), hours);
       } catch (e) {
         if (seq !== nd2.reqSeq) return;
-        console.error('Error loading transcripts:', e);
-        body.innerHTML = `<tr><td colspan="4" class="nd2-empty">Could not load transcripts: ${escapeHtml(e.message)}</td></tr>`;
+        console.error('Error loading whisper history:', e);
+        nd2RenderWhisperCharts([], { '24h': 24, '7d': 168, '30d': 720 }[nd2.window] ?? 24);
       }
+    }
+
+    // Failures are always the dashed red line on the whisper charts.
+    const ND2_WH_FAIL_COLOR = '#dc2626';
+
+    /**
+     * Render both dashboard charts from /api/whisper/history rows
+     * ({hour, backend, requests, failures, avgMs}). The client densifies:
+     * a full hour axis for the window with zero-filled gaps, one line per
+     * real backend (successful transcriptions), plus a dashed failures
+     * line summed across every row INCLUDING backend 'none' (= calls no
+     * server could take). Latency chart: avg seconds per backend, 'none'
+     * excluded (it has no latency by definition).
+     */
+    function nd2RenderWhisperCharts(rows, hours) {
+      if (typeof Chart === 'undefined') return;
+      // Series colours: the shared radio/pager pair first, extras for a 3rd+
+      // backend. Built HERE, not at top level — ND2_RADIO_COLOR is declared
+      // further down the script, and a top-level read crashed the whole page
+      // at load (TDZ), which took the login bootstrap down with it.
+      const ND2_WH_COLORS = [ND2_RADIO_COLOR, ND2_PAGER_COLOR, '#8b5cf6', '#10b981'];
+      const tpCanvas = document.getElementById('nd2-wh-tp-chart');
+      const latCanvas = document.getElementById('nd2-wh-lat-chart');
+      if (!tpCanvas || !latCanvas) return;
+
+      // Hour axis, oldest → newest, aligned to the hour like the rows are.
+      const HOUR = 3600 * 1000;
+      const end = Math.floor(Date.now() / HOUR) * HOUR;
+      const axis = [];
+      for (let t = end - (hours - 1) * HOUR; t <= end; t += HOUR) axis.push(t);
+      const idx = new Map(axis.map((t, i) => [t, i]));
+
+      const backends = [...new Set(rows.filter(r => r.backend !== 'none').map(r => r.backend))].sort();
+      const ok = new Map(backends.map(b => [b, new Array(axis.length).fill(0)]));
+      const lat = new Map(backends.map(b => [b, new Array(axis.length).fill(null)]));
+      const fails = new Array(axis.length).fill(0);
+      for (const r of rows) {
+        const t = Date.parse(r.hour);
+        const i = idx.get(t);
+        if (i === undefined) continue;
+        fails[i] += r.failures || 0;
+        if (r.backend === 'none') continue;
+        ok.get(r.backend)[i] += Math.max(0, (r.requests || 0) - (r.failures || 0));
+        if (r.avgMs != null) lat.get(r.backend)[i] = r.avgMs / 1000;
+      }
+
+      const labels = axis.map(t => {
+        const d = new Date(t);
+        return nd2.window === '24h'
+          ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : d.toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit' });
+      });
+
+      const darkOpts = (yPrecision) => ({
+        responsive: true, maintainAspectRatio: false, animation: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { display: true, labels: { color: '#94a3b8', boxWidth: 10,
+            font: { family: "'Space Grotesk', sans-serif", size: 10 } } },
+          tooltip: {
+            backgroundColor: '#121e33', borderColor: 'rgba(148,163,184,0.25)', borderWidth: 1,
+            titleColor: '#f1f5f9', bodyColor: '#94a3b8', padding: 10,
+          },
+        },
+        scales: {
+          x: { grid: { display: false }, border: { color: 'rgba(148,163,184,0.16)' },
+               ticks: { color: '#64748b', maxTicksLimit: 8, maxRotation: 0,
+                        font: { family: "'Space Grotesk', sans-serif", size: 10 } } },
+          y: { beginAtZero: true, grid: { color: 'rgba(148,163,184,0.07)' }, border: { display: false },
+               ticks: { color: '#64748b', ...(yPrecision ? { precision: 0 } : {}), maxTicksLimit: 5,
+                        font: { family: "'Space Grotesk', sans-serif", size: 10 } } },
+        },
+      });
+
+      const mkLine = (label, data, color, extra) => ({
+        label, data,
+        borderColor: color, backgroundColor: color + '14',
+        borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, pointHitRadius: 12,
+        fill: false, tension: 0.3, spanGaps: true,
+        ...(extra || {}),
+      });
+
+      const hasTp = backends.some(b => ok.get(b).some(v => v > 0)) || fails.some(v => v > 0);
+      const tpEmpty = document.getElementById('nd2-wh-tp-empty');
+      const tpNote = document.getElementById('nd2-wh-tp-note');
+      if (tpEmpty) tpEmpty.style.display = hasTp ? 'none' : '';
+      if (tpNote) tpNote.textContent = 'transcriptions per hour';
+      if (_nd2WhTpChart) { _nd2WhTpChart.destroy(); _nd2WhTpChart = null; }
+      _nd2WhTpChart = new Chart(tpCanvas, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            ...backends.map((b, i) => mkLine(b, ok.get(b), ND2_WH_COLORS[i % ND2_WH_COLORS.length], { fill: true })),
+            mkLine('Failed', fails, ND2_WH_FAIL_COLOR, { borderDash: [5, 4] }),
+          ],
+        },
+        options: darkOpts(true),
+      });
+
+      const hasLat = backends.some(b => lat.get(b).some(v => v != null));
+      const latEmpty = document.getElementById('nd2-wh-lat-empty');
+      const latNote = document.getElementById('nd2-wh-lat-note');
+      if (latEmpty) latEmpty.style.display = hasLat ? 'none' : '';
+      if (latNote) latNote.textContent = 'avg seconds per call';
+      if (_nd2WhLatChart) { _nd2WhLatChart.destroy(); _nd2WhLatChart = null; }
+      _nd2WhLatChart = new Chart(latCanvas, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: backends.map((b, i) => mkLine(b, lat.get(b), ND2_WH_COLORS[i % ND2_WH_COLORS.length])),
+        },
+        options: darkOpts(false),
+      });
     }
 
     async function nd2LoadOverview() {
@@ -8288,8 +8488,20 @@
           : b.healthy ? ['ok', 'up']
           : ['bad', 'down'];
         const bits = [];
-        if (b.inFlight > 0) bits.push(`${b.inFlight} in flight`);
+        // Capacity alongside the count, because "8 in flight" means nothing
+        // without knowing what this backend can actually run at once.
+        if (b.inFlight > 0) {
+          bits.push(b.maxInFlight ? `${b.inFlight}/${b.maxInFlight} in flight` : `${b.inFlight} in flight`);
+        }
+        // avg and p95 are BOTH the router's own ring now, so they describe
+        // the same calls and the same clock — end to end, as rdio
+        // experienced them, timeouts included. Previously this line paired a
+        // router-side mean with a server-side p95, which is how it could
+        // show 39.7s avg beside p95 1117.4s: arithmetically impossible for
+        // one population, and the giveaway that a queue had formed inside
+        // whisper where nothing could see it.
         if (b.avgMs != null) bits.push(`${(b.avgMs / 1000).toFixed(1)}s avg`);
+        if (b.p95Ms != null) bits.push(`p95 ${(b.p95Ms / 1000).toFixed(1)}s`);
         if (b.requests) bits.push(`${b.requests} calls`);
         if (b.failures) bits.push(`${b.failures} failed`);
         // The server's own /v1/stats, when it exposes them. Queue depth is
@@ -8298,10 +8510,15 @@
         let queueHtml = '';
         if (b.stats) {
           if (b.stats.model) bits.push(`${b.stats.model} ${b.stats.device || ''}`.trim());
-          if (b.stats.p95S != null) bits.push(`p95 ${b.stats.p95S.toFixed(1)}s`);
           if (b.stats.waiting > 0) {
             queueHtml = `<span class="nd-ready bad">queue ${b.stats.waiting}</span>`;
           }
+        }
+        // Calls parked in the ROUTER waiting for a slot. Distinct from the
+        // chip above: that one is a backlog inside whisper, this one is the
+        // cap doing its job and holding work back.
+        if (b.waiting > 0) {
+          queueHtml += `<span class="nd-ready updating">${b.waiting} queued</span>`;
         }
         const since = b.stateSince ? ` since ${whShortTime(b.stateSince)}` : '';
         return `<div class="wh-row${b.name === d.current ? ' wh-current' : ''}">
@@ -8521,7 +8738,7 @@
             <span>install <span class="node-mono">${installShort}</span></span>
           </div>
           <div class="dev-card-secondary">
-            <span><i class="fas fa-map"></i> region ${node.zone ? `<strong>${escapeHtml(node.zone)}</strong>` : '<span style="color:#fbbf24">not set</span>'}${(typeof node.lat === 'number') ? ' · <i class="fas fa-location-dot" title="Exact pin set"></i> pin' : ''}</span>
+            <span><i class="fas fa-map"></i> region ${(() => { const a = isPager ? [node.state, node.lga].filter(Boolean).join(' · ') : node.zone; return a ? `<strong>${escapeHtml(a)}</strong>` : '<span style="color:#fbbf24">not set</span>'; })()}${(typeof node.lat === 'number') ? ' · <i class="fas fa-location-dot" title="Exact pin set"></i> pin' : ''}</span>
           </div>
           ${statusRow}
         </div>`;
@@ -8651,9 +8868,28 @@
       const node = allNodes.find(n => String(n.id) === String(id));
       if (!node) return;
       const hasPin = typeof node.lat === 'number' && typeof node.lon === 'number';
-      const zoneLine = node.zone
-        ? `<div class="loc-view-note"><i class="fas fa-map"></i> Region: <b>${escapeHtml(node.zone)}</b></div>`
-        : `<div class="loc-view-note" style="color:#fbbf24">No region set for this node.</div>`;
+      const isPagerNode = node.kind === 'pager';
+      const areaLabel = isPagerNode ? [node.state, node.lga].filter(Boolean).join(' · ') : node.zone;
+      // Pager nodes: the area is editable right HERE — the one location surface.
+      // The state routes the node's Pagermon feed AND selects its frequency
+      // plan (re-pushed live on save). Radio stays read-only (owner-set zone).
+      const editStyle = 'background:rgba(255,255,255,0.05); color:var(--text-primary,#e2e8f0); border:1px solid var(--border-subtle,#334155); border-radius:6px; padding:0.25rem 0.4rem; font-size:0.8rem;';
+      const zoneLine = isPagerNode
+        ? `<div class="loc-view-note" style="display:flex; gap:0.4rem; align-items:center; flex-wrap:wrap;">
+            <i class="fas fa-map"></i> State / LGA:
+            <select id="loc-edit-state" class="nd-write-input" onchange="_locEditStateChanged()" style="${editStyle}">
+              ${['NSW','VIC','QLD','SA','WA','TAS','NT','ACT'].map(s => `<option value="${s}" ${s === (node.state || 'NSW') ? 'selected' : ''}>${s}</option>`).join('')}
+            </select>
+            <span class="lga-combo" style="flex:1; min-width:15rem;">
+              <input id="loc-edit-lga" class="nd-write-input" value="${escapeHtml(node.lga || '')}" placeholder="Start typing the council area…" maxlength="120" autocomplete="off" style="${editStyle} width:100%; box-sizing:border-box;"
+                oninput="_staffLgaShow()" onfocus="_staffLgaShow()" onblur="_staffLgaHide()">
+              <div id="loc-edit-lga-dd" class="lga-dd"></div>
+            </span>
+            <button class="btn btn-secondary btn-sm nd-write" onclick="_savePagerNodeState('${jsArg(node.id)}', this)" title="Save state + LGA — re-pushes the node's frequency plan">Save</button>
+          </div>`
+        : (areaLabel
+          ? `<div class="loc-view-note"><i class="fas fa-map"></i> Region: <b>${escapeHtml(areaLabel)}</b></div>`
+          : `<div class="loc-view-note" style="color:#fbbf24">No region set for this node.</div>`);
       // Zone-only node (no exact pin) — show the zone, no map.
       if (!hasPin) {
         const overlay = document.createElement('div');
@@ -8670,6 +8906,7 @@
           </div>`;
         overlay.addEventListener('click', (e) => { if (e.target === overlay) closeNodeLocation(); });
         document.body.appendChild(overlay);
+        if (isPagerNode) { _locEditLoadLgas(node.state || 'NSW'); _locEditWireDd(); }
         return;
       }
       const overlay = document.createElement('div');
@@ -8687,6 +8924,7 @@
         </div>`;
       overlay.addEventListener('click', (e) => { if (e.target === overlay) closeNodeLocation(); });
       document.body.appendChild(overlay);
+      if (isPagerNode) { _locEditLoadLgas(node.state || 'NSW'); _locEditWireDd(); }
       const c = [node.lat, node.lon];
       const dark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?key=cb1_29rl_1_764d57ded0436220d836abc9', { subdomains: 'abcd', maxZoom: 19, attribution: '© CartoDB' });
       const sat = L.tileLayer('https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', { subdomains: ['mt0', 'mt1', 'mt2', 'mt3'], maxZoom: 21, maxNativeZoom: 19, attribution: '© Google' });
@@ -9450,9 +9688,10 @@
       const feedEnabled = n.feedEnabled === true;
       const isPager = (n.kind || 'radio') === 'pager';
       const located = typeof n.lat === 'number';
-      const hasLoc = located || !!n.zone;
-      const locTitle = n.zone
-        ? `Region: ${escapeHtml(n.zone)}${located ? ' · exact pin set' : ' · no exact pin'}`
+      const areaLabel = isPager ? [n.state, n.lga].filter(Boolean).join(' · ') : n.zone;
+      const hasLoc = located || !!areaLabel;
+      const locTitle = areaLabel
+        ? `Region: ${escapeHtml(areaLabel)}${located ? ' · exact pin set' : ' · no exact pin'}`
         : 'No location set';
       const feedTitle = isPager
         ? 'Forward decoded pages to central Pagermon. Off keeps the node decoding (reception still counts) but stops uploading.'
@@ -9500,6 +9739,15 @@
       const online = !!nFresh.online;
       const msgs = Number(nFresh.messagesLast10m || 0);
       const qd = (st && typeof st.queueDepth === 'number') ? st.queueDepth : null;
+      // The status frame names a reader by agency only (component key
+      // "reader:FRNSW"), so the MHz has to come from the node's STATE plan.
+      // pagerPrimaryOptions IS that plan, backend-supplied — so a plan change
+      // (FRNSW moving to 148.9625) shows up here with nothing else to edit,
+      // and a QLD node shows its own frequency rather than NSW's.
+      const freqByLabel = new Map(
+        (Array.isArray(nFresh.pagerPrimaryOptions) ? nFresh.pagerPrimaryOptions : [])
+          .filter(o => o && o.label != null && typeof o.mhz === 'number')
+          .map(o => [String(o.label), o.mhz]));
 
       let rows;
       if (!online) {
@@ -9511,7 +9759,7 @@
           const running = /run/i.test(r.state);
           const listening = _ndAudioLabel === r.label;
           return `<tr>
-            <td>${escapeHtml(r.label)}</td>
+            <td>${escapeHtml(r.label)}${freqByLabel.has(r.label) ? ` <span class="nd-sub">${freqByLabel.get(r.label).toFixed(4)} MHz</span>` : ''}</td>
             <td class="${running ? 'r-run' : 'r-stop'}">${running ? 'running' : 'stopped'}${listening ? ' <span style="color:var(--accent,#38bdf8);font-weight:600;"><i class="fas fa-headphones"></i> monitoring</span>' : ''}</td>
             <td style="text-align:right; white-space:nowrap;">
               <button class="btn ${listening ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="_ndAudioToggle('${jsArg(r.label)}')" title="${listening ? 'Stop audio monitor' : 'Listen to this reader for tuning (restarts it ~2s)'}"><i class="fas fa-${listening ? 'stop' : 'headphones'}"></i></button>
@@ -9522,7 +9770,12 @@
       }
 
       // Single-SDR primary frequency (persisted; 2 SDRs run both regardless).
-      const primary = nFresh.pagerPrimary === 'FRNSW' ? 'FRNSW' : 'NSWRFS';
+      // The valid choices come from the node's STATE's frequency plan
+      // (pagerPrimaryOptions, backend-supplied) — never hardcoded here.
+      const primaryOpts = (Array.isArray(nFresh.pagerPrimaryOptions) && nFresh.pagerPrimaryOptions.length)
+        ? nFresh.pagerPrimaryOptions
+        : [{ label: 'NSWRFS', mhz: 148.5875 }, { label: 'FRNSW', mhz: 148.9625 }];
+      const primary = primaryOpts.some(o => o.label === nFresh.pagerPrimary) ? nFresh.pagerPrimary : primaryOpts[0].label;
       const gainVal = (nFresh.pagerGain == null) ? '' : String(nFresh.pagerGain);
       const ppmVal = (nFresh.pagerPpm == null) ? '' : String(nFresh.pagerPpm);
       // Supported gain steps the agent reports for this SDR (dB) → a dropdown of
@@ -9533,7 +9786,7 @@
       // unconditional innerHTML rebuild snaps an open <select> shut and wipes a
       // half-typed field mid-tune, so skip when nothing shown here changed.
       const sig = JSON.stringify([online, readers.map(r => r.label + ':' + r.state),
-        _ndAudioLabel, msgs, qd, primary, gainVal, ppmVal, gains]);
+        _ndAudioLabel, msgs, qd, primary, gainVal, ppmVal, gains, primaryOpts]);
       if (sig === _ndReadersSig) return;
       _ndReadersSig = sig;
 
@@ -9556,10 +9809,9 @@
       el.innerHTML = `
         <div class="nd-switch-row" style="margin-bottom:0.7rem;">
           <span>Single-SDR frequency</span>
-          <select class="nd-write-input" onchange="_ndSetPagerPrimary(this.value, this)" style="background:rgba(255,255,255,0.05); color:var(--text-primary,#e2e8f0); border:1px solid var(--border-subtle,#334155); border-radius:6px; padding:0.25rem 0.4rem; font-size:0.8rem;">
-            <option value="NSWRFS" ${primary === 'FRNSW' ? '' : 'selected'}>NSW RFS (148.5875)</option>
-            <option value="FRNSW" ${primary === 'FRNSW' ? 'selected' : ''}>Fire &amp; Rescue (148.9875)</option>
-          </select>
+          ${primaryOpts.length > 1 ? `<select class="nd-write-input" onchange="_ndSetPagerPrimary(this.value, this)" style="background:rgba(255,255,255,0.05); color:var(--text-primary,#e2e8f0); border:1px solid var(--border-subtle,#334155); border-radius:6px; padding:0.25rem 0.4rem; font-size:0.8rem;">
+            ${primaryOpts.map(o => `<option value="${escapeHtml(o.label)}" ${o.label === primary ? 'selected' : ''}>${escapeHtml(o.label)} (${o.mhz})</option>`).join('')}
+          </select>` : `<span>${escapeHtml(primaryOpts[0].label)} (${primaryOpts[0].mhz})</span>`}
         </div>
         <div class="nd-switch-row" style="margin-bottom:0.5rem;">
           <span title="Tuner gain for all readers. Default = agent default (49.6); Auto = hardware AGC; or pick a supported step.">Gain (dB)</span>
@@ -9593,10 +9845,89 @@
           body: JSON.stringify({ primary }),
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        showToast(`Single-SDR frequency set to ${primary === 'FRNSW' ? 'Fire & Rescue' : 'NSW RFS'}.`, 'success');
+        showToast(`Single-SDR frequency set to ${primary}.`, 'success');
         await loadNodes();
       } catch (e) {
         showToast(`Could not change frequency: ${e.message}`, 'error');
+      } finally {
+        if (el) el.disabled = false;
+      }
+    }
+
+    // ABS LGA names per state for the location modal's LGA dropdown (our own
+    // styled filter-as-you-type list). Cached per state; a failed fetch
+    // degrades to free text, never a blocked save.
+    const _staffLgaCache = {};
+    let _staffLgaNames = [];
+    async function _locEditLoadLgas(state) {
+      _staffLgaNames = [];
+      if (!state) return;
+      if (_staffLgaCache[state]) { _staffLgaNames = _staffLgaCache[state]; return; }
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/boundaries/lga-names?state=${state}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const names = Array.isArray(data.names) ? data.names : [];
+        _staffLgaCache[state] = names;
+        // The state may have changed while this was in flight.
+        if ((document.getElementById('loc-edit-state')?.value || '') === state) _staffLgaNames = names;
+      } catch (e) { /* suggestions are optional; the field stays free text */ }
+    }
+    function _staffLgaShow() {
+      const input = document.getElementById('loc-edit-lga');
+      const dd = document.getElementById('loc-edit-lga-dd');
+      if (!input || !dd) return;
+      const q = input.value.trim().toLowerCase();
+      const matches = _staffLgaNames.filter(n => n.toLowerCase().includes(q));
+      dd.innerHTML = matches.map(n => `<div class="lga-opt" data-lga="${escapeHtml(n)}">${escapeHtml(n)}</div>`).join('');
+      dd.classList.toggle('open', matches.length > 0);
+    }
+    function _staffLgaHide() {
+      const dd = document.getElementById('loc-edit-lga-dd');
+      if (dd) dd.classList.remove('open');
+    }
+    // Pick on mousedown — it fires BEFORE the input's blur hides the list.
+    function _locEditWireDd() {
+      const dd = document.getElementById('loc-edit-lga-dd');
+      if (dd) dd.addEventListener('mousedown', (e) => {
+        const opt = e.target.closest('.lga-opt');
+        if (!opt) return;
+        e.preventDefault();
+        const input = document.getElementById('loc-edit-lga');
+        if (input) input.value = opt.getAttribute('data-lga') || '';
+        _staffLgaHide();
+      });
+    }
+    function _locEditStateChanged() {
+      const lga = document.getElementById('loc-edit-lga');
+      if (lga) lga.value = '';
+      _staffLgaHide();
+      _locEditLoadLgas(document.getElementById('loc-edit-state')?.value || '');
+    }
+
+    // Staff: move a pager node to another state (+ its LGA tag), from the
+    // location modal. The state routes which Pagermon the node's pages feed
+    // into AND selects its frequency plan, which is re-pushed live.
+    async function _savePagerNodeState(id, el) {
+      const state = document.getElementById('loc-edit-state')?.value || '';
+      const lga = (document.getElementById('loc-edit-lga')?.value || '').trim();
+      if (!state || !lga) { showToast('Both state and LGA are required.', 'error'); return; }
+      // The frequency plan (and so the reader labels) can change — stop any
+      // running audio monitor so it doesn't get stranded on a dead label.
+      if (_ndAudioLabel != null) _ndAudioStop();
+      if (el) el.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/${id}/state`, {
+          method: 'PUT',
+          headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ state, lga }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        showToast(`Node moved to ${state} — frequency plan re-pushed.`, 'success');
+        closeNodeLocation();
+        await loadNodes();
+      } catch (e) {
+        showToast(`Could not set state: ${e.message}`, 'error');
       } finally {
         if (el) el.disabled = false;
       }
@@ -12411,7 +12742,7 @@
       
       // Check if user needs to change password first
       if (session.user.user_metadata?.force_password_change) {
-        window.location.href = 'change-password.html';
+        window.location.href = 'change-password';
         return;
       }
       
@@ -12515,6 +12846,27 @@
       if (userPermissions.tabs.requests) {
         await loadRequests();
       }
+      _applyDeepLink();
+    }
+
+    /**
+     * ?view=... from a Discord notification. Only navigates to a tab the
+     * viewer may actually open, so a deep link can never strand someone on
+     * a hidden panel.
+     */
+    function _applyDeepLink() {
+      let view = '';
+      try { view = new URLSearchParams(location.search).get('view') || ''; } catch (e) { return; }
+      if (!view) return;
+      const tabs = userPermissions.tabs || {};
+      const requestViews = { signup: 1, data: 1, approvals: 1, takedowns: 1, restrictions: 1, discord: 1 };
+      if (requestViews[view]) {
+        if (tabs.requests) openRequestsView(view);
+      } else if (view === 'users' || view === 'members') {
+        if (tabs.users) openAuthView(view === 'members' ? 'members' : 'users');
+      } else if (view === 'nodes') {
+        if (tabs.nodes) switchTab('nodes');
+      }
     }
     
     function applyPermissionRestrictions() {
@@ -12590,12 +12942,13 @@
     let _dcFilter = 'pending';
     let _reqKind = 'signup';
     function switchRequestsView(kind) {
-      const views = { signup: 'requests-signup-view', data: 'requests-datachanges-view', approvals: 'requests-approvals-view', takedowns: 'requests-takedowns-view', restrictions: 'requests-restrictions-view' };
+      const views = { signup: 'requests-signup-view', data: 'requests-datachanges-view', approvals: 'requests-approvals-view', takedowns: 'requests-takedowns-view', restrictions: 'requests-restrictions-view', discord: 'requests-discord-view' };
       Object.entries(views).forEach(([k, id]) => { const el = document.getElementById(id); if (el) el.style.display = (k === kind) ? 'block' : 'none'; });
       if (kind === 'data') loadDataChanges();
       else if (kind === 'approvals') loadApprovals();
       else if (kind === 'takedowns') loadTakedowns();
       else if (kind === 'restrictions') loadRestrictions();
+      else if (kind === 'discord') loadDiscordNotify();
     }
     // Requests dropdown lives in the tab bar and behaves exactly like the Data
     // tab dropdown (toggleDataMenu/openDataMode).
@@ -12614,6 +12967,165 @@
       const btn = document.getElementById('requests-tab-btn');
       if (btn) btn.setAttribute('aria-expanded', 'false');
     }
+    // ---- Discord notifications ---------------------------------------
+    // One channel per kind. Saves on change; the server validates that each
+    // id is a snowflake and stores it in app_settings (not an env file).
+    const DN_KINDS = [
+      ['signup_request', 'Signup requests', 'New access requests, and their approval or rejection.'],
+      ['wire_approval', 'Wire approvals', 'Posts entering the approval queue, and the decision.'],
+      ['wire_takedown', 'Wire takedowns', 'Takedown notices filed, upheld or rejected.'],
+      ['new_user', 'New accounts', 'Someone creates an account. No name is sent \u2014 just the signal.'],
+      ['new_node', 'New feeder nodes', 'A contributor creates a radio or pager node.'],
+    ];
+    let _dnState = { guild_id: null, channels: {}, guilds: [], channelList: [], delivery: {} };
+
+    async function _dnFetch(path, opts) {
+      const res = await fetch(`${API_BASE_URL}/api/staff/discord-notify${path}`, {
+        ...(opts || {}),
+        headers: {
+          'Authorization': await authHeader(),
+          ...((opts && opts.body) ? { 'Content-Type': 'application/json' } : {}),
+          ...((opts && opts.headers) || {}),
+        },
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      return body;
+    }
+
+    async function loadDiscordNotify() {
+      const body = document.getElementById('dn-body');
+      const status = document.getElementById('dn-status');
+      if (!body) return;
+      body.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i></div>';
+      if (status) status.innerHTML = '';
+      try {
+        const d = await _dnFetch('');
+        _dnState.guild_id = d.guild_id || null;
+        _dnState.channels = d.channels || {};
+        _dnState.delivery = d.delivery || {};
+        try {
+          _dnState.guilds = await _dnFetch('/guilds');
+        } catch (e) {
+          _dnState.guilds = [];
+          _dnNote('warn', `Could not list servers from Discord: ${e.message}`);
+        }
+        _dnState.channelList = [];
+        if (_dnState.guild_id) {
+          try {
+            _dnState.channelList = await _dnFetch(`/channels?guild_id=${_dnState.guild_id}`);
+          } catch (e) {
+            _dnNote('warn', `Could not list channels: ${e.message}`);
+          }
+        }
+        _dnRender();
+      } catch (e) {
+        body.innerHTML = '';
+        _dnNote('error', e.message === 'forbidden'
+          ? 'Only the site owner can change where staff notifications are sent.'
+          : `Could not load settings: ${e.message}`);
+      }
+    }
+
+    function _dnNote(level, text) {
+      const status = document.getElementById('dn-status');
+      if (!status) return;
+      const tone = level === 'error'
+        ? 'background:rgba(239,68,68,0.10); border:1px solid rgba(239,68,68,0.35); color:#fca5a5;'
+        : level === 'warn'
+          ? 'background:rgba(245,158,11,0.10); border:1px solid rgba(245,158,11,0.35); color:#fcd34d;'
+          : 'background:var(--accent-soft); border:1px solid var(--accent-border); color:#7dd3fc;';
+      const div = document.createElement('div');
+      div.style.cssText = `padding:0.6rem 0.8rem; border-radius:8px; font-size:0.82rem; margin-bottom:0.5rem; ${tone}`;
+      div.textContent = text;
+      status.appendChild(div);
+    }
+
+    function _dnRender() {
+      const body = document.getElementById('dn-body');
+      if (!body) return;
+
+      // Say plainly when the delivery path can't work, rather than looking
+      // configured but silently dropping every notification.
+      if (_dnState.delivery && _dnState.delivery.bot_db === false) {
+        _dnNote('error', 'The bot database is not configured on this backend (BOT_DATA_DATABASE_URL), so notifications cannot be queued.');
+      }
+      if (_dnState.delivery && _dnState.delivery.signed === false) {
+        _dnNote('warn', 'BOT_ACTION_SIGNING_SECRET is unset, so queued actions are unsigned and the bot accepts them unverified. Set it in both the backend and the bot before relying on this.');
+      }
+
+      const guildOpts = ['<option value="">Select a server\u2026</option>'].concat(
+        (_dnState.guilds || []).map(g =>
+          `<option value="${escapeHtml(g.id)}"${String(g.id) === String(_dnState.guild_id) ? ' selected' : ''}>${escapeHtml(g.name || g.id)}</option>`)
+      );
+      // A saved server the bot can no longer see would otherwise vanish from
+      // the list and look unset.
+      if (_dnState.guild_id && !(_dnState.guilds || []).some(g => String(g.id) === String(_dnState.guild_id))) {
+        guildOpts.push(`<option value="${escapeHtml(_dnState.guild_id)}" selected>Server ${escapeHtml(_dnState.guild_id)} (bot not in it?)</option>`);
+      }
+
+      let html = `
+        <div class="dn-fld">
+          <label for="dn-guild">Discord server</label>
+          <select id="dn-guild" onchange="dnSetGuild(this.value)">${guildOpts.join('')}</select>
+        </div>`;
+
+      if (!_dnState.guild_id) {
+        html += '<div style="color:var(--text-soft); font-size:0.85rem;">Pick a server to choose channels.</div>';
+        body.innerHTML = html;
+        return;
+      }
+
+      const chanOpts = (selected) => ['<option value="">Off \u2014 don\u2019t notify</option>'].concat(
+        (_dnState.channelList || []).map(ch =>
+          `<option value="${escapeHtml(ch.id)}"${String(ch.id) === String(selected) ? ' selected' : ''}>#${escapeHtml(ch.name || ch.id)}</option>`)
+      ).join('');
+
+      for (const [kind, label, hint] of DN_KINDS) {
+        const cur = _dnState.channels[kind] || '';
+        html += `
+          <div class="dn-fld">
+            <label for="dn-ch-${kind}">${escapeHtml(label)}</label>
+            <select id="dn-ch-${kind}" onchange="dnSetChannel('${kind}', this.value)">${chanOpts(cur)}</select>
+            <div class="dn-hint">${escapeHtml(hint)}</div>
+          </div>`;
+      }
+      body.innerHTML = html;
+    }
+
+    async function dnSetGuild(guildId) {
+      try {
+        // Channel ids belong to a server, so switching servers clears them
+        // rather than leaving ids that don't exist in the new one.
+        await _dnFetch('', {
+          method: 'PUT',
+          body: JSON.stringify({
+            guild_id: guildId || null,
+            channels: Object.fromEntries(DN_KINDS.map(([k]) => [k, null])),
+          }),
+        });
+        showToast(guildId ? 'Server set — now pick channels.' : 'Discord notifications turned off.', 'success');
+        await loadDiscordNotify();
+      } catch (e) {
+        showToast(`Could not save: ${e.message}`, 'error');
+        await loadDiscordNotify();
+      }
+    }
+
+    async function dnSetChannel(kind, channelId) {
+      try {
+        const d = await _dnFetch('', {
+          method: 'PUT',
+          body: JSON.stringify({ channels: { [kind]: channelId || null } }),
+        });
+        _dnState.channels = d.channels || _dnState.channels;
+        showToast(channelId ? 'Channel saved.' : 'Notification turned off.', 'success');
+      } catch (e) {
+        showToast(`Could not save: ${e.message}`, 'error');
+        await loadDiscordNotify();
+      }
+    }
+
     function openRequestsView(kind) {
       _reqKind = kind;
       closeRequestsMenu();
@@ -13659,6 +14171,7 @@
           (r.email || '').toLowerCase().includes(q) ||
           (r.discord_id || '').toLowerCase().includes(q) ||
           (r.region || '').toLowerCase().includes(q) ||
+          (r.referred_by_name || '').toLowerCase().includes(q) ||
           (r.request_type || []).some(t => t.toLowerCase().includes(q))
         );
       }
@@ -13755,7 +14268,8 @@
 
         return `
           <tr>
-            <td><span class="status-badge ${escapeHtml(req.status)}">${escapeHtml(req.status)}</span></td>
+            <td><span class="status-badge ${escapeHtml(req.status)}">${escapeHtml(req.status)}</span>${req.referred_by
+                  ? ` <span class="status-badge approved" title="Referred by ${escapeHtml(req.referred_by_name || req.referred_by)}"><i class="fas fa-user-plus"></i> Referred</span>` : ''}</td>
             <td>${typesHtml}</td>
             <td>${escapeHtml(req.email)}${emailChip}</td>
             <td>${req.discord_id && fmtDiscordId(req.discord_id) !== 'Not linked'
@@ -14055,6 +14569,16 @@
       document.getElementById('detail-email').textContent = req.email;
       document.getElementById('detail-discord').textContent = fmtDiscordId(req.discord_id);
       document.getElementById('detail-region').textContent = regionLabels[req.region] || req.region || 'Not specified';
+      // Referral attribution: name resolved at submit time; falls back to a
+      // slice of the referrer's user id when the lookup came back empty.
+      const referredGroup = document.getElementById('detail-referred-group');
+      if (req.referred_by) {
+        referredGroup.style.display = 'block';
+        document.getElementById('detail-referred').textContent =
+          req.referred_by_name || (String(req.referred_by).slice(0, 8) + '…');
+      } else {
+        referredGroup.style.display = 'none';
+      }
       
       // Format setup info for pager/radio feeders
       const setupGroup = document.getElementById('detail-setup-group');

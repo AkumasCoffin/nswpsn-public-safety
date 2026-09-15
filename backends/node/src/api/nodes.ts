@@ -30,6 +30,7 @@ import {
   rotateNodeToken,
   setPagerPrimary,
   setPagerTuning,
+  setNodeLocation,
   countNodesForUser,
   MAX_NODES_PER_USER,
   isNodeKind,
@@ -45,7 +46,8 @@ import { liveCallWindow } from '../services/nodeCallWindow.js';
 import { isAgentCommandAction } from '../services/nodes/protocol.js';
 import { getUsernameMap, getUsername } from './users.js';
 import { ConfigOverrideSchema } from '../services/nodes/configSchema.js';
-import { buildConfigPayload, pagerPrimaryOf, pagerGainOf, pagerPpmOf } from '../services/nodes/configMerge.js';
+import { buildConfigPayload, pagerPrimaryOf, pagerGainOf, pagerPpmOf, pagerPrimaryOptionsFor } from '../services/nodes/configMerge.js';
+import { AU_STATES } from '../lib/stateMask.js';
 import { isValidZone } from '../services/nodes/rfsZones.js';
 import { pushConfigToNode, pushConfigToAllNodes } from '../services/nodes/configPush.js';
 import {
@@ -88,6 +90,8 @@ function toApi(node: NodeRow, usernames?: Map<string, string>) {
     lat: node.lat,
     lon: node.lon,
     zone: node.zone,
+    state: node.state,
+    lga: node.lga,
     online: live.online,
     status: live.status,
     lastStatusAt: live.lastStatusAt,
@@ -96,6 +100,9 @@ function toApi(node: NodeRow, usernames?: Map<string, string>) {
     messagesLast10m: hub.uploadsInWindow(node.id),
     // Pager single-SDR primary frequency preference (persisted).
     pagerPrimary: node.kind === 'pager' ? pagerPrimaryOf(node) : null,
+    // The valid primary choices for THIS node's state ({label, mhz}[]) so the
+    // staff UI renders the right options without duplicating the plan table.
+    pagerPrimaryOptions: node.kind === 'pager' ? pagerPrimaryOptionsFor(node.state) : null,
     // Pager tuner overrides (persisted); null when unset (agent uses defaults).
     pagerGain: node.kind === 'pager' ? pagerGainOf(node) ?? null : null,
     pagerPpm: node.kind === 'pager' ? pagerPpmOf(node) ?? null : null,
@@ -292,9 +299,10 @@ nodesRouter.patch('/api/nodes/:id', requireRole(canManageNodes), async (c) => {
 
 // ---------------------------------------------------------------------------
 // PUT /api/nodes/:id/pager-primary — staff set a pager node's single-SDR
-// primary frequency (NSWRFS default / FRNSW). Persisted + pushed live.
+// primary frequency. Valid labels come from the node's STATE's plan (NSW:
+// NSWRFS default / FRNSW; QLD: QFES). Persisted + pushed live.
 // ---------------------------------------------------------------------------
-const PagerPrimarySchema = z.object({ primary: z.enum(['NSWRFS', 'FRNSW']) });
+const PagerPrimarySchema = z.object({ primary: z.string().min(1).max(32) });
 nodesRouter.put('/api/nodes/:id/pager-primary', requireRole(canManageNodes), async (c) => {
   const id = c.req.param('id');
   try {
@@ -303,6 +311,9 @@ nodesRouter.put('/api/nodes/:id/pager-primary', requireRole(canManageNodes), asy
     if (node.kind !== 'pager') return c.json({ error: 'not a pager node' }, 400);
     const parsed = PagerPrimarySchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) return c.json({ error: 'invalid primary' }, 400);
+    if (!pagerPrimaryOptionsFor(node.state).some((f) => f.label === parsed.data.primary)) {
+      return c.json({ error: `invalid primary for state ${node.state ?? 'NSW'}` }, 400);
+    }
     const updated = await setPagerPrimary(id, parsed.data.primary);
     if (!updated) return c.json({ error: 'update failed' }, 500);
     await pushConfigToNode(id).catch(() => {}); // apply live if online
@@ -351,6 +362,35 @@ nodesRouter.put('/api/nodes/:id/pager-tuning', requireRole(canManageNodes), asyn
   } catch (err) {
     log.error({ err, id }, 'Error setting pager tuning');
     return c.json({ error: 'Failed to set tuner overrides' }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// PUT /api/nodes/:id/state — staff move a pager node to another Australian
+// state (+ its LGA tag). The state selects both the Pagermon the relay
+// forwards into and the frequency plan, so the config is re-pushed live; the
+// antenna pin is left untouched. A stale pagerPrimary from the old state needs
+// no clearing — pagerPrimaryOf falls back to the new state's default.
+// ---------------------------------------------------------------------------
+const NodeStateSchema = z.object({
+  state: z.enum(AU_STATES as unknown as [string, ...string[]]),
+  lga: z.string().trim().min(1).max(120),
+});
+nodesRouter.put('/api/nodes/:id/state', requireRole(canManageNodes), async (c) => {
+  const id = c.req.param('id');
+  try {
+    const node = await getNode(id);
+    if (!node) return c.json({ error: 'node not found' }, 404);
+    if (node.kind !== 'pager') return c.json({ error: 'not a pager node' }, 400);
+    const parsed = NodeStateSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.json({ error: 'invalid state/lga' }, 400);
+    const updated = await setNodeLocation(id, { state: parsed.data.state, lga: parsed.data.lga });
+    if (!updated) return c.json({ error: 'update failed' }, 500);
+    await pushConfigToNode(id).catch(() => {}); // retune live if online
+    return c.json(toApi(updated));
+  } catch (err) {
+    log.error({ err, id }, 'Error setting node state');
+    return c.json({ error: 'Failed to set node state' }, 500);
   }
 });
 
@@ -456,24 +496,41 @@ nodesRouter.get('/api/nodes/:id/stats', requireRole(canViewNodeData), async (c) 
 // POST /api/nodes — staff-create a node for a user (name + kind). Mints the
 // node's own token, returned ONCE (bake it into the installer now).
 // ---------------------------------------------------------------------------
-const CreateSchema = z.object({
-  userId: z.string().min(1),
-  kind: z.string().refine(isNodeKind, 'invalid node kind'),
-  zone: z.string().min(1).refine(isValidZone, 'unknown zone'),
-});
+const CreateSchema = z
+  .object({
+    userId: z.string().min(1),
+    kind: z.string().refine(isNodeKind, 'invalid node kind'),
+    // Radio nodes give the NSW RFS zone; pager nodes give state + lga (same
+    // per-kind rule as the owner-facing create in feeder.ts).
+    zone: z.string().min(1).refine(isValidZone, 'unknown zone').optional(),
+    state: z.enum(AU_STATES as unknown as [string, ...string[]]).optional(),
+    lga: z.string().trim().min(1).max(120).optional(),
+  })
+  .superRefine((v, ctx) => {
+    if (v.kind === 'pager') {
+      if (!v.state) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['state'], message: 'state required for pager nodes' });
+      if (!v.lga) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['lga'], message: 'lga required for pager nodes' });
+    } else if (!v.zone) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['zone'], message: 'zone required' });
+    }
+  });
 nodesRouter.post('/api/nodes', requireRole(canManageNodes), async (c) => {
   try {
     const parsed = CreateSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) {
       return c.json({ error: 'invalid body', details: parsed.error.issues }, 400);
     }
-    const { userId, kind, zone } = parsed.data;
+    const { userId, kind, zone, state, lga } = parsed.data;
     if ((await countNodesForUser(userId)) >= MAX_NODES_PER_USER) {
       return c.json({ error: 'node limit reached for this user' }, 429);
     }
     const name = autoNodeName(kind, await getUsername(userId));
     const { token, tokenHash, tokenPrefix } = mintNodeToken();
-    const node = await createNode(userId, name, kind, tokenHash, tokenPrefix, zone);
+    const node = await createNode(userId, name, kind, tokenHash, tokenPrefix, {
+      zone: kind === 'pager' ? null : zone ?? null,
+      state: kind === 'pager' ? state ?? null : 'NSW',
+      lga: kind === 'pager' ? lga ?? null : null,
+    });
     if (!node) return c.json({ error: 'registry unavailable' }, 503);
     c.header('Cache-Control', 'no-store');
     return c.json({ node: toApi(node), token });

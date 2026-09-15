@@ -64,6 +64,7 @@ import {
 } from '../services/incidentImages.js';
 import { MetadataStripError } from '../services/imageMetadata.js';
 import { rememberCallsigns, sanitizeUnits } from '../services/callsigns.js';
+import { boundaryForPoint } from './boundaries.js';
 
 export const incidentsRouter = new Hono();
 
@@ -126,6 +127,45 @@ async function userCanModifyUpdate(
 }
 
 const DB_UNAVAILABLE = { error: 'database unavailable' } as const;
+
+/** Trimmed short text or null — the geo columns are labels, not payloads. */
+function cleanGeoText(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  const s = v.trim();
+  return s && s.length <= 120 ? s : null;
+}
+
+/**
+ * Which state / LGA / suburb the pin sits in, from the boundaries point
+ * lookup. Client-supplied values win — the suburb-pick flow knows the true
+ * suburb, whose polygon centre can fall inside a neighbouring shape.
+ * Best-effort: a failed lookup leaves nulls rather than failing the write.
+ */
+async function resolveIncidentGeo(
+  lat: number,
+  lng: number,
+  supplied: Record<string, unknown> = {},
+): Promise<{ state: string | null; lga: string | null; suburb: string | null }> {
+  const out = {
+    state: cleanGeoText(supplied['state']),
+    lga: cleanGeoText(supplied['lga']),
+    suburb: cleanGeoText(supplied['suburb']),
+  };
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || (lat === 0 && lng === 0)) return out;
+  try {
+    const [st, lg, sb] = await Promise.all([
+      out.state ? Promise.resolve(null) : boundaryForPoint('state', lng, lat),
+      out.lga ? Promise.resolve(null) : boundaryForPoint('lga', lng, lat),
+      out.suburb ? Promise.resolve(null) : boundaryForPoint('locality', lng, lat),
+    ]);
+    if (!out.state) out.state = st?.shortName || st?.name || null;
+    if (!out.lga) out.lga = lg?.name || null;
+    if (!out.suburb) out.suburb = sb?.name || null;
+  } catch {
+    /* informational columns — never block the incident write */
+  }
+  return out;
+}
 
 // Whitelist of columns that PUT /api/incidents/:id may update. Mirrors
 // the python `allowed` list at external_api_proxy.py:14251.
@@ -507,24 +547,25 @@ incidentsRouter.post('/api/incidents', async (c) => {
       const agenciesJson = JSON.stringify(data['responding_agencies'] ?? []);
       const expiresAt = data['expires_at'] ?? null;
       const isRfsStub = (data['is_rfs_stub'] as boolean | undefined) ?? false;
+      const geo = await resolveIncidentGeo(lat, lng, data);
 
       if (typeof data['id'] === 'string' && data['id']) {
         const r = await pool.query<{ id: string }>(
           `INSERT INTO incidents
-            (id, title, lat, lng, location, type, description, status, size, responding_agencies, expires_at, is_rfs_stub, created_by)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+            (id, title, lat, lng, location, type, description, status, size, responding_agencies, expires_at, is_rfs_stub, created_by, state, lga, suburb)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
           ON CONFLICT (id) DO NOTHING
           RETURNING id`,
-          [data['id'], title, lat, lng, location, typeJson, description, status, size, agenciesJson, expiresAt, isRfsStub, createdBy],
+          [data['id'], title, lat, lng, location, typeJson, description, status, size, agenciesJson, expiresAt, isRfsStub, createdBy, geo.state, geo.lga, geo.suburb],
         );
         return r.rows[0]?.id ?? null;
       }
       const r = await pool.query<{ id: string }>(
         `INSERT INTO incidents
-          (title, lat, lng, location, type, description, status, size, responding_agencies, expires_at, is_rfs_stub, created_by)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+          (title, lat, lng, location, type, description, status, size, responding_agencies, expires_at, is_rfs_stub, created_by, state, lga, suburb)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
         RETURNING id`,
-        [title, lat, lng, location, typeJson, description, status, size, agenciesJson, expiresAt, isRfsStub, createdBy],
+        [title, lat, lng, location, typeJson, description, status, size, agenciesJson, expiresAt, isRfsStub, createdBy, geo.state, geo.lga, geo.suburb],
       );
       return r.rows[0]?.id ?? null;
     });
@@ -554,12 +595,16 @@ incidentsRouter.put('/api/incidents/:id', async (c) => {
     // Ownership gate: only the creator or a site admin may edit. A
     // non-owner editor must use the suggestion flow instead.
     const gate = await withPool(async (pool) => {
-      const r = await pool.query<{ created_by: string | null }>(
-        'SELECT created_by FROM incidents WHERE id = $1 AND deleted_at IS NULL',
+      const r = await pool.query<{ created_by: string | null; lat: unknown; lng: unknown }>(
+        'SELECT created_by, lat, lng FROM incidents WHERE id = $1 AND deleted_at IS NULL',
         [id],
       );
       if (r.rowCount === 0) return { notFound: true as const };
-      return { createdBy: r.rows[0]?.created_by ?? null };
+      return {
+        createdBy: r.rows[0]?.created_by ?? null,
+        lat: coerceCoord(r.rows[0]?.lat),
+        lng: coerceCoord(r.rows[0]?.lng),
+      };
     });
     if (isUnavailable(gate)) return c.json(DB_UNAVAILABLE, 503);
     if ('notFound' in gate) return c.json({ error: 'Incident not found' }, 404);
@@ -597,6 +642,22 @@ incidentsRouter.put('/api/incidents/:id', async (c) => {
     }
     if (sets.length === 0) {
       return c.json({ error: 'No fields to update' }, 400);
+    }
+    // A move changes which state/LGA/suburb the pin sits in — re-resolve
+    // whenever a coordinate is part of the update. A one-sided nudge
+    // falls back to the stored coordinate for the missing half.
+    const hasLat = Object.prototype.hasOwnProperty.call(data, 'lat');
+    const hasLng = Object.prototype.hasOwnProperty.call(data, 'lng');
+    if (hasLat || hasLng) {
+      const newLat = hasLat ? coerceCoord(data['lat']) : gate.lat;
+      const newLng = hasLng ? coerceCoord(data['lng']) : gate.lng;
+      if (newLat !== null && newLng !== null) {
+        const geo = await resolveIncidentGeo(newLat, newLng);
+        for (const [k, v] of Object.entries(geo)) {
+          sets.push(`${k} = $${sets.length + 1}`);
+          vals.push(v);
+        }
+      }
     }
     vals.push(id);
     const sql = `UPDATE incidents SET ${sets.join(', ')} WHERE id = $${vals.length}`;
@@ -1219,6 +1280,17 @@ incidentsRouter.post('/api/incidents/:id/suggestions/:sid/approve', async (c) =>
           for (const [k, v] of Object.entries(clean)) {
             sets.push(`${k} = $${sets.length + 1}`);
             vals.push(JSONB_FIELDS.has(k) ? JSON.stringify(v) : v);
+          }
+          // An approved move carries both coords — re-resolve the
+          // state/LGA/suburb columns along with it.
+          const mLat = coerceCoord(clean['lat']);
+          const mLng = coerceCoord(clean['lng']);
+          if (mLat !== null && mLng !== null) {
+            const geo = await resolveIncidentGeo(mLat, mLng);
+            for (const [k, v] of Object.entries(geo)) {
+              sets.push(`${k} = $${sets.length + 1}`);
+              vals.push(v);
+            }
           }
           vals.push(id);
           await pool.query(

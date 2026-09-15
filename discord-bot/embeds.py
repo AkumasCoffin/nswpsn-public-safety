@@ -3,15 +3,104 @@ Embed Builder - Creates beautiful Discord embeds for various alert types.
 """
 
 import os
+import json
 import re
 import html
 import discord
-from datetime import datetime
-from typing import Dict, Any, Optional
+from datetime import datetime, timezone
+from typing import Dict, Any, List, Optional
 from urllib.parse import quote
+import alert_catalog
 
 # Base URL for the map
 MAP_BASE_URL = "https://nswpsn.forcequit.xyz"
+
+# --- Staff moderation notifications ---------------------------------------
+# Label + accent per kind, and the accent a resolved item switches to.
+STAFF_NOTIFY_KINDS = {
+    'signup_request': ('Signup request', '\U0001F4E5', 0x38BDF8),
+    'wire_approval': ('Wire approval', '\U0001F4F0', 0xF97316),
+    'wire_takedown': ('Wire takedown', '\u2696\uFE0F', 0xEF4444),
+    'new_user': ('New account', '\U0001F464', 0xA855F7),
+    'new_node': ('New node', '\U0001F4E1', 0x22C55E),
+}
+_STAFF_STATUS_COLOR = {
+    'approved': 0x22C55E,
+    'upheld': 0x22C55E,
+    'rejected': 0x64748B,
+}
+
+
+def _parse_notify_fields(raw: Any) -> List[Dict[str, Any]]:
+    """Decode the JSON-encoded detail rows.
+
+    Every pending_bot_actions param is a string so the canonical signing form
+    matches byte-for-byte across the language boundary, so the field list
+    arrives as JSON text. Malformed input yields no rows rather than losing
+    the whole notification.
+    """
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return [f for f in raw if isinstance(f, dict)]
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    return [f for f in parsed if isinstance(f, dict)] if isinstance(parsed, list) else []
+
+
+def build_staff_notify_embed(kind: str, params: Dict[str, Any]) -> discord.Embed:
+    """Embed for a staff moderation notification.
+
+    These go to a PRIVATE staff channel, so they carry the detail needed to
+    triage without opening the site. The backend decides what to include and
+    has already dropped empties, truncated long values and capped the count
+    (packFields in backends/node/src/services/staffNotify.ts) - this only
+    renders whatever survived.
+
+    A plain Embed rather than a Components V2 container: resolution edits
+    this message in place, and embeds edit cleanly.
+    """
+    label, icon, base_color = STAFF_NOTIFY_KINDS.get(
+        kind, ('Staff notification', '\U0001F514', 0x94A3B8))
+    title = (params.get('title') or '').strip() or label
+    subtitle = (params.get('subtitle') or '').strip()
+    status = (params.get('status') or '').strip().lower()
+    actor = (params.get('actor') or '').strip()
+    url = (params.get('url') or '').strip()
+
+    resolved = bool(status)
+    color = _STAFF_STATUS_COLOR.get(status, base_color) if resolved else base_color
+
+    heading = f"{icon} {label}"
+    if resolved:
+        heading = f"{heading} \u00b7 {status.title()}"
+
+    embed = discord.Embed(
+        title=heading[:256],
+        description=title[:4096],
+        color=color,
+        url=url or None,
+        timestamp=datetime.now(timezone.utc),
+    )
+    if subtitle:
+        embed.add_field(name='\u200b', value=subtitle[:1024], inline=False)
+    for f in _parse_notify_fields(params.get('fields')):
+        embed.add_field(
+            name=str(f.get('name') or '-')[:256],
+            value=str(f.get('value') or '')[:1024],
+            inline=bool(f.get('inline', True)),
+        )
+
+    if resolved:
+        embed.add_field(
+            name='Handled by',
+            value=(actor or 'a staff member')[:1024],
+            inline=True,
+        )
+    embed.set_footer(text='AusAware staff' if not resolved else 'AusAware staff \u00b7 resolved')
+    return embed
 
 
 def strip_html(text: str) -> str:
@@ -39,131 +128,6 @@ def is_valid_value(value: Any) -> bool:
         if value == -1 or value == 0:
             return False
     return True
-
-
-# ---------------------------------------------------------------------------
-# Waze subtype label cleanup — mirrors the dashboard's subtype-filter chips
-# (dashboard.html: humanizeSubtype / _SUBTYPE_GROUP_DEFS / _SUBTYPE_QUALIFIERS
-# / _subtypeChipLabel). The raw Waze subtype enums (HAZARD_ON_ROAD_POT_HOLE,
-# POLICE_WITH_MOBILE_CAMERA, JAM_HEAVY_TRAFFIC) read as SCREAMING_SNAKE noise
-# in an embed. We split each token into a class ("Hazard", "Accident",
-# "Road closure", "Traffic jam", "Police", "Roadwork") and a cleaned variant
-# ("Pot hole", "Major", "With mobile camera"), so the bot reads the same way
-# the dashboard does. Kept in sync by hand — there's no shared module across
-# the Node frontend and the Python bot.
-# ---------------------------------------------------------------------------
-
-# alert_type -> ordered (token-prefix, class label). For waze_hazard the
-# class depends on which prefix the subtype carries; the others are single.
-_WAZE_SUBTYPE_CLASSES = {
-    'waze_hazard': [
-        ('ACCIDENT', 'Accident'),
-        ('HAZARD', 'Hazard'),
-        ('ROAD_CLOSED', 'Road closure'),
-    ],
-    'waze_jam': [('JAM', 'Traffic jam')],
-    'waze_police': [('POLICE', 'Police')],
-    'waze_roadwork': [
-        ('HAZARD_ON_ROAD_CONSTRUCTION', 'Roadwork'),
-        ('CONSTRUCTION', 'Roadwork'),
-        ('ROADWORK', 'Roadwork'),
-    ],
-}
-
-# Secondary qualifier right after the class prefix. ON_ROAD is the default
-# road context so it's dropped (bare -> no extra detail); the others are
-# kept so meaning survives and the two CAR_STOPPED variants stay distinct.
-# Tuple: (prefix, suffix, bare_variant) where '' bare means "no detail".
-_WAZE_SUBTYPE_QUALIFIERS = [
-    ('ON_ROAD', '', ''),
-    ('ON_SHOULDER', ' (shoulder)', 'On shoulder'),
-    ('WEATHER', '', 'Weather'),
-]
-
-
-def humanize_subtype(v: str) -> str:
-    """Title-case a SCREAMING_SNAKE enum, leaving already-human text alone."""
-    if not isinstance(v, str) or not v:
-        return v or ''
-    if '_' not in v and any(c.islower() for c in v):
-        return v
-    return ' '.join(
-        w[:1].upper() + w[1:].lower()
-        for w in re.split(r'[_\s]+', v) if w
-    )
-
-
-def _waze_match_class(token: str, defs):
-    """Longest-prefix match of a subtype token to its class. -> (key, label)."""
-    best = None
-    for key, label in defs:
-        if token == key or token.startswith(key + '_'):
-            if best is None or len(key) > len(best[0]):
-                best = (key, label)
-    return best
-
-
-def waze_subtype_labels(alert_type: str, subtype: str):
-    """Return (class_label, variant) for a Waze subtype token.
-
-    class_label is the main type ("Hazard"); variant is the cleaned detail
-    ("Pot hole") or '' when the token is the generic member of its class.
-    Falls back to (None, humanized) for non-Waze / unrecognised tokens.
-    """
-    defs = _WAZE_SUBTYPE_CLASSES.get(alert_type)
-    # Coerce defensively — the feed *should* hand us a string, but a stray
-    # numeric/None subtype must never raise and sink the whole alert batch.
-    subtype = str(subtype) if subtype not in (None, '') else ''
-    token = subtype.strip().upper()
-    if not defs:
-        return (None, humanize_subtype(subtype))
-    if not token:
-        # No token at all (e.g. a jam polyline, or a bare alert). A
-        # single-class type (jam / police / roadwork) still has an
-        # unambiguous class; multi-class waze_hazard can't be resolved
-        # without one, so the caller falls back.
-        return (defs[0][1], '') if len(defs) == 1 else (None, '')
-    match = _waze_match_class(token, defs)
-    if not match:
-        return (None, humanize_subtype(subtype))
-    key, class_label = match
-    if token == key:
-        return (class_label, '')  # bare class — generic member
-    rest = token[len(key) + 1:] if token.startswith(key + '_') else token
-    suffix = ''
-    for prefix, qsuffix, bare in _WAZE_SUBTYPE_QUALIFIERS:
-        if rest == prefix:
-            return (class_label, bare)
-        if rest.startswith(prefix + '_'):
-            rest = rest[len(prefix) + 1:]
-            suffix = qsuffix
-            break
-    variant = humanize_subtype(rest)
-    if not variant or variant == 'General':
-        return (class_label, '')
-    return (class_label, variant + suffix)
-
-
-def waze_heading_label(alert_type: str, subtype: str):
-    """One heading for a Waze alert: the full subtype (type word kept +
-    the detail), falling back to just the main type when no subtype was
-    supplied. Same rule for every Waze type:
-
-        POLICE_HIDING             -> "Police Hiding"
-        POLICE_WITH_MOBILE_CAMERA -> "Police With Mobile Camera"
-        ACCIDENT_MAJOR            -> "Accident Major"
-        HAZARD_ON_ROAD_POT_HOLE   -> "Hazard Pot Hole"
-        ACCIDENT (no subtype)     -> "Accident"     (type fallback)
-        ROAD_CLOSED (no subtype)  -> "Road closure" (type fallback)
-        a jam polyline            -> "Traffic jam"  (type fallback)
-
-    Returns None for an unrecognised type/subtype so the caller can fall
-    back to displayType / the generic source label.
-    """
-    cls, variant = waze_subtype_labels(alert_type, subtype)
-    if not cls:
-        return None
-    return f"{cls} {variant}" if variant else cls
 
 
 def parse_timestamp_to_datetime(ts_value: Any) -> Optional[datetime]:
@@ -500,28 +464,16 @@ class EmbedBuilder:
     """Builds beautiful Discord embeds for different alert types"""
     
     # Color scheme for different alert types
+    # Embed accents, from shared/alert-catalog.json — the same hexes the map
+    # layers and incident cards use, so an agency is one colour everywhere.
+    # pager/pager_stop are not alert types (pager runs off the pager_enabled
+    # column), so they stay hand-listed here.
     COLORS = {
-        'rfs': 0xFF4500,
-        'firms': 0xF97316,           # Orange — matches the map's Fire Hotspots layer
-        'traffic_fire': 0xFF6347,
-        'bom_land': 0x1E90FF,
-        'bom_marine': 0x4169E1,
-        'traffic_incident': 0xFFA500,
-        'traffic_roadwork': 0xFFD700,
-        'traffic_flood': 0x00CED1,
-        'traffic_majorevent': 0xFF8C00,
-        'endeavour_current': 0x8B008B,
-        'endeavour_planned': 0x6A1B9A,
+        **{k: v for k, v in (
+            (t['key'], alert_catalog.color(t['key']))
+            for t in alert_catalog.TYPE_DEFS) if v is not None},
         'pager': 0x32CD32,
         'pager_stop': 0x228B22,
-        'ausgrid': 0xE67E22,         # Orange for Ausgrid
-        'essential_planned': 0x06B6D4,
-        'essential_future': 0x0891B2,
-        'user_incident': 0x9333EA,   # Purple for user incidents
-        'waze_hazard': 0xEAB308,     # Yellow for hazards
-        'waze_jam': 0xF97316,        # Orange for jams
-        'waze_police': 0x3B82F6,     # Blue for police
-        'waze_roadwork': 0xA855F7,   # Purple for roadwork
     }
     
     # Colors for specific incident types extracted from title
@@ -589,26 +541,8 @@ class EmbedBuilder:
     }
     
     ICONS = {
-        'rfs': '🔥',
-        'firms': '🛰️',
-        'bom_land': '⛈️',
-        'bom_marine': '🌊',
-        'traffic_incident': '🚗',
-        'traffic_roadwork': '🚧',
-        'traffic_flood': '🌊',
-        'traffic_fire': '🔥',
-        'traffic_majorevent': '🎉',
-        'endeavour_current': '⚡',
-        'endeavour_planned': '🔧',
-        'ausgrid': '⚡',
-        'essential_planned': '🔧',
-        'essential_future': '📅',
+        **{t['key']: t['icon'] for t in alert_catalog.TYPE_DEFS if t.get('icon')},
         'pager': '📟',
-        'user_incident': '📢',
-        'waze_hazard': '⚠️',
-        'waze_jam': '🚙',
-        'waze_police': '👮',
-        'waze_roadwork': '🚧',
     }
     
     # BOM category icons
@@ -737,27 +671,9 @@ class EmbedBuilder:
     # Human-readable labels for alert_type values. Mirrored from bot.ALERT_TYPES
     # — duplicated here to avoid a circular import. Keep in sync when new
     # alert types are added.
-    _ALERT_TYPE_LABELS = {
-        'rfs': 'RFS Major Incidents',
-        'bom_land': 'BOM Land Warnings',
-        'bom_marine': 'BOM Marine Warnings',
-        'traffic_incident': 'Traffic Incidents',
-        'traffic_roadwork': 'Traffic Roadwork',
-        'traffic_flood': 'Flood Hazards',
-        'traffic_fire': 'Traffic Fires',
-        'traffic_majorevent': 'Major Events',
-        'endeavour_current': 'Endeavour Current Outages',
-        'endeavour_planned': 'Endeavour Planned Outages',
-        'ausgrid': 'Ausgrid Outages',
-        'essential_planned': 'Essential Energy Planned Outages',
-        'essential_future': 'Essential Energy Future Outages',
-        'waze_hazard': 'Waze Hazards',
-        'waze_jam': 'Waze Traffic Jams',
-        'waze_police': 'Waze Police',
-        'waze_roadwork': 'Waze Roadwork',
-        'user_incident': 'User Incidents',
-        'radio_summary': 'Radio Summary',
-    }
+    # Labels from shared/alert-catalog.json — a duplicate of bot.py
+    # ALERT_TYPES until both were pointed at the catalog.
+    _ALERT_TYPE_LABELS = dict(alert_catalog.LABELS)
 
     _ALERT_LIST_COLOR = 0x3498db  # blue accent for /alert-list containers
 
@@ -1098,7 +1014,7 @@ class EmbedBuilder:
         return container
 
     # ============================================================
-    # /summary command — Components V2 dashboard for NSW incident totals.
+    # /overview command — Components V2 dashboard of incident totals.
     # Backed by GET /api/stats/summary. Each section becomes its own
     # colour-accented Container so the feed reads top-to-bottom rather
     # than squeezing 10+ inline fields into a single embed.
@@ -1204,7 +1120,7 @@ class EmbedBuilder:
         now_local = _dt.now().astimezone()
         header = discord.ui.Container(accent_colour=self._SUMMARY_HEADER_COLOR)
         header.add_item(discord.ui.TextDisplay(
-            content="# 📊 NSW Incident Summary"
+            content="# 📊 Incident Summary"
         ))
         header.add_item(discord.ui.Separator(visible=False))
         header.add_item(discord.ui.TextDisplay(
@@ -1374,8 +1290,14 @@ class EmbedBuilder:
               or alert_type == 'ausgrid'
               or alert_type.startswith('essential_')):
             return self.build_power_container(data, alert_type)
-        elif alert_type.startswith('waze_'):
-            return self.build_waze_container(data, alert_type)
+        elif alert_type in ('cfa', 'deeca', 'qfd', 'dfes', 'sa_cfs',
+                            'sa_mfs', 'nt_fire', 'qld_warning', 'wa_warning',
+                            'act_ambulance'):
+            return self.build_interstate_fire_container(data, alert_type)
+        elif alert_type == 'wire_article':
+            return self.build_wire_article_container(data)
+        elif alert_type == 'wire_fleet':
+            return self.build_wire_fleet_container(data)
         elif alert_type == 'user_incident':
             return self.build_user_incident_container(data, previous_message=previous_message)
         else:
@@ -1713,124 +1635,206 @@ class EmbedBuilder:
         self._append_container_footer(container, footer_bits, source="Live Traffic NSW")
         return container
 
-    # ---- Waze --------------------------------------------------
-    def build_waze_container(self, data: Dict[str, Any], alert_type: str):
-        """Components V2 container for Waze hazards / police / roadwork."""
+    # ---- Interstate fire services -------------------------------
+    # All of these serve RFS-shaped GeoJSON properties (title / status /
+    # alertLevel / location / fireType / updatedISO / url), so one builder
+    # covers every agency — only the accent colour and source label differ.
+    _INTERSTATE_SOURCES = {
+        'cfa': 'CFA (Vic)',
+        'deeca': 'DEECA (Vic)',
+        'qfd': 'QLD Fire Dept',
+        'dfes': 'DFES (WA)',
+        'sa_cfs': 'SA CFS',
+        'sa_mfs': 'SA MFS',
+        'nt_fire': 'NT Fire & Rescue',
+        'qld_warning': 'QLD Fire Dept',
+        'wa_warning': 'DFES (WA)',
+        'act_ambulance': 'ACT Ambulance',
+    }
+
+    def build_interstate_fire_container(self, data: Dict[str, Any], alert_type: str):
+        """Components V2 container for an interstate fire-service incident."""
         data = data or {}
         props = data.get('properties') or {}
-        waze_subtype = props.get('wazeSubtype', '')
-        waze_type = props.get('wazeType', '')
-        display_type = props.get('displayType', '')
-        title = strip_html(props.get('title', ''))
-        street = strip_html(props.get('street', ''))
-        city = strip_html(props.get('city', ''))
-        location = strip_html(props.get('location', ''))
-        thumbs_up = props.get('thumbsUp', 0)
-        reliability = props.get('reliability', 0)
-        created = props.get('created', '')
-        # Jam-specific richness from parseWazeJam (only present on jams).
-        severity = strip_html(str(props.get('severity', '') or ''))
-        speed_kmh = props.get('speedKMH', props.get('speed'))
-        delay_mins = props.get('delayMins')
-        delay_secs = props.get('delay')
-        length_m = props.get('length')
-
-        icon = self.ICONS.get(alert_type, '⚠️')
-        color = self.COLORS.get(alert_type, 0xEAB308)
-
-        type_labels = {
-            'waze_hazard': 'Waze Hazard',
-            'waze_jam': 'Waze Traffic Jam',
-            'waze_police': 'Waze Police Report',
-            'waze_roadwork': 'Waze Roadwork',
-        }
-        type_label = type_labels.get(alert_type, 'Waze Alert')
-        # Single subtype-based heading (the subtype already includes the
-        # main type, so no separate class heading + "Type" meta bit).
-        # Fall back to the raw type so a bare ROAD_CLOSED/ACCIDENT resolves.
-        head = waze_heading_label(alert_type, waze_subtype or waze_type)
-        if head:
-            heading = f"### {icon} {head}"
-        elif display_type and display_type != 'Unknown':
-            heading = f"### {icon} {display_type}"
-        else:
-            heading = f"### {icon} {type_label}"
-
+        color = self.COLORS.get(alert_type, 0xEF4444)
         container = discord.ui.Container(accent_colour=color)
-        container.add_item(discord.ui.TextDisplay(content=heading))
-
-        if is_valid_value(title) and title != display_type:
-            container.add_item(discord.ui.TextDisplay(
-                content=self._clip_text(title[:2000])
-            ))
-
-        if is_valid_value(location):
-            container.add_item(discord.ui.TextDisplay(
-                content=self._clip_text(f"📍 {location[:1500]}")
-            ))
-        elif is_valid_value(street) or is_valid_value(city):
-            loc_parts = [p for p in [street, city] if is_valid_value(p)]
-            if loc_parts:
-                container.add_item(discord.ui.TextDisplay(
-                    content=self._clip_text(f"📍 {', '.join(loc_parts)}")
-                ))
+        icon = self.ICONS.get(alert_type, '🔥')
+        title = props.get('title') or 'Incident'
+        container.add_item(discord.ui.TextDisplay(
+            content=self._clip_text(f"### {icon} {title}")
+        ))
 
         meta_bits = []
-        # Jam details first — the most useful info for a traffic jam.
-        if is_valid_value(severity):
-            meta_bits.append(severity)
-        if isinstance(speed_kmh, (int, float)) and speed_kmh >= 0:
-            meta_bits.append(f"🚗 {round(speed_kmh)} km/h")
-        _dmin = (delay_mins if isinstance(delay_mins, (int, float)) and delay_mins
-                 else round(delay_secs / 60) if isinstance(delay_secs, (int, float)) and delay_secs
-                 else None)
-        if _dmin:
-            meta_bits.append(f"⏱️ +{_dmin} min delay")
-        if isinstance(length_m, (int, float)) and length_m >= 0:
-            meta_bits.append(f"📏 {length_m / 1000:.1f} km" if length_m >= 1000
-                             else f"📏 {round(length_m)} m")
-        if reliability and reliability > 0:
-            meta_bits.append(f"Reliability: {min(100, reliability)}%")
-        if thumbs_up and thumbs_up > 0:
-            meta_bits.append(f"👍 {thumbs_up}")
+        status = (props.get('status') or '').strip()
+        if status:
+            meta_bits.append(f"Status: **{status}**")
+        level = (props.get('alertLevel') or '').strip()
+        if level:
+            meta_bits.append(f"⚠️ {level}")
+        ftype = (props.get('fireType') or '').strip()
+        if ftype:
+            meta_bits.append(ftype)
         if meta_bits:
             container.add_item(discord.ui.TextDisplay(
                 content=self._clip_text(' · '.join(meta_bits))
             ))
 
+        location = (props.get('location') or props.get('location_text') or '').strip()
+        if location:
+            container.add_item(discord.ui.TextDisplay(
+                content=self._clip_text(f"📍 {location}")
+            ))
+
+        # WA warnings put the public instruction in `action` (status is '').
+        action = (props.get('action') or '').strip()
+        if action:
+            container.add_item(discord.ui.TextDisplay(
+                content=self._clip_text(f"❗ {action}")
+            ))
+
         footer_bits = []
-        dt_created = parse_timestamp_to_datetime(created)
-        if dt_created:
-            footer_bits.append(f"🕐 <t:{int(dt_created.timestamp())}:R>")
-
-        geometry = data.get('geometry', {})
-        coords = geometry.get('coordinates') if isinstance(geometry, dict) else None
-        lon = lat = None
-        if isinstance(coords, list) and coords:
-            if isinstance(coords[0], (list, tuple)):
-                # LineString (jams): list of [lon, lat] pairs — use the
-                # midpoint so the map link is a real coordinate, not a pair.
-                mid = coords[len(coords) // 2]
-                if isinstance(mid, (list, tuple)) and len(mid) >= 2:
-                    lon, lat = mid[0], mid[1]
-            elif len(coords) >= 2:
-                # Point: [lon, lat].
-                lon, lat = coords[0], coords[1]
-        if lat is not None and lon is not None:
-            layer_map = {
-                'waze_hazard':   'hazards',
-                'waze_jam':      'jams',
-                'waze_police':   'police',
-                'waze_roadwork': 'roadwork',
-            }
-            layer = layer_map.get(alert_type, 'hazards')
-            map_url = build_map_url(lat, lon, label=title or display_type, layer=layer)
-            footer_bits.append(f"[🗺️ Map]({map_url})")
-
-        self._append_container_footer(container, footer_bits, source="Waze")
+        # ACT has no updatedISO — an epoch-seconds `timestamp` instead;
+        # parse_timestamp_to_datetime handles both.
+        dt_upd = parse_timestamp_to_datetime(
+            props.get('updatedISO') or props.get('timestamp') or '')
+        if dt_upd:
+            footer_bits.append(f"🕐 <t:{int(dt_upd.timestamp())}:R>")
+        # Point features carry [lng, lat]; NT warnings can be a Polygon —
+        # unwrap nested rings to a representative pair for the map link.
+        coords = (data.get('geometry') or {}).get('coordinates')
+        while (isinstance(coords, (list, tuple)) and coords
+               and isinstance(coords[0], (list, tuple))):
+            coords = coords[len(coords) // 2]
+        if isinstance(coords, (list, tuple)) and len(coords) >= 2:
+            try:
+                map_url = build_map_url(float(coords[1]), float(coords[0]),
+                                        label=title, layer="incidents")
+                footer_bits.append(f"[🗺️ Map]({map_url})")
+            except (TypeError, ValueError):
+                pass
+        url = (props.get('url') or '').strip()
+        if url:
+            footer_bits.append(f"[🔗 Details]({url})")
+        source = self._INTERSTATE_SOURCES.get(alert_type, 'Interstate feed')
+        self._append_container_footer(container, footer_bits, source=source)
         return container
 
-    # ---- Power (dispatcher) ------------------------------------
+    # ---- The Wire ----------------------------------------------
+    def build_wire_article_container(self, data: Dict[str, Any]):
+        """Components V2 container for a newly published Wire article."""
+        data = data or {}
+        color = self.COLORS.get('wire_article', 0xF59E0B)
+        container = discord.ui.Container(accent_colour=color)
+        title = data.get('title') or 'New article'
+        container.add_item(discord.ui.TextDisplay(
+            content=self._clip_text(f"### \U0001F4F0 {title}")
+        ))
+        excerpt = (data.get('excerpt') or '').strip()
+        if excerpt:
+            container.add_item(discord.ui.TextDisplay(content=self._clip_text(excerpt)))
+
+        meta_bits = []
+        author = (data.get('author') or {}).get('name')
+        if author:
+            meta_bits.append(f"\u270D\uFE0F {author}")
+        agencies = data.get('agencies') or []
+        if agencies:
+            meta_bits.append(' / '.join(str(a) for a in agencies[:3]))
+        region = (data.get('location') or {}).get('region')
+        if region:
+            meta_bits.append(f"\U0001F4CD {region}")
+        if meta_bits:
+            container.add_item(discord.ui.TextDisplay(
+                content=self._clip_text(' \u00b7 '.join(meta_bits))
+            ))
+
+        # Cover photo (public R2/CF URL). Degrades silently — a photo must
+        # never break the card.
+        cover = data.get('cover')
+        cover_url = cover.get('url') if isinstance(cover, dict) else None
+        if cover_url:
+            try:
+                container.add_item(discord.ui.MediaGallery(
+                    discord.MediaGalleryItem(cover_url, description="Cover photo")
+                ))
+            except Exception:
+                pass
+
+        footer_bits = []
+        dt_pub = parse_timestamp_to_datetime(
+            data.get('published_at') or data.get('created_at') or ''
+        )
+        if dt_pub:
+            footer_bits.append(f"\U0001F550 <t:{int(dt_pub.timestamp())}:R>")
+        slug = data.get('slug') or data.get('id')
+        if slug:
+            footer_bits.append(
+                f"[\U0001F4F0 Read on The Wire]({MAP_BASE_URL}/wire?article={slug})"
+            )
+        self._append_container_footer(container, footer_bits, source="The Wire")
+        return container
+
+    def build_wire_fleet_container(self, data: Dict[str, Any]):
+        """Components V2 container for a new fleet vehicle added to The Wire."""
+        data = data or {}
+        color = self.COLORS.get('wire_fleet', 0x14B8A6)
+        container = discord.ui.Container(accent_colour=color)
+        callsign = data.get('callsign') or data.get('title') or 'New vehicle'
+        container.add_item(discord.ui.TextDisplay(
+            content=self._clip_text(f"### \U0001F692 {callsign}")
+        ))
+
+        line_bits = []
+        agency = data.get('agency')
+        if agency:
+            line_bits.append(str(agency))
+        station = data.get('station')
+        if station:
+            line_bits.append(f"\U0001F3E0 {station}")
+        place = ' '.join(str(v) for v in (data.get('lga'), data.get('state')) if v)
+        if place:
+            line_bits.append(f"\U0001F4CD {place}")
+        if line_bits:
+            container.add_item(discord.ui.TextDisplay(
+                content=self._clip_text(' \u00b7 '.join(line_bits))
+            ))
+
+        vehicle_bits = []
+        vtype = data.get('vehicle_type')
+        if vtype:
+            vehicle_bits.append(str(vtype))
+        mm = ' '.join(str(v) for v in (data.get('make'), data.get('model')) if v)
+        if mm:
+            vehicle_bits.append(mm)
+        year = data.get('production_year')
+        if year:
+            vehicle_bits.append(str(year))
+        if vehicle_bits:
+            container.add_item(discord.ui.TextDisplay(
+                content=self._clip_text(' \u00b7 '.join(vehicle_bits))
+            ))
+
+        photo = data.get('image_url')
+        if photo:
+            try:
+                container.add_item(discord.ui.MediaGallery(
+                    discord.MediaGalleryItem(photo, description="Fleet photo")
+                ))
+            except Exception:
+                pass
+
+        footer_bits = []
+        dt_added = parse_timestamp_to_datetime(data.get('created_at') or '')
+        if dt_added:
+            footer_bits.append(f"\U0001F550 <t:{int(dt_added.timestamp())}:R>")
+        vid = data.get('id')
+        if vid:
+            footer_bits.append(
+                f"[\U0001F692 View on The Wire]({MAP_BASE_URL}/wire?tab=fleet&vehicle={vid})"
+            )
+        self._append_container_footer(container, footer_bits, source="The Wire")
+        return container
+
     def build_power_container(self, data: Dict[str, Any], alert_type: str):
         if alert_type == 'ausgrid':
             return self.build_ausgrid_container(data)

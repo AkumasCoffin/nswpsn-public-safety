@@ -128,6 +128,15 @@ const Schema = z.object({
   PAGERMON_INGEST_URL: z.string().optional(),
   PAGERMON_INGEST_API_KEY: z.string().optional(),
 
+  // Per-state Pagermon ingest targets: PAGERMON_INGEST_URL_<STATE> /
+  // PAGERMON_INGEST_API_KEY_<STATE>. The unsuffixed pair above stays NSW (the
+  // legacy default, still overridable via the staff DB row); every other state
+  // is env-only. A pager node's messages route by ITS state (nodes.state), so
+  // bringing a new state online is: stand up its Pagermon, add its pair here
+  // and in .env, done.
+  PAGERMON_INGEST_URL_QLD: z.string().optional(),
+  PAGERMON_INGEST_API_KEY_QLD: z.string().optional(),
+
   // Pager capcodes to DROP from the relay (comma-separated) — non-message
   // transmitters that clutter the feed with encoded/binary data frames rather
   // than human-readable pages (e.g. FRNSW 521839 fires ~1/min of base64 data).
@@ -188,7 +197,7 @@ const Schema = z.object({
     .transform((v) => (v === undefined ? -1000 : Number(v)))
     .pipe(z.number().int().min(-60_000).max(60_000)),
 
-  // Timezone for rdio summary windows + transcripts/search day-bounds.
+  // Timezone for rdio summary windows.
   // Mirrors python's SUMMARY_TZ env var; default to Sydney since this
   // is an NSW-focused service.
   SUMMARY_TZ: z.string().default('Australia/Sydney'),

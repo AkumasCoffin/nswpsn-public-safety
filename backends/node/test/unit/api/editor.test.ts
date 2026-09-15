@@ -198,6 +198,84 @@ describe('POST /api/editor-requests (public submit)', () => {
     const params = calls[1]?.params ?? [];
     expect(params[11]).toBeNull();
   });
+
+  // --- referral attribution -------------------------------------------------
+  // Params 14/15 are referred_by / referred_by_name (appended after
+  // supabase_user_id at 13 so existing assertions keep their indices).
+  it('records the referrer when the body carries a known code', async () => {
+    resultQueue = [{ rows: [{ user_id: 'ref-1' }] }, { rows: [] }, { rows: [{ id: 9 }] }];
+    const app = makeApp();
+    const res = await app.request('/api/editor-requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'a@b.com', about: 'x', request_type: ['editor'], referral_code: 'abcd2345' }),
+    });
+    expect(res.status).toBe(201);
+    expect(calls[0]?.sql).toContain('FROM referral_codes');
+    expect(calls[0]?.params).toEqual(['ABCD2345']); // uppercased -> case-insensitive
+    const params = calls[2]?.params ?? [];
+    expect(params[13]).toBe('owner-1'); // supabase_user_id still at 13
+    expect(params[14]).toBe('ref-1');
+  });
+
+  it('ignores an unknown code without failing the signup', async () => {
+    resultQueue = [{ rows: [] }, { rows: [] }, { rows: [{ id: 10 }] }];
+    const app = makeApp();
+    const res = await app.request('/api/editor-requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'a@b.com', about: 'x', request_type: ['editor'], referral_code: 'NOPENOPE' }),
+    });
+    expect(res.status).toBe(201);
+    expect((calls[2]?.params ?? [])[14]).toBeNull();
+  });
+
+  it('ignores a self-referral', async () => {
+    resultQueue = [{ rows: [{ user_id: 'owner-1' }] }, { rows: [] }, { rows: [{ id: 11 }] }];
+    const app = makeApp(); // userId 'owner-1'
+    const res = await app.request('/api/editor-requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'a@b.com', about: 'x', request_type: ['editor'], referral_code: 'SELFCODE' }),
+    });
+    expect(res.status).toBe(201);
+    expect((calls[2]?.params ?? [])[14]).toBeNull();
+  });
+
+  it('a failed code lookup never fails the signup', async () => {
+    fakePool.query.mockRejectedValueOnce(new Error('pg down'));
+    resultQueue = [{ rows: [] }, { rows: [{ id: 12 }] }];
+    const app = makeApp();
+    const res = await app.request('/api/editor-requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'a@b.com', about: 'x', request_type: ['editor'], referral_code: 'ABCD2345' }),
+    });
+    expect(res.status).toBe(201);
+  });
+
+  it('issues no referral query for a malformed code', async () => {
+    resultQueue = [{ rows: [] }, { rows: [{ id: 13 }] }];
+    const app = makeApp();
+    await app.request('/api/editor-requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'a@b.com', about: 'x', request_type: ['editor'], referral_code: 'no!' }),
+    });
+    expect(calls[0]?.sql).toContain('SELECT id, status FROM editor_requests');
+  });
+
+  it('a re-submit never overwrites the original referrer', async () => {
+    resultQueue = [{ rows: [{ user_id: 'ref-2' }] }, { rows: [{ id: 7, status: 'pending' }] }, { rows: [] }];
+    const app = makeApp();
+    const res = await app.request('/api/editor-requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'a@b.com', about: 'x', request_type: ['editor'], referral_code: 'ABCD2345' }),
+    });
+    expect(res.status).toBe(200);
+    expect(calls[2]?.sql).toContain('COALESCE(referred_by, $14)');
+  });
 });
 
 describe('GET /api/editor-requests', () => {
@@ -209,6 +287,7 @@ describe('GET /api/editor-requests', () => {
         background_details: null, has_existing_setup: null, setup_details: null,
         tech_experience: 'ts', experience_level: 3, status: 'pending',
         created_at: 1700000000, reviewed_at: null, notes: null,
+        referred_by: 'ref-1', referred_by_name: 'Alex',
       }],
     }];
     const app = makeApp();
@@ -217,6 +296,9 @@ describe('GET /api/editor-requests', () => {
     const body = (await res.json()) as { requests: Array<Record<string, unknown>>; count: number };
     expect(body.count).toBe(1);
     expect(body.requests[0]?.['request_type']).toEqual(['editor', 'pager_feeder']);
+    // Referral attribution reaches the staff UI.
+    expect(body.requests[0]?.['referred_by']).toBe('ref-1');
+    expect(body.requests[0]?.['referred_by_name']).toBe('Alex');
   });
 
   it('filters by status when ?status=approved', async () => {

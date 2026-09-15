@@ -75,6 +75,11 @@ import {
 } from '../services/discordApi.js';
 import { validateFilters, FilterValidationError } from '../services/dashboardFilterValidator.js';
 import {
+  ALERT_TYPES,
+  canonicalAlertType,
+  catalogForClient,
+} from '../services/alertCatalog.js';
+import {
   clearSourceErrors,
   getSourceHealthSnapshot,
 } from '../services/sourceHealth.js';
@@ -86,19 +91,10 @@ export const dashboardRouter = new Hono();
 const MANAGE_CHANNELS = 0x10n;
 const ADMINISTRATOR = 0x8n;
 
-// Mirror of discord-bot/bot.py ALERT_TYPES (python line 16156-16167).
-const ALERT_TYPES: readonly string[] = [
-  'rfs',
-  'firms',
-  'bom_land', 'bom_marine',
-  'traffic_incident', 'traffic_roadwork', 'traffic_flood',
-  'traffic_fire', 'traffic_majorevent',
-  'endeavour_current', 'endeavour_planned',
-  'ausgrid',
-  'essential_planned', 'essential_future',
-  'user_incident',
-  'radio_summary',
-];
+// ALERT_TYPES now comes from shared/alert-catalog.json via alertCatalog.ts.
+// It used to be a literal here, mirrored by hand from bot.py — which is how a
+// build older than the catalog came to reject keys the dashboard was already
+// offering, surfacing as bad_request on every save.
 
 const PG_UNIQUE_VIOLATION = '23505';
 
@@ -441,6 +437,13 @@ dashboardRouter.post('/api/dashboard/auth/logout', async (c) => {
 // ---------------------------------------------------------------------------
 // /me.
 // ---------------------------------------------------------------------------
+// The catalog the dashboard renders its chips from. Served rather than
+// duplicated in the page so the UI can only ever offer keys this process
+// accepts — the two read the same file in the same process.
+dashboardRouter.get('/api/dashboard/alert-catalog', (c) =>
+  c.json(catalogForClient()),
+);
+
 dashboardRouter.get('/api/dashboard/me', async (c) => {
   const session = await requireSession(c);
   if (session instanceof Response) return session;
@@ -672,21 +675,44 @@ const PRESET_COLS =
   'id, guild_id, channel_id, name, alert_types, pager_enabled, pager_capcodes, ' +
   'role_ids, enabled, enabled_ping, type_overrides, filters, created_at, updated_at';
 
-function parseAlertTypes(raw: unknown): string[] | null {
-  if (raw == null) return [];
-  if (!Array.isArray(raw)) return null;
+type AlertTypesParse =
+  | { ok: true; types: string[] }
+  | { ok: false; message: string };
+
+/**
+ * Validate an alert_types array, folding retired keys to their canonical form.
+ *
+ * Reports the offending key rather than rejecting the array wholesale. The
+ * dashboard resends every type on each chip click, so a single unrecognised
+ * key used to un-save the types that were already working.
+ */
+function parseAlertTypes(raw: unknown): AlertTypesParse {
+  if (raw == null) return { ok: true, types: [] };
+  if (!Array.isArray(raw)) {
+    return { ok: false, message: 'alert_types must be an array of strings.' };
+  }
   const seen = new Set<string>();
   const out: string[] = [];
   for (const a of raw) {
-    if (typeof a !== 'string') return null;
+    if (typeof a !== 'string') {
+      return { ok: false, message: 'alert_types must be an array of strings.' };
+    }
     const s = a.trim();
     if (!s) continue;
-    if (!ALERT_TYPES.includes(s)) return null;
-    if (seen.has(s)) continue;
-    seen.add(s);
-    out.push(s);
+    const canon = canonicalAlertType(s);
+    if (!canon) {
+      return {
+        ok: false,
+        message:
+          `alert_types contains an unknown type: "${s}". ` +
+          'See GET /api/dashboard/alert-catalog for the current set.',
+      };
+    }
+    if (seen.has(canon)) continue;
+    seen.add(canon);
+    out.push(canon);
   }
-  return out;
+  return { ok: true, types: out };
 }
 
 function parseRoleIds(raw: unknown): bigint[] | null {
@@ -850,10 +876,11 @@ dashboardRouter.post('/api/dashboard/guilds/:guildId/presets', async (c) => {
     return dashErr(c, 'bad_request', 'name must be 1-64 characters.', 400);
   }
 
-  const alertTypes = parseAlertTypes(body['alert_types']);
-  if (alertTypes === null) {
-    return dashErr(c, 'bad_request', `alert_types must be strings in ${ALERT_TYPES.join(',')}.`, 400);
+  const alertTypesParsed = parseAlertTypes(body['alert_types']);
+  if (!alertTypesParsed.ok) {
+    return dashErr(c, 'bad_request', alertTypesParsed.message, 400);
   }
+  const alertTypes = alertTypesParsed.types;
   const roleIds = parseRoleIds(body['role_ids']);
   if (roleIds === null) {
     return dashErr(c, 'bad_request', 'role_ids must be an array of numeric ids.', 400);
@@ -985,10 +1012,11 @@ dashboardRouter.patch('/api/dashboard/guilds/:guildId/presets/:presetId', async 
   }
   let newAlertTypes: string[] | null = null;
   if ('alert_types' in body) {
-    newAlertTypes = parseAlertTypes(body['alert_types']);
-    if (newAlertTypes === null) {
-      return dashErr(c, 'bad_request', `alert_types must be strings in ${ALERT_TYPES.join(',')}.`, 400);
+    const parsed = parseAlertTypes(body['alert_types']);
+    if (!parsed.ok) {
+      return dashErr(c, 'bad_request', parsed.message, 400);
     }
+    newAlertTypes = parsed.types;
     sets.push(`alert_types=$${params.length + 1}`);
     params.push(newAlertTypes);
   }
@@ -1163,15 +1191,18 @@ dashboardRouter.put(
     if (session instanceof Response) return session;
     const guildId = c.req.param('guildId');
     const presetId = Number(c.req.param('presetId'));
-    const alertType = c.req.param('alertType');
+    const rawAlertType = c.req.param('alertType');
+    // Fold retired keys so an override saved under an old name keeps working.
+    const alertType = canonicalAlertType(rawAlertType) ?? '';
     if (!Number.isFinite(presetId)) {
       return dashErr(c, 'bad_request', 'preset_id must be numeric.', 400);
     }
-    if (!ALERT_TYPES.includes(alertType)) {
+    if (!alertType) {
       return dashErr(
         c,
         'bad_request',
-        `alert_type must be one of ${ALERT_TYPES.join(',')}.`,
+        `alert_type "${rawAlertType}" is not a known alert type. ` +
+          'See GET /api/dashboard/alert-catalog for the current set.',
         400,
       );
     }
@@ -1238,15 +1269,18 @@ dashboardRouter.delete(
     if (session instanceof Response) return session;
     const guildId = c.req.param('guildId');
     const presetId = Number(c.req.param('presetId'));
-    const alertType = c.req.param('alertType');
+    const rawAlertType = c.req.param('alertType');
+    // Fold retired keys so an override saved under an old name keeps working.
+    const alertType = canonicalAlertType(rawAlertType) ?? '';
     if (!Number.isFinite(presetId)) {
       return dashErr(c, 'bad_request', 'preset_id must be numeric.', 400);
     }
-    if (!ALERT_TYPES.includes(alertType)) {
+    if (!alertType) {
       return dashErr(
         c,
         'bad_request',
-        `alert_type must be one of ${ALERT_TYPES.join(',')}.`,
+        `alert_type "${rawAlertType}" is not a known alert type. ` +
+          'See GET /api/dashboard/alert-catalog for the current set.',
         400,
       );
     }

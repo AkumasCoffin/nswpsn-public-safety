@@ -1,15 +1,15 @@
 /**
- * /api/rdio/transcripts/search and /api/rdio/calls/:id.
+ * /api/rdio/calls/:id — one call by id from the SELF-HOSTED rdio-scanner
+ * Postgres (RDIO_DATABASE_URL), joined with the system + talkgroup label
+ * cache and the radio-unit label dictionary.
  *
- * Mirrors python external_api_proxy.py:15725-15947. Reads from the
- * SELF-HOSTED rdio-scanner Postgres (RDIO_DATABASE_URL), joins results
- * with the system + talkgroup label cache and the radio-unit label
- * dictionary, and returns the same response shape python emits so any
- * UI / downstream consumer can flip backends without noticing.
- *
- * Local-time-of-day filtering is delegated to Postgres' AT TIME ZONE
- * arithmetic (same approach python uses) — keeps DST handling out of
- * application code.
+ * /api/rdio/transcripts/search used to live here too. It was REMOVED
+ * (2026-09): its browse mode ran an unbounded COUNT(*) + leading-wildcard
+ * ILIKE over the whole calls⨝transcripts join every 30 s per open staff
+ * tab, which blew the rdio pool's 30 s statement_timeout (500s) and
+ * starved its 5 connections (hangs). The staff Transcripts view is now a
+ * whisper throughput dashboard (api/whisper.ts /history) that never
+ * touches the rdio DB, and the bot's /ts command was retired with it.
  */
 import { Hono } from 'hono';
 import {
@@ -88,200 +88,7 @@ async function rowToShape(row: RdioCallRow): Promise<Record<string, unknown>> {
   };
 }
 
-function parseHm(s: string): { h: number; m: number } | null {
-  const parts = s.split(':');
-  if (parts.length !== 2) return null;
-  const h = Number(parts[0]);
-  const m = Number(parts[1]);
-  if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
-  if (h < 0 || h >= 24 || m < 0 || m >= 60) return null;
-  return { h, m };
-}
-
 export const transcriptsRouter = new Hono();
-
-transcriptsRouter.get('/api/rdio/transcripts/search', async (c) => {
-  if (!isRdioConfigured()) {
-    return c.json({ error: 'RDIO_DATABASE_URL not configured' }, 503);
-  }
-  try {
-    const url = new URL(c.req.url);
-    const q = (url.searchParams.get('q') ?? '').trim();
-    const callIdRaw = url.searchParams.get('call_id');
-    const callId =
-      callIdRaw !== null && callIdRaw !== '' && /^\d+$/.test(callIdRaw)
-        ? Number.parseInt(callIdRaw, 10)
-        : null;
-    // No q and no call_id is BROWSE mode: the newest transcribed calls,
-    // filterable by system/talkgroup/date like a search. This diverges from
-    // python (which required a keyword) deliberately — the staff Transcripts
-    // view needs a default stream to show, and "latest N with a transcript"
-    // is a cheap indexed read on rdio's dateTime ordering.
-    const systemRaw = url.searchParams.get('system');
-    const talkgroupRaw = url.searchParams.get('talkgroup');
-    const systemId =
-      systemRaw && /^\d+$/.test(systemRaw) ? Number.parseInt(systemRaw, 10) : null;
-    const talkgroupId =
-      talkgroupRaw && /^\d+$/.test(talkgroupRaw)
-        ? Number.parseInt(talkgroupRaw, 10)
-        : null;
-
-    let dateFrom = url.searchParams.get('date_from');
-    let dateTo = url.searchParams.get('date_to');
-    const date = url.searchParams.get('date');
-    const timeFrom = url.searchParams.get('time_from');
-    const timeTo = url.searchParams.get('time_to');
-    const limit = Math.max(
-      1,
-      Math.min(200, Number(url.searchParams.get('limit') ?? 20) || 20),
-    );
-    const offset = Math.max(
-      0,
-      Number(url.searchParams.get('offset') ?? 0) || 0,
-    );
-    const order =
-      (url.searchParams.get('order') ?? 'desc').toLowerCase() === 'asc'
-        ? 'ASC'
-        : 'DESC';
-
-    if (date && !dateFrom && !dateTo) {
-      dateFrom = date;
-      dateTo = date;
-    }
-
-    const clauses: string[] = [];
-    const params: unknown[] = [];
-    const next = (): string => `$${params.length + 1}`;
-
-    if (callId !== null) {
-      clauses.push(`"id" = ${next()}`);
-      params.push(callId);
-    } else {
-      clauses.push(`${RDIO_TRANSCRIPT} IS NOT NULL`);
-      // Comma-separated terms = OR of ILIKE; matches python's behaviour.
-      const terms = q
-        .split(',')
-        .map((t) => t.trim())
-        .filter((t) => t.length >= 2);
-      // A PRESENT-but-useless q (all terms under 2 chars) is still an error:
-      // silently browsing would look like a search that matched everything.
-      // An absent q is the browse mode described above and adds no clause.
-      if (q && terms.length === 0) {
-        return c.json(
-          { error: 'q must contain at least one term of 2+ chars' },
-          400,
-        );
-      }
-      if (terms.length === 0) {
-        // browse: transcript IS NOT NULL alone
-      } else if (terms.length === 1) {
-        clauses.push(`${RDIO_TRANSCRIPT} ILIKE ${next()}`);
-        params.push(`%${terms[0]}%`);
-      } else {
-        const placeholders = terms.map(() => `${RDIO_TRANSCRIPT} ILIKE ${next()}`);
-        // Re-emit placeholders but only after pushing each param; the
-        // simple loop above mutates params, so use a separate builder:
-        clauses.pop(); // drop the simple ILIKE we tentatively pushed
-        const parts: string[] = [];
-        for (const t of terms) {
-          parts.push(`${RDIO_TRANSCRIPT} ILIKE ${next()}`);
-          params.push(`%${t}%`);
-        }
-        // Strip the unused single placeholders we just generated:
-        // (we used `placeholders` only as a counter — drop it)
-        void placeholders;
-        clauses.push(`(${parts.join(' OR ')})`);
-      }
-    }
-
-    if (systemId !== null) {
-      clauses.push(`"system" = ${next()}`);
-      params.push(systemId);
-    }
-    if (talkgroupId !== null) {
-      clauses.push(`"talkgroup" = ${next()}`);
-      params.push(talkgroupId);
-    }
-
-    // YYYY-MM-DD bounds in SUMMARY_TZ → naive UTC instants Postgres
-    // can compare against the rdioScanner naive `dateTime` column.
-    // Python computes the bound in app code; we let Postgres do the
-    // tz arithmetic via AT TIME ZONE so DST is handled identically.
-    if (dateFrom) {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateFrom)) {
-        return c.json({ error: 'date_from must be YYYY-MM-DD' }, 400);
-      }
-      // (date::date AT TIME ZONE tz) = midnight in tz, returned as UTC.
-      // Cast to ::timestamp to drop tz info so it compares against the
-      // naive `dateTime` column (which already holds UTC).
-      clauses.push(
-        `"dateTime" >= ((${next()}::date) AT TIME ZONE ${next()})::timestamp`,
-      );
-      params.push(dateFrom, config.SUMMARY_TZ);
-    }
-    if (dateTo) {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateTo)) {
-        return c.json({ error: 'date_to must be YYYY-MM-DD' }, 400);
-      }
-      // End of local day = start of next local day, exclusive. The
-      // python version uses 23:59:59 inclusive; using (next_day) with
-      // a strict-less-than is equivalent without rounding loss.
-      clauses.push(
-        `"dateTime" < ((${next()}::date + INTERVAL '1 day') AT TIME ZONE ${next()})::timestamp`,
-      );
-      params.push(dateTo, config.SUMMARY_TZ);
-    }
-
-    if (timeFrom) {
-      const hm = parseHm(timeFrom);
-      if (!hm) return c.json({ error: 'time_from must be HH:MM' }, 400);
-      clauses.push(
-        `EXTRACT(HOUR FROM "dateTime" AT TIME ZONE 'UTC' AT TIME ZONE ${next()}) * 60 ` +
-          `+ EXTRACT(MINUTE FROM "dateTime" AT TIME ZONE 'UTC' AT TIME ZONE ${next()}) >= ${next()}`,
-      );
-      params.push(config.SUMMARY_TZ, config.SUMMARY_TZ, hm.h * 60 + hm.m);
-    }
-    if (timeTo) {
-      const hm = parseHm(timeTo);
-      if (!hm) return c.json({ error: 'time_to must be HH:MM' }, 400);
-      clauses.push(
-        `EXTRACT(HOUR FROM "dateTime" AT TIME ZONE 'UTC' AT TIME ZONE ${next()}) * 60 ` +
-          `+ EXTRACT(MINUTE FROM "dateTime" AT TIME ZONE 'UTC' AT TIME ZONE ${next()}) <= ${next()}`,
-      );
-      params.push(config.SUMMARY_TZ, config.SUMMARY_TZ, hm.h * 60 + hm.m);
-    }
-
-    const where = `WHERE ${clauses.join(' AND ')}`;
-    const pool = await getRdioPool();
-    if (!pool) return c.json({ error: 'RDIO_DATABASE_URL not configured' }, 503);
-
-    const countSql = `SELECT COUNT(*)::int AS n FROM ${RDIO_CALLS_FROM} ${where}`;
-    const limitParam = `$${params.length + 1}`;
-    const offsetParam = `$${params.length + 2}`;
-    const dataSql =
-      `SELECT "id", "dateTime" AS date_time, "system", "talkgroup", ` +
-      `${RDIO_TRANSCRIPT} AS transcript, "source", "sources" FROM ${RDIO_CALLS_FROM} ${where} ` +
-      `ORDER BY "dateTime" ${order} LIMIT ${limitParam} OFFSET ${offsetParam}`;
-
-    const [countRes, dataRes] = await Promise.all([
-      pool.query<{ n: number }>(countSql, params),
-      pool.query<RdioCallRow>(dataSql, [...params, limit, offset]),
-    ]);
-    const total = countRes.rows[0]?.n ?? 0;
-    const results = await Promise.all(dataRes.rows.map(rowToShape));
-    return c.json({
-      total,
-      limit,
-      offset,
-      query: q,
-      call_id: callId,
-      results,
-    });
-  } catch (err) {
-    log.error({ err }, '/api/rdio/transcripts/search error');
-    return c.json({ error: 'failed to load transcripts' }, 500);
-  }
-});
 
 transcriptsRouter.get('/api/rdio/calls/:callId', async (c) => {
   if (!isRdioConfigured()) {

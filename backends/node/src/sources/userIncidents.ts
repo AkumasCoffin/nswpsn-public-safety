@@ -32,6 +32,9 @@ export interface UserIncidentRow {
   lat: number | string | null;
   lng: number | string | null;
   location: string | null;
+  state: string | null;
+  lga: string | null;
+  suburb: string | null;
   type: unknown;
   status: string | null;
   size: string | null;
@@ -113,6 +116,9 @@ export function userIncidentArchiveRow(
     data: {
       title: row.title ?? '',
       location_text: row.location ?? '',
+      state: row.state ?? null,
+      lga: row.lga ?? null,
+      suburb: row.suburb ?? null,
       description: row.description ?? '',
       status: row.status ?? '',
       size: row.size ?? '',
@@ -132,7 +138,8 @@ async function fetchUserIncidents(): Promise<UserIncidentRow[]> {
   const pool = await getPool();
   if (!pool) return [];
   const r = await pool.query<UserIncidentRow>(
-    `SELECT id, title, description, lat, lng, location, type, status, size,
+    `SELECT id, title, description, lat, lng, location, state, lga, suburb,
+            type, status, size,
             responding_agencies, units, images, created_at, updated_at, expires_at
        FROM incidents
       WHERE deleted_at IS NULL AND is_rfs_stub IS NOT TRUE`,

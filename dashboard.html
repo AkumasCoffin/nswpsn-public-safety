@@ -408,6 +408,10 @@
     .chip-row {
       display: flex; flex-wrap: wrap; gap: 0.4rem;
     }
+    /* Coming-soon types: visible so people know they're on the way, but
+       clearly inert. */
+    .chip.soon { opacity: 0.55; border-style: dashed; cursor: default; }
+    .pv-count.pv-soon { color: var(--text-muted); font-style: italic; }
     .chip {
       display: inline-flex; align-items: center; gap: 0.4rem;
       padding: 0.35rem 0.75rem;
@@ -1496,64 +1500,98 @@
 const API = 'https://api.forcequit.xyz';
 window.API = API;
 
-// Provider-grouped alert type catalog. Keep in sync with discord-bot
-// ALERT_TYPES and the data_history `source` values.
-const PROVIDERS = [
-  { key: 'rfs',         name: 'NSW Rural Fire Service', icon: 'fire',  color: '#ef4444',
-    types: [
-      { key: 'rfs', label: 'NSW RFS' },
-    ] },
-  { key: 'firms',       name: 'NASA FIRMS',             icon: 'fire',  color: '#f97316',
-    types: [
-      { key: 'firms', label: 'Fire Hotspots' },
-    ] },
-  { key: 'bom',         name: 'Bureau of Meteorology',  icon: 'cloud', color: '#3b82f6',
-    types: [
-      { key: 'bom_land',   label: 'Land Warnings' },
-      { key: 'bom_marine', label: 'Marine Warnings' },
-    ] },
-  { key: 'livetraffic', name: 'LiveTraffic NSW',        icon: 'road',  color: '#f97316',
-    types: [
-      { key: 'traffic_incident',   label: 'Incidents' },
-      { key: 'traffic_roadwork',   label: 'Roadwork' },
-      { key: 'traffic_flood',      label: 'Flooding' },
-      { key: 'traffic_fire',       label: 'Fires' },
-      { key: 'traffic_majorevent', label: 'Major Events' },
-    ] },
-  { key: 'endeavour',   name: 'Endeavour Energy',       icon: 'bolt',  color: '#fbbf24',
-    types: [
-      { key: 'endeavour_current', label: 'Current Outages' },
-      { key: 'endeavour_planned', label: 'Planned Outages' },
-    ] },
-  { key: 'ausgrid',     name: 'Ausgrid',                icon: 'plug',  color: '#f59e0b',
-    types: [
-      { key: 'ausgrid', label: 'Outages' },
-    ] },
-  { key: 'essential',   name: 'Essential Energy',       icon: 'bolt',  color: '#06b6d4',
-    types: [
-      { key: 'essential_planned', label: 'Planned Outages' },
-      { key: 'essential_future',  label: 'Future Outages' },
-    ] },
-  // Waze removed as an alertable source — the userscript ingest is retired,
-  // so nothing new arrives and any alert configured against it would simply
-  // never fire. Existing saved filters referencing waze_* keys stay in the
-  // database and are inert; the archived history is untouched and still
-  // browsable on the logs page.
-  { key: 'user',        name: 'User Submissions',       icon: 'user',  color: '#a855f7',
-    types: [
-      { key: 'user_incident', label: 'User Incidents' },
-    ] },
-  { key: 'rdio',        name: 'Radio Scanner',          icon: 'radio', color: '#10b981',
-    types: [
-      { key: 'radio_summary', label: 'Hourly Summaries' },
-    ] },
-];
+// Provider-grouped alert type catalog — FETCHED from the API, never declared
+// here. This used to be a literal kept in sync with the bot and the backend
+// whitelist by hand. It drifted: the page offered keys a stale backend build
+// did not know, and because a chip click resends the whole array, one unknown
+// key made every save fail with bad_request.
+//
+// Fetching it means the page can only ever offer what this exact server
+// accepts — the two read the same file in the same process.
+//
+// These stay mutable and are filled IN PLACE by applyAlertCatalog(), so the
+// module-scope bindings every consumer already closes over stay valid.
+let PROVIDERS = [];
+const _CATALOG_TYPE_DEFS = {};
+const ALERT_TYPES = [];
+// Types marked `soon` are shown but not yet enableable (The Wire hasn't
+// launched) — excluded from Select all and every payload we send.
+const _SOON_TYPES = new Set();
+const _DASH_ALERT_TYPES = [];
+const ALERT_TYPE_LABELS = {};
 
-const ALERT_TYPES = PROVIDERS.flatMap(p => p.types.map(t => t.key));
-const _DASH_ALERT_TYPES = ALERT_TYPES;
-const ALERT_TYPE_LABELS = Object.fromEntries(
-  PROVIDERS.flatMap(p => p.types.map(t => [t.key, t.label]))
-);
+function applyAlertCatalog(cat) {
+  // The raw defs carry severityScale / subtypeAware, which the filters card
+  // needs but the trimmed provider shape below does not keep.
+  for (const k of Object.keys(_CATALOG_TYPE_DEFS)) delete _CATALOG_TYPE_DEFS[k];
+  for (const p of (cat.providers || [])) {
+    for (const t of (p.types || [])) _CATALOG_TYPE_DEFS[t.key] = t;
+  }
+
+  PROVIDERS = (cat.providers || []).map(p => ({
+    key: p.key,
+    name: p.label,
+    icon: p.icon,
+    color: p.color,
+    types: (p.types || []).map(t => ({
+      key: t.key,
+      label: t.label,
+      ...(t.soon ? { soon: true } : {}),
+    })),
+  }));
+
+  ALERT_TYPES.length = 0;
+  _SOON_TYPES.clear();
+  _DASH_ALERT_TYPES.length = 0;
+  for (const k of Object.keys(ALERT_TYPE_LABELS)) delete ALERT_TYPE_LABELS[k];
+
+  for (const p of PROVIDERS) {
+    for (const t of p.types) {
+      ALERT_TYPES.push(t.key);
+      ALERT_TYPE_LABELS[t.key] = t.label;
+      if (t.soon) _SOON_TYPES.add(t.key);
+      else _DASH_ALERT_TYPES.push(t.key);
+    }
+  }
+
+  // Severity floors are per SOURCE: every fire agency carries its own
+  // alertLevel, so each gets its own floor rather than one RFS-shaped floor
+  // standing in for all of them.
+  for (const k of Object.keys(_DASH_SEVERITY_PER_TYPE)) delete _DASH_SEVERITY_PER_TYPE[k];
+  for (const k of Object.keys(_DASH_SEVERITY_TYPE_LABELS)) delete _DASH_SEVERITY_TYPE_LABELS[k];
+  _DASH_FILTER_SEVERITY_TYPES.clear();
+  _DASH_SUBTYPE_AWARE_TYPES.clear();
+  const scales = cat.severityScales || {};
+  for (const p of PROVIDERS) {
+    for (const t of p.types) {
+      const def = _CATALOG_TYPE_DEFS[t.key];
+      if (!def) continue;
+      if (def.subtypeAware) _DASH_SUBTYPE_AWARE_TYPES.add(t.key);
+      const scale = def.severityScale && scales[def.severityScale];
+      if (scale && Array.isArray(scale.options) && scale.options.length) {
+        _DASH_SEVERITY_PER_TYPE[t.key] = scale.options.map(
+          o => ({ value: o.value, label: o.label }));
+        // Qualified with the provider so "Warnings" and "Incidents" rows are
+        // telling apart at a glance in a list that now spans many agencies.
+        _DASH_SEVERITY_TYPE_LABELS[t.key] = `${p.name} — ${t.label}`;
+        _DASH_FILTER_SEVERITY_TYPES.add(t.key);
+      }
+    }
+  }
+
+  _BOTCTL_ALERT_TYPES.length = 0;
+  _BOTCTL_ALERT_TYPES.push(
+    { value: 'all', label: 'All alert types' },
+    ..._DASH_ALERT_TYPES.map(t => ({ value: t, label: ALERT_TYPE_LABELS[t] || t })),
+    { value: 'pager', label: 'Pager' },
+  );
+}
+
+async function loadAlertCatalog() {
+  const res = await fetch(API + '/api/dashboard/alert-catalog', { credentials: 'include' });
+  if (!res.ok) throw new Error('alert-catalog ' + res.status);
+  applyAlertCatalog(await res.json());
+}
 const MOBILE_BREAKPOINT = 1024;
 const MAX_ROLES = 5;
 
@@ -1702,6 +1740,19 @@ function confirmDialog(title, body, okLabel='Confirm', okDanger=true) {
 /* -------------------- Bootstrap -------------------- */
 
 async function bootstrap() {
+  // Before anything renders: without the catalog there are no chips to draw.
+  // Non-fatal on purpose. The page deploys on push but the API is deployed
+  // separately, so there is a window where this endpoint is not live yet —
+  // during it the rest of the dashboard (guilds, channels, presets) still
+  // works and only the alert-type chips are missing, with a banner saying so.
+  try {
+    await loadAlertCatalog();
+  } catch (e) {
+    console.error('Could not load the alert catalog', e);
+    state.catalogError = 'Could not load the alert type list. If the API was '
+      + 'just updated, reload in a moment.';
+  }
+
   try {
     const me = await api('/api/dashboard/me');
     state.user = me.user;
@@ -2595,8 +2646,11 @@ function setProviderOpen(presetId, providerKey, open) {
 function _renderProviderSection(provider, selected, opts) {
   // opts: { onToggleType(typeKey), onSelectAll(), presetId, expanded, onExpand(open) }
   const types = provider.types || [];
-  const selectedCount = types.filter(t => selected.has(t.key)).length;
-  const totalCount = types.length;
+  // `soon` types are visible but not enableable — they don't count and the
+  // per-provider power toggle ignores them.
+  const selectable = types.filter(t => !t.soon);
+  const selectedCount = selectable.filter(t => selected.has(t.key)).length;
+  const totalCount = selectable.length;
   const hasSelected = selectedCount > 0;
   const allSelected = selectedCount === totalCount && totalCount > 0;
   const expanded = !!opts.expanded;
@@ -2623,10 +2677,13 @@ function _renderProviderSection(provider, selected, opts) {
       el('i', { class: `fa-solid fa-${provider.icon || 'circle'}`,
                 style: `color:${provider.color || '#94a3b8'}` })),
     el('span', { class: 'pv-name' }, provider.name),
-    el('span', { class: 'pv-count' + (hasSelected ? ' has-selected' : '') },
-      `${selectedCount}/${totalCount}`),
-    // Per-source on/off — flips every type in the provider.
-    el('button', {
+    totalCount > 0
+      ? el('span', { class: 'pv-count' + (hasSelected ? ' has-selected' : '') },
+          `${selectedCount}/${totalCount}`)
+      : el('span', { class: 'pv-count pv-soon' }, 'soon'),
+    // Per-source on/off — flips every enableable type in the provider.
+    // Hidden while a provider is all-soon (nothing to flip).
+    ...(totalCount > 0 ? [el('button', {
       class: 'pv-toggle' + (allSelected ? ' on' : (hasSelected ? ' partial' : '')),
       type: 'button',
       title: allSelected
@@ -2638,16 +2695,16 @@ function _renderProviderSection(provider, selected, opts) {
       },
     }, [
       el('i', { class: 'fa-solid fa-power-off' }),
-    ]),
+    ])] : []),
     el('i', { class: 'fa-solid fa-chevron-right pv-caret' }),
   ]);
   section.appendChild(header);
 
   if (expanded) {
     const body = el('div', { class: 'provider-body' });
-    // Toolbar: Select all / Clear (per provider).
+    // Toolbar: Select all / Clear (per provider). Hidden while all-soon.
     const allSelected = selectedCount === totalCount && totalCount > 0;
-    body.appendChild(el('div', { class: 'provider-toolbar' }, [
+    if (totalCount > 0) body.appendChild(el('div', { class: 'provider-toolbar' }, [
       el('button', {
         class: 'link-btn',
         onclick: (e) => { e.stopPropagation(); opts.onSelectAll(!allSelected); },
@@ -2659,6 +2716,20 @@ function _renderProviderSection(provider, selected, opts) {
     // tooltips / quick debug.
     const row = el('div', { class: 'chip-row' });
     for (const t of types) {
+      if (t.soon) {
+        // Not enableable yet — never sent to the backend, which would
+        // reject an unknown key with bad_request on an older deploy.
+        row.appendChild(el('button', {
+          class: 'chip soon',
+          onclick: (e) => {
+            e.stopPropagation();
+            toast('Coming soon — The Wire has not launched yet.', 'info');
+          },
+          title: `${t.key} — coming soon`,
+          type: 'button',
+        }, `${t.label || t.key} · soon`));
+        continue;
+      }
       const active = selected.has(t.key);
       row.appendChild(el('button', {
         class: 'chip' + (active ? ' active' : ''),
@@ -2676,6 +2747,12 @@ function _renderProviderSection(provider, selected, opts) {
 function renderAlertTypeChips(preset) {
   const selected = new Set(preset.alert_types || []);
   const wrap = el('div', { class: 'provider-list' });
+  if (state.catalogError) {
+    // The catalog is fetched, so with no catalog there are no chips to draw.
+    // Say why rather than showing an empty box that looks like "no sources".
+    wrap.appendChild(el('div', { class: 'empty' }, state.catalogError));
+    return wrap;
+  }
   for (const provider of PROVIDERS) {
     const hasSelected = provider.types.some(t => selected.has(t.key));
     const expanded = isProviderOpen(preset.id, provider.key, hasSelected);
@@ -2692,6 +2769,7 @@ function renderAlertTypeChips(preset) {
         // Compute the next alert_types array off the current preset state.
         const cur = new Set(preset.alert_types || []);
         for (const t of provider.types) {
+          if (t.soon) continue;
           if (turnOn) cur.add(t.key); else cur.delete(t.key);
         }
         patchPreset(preset.id, { alert_types: Array.from(cur) });
@@ -2768,49 +2846,17 @@ function renderRolesCard(preset) {
 // "no filter" — every alert that passes the mute gate is delivered.
 // ============================================================================
 
-// Per-alert-type severity scales. The dashboard renders one dropdown per
-// severity-aware alert type so users can set independent floors for each.
-const _DASH_SEVERITY_PER_TYPE = {
-  rfs: [
-    { value: 'advice',        label: 'Advice' },
-    { value: 'watch_and_act', label: 'Watch & Act' },
-    { value: 'emergency',     label: 'Emergency' },
-  ],
-  bom_land: [
-    { value: 'minor',    label: 'Minor' },
-    { value: 'moderate', label: 'Moderate' },
-    { value: 'major',    label: 'Major' },
-  ],
-  bom_marine: [
-    { value: 'minor',    label: 'Minor' },
-    { value: 'moderate', label: 'Moderate' },
-    { value: 'major',    label: 'Major' },
-  ],
-  traffic_majorevent: [
-    { value: 'minor',    label: 'Minor' },
-    { value: 'moderate', label: 'Moderate' },
-    { value: 'major',    label: 'Major' },
-  ],
-};
-const _DASH_SEVERITY_TYPE_LABELS = {
-  rfs:                'RFS (bushfires)',
-  bom_land:           'BOM Land (weather)',
-  bom_marine:         'BOM Marine (weather)',
-  traffic_majorevent: 'Traffic (major events)',
-};
-const _DASH_FILTER_SEVERITY_TYPES = new Set(Object.keys(_DASH_SEVERITY_PER_TYPE));
-
-// Canonical alert_types that carry a meaningful sub-type field. Mirrors
-// _DASH_SUBTYPE_AWARE_TYPES on the backend. Only these show subtype-filter
-// rows in the filters card.
-const _DASH_SUBTYPE_AWARE_TYPES = new Set([
-  'rfs',
-  'bom_land', 'bom_marine',
-  'traffic_incident', 'traffic_roadwork', 'traffic_flood',
-  'traffic_fire', 'traffic_majorevent',
-  'waze_hazard', 'waze_jam', 'waze_police', 'waze_roadwork',
-  'user_incident',
-]);
+// Per-alert-type severity scales and sub-type awareness — filled from the
+// fetched catalog by applyAlertCatalog(), never declared here.
+//
+// These were three more hand-written lists naming only the original NSW
+// types. That is why the interstate agencies had no severity floor and no
+// sub-type rows even after the server started accepting both: the server
+// would have taken the filter, but the page never offered the control.
+const _DASH_SEVERITY_PER_TYPE = {};
+const _DASH_SEVERITY_TYPE_LABELS = {};
+const _DASH_FILTER_SEVERITY_TYPES = new Set();
+const _DASH_SUBTYPE_AWARE_TYPES = new Set();
 
 // Lazy-fetched + cached `/api/data/history/filters` providers tree.
 // First call kicks off a request; subsequent calls reuse the same promise.
@@ -3599,8 +3645,11 @@ function renderFiltersCard(preset) {
   const sevSelects = {};   // alert_type -> <select> element
   const sevWrap = el('div', {});
   sevWrap.appendChild(el('label', { class: 'field-label' }, 'Severity floors (per source)'));
+  // Only the severity-aware sources actually in this preset. Every fire
+  // agency has its own floor now, so listing all of them (17 and counting)
+  // would bury the handful that apply behind a wall of greyed-out rows.
   for (const at of Object.keys(_DASH_SEVERITY_PER_TYPE)) {
-    const enabled = presetTypes.has(at);
+    if (!presetTypes.has(at)) continue;
     const sel = el('select', {
       class: 'form-select',
       id: `filters-sev-${at}-${preset.id}`,
@@ -3611,13 +3660,8 @@ function renderFiltersCard(preset) {
       if (f.severity_min[at] === opt.value) o.selected = true;
       sel.appendChild(o);
     }
-    if (!enabled) {
-      sel.disabled = true;
-      sel.style.opacity = '0.55';
-    }
     sevSelects[at] = sel;
-    const labelStyle = 'min-width:160px;font-size:0.8rem;'
-      + (enabled ? '' : 'color:var(--text-soft);');
+    const labelStyle = 'min-width:210px;font-size:0.8rem;';
     const row = el('div', {
       style: 'display:flex;align-items:center;gap:0.5rem;margin-bottom:0.3rem;flex-wrap:wrap;',
     }, [
@@ -3628,8 +3672,10 @@ function renderFiltersCard(preset) {
   }
   sevWrap.appendChild(el('div', { style: 'font-size:0.7rem;color:var(--text-soft);margin-top:0.35rem' },
     hasSeverityType
-      ? 'Each floor is independent — RFS at "Watch & Act" lets advice through for BOM if BOM is set lower.'
-      : 'Add RFS, BOM, or traffic_major to this preset to use severity floors. Greyed-out rows are inactive.'));
+      ? 'One floor per source, each independent — NSW RFS at "Watch & Act" '
+        + 'still lets CFA advice through if CFA is set lower.'
+      : 'No source in this preset reports a severity. Add a fire agency, a BOM '
+        + 'warning feed, or traffic major events to set floors.'));
   body.appendChild(sevWrap);
 
   // ---- Subtype filters (per subscribed subtype-aware alert type) ----
@@ -4329,6 +4375,7 @@ function renderWizardStep3() {
       },
       onSelectAll: (turnOn) => {
         for (const t of provider.types) {
+          if (t.soon) continue;
           if (turnOn) w.types.add(t.key); else w.types.delete(t.key);
         }
         renderWizardBodyOnly();
@@ -5101,11 +5148,8 @@ const botctl = {
   actions: { loading: false, items: [] },
 };
 
-const _BOTCTL_ALERT_TYPES = [
-  { value: 'all', label: 'All alert types' },
-  ..._DASH_ALERT_TYPES.map(t => ({ value: t, label: ALERT_TYPE_LABELS[t] || t })),
-  { value: 'pager', label: 'Pager' },
-];
+// Filled by applyAlertCatalog() once the catalog arrives — see above.
+const _BOTCTL_ALERT_TYPES = [];
 
 async function enqueueBotAction(action, params) {
   try {

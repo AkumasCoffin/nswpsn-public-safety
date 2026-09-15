@@ -19,6 +19,7 @@ import { Hono } from 'hono';
 import type { Pool } from 'pg';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
+import { notifyStaff } from '../services/staffNotify.js';
 import {
   requireRole,
   canFeedMedia,
@@ -404,6 +405,22 @@ fleetRouter.post('/api/wire/fleet', requireRole(canFeedMedia), async (c) => {
        VALUES ($${vals.length + 1}, $${vals.length + 2}, $${vals.length + 3}, ${ph}) RETURNING id`,
       [...vals, authorId, await authorNameFor(pool, authorId, currentUserName(c)), status],
     );
+    if (status === 'pending') {
+      notifyStaff(pool, {
+        kind: 'wire_approval',
+        event: 'new',
+        ref: `fleet:${ins.rows[0]!.id}`,
+        title: v.callsign || 'Fleet vehicle',
+        subtitle: 'Fleet vehicle awaiting approval',
+        fields: [
+          { name: 'Submitted by', value: currentUserName(c) },
+          { name: 'Agency', value: v.agency },
+          { name: 'Type', value: v.vehicle_type },
+          { name: 'Rego', value: v.registration },
+          { name: 'Station', value: v.station },
+        ],
+      });
+    }
     return c.json({ id: ins.rows[0]!.id, success: true, status }, 201);
   } catch (err) {
     log.error({ err }, 'fleet: create failed');
@@ -532,6 +549,15 @@ async function review(c: any, action: 'approve' | 'reject') {
       [id, status, note, currentUserId(c) ?? null, currentUserName(c)],
     );
     if (r.rowCount === 0) return c.json({ error: 'not found or already reviewed' }, 404);
+    notifyStaff(pool, {
+      kind: 'wire_approval',
+      event: 'resolved',
+      ref: `fleet:${id}`,
+      title: 'Fleet vehicle',
+      status: action === 'approve' ? 'approved' : 'rejected',
+      actor: currentUserName(c),
+      fields: [{ name: 'Review note', value: note, inline: false }],
+    });
     return c.json({ success: true, status });
   } catch (err) {
     log.error({ err, id, action }, 'fleet: review failed');

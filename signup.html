@@ -10,7 +10,7 @@
   
   <!-- Open Graph / Facebook -->
   <meta property="og:type" content="website">
-  <meta property="og:url" content="https://nswpsn.forcequit.xyz/signup.html">
+  <meta property="og:url" content="https://nswpsn.forcequit.xyz/signup">
   <meta property="og:title" content="Become a Forcequit Editor">
   <meta property="og:site_name" content="AusAware">
   <meta property="og:description" content="Request editor access to contribute to AusAware - real-time emergency services mapping for Australia.">
@@ -18,7 +18,7 @@
   
   <!-- Twitter -->
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/signup.html">
+  <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/signup">
   <meta name="twitter:title" content="Become a Forcequit Editor">
   <meta name="twitter:description" content="Request editor access to contribute to AusAware - real-time emergency services mapping for Australia.">
   <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/AusAware_filled_background.jpg">
@@ -49,7 +49,7 @@
 
     /* "I want to be a…" role rows: keep the role name on one line and let the
        description take the remaining width (wrapping instead of squeezing the
-       name onto two lines — e.g. "Media Feeder", "Other"). */
+       name onto two lines — e.g. "Wire Contributor", "Other"). */
     label:has(> input[name="request-type"]) { align-items: flex-start !important; }
     input[name="request-type"] { flex-shrink: 0; margin-top: 0.15rem; }
     input[name="request-type"] + span { white-space: nowrap; }
@@ -337,6 +337,19 @@
       }
     }
   </style>
+  <style>
+    /* Custom LGA dropdown — the native <datalist> popup is unstylable (it
+       renders as a giant white list pinned to the screen edge), so suggestions
+       live in our own positioned, filter-as-you-type list under the field. */
+    .lga-combo { position: relative; display: block; }
+    .lga-dd { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 1200;
+      max-height: 230px; overflow-y: auto; background: #0f172a;
+      border: 1px solid var(--border-subtle, #334155); border-radius: 8px;
+      box-shadow: 0 10px 26px rgba(0,0,0,0.5); display: none; }
+    .lga-dd.open { display: block; }
+    .lga-dd .lga-opt { padding: 0.45rem 0.7rem; cursor: pointer; font-size: 0.85rem; color: var(--text-primary, #e2e8f0); }
+    .lga-dd .lga-opt:hover { background: rgba(125,211,252,0.12); }
+  </style>
 </head>
 <body>
   <div class="container">
@@ -350,7 +363,7 @@
     
     <div class="card">
       <div id="form-container">
-        <a href="login.html" style="display: inline-flex; align-items: center; gap: 0.4rem; color: var(--text-soft); text-decoration: none; font-size: 0.85rem; margin-bottom: 1rem; transition: color 0.2s;">
+        <a href="login" style="display: inline-flex; align-items: center; gap: 0.4rem; color: var(--text-soft); text-decoration: none; font-size: 0.85rem; margin-bottom: 1rem; transition: color 0.2s;">
           <i class="fas fa-arrow-left"></i> Back to Login
         </a>
         <div class="card-title">
@@ -446,7 +459,7 @@
               </label>
               <label style="display: flex; align-items: center; gap: 0.6rem; cursor: pointer;">
                 <input type="checkbox" name="request-type" value="media_feeder" onchange="toggleFeederSetup()" style="width: 18px; height: 18px; accent-color: var(--accent);">
-                <span>📸 Media Feeder</span>
+                <span>📸 Wire Contributor</span>
                 <span style="color: #64748b; font-size: 0.8rem;">- Post photos, video &amp; articles to The Wire</span>
               </label>
               <label style="display: flex; align-items: center; gap: 0.6rem; cursor: pointer;">
@@ -572,7 +585,8 @@
 
           <!-- Location: State -> LGA -> Suburb. Stored as one readable
                string (the backend's `region` column is free text), combined
-               at submit time. LGA is a datalist combo rather than a select:
+               at submit time. LGA is a filter-as-you-type combo (lgaCombo) rather
+               than a select:
                a state has 100+ LGAs, and if the suggestion fetch ever fails
                the field still works as plain text instead of bricking
                signup. -->
@@ -596,10 +610,12 @@
             <label class="form-label">
               Local Government Area <span class="required">*</span>
             </label>
-            <input type="text" id="region-lga" class="form-input" list="region-lga-list"
-                   placeholder="Select your state first..." autocomplete="off" disabled
-                   data-manual-disable="1">
-            <datalist id="region-lga-list"></datalist>
+            <span class="lga-combo">
+              <input type="text" id="region-lga" class="form-input"
+                     placeholder="Select your state first..." autocomplete="off" disabled
+                     data-manual-disable="1">
+              <div id="region-lga-dd" class="lga-dd"></div>
+            </span>
           </div>
           <div class="form-group" data-contributor-only>
             <label class="form-label">
@@ -663,7 +679,7 @@
            Your account is ready to sign in with now — editor/feeder features switch on once you're approved.</p>
         <p id="success-confirm-note" style="display:none; color: var(--accent); margin-top:0.5rem;"><i class="fas fa-envelope"></i> One more step: check your email and confirm your address so you can sign in.</p>
         <div style="margin-top: 1.5rem;">
-          <a href="map.html" class="btn" style="background: rgba(255,255,255,0.1); border: 1px solid var(--border-subtle);">
+          <a href="map" class="btn" style="background: rgba(255,255,255,0.1); border: 1px solid var(--border-subtle);">
             <i class="fas fa-map"></i>
             View Live Map
           </a>
@@ -672,10 +688,10 @@
     </div>
     
     <div class="footer-links">
-      <a href="map.html">
+      <a href="map">
         <i class="fas fa-map"></i> Live Map
       </a>
-      <a href="login.html">
+      <a href="login">
         <i class="fas fa-sign-in-alt"></i> Login
       </a>
       <a href="https://discord.forcequit.xyz" target="_blank">
@@ -873,45 +889,75 @@
     // --- Location: State -> LGA suggestions --------------------------------
     // ABS LGA names per state, from the boundaries table. Cached per state;
     // a failed fetch degrades to a free-text LGA field, never a blocked form.
+    // Custom LGA dropdown: renders the suggestions in a styled .lga-dd list
+    // under the field (the native <datalist> popup can't be styled). Picks on
+    // mousedown — it fires BEFORE the input's blur hides the list — and
+    // re-dispatches 'input' so existing listeners stay in sync.
+    function lgaCombo(inputId, ddId, getNames) {
+      const input = document.getElementById(inputId);
+      const dd = document.getElementById(ddId);
+      if (!input || !dd) return;
+      const show = () => {
+        if (input.disabled) return;
+        const q = input.value.trim().toLowerCase();
+        const matches = (getNames() || []).filter(n => n.toLowerCase().includes(q));
+        dd.innerHTML = matches.map(n => {
+          const e = n.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+          return `<div class="lga-opt" data-lga="${e}">${e}</div>`;
+        }).join('');
+        dd.classList.toggle('open', matches.length > 0);
+      };
+      const hide = () => dd.classList.remove('open');
+      input.addEventListener('input', show);
+      input.addEventListener('focus', show);
+      input.addEventListener('blur', hide);
+      dd.addEventListener('mousedown', (e) => {
+        const opt = e.target.closest('.lga-opt');
+        if (!opt) return;
+        e.preventDefault();
+        input.value = opt.getAttribute('data-lga') || '';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        hide();
+      });
+    }
     const _lgaNamesCache = {};
+    let _lgaNames = [];
     async function onRegionStateChange() {
       const state = document.getElementById('region-state').value;
       bgOnStateChange();
       const lga = document.getElementById('region-lga');
-      const list = document.getElementById('region-lga-list');
-      if (!lga || !list) return;
+      if (!lga) return;
       lga.value = '';
+      _lgaNames = [];
       if (!state) {
         lga.disabled = true;
         // Tells syncHiddenFieldValidation this is OUR rule, not stale state.
         lga.dataset.manualDisable = '1';
         lga.placeholder = 'Select your state first...';
-        list.innerHTML = '';
         return;
       }
       lga.disabled = false;
       delete lga.dataset.manualDisable;
       lga.placeholder = 'Start typing your council area...';
       if (_lgaNamesCache[state]) {
-        list.innerHTML = _lgaNamesCache[state];
+        _lgaNames = _lgaNamesCache[state];
         return;
       }
       try {
         const res = await fetch(`${API_BASE_URL}/api/boundaries/lga-names?state=${state}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        const opts = (data.names || [])
-          .map(n => `<option value="${n.replace(/"/g, '&quot;')}">`)
-          .join('');
-        _lgaNamesCache[state] = opts;
+        const names = Array.isArray(data.names) ? data.names : [];
+        _lgaNamesCache[state] = names;
         // The user may have changed state while this was in flight.
-        if (document.getElementById('region-state').value === state) list.innerHTML = opts;
+        if (document.getElementById('region-state').value === state) _lgaNames = names;
       } catch (e) {
         // No suggestions is fine — the field is a plain text input either
         // way, and blocking signup on a lookup would be backwards.
         console.warn('LGA suggestions unavailable:', e.message);
       }
     }
+    lgaCombo('region-lga', 'region-lga-dd', () => _lgaNames);
 
     /** The stored region string: "NSW — Penrith — Emu Plains" (suburb optional). */
     function combinedRegion() {
@@ -959,6 +1005,9 @@
         cb.checked = Array.isArray(b.tech_experience) && b.tech_experience.includes(cb.value);
       });
       if (b.experience_level && typeof setRating === 'function') setRating(parseInt(b.experience_level, 10));
+      // Not a DOM field — restore the module var so a manual re-submit
+      // after a failed post-OAuth auto-submit keeps the attribution.
+      if (b.referral_code) _referralCode = b.referral_code;
     }
 
     // On Discord OAuth return, submit the form the user completed before the
@@ -1101,11 +1150,30 @@
       if (event === 'SIGNED_IN') applySession(session);
     });
 
+    // Referral code from ?ref= — a contributor's personal invite link. Held
+    // in a module var, NOT a DOM field, so restoreSignupForm can't drop it;
+    // the Discord OAuth stash carries it inside the stashed body.
+    let _referralCode = '';
+
     // ?as=user | ?as=contributor — the login page links straight to a path, so
-    // skip the account-type chooser and go to the method step.
+    // skip the account-type chooser and go to the method step. A ?ref link is
+    // by definition a contributor invite, so it implies the contributor path.
     (function applyAccountTypeParam() {
-      const as = new URLSearchParams(location.search).get('as');
+      const p = new URLSearchParams(location.search);
+      const ref = (p.get('ref') || '').trim().toUpperCase();
+      if (/^[A-Z0-9]{4,32}$/.test(ref)) _referralCode = ref;
+      const as = p.get('as');
       if (as === 'user' || as === 'contributor') chooseAccountType(as);
+      else if (_referralCode) chooseAccountType('contributor');
+      if (_referralCode) {
+        const fc = document.getElementById('form-container');
+        if (fc) {
+          const b = document.createElement('div');
+          b.style.cssText = 'background:rgba(34,197,94,0.12); border:1px solid rgba(34,197,94,0.4); border-radius:8px; padding:0.75rem 1rem; margin-bottom:1rem; color:#bbf7d0; font-size:0.9rem;';
+          b.textContent = 'A contributor invited you — fill out this form to apply.';
+          fc.insertBefore(b, fc.firstChild);
+        }
+      }
     })();
 
     // Sent here from the login page's orphan guard (tried to log in without an
@@ -1349,7 +1417,7 @@
         if (suError) {
           const already = /already|registered|exists/i.test(suError.message || '');
           messageEl.innerHTML = already
-            ? 'This email already has an account — <a href="login.html" style="color:var(--accent);">sign in</a> instead.'
+            ? 'This email already has an account — <a href="login" style="color:var(--accent);">sign in</a> instead.'
             : escapeHtmlSignup(suError.message || 'Could not create your account.');
           messageEl.className = 'message error';
           submitBtn.disabled = false;
@@ -1390,7 +1458,7 @@
       if (m) {
         m.innerHTML = needsConfirm
           ? 'Account created. Check your inbox for a confirmation link, then sign in.'
-          : 'Your account is ready. <a href="index.html" style="color:var(--accent);">Start exploring</a>, or apply to contribute any time from your profile.';
+          : 'Your account is ready. <a href="/" style="color:var(--accent);">Start exploring</a>, or apply to contribute any time from your profile.';
       }
     }
 
@@ -1504,6 +1572,7 @@
             setup_details: setupDetails || null,
             tech_experience: techExperienceChecked.length > 0 ? techExperienceChecked : null,
             experience_level: experienceLevel ? parseInt(experienceLevel) : null,
+            referral_code: _referralCode || null,
           }));
         } catch (e) { /* localStorage blocked — OAuth still links the account, user re-submits */ }
         const { error: oauthErr } = await startDiscordOAuth();
@@ -1559,7 +1628,7 @@
           if (suError) {
             const already = /already|registered|exists/i.test(suError.message || '');
             messageEl.innerHTML = already
-              ? 'This email already has an account — <a href="login.html?redirect=/signup.html" style="color:var(--accent);">sign in</a> and then submit your request.'
+              ? 'This email already has an account — <a href="login?redirect=/signup" style="color:var(--accent);">sign in</a> and then submit your request.'
               : escapeHtmlSignup(suError.message || 'Could not create your account.');
             messageEl.className = 'message error';
             submitBtn.disabled = false;
@@ -1603,7 +1672,8 @@
             has_existing_setup: hasSetup,
             setup_details: setupDetails || null,
             tech_experience: techExperienceChecked.length > 0 ? techExperienceChecked : null,
-            experience_level: experienceLevel ? parseInt(experienceLevel) : null
+            experience_level: experienceLevel ? parseInt(experienceLevel) : null,
+            referral_code: _referralCode || null
           })
         });
         

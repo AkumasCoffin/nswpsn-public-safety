@@ -70,6 +70,19 @@
     .coming-soon h1 span { color: var(--accent); }
     .coming-soon p { color: var(--text-muted); }
   </style>
+  <style>
+    /* Custom LGA dropdown — the native <datalist> popup is unstylable (it
+       renders as a giant white list pinned to the screen edge), so suggestions
+       live in our own positioned, filter-as-you-type list under the field. */
+    .lga-combo { position: relative; display: block; }
+    .lga-dd { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 1200;
+      max-height: 230px; overflow-y: auto; background: #0f172a;
+      border: 1px solid var(--border-subtle, #334155); border-radius: 8px;
+      box-shadow: 0 10px 26px rgba(0,0,0,0.5); display: none; }
+    .lga-dd.open { display: block; }
+    .lga-dd .lga-opt { padding: 0.45rem 0.7rem; cursor: pointer; font-size: 0.85rem; color: var(--text-primary, #e2e8f0); }
+    .lga-dd .lga-opt:hover { background: rgba(125,211,252,0.12); }
+  </style>
 </head>
 <body>
 
@@ -87,13 +100,13 @@
     <div class="sidebar-subtitle">Live emergency awareness for Australia — incidents, radio and public safety data.</div>
     <div class="sidebar-section-label">Sections</div>
     <nav class="sidebar-nav">
-      <a href="index.html">Home / Overview</a>
-      <a href="live.html" style="color: #fca5a5;">Live Data / Scanner</a>
-      <a href="map.html">Incident Map</a>
-      <a href="logs.html">Incident Logs</a>
-      <a href="links.html">Useful Links</a>
-      <a href="data-sources.html">Data Sources</a>
-      <a href="about.html">About</a>
+      <a href="/">Home / Overview</a>
+      <a href="live" style="color: #fca5a5;">Live Data / Scanner</a>
+      <a href="map">Incident Map</a>
+      <a href="logs">Incident Logs</a>
+      <a href="links">Useful Links</a>
+      <a href="data-sources">Data Sources</a>
+      <a href="about">About</a>
     </nav>
     <div id="agencies-nav-mount"></div>
     <div class="sidebar-footer">AusAware · Run by Forcequit</div>
@@ -111,7 +124,7 @@
     <div id="gate" class="cmp-gate" style="display:none">
       <p><i class="fa-solid fa-lock" style="font-size:1.6rem;color:var(--text-soft)"></i></p>
       <p id="gateMsg">You need the Media Feeder role to add fleet vehicles.</p>
-      <p><a class="btn" href="signup.html">Request access</a> <a class="btn" href="wire?tab=fleet">Back to the Fleet</a></p>
+      <p><a class="btn" href="signup">Request access</a> <a class="btn" href="wire?tab=fleet">Back to the Fleet</a></p>
     </div>
 
     <form id="form" style="display:none" onsubmit="return false">
@@ -156,8 +169,10 @@
           </div>
           <div class="field">
             <label for="fLga">Local Government Area <span style="color:var(--accent)">*</span></label>
-            <input type="text" id="fLga" list="fLgaList" placeholder="Select the state first…" autocomplete="off" disabled>
-            <datalist id="fLgaList"></datalist>
+            <span class="lga-combo">
+              <input type="text" id="fLga" placeholder="Select the state first…" autocomplete="off" disabled style="width:100%; box-sizing:border-box;">
+              <div id="fLgaDd" class="lga-dd"></div>
+            </span>
           </div>
           <div class="field">
             <label for="fSuburb">Suburb · optional</label>
@@ -259,6 +274,8 @@
           <span class="hint" style="display:block;margin-top:0.2rem">
             Burned into the file itself, so it survives download. Uses the watermark
             image from your profile if you've uploaded one, otherwise your username.
+            Switch it on or off whenever you like &mdash; photos you've already added
+            are re-marked to match.
             The photo is marked as it uploads — set this before choosing the image.
           </span>
         </span>
@@ -333,12 +350,30 @@
         const meta = data.session?.user?.user_metadata || {};
         _meName = (meta.display_name || meta.username || meta.full_name || meta.name
                    || (data.session?.user?.email || '').split('@')[0] || '').trim();
+        // Watermark default: an ACCOUNT setting (profile modal) so it follows
+        // the contributor across devices; localStorage is a cache applied first
+        // so the box doesn't visibly flip once the profile loads.
         try {
           const wm = $('#watermarkToggle');
-          if (wm && localStorage.getItem(WM_KEY) === '1') wm.checked = true;
-          if (wm) wm.addEventListener('change', () => {
-            try { localStorage.setItem(WM_KEY, wm.checked ? '1' : '0'); } catch (e) {}
-          });
+          if (wm) {
+            if (localStorage.getItem(WM_KEY) === '1') wm.checked = true;
+            fetch(`${API_BASE}/api/profiles/${uid}`, { headers: await userHeaders() })
+              .then((r) => (r.ok ? r.json() : null))
+              .then((p) => {
+                if (!p || editId) return; // an edit owns the toggle
+                // GET /api/profiles/:id wraps the row: { profile, stats, tags }.
+                wm.checked = (p.profile || p).watermark_default === true;
+                try { localStorage.setItem(WM_KEY, wm.checked ? '1' : '0'); } catch (e) {}
+              })
+              .catch(() => {});
+            wm.addEventListener('change', () => {
+              try { localStorage.setItem(WM_KEY, wm.checked ? '1' : '0'); } catch (e) {}
+              userHeaders(true).then((h) => fetch(`${API_BASE}/api/profiles/watermark-default`, {
+                method: 'PUT', headers: h, body: JSON.stringify({ enabled: wm.checked }),
+              })).catch(() => {});
+              reapplyWatermark();
+            });
+          }
         } catch (e) { /* storage blocked -- the toggle still works per-post */ }
       } catch (e) { showGate('Could not verify your access. Try again.'); return false; }
       return true;
@@ -435,10 +470,49 @@
       }));
     }
 
+    /**
+     * Re-encode and re-upload photos whose burnt-in watermark no longer matches
+     * the toggle — the mark is painted into the pixels at upload time, so
+     * flipping the switch afterwards used to leave existing photos alone.
+     */
+    let _reapplying = false;
+    async function reapplyWatermark() {
+      if (_reapplying) return;
+      const want = wantsWatermark();
+      const todo = state.images.filter((im) => im.file && !im.uploading && im.marked !== want);
+      if (!todo.length) return;
+      _reapplying = true;
+      todo.forEach((im) => { im.uploading = true; });
+      renderPhoto();
+      setMsg(want ? 'Adding your watermark\u2026' : 'Removing the watermark\u2026');
+      let failed = 0;
+      for (const item of todo) {
+        try {
+          const blob = await optimizeImage(item.file, 1600, 0.82);
+          if (!blob) throw new Error('encode');
+          const r = await fetch(`${API_BASE}/api/wire/upload-url`, { method: 'POST', headers: await userHeaders(true), body: '{}' });
+          if (!r.ok) throw new Error('upload-url ' + r.status);
+          const { uploadURL, key, publicUrl } = await r.json();
+          const up = await fetch(uploadURL, { method: 'PUT', body: blob });
+          if (!up.ok) throw new Error('r2 put ' + up.status);
+          item.key = key; item.marked = want;
+          if (publicUrl) item.url = publicUrl;
+        } catch (e) {
+          failed++; // the photo stays as it is
+        }
+        item.uploading = false;
+        renderPhoto();
+      }
+      _reapplying = false;
+      setMsg(failed ? `${failed} photo${failed === 1 ? '' : 's'} couldn't be updated — remove and re-add ${failed === 1 ? 'it' : 'them'} to change the watermark.` : '', !!failed);
+    }
+
     async function handleFile(file) {
       if (!/^image\//.test(file.type)) return;
       if (state.images.length >= MAX_IMAGES) { setMsg(`Up to ${MAX_IMAGES} photos.`, true); return; }
-      const item = { key: null, url: URL.createObjectURL(file), side: null, uploading: true };
+      // `file` is kept so the watermark toggle can re-encode this photo later;
+      // `marked` is the state it was encoded with.
+      const item = { key: null, file: file, marked: wantsWatermark(), url: URL.createObjectURL(file), side: null, uploading: true };
       state.images.push(item); renderPhoto();
       try {
         const blob = await optimizeImage(file, 1600, 0.82);
@@ -451,6 +525,7 @@
         const up = await fetch(uploadURL, { method: 'PUT', body: blob });
         if (!up.ok) throw new Error('r2 put ' + up.status);
         item.key = key; if (publicUrl) item.url = publicUrl;
+        item.marked = wantsWatermark();
         item.uploading = false;
         setMsg('');
       } catch (e) {
@@ -461,7 +536,39 @@
     }
 
     // ---- state -> agency list + LGA suggestions ----
+    // Custom LGA dropdown: renders the suggestions in a styled .lga-dd list
+    // under the field (the native <datalist> popup can't be styled). Picks on
+    // mousedown — it fires BEFORE the input's blur hides the list — and
+    // re-dispatches 'input' so existing listeners stay in sync.
+    function lgaCombo(inputId, ddId, getNames) {
+      const input = document.getElementById(inputId);
+      const dd = document.getElementById(ddId);
+      if (!input || !dd) return;
+      const show = () => {
+        if (input.disabled) return;
+        const q = input.value.trim().toLowerCase();
+        const matches = (getNames() || []).filter(n => n.toLowerCase().includes(q));
+        dd.innerHTML = matches.map(n => {
+          const e = n.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+          return `<div class="lga-opt" data-lga="${e}">${e}</div>`;
+        }).join('');
+        dd.classList.toggle('open', matches.length > 0);
+      };
+      const hide = () => dd.classList.remove('open');
+      input.addEventListener('input', show);
+      input.addEventListener('focus', show);
+      input.addEventListener('blur', hide);
+      dd.addEventListener('mousedown', (e) => {
+        const opt = e.target.closest('.lga-opt');
+        if (!opt) return;
+        e.preventDefault();
+        input.value = opt.getAttribute('data-lga') || '';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        hide();
+      });
+    }
     const _lgaCache = {};
+    let _lgaNames = [];
     function fillAgencies(st, keep) {
       const sel = $('#fAgency');
       const list = (window.FleetVocab && FleetVocab.departments[st]) || [];
@@ -478,20 +585,22 @@
     async function onStateChange(keepAgency) {
       const st = $('#fState').value;
       fillAgencies(st, keepAgency);
-      const lga = $('#fLga'), list = $('#fLgaList');
+      const lga = $('#fLga');
       if (!keepAgency) lga.value = '';
-      if (!st) { lga.disabled = true; lga.placeholder = 'Select the state first…'; list.innerHTML = ''; return; }
+      _lgaNames = [];
+      if (!st) { lga.disabled = true; lga.placeholder = 'Select the state first…'; return; }
       lga.disabled = false; lga.placeholder = 'Start typing the council area…';
-      if (_lgaCache[st]) { list.innerHTML = _lgaCache[st]; return; }
+      if (_lgaCache[st]) { _lgaNames = _lgaCache[st]; return; }
       try {
         const res = await fetch(`${API_BASE}/api/boundaries/lga-names?state=${st}`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();
-        const opts = (data.names || []).map((n) => `<option value="${esc(n)}">`).join('');
-        _lgaCache[st] = opts;
-        if ($('#fState').value === st) list.innerHTML = opts;
+        const names = Array.isArray(data.names) ? data.names : [];
+        _lgaCache[st] = names;
+        if ($('#fState').value === st) _lgaNames = names;
       } catch (e) { /* suggestions optional; the field stays free text */ }
     }
+    lgaCombo('fLga', 'fLgaDd', () => _lgaNames);
     /** The chosen agency's category shows/hides the fire & ambulance sections. */
     function applyCategory() {
       const cat = window.FleetVocab

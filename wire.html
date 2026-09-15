@@ -396,13 +396,13 @@
     <div class="sidebar-subtitle">Live emergency awareness for Australia — incidents, radio and public safety data.</div>
     <div class="sidebar-section-label">Sections</div>
     <nav class="sidebar-nav">
-      <a href="index.html">Home / Overview</a>
-      <a href="live.html" style="color: #fca5a5;">Live Data / Scanner</a>
-      <a href="map.html">Incident Map</a>
-      <a href="logs.html">Incident Logs</a>
-      <a href="links.html">Useful Links</a>
-      <a href="data-sources.html">Data Sources</a>
-      <a href="about.html">About</a>
+      <a href="/">Home / Overview</a>
+      <a href="live" style="color: #fca5a5;">Live Data / Scanner</a>
+      <a href="map">Incident Map</a>
+      <a href="logs">Incident Logs</a>
+      <a href="links">Useful Links</a>
+      <a href="data-sources">Data Sources</a>
+      <a href="about">About</a>
     </nav>
     <div id="agencies-nav-mount"></div>
     <div class="sidebar-footer">AusAware · Run by Forcequit</div>
@@ -415,7 +415,7 @@
       <p>An independent photo, video &amp; news feed from NSW emergency-services contributors — photographers, videographers and stringers. We're putting the finishing touches on it.</p>
       <div class="cs-tag">Launching soon</div>
       <p class="cs-cta">Shoot for NSW emergency services? Contributors get in before launch.
-        <a href="signup.html">Request contributor access</a>.</p>
+        <a href="signup">Request contributor access</a>.</p>
     </div>
 
     <div class="wire-head">
@@ -516,6 +516,33 @@
     // Full GitHub-flavoured Markdown for article bodies: tables, task lists,
     // strikethrough, autolinks, and single-newline line breaks.
     if (window.marked && marked.setOptions) marked.setOptions({ gfm: true, breaks: true });
+
+    /**
+     * A line of dashes or equals directly under text is a SETEXT HEADING in
+     * Markdown (even a single '-'),
+     * so plain-text posts that use dashes as a section divider silently turned
+     * the whole preceding paragraph into a big bold heading. Authors mean a
+     * divider, so give them one: insert the blank line that makes it an <hr>
+     * (deliberate `#`/`##` headings, bold, lists and spaced-out `---` rules are
+     * all untouched).
+     */
+    function mdDividerFix(src) {
+      const lines = String(src == null ? '' : src).split('\n');
+      const out = [];
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].replace(/\r$/, '');
+        // A setext underline is ANY run of - or = (a single '-' counts), so a
+        // one-dash divider silently made a heading too. Normalise every such
+        // line to a real rule, blank-separated, which is what was meant.
+        if (i > 0 && lines[i - 1].trim() !== '' && /^[ \t]{0,3}[-=]+[ \t]*$/.test(line)) {
+          out.push('', '---', '');
+          continue;
+        }
+        out.push(line);
+      }
+      return out.join('\n');
+    }
+
     let API_KEY = null;
     let ME = { userId: null, canFeed: false, canModerate: false, isOwner: false };
     // ONE article feed since the media/article merge; ?tab=fleet switches
@@ -1100,7 +1127,7 @@
       // gallery panel (3:2, contained) on the left, the info rail on the right.
       // Articles render their Markdown body under the gallery.
       const left = isArticle
-        ? `${galleryMedia.length ? galleryPane() : ''}<div class="wd-article">${DOMPurify.sanitize(marked.parse(item.body || ''))}</div>`
+        ? `${galleryMedia.length ? galleryPane() : ''}<div class="wd-article">${DOMPurify.sanitize(marked.parse(mdDividerFix(item.body)))}</div>`
         : `${galleryPane()}<p class="wd-caption">${esc(item.caption || '')}</p>`;
       $('#detail').innerHTML = `${back}${eyebrow}${draftBanner}
         <div class="wd-grid${isArticle ? ' wd-grid-article' : ''}">
@@ -1199,7 +1226,7 @@
       const box = $('#commentComposer'); if (!box) return;
       if (!ME.userId) {
         box.innerHTML = `<div class="wd-comment-note">
-          <a href="login.html" class="wire-author">Sign in</a> to join the conversation.</div>`;
+          <a href="login" class="wire-author">Sign in</a> to join the conversation.</div>`;
         return;
       }
       const r = commentState.restriction;

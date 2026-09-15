@@ -28,7 +28,7 @@
 
   function renderAgency(a) {
     const safeName = escapeHtml(a.name);
-    const href = `agency.html?slug=${encodeURIComponent(a.slug)}`;
+    const href = `agency?slug=${encodeURIComponent(a.slug)}`;
     const icon = a.icon ? `<i class="agency-item-icon ${escapeHtml(a.icon)}" aria-hidden="true"></i>` : "";
     return `<a class="agency-item-link" href="${href}" data-slug="${escapeHtml(a.slug)}">${icon}<span class="agency-item-name">${safeName}</span></a>`;
   }
@@ -68,7 +68,7 @@
     }
 
     // Clean URLs strip the extension, so the path may be "agency" or "agency.html".
-    if ((path === "agency.html" || path === "agency") && slug) activate(slug);
+    if ((path === "agency" || path === "agency.html") && slug) activate(slug);
   }
 
   // ---------- search index ----------
@@ -223,13 +223,13 @@
     for (const [slug, g] of groups) {
       const icon = g.icon ? `<i class="agency-search-group-icon ${escapeHtml(g.icon)}" aria-hidden="true"></i>` : "";
       html.push(`<div class="agency-search-group">
-        <a class="agency-search-group-header" href="agency.html?slug=${encodeURIComponent(slug)}">
+        <a class="agency-search-group-header" href="agency?slug=${encodeURIComponent(slug)}">
           ${icon}<span>${escapeHtml(g.name)}</span>
         </a>`);
       for (const it of g.items) {
         const params = new URLSearchParams({ slug });
         if (it.q) params.set("q", it.q);
-        const href = `agency.html?${params.toString()}`;
+        const href = `agency?${params.toString()}`;
         const primary = highlightMatch(it.primary || "", query);
         const secondary = it.secondary ? highlightMatch(it.secondary, query) : "";
         html.push(`<a class="agency-search-item" href="${href}">

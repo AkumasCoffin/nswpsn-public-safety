@@ -72,6 +72,37 @@ describe('pager.parsePagerIncidentId (FRNSW)', () => {
   });
 });
 
+describe('pager.stripLeadingPagerDate', () => {
+  const DATED =
+    '08 September 2026 14:31:37 CVDO - 26-126950 - Bush Fire - FIRECALL - ARMIDALE RD,BLAXLANDS CREEK RD,BLAXLANDS CREEK,CLARENCE VALLEY (NSW),2460 - [152.785315,-29.911881]';
+
+  it('strips a full leading dispatch date (new CAD lines)', async () => {
+    const { stripLeadingPagerDate } = await import('../../../src/sources/pager.js');
+    expect(stripLeadingPagerDate(DATED)).toBe(
+      'CVDO - 26-126950 - Bush Fire - FIRECALL - ARMIDALE RD,BLAXLANDS CREEK RD,BLAXLANDS CREEK,CLARENCE VALLEY (NSW),2460 - [152.785315,-29.911881]',
+    );
+  });
+
+  it('strips a bare HH:MM:SS prefix and leaves undated bodies alone', async () => {
+    const { stripLeadingPagerDate } = await import('../../../src/sources/pager.js');
+    expect(stripLeadingPagerDate('14:31:37 CVDO - 26-126950 - Bush Fire')).toBe('CVDO - 26-126950 - Bush Fire');
+    expect(stripLeadingPagerDate('CVDO - 26-126950 - Bush Fire')).toBe('CVDO - 26-126950 - Bush Fire');
+    // A body that opens with a street number must not lose it.
+    expect(stripLeadingPagerDate('6 LARKINS LANE,YALLAH')).toBe('6 LARKINS LANE,YALLAH');
+  });
+
+  it('date-prefixed lines still parse type/address/coords/id', async () => {
+    const { parsePagerType, parsePagerAddress, parsePagerCoords, parsePagerIncidentId } =
+      await import('../../../src/sources/pager.js');
+    expect(parsePagerType(DATED)).toEqual({ type: 'Bush Fire', callClass: 'FIRECALL' });
+    expect(parsePagerAddress(DATED)).toBe(
+      'ARMIDALE RD,BLAXLANDS CREEK RD,BLAXLANDS CREEK,CLARENCE VALLEY (NSW),2460',
+    );
+    expect(parsePagerCoords(DATED)).toEqual([-29.911881, 152.785315]);
+    expect(parsePagerIncidentId(DATED)).toBe('26-126950');
+  });
+});
+
 describe('pager.parsePagerType', () => {
   it('parses type + call class from a standard RFS detail line', async () => {
     const { parsePagerType } = await import('../../../src/sources/pager.js');

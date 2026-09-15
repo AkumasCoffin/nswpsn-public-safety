@@ -13,14 +13,14 @@
   <meta name="author" content="Forcequit">
 
   <meta property="og:type" content="website">
-  <meta property="og:url" content="https://nswpsn.forcequit.xyz/map.html">
+  <meta property="og:url" content="https://nswpsn.forcequit.xyz/map">
   <meta property="og:title" content="AusAware – Live Incident Map">
   <meta property="og:description" content="Interactive live map showing RFS fires, traffic incidents, power outages, pager hits, and more across NSW.">
   <meta property="og:image" content="https://nswpsn.forcequit.xyz/assets/AusAware_filled_background.jpg">
   <meta property="og:site_name" content="AusAware">
 
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/map.html">
+  <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/map">
   <meta name="twitter:title" content="AusAware – Live Incident Map">
   <meta name="twitter:description" content="Interactive live map showing RFS fires, traffic incidents, power outages, pager hits, and more across NSW.">
   <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/AusAware_filled_background.jpg">
@@ -33,6 +33,7 @@
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="livetraffic-vocab.js?v=1"></script>
   <script src="fire-vocab.js?v=3"></script>
+  <script src="fleet-vocab.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js" integrity="sha384-948ahk4ZmxYVYOc+rxN1H2gM1EJ2Duhp7uHtZ4WSLkV4Vtx5MUqnV+l7u9B+jFv+" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
 
@@ -2629,29 +2630,24 @@
     <div class="sidebar-subtitle">Live emergency awareness for Australia — incidents, radio and public safety data.</div>
     <div class="sidebar-section-label">Sections</div>
     <nav class="sidebar-nav">
-      <a href="index.html">Home / Overview</a>
-      <a href="live.html" style="color: #fca5a5;">Live Data / Scanner</a>
-      <a class="active" href="map.html" style="color: #fca5a5;">Incident Map</a>
-      <a href="logs.html">Incident Logs</a>
-      <a href="links.html">Useful Links</a>
-      <a href="data-sources.html">Data Sources</a>
-      <a href="about.html">About</a>
+      <a href="/">Home / Overview</a>
+      <a href="live" style="color: #fca5a5;">Live Data / Scanner</a>
+      <a class="active" href="map" style="color: #fca5a5;">Incident Map</a>
+      <a href="logs">Incident Logs</a>
+      <a href="links">Useful Links</a>
+      <a href="data-sources">Data Sources</a>
+      <a href="about">About</a>
     </nav>
     <div id="agencies-nav-mount"></div>
     <div class="sidebar-section-label" id="sidebar-map-filters-label" style="display:none;">Map Layers &amp; Filters</div>
     <div id="sidebar-map-filters-slot" class="sidebar-map-filters" style="display:none;"></div>
-    <div class="sidebar-section-label">Live Scanner</div>
+    <div class="sidebar-section-label">Listen Live</div>
     <div class="sidebar-highlight">
-      <div class="sidebar-highlight-title">NSW PSN Scanner</div>
-      <div>Hosted by Forcequit</div>
+      <div class="sidebar-highlight-title">Direct Feeds</div>
+      <div>Radio &amp; pager scanners hosted by Forcequit</div>
       <div style="margin-top:0.45rem;">
-        <a class="listen-btn-wide" href="https://radio.forcequit.xyz/" target="_blank" rel="noopener noreferrer">
-          Radio Feed
-        </a>
-      </div>
-      <div style="margin-top:0.45rem;">
-        <a class="listen-btn-wide" href="https://pager.forcequit.xyz/" target="_blank" rel="noopener noreferrer">
-          Pager Feed
+        <a class="listen-btn-wide" href="feeds">
+          Direct Feeds
         </a>
       </div>
     </div>
@@ -2661,7 +2657,7 @@
       </a>
     </div>
     <div style="margin-top:0.3rem;">
-      <a class="discord-btn-wide" href="dashboard.html" target="_blank" rel="noopener noreferrer">
+      <a class="discord-btn-wide" href="dashboard" target="_blank" rel="noopener noreferrer">
         Discord Bot
       </a>
     </div>
@@ -4719,6 +4715,20 @@
     let pagerHours = 12; // Pager hits lookback window in hours (controlled by slider)
     const PAGER_HOURS_STORAGE_KEY = 'pager_hours_window';
     const AGENCY_COLORS = { 'RFS': '#ff6600', 'FRNSW': '#ef4444', 'NSWAS': '#3b82f6', 'SES': '#eab308', 'POLICE': '#3b82f6', 'VRA': '#000000', 'AVIATION': '#a855f7' };
+    // User incidents now carry full Aus-wide agency names (fleet-vocab):
+    // exact legacy codes first, then keyword rules.
+    function _userAgencyColor(a) {
+      const u = String(a || '').toUpperCase();
+      if (AGENCY_COLORS[u]) return AGENCY_COLORS[u];
+      if (/\bRFS\b|RURAL FIRE|COUNTRY FIRE/.test(u)) return '#ff6600';
+      if (u.includes('POLICE')) return '#3b82f6';
+      if (/\bSES\b|STATE EMERGENCY SERVICE/.test(u)) return '#eab308';
+      if (/AMBULANCE|ST JOHN|SOUTHCARE/.test(u)) return '#3b82f6';
+      if (u.includes('FIRE')) return '#ef4444';
+      if (u.includes('VRA')) return '#000000';
+      if (/MARINE|SURF/.test(u)) return '#0ea5e9';
+      return null;
+    }
     const TYPE_COLORS = { 'FIRE': '#ef4444', 'RESCUE': '#ff6600', 'HAZARD': '#eab308', 'POLICE': '#3b82f6', 'MEDICAL': '#3b82f6', 'DEFAULT': '#000000' };
 
     function generateRfsId(url) {
@@ -5102,6 +5112,31 @@
         locationStr,
         messageNoCoords
       };
+    }
+
+    /**
+     * A line of dashes or equals directly under text is a SETEXT HEADING in
+     * Markdown (even a single '-'),
+     * so an update typed with dashes as a section divider silently turned the
+     * whole preceding paragraph into a big bold heading. Authors mean a
+     * divider, so give them one: insert the blank line that makes it an <hr>.
+     * Deliberate `#` headings, bold, lists and spaced-out `---` are untouched.
+     */
+    function mdDividerFix(src) {
+      const lines = String(src == null ? '' : src).split('\n');
+      const out = [];
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].replace(/\r$/, '');
+        // A setext underline is ANY run of - or = (a single '-' counts), so a
+        // one-dash divider silently made a heading too. Normalise every such
+        // line to a real rule, blank-separated, which is what was meant.
+        if (i > 0 && lines[i - 1].trim() !== '' && /^[ \t]{0,3}[-=]+[ \t]*$/.test(line)) {
+          out.push('', '---', '');
+          continue;
+        }
+        out.push(line);
+      }
+      return out.join('\n');
     }
 
     function escapeHtml(str) {
@@ -7912,7 +7947,7 @@ function initPagerHoursFromStorage() {
               updatesHtml = `<div class="update-timeline">` + updates.map(u => `
                 <div class="update-item">
                   <div class="update-time">${new Date(u.created_at).toLocaleString()}${u.created_by_name ? ` · ${escapeHtml(u.created_by_name)}` : ""}</div>
-                  <div class="update-msg markdown-body">${DOMPurify.sanitize(marked.parse(u.message))}</div>
+                  <div class="update-msg markdown-body">${DOMPurify.sanitize(marked.parse(mdDividerFix(u.message)))}</div>
                 </div>`).join('') + `</div>`;
             } else {
               updatesHtml = '<div style="font-size:0.85rem; color:var(--text-soft); margin-top:1rem; font-style:italic;">No user updates yet.</div>';
@@ -7930,6 +7965,10 @@ function initPagerHoursFromStorage() {
       const status = data.status || 'Unknown';
       const size = data.size || '-';
       const location = data.location || data.LOCATION || 'Unknown location';
+      // Resolved by the backend from the pin coordinates (or from the
+      // suburb pick) — absent on incidents created before the columns.
+      const areaBits = [data.suburb, data.lga, data.state].filter(Boolean).join(' \u00b7 ');
+      const areaLine = areaBits ? `<strong>Area:</strong> ${escapeHtml(areaBits)}<br>` : '';
 
       const agencyBadges = agencies.length
         ? agencies.map(getAgencyClass).map((cls, idx) => {
@@ -7945,7 +7984,7 @@ function initPagerHoursFromStorage() {
         <h2 style="margin:0 0 0.5rem 0; font-size:1.6rem; color:#fff;">${escapeHtml(data.title || 'User incident')}</h2>
         <div style="background:rgba(255,255,255,0.05); padding:1rem; border-radius:0.5rem; margin-bottom:1rem; font-size:0.9rem; line-height:1.6; color:#cbd5e1;">
           <strong>Location:</strong> ${escapeHtml(location)}<br>
-          <strong>Status:</strong> ${escapeHtml(status)}<br>
+          ${areaLine}<strong>Status:</strong> ${escapeHtml(status)}<br>
           <strong>Type:</strong> ${escapeHtml(typeRaw)}<br>
           <strong>Size:</strong> ${escapeHtml(size)}
           ${(Array.isArray(data.units) && data.units.length)
@@ -7998,7 +8037,7 @@ function initPagerHoursFromStorage() {
             updatesHtml = `<div class="update-timeline">` + updates.map(u => `
               <div class="update-item">
                 <div class="update-time">${new Date(u.created_at).toLocaleString()}${u.created_by_name ? ` · ${escapeHtml(u.created_by_name)}` : ""}</div>
-                <div class="update-msg markdown-body">${DOMPurify.sanitize(marked.parse(u.message))}</div>
+                <div class="update-msg markdown-body">${DOMPurify.sanitize(marked.parse(mdDividerFix(u.message)))}</div>
               </div>`).join('') + `</div>`;
           } else {
             updatesHtml = '<div style="font-size:0.85rem; color:var(--text-soft); margin-top:1rem; font-style:italic;">No user updates yet.</div>';
@@ -8106,13 +8145,14 @@ function initPagerHoursFromStorage() {
     }
 
     function getAgencyClass(agency) {
-      const a = agency.toUpperCase();
-      if (a.includes('RFS')) return 'pill pill-agency-rfs';
+      const a = String(agency || '').toUpperCase();
+      if (/\bRFS\b|RURAL FIRE|COUNTRY FIRE/.test(a)) return 'pill pill-agency-rfs';
       if (a.includes('FRNSW')) return 'pill pill-agency-frnsw';
-      if (a.includes('NSWAS')) return 'pill pill-agency-amb';
-      if (a.includes('SES')) return 'pill pill-agency-ses';
       if (a.includes('POLICE')) return 'pill pill-blue';
+      if (/\bSES\b|STATE EMERGENCY SERVICE/.test(a)) return 'pill pill-agency-ses';
+      if (/NSWAS|AMBULANCE|ST JOHN|SOUTHCARE/.test(a)) return 'pill pill-agency-amb';
       if (a.includes('VRA')) return 'pill pill-white';
+      if (a.includes('FIRE')) return 'pill pill-agency-frnsw';
       return 'pill pill-agency-util';
     }
 
@@ -8120,7 +8160,7 @@ function initPagerHoursFromStorage() {
       let colors = [];
       if (inc.responding_agencies && inc.responding_agencies.length > 0) {
         inc.responding_agencies.forEach(a => {
-          const c = AGENCY_COLORS[a.toUpperCase()];
+          const c = _userAgencyColor(a);
           if (c) colors.push(c);
         });
       }
@@ -17978,6 +18018,19 @@ function initPagerHoursFromStorage() {
       const cfg = _boundaryCfg[kind];
       // Upstream shouts some locality and LGA names; states come cased.
       const name = raw === raw.toUpperCase() ? _titleCaseName(raw) : raw;
+      // Editor suburb-level placement: hand the pick to the editor module
+      // and skip the popup. The centre of the shape stands in for the
+      // unknown exact spot.
+      if (kind === 'locality' && window.__editorActive && window.NSWPSNEditorHooks
+          && typeof NSWPSNEditorHooks.suburbPickArmed === 'function' && NSWPSNEditorHooks.suburbPickArmed()
+          && typeof NSWPSNEditorHooks.pickSuburb === 'function') {
+        _suppressBoundaryClear = true;
+        setTimeout(() => { _suppressBoundaryClear = false; }, 0);
+        let center = e.latlng;
+        try { if (lyr && lyr.getBounds) center = lyr.getBounds().getCenter(); } catch (_) { /* click point then */ }
+        NSWPSNEditorHooks.pickSuburb({ name, state: props.state || '' }, center);
+        return;
+      }
       const sub = props.state && kind !== 'state' ? cfg.subtitle + ' · ' + props.state : cfg.subtitle;
       _clearBoundaryHi();
       try { lyr.setStyle(cfg.highlight); } catch (_) { /* ignore */ }
@@ -18116,6 +18169,9 @@ function initPagerHoursFromStorage() {
         if (opt) opt.classList.remove('loading');
       }
     }
+
+    /** The boundary kind currently switched on (editor suburb-pick reads this). */
+    function getActiveBoundary() { return _boundaryActive; }
 
     function onBoundaryKey(ev, kind) {
       if (ev.key === 'Enter' || ev.key === ' ' || ev.key === 'Spacebar') {
@@ -18391,6 +18447,6 @@ function initPagerHoursFromStorage() {
   <script src="ui-dialogs.js"></script>
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
-  <script src="map-editor-module.js?v=40"></script>
+  <script src="map-editor-module.js?v=43"></script>
 </body>
 </html>

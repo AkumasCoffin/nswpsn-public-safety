@@ -10,7 +10,7 @@
   
   <!-- Open Graph / Facebook -->
   <meta property="og:type" content="website">
-  <meta property="og:url" content="https://nswpsn.forcequit.xyz/login.html">
+  <meta property="og:url" content="https://nswpsn.forcequit.xyz/login">
   <meta property="og:title" content="Login – AusAware">
   <meta property="og:site_name" content="AusAware">
   <meta property="og:description" content="Sign in to your AusAware account.">
@@ -18,7 +18,7 @@
   
   <!-- Twitter -->
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/login.html">
+  <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/login">
   <meta name="twitter:title" content="Login – AusAware">
   <meta name="twitter:description" content="Sign in to your AusAware account.">
   <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/AusAware_filled_background.jpg">
@@ -448,11 +448,11 @@
           <p class="divider-text">Don't have an account?</p>
           <!-- Two paths, matching signup.html: a plain account (instant, no
                roles) vs a contributor application (reviewed). -->
-          <a href="signup.html?as=user" class="btn btn-outline" data-umami-event="signup-user-click">
+          <a href="signup?as=user" class="btn btn-outline" data-umami-event="signup-user-click">
             <i class="fas fa-user-plus"></i>
             Sign up
           </a>
-          <a href="signup.html?as=contributor" class="btn btn-outline" style="margin-top:0.6rem;" data-umami-event="signup-contributor-click">
+          <a href="signup?as=contributor" class="btn btn-outline" style="margin-top:0.6rem;" data-umami-event="signup-contributor-click">
             <i class="fas fa-user-tag"></i>
             Contributor sign up
           </a>
@@ -516,13 +516,13 @@
     </div>
     
     <div class="footer-links">
-      <a href="map.html">
+      <a href="map">
         <i class="fas fa-map"></i> Live Map
       </a>
       <a href="https://discord.forcequit.xyz" target="_blank">
         <i class="fab fa-discord"></i> Discord
       </a>
-      <a href="privacy.html">
+      <a href="privacy">
         <i class="fas fa-shield-alt"></i> Privacy
       </a>
     </div>
@@ -539,7 +539,7 @@
         There's no access request on this account yet. Please sign up to request
         access — that's what puts you in the approval queue.
       </p>
-      <a href="signup.html" class="btn" style="margin-bottom: 0.75rem;">
+      <a href="signup" class="btn" style="margin-bottom: 0.75rem;">
         <i class="fas fa-user-plus"></i>
         Go to sign up
       </a>
@@ -599,20 +599,20 @@
     async function roleLandingPage(userId) {
       try {
         const r = await fetch(`${API_BASE_URL}/api/check-editor/${userId}`);
-        if (!r.ok) return 'map.html';
+        if (!r.ok) return 'map';
         const d = await r.json();
-        if (d.has_access) return 'map.html';
-        if (d.is_team_member) return 'staff.html';
+        if (d.has_access) return 'map';
+        if (d.is_team_member) return 'staff';
         // No roles at all → a new/incomplete signup (e.g. someone who used
         // "Continue with Discord" without an existing account). Send them to the
         // signup form to finish — a request is only created when they submit it,
         // so this is the only way they end up in the approval queue.
         // 'authed' is the base role EVERY account carries — it doesn't mean the
         // signup completed, so exclude it when asking "has no roles".
-        if (Array.isArray(d.roles) && d.roles.filter(r => r !== 'authed').length === 0) return 'signup.html';
-        return 'map.html';
+        if (Array.isArray(d.roles) && d.roles.filter(r => r !== 'authed').length === 0) return 'signup';
+        return 'map';
       } catch (e) {
-        return 'map.html';
+        return 'map';
       }
     }
 
@@ -675,7 +675,7 @@
             // keep the original behaviour — sign out and send them to finish
             // signing up.
             try { await sb.auth.signOut(); } catch (e) { /* ignore */ }
-            window.location.href = 'signup.html?welcome=1';
+            window.location.href = 'signup?welcome=1';
             return;
           }
         }
@@ -802,7 +802,7 @@
         
         // Check if user needs to change password on first login
         if (data?.user?.user_metadata?.force_password_change) {
-          window.location.href = 'change-password.html';
+          window.location.href = 'change-password';
           return;
         }
         
@@ -844,7 +844,7 @@
       try {
         const { error } = await withTimeout(
           sb.auth.resetPasswordForEmail(email, {
-            redirectTo: window.location.origin + '/reset-password.html'
+            redirectTo: window.location.origin + '/reset-password'
           }),
           AUTH_TIMEOUT_MS,
           AUTH_TIMEOUT_MSG,
