@@ -1963,9 +1963,9 @@ class EmbedBuilder:
 
     # ---- Essential Energy --------------------------------------
     def build_essential_container(self, data: Dict[str, Any],
-                                  alert_type: str = 'essential_planned'):
+                                  alert_type: str = 'essential_unplanned'):
         """Components V2 container for Essential Energy outages
-        (planned + future). Best-effort field reads — Essential's API
+        (unplanned + future). Best-effort field reads — Essential's API
         contract isn't pinned yet; we accept several common spellings and
         gracefully omit anything missing."""
         suburb = (data.get('suburb') or data.get('Suburb')
@@ -1984,12 +1984,16 @@ class EmbedBuilder:
                        or data.get('EstRestoration')
                        or data.get('expectedRestore') or '')
 
-        is_future = alert_type == 'essential_future'
-        title_prefix = "📅" if is_future else "🔧"
-        type_text = 'Future' if is_future else 'Planned'
+        if alert_type == 'essential_future':
+            title_prefix, type_text = "📅", 'Future'
+        elif alert_type == 'essential_unplanned':
+            title_prefix, type_text = "⚡", 'Unplanned'
+        else:
+            # Retired essential_planned key from an unmigrated preset.
+            title_prefix, type_text = "🔧", 'Planned'
 
         container = discord.ui.Container(
-            accent_colour=self.COLORS.get(alert_type, self.COLORS['essential_planned'])
+            accent_colour=self.COLORS.get(alert_type, 0x06B6D4)
         )
         container.add_item(discord.ui.TextDisplay(
             content=f"### {title_prefix} {type_text} Outage — {suburb}"

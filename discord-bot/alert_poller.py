@@ -31,7 +31,7 @@ class AlertPoller:
         #     into bom_land / bom_marine by category at extraction time).
         #   - 'endeavour_planned' uses /api/endeavour/planned (current outages
         #     come back as 'endeavour_current').
-        #   - 'essential_planned'/'essential_future' point at the Essential
+        #   - 'essential_unplanned'/'essential_future' point at the Essential
         #     Energy backend endpoints.
         #   - 'cfa'/'deeca' share /api/vic-emergency/events — one feed
         #     carries every Victorian publisher; _extract_items splits on

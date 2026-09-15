@@ -106,16 +106,30 @@ describe('canonical folding', () => {
   it('resolves an alias to the real definition', () => {
     expect(alertTypeDef('qld_warning')?.key).toBe('qfd_warning');
   });
+
+  it('folds the retired essential_planned into essential_future', () => {
+    // The two overlapped almost 1:1 on the wire (planned work spans both
+    // feeds; the future feed is all planned), so a guild on both got every
+    // outage twice. One type remains; the old key keeps saving and alerting.
+    expect(canonicalAlertType('essential_planned')).toBe('essential_future');
+    expect(ALERT_TYPES).not.toContain('essential_planned');
+  });
 });
 
 describe('severity scales', () => {
-  it('every scale maps only onto its own options', () => {
+  it('every scale maps onto its own options or the __below__ sentinel', () => {
+    // __below__ ranks a raw value UNDER the whole scale: it is never a
+    // selectable floor (not an option), and a record mapped to it fails any
+    // configured floor — e.g. RFS "Not Applicable".
     for (const [name, scale] of Object.entries(catalog.severityScales)) {
       const values = new Set(scale.options.map((o) => o.value));
+      values.add('__below__');
       for (const [raw, token] of Object.entries(scale.map)) {
         expect(values, `${name}.map[${raw}] -> ${token}`).toContain(token);
       }
       expect(raw_is_lowercased(scale.map)).toBe(true);
+      // ...and the sentinel must never leak into the floor dropdowns.
+      expect(scale.options.map((o) => o.value)).not.toContain('__below__');
     }
   });
 
@@ -134,9 +148,16 @@ describe('severity scales', () => {
   });
 
   it('does not offer a floor for types with no severity', () => {
-    for (const k of ['ausgrid', 'endeavour_current', 'user_incident', 'wire_article']) {
+    // traffic_majorevent is here deliberately: its old scale named
+    // properties.severity, a field that exists on neither the parsed
+    // snapshot nor the raw upstream — the floor never filtered anything.
+    for (const k of ['ausgrid', 'endeavour_current', 'user_incident', 'wire_article', 'traffic_majorevent']) {
       expect(alertTypeDef(k)?.severityScale, k).toBeNull();
     }
+  });
+
+  it('ranks RFS "Not Applicable" below any floor', () => {
+    expect(catalog.severityScales.fire?.map['not applicable']).toBe('__below__');
   });
 
   it('no retired waze key is still marked sub-type aware', () => {

@@ -67,6 +67,11 @@ RENAMES = {
     # so an unmigrated row keeps working — this just tidies the stored data.
     'qld_warning':       ['qfd_warning'],
     'wa_warning':        ['dfes_warning'],
+    # essential_planned duplicated essential_future almost 1:1 on the wire
+    # (planned work spans both feeds; the future feed is all planned), so a
+    # guild on both got every outage twice. Folded into essential_future,
+    # which also carries the alias so unmigrated rows keep alerting.
+    'essential_planned': ['essential_future'],
 }
 
 

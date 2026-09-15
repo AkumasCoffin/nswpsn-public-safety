@@ -124,7 +124,6 @@ _Generated from `shared/alert-catalog.json` by `gen_readme_alert_types.py` — d
 | Endeavour Energy | `endeavour_planned` | Endeavour Energy | Endeavour Planned Outages |
 | Ausgrid | `ausgrid` | Ausgrid | Ausgrid Outages |
 | Essential Energy | `essential_unplanned` | Essential Energy | Essential Energy Unplanned Outages |
-| Essential Energy | `essential_planned` | Essential Energy | Essential Energy Planned Outages |
 | Essential Energy | `essential_future` | Essential Energy | Essential Energy Future Outages |
 | User Submissions | `user_incident` | User Submissions | User Incidents |
 | Radio Scanner | `radio_summary` | Radio Scanner | Radio Summary |

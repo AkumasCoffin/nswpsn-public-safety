@@ -36,7 +36,8 @@
         "watch and act": "watch_and_act",
         "watch_and_act": "watch_and_act",
         "emergency warning": "emergency",
-        "emergency": "emergency"
+        "emergency": "emergency",
+        "not applicable": "__below__"
       }
     },
     "bom": {
@@ -308,17 +309,11 @@
       "color": "#22d3ee", "icon": "⚡", "severityScale": null, "subtypeAware": false
     },
     {
-      "key": "essential_planned", "provider": "essential", "label": "Planned Outages", "botLabel": "Essential Energy Planned Outages",
-      "agency": "ESSENTIAL", "agencyLabel": "Essential Energy",
-      "feedShape": "essential",
-      "archiveSource": "essential_current", "endpoint": "/api/essential/planned", "itemsPath": "outages",
-      "color": "#06b6d4", "icon": "🔧", "severityScale": null, "subtypeAware": false
-    },
-    {
       "key": "essential_future", "provider": "essential", "label": "Future Outages", "botLabel": "Essential Energy Future Outages",
       "agency": "ESSENTIAL", "agencyLabel": "Essential Energy",
       "feedShape": "essential",
       "archiveSource": "essential_future", "endpoint": "/api/essential/future", "itemsPath": "outages",
+      "aliases": ["essential_planned"],
       "color": "#0891b2", "icon": "📅", "severityScale": null, "subtypeAware": false
     },
 

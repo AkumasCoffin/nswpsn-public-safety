@@ -402,6 +402,11 @@ def alert_passes_severity(alert_type: str, alert_data: dict, severity_min) -> bo
     if floor not in scale:
         return True  # unknown floor for this scale — don't filter
     actual = _alert_severity_token(alert_type, alert_data)
+    if actual == '__below__':
+        # The catalog maps this raw value BELOW the whole scale (e.g. RFS
+        # "Not Applicable") — any configured floor filters it out. Distinct
+        # from None: absent severity passes, sub-scale severity does not.
+        return False
     if actual is None or actual not in scale:
         return True  # alert has no severity field — don't filter
     return scale.index(actual) >= scale.index(floor)
