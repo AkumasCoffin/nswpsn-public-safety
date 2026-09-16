@@ -168,7 +168,13 @@ function iso(ms: number): string {
  *    recorded before the restart.
  *  - Identity fields only improve — COALESCE(new, old), never the reverse, or
  *    a record that momentarily forgot a callsign would erase it.
- *  - `sources` unions, so an hour heard by two receivers lists both.
+ *  - `sources` unions, so an hour heard by two receivers lists both. Written
+ *    with containment operators rather than ARRAY(SELECT DISTINCT unnest(...)):
+ *    plain operators, no subquery inside ON CONFLICT, and it converges — the
+ *    concat branch can fire at most once, because the next flush's incoming
+ *    set is then a subset of what was stored and the first branch keeps it.
+ *    The reader de-duplicates, so the single concat cannot show a source
+ *    twice.
  */
 export async function flushAdsbTracks(
   tracks: ReadonlyArray<ArchivableTrack>,
@@ -222,7 +228,11 @@ export async function flushAdsbTracks(
            reg        = COALESCE(EXCLUDED.reg, adsb_tracks.reg),
            type       = COALESCE(EXCLUDED.type, adsb_tracks.type),
            es_tag     = COALESCE(EXCLUDED.es_tag, adsb_tracks.es_tag),
-           sources    = ARRAY(SELECT DISTINCT unnest(adsb_tracks.sources || EXCLUDED.sources))`,
+           sources    = CASE
+             WHEN EXCLUDED.sources <@ adsb_tracks.sources THEN adsb_tracks.sources
+             WHEN adsb_tracks.sources <@ EXCLUDED.sources THEN EXCLUDED.sources
+             ELSE adsb_tracks.sources || EXCLUDED.sources
+           END`,
         values,
       );
       written += batch.length;

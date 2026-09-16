@@ -157,7 +157,10 @@ export async function adsbHistoryAt(
         reg: row.reg,
         type: row.type,
         esTag: row.es_tag,
-        sources: row.sources ?? [],
+        // De-duplicated here rather than in SQL: the writer's union can leave
+        // one repeat behind (see the CASE in adsbTrackArchive), and a repeated
+        // source would double a count nobody wants doubled.
+        sources: Array.from(new Set(row.sources ?? [])),
         points: [],
       };
       byHex.set(row.hex, track);

@@ -1318,6 +1318,49 @@
       border: 1px solid rgba(148,163,184,0.25); }
     .adsb-dc-btn:hover { background: rgba(148,163,184,0.22); color: #f8fafc; }
     .adsb-dc-btn.on { background: rgba(192,132,252,0.22); border-color: rgba(192,132,252,0.6); color: #e9d5ff; }
+
+    /* ---- Aircraft history scrubber ----
+       Bottom-centre is the one free edge: the map-type pill owns bottom-left,
+       the API status pill bottom-right, and the layer toggles the top centre.
+       Its own element rather than a filter panel, because the panel closes on
+       any outside click and a scrubber that vanishes when you touch the map
+       would be useless. */
+    .adsb-history-bar {
+      position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
+      z-index: 860; display: none;
+      background: rgba(15, 23, 42, 0.95); backdrop-filter: blur(10px);
+      border: 1px solid rgba(192, 132, 252, 0.35); border-radius: 12px;
+      box-shadow: 0 6px 24px rgba(0,0,0,0.5);
+      padding: 9px 14px; width: 460px; max-width: calc(100vw - 32px); color: #e2e8f0;
+    }
+    .adsb-history-bar.open { display: block; }
+    .adsb-hb-top { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+    .adsb-hb-date {
+      background: rgba(148,163,184,0.12); border: 1px solid rgba(148,163,184,0.28);
+      color: #e2e8f0; border-radius: 6px; padding: 3px 6px; font-size: 11.5px;
+      font-family: inherit; color-scheme: dark;
+    }
+    .adsb-hb-clock { font-size: 15px; font-weight: 700; color: #c084fc;
+      font-variant-numeric: tabular-nums; flex: 1; text-align: center; }
+    .adsb-hb-live {
+      background: #22c55e; color: #fff; border: none; padding: 4px 11px;
+      border-radius: 6px; font-size: 11px; font-weight: 700; cursor: pointer;
+      white-space: nowrap;
+    }
+    .adsb-hb-live:hover { opacity: 0.9; }
+    .adsb-hb-range { width: 100%; height: 5px; -webkit-appearance: none; appearance: none;
+      background: #334155; border-radius: 3px; cursor: pointer; display: block; }
+    .adsb-hb-range::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
+      width: 15px; height: 15px; background: #c084fc; border-radius: 50%; cursor: grab; }
+    .adsb-hb-range::-moz-range-thumb { width: 15px; height: 15px; background: #c084fc;
+      border: none; border-radius: 50%; cursor: grab; }
+    .adsb-hb-foot { display: flex; justify-content: space-between; font-size: 9.5px;
+      color: #64748b; margin-top: 3px; }
+    .adsb-hb-note { color: #94a3b8; }
+    @media (max-width: 900px) {
+      .adsb-history-bar { bottom: 12px; padding: 8px 10px; }
+      .adsb-hb-clock { font-size: 13px; }
+    }
     @media (max-width: 900px) {
       .floating-filter-sidebar { display: none; }
       .floating-filter-panel { display: none !important; }
@@ -2728,6 +2771,10 @@
            any outside click, whereas this card is owned by the pin and is
            cleared by the same map-background click that already unpins. -->
       <div class="filter-panel adsb-detail-card" id="adsb-detail-card"></div>
+
+      <!-- Time scrubber for the aircraft layer. Hidden until the History pill
+           turns it on. -->
+      <div class="adsb-history-bar" id="adsb-history-bar"></div>
 
       <!-- Compact icon-over-label toggles: the coloured icon carries the
            layer identity, the small caption keeps it unambiguous. -->
@@ -4857,7 +4904,16 @@
           stopCameraRefresh();
           clearCameraSelection();
         }
-        if (target === 'adsb') { stopAdsbRefresh(); adsbUnpinAircraft(); }
+        if (target === 'adsb') {
+          // Leave history FIRST: adsbHistoryGoLive restarts the live poll, so
+          // doing it after stopAdsbRefresh would leave a timer (and a fetch)
+          // running for a layer that is being switched off. Exiting here also
+          // stops the layer coming back still frozen on a past moment with no
+          // bar visible to explain why nothing is moving.
+          if (adsbHistoryMode) adsbHistoryGoLive();
+          stopAdsbRefresh();
+          adsbUnpinAircraft();
+        }
         if (target === 'transport') stopTransportRefresh();
       } else {
         map.addLayer(layer);
@@ -14470,6 +14526,9 @@ function initPagerHoursFromStorage() {
     }
 
     async function loadAdsbData() {
+      // Historical mode owns _adsbAircraft; a live tick landing here would
+      // replace the frozen picture with the present without warning.
+      if (adsbHistoryMode) return;
       const hadData = _adsbAircraft.length > 0;
       try {
         const res = await apiFetch(`${PROXY_BASE}/api/adsb/aircraft`);
@@ -14482,6 +14541,10 @@ function initPagerHoursFromStorage() {
           console.warn('[adsb] empty response — keeping previous', _adsbAircraft.length, 'aircraft');
           return;
         }
+        // How far back the scrubber may reach. Carried on the live poll the
+        // map already makes, so the date picker has its bounds before anyone
+        // opens it.
+        if (data.history) _adsbHistWindow = data.history;
         _adsbAircraft = aircraft;
         _rebuildAdsb();
         // Altitude, speed and position age all move on every poll.
@@ -14521,6 +14584,7 @@ function initPagerHoursFromStorage() {
     let _adsbFollowActive = false;
 
     async function loadAdsbTrails() {
+      if (adsbHistoryMode) return;   // trails come from the history response
       if (!adsbTrailsEnabled && !_adsbPinnedHex) return;
       try {
         const res = await apiFetch(`${PROXY_BASE}/api/adsb/trails`);
@@ -14662,6 +14726,292 @@ function initPagerHoursFromStorage() {
         console.log('✈️ ADS-B refresh stopped');
       }
     }
+
+
+    // ---------- Aircraft history ----------
+    //
+    // Scrub back to a past moment and see where everything was, with the track
+    // each aircraft flew into that moment.
+    //
+    // The whole view renders through the LIVE pipeline: a history response is
+    // converted into the same `_adsbAircraft` and `_adsbTrails` shapes and
+    // handed to _rebuildAdsb(), so every existing filter — type, "only my
+    // receiver", labels, icon sizing, the altitude ramp — applies to the past
+    // without being reimplemented for it.
+    //
+    // Deliberately NOT saved in map prefs. Reloading the page into a map
+    // frozen on last Tuesday reads as a broken map, so this is the one control
+    // that always starts off.
+
+    let adsbHistoryMode = false;
+    let _adsbHistAtMs = null;         // the instant being viewed
+    let _adsbHistSeq = 0;             // discards responses overtaken by a newer scrub
+    let _adsbHistDebounce = null;
+    let _adsbHistLoading = false;
+    let _adsbHistCount = null;        // aircraft in the last response, for the footer
+    let _adsbHistTruncated = false;
+    // Filled from /api/adsb/aircraft, which the live poll already fetches — the
+    // date picker needs its bounds before it can offer a first scrub.
+    let _adsbHistWindow = { retentionDays: null, oldestMs: null };
+    const ADSB_HIST_TRAIL_MIN = 15;
+    // The archive flushes once a minute, so the most recent minute or two is
+    // still filling. Opening the scrubber further back than that avoids
+    // starting the user on a deceptively empty map.
+    const ADSB_HIST_LAG_MS = 3 * 60_000;
+
+    /** Local midnight for a given instant — the zero point of the day slider. */
+    function _adsbHistDayStart(ms) {
+      const d = new Date(ms);
+      d.setHours(0, 0, 0, 0);
+      return d.getTime();
+    }
+
+    /** `YYYY-MM-DD` in LOCAL time, which is what <input type="date"> expects.
+     *  toISOString would shift the date for anyone east of UTC. */
+    function _adsbHistDateValue(ms) {
+      const d = new Date(ms);
+      const p = (n) => String(n).padStart(2, '0');
+      return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+    }
+
+    function _adsbHistClock(ms) {
+      const d = new Date(ms);
+      const p = (n) => String(n).padStart(2, '0');
+      return p(d.getHours()) + ':' + p(d.getMinutes());
+    }
+
+    function adsbHistoryBarRender() {
+      const el = document.getElementById('adsb-history-bar');
+      if (!el) return;
+      if (!adsbHistoryMode) { el.classList.remove('open'); el.innerHTML = ''; return; }
+
+      const at = _adsbHistAtMs || (Date.now() - ADSB_HIST_LAG_MS);
+      const dayStart = _adsbHistDayStart(at);
+      const minuteOfDay = Math.floor((at - dayStart) / 60_000);
+      const oldest = _adsbHistWindow.oldestMs || (Date.now() - 31 * 86400000);
+
+      // The slider spans a DAY, not the whole retention window: a month on one
+      // bar is about two minutes per pixel, which cannot be aimed. The date
+      // picker moves between days; the slider moves within one.
+      //
+      // Today's slider stops at the present rather than running to midnight,
+      // so it cannot be dragged into a future that has not happened.
+      const isToday = _adsbHistDateValue(at) === _adsbHistDateValue(Date.now());
+      const maxMinute = isToday
+        ? Math.max(0, Math.floor((Date.now() - ADSB_HIST_LAG_MS - dayStart) / 60_000))
+        : 1439;
+
+      let note;
+      if (_adsbHistLoading) note = 'Loading…';
+      else if (_adsbHistCount === null) note = '';
+      else if (_adsbHistTruncated) note = _adsbHistCount.toLocaleString() + ' aircraft (capped)';
+      else note = _adsbHistCount.toLocaleString() + ' aircraft';
+
+      el.classList.add('open');
+      el.innerHTML = ''
+        + '<div class="adsb-hb-top">'
+        +   '<input type="date" class="adsb-hb-date" id="adsb-hb-date"'
+        +     ' value="' + _adsbHistDateValue(at) + '"'
+        +     ' min="' + _adsbHistDateValue(oldest) + '"'
+        +     ' max="' + _adsbHistDateValue(Date.now()) + '"'
+        +     ' onchange="adsbHistorySetDate(this.value)">'
+        +   '<div class="adsb-hb-clock">' + _adsbHistClock(at) + '</div>'
+        +   '<button class="adsb-hb-live" onclick="adsbHistoryGoLive()">&#9679; LIVE</button>'
+        + '</div>'
+        + '<input type="range" class="adsb-hb-range" id="adsb-hb-range" min="0" max="' + maxMinute + '"'
+        +   ' value="' + Math.min(minuteOfDay, maxMinute) + '"'
+        +   ' oninput="adsbHistorySetMinute(this.value)">'
+        + '<div class="adsb-hb-foot">'
+        +   '<span>00:00</span>'
+        +   '<span class="adsb-hb-note">' + escapeHtml(note) + '</span>'
+        +   '<span>' + _adsbHistClock(dayStart + maxMinute * 60_000) + '</span>'
+        + '</div>';
+    }
+
+    window.adsbHistorySetDate = function (value) {
+      if (!value) return;
+      const parts = String(value).split('-').map(Number);
+      if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return;
+      const at = _adsbHistAtMs || Date.now();
+      const d = new Date(at);
+      d.setFullYear(parts[0], parts[1] - 1, parts[2]);
+      // Landing in the future (picking today while the clock was at 23:00
+      // yesterday) snaps back to the newest instant history actually holds.
+      const newest = Date.now() - ADSB_HIST_LAG_MS;
+      _adsbHistAtMs = Math.min(d.getTime(), newest);
+      adsbHistoryBarRender();
+      adsbHistoryFetchSoon();
+    };
+
+    window.adsbHistorySetMinute = function (value) {
+      const minute = Number(value);
+      if (!Number.isFinite(minute)) return;
+      _adsbHistAtMs = _adsbHistDayStart(_adsbHistAtMs || Date.now()) + minute * 60_000;
+      // The clock updates immediately; the fetch is debounced, so dragging the
+      // slider reads as continuous rather than as a burst of requests.
+      const clock = document.querySelector('#adsb-history-bar .adsb-hb-clock');
+      if (clock) clock.textContent = _adsbHistClock(_adsbHistAtMs);
+      adsbHistoryFetchSoon();
+    };
+
+    function adsbHistoryFetchSoon() {
+      if (_adsbHistDebounce) clearTimeout(_adsbHistDebounce);
+      _adsbHistDebounce = setTimeout(() => {
+        _adsbHistDebounce = null;
+        loadAdsbHistory();
+      }, 200);
+    }
+
+    /**
+     * Where one track was at `atMs`, interpolated between the points either
+     * side of it.
+     *
+     * Interpolating rather than snapping to the nearest stored point is what
+     * lets the bucketed, heavily-cached responses still read as smooth: stored
+     * points can be a minute apart, and an aircraft that jumped between them
+     * would look like it was teleporting rather than flying.
+     */
+    function _adsbHistInterpolate(points, atMs) {
+      const n = points.length;
+      if (n === 0) return null;
+      if (n === 1 || atMs <= points[0][0]) {
+        const p = points[0];
+        return { lat: p[1], lon: p[2], altFt: p[3], ageSec: Math.max(0, (atMs - p[0]) / 1000) };
+      }
+      const last = points[n - 1];
+      if (atMs >= last[0]) {
+        // Its last report before the instant asked for. NOT extrapolated: the
+        // live view has a dead-reckoning path for that and it is flagged;
+        // inventing one here would put an unmarked guess into history.
+        return { lat: last[1], lon: last[2], altFt: last[3], ageSec: (atMs - last[0]) / 1000 };
+      }
+      for (let i = 1; i < n; i++) {
+        if (points[i][0] < atMs) continue;
+        const a = points[i - 1], b = points[i];
+        const span = b[0] - a[0];
+        const t = span > 0 ? (atMs - a[0]) / span : 0;
+        return {
+          lat: a[1] + (b[1] - a[1]) * t,
+          lon: a[2] + (b[2] - a[2]) * t,
+          altFt: (a[3] == null || b[3] == null) ? (b[3] != null ? b[3] : a[3]) : a[3] + (b[3] - a[3]) * t,
+          ageSec: 0,
+        };
+      }
+      return null;
+    }
+
+    /** Heading and groundspeed from the two points bracketing the instant.
+     *  Neither is stored — they are per-report fields and history keeps
+     *  positions — but both are recoverable from the geometry, and without a
+     *  heading every aircraft would render as the trackless dot fallback. */
+    function _adsbHistCourse(points, atMs) {
+      let b = -1;
+      for (let i = 1; i < points.length; i++) {
+        if (points[i][0] >= atMs) { b = i; break; }
+      }
+      if (b === -1) b = points.length - 1;
+      const p0 = points[b - 1], p1 = points[b];
+      if (!p0 || !p1) return { gsKt: null, trackDeg: null };
+      const dt = (p1[0] - p0[0]) / 1000;
+      if (dt <= 0) return { gsKt: null, trackDeg: null };
+      const cosLat = Math.cos(p0[1] * Math.PI / 180) || 1;
+      const dLat = p1[1] - p0[1];
+      const dLon = (p1[2] - p0[2]) * cosLat;
+      const nm = Math.sqrt(dLat * dLat + dLon * dLon) * 60;
+      if (nm < 0.001) return { gsKt: null, trackDeg: null };
+      return {
+        gsKt: nm / (dt / 3600),
+        trackDeg: (Math.atan2(dLon, dLat) * 180 / Math.PI + 360) % 360,
+      };
+    }
+
+    async function loadAdsbHistory() {
+      if (!adsbHistoryMode) return;
+      const at = _adsbHistAtMs;
+      if (!at) return;
+      const seq = ++_adsbHistSeq;
+      _adsbHistLoading = true;
+      adsbHistoryBarRender();
+      try {
+        const res = await apiFetch(
+          `${PROXY_BASE}/api/adsb/history?at=${at}&trail=${ADSB_HIST_TRAIL_MIN}`);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        // A slower earlier request must not overwrite a newer scrub.
+        if (seq !== _adsbHistSeq || !adsbHistoryMode) return;
+
+        const atMs = data.atMs || at;
+        const aircraft = [];
+        const trails = {};
+        for (const t of (data.aircraft || [])) {
+          const pos = _adsbHistInterpolate(t.points, atMs);
+          if (!pos) continue;
+          const course = _adsbHistCourse(t.points, atMs);
+          aircraft.push({
+            hex: t.hex,
+            callsign: t.callsign, reg: t.reg, type: t.type,
+            lat: pos.lat, lon: pos.lon, altFt: pos.altFt,
+            // Not stored, and not guessable from two positions: a low-altitude
+            // track is not the same thing as a ground movement.
+            onGround: false,
+            gsKt: course.gsKt, trackDeg: course.trackDeg,
+            category: null, squawk: null, emergencySquawk: false,
+            esTag: t.esTag || null,
+            ageSec: Math.max(0, Math.round(pos.ageSec)),
+            sources: t.sources || [], sourceCount: (t.sources || []).length,
+            estimated: false, estimatedSec: null,
+          });
+          // Only the part of the track up to the instant being viewed — a
+          // trail running ahead of the aircraft would be showing the future.
+          const upto = t.points.filter((p) => p[0] <= atMs);
+          if (upto.length >= 2) trails[t.hex] = upto.map((p) => [p[1], p[2], p[3]]);
+        }
+        _adsbAircraft = aircraft;
+        _adsbTrails = trails;
+        _adsbHistCount = data.count || 0;
+        _adsbHistTruncated = !!data.truncated;
+        _rebuildAdsb();
+        if (_adsbPinnedHex) adsbRenderDetailCard();
+      } catch (e) {
+        console.warn('[adsb] history failed to load:', e);
+        _adsbHistCount = null;
+      } finally {
+        if (seq === _adsbHistSeq) {
+          _adsbHistLoading = false;
+          adsbHistoryBarRender();
+        }
+      }
+    }
+
+    window.toggleAdsbHistoryPill = function () {
+      adsbHistoryMode ? adsbHistoryGoLive() : adsbHistoryStart();
+    };
+
+    function adsbHistoryStart() {
+      adsbHistoryMode = true;
+      _adsbHistAtMs = Date.now() - ADSB_HIST_LAG_MS;
+      _adsbHistCount = null;
+      _adsbHistTruncated = false;
+      // The live poll would overwrite the frozen picture on its next tick.
+      stopAdsbRefresh();
+      adsbHistoryBarRender();
+      loadAdsbHistory();
+      refreshActiveFilterPanel();
+    }
+
+    window.adsbHistoryGoLive = function () {
+      if (!adsbHistoryMode) return;
+      adsbHistoryMode = false;
+      _adsbHistAtMs = null;
+      _adsbHistSeq++;              // abandon anything still in flight
+      if (_adsbHistDebounce) { clearTimeout(_adsbHistDebounce); _adsbHistDebounce = null; }
+      adsbHistoryBarRender();
+      _adsbTrails = {};
+      loadAdsbData();
+      loadAdsbTrails();
+      startAdsbRefresh();
+      refreshActiveFilterPanel();
+    };
 
     // ---------- Aircraft list (renders into the shared panel) ----------
     function adsbListGlyph(a) {
@@ -15206,6 +15556,10 @@ function initPagerHoursFromStorage() {
           adsbTrailsEnabled,
           '<i class="fa-solid fa-route"></i> Trails',
           'toggleAdsbTrailsPill()'
+        ) + _ffPill(
+          adsbHistoryMode,
+          '<i class="fa-solid fa-clock-rotate-left"></i> History',
+          'toggleAdsbHistoryPill()'
         );
         // Field sub-toggles only appear while labels are on.
         let fieldsHtml = '';
