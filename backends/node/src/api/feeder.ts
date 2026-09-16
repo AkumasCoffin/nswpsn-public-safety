@@ -282,6 +282,7 @@ feederRouter.post('/api/feeder/nodes', async (c) => {
 // ---- Linux: one self-contained installer, token baked in --------------------
 function linuxInstaller(token: string, kind: string): string {
   if (kind === 'pager') return pagerLinuxInstaller(token);
+  if (kind === 'adsb') return adsbLinuxInstaller(token);
   const T = shSingleQuote(token);
   const S = shSingleQuote(SERVER_URL);
   const D = shSingleQuote(DOWNLOADS_BASE);
@@ -505,6 +506,177 @@ function pagerLinuxInstaller(token: string): string {
     `systemctl daemon-reload`,
     `systemctl enable --now nswpsn-node.service`,
     `echo "Done. The pager node is installed and starting. Check: systemctl status nswpsn-node"`,
+    ``,
+  ].join('\n');
+}
+
+// ---- Linux ADS-B node installer (dump1090-fa -> JSON -> backend) ------------
+// Linux/amd64+arm64 only. Installs dump1090-fa (FlightAware's apt repository,
+// falling back to the distro's dump1090-mutability, which speaks the same
+// --write-json contract), the adsb agent binary, udev rules + the RTL
+// kernel-module blacklist, and a systemd unit.
+//
+// The decoder is NOT left to its own package service: those auto-start on
+// install and would hold the dongle open before our supervised child could
+// claim it. They are stopped, disabled AND masked, so a later apt upgrade
+// cannot quietly resurrect one and leave the node unable to open its own SDR.
+//
+// Gain and antenna position are not written here - they arrive by config push,
+// so staff can retune a receiver without touching the host.
+function adsbLinuxInstaller(token: string): string {
+  const T = shSingleQuote(token);
+  const S = shSingleQuote(SERVER_URL);
+  const D = shSingleQuote(DOWNLOADS_BASE);
+  return [
+    `#!/usr/bin/env bash`,
+    `# AusAware ADS-B feeder node installer. Your node token is baked in below.`,
+    `# Run:  sudo bash install-nswpsn-adsb-node.sh    (re-run any time to update)`,
+    `set -euo pipefail`,
+    `NODE_TOKEN=${T}`,
+    `SERVER_URL=${S}`,
+    `DOWNLOADS=${D}`,
+    ``,
+    `if [ "$(id -u)" -ne 0 ]; then exec sudo -E NODE_TOKEN="$NODE_TOKEN" SERVER_URL="$SERVER_URL" DOWNLOADS="$DOWNLOADS" bash "$0" "$@"; fi`,
+    `case "$(uname -m)" in`,
+    `  x86_64) ARCH=amd64;;`,
+    `  aarch64|arm64) ARCH=arm64;;`,
+    `  *) echo "unsupported architecture: $(uname -m) (adsb nodes are amd64/arm64)" >&2; exit 1;;`,
+    `esac`,
+    ``,
+    `# Decoder: dump1090-fa from FlightAware's repository, else the distro's`,
+    `# dump1090-mutability. Both write the aircraft.json/stats.json the agent reads.`,
+    `echo "Installing the ADS-B decoder..."`,
+    `if command -v apt-get >/dev/null 2>&1; then`,
+    `  export DEBIAN_FRONTEND=noninteractive`,
+    `  apt-get update -qq || true`,
+    `  apt-get install -y --no-install-recommends rtl-sdr curl ca-certificates || true`,
+    `  if ! command -v dump1090-fa >/dev/null 2>&1; then`,
+    `    TMP_DEB="$(mktemp)"`,
+    `    if curl -fsSL "https://www.flightaware.com/adsb/piaware/files/packages/pool/piaware/f/flightaware-apt-repository/flightaware-apt-repository_1.2_all.deb" -o "$TMP_DEB"; then`,
+    `      dpkg -i "$TMP_DEB" >/dev/null 2>&1 || true`,
+    `      apt-get update -qq || true`,
+    `      apt-get install -y --no-install-recommends dump1090-fa || true`,
+    `    fi`,
+    `    rm -f "$TMP_DEB"`,
+    `  fi`,
+    `  command -v dump1090-fa >/dev/null 2>&1 || apt-get install -y --no-install-recommends dump1090-mutability || true`,
+    `else`,
+    `  echo "warning: no apt-get - install rtl-sdr and dump1090-fa manually, then re-run." >&2`,
+    `fi`,
+    `DECODER_BIN=""`,
+    `for c in dump1090-fa dump1090-mutability dump1090; do`,
+    `  if command -v "$c" >/dev/null 2>&1; then DECODER_BIN="$c"; break; fi`,
+    `done`,
+    `if [ -z "$DECODER_BIN" ]; then`,
+    `  echo "error: no dump1090 found on PATH. Install dump1090-fa and re-run." >&2; exit 1`,
+    `fi`,
+    `echo "Using decoder: $DECODER_BIN"`,
+    ``,
+    `# The decoder packages ship their own auto-starting service, which would`,
+    `# claim the dongle before our agent can open it. Mask so an apt upgrade`,
+    `# cannot quietly bring one back.`,
+    `for svc in dump1090-fa dump1090-mutability dump1090; do`,
+    `  systemctl stop "$svc" 2>/dev/null || true`,
+    `  systemctl disable "$svc" 2>/dev/null || true`,
+    `  systemctl mask "$svc" 2>/dev/null || true`,
+    `done`,
+    ``,
+    `install -d /opt/nswpsn-node /etc/nswpsn-node /var/lib/nswpsn-node`,
+    `id nswpsn-node >/dev/null 2>&1 || useradd -r -s /usr/sbin/nologin -G plugdev nswpsn-node || useradd -r -s /usr/sbin/nologin nswpsn-node`,
+    ``,
+    `systemctl stop nswpsn-node 2>/dev/null || true`,
+    `echo "Downloading ADS-B node agent..."`,
+    `AGENT_URL="\${DOWNLOADS%/}/nodeagent-adsb-linux-\${ARCH}"`,
+    `TMP_BIN="$(mktemp)"`,
+    `if command -v curl >/dev/null 2>&1; then`,
+    `  curl -fsSL "$AGENT_URL" -o "$TMP_BIN"`,
+    `elif command -v wget >/dev/null 2>&1; then`,
+    `  wget -qO "$TMP_BIN" "$AGENT_URL"`,
+    `else`,
+    `  echo "error: this installer needs curl or wget." >&2; exit 1`,
+    `fi`,
+    `[ -s "$TMP_BIN" ] || { echo "error: downloaded agent is empty (check network / URL)" >&2; exit 1; }`,
+    `# Verify against the published hash when one is available, so a corrupted or`,
+    `# substituted download is caught before it is ever executed.`,
+    `if command -v sha256sum >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then`,
+    `  WANT="$(curl -fsSL "\${AGENT_URL}.sha256" 2>/dev/null | tr -d "[:space:]" || true)"`,
+    `  if [ -n "$WANT" ]; then`,
+    `    GOT="$(sha256sum "$TMP_BIN" | awk "{print \\$1}")"`,
+    `    if [ "$WANT" != "$GOT" ]; then`,
+    `      rm -f "$TMP_BIN"`,
+    `      echo "error: agent checksum mismatch (expected $WANT, got $GOT)" >&2; exit 1`,
+    `    fi`,
+    `  fi`,
+    `fi`,
+    `install -m 0755 "$TMP_BIN" /opt/nswpsn-node/nodeagent`,
+    `rm -f "$TMP_BIN"`,
+    `chown -R nswpsn-node:nswpsn-node /opt/nswpsn-node`,
+    ``,
+    `# Preserve an existing install_id across re-runs. It is bound to this node on`,
+    `# first connect; losing it would make the backend reject the machine.`,
+    `INSTALL_ID=""`,
+    `if [ -f /etc/nswpsn-node/agent.yaml ]; then`,
+    `  INSTALL_ID="$(grep -E "^install_id:" /etc/nswpsn-node/agent.yaml | head -n1 | cut -d'"' -f2)"`,
+    `fi`,
+    `cat > /etc/nswpsn-node/agent.yaml <<YAML`,
+    `server_url: "\${SERVER_URL}"`,
+    `node_token: "\${NODE_TOKEN}"`,
+    `install_id: "\${INSTALL_ID}"`,
+    `kind: "adsb"`,
+    `data_dir: "/var/lib/nswpsn-node"`,
+    `# The decoder rewrites these files every second, so they live on tmpfs`,
+    `# (systemd RuntimeDirectory) rather than wearing out an SD card.`,
+    `json_dir: "/run/nswpsn-adsb"`,
+    `dump1090_bin: "\${DECODER_BIN}"`,
+    `# Gain and antenna position arrive by config push, not from this file.`,
+    `YAML`,
+    `chown -R nswpsn-node:nswpsn-node /etc/nswpsn-node`,
+    `chmod 0750 /etc/nswpsn-node && chmod 0640 /etc/nswpsn-node/agent.yaml`,
+    `chown -R nswpsn-node:nswpsn-node /var/lib/nswpsn-node`,
+    ``,
+    `# RTL-SDR USB access for the plugdev group (the decoder runs as the service`,
+    `# user). uaccess also grants the active seat.`,
+    `cat > /etc/udev/rules.d/99-nswpsn-sdr.rules <<'RULES'`,
+    `SUBSYSTEM=="usb", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="2838", GROUP="plugdev", MODE="0660", TAG+="uaccess"`,
+    `SUBSYSTEM=="usb", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="2832", GROUP="plugdev", MODE="0660", TAG+="uaccess"`,
+    `RULES`,
+    `udevadm control --reload-rules 2>/dev/null || true; udevadm trigger 2>/dev/null || true`,
+    ``,
+    `# The DVB-T kernel driver claims RTL dongles and blocks dump1090 - blacklist it.`,
+    `cat > /etc/modprobe.d/blacklist-nswpsn-rtl.conf <<'BL'`,
+    `blacklist dvb_usb_rtl28xxu`,
+    `blacklist rtl2832`,
+    `blacklist rtl2830`,
+    `BL`,
+    `modprobe -r dvb_usb_rtl28xxu 2>/dev/null || true`,
+    ``,
+    `cat > /etc/systemd/system/nswpsn-node.service <<UNIT`,
+    `[Unit]`,
+    `Description=AusAware ADS-B feeder node agent`,
+    `After=network-online.target`,
+    `Wants=network-online.target`,
+    `[Service]`,
+    `Type=simple`,
+    `User=nswpsn-node`,
+    `SupplementaryGroups=plugdev`,
+    `ExecStart=/opt/nswpsn-node/nodeagent run --config /etc/nswpsn-node/agent.yaml`,
+    `Restart=always`,
+    `RestartSec=5`,
+    `# tmpfs for the decoder's once-a-second JSON output, created and cleaned up`,
+    `# by systemd and writable under ProtectSystem=strict.`,
+    `RuntimeDirectory=nswpsn-adsb`,
+    `RuntimeDirectoryMode=0755`,
+    `NoNewPrivileges=true`,
+    `ProtectSystem=strict`,
+    `ReadWritePaths=/opt/nswpsn-node /var/lib/nswpsn-node /etc/nswpsn-node`,
+    `ProtectHome=true`,
+    `PrivateTmp=true`,
+    `[Install]`,
+    `WantedBy=multi-user.target`,
+    `UNIT`,
+    `systemctl daemon-reload`,
+    `systemctl enable --now nswpsn-node.service`,
+    `echo "Done. The ADS-B node is installed and starting. Check: systemctl status nswpsn-node"`,
     ``,
   ].join('\n');
 }
@@ -737,9 +909,12 @@ async function serveInstaller(c: import('hono').Context, os: 'linux' | 'windows'
   const resolved = await resolveNodeToken(token);
   if (!resolved.ok) return c.json({ error: 'invalid node token' }, 401);
   if (resolved.userId !== userId) return c.json({ error: 'not your node' }, 403);
-  // Pager nodes are Linux-only (rtl_fm | multimon-ng | reader.sh is a bash stack).
-  if (resolved.kind === 'pager' && os === 'windows') {
-    return c.json({ error: 'pager nodes are Linux only' }, 400);
+  // Only radio nodes have a Windows agent. Pager (rtl_fm | multimon-ng) and
+  // ADS-B (dump1090 + a bash launcher) are both Linux-only stacks, so this
+  // gate is stated as an allowlist — a future kind is Linux-only by default
+  // rather than silently handed a PowerShell script that cannot work.
+  if (resolved.kind !== 'radio' && os === 'windows') {
+    return c.json({ error: resolved.kind + ' nodes are Linux only' }, 400);
   }
   const body = os === 'linux' ? linuxInstaller(token, resolved.kind) : windowsInstaller(token, resolved.kind);
   const ext = os === 'linux' ? 'sh' : 'ps1';

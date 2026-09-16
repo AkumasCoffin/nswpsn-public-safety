@@ -71,10 +71,13 @@ npm run build
 # runtime + rdio binary are placed in the same dir once, by hand.
 AGENT_SRC="$REPO_ROOT/feeder-nodes/radio-node"
 PAGER_SRC="$REPO_ROOT/feeder-nodes/pager-node"
+ADSB_SRC="$REPO_ROOT/feeder-nodes/aircraft-node"
 DOWNLOADS_DIR="$REPO_ROOT/downloads"
 EXPECTED_AGENTS="nodeagent-linux-amd64 nodeagent-windows-amd64.exe nodeagent-linux-arm64"
 # Pager agent: Linux only (rtl_fm | multimon-ng stack), amd64 + arm64 (Pi).
 PAGER_AGENTS="nodeagent-pager-linux-amd64 nodeagent-pager-linux-arm64"
+# ADS-B agent: Linux only (dump1090 stack), amd64 + arm64 (Pi).
+ADSB_AGENTS="nodeagent-adsb-linux-amd64 nodeagent-adsb-linux-arm64"
 export PATH="$PATH:/snap/bin"
 if command -v go >/dev/null 2>&1 && [ -d "$AGENT_SRC" ]; then
   mkdir -p "$DOWNLOADS_DIR"
@@ -136,6 +139,32 @@ if command -v go >/dev/null 2>&1 && [ -d "$AGENT_SRC" ]; then
     fi
   fi
 
+  # ---- ADS-B node agent (separate module + binary, Linux amd64/arm64) -------
+  if [ -d "$ADSB_SRC" ]; then
+    ADSB_VERSION="$(node -e 'process.stdout.write(String((require(process.argv[1])["adsb-agent"]||{}).version||"0.0.0"))' "$NODE_DIR/assets/node-versions.json" 2>/dev/null || echo 0.0.0)"
+    ADSB_BUILT=""
+    if [ -x "$DOWNLOADS_DIR/nodeagent-adsb-linux-amd64" ]; then
+      ADSB_BUILT="$("$DOWNLOADS_DIR/nodeagent-adsb-linux-amd64" version 2>/dev/null | sed -nE 's/^aircraft-node ([^ ]+).*/\1/p')"
+    fi
+    if [ -n "$ADSB_VERSION" ] && [ "$ADSB_BUILT" = "$ADSB_VERSION" ]; then
+      echo "[deploy] adsb-agent v$ADSB_VERSION already built — skipping rebuild."
+    else
+      ALDFLAGS="-s -w -X github.com/AkumasCoffin/nswpsn-node/aircraft-node/internal/version.Version=$ADSB_VERSION"
+      echo "[deploy] building adsb-agent v$ADSB_VERSION (was '${ADSB_BUILT:-none}')…"
+      (
+        cd "$ADSB_SRC"
+        GOOS=linux GOARCH=amd64 go build -ldflags "$ALDFLAGS" -o "$DOWNLOADS_DIR/nodeagent-adsb-linux-amd64" ./cmd/nodeagent
+        GOOS=linux GOARCH=arm64 go build -ldflags "$ALDFLAGS" -o "$DOWNLOADS_DIR/nodeagent-adsb-linux-arm64" ./cmd/nodeagent
+      )
+      for b in $ADSB_AGENTS; do
+        if [ -f "$DOWNLOADS_DIR/$b" ]; then
+          ( cd "$DOWNLOADS_DIR" && sha256sum "$b" | awk '{print $1}' > "$b.sha256" )
+        fi
+      done
+      echo "[deploy] adsb-agent binaries + sha256 sidecars updated in $DOWNLOADS_DIR"
+    fi
+  fi
+
   # Remove any stale agent binaries no longer in the built set (e.g. an arch we
   # stopped shipping) so downloads/ never serves an orphaned old build. A
   # `<name>.sha256` sidecar is kept iff its base binary is still expected.
@@ -143,7 +172,7 @@ if command -v go >/dev/null 2>&1 && [ -d "$AGENT_SRC" ]; then
     [ -e "$f" ] || continue
     base="$(basename "$f")"
     check="${base%.sha256}"
-    case " $EXPECTED_AGENTS $PAGER_AGENTS " in
+    case " $EXPECTED_AGENTS $PAGER_AGENTS $ADSB_AGENTS " in
       *" $check "*) ;;
       *) echo "[deploy] removing stale $base"; rm -f "$f" ;;
     esac
