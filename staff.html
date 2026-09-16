@@ -1778,21 +1778,38 @@
 
     .no-roles { color: var(--text-soft); font-style: italic; font-size: 0.8rem; }
 
-    /* Email addresses in the Members / Users / Signups lists are masked until
+    /* Email addresses in the Members / Users / Signups lists are blurred until
        hovered. These are long lists that get scanned, screenshotted and shared
        in a support context, and an address is the one column that identifies a
        real person off-site. Hovering is a deliberate act; scrolling past is
-       not. CSS-only so it cannot break with a script error, and the text is
-       still selectable once shown. */
-    .email-mask { cursor: default; }
-    .email-mask .em-dots { color: var(--text-soft, #94a3b8); letter-spacing: 0.12em; user-select: none; }
-    .email-mask .em-real { display: none; }
-    .email-mask:hover .em-dots,
-    .email-mask:focus-within .em-dots { display: none; }
-    .email-mask:hover .em-real,
-    .email-mask:focus-within .em-real { display: inline; user-select: text; }
-    /* Keyboard users get the same reveal — the dots are focusable. */
+       not.
+
+       BLURRED IN PLACE rather than replaced with a placeholder: the real text
+       is always what occupies the cell, so its width never changes and the
+       table does not reflow under the pointer as rows are scanned. Swapping in
+       a shorter mask made every hover jolt the layout.
+
+       CSS-only, so it survives a script error elsewhere on the page, and it
+       lifts on keyboard focus as well as hover. Not a security control — the
+       address is in the DOM — it is a shoulder-surfing and screenshot guard. */
+    .email-mask {
+      filter: blur(4px);
+      transition: filter 0.1s ease-out;
+      cursor: default;
+      user-select: none;
+      /* Keeps the blur from bleeding over neighbouring columns. */
+      display: inline-block;
+      max-width: 100%;
+      vertical-align: bottom;
+    }
+    .email-mask:hover,
+    .email-mask:focus-visible {
+      filter: none;
+      user-select: text;
+      cursor: text;
+    }
     .email-mask:focus-visible { outline: 1px solid var(--border-subtle, #334155); outline-offset: 2px; border-radius: 3px; }
+    @media (prefers-reduced-motion: reduce) { .email-mask { transition: none; } }
     .auth-view-note { color: var(--text-soft); font-size: 0.82rem; margin: 0 0 0.75rem; }
     /* Grouped role checkboxes in the approval / edit-roles modals.
        Row layout: [checkbox] [name (never wraps)] [hint (takes the rest)] —
@@ -14319,21 +14336,20 @@
     function realRoles(user) {
       return (user.roles || []).map(r => r.role).filter(r => r && r !== BASE_ROLE);
     }
-    /** An email address, masked until hovered.
+    /** An email address, blurred until hovered.
      *
-     *  Used by every list that shows one (Members, Users, Signups). Reveal is
-     *  pure CSS, so it survives a script error elsewhere on the page, and the
-     *  address stays in the DOM — client-side search still matches it, and it
-     *  is selectable once shown.
+     *  Used by every list that shows one (Members, Users, Signups). The real
+     *  address is what sits in the cell — only a CSS blur covers it — so the
+     *  column width is identical blurred or not and the table cannot reflow as
+     *  the pointer moves down it.
      *
      *  Deliberately NOT a title attribute: a native tooltip cannot be selected
      *  or copied, and would sit on top of the row it belongs to. */
     function emailMasked(email) {
       const e = (email || '').trim();
       if (!e) return '<span class="no-roles">—</span>';
-      return '<span class="email-mask" tabindex="0" aria-label="Email address, hover to reveal">'
-        + '<span class="em-dots">\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022</span>'
-        + '<span class="em-real">' + escapeHtml(e) + '</span>'
+      return '<span class="email-mask" tabindex="0" title="Hover to reveal">'
+        + escapeHtml(e)
         + '</span>';
     }
 
