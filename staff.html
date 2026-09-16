@@ -9044,9 +9044,9 @@
           </div>
           <div class="dev-card-secondary">
             ${isAdsb
-              ? `<span><i class="fas fa-location-dot"></i> antenna ${(typeof node.lat === 'number' && typeof node.lon === 'number')
-                  ? `<strong>${node.lat.toFixed(4)}, ${node.lon.toFixed(4)}</strong>`
-                  : '<span style="color:#fbbf24">no pin — range cannot be measured</span>'}</span>`
+              ? `<span><i class="fas fa-location-dot"></i> ${(typeof node.lat === 'number' && typeof node.lon === 'number')
+                  ? 'antenna <strong>pinned</strong>'
+                  : '<span style="color:#fbbf24">no antenna pin — range cannot be measured</span>'}</span>`
               : `<span><i class="fas fa-map"></i> region ${(() => { const a = isPager ? [node.state, node.lga].filter(Boolean).join(' · ') : node.zone; return a ? `<strong>${escapeHtml(a)}</strong>` : '<span style="color:#fbbf24">not set</span>'; })()}${(typeof node.lat === 'number') ? ' · <i class="fas fa-location-dot" title="Exact pin set"></i> pin' : ''}</span>`}
           </div>
           ${statusRow}
