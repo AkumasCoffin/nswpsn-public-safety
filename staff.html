@@ -608,9 +608,14 @@
       display: none;
     }
     .node-drawer.open { display: block; }
-    /* Kind-aware panels: show radio-only vs pager-only sections by node kind. */
-    #node-drawer[data-kind="pager"] .nd-radio-only { display: none !important; }
+    /* Kind-aware panels. Stated per-kind rather than as "pager vs not pager":
+       that binary form silently handed every new kind the radio panels, which
+       is how an ADS-B node would have been shown a spectrum view, channel
+       editor and SDR-Trunk restart buttons it has no use for. */
+    #node-drawer[data-kind="pager"] .nd-radio-only,
+    #node-drawer[data-kind="adsb"] .nd-radio-only { display: none !important; }
     #node-drawer:not([data-kind="pager"]) .nd-pager-only { display: none !important; }
+    #node-drawer:not([data-kind="adsb"]) .nd-adsb-only { display: none !important; }
     .nd-readers-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
     .nd-readers-table th, .nd-readers-table td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border-subtle, #334155); }
     .nd-readers-table th { color: var(--text-soft, #94a3b8); font-weight: 600; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; }
@@ -2736,6 +2741,7 @@
           <div class="tab-dd-menu" id="data-dd-menu" role="menu" aria-label="Data mode">
             <button class="tab-dd-item" role="menuitem" data-mode="radio" onclick="openDataMode('radio')"><i class="fas fa-walkie-talkie"></i> Radio</button>
             <button class="tab-dd-item" role="menuitem" data-mode="pager" onclick="openDataMode('pager')"><i class="fas fa-tower-broadcast"></i> Pager</button>
+            <button class="tab-dd-item" role="menuitem" data-mode="adsb" onclick="openDataMode('adsb')"><i class="fas fa-plane-up"></i> ADS-B</button>
             <button class="tab-dd-item" role="menuitem" data-mode="transcripts" onclick="openDataMode('transcripts')"><i class="fas fa-closed-captioning"></i> Transcripts</button>
           </div>
         </div>
@@ -3038,6 +3044,12 @@
           <div class="nd2-seg" role="group" aria-label="Pager data view">
             <button class="filter-btn active" data-nd2-view="poverview" onclick="nd2SetView('poverview')">Overview</button>
             <button class="filter-btn" data-nd2-view="capcodes" onclick="nd2SetView('capcodes')">Capcodes</button>
+          </div>
+        </div>
+
+        <div class="nd2-controls nd2-viewbar" id="nd2-viewbar-adsb" style="display: none;">
+          <div class="nd2-seg" role="group" aria-label="ADS-B data view">
+            <button class="filter-btn active" data-nd2-view="aoverview" onclick="nd2SetView('aoverview')">Receivers</button>
           </div>
         </div>
 
@@ -3654,6 +3666,16 @@
       </div>
 
         <!-- ===== Pager Overview view ===== -->
+        <!-- ADS-B receivers: live state + windowed performance per receiver. -->
+        <div id="nd2-view-aoverview" style="display: none;">
+          <div class="nd2-stat-row" id="nd2-aov-tiles"></div>
+          <div class="nd2-card">
+            <div class="nd2-card-h"><span>Receivers</span></div>
+            <div id="nd2-aov-list"><div class="nd2-empty">Loading…</div></div>
+          </div>
+          <div id="nd2-aov-detail" style="display: none;"></div>
+        </div>
+
         <div id="nd2-view-poverview" style="display: none;">
           <div class="stats-bar">
             <div class="stat-card" style="border-color: rgba(249, 115, 22, 0.3);">
@@ -3864,6 +3886,8 @@
                 <button class="btn btn-secondary btn-sm nd-radio-only nd-write" onclick="_ndRestart('rdio')"><i class="fas fa-rotate"></i> Restart rdio</button>
                 <button class="btn btn-secondary btn-sm nd-pager-only nd-write" onclick="_ndRestartReaders()"><i class="fas fa-rotate"></i> Restart readers</button>
                 <button class="btn btn-secondary btn-sm nd-pager-only nd-write" onclick="_ndRescanSdr()"><i class="fas fa-magnifying-glass"></i> Recheck SDRs</button>
+                <button class="btn btn-secondary btn-sm nd-adsb-only nd-write" onclick="_ndRestart('dump1090')"><i class="fas fa-rotate"></i> Restart decoder</button>
+                <button class="btn btn-secondary btn-sm nd-adsb-only nd-write" onclick="_ndRescanSdr()"><i class="fas fa-magnifying-glass"></i> Recheck SDR</button>
                 <button class="btn btn-secondary btn-sm nd-write" onclick="_ndUpdate()"><i class="fas fa-download"></i> Trigger update</button>
                 <button class="btn btn-danger btn-sm nd-write" onclick="_ndReboot()"><i class="fas fa-power-off"></i> Restart agent</button>
               </div>
@@ -3887,6 +3911,12 @@
           <div class="nd-panel nd-span-all nd-pager-only">
             <div class="nd-panel-h"><i class="fas fa-tower-broadcast"></i> Readers</div>
             <div class="nd-panel-b" id="nd-readers"></div>
+          </div>
+
+          <!-- Receiver (adsb) -->
+          <div class="nd-panel nd-span-all nd-adsb-only">
+            <div class="nd-panel-h"><i class="fas fa-plane-up"></i> Receiver</div>
+            <div class="nd-panel-b" id="nd-adsb"></div>
           </div>
 
           <!-- Tuners -->
@@ -4642,9 +4672,10 @@
     // this drives the panel show/hide sweep and the saved-view whitelist).
     const ND2_RADIO_VIEWS = ['overview', 'live', 'events', 'systems', 'nodes', 'talkgroups', 'aliases'];
     const ND2_PAGER_VIEWS = ['poverview', 'capcodes'];
+    const ND2_ADSB_VIEWS = ['aoverview'];
     // Transcripts is a single view opened straight from the Data dropdown —
     // no pill row of its own, so no view LIST, just the one name.
-    const _nd2AllViews = [...ND2_RADIO_VIEWS, ...ND2_PAGER_VIEWS, 'transcripts'];
+    const _nd2AllViews = [...ND2_RADIO_VIEWS, ...ND2_PAGER_VIEWS, ...ND2_ADSB_VIEWS, 'transcripts'];
 
     function nd2StartPolling() {
       // Reflect the persisted hide-encrypted choice on the control itself —
@@ -4694,6 +4725,7 @@
             break;
           case 'events': if (nd2.evOffset === 0) nd2LoadEvents(); break;
           case 'poverview': nd2LoadPagerOverview(); break;
+          case 'aoverview': nd2LoadAdsbOverview(); break;
           case 'transcripts': nd2LoadTranscripts(); break;
           case 'capcodes': if (nd2.capLevel === 'list' && nd2.cap.offset === 0) nd2LoadCapcodes(); break;
         }
@@ -4733,6 +4765,7 @@
         case 'aliases': await nd2LoadAliases(); break;
         case 'events': await Promise.all([nd2LoadOverview(), nd2LoadEvents()]); break;
         case 'poverview': await nd2LoadPagerOverview(); break;
+        case 'aoverview': await nd2LoadAdsbOverview(); break;
         case 'capcodes': await nd2LoadCapcodesView(); break;
       }
     }
@@ -4766,7 +4799,7 @@
     }
     // Menu pick: remember the mode, activate the Data tab, switch mode.
     function openDataMode(mode) {
-      if (mode !== 'radio' && mode !== 'pager' && mode !== 'transcripts') return;
+      if (mode !== 'radio' && mode !== 'pager' && mode !== 'adsb' && mode !== 'transcripts') return;
       nd2LastMode = mode;
       staffRemember(STAFF_DATA_MODE_KEY, mode);
       closeDataMenu();
@@ -4785,7 +4818,7 @@
 
     // Radio ⇄ Pager: swap the view-pill row and reset to the mode's first view.
     function nd2SetMode(mode) {
-      if (mode !== 'radio' && mode !== 'pager' && mode !== 'transcripts') return;
+      if (mode !== 'radio' && mode !== 'pager' && mode !== 'adsb' && mode !== 'transcripts') return;
       nd2LastMode = mode;
       staffRemember(STAFF_DATA_MODE_KEY, mode);
       if (nd2.mode === mode) { _nd2MarkDataMenu(); return; }
@@ -4793,8 +4826,10 @@
       _nd2MarkDataMenu();
       const rBar = document.getElementById('nd2-viewbar-radio');
       const pBar = document.getElementById('nd2-viewbar-pager');
+      const aBar = document.getElementById('nd2-viewbar-adsb');
       if (rBar) rBar.style.display = mode === 'radio' ? '' : 'none';
       if (pBar) pBar.style.display = mode === 'pager' ? '' : 'none';
+      if (aBar) aBar.style.display = mode === 'adsb' ? '' : 'none';
       // Transcripts has ONE view, so it gets no pill row at all.
       // The per-node scope selector is a Radio-mode control (pager stays
       // fleet-wide); hide it entirely in Pager mode.
@@ -4807,7 +4842,10 @@
       const encCtl = document.getElementById('nd2-enc-ctl');
       if (encCtl) encCtl.style.display = mode === 'radio' ? '' : 'none';
       // Reset to the mode's first view; force nd2SetView past its equality guard.
-      const first = mode === 'radio' ? 'overview' : mode === 'pager' ? 'poverview' : 'transcripts';
+      const first = mode === 'radio' ? 'overview'
+        : mode === 'pager' ? 'poverview'
+        : mode === 'adsb' ? 'aoverview'
+        : 'transcripts';
       nd2.view = null;
       nd2SetView(first);
     }
@@ -6306,8 +6344,15 @@
      *  A scanner feed has no control channel: Systems is built from sites and
      *  RFSS, and Live is fed by the websocket hub a scanner never joins. Both
      *  would sit permanently empty, which reads as a fault rather than as
-     *  "this kind of feed does not carry that". */
-    const ND2_NODE_TAB_HIDDEN = { scanner: ['systems', 'live'] };
+     *  "this kind of feed does not carry that".
+     *
+     *  An ADS-B node carries none of the radio vocabulary at all — no
+     *  talkgroups, radios, sites or calls — so only its Overview can ever
+     *  hold anything. */
+    const ND2_NODE_TAB_HIDDEN = {
+      scanner: ['systems', 'live'],
+      adsb: ['systems', 'live', 'events', 'talkgroups', 'radios', 'sites', 'calls'],
+    };
 
     function nd2NodeTabHidden(tab) {
       return (ND2_NODE_TAB_HIDDEN[nd2.nodes.kind] || []).includes(tab);
@@ -7748,6 +7793,144 @@
         (o.pages != null ? ` <span class="nd-sub">${nd2Num(o.pages)}</span>` : '') : '—';
     }
 
+    // ---- ADS-B receivers ------------------------------------------------
+    /** The fleet view: one row per receiver, live state plus windowed totals.
+     *
+     *  Live figures (aircraft, message rate) come from the agent heartbeat and
+     *  are null while a node is offline; historical ones come from the daily
+     *  rollup. They are shown side by side but labelled distinctly, because a
+     *  receiver that is offline right now may still have a full day's work
+     *  behind it — and conflating the two would make it look idle. */
+    async function nd2LoadAdsbOverview() {
+      const listEl = document.getElementById('nd2-aov-list');
+      let d;
+      try {
+        d = await nd2Fetch(`/api/node-data/adsb-overview?window=${encodeURIComponent(nd2.window)}`);
+      } catch (e) {
+        if (listEl) listEl.innerHTML = `<div class="nd2-empty">Could not load receivers (${escapeHtml(e && e.message ? e.message : 'request failed')}).</div>`;
+        return;
+      }
+      if (!d) return;
+      try {
+        nd2RenderAdsbOverview(d);
+      } catch (e) {
+        console.error('nd2RenderAdsbOverview failed', e);
+        if (listEl) listEl.innerHTML = `<div class="nd2-empty">Loaded, but could not render (${escapeHtml(e && e.message ? e.message : 'render error')}).</div>`;
+      }
+    }
+
+    function nd2RenderAdsbOverview(d) {
+      const t = (d && d.totals) || {};
+      const rx = (d && d.receivers) || [];
+
+      const tilesEl = document.getElementById('nd2-aov-tiles');
+      if (tilesEl) {
+        tilesEl.innerHTML = [
+          // Aircraft now is a fleet SUM and will double-count anything two
+          // receivers can both see; it answers "how much are we hearing",
+          // not "how many distinct aircraft exist".
+          ['Aircraft now', nd2Num(t.aircraftNow), (t.online || 0) + ' of ' + (t.receivers || 0) + ' online'],
+          ['Positions', nd2Num(t.positions), 'reports in this window'],
+          ['Best range', t.maxRangeKm ? Math.round(t.maxRangeKm) + ' km' : '—', 'furthest any receiver saw'],
+          ['Snapshots', nd2Num(t.snapshots), 'uploads accepted'],
+        ].map(([k, v, sub]) =>
+          `<div class="stat-card"><div class="stat-value">${v}</div>`
+          + `<div class="stat-label">${escapeHtml(k)}</div>`
+          + `<div class="nd2-stat-sub">${escapeHtml(sub)}</div></div>`).join('');
+      }
+
+      const listEl = document.getElementById('nd2-aov-list');
+      if (!listEl) return;
+      if (!rx.length) {
+        listEl.innerHTML = '<div class="nd2-empty">No ADS-B receivers yet.</div>';
+        return;
+      }
+
+      const soft = 'color:var(--text-soft,#94a3b8);';
+      const rows = rx.map(r => {
+        const live = r.live || {};
+        const tot = r.totals || {};
+        let state;
+        if (!r.online) state = '<span style="' + soft + '">offline</span>';
+        else if (!r.enabled) state = '<span style="' + soft + '">capture off</span>';
+        else if (live.decoder && /run/i.test(live.decoder)) state = '<span style="color:#4ade80;">decoding</span>';
+        else if (live.decoder && /crash/i.test(live.decoder)) state = '<span style="color:#fca5a5;">crash-looping</span>';
+        else state = '<span style="color:#fca5a5;">decoder down</span>';
+        if (r.feedEnabled === false) state += ' <span style="' + soft + '">· feed off</span>';
+
+        // An absent range is explained rather than shown as a fault: without an
+        // antenna pin the decoder cannot compute one at all.
+        const rangeCell = !r.hasPosition
+          ? '<span style="' + soft + '" title="Set the node\'s exact antenna pin to enable range">no pin</span>'
+          : (tot.maxRangeKm ? Math.round(tot.maxRangeKm) + ' km' : '—');
+
+        return [
+          `<a href="#" class="nd2-node-link" data-node-id="${escapeHtml(String(r.id))}">${escapeHtml(r.name || String(r.id))}</a>`
+            + `<div style="font-size:0.7rem; ${soft}">${state}</div>`,
+          (live.aircraftNow == null ? '—' : nd2Num(live.aircraftNow)),
+          (live.msgRate == null ? '—' : Number(live.msgRate).toFixed(1) + '/s'),
+          rangeCell,
+          nd2Num(tot.positions),
+          nd2Num(tot.maxAircraft),
+          (tot.tracksMax == null ? '—' : nd2Num(tot.tracksMax)),
+        ];
+      });
+
+      listEl.innerHTML = nd2MiniTable(
+        [{ label: 'Receiver' }, { label: 'Aircraft', num: true }, { label: 'Msg rate', num: true },
+         { label: 'Max range', num: true }, { label: 'Positions', num: true },
+         { label: 'Peak aircraft', num: true }, { label: 'Unique', num: true }],
+        rows);
+
+      // Delegated so it survives the poll re-render.
+      listEl.onclick = (e) => {
+        const a = e.target.closest('.nd2-node-link');
+        if (!a) return;
+        e.preventDefault();
+        nd2OpenAdsbNodeView(a.dataset.nodeId);
+      };
+    }
+
+    /** One receiver's day-by-day history, shown under the fleet table. */
+    async function nd2OpenAdsbNodeView(nodeId) {
+      if (!nodeId) return;
+      let d;
+      try {
+        d = await nd2Fetch(`/api/node-data/adsb-node?nodeId=${encodeURIComponent(nodeId)}&window=${encodeURIComponent(nd2.window)}`);
+      } catch (e) {
+        showToast('Could not load that receiver: ' + (e && e.message ? e.message : 'request failed'), 'error');
+        return;
+      }
+      if (!d) return;
+      const days = d.days || [];
+      const name = (d.node && (d.node.name || d.node.id)) || 'Receiver';
+      const body = days.length
+        ? nd2MiniTable(
+            [{ label: 'Day' }, { label: 'Positions', num: true }, { label: 'Peak aircraft', num: true },
+             { label: 'Max range', num: true }, { label: 'Peak msg rate', num: true }],
+            days.slice().reverse().map(x => [
+              escapeHtml(String(x.day)),
+              nd2Num(x.positions),
+              nd2Num(x.maxAircraft),
+              x.maxRangeKm ? Math.round(x.maxRangeKm) + ' km' : '—',
+              x.msgRateMax ? Number(x.msgRateMax).toFixed(1) + '/s' : '—',
+            ]))
+        : '<div class="nd2-empty">Nothing recorded for this receiver in this window.</div>';
+      const el = document.getElementById('nd2-aov-detail');
+      if (!el) return;
+      el.style.display = '';
+      el.innerHTML = '<div class="nd2-card">'
+        + '<div class="nd2-card-h"><span>' + escapeHtml(name) + ' — daily</span>'
+        + '<button type="button" class="nd2-back" onclick="nd2CloseAdsbNodeView()">Close</button></div>'
+        + body + '</div>';
+      el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    function nd2CloseAdsbNodeView() {
+      const el = document.getElementById('nd2-aov-detail');
+      if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+    }
+
     async function nd2LoadPagerOverview() {
       try {
         const data = await nd2Fetch(`/api/node-data/pager-overview?window=${nd2.window}`);
@@ -9006,6 +9189,7 @@
     let _ndPagerMsgs = [];         // pager nodes: recent decoded pages (buffered server-side + live)
     let _ndSpectrumTunerId = null; // tunerId of the active spectrum stream
     let _ndReadersSig = null;      // last-rendered pager Readers-panel signature (rebuild guard)
+    let _ndAdsbSig = null;         // ditto for the ADS-B Receiver panel
     let _ndAudioLabel = null;      // reader label of the active pager audio monitor (null = off)
     let _ndAudioCtx = null;        // Web Audio context for the monitor
     let _ndAudioPlayhead = 0;      // scheduled playback time cursor (ctx clock)
@@ -9059,6 +9243,7 @@
       _ndTuners = []; _ndChannels = []; _ndCalls = []; _ndEvents = []; _ndPagerMsgs = [];
       _ndTunersSig = null;
       _ndReadersSig = null;
+      _ndAdsbSig = null;
       _ndSpectrumTunerId = null;
       _ndAudioLabel = null; _ndAudioPlayhead = 0;
       try { if (_ndAudioCtx) _ndAudioCtx.close(); } catch (e) {}
@@ -9209,6 +9394,7 @@
       _ndRenderChannels();
       _ndRenderEvents();
       _ndRenderReaders();      // pager: reader running/stopped + msg count live (no-op for radio)
+      _ndRenderAdsb();         // adsb: decoder state + aircraft/rate/range (no-op otherwise)
       _ndRenderNowPlaying();
       _ndRenderCfgSync();
       _ndRenderVersions();     // reflect a just-completed component update live
@@ -9672,6 +9858,7 @@
       _ndRenderNowPlaying();
       _ndRenderTunerSelector();
       _ndRenderReaders();
+      _ndRenderAdsb();
       _ndCfgRender();
       _ndRenderCfgSync();
     }
@@ -9723,6 +9910,142 @@
     // Pager drawer: render the per-frequency reader status from the live status
     // frame's components (keys "reader:<label>") + a messages/10min line. No-op
     // for radio nodes (the panel is CSS-hidden).
+    /** The ADS-B drawer panel: what the receiver is doing, and its two knobs.
+     *
+     *  Reads live figures from the FRESH allNodes row and the status frame
+     *  rather than the _ndNode snapshot taken at drawer-open, so the numbers
+     *  track the ~15s heartbeat instead of freezing at open time. */
+    function _ndRenderAdsb() {
+      const el = document.getElementById('nd-adsb');
+      if (!el) return;
+      if ((_ndNode && _ndNode.kind) !== 'adsb') return;
+      const st = _ndStatus || (_ndNode && _ndNode.status) || {};
+      const comps = (st && st.components) || {};
+      const nFresh = (allNodes || []).find(x => String(x.id) === String(_ndNodeId)) || _ndNode || {};
+      const online = !!nFresh.online;
+
+      const decoder = String(comps['dump1090'] || '');
+      const aircraft = (typeof st.adsbAircraftNow === 'number') ? st.adsbAircraftNow : null;
+      const rate = (typeof st.adsbMsgRate === 'number') ? st.adsbMsgRate : null;
+      const range = (typeof st.adsbMaxRangeKm === 'number') ? st.adsbMaxRangeKm : null;
+      const gainNow = (typeof st.adsbGainNow === 'number') ? st.adsbGainNow : null;
+      const qd = (typeof st.queueDepth === 'number') ? st.queueDepth : null;
+      const expired = (typeof st.uploadsExpired === 'number') ? st.uploadsExpired : null;
+      const gainVal = (nFresh.adsbGain == null) ? '' : String(nFresh.adsbGain);
+      const ppmVal = (nFresh.adsbPpm == null) ? '' : String(nFresh.adsbPpm);
+      const hasPin = (typeof nFresh.lat === 'number' && typeof nFresh.lon === 'number');
+
+      // Rebuild guard: the panel re-renders on every status frame, and an
+      // unconditional innerHTML would snap an open <select> shut or wipe a
+      // half-typed gain mid-edit.
+      const sig = JSON.stringify([online, decoder, aircraft, rate, range, gainNow,
+        qd, expired, gainVal, ppmVal, hasPin]);
+      if (sig === _ndAdsbSig) return;
+      _ndAdsbSig = sig;
+
+      const tuneInput = 'background:rgba(255,255,255,0.05); color:var(--text-primary,#e2e8f0); border:1px solid var(--border-subtle,#334155); border-radius:6px; padding:0.25rem 0.4rem; font-size:0.8rem; width:6.5rem; text-align:right;';
+      const soft = 'color:var(--text-soft,#94a3b8);';
+      const num = (v, suffix, digits) => (v == null ? '—'
+        : (digits ? Number(v).toFixed(digits) : String(Math.round(Number(v)))) + (suffix || ''));
+
+      // Decoder state is shown verbatim rather than flattened to running/stopped:
+      // a crash-looping decoder is a different problem from a deliberately
+      // stopped one, and the agent reports them distinctly.
+      let decoderHtml;
+      if (!online) decoderHtml = '<span style="' + soft + '">node offline</span>';
+      else if (/run/i.test(decoder)) decoderHtml = '<span style="color:#4ade80;">running</span>';
+      else if (/crash/i.test(decoder)) decoderHtml = '<span style="color:#fca5a5;">crash-looping</span>';
+      else if (/disab/i.test(decoder)) decoderHtml = '<span style="' + soft + '">disabled (capture off)</span>';
+      else decoderHtml = '<span style="color:#fca5a5;">' + escapeHtml(decoder || 'stopped') + '</span>';
+
+      const stat = (label, value, hint) =>
+        '<div style="min-width:7rem;">'
+        + '<div style="font-size:0.68rem; text-transform:uppercase; letter-spacing:0.04em; ' + soft + '">' + escapeHtml(label) + '</div>'
+        + '<div style="font-size:1.05rem; font-weight:600;">' + value + '</div>'
+        + (hint ? '<div style="font-size:0.68rem; ' + soft + '">' + hint + '</div>' : '')
+        + '</div>';
+
+      // Gain "auto" means the AGENT adapts, not the dongle's hardware AGC —
+      // labelled so nobody picks it expecting the latter.
+      const isAuto = /^auto$/i.test(gainVal);
+      const gainControl =
+        '<select class="nd-write-input" onchange="_ndSetAdsbTuning({ gain: this.value }, this)" style="' + tuneInput + ' width:auto; text-align:left;">'
+        + '<option value="auto" ' + (isAuto || gainVal === '' ? 'selected' : '') + '>Auto (adaptive)</option>'
+        + [49.6, 44.5, 40.2, 36.4, 33.8, 29.7, 25.4, 22.9, 19.7, 16.6, 12.5, 8.7, 4.4, 0]
+            .map(function (g) {
+              const sel = (!isAuto && gainVal !== '' && Number(gainVal) === g) ? 'selected' : '';
+              return '<option value="' + g + '" ' + sel + '>' + g + ' dB</option>';
+            }).join('')
+        + '</select>';
+
+      el.innerHTML = ''
+        + '<div style="display:flex; flex-wrap:wrap; gap:1.2rem; margin-bottom:0.9rem;">'
+        +   stat('Decoder', decoderHtml, null)
+        +   stat('Aircraft', num(aircraft), 'with a position now')
+        +   stat('Messages', num(rate, '/s', 1), 'last minute')
+        +   stat('Max range', hasPin ? num(range, ' km') : '—',
+              hasPin ? 'this decoder run' : 'needs an antenna pin')
+        +   stat('Queue', num(qd), expired ? (expired + ' expired') : 'snapshots waiting')
+        + '</div>'
+        + (hasPin ? '' :
+            '<div style="font-size:0.78rem; color:#fbbf24; margin-bottom:0.7rem;">'
+            + 'No antenna position set, so this receiver cannot measure range. '
+            + 'Set the exact pin on the node\'s location.</div>')
+        + '<div class="nd-switch-row nd-write" style="display:flex; align-items:center; gap:0.6rem; flex-wrap:wrap;">'
+        +   '<span style="font-size:0.8rem;">Gain</span>'
+        +   gainControl
+        +   '<span style="font-size:0.72rem; ' + soft + '">'
+        +     (isAuto || gainVal === ''
+                ? ('adapting to this site' + (gainNow != null ? ' — now ' + Number(gainNow).toFixed(1) + ' dB' : ''))
+                : 'fixed')
+        +   '</span>'
+        +   '<span style="font-size:0.8rem; margin-left:0.8rem;">PPM</span>'
+        +   '<input type="text" class="nd-write-input" value="' + escapeHtml(ppmVal) + '" placeholder="0" style="' + tuneInput + ' width:4.5rem;" onchange="_ndSetAdsbTuning({ ppm: this.value }, this)">'
+        + '</div>';
+    }
+
+    /** Save an ADS-B tuner override. Both fields restart the decoder to apply,
+     *  which is a couple of seconds of lost reception — worth saying so. */
+    async function _ndSetAdsbTuning(patch, el) {
+      const body = {};
+      if ('gain' in patch) {
+        const g = String(patch.gain).trim();
+        if (g === '') body.gain = null;
+        else if (/^auto$/i.test(g)) body.gain = 'auto';
+        else {
+          const n = Number(g);
+          if (!Number.isFinite(n) || n < 0 || n > 49.6) { showToast('Gain must be 0–49.6 dB or "auto".', 'error'); return; }
+          body.gain = n;
+        }
+      }
+      if ('ppm' in patch) {
+        const p = String(patch.ppm).trim();
+        if (p === '') body.ppm = null;
+        else {
+          const n = Number(p);
+          if (!Number.isInteger(n) || n < -100 || n > 100) { showToast('PPM must be a whole number (-100..100).', 'error'); return; }
+          body.ppm = n;
+        }
+      }
+      if (el) el.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/${_ndNodeId}/adsb-tuning`, {
+          method: 'PUT',
+          headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        showToast('Saved — the decoder restarts to apply.', 'success');
+        await loadNodes();
+        _ndAdsbSig = null; // force a redraw against the saved values
+        _ndRenderAdsb();
+      } catch (e) {
+        showToast('Could not save: ' + e.message, 'error');
+      } finally {
+        if (el) el.disabled = false;
+      }
+    }
+
     function _ndRenderReaders() {
       const el = document.getElementById('nd-readers');
       if (!el) return;
@@ -9989,6 +10312,7 @@
       _ndWsSend({ t: 'audioStart', data: { nodeId: _ndNodeId, label } });
       showToast(`Starting audio monitor for ${label} — reader restarts (~2s).`, 'success');
       _ndRenderReaders();
+      _ndRenderAdsb();
     }
 
     function _ndAudioStop() {
@@ -9999,6 +10323,7 @@
       try { if (_ndAudioCtx) _ndAudioCtx.close(); } catch (e) {}
       _ndAudioCtx = null;
       _ndRenderReaders();
+      _ndRenderAdsb();
     }
 
     // Recheck SDRs: agent stops readers, re-detects the dongles (re-measures ppm),
@@ -13658,6 +13983,7 @@
       'wire:manager':       { icon: 'fa-solid fa-newspaper',      label: 'Wire · Manager',     group: 'The Wire' },
       'feeder:radio':       { icon: 'fa-solid fa-walkie-talkie',  label: 'Feeder · Radio',     group: 'Feeder' },
       'feeder:pager':       { icon: 'fa-solid fa-pager',          label: 'Feeder · Pager',     group: 'Feeder' },
+      'feeder:adsb':        { icon: 'fa-solid fa-plane-up',       label: 'Feeder · ADS-B',     group: 'Feeder' },
       'feeder:agency_data': { icon: 'fa-solid fa-table',          label: 'Feeder · Agency data', group: 'Feeder' },
       'feeder:monitor':     { icon: 'fa-solid fa-eye',            label: 'Feeder · Monitor',   group: 'Feeder' },
       'feeder:manager':     { icon: 'fa-solid fa-screwdriver-wrench', label: 'Feeder · Manager', group: 'Feeder' },
@@ -13682,7 +14008,7 @@
     // are gated behind can_assign_privileged_roles.
     const ASSIGNABLE_ROLE_GROUPS = [
       { group: 'The Wire', roles: ['wire:contributor', 'wire:manager'] },
-      { group: 'Feeder',   roles: ['feeder:radio', 'feeder:pager', 'feeder:agency_data', 'feeder:monitor', 'feeder:manager'] },
+      { group: 'Feeder',   roles: ['feeder:radio', 'feeder:pager', 'feeder:adsb', 'feeder:agency_data', 'feeder:monitor', 'feeder:manager'] },
       { group: 'Map',      roles: ['map:editor', 'map:manager'] },
     ];
     const PRIVILEGED_ASSIGNABLE = ['staff', 'owner'];
@@ -13692,6 +14018,7 @@
       'wire:manager': 'Approve Wire posts, action takedowns (can post too)',
       'feeder:radio': 'Run a radio feeder node',
       'feeder:pager': 'Run a pager feeder node',
+      'feeder:adsb': 'Run an ADS-B (aircraft) feeder node',
       'feeder:agency_data': 'Edit agency reference tables (via approval)',
       'feeder:monitor': 'View-only Data + Nodes pages',
       'feeder:manager': 'Manage feeder nodes/config + review data changes',

@@ -481,6 +481,9 @@
     .lga-dd .lga-opt { padding: 0.45rem 0.7rem; cursor: pointer; font-size: 0.85rem; color: var(--text-primary, #e2e8f0); }
     .lga-dd .lga-opt:hover { background: rgba(125,211,252,0.12); }
     .loc-pin-toggle { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.9rem; font-size: 0.9rem; cursor: pointer; }
+    /* ADS-B: the pin is required, so it gets a field label rather than a
+       checkbox the volunteer could untick. */
+    .loc-pin-required { margin-bottom: 0.6rem; font-size: 0.9rem; font-weight: 600; }
     .loc-pin-toggle input { width: 16px; height: 16px; flex: 0 0 auto; }
     #loc-map { height: 340px; border-radius: 8px; margin-bottom: 1rem; border: 1px solid var(--border-subtle); }
     #loc-map, #loc-map * { box-sizing: initial; } /* Leaflet needs its own box model */
@@ -732,6 +735,7 @@
     const _kindAgent = {
       radio: { platforms: ['windows', 'linux'] },
       pager: { platforms: ['linux'] }, // rtl_fm | multimon-ng is a Linux stack
+      adsb: { platforms: ['linux'] },  // dump1090 + a bash launcher, likewise
     };
     const hasAgent = (kind) => !!_kindAgent[kind];
     const _loc = { map: null, marker: null, thenInstall: false, node: null, nodeId: null, createKind: null, pinPlaced: false };
@@ -817,13 +821,16 @@
     function renderRadioCard(data) {
       const nodes = data.nodes || [];
       _feederNodes = nodes;
-      // Which node kinds this user may create (by role). Default permissive if an
-      // older backend doesn't send it. adsb needs radio_contributor (roleForKind).
-      const cc = data.canCreate || { radio: true, pager: true };
+      // Which node kinds this user may create (by role). Each kind has its own
+      // feeder:<kind> role, so adsb no longer piggybacks on radio. Default
+      // permissive for radio/pager if an older backend does not send the field;
+      // adsb defaults OFF, since a backend that predates the role would reject
+      // the create anyway and offering it would just produce a 403.
+      const cc = data.canCreate || { radio: true, pager: true, adsb: false };
       const opts = [];
       if (cc.radio) opts.push('<option value="radio">PSN</option>');
       if (cc.pager) opts.push('<option value="pager">Pager</option>');
-      if (cc.radio) opts.push('<option value="adsb">ADSB — coming soon</option>');
+      if (cc.adsb) opts.push('<option value="adsb">ADSB</option>');
       const addNodeHtml = opts.length
         ? `<div class="add-node">
              <select id="new-node-kind" aria-label="Node type">${opts.join('')}</select>
@@ -864,6 +871,7 @@
       const kind = node.kind || 'radio';
       const isRadio = kind === 'radio';
       const isPager = kind === 'pager';
+      const isAdsb = kind === 'adsb';
       const agentCfg = _kindAgent[kind];
       const agent = node.agentVersion;
       const agentHtml = agent ? `<span class="node-ver">agent ${escapeHtml(agent)}</span>` : '';
@@ -880,6 +888,24 @@
         chips = chipHtml('updating', '<i class="fas fa-arrows-rotate"></i> Updating');
       } else if (!online) {
         chips = chip('off', 'Offline');
+      } else if (isAdsb) {
+        let out = '';
+        if (!node.sdrUp) out += chip('warn', 'Decoder down');
+        else if (node.decoding) out += chip('ok', 'Decoding');
+        else out += chip('', 'Idle');
+        // What the receiver is actually contributing. Aircraft can legitimately
+        // be zero on a quiet night, so it is shown as a plain count rather than
+        // dressed up as a fault; the message rate above is the health signal.
+        if (node.sdrUp && typeof node.aircraftNow === 'number') {
+          out += chip('', node.aircraftNow + (node.aircraftNow === 1 ? ' aircraft' : ' aircraft'));
+        }
+        if (typeof node.maxRangeKm === 'number' && node.maxRangeKm > 0) {
+          out += chip('', Math.round(node.maxRangeKm) + ' km range');
+        }
+        if (node.feedEnabled === false) out += chip('off', 'Feed off');
+        else if (node.uploading) out += chip('ok', 'Uploading');
+        else out += chip('', 'Feed on');
+        chips = out;
       } else if (isPager) {
         let out = '';
         if (!node.sdrUp) out += chip('warn', 'No readers');
@@ -1312,10 +1338,17 @@
       document.body.appendChild(el);
     }
 
-    // Location picker: a REQUIRED coarse area (radio: NSW RFS zone; pager:
-    // State + LGA — the state routes the node's Pagermon feed AND selects its
-    // frequency plan) plus an OPTIONAL exact antenna pin. Used both to create a
-    // node (opts.createKind — created on Save) and to edit an existing one.
+    // Location picker. What is required differs by kind:
+    //   radio — NSW RFS zone, exact pin optional
+    //   pager — State + LGA (the state routes its Pagermon feed AND selects
+    //           its frequency plan), exact pin optional
+    //   adsb  — the exact pin IS the location, and is REQUIRED. Not a
+    //           preference: the decoder is launched with --lat/--lon and
+    //           computes its range statistics from them, so an approximate
+    //           position produces wrong numbers and a missing one produces
+    //           none at all.
+    // Used both to create a node (opts.createKind — created on Save) and to
+    // edit an existing one.
     async function openLocationPicker(nodeId, opts) {
       closeLocationPicker(); // never stack two pickers
       opts = opts || {};
@@ -1327,8 +1360,10 @@
       const createMode = !!_loc.createKind;
       const hasPin = typeof node.lat === 'number' && typeof node.lon === 'number';
       const curZone = node.zone || '';
-      const isPager = (_loc.createKind || node.kind) === 'pager';
-      if (!isPager) {
+      const kind = _loc.createKind || node.kind;
+      const isPager = kind === 'pager';
+      const isAdsb = kind === 'adsb';
+      if (!isPager && !isAdsb) {
         const zones = await loadZones();
         if (!zones.length) {
           // No zones = can't pick one = can't create/save. Don't open a dead modal.
@@ -1342,10 +1377,12 @@
       overlay.innerHTML = `
         <div class="modal loc-modal">
           <h3><i class="fas fa-location-dot"></i> Node location</h3>
-          <p>${isPager
+          <p>${isAdsb
+            ? `Drop a pin on your <b>exact antenna position</b> — this one is required. Your receiver uses it to work out how far away each aircraft is, so its range and coverage figures are only as accurate as this pin. Street-level is what you want. The position is staff/owner only, never public.`
+            : isPager
             ? `Every pager node needs its <b>state</b> and <b>council area (LGA)</b> — the state decides which Pagermon network it feeds and what frequencies it scans. Optionally drop an <b>exact antenna pin</b> for <b>coverage</b> estimates. The location is staff/owner only, never public.`
             : `Every node needs a <b>region</b> (its NSW RFS area). Optionally drop an <b>exact antenna pin</b> — it improves <b>coverage</b> estimates and <b>channel tuning</b>. The pin and region are staff/owner only, never public.`}</p>
-          ${isPager ? `
+          ${isAdsb ? `` : isPager ? `
           <label class="loc-field">
             <span>State <span style="color:#f87171">*</span></span>
             <select id="loc-state" onchange="_locOnStateChange()">${_stateOptionsHtml(node.state || '')}</select>
@@ -1362,19 +1399,28 @@
             <span>Region <span style="color:#f87171">*</span></span>
             <select id="loc-zone">${_zoneOptionsHtml(curZone)}</select>
           </label>`}
+          ${isAdsb ? `
+          <div class="loc-pin-required">
+            <span>Antenna position <span style="color:#f87171">*</span></span>
+          </div>` : `
           <label class="loc-pin-toggle">
             <input type="checkbox" id="loc-pin-on" ${hasPin ? 'checked' : ''} onchange="_locTogglePin(this.checked)">
             <span>Set an exact antenna pin (optional)</span>
-          </label>
-          <div id="loc-map" style="display:${hasPin ? 'block' : 'none'};"></div>
+          </label>`}
+          <div id="loc-map" style="display:${(hasPin || isAdsb) ? 'block' : 'none'};"></div>
           <div class="modal-actions">
             <button class="dl-btn" onclick="saveLocation(this)"><i class="fas fa-check"></i> ${createMode ? 'Create node' : 'Save'}</button>
-            ${(!createMode && hasPin) ? `<button class="mini-btn danger" onclick="clearLocation(this)">Remove pin</button>` : ''}
+            ${(!createMode && hasPin && !isAdsb) ? `<button class="mini-btn danger" onclick="clearLocation(this)">Remove pin</button>` : ''}
             <button class="mini-btn" onclick="skipLocation()">Cancel</button>
           </div>
         </div>`;
       document.body.appendChild(overlay);
       if (hasPin) _locInitMap([node.lat, node.lon], true);
+      // ADS-B: the map is the whole form, so bring it up straight away. Opens on
+      // the country-wide default with pinPlaced=false, which is what makes Save
+      // refuse until the volunteer actually clicks their own antenna — the
+      // default marker must never be mistaken for a real position.
+      else if (isAdsb) _locInitMap([-33.8688, 151.2093], false);
       // Pre-fill the LGA suggestions for the stored state (edit mode) and wire
       // the dropdown: pick on mousedown, which fires BEFORE the input's blur.
       if (isPager) {
@@ -1446,11 +1492,16 @@
     }
 
     async function saveLocation(btn) {
-      // Per-kind area fields: pager = state + lga, radio = RFS zone. `area` is
-      // spread into both the create body and putLocation.
-      const isPager = (_loc.createKind || (_loc.node && _loc.node.kind)) === 'pager';
+      // Per-kind area fields: pager = state + lga, radio = RFS zone, adsb = the
+      // exact pin and nothing else. `area` is spread into both the create body
+      // and putLocation.
+      const kind = _loc.createKind || (_loc.node && _loc.node.kind);
+      const isPager = kind === 'pager';
+      const isAdsb = kind === 'adsb';
       let area;
-      if (isPager) {
+      if (isAdsb) {
+        area = {};
+      } else if (isPager) {
         const state = document.getElementById('loc-state')?.value || '';
         const lga = (document.getElementById('loc-lga')?.value || '').trim();
         if (!state) { showToast('Please select your state.', 'error'); return; }
@@ -1464,7 +1515,18 @@
       }
       const pinOn = document.getElementById('loc-pin-on');
       let lat = null, lon = null;
-      if (pinOn && pinOn.checked) {
+      if (isAdsb) {
+        // The pin IS the location here, so there is no untick escape: without a
+        // real position the decoder reports no range at all. Same
+        // untouched-default guard as below — the marker starts on a placeholder
+        // and pinPlaced only becomes true once the volunteer moves or clicks it.
+        if (!_loc.marker || !_loc.pinPlaced) {
+          showToast('Click or drag the pin to your exact antenna location — ADS-B nodes need it to measure range.', 'error');
+          return;
+        }
+        const c = _loc.marker.getLatLng();
+        lat = c.lat; lon = c.lng;
+      } else if (pinOn && pinOn.checked) {
         // Guard against saving the untouched default marker (Sydney CBD) as a real
         // antenna location — require the user to actually place it, or untick the pin.
         if (!_loc.marker || !_loc.pinPlaced) {
@@ -1484,12 +1546,17 @@
           const res = await fetch(`${API_BASE_URL}/api/feeder/nodes`, {
             method: 'POST',
             headers: { 'Authorization': 'Bearer ' + jwt, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ kind: _loc.createKind, ...area }),
+            // ADS-B carries its pin in the CREATE body: the backend requires it
+            // there (no area to fall back on), and it means the first config
+            // push already has --lat/--lon rather than waiting for a follow-up.
+            body: JSON.stringify({ kind: _loc.createKind, ...area, ...(isAdsb ? { lat, lon } : {}) }),
           });
           const data = await res.json().catch(() => ({}));
           if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
           _nodeTokens[data.node.id] = data.token;
-          if (lat !== null) await putLocation(data.node.id, { ...area, lat, lon });
+          // ADS-B already sent its pin in the create body above; a follow-up
+          // PUT would only trigger a second, identical config push.
+          if (lat !== null && !isAdsb) await putLocation(data.node.id, { ...area, lat, lon });
           closeLocationPicker();
           await refreshNodes();
           showInstallModal(data.node);

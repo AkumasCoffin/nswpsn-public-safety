@@ -4141,6 +4141,111 @@ nodeDataRouter.get(
 );
 
 // ---------------------------------------------------------------------------
+// GET /api/node-data/adsb-overview?window=24h|7d|30d
+//
+// Every ADS-B receiver with its windowed totals and current live figures — the
+// fleet view behind the staff Data tab's ADS-B mode.
+//
+// One query rather than N per-node fetches: the page needs the whole fleet at
+// once, and a receiver that has reported NOTHING is exactly the one worth
+// seeing, so the node list is the left side of the join and the aggregate is
+// optional.
+// ---------------------------------------------------------------------------
+nodeDataRouter.get(
+  '/api/node-data/adsb-overview',
+  requireRole(canViewNodeData),
+  async (c) => {
+    try {
+      const pool = await getPool();
+      if (!pool) return c.json({ error: 'database unavailable' }, 503);
+      const url = new URL(c.req.url);
+      const window = detailWindow(url);
+      const days = window === '24h' ? 1 : window === '7d' ? 7 : 30;
+
+      const rows = await pool.query<{
+        id: string; name: string | null; enabled: boolean; feed_enabled: boolean;
+        lat: unknown; lon: unknown;
+        snapshots: unknown; positions: unknown; max_aircraft: unknown;
+        max_range_km: unknown; msg_rate_max: unknown; tracks_max: unknown;
+        days_reporting: unknown; last_day: unknown;
+      }>(
+        `SELECT n.id, n.name, n.enabled, n.feed_enabled, n.lat, n.lon,
+                COALESCE(SUM(d.snapshots), 0)::int    AS snapshots,
+                COALESCE(SUM(d.positions), 0)::bigint AS positions,
+                COALESCE(MAX(d.max_aircraft), 0)::int AS max_aircraft,
+                MAX(d.max_range_km)                   AS max_range_km,
+                MAX(d.msg_rate_max)                   AS msg_rate_max,
+                MAX(d.tracks_max)::int                AS tracks_max,
+                COUNT(d.day)::int                     AS days_reporting,
+                MAX(d.day)                            AS last_day
+           FROM nodes n
+           LEFT JOIN node_adsb_daily d
+             ON d.node_id = n.id
+            AND d.day > (now() AT TIME ZONE 'Australia/Sydney')::date - $1::int
+          WHERE n.kind = 'adsb'
+          GROUP BY n.id, n.name, n.enabled, n.feed_enabled, n.lat, n.lon
+          ORDER BY positions DESC, n.name ASC`,
+        [days],
+      );
+
+      const receivers = rows.rows.map((r) => {
+        // Live figures come from the agent's heartbeat, so they are null while
+        // a node is offline — deliberately, so the UI can say "offline" rather
+        // than claim the receiver is hearing nothing.
+        const live = hub.liveStatus(r.id);
+        const st = live.status;
+        return {
+          id: r.id,
+          name: r.name,
+          enabled: r.enabled,
+          feedEnabled: r.feed_enabled,
+          // Null here explains an absent range rather than looking like a fault.
+          hasPosition: typeof r.lat === 'number' && typeof r.lon === 'number',
+          online: hub.isOnline(r.id),
+          live: {
+            aircraftNow: st?.adsbAircraftNow ?? null,
+            msgRate: st?.adsbMsgRate ?? null,
+            maxRangeKm: st?.adsbMaxRangeKm ?? null,
+            gainNow: st?.adsbGainNow ?? null,
+            decoder: st?.components?.['dump1090'] ?? null,
+            queueDepth: st?.queueDepth ?? null,
+          },
+          totals: {
+            snapshots: num(r.snapshots),
+            positions: num(r.positions),
+            maxAircraft: num(r.max_aircraft),
+            maxRangeKm: r.max_range_km ?? null,
+            msgRateMax: r.msg_rate_max ?? null,
+            tracksMax: r.tracks_max ?? null,
+            daysReporting: num(r.days_reporting),
+          },
+        };
+      });
+
+      // Fleet roll-up. positions/snapshots sum; the maxima are the best any one
+      // receiver managed, NOT a sum — "furthest aircraft the fleet saw" is a
+      // max by definition, and adding ranges together would be meaningless.
+      const totals = receivers.reduce(
+        (acc, r) => ({
+          receivers: acc.receivers + 1,
+          online: acc.online + (r.online ? 1 : 0),
+          positions: acc.positions + r.totals.positions,
+          snapshots: acc.snapshots + r.totals.snapshots,
+          aircraftNow: acc.aircraftNow + (r.live.aircraftNow ?? 0),
+          maxRangeKm: Math.max(acc.maxRangeKm, Number(r.totals.maxRangeKm ?? 0)),
+        }),
+        { receivers: 0, online: 0, positions: 0, snapshots: 0, aircraftNow: 0, maxRangeKm: 0 },
+      );
+
+      return c.json({ window, totals, receivers });
+    } catch (err) {
+      log.error({ err }, '/api/node-data/adsb-overview error');
+      return c.json({ error: 'failed to load adsb overview' }, 500);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
 // GET /api/node-data/adsb-node?nodeId=&window=24h|7d|30d
 //
 // One ADS-B receiver's performance: what it is doing right now (live, from the
