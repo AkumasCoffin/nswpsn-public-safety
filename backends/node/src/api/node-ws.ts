@@ -208,7 +208,13 @@ async function handleAgentUpgrade(
       { tokenPrefix, tokenLen, installId, reason: resolved.reason },
       'agent WS reject: token resolve failed',
     );
-    rejectUpgrade(socket, resolved.reason === 'no_role' ? 403 : 401, 'Unauthorized');
+    // 503 for 'unavailable' so the agent backs off and retries instead of
+    // treating the socket as permanently refused.
+    rejectUpgrade(
+      socket,
+      resolved.reason === 'no_role' ? 403 : resolved.reason === 'unavailable' ? 503 : 401,
+      resolved.reason === 'unavailable' ? 'Registry Unavailable' : 'Unauthorized',
+    );
     return;
   }
   // TOFU: bind this machine to the node on first connect; reject a DIFFERENT

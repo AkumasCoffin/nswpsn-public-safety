@@ -87,7 +87,10 @@ export type ResolveResult =
       feedEnabled: boolean;
       installId: string | null;
     }
-  | { ok: false; reason: 'bad_token' | 'no_role' };
+  // 'unavailable' is NOT an auth failure: the token could not be checked at
+  // all (no database). Callers must answer 5xx for it, never 401 — agents
+  // treat 401 as permanent and discard queued data on it.
+  | { ok: false; reason: 'bad_token' | 'no_role' | 'unavailable' };
 
 /**
  * Verify a presented per-node token → the node it belongs to, gated on the
@@ -107,7 +110,10 @@ export async function resolveNodeToken(token: string): Promise<ResolveResult> {
     if (safeEqualHex(suppliedHash, cached.tokenHash)) entry = cached;
   } else {
     const pool = await getPool();
-    if (!pool) return { ok: false, reason: 'bad_token' };
+    // No database: we cannot say whether this token is good. Saying "bad"
+    // would make every agent in the fleet drop its queue over an outage the
+    // queue was built to ride out.
+    if (!pool) return { ok: false, reason: 'unavailable' };
     const res = await pool.query<{
       id: string;
       user_id: string;

@@ -136,6 +136,11 @@ nodeIngestRouter.post('/api/node-ingest/call-upload', async (c) => {
     if (r.reason === 'no_role') {
       return c.json({ error: 'contributor role removed' }, 403);
     }
+    // 503, not 401: the token could not be checked, so the agent must keep
+    // its queue and retry rather than discarding it as permanently refused.
+    if (r.reason === 'unavailable') {
+      return c.json({ error: 'node registry unavailable' }, 503);
+    }
     return c.json({ error: 'unauthorized' }, 401);
   }
   // TOFU: the token is bound to one machine; a different install is rejected.
@@ -404,6 +409,11 @@ nodeIngestRouter.post('/api/node-ingest/activity', async (c) => {
     if (r.reason === 'no_role') {
       return c.json({ error: 'contributor role removed' }, 403);
     }
+    // 503, not 401: the token could not be checked, so the agent must keep
+    // its queue and retry rather than discarding it as permanently refused.
+    if (r.reason === 'unavailable') {
+      return c.json({ error: 'node registry unavailable' }, 503);
+    }
     return c.json({ error: 'unauthorized' }, 401);
   }
   if (r.installId && r.installId !== installId) {
@@ -568,6 +578,11 @@ nodeIngestRouter.post('/api/node-ingest/site-snapshots', async (c) => {
     if (r.reason === 'no_role') {
       return c.json({ error: 'contributor role removed' }, 403);
     }
+    // 503, not 401: the token could not be checked, so the agent must keep
+    // its queue and retry rather than discarding it as permanently refused.
+    if (r.reason === 'unavailable') {
+      return c.json({ error: 'node registry unavailable' }, 503);
+    }
     return c.json({ error: 'unauthorized' }, 401);
   }
   if (r.installId && r.installId !== installId) {
@@ -696,6 +711,11 @@ nodeIngestRouter.post('/api/node-ingest/pager-upload', async (c) => {
   if (!r.ok) {
     if (r.reason === 'no_role') {
       return c.json({ error: 'contributor role removed' }, 403);
+    }
+    // 503, not 401: the token could not be checked, so the agent must keep
+    // its queue and retry rather than discarding it as permanently refused.
+    if (r.reason === 'unavailable') {
+      return c.json({ error: 'node registry unavailable' }, 503);
     }
     return c.json({ error: 'unauthorized' }, 401);
   }
@@ -977,6 +997,11 @@ nodeIngestRouter.post('/api/node-ingest/adsb-upload', async (c) => {
   if (!r.ok) {
     if (r.reason === 'no_role') {
       return c.json({ error: 'contributor role removed' }, 403);
+    }
+    // 503, not 401: the token could not be checked, so the agent must keep
+    // its queue and retry rather than discarding it as permanently refused.
+    if (r.reason === 'unavailable') {
+      return c.json({ error: 'node registry unavailable' }, 503);
     }
     return c.json({ error: 'unauthorized' }, 401);
   }

@@ -167,6 +167,7 @@ nodeUpdatesRouter.get('/api/node-updates/manifest', async (c) => {
   const r = await resolveNodeToken(token);
   if (!r.ok) {
     if (r.reason === 'no_role') return c.json({ error: 'contributor role removed' }, 403);
+    if (r.reason === 'unavailable') return c.json({ error: 'node registry unavailable' }, 503);
     return c.json({ error: 'unauthorized' }, 401);
   }
   try {
