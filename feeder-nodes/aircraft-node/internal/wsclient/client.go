@@ -295,15 +295,15 @@ func (c *Client) sendStatus(conn *websocket.Conn) error {
 	}
 
 	st := protocol.Status{
-		Tuners:        []any{},
-		Channels:      []any{},
-		ActiveCalls:   []any{},
-		Events:        []any{},
-		Components:    comps,
-		QueueDepth:    c.q.Depth(),
-		CPUPct:        0, // best-effort; not computed
-		MemMB:         int(ms.Alloc / (1024 * 1024)),
-		DiskFreeMB:    0, // best-effort; not computed
+		Tuners:         []any{},
+		Channels:       []any{},
+		ActiveCalls:    []any{},
+		Events:         []any{},
+		Components:     comps,
+		QueueDepth:     c.q.Depth(),
+		CPUPct:         0, // best-effort; not computed
+		MemMB:          int(ms.Alloc / (1024 * 1024)),
+		DiskFreeMB:     0, // best-effort; not computed
 		ConfigVersion:  c.appliedVersionPtr(),
 		UploadsExpired: c.q.Expired(),
 	}
@@ -667,8 +667,28 @@ func (c *Client) persistAppliedVersion(v string) error {
 // persistAppliedConfig atomically writes the full applied config (frequency plan
 // + toggles) so the agent can replay the exact config on boot rather than the
 // hardcoded default. See agentcfg.AppliedConfigPath for why this matters.
+// persistedConfig is the applied config as written to disk, stamped with the
+// node kind that wrote it.
+//
+// The stamp exists because a host runs one node kind at a time but is switched
+// between them by re-running the other installer, which reuses the same data
+// dir. The kinds' config structs share field names (ConfigVersion,
+// CaptureEnabled, FeedEnabled), so each unmarshals the other's file without
+// complaint and resumes a config belonging to a DIFFERENT node — reporting
+// that node's config version to the backend, and running on whatever its own
+// fields defaulted to. An ADS-B node switched from a pager did exactly that:
+// it came up with no antenna position and told the backend it was in sync with
+// a version it had never applied.
+//
+// The embedded struct keeps the JSON flat, so the file's shape is unchanged
+// apart from the added key.
+type persistedConfig struct {
+	Kind string `json:"kind"`
+	AdsbConfig
+}
+
 func (c *Client) persistAppliedConfig(cfg AdsbConfig) error {
-	b, err := json.Marshal(cfg)
+	b, err := json.Marshal(persistedConfig{Kind: c.cfg.Kind, AdsbConfig: cfg})
 	if err != nil {
 		return err
 	}
@@ -690,12 +710,23 @@ func LoadPersistedConfig(cfg *agentcfg.Config) (AdsbConfig, bool) {
 	if err != nil {
 		return AdsbConfig{}, false
 	}
-	var pc AdsbConfig
+	var pc persistedConfig
 	if err := json.Unmarshal(b, &pc); err != nil {
 		log.Printf("wsclient: persisted config unreadable (%v); using boot default", err)
 		return AdsbConfig{}, false
 	}
-	return pc, true
+	// Only resume a config THIS kind wrote. A missing stamp means an older
+	// agent wrote it and we cannot tell which kind it was, so it is refused for
+	// the same reason — the cost is one forced re-push from the backend, which
+	// is immediate and self-correcting. Resuming the wrong kind's config is
+	// not: it leaves the node reporting a config version it never applied, so
+	// the backend sees a node already in sync and pushes nothing.
+	if pc.Kind != cfg.Kind {
+		log.Printf("wsclient: persisted config was written by a %q node, not %q; ignoring it and waiting for a push",
+			pc.Kind, cfg.Kind)
+		return AdsbConfig{}, false
+	}
+	return pc.AdsbConfig, true
 }
 
 // writeType serializes and writes a frame under the write mutex.
