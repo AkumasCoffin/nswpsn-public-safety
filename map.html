@@ -12485,12 +12485,14 @@ function initPagerHoursFromStorage() {
       _ffSetCheckbox(`chk-ais-${key}`, aisTypeFilter[key]);
       _rebuildAis();
       refreshActiveFilterPanel();
+      saveMapPrefs();
     };
     window.toggleAisStatusPill = function (key) {
       aisStatusFilter[key] = !aisStatusFilter[key];
       _ffSetCheckbox(`chk-ais-st-${key}`, aisStatusFilter[key]);
       _rebuildAis();
       refreshActiveFilterPanel();
+      saveMapPrefs();
     };
     window.toggleAisHideDockedPill = function () {
       aisHideDocked = !aisHideDocked;
@@ -12498,6 +12500,7 @@ function initPagerHoursFromStorage() {
       _rebuildAis();
       if (document.getElementById('ais-list-panel')?.classList.contains('open')) aisListRender();
       refreshActiveFilterPanel();
+      saveMapPrefs();
     };
     // GT_SHIPTYPE subtype pill — toggles the filter and re-renders.
     // Default state for unknown ids is "on", so the first click sets
@@ -12507,6 +12510,7 @@ function initPagerHoursFromStorage() {
       aisSubtypeFilter[gtId] = !cur;
       _rebuildAis();
       refreshActiveFilterPanel();
+      saveMapPrefs();
     };
     // Toggle whether a main type's subtype list is expanded in the
     // floating filter panel.
@@ -13692,6 +13696,180 @@ function initPagerHoursFromStorage() {
     // the floating filter panel; the field keys are the sub-toggles that
     // appear once labels are on. Identity (callsign/rego/hex) always
     // shows when labels are enabled.
+    // ================= Map filter preferences =================
+    //
+    // Filters are fiddly to set up — aircraft type pills, label fields, trails —
+    // and until now every one of them was lost on reload. They persist in two
+    // places: localStorage for everyone including anonymous visitors, and the
+    // account for signed-in users so the same setup follows them to another
+    // device.
+    //
+    // The blob is versioned and read defensively: unknown keys are ignored and
+    // missing ones fall back to today's defaults, so a newer browser writing an
+    // extra field cannot break an older one, and a field removed later cannot
+    // strand a stale value.
+    //
+    // NOT persisted: search text (transient by nature) and layer visibility —
+    // the latter is a deliberate existing decision, see the comment above the
+    // layer setup about defaults being whatever is added to the map.
+    const MAP_PREFS_KEY = 'nswpsn.map.prefs.v1';
+    const MAP_PREFS_VERSION = 1;
+    let _mapPrefsLoaded = false;      // until true, saves are suppressed
+    let _mapPrefsSaveTimer = null;
+    let _mapPrefsRemoteAt = 0;        // updatedAt of what the server last gave us
+
+    // "Only my receiver" state. Declared here with the rest of the persisted
+    // filters; the control that drives it, and the identity lookup that decides
+    // whether to offer it at all, come later in the ADS-B section.
+    let adsbMineOnly = false;
+    let _adsbPendingMineOnly = false;  // restored value, held until ownership is known
+    let _myAdsbSources = new Set();    // 'node:<name>' labels this user owns
+
+    /** Snapshot the persistable filter state. */
+    function _collectMapPrefs() {
+      return {
+        v: MAP_PREFS_VERSION,
+        updatedAt: Date.now(),
+        adsb: {
+          types: { ...adsbTypeFilter },
+          labels: { ...adsbLabelSettings },
+          trails: adsbTrailsEnabled,
+          mineOnly: adsbMineOnly,
+        },
+        ais: {
+          types: { ...aisTypeFilter },
+          labels: { ...aisLabelSettings },
+          status: { ...aisStatusFilter },
+          hideDocked: aisHideDocked,
+          subtypes: { ...aisSubtypeFilter },
+        },
+      };
+    }
+
+    /** Copy only keys the target already declares, so an unknown or removed
+     *  field can never be introduced by stored data. */
+    function _applyKnownKeys(target, source) {
+      if (!source || typeof source !== 'object') return;
+      for (const k of Object.keys(target)) {
+        if (typeof source[k] === typeof target[k]) target[k] = source[k];
+      }
+    }
+
+    function _applyMapPrefs(p) {
+      if (!p || typeof p !== 'object' || p.v !== MAP_PREFS_VERSION) return false;
+      if (p.adsb) {
+        _applyKnownKeys(adsbTypeFilter, p.adsb.types);
+        _applyKnownKeys(adsbLabelSettings, p.adsb.labels);
+        if (typeof p.adsb.trails === 'boolean') adsbTrailsEnabled = p.adsb.trails;
+        // mineOnly is applied only once we know the user actually owns a
+        // receiver — see _adsbApplyPendingMineOnly. A stale true would
+        // otherwise hide every aircraft with no control on screen to explain it.
+        _adsbPendingMineOnly = p.adsb.mineOnly === true;
+      }
+      if (p.ais) {
+        _applyKnownKeys(aisTypeFilter, p.ais.types);
+        _applyKnownKeys(aisLabelSettings, p.ais.labels);
+        _applyKnownKeys(aisStatusFilter, p.ais.status);
+        if (typeof p.ais.hideDocked === 'boolean') aisHideDocked = p.ais.hideDocked;
+        // Subtypes are keyed by vessel-type id and populated as the feed is
+        // seen, so the target is empty at boot and _applyKnownKeys would copy
+        // nothing. Assign the stored map wholesale, keeping only booleans.
+        if (p.ais.subtypes && typeof p.ais.subtypes === 'object') {
+          for (const [k, v] of Object.entries(p.ais.subtypes)) {
+            if (typeof v === 'boolean') aisSubtypeFilter[k] = v;
+          }
+        }
+      }
+      return true;
+    }
+
+    function _readLocalMapPrefs() {
+      try {
+        const raw = localStorage.getItem(MAP_PREFS_KEY);
+        return raw ? JSON.parse(raw) : null;
+      } catch (e) {
+        // A private window, blocked storage, or corrupt JSON. Not having
+        // preferences is a minor loss; a page that fails to start is not.
+        return null;
+      }
+    }
+
+    function _writeLocalMapPrefs(p) {
+      try { localStorage.setItem(MAP_PREFS_KEY, JSON.stringify(p)); }
+      catch (e) { /* quota or blocked storage — persistence degrades, nothing breaks */ }
+    }
+
+    /** Push to the account, when there is one. Fire-and-forget: a failed sync
+     *  leaves localStorage authoritative, which is the same position an
+     *  anonymous visitor is in. */
+    async function _pushRemoteMapPrefs(p) {
+      try {
+        if (typeof notifHeaders !== 'function') return;
+        const h = await notifHeaders();
+        if (!h) return;
+        await fetch(`${API_BASE_URL}/api/profiles/map-prefs`, {
+          method: 'PUT', headers: h, body: JSON.stringify({ prefs: p }),
+        });
+      } catch (e) { /* offline or signed out mid-flight */ }
+    }
+
+    /** Called by every filter toggle. Debounced, because the pills are clicked
+     *  in bursts and each click would otherwise be a write and a request. */
+    function saveMapPrefs() {
+      if (!_mapPrefsLoaded) return;   // don't write defaults over stored values during boot
+      if (_mapPrefsSaveTimer) clearTimeout(_mapPrefsSaveTimer);
+      _mapPrefsSaveTimer = setTimeout(() => {
+        _mapPrefsSaveTimer = null;
+        const p = _collectMapPrefs();
+        _writeLocalMapPrefs(p);
+        _pushRemoteMapPrefs(p);
+      }, 600);
+    }
+
+    /**
+     * Restore preferences, merging the two stores.
+     *
+     * Both copies carry updatedAt and the newer wins, then it is written back to
+     * the other so they converge. That keeps the obvious case working — set
+     * filters while logged out, sign in, keep them — instead of the account
+     * silently overwriting work the user just did.
+     */
+    async function initMapPrefs() {
+      const local = _readLocalMapPrefs();
+      let remote = null;
+      try {
+        if (typeof notifHeaders === 'function') {
+          const h = await notifHeaders();
+          if (h) {
+            const r = await fetch(`${API_BASE_URL}/api/profiles/map-prefs`, { headers: h });
+            if (r.ok) remote = (await r.json().catch(() => ({}))).prefs || null;
+          }
+        }
+      } catch (e) { /* anonymous, offline, or the API is unhappy — local is enough */ }
+
+      const localAt = Number(local?.updatedAt) || 0;
+      const remoteAt = Number(remote?.updatedAt) || 0;
+      _mapPrefsRemoteAt = remoteAt;
+
+      let winner = null;
+      if (remote && remoteAt >= localAt) winner = remote;
+      else if (local) winner = local;
+
+      if (winner && _applyMapPrefs(winner)) {
+        // Converge the loser on the winner so the next device sees one answer.
+        if (winner === remote) _writeLocalMapPrefs(remote);
+        else if (localAt > remoteAt) _pushRemoteMapPrefs(local);
+      }
+      _mapPrefsLoaded = true;
+
+      // Repaint whatever the restored state changes. Cheap, and only once.
+      try {
+        if (typeof _rebuildAdsb === 'function') _rebuildAdsb();
+        if (typeof _rebuildAis === 'function') _rebuildAis();
+        if (typeof refreshActiveFilterPanel === 'function') refreshActiveFilterPanel();
+      } catch (e) { /* a layer not yet built simply has nothing to repaint */ }
+    }
+
     const adsbLabelSettings = {
       enabled: false,
       alt: true,
@@ -14356,6 +14534,7 @@ function initPagerHoursFromStorage() {
       if (adsbTrailsEnabled) loadAdsbTrails();
       else _clearAdsbTrails();
       refreshActiveFilterPanel();
+      saveMapPrefs();
     };
 
     function startAdsbRefresh() {
@@ -14599,26 +14778,31 @@ function initPagerHoursFromStorage() {
       aisLabelSettings.enabled = !aisLabelSettings.enabled;
       _rebuildAis();
       refreshActiveFilterPanel();
+      saveMapPrefs();
     };
     window.toggleAisLabelFieldPill = function (key) {
       aisLabelSettings[key] = !aisLabelSettings[key];
       _rebuildAis();
       refreshActiveFilterPanel();
+      saveMapPrefs();
     };
     window.toggleAdsbLabelsPill = function () {
       adsbLabelSettings.enabled = !adsbLabelSettings.enabled;
       _rebuildAdsb();
       refreshActiveFilterPanel();
+      saveMapPrefs();
     };
     window.toggleAdsbLabelFieldPill = function (key) {
       adsbLabelSettings[key] = !adsbLabelSettings[key];
       _rebuildAdsb();
       refreshActiveFilterPanel();
+      saveMapPrefs();
     };
     window.toggleAdsbTypePill = function (key) {
       adsbTypeFilter[key] = !adsbTypeFilter[key];
       _rebuildAdsb();
       refreshActiveFilterPanel();
+      saveMapPrefs();
     };
     FILTER_REGISTRY.adsb = {
       icon: 'fa-plane',
@@ -18487,6 +18671,13 @@ function initPagerHoursFromStorage() {
     (async () => {
       await loadApiConfig();
       initPagerHoursFromStorage();
+      // Filter preferences, before any layer paints: restoring afterwards would
+      // draw the default view first and then visibly re-filter it. Awaited
+      // because it may consult the account, and deliberately non-fatal — a
+      // signed-out visitor, blocked storage or an unreachable API all just mean
+      // the map opens on defaults.
+      try { await initMapPrefs(); }
+      catch (e) { console.warn('map prefs unavailable:', e); }
       // Layers that come up enabled by default still need their filter
       // button registered with the floating sidebar — toggle functions
       // only fire on user click. Sweep every known layer and register a

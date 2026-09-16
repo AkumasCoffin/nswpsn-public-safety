@@ -45,6 +45,7 @@ interface ProfileRow {
   youtube: string | null;
   website: string | null;
   watermark_default: boolean | null;
+  map_prefs: unknown;
 }
 
 function shapeProfile(userId: string, row?: ProfileRow): Record<string, unknown> {
@@ -275,6 +276,82 @@ profilesRouter.put('/api/profiles/watermark', requireSupabaseJwt, async (c) => {
 /** Set the caller's "watermark my media by default" preference. Its own
  *  endpoint on purpose: PUT /api/profiles replaces the whole profile, so a
  *  compose page writing this through there would wipe the user's bio. */
+// ---------------------------------------------------------------------------
+// Map filter preferences — the caller's OWN, JWT-gated both ways.
+//
+// Deliberately not part of the public profile: shapeProfile() is an allowlist
+// and map_prefs is not in it, so GET /api/profiles/:userId cannot return this.
+// Someone's filter choices say a little about what they watch, and none of it
+// is anyone else's business.
+//
+// The body is opaque to the server. The client owns the shape, versions it
+// internally, and is the only thing that reads it back — so there is nothing
+// here to validate beyond "is it an object" and "is it a sane size". Validating
+// its contents would mean a migration every time a filter is added, which is
+// exactly what storing a blob avoids.
+// ---------------------------------------------------------------------------
+
+/** Bound on the stored blob. The real thing is a few hundred bytes; this is
+ *  large enough never to be hit by honest use and small enough that the column
+ *  cannot be used as free storage. */
+const MAX_MAP_PREFS_BYTES = 16 * 1024;
+
+profilesRouter.get('/api/profiles/map-prefs', requireSupabaseJwt, async (c) => {
+  const pool = await getPool();
+  if (!pool) return c.json(DB_UNAVAILABLE, 503);
+  const uid = c.get('userId') as string;
+  try {
+    const r = await pool.query<{ map_prefs: unknown }>(
+      'SELECT map_prefs FROM user_profiles WHERE user_id = $1',
+      [uid],
+    );
+    // null rather than 404 for "never saved any": the client merges against
+    // whatever it has locally, and an absent preference is not an error.
+    return c.json({ prefs: r.rows[0]?.map_prefs ?? null });
+  } catch (err) {
+    log.error({ err, uid }, 'profiles: map prefs read failed');
+    return c.json({ error: 'failed to load preferences' }, 500);
+  }
+});
+
+profilesRouter.put('/api/profiles/map-prefs', requireSupabaseJwt, async (c) => {
+  const pool = await getPool();
+  if (!pool) return c.json(DB_UNAVAILABLE, 503);
+  const uid = c.get('userId') as string;
+  try {
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    const prefs = body['prefs'];
+    if (prefs === null || prefs === undefined) {
+      // An explicit clear — the user reset their filters and wants that to
+      // follow them too, rather than a stale set coming back on the next device.
+      await pool.query(
+        `INSERT INTO user_profiles (user_id, map_prefs, updated_at)
+         VALUES ($1, NULL, now())
+         ON CONFLICT (user_id) DO UPDATE SET map_prefs = NULL, updated_at = now()`,
+        [uid],
+      );
+      return c.json({ success: true, prefs: null });
+    }
+    if (typeof prefs !== 'object' || Array.isArray(prefs)) {
+      return c.json({ error: 'prefs must be an object' }, 400);
+    }
+    const encoded = JSON.stringify(prefs);
+    if (encoded.length > MAX_MAP_PREFS_BYTES) {
+      return c.json({ error: 'preferences too large' }, 413);
+    }
+    await pool.query(
+      `INSERT INTO user_profiles (user_id, map_prefs, updated_at)
+       VALUES ($1, $2::jsonb, now())
+       ON CONFLICT (user_id) DO UPDATE SET map_prefs = $2::jsonb, updated_at = now()`,
+      [uid, encoded],
+    );
+    return c.json({ success: true });
+  } catch (err) {
+    log.error({ err, uid }, 'profiles: map prefs save failed');
+    return c.json({ error: 'failed to save preferences' }, 500);
+  }
+});
+
 profilesRouter.put('/api/profiles/watermark-default', requireSupabaseJwt, async (c) => {
   const pool = await getPool();
   if (!pool) return c.json(DB_UNAVAILABLE, 503);
