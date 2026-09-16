@@ -34,6 +34,8 @@ import {
   recordNodeAdsbSnapshot,
   accumulateAdsbDaily,
   adsbNodeSourceId,
+  recordAdsbIngestOutcome,
+  recordAdsbAuthFailure,
 } from '../services/nodes/adsbNodeStore.js';
 import { normalizeNodeUpload } from '../sources/adsb.js';
 import {
@@ -995,6 +997,9 @@ nodeIngestRouter.post('/api/node-ingest/adsb-upload', async (c) => {
   }
   const r = await resolveNodeToken(token);
   if (!r.ok) {
+    // Not attributed to a node — the token did not resolve, so there is no node
+    // to attribute it to. Goes to the fleet-wide ring instead.
+    if (r.reason !== 'unavailable') recordAdsbAuthFailure(installId, r.reason);
     if (r.reason === 'no_role') {
       return c.json({ error: 'contributor role removed' }, 403);
     }
@@ -1006,15 +1011,20 @@ nodeIngestRouter.post('/api/node-ingest/adsb-upload', async (c) => {
     return c.json({ error: 'unauthorized' }, 401);
   }
   if (r.installId && r.installId !== installId) {
+    // Past the token resolve, so this one IS attributable: the owner needs to
+    // see that a second machine is uploading with their node's credentials.
+    recordAdsbIngestOutcome(r.nodeId, 'install_mismatch');
     return c.json({ error: 'install mismatch' }, 401);
   }
   // Only adsb-kind nodes may use this route.
   if (r.kind !== 'adsb') {
+    recordAdsbIngestOutcome(r.nodeId, 'not_adsb', `node kind is ${r.kind ?? 'unset'}`);
     return c.json({ error: 'not an adsb node' }, 403);
   }
 
   if (!adsbRateOk(r.nodeId)) {
     log.warn(`adsb ingest: RATE-LIMITED (dropped) node=${r.nodeId.slice(0, 8)}`);
+    recordAdsbIngestOutcome(r.nodeId, 'rate_limited');
     return c.json({ ok: true, dropped: 'rate limit' });
   }
 
@@ -1023,9 +1033,11 @@ nodeIngestRouter.post('/api/node-ingest/adsb-upload', async (c) => {
   const lenHeader = c.req.header('content-length');
   const len = Number(lenHeader ?? '');
   if (lenHeader === undefined || !Number.isFinite(len)) {
+    recordAdsbIngestOutcome(r.nodeId, 'length_required');
     return c.json({ error: 'length required' }, 411);
   }
   if (len > MAX_ADSB_BYTES) {
+    recordAdsbIngestOutcome(r.nodeId, 'too_large', `${len} bytes, cap ${MAX_ADSB_BYTES}`);
     return c.json({ error: 'snapshot too large' }, 413);
   }
 
@@ -1033,7 +1045,11 @@ nodeIngestRouter.post('/api/node-ingest/adsb-upload', async (c) => {
   let parsed: z.infer<typeof AdsbUploadSchema>;
   try {
     parsed = AdsbUploadSchema.parse(await c.req.json());
-  } catch {
+  } catch (err) {
+    recordAdsbIngestOutcome(
+      r.nodeId, 'bad_body',
+      err instanceof Error ? err.message.split('\n')[0]!.slice(0, 120) : null,
+    );
     return c.json({ error: 'bad body' }, 400);
   }
 
@@ -1046,6 +1062,9 @@ nodeIngestRouter.post('/api/node-ingest/adsb-upload', async (c) => {
   // 6. Feed gate — when off the node stays connected and counted, but nothing
   //    it hears reaches the live map.
   if (!r.feedEnabled) {
+    // Recorded, because "why is my receiver not on the map" is the commonest
+    // question an owner has and a paused feed is usually the answer.
+    recordAdsbIngestOutcome(r.nodeId, 'feed_off');
     return c.json({ ok: true, fed: false });
   }
 
@@ -1055,6 +1074,7 @@ nodeIngestRouter.post('/api/node-ingest/adsb-upload', async (c) => {
     nodeRow?.name ?? null,
     normalizeNodeUpload(parsed, adsbNodeSourceId(r.nodeId, nodeRow?.name ?? null)),
   );
+  recordAdsbIngestOutcome(r.nodeId, 'ok', `${accepted} aircraft`);
   return c.json({ ok: true, accepted });
 });
 

@@ -194,6 +194,21 @@ interface Trace {
   t: number[];
   callsign: string | null;
   lastMs: number;
+  /** Latest and highest altitude seen, feet.
+   *
+   *  Two scalars, not a fourth parallel array: 4000 aircraft x 240 altitudes
+   *  would be stored purely to render one number per row of a table. */
+  lastAltFt: number | null;
+  maxAltFt: number | null;
+  /**
+   * How many reports this aircraft was seen in — including the ones the gap
+   * and distance rules below decline to store as points.
+   *
+   * This is the "how solidly was it held" signal that a point count cannot
+   * give: an aircraft parked in view has one point and thousands of reports,
+   * and one crossing the edge of coverage has few of both.
+   */
+  reports: number;
 }
 
 const traces = new Map<string, Map<string, Trace>>();
@@ -213,12 +228,21 @@ function recordTraces(nodeId: string, records: AdsbAircraft[], nowMs: number): v
       byHex.set(r.hex, {
         lat: [r.lat], lon: [r.lon], t: [nowMs],
         callsign: r.callsign, lastMs: nowMs,
+        lastAltFt: r.altFt, maxAltFt: r.altFt, reports: 1,
       });
       continue;
     }
     // Keep the callsign once it is known: an aircraft is usually tracked for a
     // while before it transmits one, so the first point rarely has it.
     if (!tr.callsign && r.callsign) tr.callsign = r.callsign;
+
+    // Counted BEFORE the dedupe below, which is the whole point: an aircraft
+    // sitting still contributes reports without contributing points.
+    tr.reports += 1;
+    if (r.altFt !== null) {
+      tr.lastAltFt = r.altFt;
+      if (tr.maxAltFt === null || r.altFt > tr.maxAltFt) tr.maxAltFt = r.altFt;
+    }
 
     const n = tr.lat.length;
     const dt = nowMs - tr.t[n - 1]!;
@@ -326,6 +350,225 @@ export function nodeAdsbTraces(
   return { traces: out, aircraft, points, windowMinutes: minutes };
 }
 
+// ---------------------------------------------------------------------------
+// Recent aircraft (what this receiver actually heard)
+// ---------------------------------------------------------------------------
+//
+// Derived entirely from the traces above — no second structure, because the
+// traces already hold every fact this answers and a parallel "recent" list
+// would be one more thing to prune in step with them.
+
+export interface NodeRecentAircraft {
+  hex: string;
+  callsign: string | null;
+  /** Epoch ms. Timestamps are dropped from `NodeTrace` because a path does not
+   *  need them; here they ARE the answer, so they stay. */
+  firstMs: number;
+  lastMs: number;
+  /** Stored points versus reports received — see `Trace.reports`. A large gap
+   *  between them means an aircraft that barely moved, not a weak signal. */
+  points: number;
+  reports: number;
+  lastAltFt: number | null;
+  maxAltFt: number | null;
+}
+
+/** Hard ceiling on a `limit` query parameter, so a caller cannot ask for the
+ *  whole 4000-aircraft window as JSON. */
+export const ADSB_RECENT_MAX = 100;
+
+/**
+ * The aircraft this receiver heard most recently, newest first.
+ *
+ * First-heard comes from `tr.t[0]` rather than a cached `firstMs`, which would
+ * go stale twice over: the point cap shifts the oldest point off the front, and
+ * the window prune does the same. The array is the truth.
+ */
+export function nodeAdsbRecentAircraft(
+  nodeId: string,
+  limit: number,
+  nowMs: number = Date.now(),
+): NodeRecentAircraft[] {
+  pruneTraces(nodeId, nowMs);
+  const byHex = traces.get(nodeId);
+  if (!byHex) return [];
+
+  const n = Number.isFinite(limit)
+    ? Math.min(ADSB_RECENT_MAX, Math.max(1, Math.round(limit)))
+    : ADSB_RECENT_MAX;
+
+  const out: NodeRecentAircraft[] = [];
+  for (const [hex, tr] of byHex) {
+    out.push({
+      hex,
+      callsign: tr.callsign,
+      firstMs: tr.t[0] ?? tr.lastMs,
+      lastMs: tr.lastMs,
+      points: tr.t.length,
+      reports: tr.reports,
+      lastAltFt: tr.lastAltFt,
+      maxAltFt: tr.maxAltFt,
+    });
+  }
+  out.sort((a, b) => b.lastMs - a.lastMs);
+  return out.slice(0, n);
+}
+
+// ---------------------------------------------------------------------------
+// Ingest issues (why an upload was refused)
+// ---------------------------------------------------------------------------
+//
+// A per-node fault log, in memory. Not `nodeEvents` — that is Postgres-backed
+// with a 30-day pruner, far too heavy a tier for something an owner glances at
+// while their receiver is misbehaving. Not `hub` — that is WebSocket plumbing
+// and these outcomes come off the REST upload route.
+//
+// THE DESIGN PROBLEM IS THE 5-SECOND CADENCE. A healthy node uploads every 5s,
+// so recording each success would push the last real error out of a 40-entry
+// window in about three minutes — destroying the one thing the buffer exists
+// for. Hence the two rules below: successes are recorded only as state changes,
+// and consecutive identical outcomes coalesce in place. What is left reads as a
+// fault log with explicit "recovered" markers.
+
+export type AdsbIngestOutcome =
+  | 'ok'
+  | 'install_mismatch'
+  | 'not_adsb'
+  | 'rate_limited'
+  | 'length_required'
+  | 'too_large'
+  | 'bad_body'
+  | 'feed_off';
+
+export interface AdsbIngestIssue {
+  outcome: AdsbIngestOutcome;
+  firstMs: number;
+  lastMs: number;
+  /** How many uploads this entry stands for. A rate-limit loop is one entry
+   *  with a count in the thousands, not thousands of entries. */
+  count: number;
+  detail: string | null;
+}
+
+const ISSUE_RING = 40;
+
+/** Consecutive identical outcomes inside this window bump a count in place.
+ *  Without it a rate-limit loop fills the whole ring in 200 seconds. */
+const ISSUE_COALESCE_MS = 60_000;
+
+/** How long a run of successes is held as one entry before a fresh "still
+ *  fine" marker is started. Long enough that a healthy node writes four
+ *  entries an hour, short enough that the log is not silent for a whole shift. */
+const ISSUE_OK_HEARTBEAT_MS = 15 * 60_000;
+
+const issues = new Map<string, AdsbIngestIssue[]>();
+
+/**
+ * Record one upload's outcome against its node.
+ *
+ * Called only AFTER the token resolves, so the node is known. Authentication
+ * failures deliberately do not come here — see `recordAdsbAuthFailure`.
+ */
+export function recordAdsbIngestOutcome(
+  nodeId: string,
+  outcome: AdsbIngestOutcome,
+  detail: string | null = null,
+  nowMs: number = Date.now(),
+): void {
+  let ring = issues.get(nodeId);
+  if (!ring) {
+    ring = [];
+    issues.set(nodeId, ring);
+  }
+  const last = ring[ring.length - 1];
+
+  if (last && last.outcome === outcome) {
+    // A success stays folded into the running entry for a quarter of an hour;
+    // every other outcome coalesces on the tighter window, so a fault that
+    // stops and restarts later reads as two episodes rather than one long one.
+    const hold = outcome === 'ok' ? ISSUE_OK_HEARTBEAT_MS : ISSUE_COALESCE_MS;
+    if (nowMs - last.lastMs < hold) {
+      last.lastMs = nowMs;
+      last.count += 1;
+      if (detail) last.detail = detail;
+      return;
+    }
+  }
+
+  ring.push({ outcome, firstMs: nowMs, lastMs: nowMs, count: 1, detail });
+  while (ring.length > ISSUE_RING) ring.shift();
+}
+
+/** One node's issue log, newest first. */
+export function nodeAdsbIssues(nodeId: string): AdsbIngestIssue[] {
+  const ring = issues.get(nodeId);
+  if (!ring) return [];
+  return ring.slice().reverse();
+}
+
+// --- Authentication failures (fleet-wide, staff only) ----------------------
+//
+// These cannot be attributed to a node: they happen BEFORE the token resolves,
+// and the only identifier on the request is the token that just failed. Looking
+// one up by prefix to name a node would turn this log into an oracle for
+// guessing tokens, so it is kept fleet-wide and keyed on the install id — the
+// agent's own machine identifier, which is not a secret.
+//
+// An owner whose token has died sees their node go offline, which is the
+// actionable signal; this ring is for staff working out WHY.
+
+export interface AdsbAuthFailure {
+  /** Enough of the install id to tell two machines apart, never the token. */
+  install: string;
+  reason: string;
+  firstMs: number;
+  lastMs: number;
+  count: number;
+}
+
+const AUTH_FAIL_RING = 25;
+const authFailures: AdsbAuthFailure[] = [];
+
+export function recordAdsbAuthFailure(
+  installId: string | null | undefined,
+  reason: string,
+  nowMs: number = Date.now(),
+): void {
+  const install = (installId ?? '').trim().slice(0, 8) || 'unknown';
+  const last = authFailures[authFailures.length - 1];
+  if (
+    last && last.install === install && last.reason === reason &&
+    nowMs - last.lastMs < ISSUE_COALESCE_MS
+  ) {
+    last.lastMs = nowMs;
+    last.count += 1;
+    return;
+  }
+  authFailures.push({ install, reason, firstMs: nowMs, lastMs: nowMs, count: 1 });
+  while (authFailures.length > AUTH_FAIL_RING) authFailures.shift();
+}
+
+/** The fleet-wide authentication failure log, newest first. */
+export function adsbAuthFailures(): AdsbAuthFailure[] {
+  return authFailures.slice().reverse();
+}
+
+// ---------------------------------------------------------------------------
+
+/**
+ * Forget everything held for one node.
+ *
+ * Called when a node is deleted, beside `hub.clearNode`. Without it a deleted
+ * receiver keeps a live snapshot on the map for up to two minutes and traces
+ * for up to eight hours — and if the id is ever reissued, the new node inherits
+ * the old one's coverage picture.
+ */
+export function clearAdsbNodeState(nodeId: string): void {
+  snapshots.delete(nodeId);
+  traces.delete(nodeId);
+  issues.delete(nodeId);
+}
+
 /** How many nodes currently have a live snapshot (for the upstreams summary). */
 export function nodeAdsbFeedCount(): number {
   return snapshots.size;
@@ -336,6 +579,8 @@ export function _resetAdsbNodeStore(): void {
   snapshots.clear();
   pending.clear();
   traces.clear();
+  issues.clear();
+  authFailures.length = 0;
 }
 
 // ---------------------------------------------------------------------------

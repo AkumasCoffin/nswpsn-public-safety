@@ -15,7 +15,18 @@
  */
 import { getPool } from '../../db/pool.js';
 import { hub } from './hub.js';
-import { nodeAdsbTraces, type NodeTrace } from './adsbNodeStore.js';
+import {
+  nodeAdsbTraces,
+  nodeAdsbRecentAircraft,
+  nodeAdsbIssues,
+  type NodeTrace,
+  type NodeRecentAircraft,
+  type AdsbIngestIssue,
+} from './adsbNodeStore.js';
+
+/** How many recent aircraft the view carries. Enough to fill a scrollable
+ *  panel; the full 100-row ceiling is for a caller that asks explicitly. */
+const VIEW_RECENT_LIMIT = 40;
 
 export type AdsbWindow = '24h' | '7d' | '30d';
 
@@ -83,6 +94,17 @@ export interface AdsbNodeView {
     maxRangeKm: number | null;
     msgRateMax: number | null;
   }>;
+  /**
+   * The middle tier the totals cannot show: what this receiver heard in the
+   * last eight hours, and why any upload was refused.
+   *
+   * Both come from memory, and both are folded in here rather than given their
+   * own routes so the Data tab and the owner modal each stay one request. They
+   * are empty after a backend restart, which is the accepted cost of not
+   * persisting either — see adsbNodeStore.
+   */
+  recent: NodeRecentAircraft[];
+  issues: AdsbIngestIssue[];
 }
 
 /**
@@ -186,6 +208,8 @@ export async function adsbNodeView(
       tracksMax: numOrNull(t?.tracks_max),
       daysReporting: num(t?.days),
     },
+    recent: nodeAdsbRecentAircraft(nodeId, VIEW_RECENT_LIMIT),
+    issues: nodeAdsbIssues(nodeId),
     days: seriesQ.rows.map((r) => ({
       day: r.day,
       snapshots: num(r.snapshots),

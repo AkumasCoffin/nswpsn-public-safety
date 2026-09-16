@@ -22,7 +22,7 @@ import { requireSupabaseJwt } from '../services/auth/supabaseJwt.js';
 import { hasRole } from '../services/auth/roles.js';
 import { mintNodeToken, resolveNodeToken, _clearNodeTokenCache } from '../services/auth/nodeToken.js';
 import { issueEnrolCode } from '../services/auth/nodeEnrol.js';
-import { adsbNodeSourceId } from '../services/nodes/adsbNodeStore.js';
+import { adsbNodeSourceId, clearAdsbNodeState } from '../services/nodes/adsbNodeStore.js';
 import {
   listNodesForUser,
   createNode,
@@ -926,6 +926,10 @@ feederRouter.delete('/api/feeder/nodes/:id', async (c) => {
     hub.forceDisconnectAgent(node.id);
     hub.clearNode(node.id);
     liveCallWindow.dropNode(node.id);
+    // Live snapshot, 8 hours of traces, issue log. Without this a deleted
+    // receiver stays on the map for up to two minutes and keeps its coverage
+    // picture for the rest of the window.
+    clearAdsbNodeState(node.id);
     await deleteNode(node.id);
     _clearNodeTokenCache();
     return c.json({ ok: true });

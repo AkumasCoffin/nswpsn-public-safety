@@ -42,6 +42,7 @@ import { log } from '../lib/log.js';
 import { learnedAliasMap } from '../services/capcodeAliasSync.js';
 import { requireRole, canViewNodeData } from '../services/auth/roles.js';
 import { hub } from '../services/nodes/hub.js';
+import { adsbAuthFailures } from '../services/nodes/adsbNodeStore.js';
 import {
   adsbNodeView,
   adsbNodeTracks,
@@ -4241,7 +4242,11 @@ nodeDataRouter.get(
         { receivers: 0, online: 0, positions: 0, snapshots: 0, aircraftNow: 0, maxRangeKm: 0 },
       );
 
-      return c.json({ window, totals, receivers });
+      // Fleet-wide, and staff-only by virtue of this route's gate: these are
+      // the uploads whose token did NOT resolve, so there is no node to hang
+      // them off. Keyed on the install id rather than the token — see
+      // recordAdsbAuthFailure.
+      return c.json({ window, totals, receivers, authFailures: adsbAuthFailures() });
     } catch (err) {
       log.error({ err }, '/api/node-data/adsb-overview error');
       return c.json({ error: 'failed to load adsb overview' }, 500);

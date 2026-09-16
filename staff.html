@@ -3729,6 +3729,7 @@
             <div class="nd2-card-h"><span>Receivers</span></div>
             <div id="nd2-aov-list"><div class="nd2-empty">Loading…</div></div>
           </div>
+          <div id="nd2-aov-auth" style="display: none;"></div>
           <div id="nd2-aov-detail" style="display: none;"></div>
         </div>
 
@@ -7906,6 +7907,8 @@
         }
       }
 
+      nd2RenderAdsbAuthFailures(d && d.authFailures);
+
       const listEl = document.getElementById('nd2-aov-list');
       if (!listEl) return;
       if (!rx.length) {
@@ -8068,6 +8071,101 @@
       _nd2TrackNodeId = null;
     }
 
+    /* ---- ADS-B logs: what a receiver heard, and why an upload failed ----
+     *
+     * Both come from memory on the backend (adsbNodeStore), so both are empty
+     * after a restart and refill within minutes. Rendered as two cards under
+     * the coverage map rather than two more fetches — the view route already
+     * carries them. */
+
+    /** Plain-English name and colour for an upload outcome. The raw codes are
+     *  the wire format; nobody reading a fault log should have to decode them. */
+    const ND2_ADSB_OUTCOME = {
+      ok:               ['Uploading normally', '#4ade80'],
+      feed_off:         ['Feed paused — received, but not put on the map', '#fbbf24'],
+      rate_limited:     ['Uploading too fast — snapshots dropped', '#fbbf24'],
+      too_large:        ['Snapshot rejected: too large', '#fca5a5'],
+      length_required:  ['Snapshot rejected: no Content-Length', '#fca5a5'],
+      bad_body:         ['Snapshot rejected: malformed', '#fca5a5'],
+      not_adsb:         ['Refused: this node is not set up as ADS-B', '#fca5a5'],
+      install_mismatch: ['Refused: a different machine used these credentials', '#fca5a5'],
+    };
+
+    /** Epoch ms → clock time. The backend sends ms; nd2Time takes anything
+     *  `new Date()` accepts. */
+    function nd2AdsbWhen(ms) {
+      return ms ? nd2Time(new Date(ms).toISOString()) : '—';
+    }
+
+    function nd2AdsbRecentCard(recent) {
+      const list = recent || [];
+      if (!list.length) {
+        return '<div class="nd2-empty">Nothing heard in the last 8 hours '
+             + '(or the backend has restarted since).</div>';
+      }
+      const soft = 'color:var(--text-soft,#94a3b8);';
+      return nd2MiniTable(
+        [{ label: 'Aircraft' }, { label: 'Altitude', num: true }, { label: 'Peak', num: true },
+         { label: 'Reports', num: true }, { label: 'First heard' }, { label: 'Last heard' }],
+        list.map(a => [
+          '<span style="font-family:var(--font-mono,monospace);">' + escapeHtml(String(a.hex || '')).toUpperCase() + '</span>'
+            + (a.callsign ? ' <span style="' + soft + '">' + escapeHtml(a.callsign) + '</span>' : ''),
+          a.lastAltFt == null ? '—' : nd2Num(a.lastAltFt) + ' ft',
+          a.maxAltFt == null ? '—' : nd2Num(a.maxAltFt) + ' ft',
+          // Reports, not points: an aircraft that barely moved is stored as one
+          // point but was heard on every upload, and the point count alone
+          // would read as a receiver that only just caught it.
+          nd2Num(a.reports),
+          nd2AdsbWhen(a.firstMs),
+          nd2AdsbWhen(a.lastMs) + ' <span style="' + soft + '">' + escapeHtml(nd2Ago(new Date(a.lastMs).toISOString())) + '</span>',
+        ]));
+    }
+
+    function nd2AdsbIssuesCard(issues) {
+      const list = issues || [];
+      if (!list.length) {
+        return '<div class="nd2-empty">No uploads recorded yet.</div>';
+      }
+      const soft = 'color:var(--text-soft,#94a3b8);';
+      return nd2MiniTable(
+        [{ label: 'Outcome' }, { label: 'Uploads', num: true }, { label: 'From' }, { label: 'Until' }],
+        list.map(e => {
+          const meta = ND2_ADSB_OUTCOME[e.outcome] || [e.outcome, 'var(--text-primary)'];
+          return [
+            '<span style="color:' + meta[1] + ';">' + escapeHtml(meta[0]) + '</span>'
+              + (e.detail ? '<div style="' + soft + '">' + escapeHtml(e.detail) + '</div>' : ''),
+            // One entry can stand for thousands of uploads — a rate-limit loop
+            // is coalesced rather than repeated, so the count is the severity.
+            nd2Num(e.count),
+            nd2AdsbWhen(e.firstMs),
+            nd2AdsbWhen(e.lastMs),
+          ];
+        }));
+    }
+
+    /** Uploads whose token did not resolve — fleet-wide, because at that point
+     *  there is no node to attribute them to. Keyed on the agent's install id,
+     *  never the token that failed. Hidden entirely when there are none. */
+    function nd2RenderAdsbAuthFailures(list) {
+      const el = document.getElementById('nd2-aov-auth');
+      if (!el) return;
+      const rows = list || [];
+      if (!rows.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
+      el.style.display = '';
+      el.innerHTML = ''
+        + '<div class="nd2-card">'
+        +   '<div class="nd2-card-h"><span>Rejected connections</span></div>'
+        +   nd2MiniTable(
+              [{ label: 'Install' }, { label: 'Reason' }, { label: 'Attempts', num: true }, { label: 'Last' }],
+              rows.map(f => [
+                '<span style="font-family:var(--font-mono,monospace);">' + escapeHtml(String(f.install || '')) + '</span>',
+                escapeHtml(f.reason === 'no_role' ? 'contributor role removed' : 'token not recognised'),
+                nd2Num(f.count),
+                nd2AdsbWhen(f.lastMs),
+              ]))
+        + '</div>';
+    }
+
     /** One receiver's day-by-day history, shown under the fleet table. */
     async function nd2OpenAdsbNodeView(nodeId) {
       if (!nodeId) return;
@@ -8117,6 +8215,16 @@
         + '<div class="nd2-card">'
         +   '<div class="nd2-card-h"><span>' + escapeHtml(name) + ' — daily</span></div>'
         +   body
+        + '</div>'
+        + '<div class="nd2-card">'
+        +   '<div class="nd2-card-h"><span>Recently heard</span>'
+        +     '<span class="nd2-note">last 8 hours, held in memory</span></div>'
+        +   nd2AdsbRecentCard(d.recent)
+        + '</div>'
+        + '<div class="nd2-card">'
+        +   '<div class="nd2-card-h"><span>Upload history</span>'
+        +     '<span class="nd2-note">successes collapsed; faults kept</span></div>'
+        +   nd2AdsbIssuesCard(d.issues)
         + '</div>';
       el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       // After the panel is in the DOM and sized, or Leaflet measures zero.
