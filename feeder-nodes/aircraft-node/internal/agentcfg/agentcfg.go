@@ -13,7 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ComponentCfg describes one supervised external process (a pager reader.sh).
+// ComponentCfg describes one supervised external process (the dump1090 launcher).
 type ComponentCfg struct {
 	Enabled bool     `yaml:"enabled"`
 	Command string   `yaml:"command"`

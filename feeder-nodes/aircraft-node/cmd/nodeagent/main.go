@@ -1,15 +1,13 @@
-// Command nodeagent-pager is the pager feeder node agent. It detects RTL-SDR
-// dongles, renders a per-frequency reader.sh (rtl_fm | multimon-ng | curl) for
-// each, supervises them, runs a localhost HTTP listener that receives the decoded
-// POCSAG lines, buffers normalized messages to a disk queue, drains them to the
-// backend relay, and maintains a control WebSocket to the backend.
+// Command nodeagent-adsb is the ADS-B feeder node agent. It supervises a
+// dump1090 decoder, reads the aircraft.json / stats.json that decoder writes,
+// buffers position snapshots to a disk queue, drains them to the backend, and
+// maintains a control WebSocket to the backend.
 //
 // It shares the radio agent's OS-service integration (github.com/kardianos/
 // service): install/uninstall/start/stop manage a "nswpsn-node" system service,
 // and "run" works both under a service manager and as a plain foreground process.
-// Unlike the radio agent it manages no external installs — the readers drive
-// system-installed rtl_fm/multimon-ng/curl — so it only self-updates its own
-// binary.
+// It manages no external installs — the decoder is a system package — so it
+// only ever self-updates its own binary.
 package main
 
 import (
@@ -42,7 +40,7 @@ const serviceName = "nswpsn-node"
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
-	log.SetPrefix("[nodeagent-pager] ")
+	log.SetPrefix("[nodeagent-adsb] ")
 
 	// Global --config flag can appear anywhere; parse it out manually so we can
 	// keep simple subcommand dispatch without cobra.
@@ -67,7 +65,7 @@ func main() {
 		fmt.Printf("%s: ok (service %q)\n", cmd, serviceName)
 	default:
 		fmt.Printf("unknown command %q\n", cmd)
-		fmt.Println("usage: nodeagent-pager [--config <path>] <run|version|install|uninstall|start|stop>")
+		fmt.Println("usage: nodeagent-adsb [--config <path>] <run|version|install|uninstall|start|stop>")
 		os.Exit(2)
 	}
 }
@@ -147,7 +145,7 @@ func (p *program) Stop(s service.Service) error {
 }
 
 // newService builds the kardianos service handle and its program for the given
-// config path. The service is registered to run "nodeagent-pager run --config <abs>".
+// config path. The service is registered to run "nodeagent-adsb run --config <abs>".
 func newService(configPath string) (service.Service, *program, error) {
 	cfgArg := configPath
 	if abs, err := filepath.Abs(configPath); err == nil {
@@ -156,8 +154,8 @@ func newService(configPath string) (service.Service, *program, error) {
 	prg := &program{configPath: cfgArg}
 	svcConfig := &service.Config{
 		Name:        serviceName,
-		DisplayName: "NSW PSN Pager Feeder Node",
-		Description: "Captures POCSAG pager traffic via RTL-SDR and relays decoded messages to the NSW PSN backend.",
+		DisplayName: "AusAware ADS-B Feeder Node",
+		Description: "Decodes ADS-B aircraft positions via RTL-SDR and relays them to the AusAware backend.",
 		Arguments:   []string{"run", "--config", cfgArg},
 	}
 	s, err := service.New(prg, svcConfig)
