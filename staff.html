@@ -1745,13 +1745,23 @@
       display: inline-flex;
       align-items: center;
       gap: 0.25rem;
-      padding: 0.2rem 0.5rem;
+      padding: 0.15rem 0.4rem;
       border-radius: 5px;
-      font-size: 0.7rem;
+      font-size: 0.68rem;
       font-weight: 500;
-      margin-right: 0.25rem;
-      margin-bottom: 0.25rem;
+      margin-right: 0.2rem;
+      margin-bottom: 0.2rem;
       white-space: nowrap;
+    }
+
+    /* The email column holds the longest value in the table and must not clip:
+       a half-shown address reads as a typo rather than as a truncation. It
+       wraps instead, which costs a little row height on the few long ones and
+       nothing on the rest. */
+    .email-cell {
+      max-width: 22rem;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
     /* Role badges. Role strings are "main:sub"; ':' isn't valid in a CSS class,
        so roleClass() swaps non-word chars for '-' (wire:manager → wire-manager).
@@ -1797,10 +1807,13 @@
       transition: filter 0.1s ease-out;
       cursor: default;
       user-select: none;
-      /* Keeps the blur from bleeding over neighbouring columns. */
+      /* Keeps the blur from bleeding over neighbouring columns. Wrapping is
+         allowed inside it: inline-block with a width cap would otherwise clip a
+         long address instead of letting the cell wrap it. */
       display: inline-block;
       max-width: 100%;
       vertical-align: bottom;
+      overflow-wrap: anywhere;
     }
     .email-mask:hover,
     .email-mask:focus-visible {
@@ -14182,6 +14195,31 @@
       'radio_contributor':  { icon: 'fa-solid fa-walkie-talkie',  label: 'Feeder · Radio (legacy)',     group: 'Feeder' },
       'node_monitor':       { icon: 'fa-solid fa-eye',            label: 'Feeder · Monitor (legacy)',   group: 'Feeder' },
     };
+
+    /** Compact role labels for the table, where horizontal space is scarce.
+     *
+     *  "Feeder · Radio" becomes "Radio": the group is already carried by the
+     *  icon and the colour, and a user with six roles otherwise pushed every
+     *  later column off-screen.
+     *
+     *  Shortened ONLY where the result stays unique. Three roles end in
+     *  "Manager" (feeder, wire and map), so those keep their full label —
+     *  someone holding two of them would otherwise see "Manager | Manager"
+     *  and have to hover to tell which is which. */
+    const ROLE_SHORT = (() => {
+      const tail = (l) => String(l).split(' · ').pop();
+      const counts = {};
+      for (const meta of Object.values(ROLE_LABELS)) {
+        const t = tail(meta.label);
+        counts[t] = (counts[t] || 0) + 1;
+      }
+      const out = {};
+      for (const [role, meta] of Object.entries(ROLE_LABELS)) {
+        const t = tail(meta.label);
+        out[role] = counts[t] === 1 ? t : meta.label;
+      }
+      return out;
+    })();
     /** <i> markup for a role's icon; falls back to a neutral dot. */
     function roleIcon(role) {
       const info = ROLE_LABELS[role];
@@ -14466,7 +14504,13 @@
         if (shownRoles.length > 0) {
           rolesHtml = shownRoles.map(role => {
             const info = ROLE_LABELS[role] || { label: role }; // icon comes from roleIcon()
-            return `<span class="role-badge ${roleClass(role)}">${roleIcon(role)} ${escapeHtml(info.label)}</span>`;
+            // Show only the distinctive half: "Feeder · Radio" becomes "Radio",
+            // since the icon and colour already say which family it is. The
+            // full label stays in the tooltip for anyone who needs it. A user
+            // with six roles otherwise pushed every later column off-screen.
+            const short = ROLE_SHORT[role] || info.label;
+            return `<span class="role-badge ${roleClass(role)}" title="${escapeHtml(info.label)}">`
+              + `${roleIcon(role)} ${escapeHtml(short)}</span>`;
           }).join('');
         } else {
           rolesHtml = '<span class="no-roles">User</span>';
@@ -14496,7 +14540,7 @@
             <td>${user.username
               ? `<span style="font-weight: 600;">${escapeHtml(user.username)}</span>`
               : '<span class="no-roles">—</span>'}</td>
-            <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis;">${emailMasked(user.email)}</td>
+            <td class="email-cell">${emailMasked(user.email)}</td>
             <td>${discordHtml}</td>
             <td>${rolesHtml}</td>
             <td><span class="timestamp">${user.last_sign_in ? fmtDate(user.last_sign_in) : 'Never'}</span></td>
