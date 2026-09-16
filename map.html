@@ -1270,6 +1270,54 @@
       pointer-events: none;
     }
     .floating-filter-sidebar > * { pointer-events: auto; }
+
+    /* ---- Pinned-aircraft detail card ----
+       Carries .filter-panel so the existing @media (max-width: 900px) rule
+       turns it into a bottom sheet for free; these overrides only move it on
+       desktop. TOP-LEFT is the one free corner: the aircraft list docks
+       top-right, the Leaflet zoom control sits above it, the filter sidebar
+       and map-type pill own the bottom-left, and the search bar the top
+       centre. */
+    .filter-panel.adsb-detail-card {
+      top: 70px; left: 12px; right: auto; bottom: auto;
+      width: 280px; min-width: 0; max-width: calc(100vw - 24px);
+      /* Stops short of the filter sidebar (bottom: 76px) rather than
+         scrolling underneath it. */
+      max-height: calc(100vh - 230px);
+      overflow-y: auto;
+      padding: 10px 12px;
+      border: 1px solid rgba(192, 132, 252, 0.35);
+      z-index: 860;
+    }
+    .adsb-dc-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .adsb-dc-name { font-size: 14px; font-weight: 700; flex: 1; min-width: 0;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .adsb-dc-x { background: none; border: none; color: #94a3b8; cursor: pointer;
+      font-size: 14px; padding: 2px 4px; line-height: 1; flex-shrink: 0; }
+    .adsb-dc-x:hover { color: #f8fafc; }
+    .adsb-dc-badge { font-size: 9px; font-weight: 700; color: #fff; padding: 2px 6px;
+      border-radius: 4px; flex-shrink: 0; }
+    .adsb-dc-photo { width: 100%; max-height: 120px; object-fit: cover; border-radius: 6px;
+      background: rgba(0,0,0,0.3); display: block; }
+    .adsb-dc-credit { font-size: 9px; color: #64748b; margin: 3px 0 8px; }
+    .adsb-dc-rows { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px;
+      font-size: 11.5px; line-height: 1.5; }
+    .adsb-dc-k { color: #94a3b8; white-space: nowrap; }
+    .adsb-dc-v { color: #e2e8f0; font-weight: 600; text-align: right;
+      font-variant-numeric: tabular-nums; }
+    .adsb-dc-v.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 500; }
+    .adsb-dc-note { font-size: 10px; color: #64748b; margin-top: 8px; padding-top: 6px;
+      border-top: 1px solid rgba(148,163,184,0.18); }
+    /* A dead-reckoned position is a guess, and has to look like one. */
+    .adsb-dc-est { font-size: 10.5px; line-height: 1.4; color: #fbbf24; margin-bottom: 8px;
+      padding: 5px 7px; border-radius: 6px; background: rgba(251, 191, 36, 0.1);
+      border: 1px dashed rgba(251, 191, 36, 0.45); }
+    .adsb-dc-acts { display: flex; gap: 5px; margin-top: 9px; }
+    .adsb-dc-btn { flex: 1; font-size: 10.5px; padding: 5px 4px; border-radius: 6px;
+      cursor: pointer; background: rgba(148,163,184,0.12); color: #cbd5e1;
+      border: 1px solid rgba(148,163,184,0.25); }
+    .adsb-dc-btn:hover { background: rgba(148,163,184,0.22); color: #f8fafc; }
+    .adsb-dc-btn.on { background: rgba(192,132,252,0.22); border-color: rgba(192,132,252,0.6); color: #e9d5ff; }
     @media (max-width: 900px) {
       .floating-filter-sidebar { display: none; }
       .floating-filter-panel { display: none !important; }
@@ -2674,6 +2722,12 @@
            open panel when a different button is clicked. -->
       <div class="floating-filter-sidebar" id="floating-filter-sidebar"></div>
       <div class="floating-filter-panel" id="floating-filter-panel"></div>
+
+      <!-- Pinned-aircraft detail. Deliberately a SIBLING of the filter panel,
+           not a child: the document-level click handler closes that panel on
+           any outside click, whereas this card is owned by the pin and is
+           cleared by the same map-background click that already unpins. -->
+      <div class="filter-panel adsb-detail-card" id="adsb-detail-card"></div>
 
       <!-- Compact icon-over-label toggles: the coloured icon carries the
            layer identity, the small caption keeps it unambiguous. -->
@@ -4803,7 +4857,7 @@
           stopCameraRefresh();
           clearCameraSelection();
         }
-        if (target === 'adsb') stopAdsbRefresh();
+        if (target === 'adsb') { stopAdsbRefresh(); adsbUnpinAircraft(); }
         if (target === 'transport') stopTransportRefresh();
       } else {
         map.addLayer(layer);
@@ -14410,6 +14464,8 @@ function initPagerHoursFromStorage() {
         }
         _adsbAircraft = aircraft;
         _rebuildAdsb();
+        // Altitude, speed and position age all move on every poll.
+        if (_adsbPinnedHex) adsbRenderDetailCard();
         // Follow mode: keep the camera on the pinned aircraft as it
         // moves; if it vanished from the feed, quietly stop following.
         if (_adsbFollowActive && _adsbPinnedHex) {
@@ -14452,6 +14508,9 @@ function initPagerHoursFromStorage() {
         const data = await res.json();
         _adsbTrails = data.trails || {};
         _rebuildAdsbTrails();
+        // The trend arrow and track summary are both derived from the trail,
+        // so the card is incomplete until this lands.
+        if (_adsbPinnedHex) adsbRenderDetailCard();
       } catch (e) {
         console.warn('[adsb] trails failed to load:', e);
       }
@@ -14707,6 +14766,7 @@ function initPagerHoursFromStorage() {
         // next 15 s rebuild tick.
         const entry = _adsbMarkers.get(a.hex);
         if (entry) entry.marker.setTooltipContent(buildAdsbTooltipHtml(a));
+        if (_adsbPinnedHex === a.hex) adsbRenderDetailCard();
       } catch (e) {
         console.warn('[adsb] photo fetch failed', e);
         // Not persisted — a transient failure shouldn't stick for 7 days.
@@ -14743,6 +14803,205 @@ function initPagerHoursFromStorage() {
       }
     }
 
+
+    // ---------- Pinned-aircraft detail card ----------
+    //
+    // Everything known about the one aircraft the user selected. The hover
+    // tooltip stays a glance; this is the sustained view, and it is where the
+    // facts that need room live — the trail summary, the altitude trend, the
+    // actions.
+    //
+    // It deliberately does NOT name the receiver that heard the aircraft.
+    // `sources[]` is on every record and it stays off this card.
+
+    /** Climbing / descending / level, from the last two trail points that
+     *  carry an altitude.
+     *
+     *  Derived rather than reported: ADS-B gives `alt_baro`, not a vertical
+     *  rate, and the aggregators we merge do not pass one through. An arrow
+     *  from two real samples is honest; a synthesised ft/min figure would
+     *  claim a precision the samples do not support, because the gap between
+     *  them is whatever the poll cadence happened to be. */
+    function adsbAltTrend(hex) {
+      const t = _adsbTrails[hex];
+      if (!Array.isArray(t) || t.length < 2) return null;
+      let last = null, prev = null;
+      for (let i = t.length - 1; i >= 0; i--) {
+        const alt = t[i][2];
+        if (alt == null) continue;
+        if (last === null) { last = alt; continue; }
+        prev = alt;
+        break;
+      }
+      if (last === null || prev === null) return null;
+      const d = last - prev;
+      if (Math.abs(d) < 150) return { arrow: '→', label: 'level', color: '#94a3b8' };
+      return d > 0
+        ? { arrow: '▲', label: 'climbing', color: '#4ade80' }
+        : { arrow: '▼', label: 'descending', color: '#fbbf24' };
+    }
+
+    /** Points held and the highest altitude among them.
+     *
+     *  No "tracked for N minutes": /api/adsb/trails drops the timestamp from
+     *  every point on the way out (it draws paths, and a third number per
+     *  point would inflate the response for something nothing renders), so a
+     *  duration here would have to be invented. Point count is the honest
+     *  stand-in for how much of the flight we hold. */
+    function adsbTrackSummary(hex) {
+      const t = _adsbTrails[hex];
+      if (!Array.isArray(t) || t.length < 2) return null;
+      let maxAlt = null;
+      for (const p of t) {
+        if (p[2] == null) continue;
+        if (maxAlt === null || p[2] > maxAlt) maxAlt = p[2];
+      }
+      return { points: t.length, maxAlt };
+    }
+
+    function adsbHideDetailCard() {
+      const el = document.getElementById('adsb-detail-card');
+      if (el) { el.classList.remove('open'); el.innerHTML = ''; }
+    }
+
+    function adsbRenderDetailCard() {
+      const el = document.getElementById('adsb-detail-card');
+      if (!el) return;
+      if (!_adsbPinnedHex) { adsbHideDetailCard(); return; }
+      const a = _adsbAircraft.find((x) => x.hex === _adsbPinnedHex);
+      // Pinned but gone from the feed: keep the card up and say so rather than
+      // silently vanishing, which reads as a misclick.
+      if (!a) {
+        el.classList.add('open');
+        el.innerHTML = '<div class="adsb-dc-head">'
+          + '<div class="adsb-dc-name">' + escapeHtml(_adsbPinnedHex.toUpperCase()) + '</div>'
+          + '<button class="adsb-dc-x" onclick="adsbUnpinAircraft()" title="Close">&times;</button>'
+          + '</div><div class="adsb-dc-note">No longer in the feed — out of coverage or landed.</div>';
+        return;
+      }
+
+      const es = a.esTag ? ADSB_ES_STYLE[a.esTag] : null;
+      const color = es ? es.color : adsbAltColor(a.altFt);
+      const name = a.callsign || a.reg || a.hex.toUpperCase();
+      const sqBad = a.squawk && ['7500', '7600', '7700'].indexOf(a.squawk) !== -1;
+
+      const row = (k, v, cls) => (v == null || v === '' )
+        ? ''
+        : '<div class="adsb-dc-k">' + escapeHtml(k) + '</div>'
+          + '<div class="adsb-dc-v' + (cls ? ' ' + cls : '') + '">' + v + '</div>';
+
+      // Distance from where the user is looking. Computable from what is
+      // already on screen, and the quickest way to judge "is this near me".
+      let distTxt = null;
+      try {
+        const c = map.getCenter();
+        const m = haversineMeters(c.lat, c.lng, a.lat, a.lon);
+        distTxt = (m >= 10000 ? Math.round(m / 1000) : (m / 1000).toFixed(1)) + ' km';
+      } catch (e) { /* a degenerate centre is not worth failing the card for */ }
+
+      const trend = adsbAltTrend(a.hex);
+      const altTxt = a.onGround
+        ? 'On ground'
+        : (a.altFt != null
+          ? a.altFt.toLocaleString() + ' ft'
+            + (trend ? ' <span style="color:' + trend.color + ';" title="' + trend.label + '">' + trend.arrow + '</span>' : '')
+          : null);
+
+      const cached = _adsbPhotoCache.get(a.hex);
+      const photoHtml = (cached && cached !== '__loading__' && cached !== '__none__')
+        ? '<img class="adsb-dc-photo" src="' + escapeHtml(cached.src) + '" alt="" referrerpolicy="no-referrer" onerror="this.style.display=\'none\';">'
+          + '<div class="adsb-dc-credit">Photo © ' + escapeHtml(cached.photographer || 'unknown')
+          + (cached.link ? ' · <a href="' + escapeHtml(cached.link) + '" target="_blank" rel="noopener" style="color:#7dd3fc;">Planespotters.net</a>' : '')
+          + '</div>'
+        : '';
+
+      // Dead-reckoned rather than observed (see applyHoldover). Stated first
+      // and styled as a warning, because every number below it is a projection
+      // from the last real fix.
+      const estHtml = a.estimated
+        ? '<div class="adsb-dc-est"><i class="fa-solid fa-triangle-exclamation"></i> '
+          + 'Estimated position — no signal for ' + Math.round(a.estimatedSec || a.ageSec) + 's. '
+          + 'Projected along its last known heading and speed.</div>'
+        : '';
+
+      const summary = adsbTrackSummary(a.hex);
+      const noteHtml = summary
+        ? '<div class="adsb-dc-note">Track: ' + summary.points + ' points'
+          + (summary.maxAlt != null ? ' · peak ' + summary.maxAlt.toLocaleString() + ' ft' : '')
+          + '</div>'
+        : '';
+
+      el.classList.add('open');
+      el.innerHTML = ''
+        + '<div class="adsb-dc-head">'
+        +   '<i class="fa-solid ' + (adsbIconClass(a) === 'heli' ? 'fa-helicopter' : 'fa-plane') + '" style="color:' + color + ';"></i>'
+        +   '<div class="adsb-dc-name" style="color:' + color + ';">' + escapeHtml(name) + '</div>'
+        +   (es ? '<span class="adsb-dc-badge" style="background:' + es.color + ';">' + escapeHtml(es.label) + '</span>' : '')
+        +   '<button class="adsb-dc-x" onclick="adsbUnpinAircraft()" title="Close">&times;</button>'
+        + '</div>'
+        + estHtml
+        + photoHtml
+        + '<div class="adsb-dc-rows">'
+        +   row('Registration', a.reg ? escapeHtml(a.reg) : null)
+        +   row('Type', a.type ? escapeHtml(a.type) : null)
+        +   row('Altitude', altTxt)
+        +   row('Speed', a.gsKt != null ? Math.round(a.gsKt) + ' kt' : null)
+        +   row('Track', Number.isFinite(a.trackDeg) ? Math.round(a.trackDeg) + '°' : null)
+        +   row('Squawk', a.squawk
+              ? '<span style="color:' + (sqBad ? '#f87171' : '#e2e8f0') + ';">' + escapeHtml(a.squawk) + (sqBad ? ' — EMERGENCY' : '') + '</span>'
+              : null)
+        +   row('Distance', distTxt)
+        +   row('Position age', Math.round(a.ageSec) + 's')
+        +   row('ICAO', escapeHtml(a.hex.toUpperCase()), 'mono')
+        + '</div>'
+        + noteHtml
+        + '<div class="adsb-dc-acts">'
+        +   '<button class="adsb-dc-btn' + (_adsbFollowActive ? ' on' : '') + '" onclick="adsbToggleFollow()">'
+        +     '<i class="fa-solid fa-crosshairs"></i> ' + (_adsbFollowActive ? 'Following' : 'Follow') + '</button>'
+        +   '<button class="adsb-dc-btn" onclick="adsbCentreOnPinned()"><i class="fa-solid fa-location-crosshairs"></i> Centre</button>'
+        +   '<button class="adsb-dc-btn" onclick="adsbCopyPinnedHex()"><i class="fa-solid fa-copy"></i> Copy</button>'
+        + '</div>';
+    }
+
+    window.adsbToggleFollow = function () {
+      _adsbFollowActive = !_adsbFollowActive;
+      if (_adsbFollowActive && _adsbPinnedHex) {
+        const entry = _adsbMarkers.get(_adsbPinnedHex);
+        if (entry) panToMarkerClearingUi(entry.marker, 0.8);
+      }
+      adsbRenderDetailCard();
+    };
+
+    window.adsbCentreOnPinned = function () {
+      const entry = _adsbPinnedHex && _adsbMarkers.get(_adsbPinnedHex);
+      if (entry) panToMarkerClearingUi(entry.marker, 0.8);
+    };
+
+    window.adsbCopyPinnedHex = function () {
+      const a = _adsbAircraft.find((x) => x.hex === _adsbPinnedHex);
+      const txt = a ? (a.callsign || a.reg || a.hex).toUpperCase() : (_adsbPinnedHex || '').toUpperCase();
+      if (!txt) return;
+      try {
+        navigator.clipboard.writeText(txt);
+        showToast('Copied ' + txt, 'success');
+      } catch (e) {
+        showToast('Could not copy', 'error');
+      }
+    };
+
+    /** Clear the pin from the card's close button — the same teardown the
+     *  map-background click does, kept in one place so the two cannot drift. */
+    window.adsbUnpinAircraft = function () {
+      if (!_adsbPinnedHex) return;
+      const entry = _adsbMarkers.get(_adsbPinnedHex);
+      if (entry) entry.marker.closeTooltip();
+      _adsbPinnedHex = null;
+      _adsbFollowActive = false;
+      adsbHideDetailCard();
+      _rebuildAdsbTrails();
+      adsbListRender();
+    };
+
     // Pin an aircraft: pan to it, keep its tooltip open, highlight and
     // scroll to its list row. Replaces any previous pin.
     function adsbPinAircraft(hex) {
@@ -14770,6 +15029,7 @@ function initPagerHoursFromStorage() {
         const target = row.offsetTop - (body.clientHeight - row.offsetHeight) / 2;
         body.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
       }
+      adsbRenderDetailCard();
       // Lazy-load the Planespotters photo for the pinned row.
       const a = _adsbAircraft.find((x) => x.hex === hex);
       if (a) adsbFetchPhoto(a);
@@ -14785,6 +15045,7 @@ function initPagerHoursFromStorage() {
         if (entry) entry.marker.closeTooltip();
         _adsbPinnedHex = null;
         _adsbFollowActive = false;
+        adsbHideDetailCard();
         _rebuildAdsbTrails();
         adsbListRender();
       }
