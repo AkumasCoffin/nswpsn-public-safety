@@ -42,7 +42,11 @@ import { log } from '../lib/log.js';
 import { learnedAliasMap } from '../services/capcodeAliasSync.js';
 import { requireRole, canViewNodeData } from '../services/auth/roles.js';
 import { hub } from '../services/nodes/hub.js';
-import { nodeAdsbTraces } from '../services/nodes/adsbNodeStore.js';
+import {
+  adsbNodeView,
+  adsbNodeTracks,
+  ADSB_TRACKS_MAX_MINUTES,
+} from '../services/nodes/adsbNodeView.js';
 import {
   talkgroupCatalog,
   talkgroupLabels,
@@ -4265,50 +4269,10 @@ nodeDataRouter.get(
       const url = new URL(c.req.url);
       const nodeId = (url.searchParams.get('nodeId') ?? '').trim();
       if (!nodeId) return c.json({ error: 'nodeId is required' }, 400);
-      // Clamped to what the store actually retains, so a caller asking for more
-      // gets the full window rather than a silently short answer.
-      // Clamped to what the store actually retains (8h), so a caller asking for
-      // more gets the full window rather than a silently short answer.
-      const raw = Number(url.searchParams.get('minutes') ?? 480);
-      const minutes = Number.isFinite(raw) ? Math.min(480, Math.max(1, Math.round(raw))) : 480;
-
-      const t = nodeAdsbTraces(nodeId, minutes);
-
-      // The receiver anchors the picture — a coverage map cannot show which
-      // bearings are weak without knowing where the centre is — but its EXACT
-      // position is somebody's home address and does not belong in a view that
-      // is scanned, screenshotted and shared.
-      //
-      // So the centre is rounded to ~1 km, which is far finer than the tens of
-      // kilometres a coverage plot is read at and far coarser than a street.
-      // The precise pin stays behind the node's Location control, where opening
-      // it is a deliberate act.
-      const pool = await getPool();
-      let site: { lat: number; lon: number; name: string | null; approx: true } | null = null;
-      if (pool) {
-        const r = await pool.query<{ name: string | null; lat: unknown; lon: unknown }>(
-          'SELECT name, lat, lon FROM nodes WHERE id = $1',
-          [nodeId],
-        );
-        const row = r.rows[0];
-        if (row && typeof row.lat === 'number' && typeof row.lon === 'number') {
-          site = {
-            lat: Math.round(row.lat * 100) / 100,
-            lon: Math.round(row.lon * 100) / 100,
-            name: row.name,
-            approx: true,
-          };
-        }
-      }
-
-      return c.json({
-        nodeId,
-        site,
-        windowMinutes: t.windowMinutes,
-        aircraft: t.aircraft,
-        points: t.points,
-        traces: t.traces,
-      });
+      // Clamping and the ~1km site rounding both live inside adsbNodeTracks, so
+      // the owner route under /api/feeder cannot be written without them.
+      const minutes = Number(url.searchParams.get('minutes') ?? ADSB_TRACKS_MAX_MINUTES);
+      return c.json(await adsbNodeTracks(nodeId, minutes));
     } catch (err) {
       log.error({ err }, '/api/node-data/adsb-tracks error');
       return c.json({ error: 'failed to load node adsb tracks' }, 500);
@@ -4338,105 +4302,13 @@ nodeDataRouter.get(
   requireRole(canViewNodeData),
   async (c) => {
     try {
-      const pool = await getPool();
-      if (!pool) return c.json({ error: 'database unavailable' }, 503);
       const url = new URL(c.req.url);
       const window = detailWindow(url);
-      const days = window === '24h' ? 1 : window === '7d' ? 7 : 30;
       const nodeId = (url.searchParams.get('nodeId') ?? '').trim();
       if (!nodeId) return c.json({ error: 'nodeId is required' }, 400);
-
-      const [nodeQ, totalsQ, seriesQ] = await Promise.all([
-        pool.query<{ id: string; name: string | null; kind: string | null; lat: unknown; lon: unknown }>(
-          'SELECT id, name, kind, lat, lon FROM nodes WHERE id = $1',
-          [nodeId],
-        ),
-        pool.query<{
-          snapshots: unknown; positions: unknown; max_aircraft: unknown;
-          max_range_km: unknown; msg_rate_max: unknown; tracks_max: unknown; days: unknown;
-        }>(
-          `SELECT COALESCE(SUM(snapshots), 0)::int    AS snapshots,
-                  COALESCE(SUM(positions), 0)::bigint AS positions,
-                  COALESCE(MAX(max_aircraft), 0)::int AS max_aircraft,
-                  MAX(max_range_km)                   AS max_range_km,
-                  MAX(msg_rate_max)                   AS msg_rate_max,
-                  MAX(tracks_max)::int                AS tracks_max,
-                  COUNT(*)::int                       AS days
-             FROM node_adsb_daily
-            WHERE node_id = $1 AND day > (now() AT TIME ZONE 'Australia/Sydney')::date - $2::int`,
-          [nodeId, days],
-        ),
-        pool.query<{
-          day: string; snapshots: unknown; positions: unknown;
-          max_aircraft: unknown; max_range_km: unknown; msg_rate_max: unknown;
-        }>(
-          // to_char, not the raw date: node-postgres parses a DATE column into
-          // a JS Date at LOCAL midnight, so toISOString().slice(0,10) on a
-          // server east of UTC yields the previous day. Formatting in SQL
-          // removes the server timezone from the answer entirely.
-          `SELECT to_char(day, 'YYYY-MM-DD') AS day,
-                  snapshots, positions, max_aircraft, max_range_km, msg_rate_max
-             FROM node_adsb_daily
-            WHERE node_id = $1 AND day > (now() AT TIME ZONE 'Australia/Sydney')::date - $2::int
-            ORDER BY day`,
-          [nodeId, days],
-        ),
-      ]);
-
-      // As with the pager view: the registry row supplies only identity, so a
-      // node that has been deleted is still inspectable rather than a 404.
-      const node = nodeQ.rows[0] ?? { id: nodeId, name: null, kind: null, lat: null, lon: null };
-      const t = totalsQ.rows[0];
-
-      // Live figures come from the agent's 15s heartbeat, so they are absent
-      // whenever the node is offline — deliberately null rather than zero, so
-      // the UI can say "offline" instead of claiming it is hearing nothing.
-      const live = hub.liveStatus(nodeId);
-      const st = live.status;
-      const components = st?.components ?? {};
-      const decoderState = components['dump1090'] ?? null;
-
-      return c.json({
-        window,
-        node: {
-          id: node.id,
-          name: node.name,
-          kind: node.kind,
-          // The antenna position: without it the decoder reports no range at
-          // all, so a null here explains a missing maxRange rather than
-          // leaving it looking like a fault.
-          lat: node.lat,
-          lon: node.lon,
-        },
-        online: hub.isOnline(nodeId),
-        live: {
-          aircraftNow: st?.adsbAircraftNow ?? null,
-          msgRate: st?.adsbMsgRate ?? null,
-          maxRangeKm: st?.adsbMaxRangeKm ?? null,
-          gainNow: st?.adsbGainNow ?? null,
-          queueDepth: st?.queueDepth ?? null,
-          uploadsExpired: st?.uploadsExpired ?? null,
-          decoder: decoderState,
-          configVersion: st?.configVersion ?? null,
-        },
-        totals: {
-          snapshots: num(t?.snapshots),
-          positions: num(t?.positions),
-          maxAircraft: num(t?.max_aircraft),
-          maxRangeKm: t?.max_range_km ?? null,
-          msgRateMax: t?.msg_rate_max ?? null,
-          tracksMax: t?.tracks_max ?? null,
-          daysReporting: num(t?.days),
-        },
-        days: seriesQ.rows.map((r) => ({
-          day: r.day,
-          snapshots: num(r.snapshots),
-          positions: num(r.positions),
-          maxAircraft: num(r.max_aircraft),
-          maxRangeKm: r.max_range_km ?? null,
-          msgRateMax: r.msg_rate_max ?? null,
-        })),
-      });
+      const view = await adsbNodeView(nodeId, window);
+      if (!view) return c.json({ error: 'database unavailable' }, 503);
+      return c.json(view);
     } catch (err) {
       log.error({ err }, '/api/node-data/adsb-node error');
       return c.json({ error: 'failed to load node adsb view' }, 500);
