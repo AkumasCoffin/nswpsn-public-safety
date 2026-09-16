@@ -265,6 +265,16 @@ func runAgent(ctx context.Context, configPath string) error {
 	// Localhost listener receiving decoded pager lines from the reader scripts.
 	listener := relay.New(cfg.RelayAddr, q)
 
+	// Node-side record of every decoded page: <data>/logs/messages.log,
+	// rotating at the same bound as the reader logs. Best-effort — a failure
+	// to open it must never stop capture.
+	if msgLog, err := supervise.NewLogWriter(filepath.Join(cfg.LogsDir(), "messages.log")); err != nil {
+		log.Printf("messages log unavailable: %v", err)
+	} else {
+		listener.SetMessageLog(msgLog)
+		defer msgLog.Close()
+	}
+
 	// WS control client. The reader manager is both the config applier and the
 	// status provider (reader component states).
 	ws := wsclient.New(cfg, q, readerMgr, readerMgr.Status)

@@ -1,6 +1,7 @@
 package supervise
 
 import (
+	"io"
 	"os"
 	"sync"
 )
@@ -14,6 +15,10 @@ type logWriter struct {
 	f    *os.File
 	size int64
 }
+
+// NewLogWriter exposes the same rotating writer for other agent components
+// that keep a log beside the reader logs (the relay's decoded-messages log).
+func NewLogWriter(path string) (io.WriteCloser, error) { return newLogWriter(path) }
 
 func newLogWriter(path string) (*logWriter, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)

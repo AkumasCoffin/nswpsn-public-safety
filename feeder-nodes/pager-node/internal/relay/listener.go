@@ -11,10 +11,12 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/AkumasCoffin/nswpsn-node/pager-node/internal/pagerdecode"
@@ -53,7 +55,15 @@ type Listener struct {
 	q         *queue.Queue
 	srv       *http.Server
 	audioSink func([]byte) // set via SetAudioSink; forwards framed monitor audio
+	msgLog    io.Writer    // set via SetMessageLog; one line per decoded page
 }
+
+// SetMessageLog wires an optional writer that receives one line per DECODED
+// page (the reader:<label>.log files only carry rtl_fm/multimon stderr — the
+// decoded traffic itself goes straight from multimon to this relay, so without
+// this there is no node-side record of what was decoded). Called once at
+// startup, before the server accepts traffic.
+func (l *Listener) SetMessageLog(w io.Writer) { l.msgLog = w }
 
 // SetAudioSink wires the destination for framed monitor audio (the WS binary
 // sender). Called once at startup, before the server accepts /audio streams.
@@ -163,6 +173,16 @@ func (l *Listener) handlePager(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := l.q.Enqueue("application/json", enc); err != nil {
 		log.Printf("relay: enqueue failed: %v", err)
+	}
+	if l.msgLog != nil {
+		// Logged after decode regardless of enqueue outcome: this file answers
+		// "what did this node decode", not "what was delivered".
+		line := fmt.Sprintf("%s [%s %.4fMHz] addr=%s fn=%d %s\n",
+			payload.Timestamp, source, freqMHz, msg.Address, msg.Function,
+			strings.ReplaceAll(msg.Text, "\n", " "))
+		if _, err := io.WriteString(l.msgLog, line); err != nil {
+			log.Printf("relay: messages log write failed: %v", err)
+		}
 	}
 	ok()
 }
