@@ -4167,7 +4167,7 @@ nodeDataRouter.get(
         lat: unknown; lon: unknown;
         snapshots: unknown; positions: unknown; max_aircraft: unknown;
         max_range_km: unknown; msg_rate_max: unknown; tracks_max: unknown;
-        days_reporting: unknown; last_day: unknown;
+        days_reporting: unknown;
       }>(
         `SELECT n.id, n.name, n.enabled, n.feed_enabled, n.lat, n.lon,
                 COALESCE(SUM(d.snapshots), 0)::int    AS snapshots,
@@ -4176,8 +4176,7 @@ nodeDataRouter.get(
                 MAX(d.max_range_km)                   AS max_range_km,
                 MAX(d.msg_rate_max)                   AS msg_rate_max,
                 MAX(d.tracks_max)::int                AS tracks_max,
-                COUNT(d.day)::int                     AS days_reporting,
-                MAX(d.day)                            AS last_day
+                COUNT(d.day)::int                     AS days_reporting
            FROM nodes n
            LEFT JOIN node_adsb_daily d
              ON d.node_id = n.id
@@ -4296,10 +4295,15 @@ nodeDataRouter.get(
           [nodeId, days],
         ),
         pool.query<{
-          day: unknown; snapshots: unknown; positions: unknown;
+          day: string; snapshots: unknown; positions: unknown;
           max_aircraft: unknown; max_range_km: unknown; msg_rate_max: unknown;
         }>(
-          `SELECT day, snapshots, positions, max_aircraft, max_range_km, msg_rate_max
+          // to_char, not the raw date: node-postgres parses a DATE column into
+          // a JS Date at LOCAL midnight, so toISOString().slice(0,10) on a
+          // server east of UTC yields the previous day. Formatting in SQL
+          // removes the server timezone from the answer entirely.
+          `SELECT to_char(day, 'YYYY-MM-DD') AS day,
+                  snapshots, positions, max_aircraft, max_range_km, msg_rate_max
              FROM node_adsb_daily
             WHERE node_id = $1 AND day > (now() AT TIME ZONE 'Australia/Sydney')::date - $2::int
             ORDER BY day`,
@@ -4353,7 +4357,7 @@ nodeDataRouter.get(
           daysReporting: num(t?.days),
         },
         days: seriesQ.rows.map((r) => ({
-          day: String(r.day instanceof Date ? r.day.toISOString().slice(0, 10) : r.day),
+          day: r.day,
           snapshots: num(r.snapshots),
           positions: num(r.positions),
           maxAircraft: num(r.max_aircraft),

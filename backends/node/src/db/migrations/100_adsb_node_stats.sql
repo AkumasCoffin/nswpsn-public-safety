@@ -11,7 +11,9 @@
 -- upsert one row per flush with no read-modify-write.
 
 CREATE TABLE IF NOT EXISTS node_adsb_daily (
-  node_id      uuid NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+  -- TEXT, matching nodes.id (gen_random_uuid()::text) and every other
+  -- node-referencing table. Not uuid: Postgres rejects the FK outright.
+  node_id      TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
   -- Sydney-local date: the rest of the site reports days in local time, and a
   -- UTC boundary would split an evening's flying across two rows.
   day          date NOT NULL,

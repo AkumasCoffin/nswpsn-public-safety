@@ -30,7 +30,28 @@ cd "$REPO_ROOT"
 # re-resolves it anyway. Scoped to the lockfile so real edits are untouched.
 git checkout -- backends/node/package-lock.json 2>/dev/null || true
 echo "[deploy] git pull…"
+# Fingerprint THIS script before the pull. bash reads a script lazily, by byte
+# offset — so when the pull rewrites deploy.sh underneath a running deploy, the
+# rest of this run either executes the old buffered content or resumes at a
+# shifted offset in the new file. Either way the newly-pulled steps are skipped
+# silently, and the deploy looks like it succeeded.
+#
+# This has bitten twice: a new agent build block was added and the deploy that
+# pulled it did not run it, so the binaries were only built on the NEXT deploy.
+_SELF="$SCRIPT_DIR/deploy.sh"
+_BEFORE="$(sha256sum "$_SELF" 2>/dev/null | awk '{print $1}' || true)"
+
 git pull --ff-only
+
+# If the pull changed this script, re-exec the new one so the rest of the
+# deploy is the version that was just pulled. DEPLOY_REEXEC guards against a
+# loop: the second run's pull is a no-op, so the hash cannot change again, but
+# the flag makes that guarantee explicit rather than assumed.
+_AFTER="$(sha256sum "$_SELF" 2>/dev/null | awk '{print $1}' || true)"
+if [ -n "$_BEFORE" ] && [ -n "$_AFTER" ] && [ "$_BEFORE" != "$_AFTER" ] && [ -z "${DEPLOY_REEXEC:-}" ]; then
+  echo "[deploy] deploy.sh changed in this pull — re-running the updated script…"
+  DEPLOY_REEXEC=1 exec bash "$_SELF" "$@"
+fi
 
 cd "$NODE_DIR"
 # Install any newly-added deps from package.json so the build can find
