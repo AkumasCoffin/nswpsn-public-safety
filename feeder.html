@@ -983,12 +983,18 @@
       const located = typeof node.lat === 'number' && typeof node.lon === 'number';
       const statusText = updating ? 'Updating…' : (online ? 'Online' : 'Offline');
       const statusCls = updating ? 'st-upd' : (online ? 'st-on' : 'st-off');
-      // Pager nodes locate by State + LGA; radio nodes by RFS zone.
+      // Pager nodes locate by State + LGA; radio nodes by RFS zone. ADS-B nodes
+      // have no coarse area at all — the exact pin IS the location — so showing
+      // "no region set" would flag a field this kind does not have.
       const areaLabel = isPager ? [node.state, node.lga].filter(Boolean).join(' · ') : node.zone;
-      const regionItem = areaLabel
+      const regionItem = isAdsb
+        ? ''
+        : areaLabel
         ? `<span class="nl-item"><i class="fas fa-map"></i> ${escapeHtml(areaLabel)}</span>`
         : `<span class="nl-item nl-warn"><i class="fas fa-map"></i> no region set</span>`;
-      const pinItem = located ? `<span class="nl-item"><i class="fas fa-location-dot"></i> exact pin</span>` : '';
+      const pinItem = located
+        ? `<span class="nl-item"><i class="fas fa-location-dot"></i> ${isAdsb ? 'antenna pinned' : 'exact pin'}</span>`
+        : (isAdsb ? `<span class="nl-item nl-warn"><i class="fas fa-location-dot"></i> no antenna pin — range unavailable</span>` : '');
       const keyItem = node.tokenPrefix ? `<span class="nl-item nl-key">key <code>${escapeHtml(node.tokenPrefix)}…</code></span>` : '';
       const _dlBtn = {
         windows: `<button class="mini-btn" title="Download Windows installer" onclick="downloadInstaller('windows','${node.id}',this)"><i class="fab fa-windows"></i> Windows</button>`,

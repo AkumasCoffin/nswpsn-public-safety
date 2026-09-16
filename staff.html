@@ -8849,6 +8849,7 @@
       const st = node.status || null;
       const kind = node.kind || 'radio';
       const isPager = kind === 'pager';
+      const isAdsb = kind === 'adsb';
       const owner = node.ownerUsername ? escapeHtml(node.ownerUsername) : userShort;
       // Decoding: radio = SDR-Trunk up AND following the trunk (control lock or a
       // live call); pager = one or more POCSAG readers running. Feeding: uploads
@@ -8856,17 +8857,26 @@
       const readersUp = st && st.components
         ? Object.entries(st.components).filter(([k, v]) => k.startsWith('reader') && String(v).toLowerCase().includes('run')).length
         : 0;
+      // ADS-B runs one supervised decoder, so both signals come off that single
+      // component. Messages, not aircraft: a receiver on a quiet night with
+      // nothing overhead is decoding perfectly well.
+      const dump1090Up = !!(st && st.components
+        && String(st.components.dump1090 || '').toLowerCase().includes('run'));
       const sdrUp = isPager
         ? readersUp > 0
-        : !!(st && st.components && st.components.sdrtrunk === 'running');
+        : isAdsb
+          ? dump1090Up
+          : !!(st && st.components && st.components.sdrtrunk === 'running');
       const decoding = isPager
         ? (online && readersUp > 0)
-        : !!(st && (
+        : isAdsb
+          ? (online && dump1090Up && Number((st && st.adsbMsgRate) || 0) > 0)
+          : !!(st && (
             (Array.isArray(st.activeCalls) && st.activeCalls.length > 0) ||
             (Array.isArray(st.channels) && st.channels.some(c =>
               c && (c.processing || ['CONTROL', 'CALL', 'ACTIVE', 'DATA'].includes(String(c.state || '').toUpperCase()))))
           ));
-      const uploading = isPager
+      const uploading = (isPager || isAdsb)
         ? Number(node.messagesLast10m || 0) > 0
         : !!(st && st.uploadsPerMin != null && st.uploadsPerMin > 0);
 
@@ -8911,17 +8921,21 @@
           </div>
           <div class="node-versions">
             ${_nodeVer('agent', node.agentVersion)}
-            ${isPager ? '' : `${_nodeVer('sdrtrunk', node.sdrtrunkVersion)}
+            ${(isPager || isAdsb) ? '' : `${_nodeVer('sdrtrunk', node.sdrtrunkVersion)}
             ${_nodeVer('rdio', node.rdioVersion)}`}
           </div>
-          ${isPager ? '' : _ndReadinessHtml(st, sdrUp)}
+          ${(isPager || isAdsb) ? '' : _ndReadinessHtml(st, sdrUp)}
           ${_ndActivityHtml(online, sdrUp, decoding, feedEnabled, uploading, kind, updating, node.pagerDecoding)}
           <div class="dev-card-secondary">
             <span>owner <span class="node-mono" title="${escapeHtml(userId)}">${owner}</span></span>
             <span>install <span class="node-mono">${installShort}</span></span>
           </div>
           <div class="dev-card-secondary">
-            <span><i class="fas fa-map"></i> region ${(() => { const a = isPager ? [node.state, node.lga].filter(Boolean).join(' · ') : node.zone; return a ? `<strong>${escapeHtml(a)}</strong>` : '<span style="color:#fbbf24">not set</span>'; })()}${(typeof node.lat === 'number') ? ' · <i class="fas fa-location-dot" title="Exact pin set"></i> pin' : ''}</span>
+            ${isAdsb
+              ? `<span><i class="fas fa-location-dot"></i> antenna ${(typeof node.lat === 'number' && typeof node.lon === 'number')
+                  ? `<strong>${node.lat.toFixed(4)}, ${node.lon.toFixed(4)}</strong>`
+                  : '<span style="color:#fbbf24">no pin — range cannot be measured</span>'}</span>`
+              : `<span><i class="fas fa-map"></i> region ${(() => { const a = isPager ? [node.state, node.lga].filter(Boolean).join(' · ') : node.zone; return a ? `<strong>${escapeHtml(a)}</strong>` : '<span style="color:#fbbf24">not set</span>'; })()}${(typeof node.lat === 'number') ? ' · <i class="fas fa-location-dot" title="Exact pin set"></i> pin' : ''}</span>`}
           </div>
           ${statusRow}
         </div>`;
@@ -9880,8 +9894,11 @@
       const locTitle = areaLabel
         ? `Region: ${escapeHtml(areaLabel)}${located ? ' · exact pin set' : ' · no exact pin'}`
         : 'No location set';
+      const isAdsbNode = (n.kind || 'radio') === 'adsb';
       const feedTitle = isPager
         ? 'Forward decoded pages to central Pagermon. Off keeps the node decoding (reception still counts) but stops uploading.'
+        : isAdsbNode
+        ? "Contribute this receiver's aircraft to the live map. Off keeps it decoding — its own statistics still accrue — but nothing it hears reaches the map."
         : "Forward calls to central rdio. Off disables the node's rdio downstream (rdio keeps running, stops uploading).";
       el.innerHTML = `
         <div class="nd-ctl-switches">
@@ -9897,7 +9914,7 @@
               <input type="checkbox" ${feedEnabled ? 'checked' : ''} onchange="toggleNodeFeed('${jsArg(id)}', this.checked, this)">
               <span class="track"></span>
             </label>
-            <span>Feed → ${isPager ? 'Pagermon' : 'rdio'} <b>${feedEnabled ? 'on' : 'off'}</b></span>
+            <span>Feed → ${isPager ? 'Pagermon' : isAdsbNode ? 'the map' : 'rdio'} <b>${feedEnabled ? 'on' : 'off'}</b></span>
           </div>
         </div>
         <div class="nd-controls" style="margin-top:0.8rem;">
@@ -11809,8 +11826,9 @@
       // last-cached status.
       const rst = (_ndStatus && (_ndStatus.calibrated != null || _ndStatus.jmbeInstalled != null))
         ? _ndStatus : (n.status || null);
-      // Pager nodes have no SDR-Trunk/rdio — show only the agent version.
-      if ((n.kind || 'radio') === 'pager') {
+      // Pager and ADS-B nodes run no SDR-Trunk or rdio — show only the agent
+      // version rather than two permanent em dashes.
+      if (['pager', 'adsb'].includes(n.kind || 'radio')) {
         el.innerHTML = _nodeVer('agent', agent);
         return;
       }
