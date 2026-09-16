@@ -1754,6 +1754,22 @@
       white-space: nowrap;
     }
 
+    /* ADS-B coverage card. The header carries a title, a window toggle and a
+       Close button; on a narrow window those collide unless the controls are
+       allowed to drop to their own line. */
+    .nd2-aov-head { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+    .nd2-aov-head-ctl { display: flex; align-items: center; gap: 0.5rem; margin-left: auto; }
+    #nd2-aov-map {
+      height: 440px;
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid var(--border-subtle, #334155);
+    }
+    #nd2-aov-map-note { margin-top: 0.55rem; }
+    /* The receiver name is the click target in the fleet table; the state line
+       under it is context, not a second link. */
+    .nd2-aov-state { font-size: 0.7rem; margin-top: 0.15rem; }
+
     /* The email column holds the longest value in the table and must not clip:
        a half-shown address reads as a typo rather than as a truncation. It
        wraps instead, which costs a little row height on the few long ones and
@@ -3093,12 +3109,6 @@
           </div>
         </div>
 
-        <div class="nd2-controls nd2-viewbar" id="nd2-viewbar-adsb" style="display: none;">
-          <div class="nd2-seg" role="group" aria-label="ADS-B data view">
-            <button class="filter-btn active" data-nd2-view="aoverview" onclick="nd2SetView('aoverview')">Receivers</button>
-          </div>
-        </div>
-
         <div class="nd2-error" id="nd2-error" style="display: none;"></div>
         <!-- Node drill-down chrome. Deliberately placed ABOVE every nd2-view-*
              panel: the node detail reuses those panels verbatim, scoped by
@@ -3714,7 +3724,7 @@
         <!-- ===== Pager Overview view ===== -->
         <!-- ADS-B receivers: live state + windowed performance per receiver. -->
         <div id="nd2-view-aoverview" style="display: none;">
-          <div class="nd2-stat-row" id="nd2-aov-tiles"></div>
+          <div class="stats-bar" id="nd2-aov-tiles"></div>
           <div class="nd2-card">
             <div class="nd2-card-h"><span>Receivers</span></div>
             <div id="nd2-aov-list"><div class="nd2-empty">Loading…</div></div>
@@ -4872,11 +4882,11 @@
       _nd2MarkDataMenu();
       const rBar = document.getElementById('nd2-viewbar-radio');
       const pBar = document.getElementById('nd2-viewbar-pager');
-      const aBar = document.getElementById('nd2-viewbar-adsb');
       if (rBar) rBar.style.display = mode === 'radio' ? '' : 'none';
       if (pBar) pBar.style.display = mode === 'pager' ? '' : 'none';
-      if (aBar) aBar.style.display = mode === 'adsb' ? '' : 'none';
-      // Transcripts has ONE view, so it gets no pill row at all.
+      // ADS-B has a single view, so like Transcripts it gets no pill row: one
+      // lone pill reads as a control that does nothing.
+      // Transcripts and ADS-B have ONE view each, so they get no pill row.
       // The per-node scope selector is a Radio-mode control (pager stays
       // fleet-wide); hide it entirely in Pager mode.
       const nodeCtl = document.getElementById('nd2-node-ctl');
@@ -7871,18 +7881,29 @@
 
       const tilesEl = document.getElementById('nd2-aov-tiles');
       if (tilesEl) {
+        const offline = Math.max(0, (t.receivers || 0) - (t.online || 0));
         tilesEl.innerHTML = [
           // Aircraft now is a fleet SUM and will double-count anything two
           // receivers can both see; it answers "how much are we hearing",
           // not "how many distinct aircraft exist".
-          ['Aircraft now', nd2Num(t.aircraftNow), (t.online || 0) + ' of ' + (t.receivers || 0) + ' online'],
-          ['Positions', nd2Num(t.positions), 'reports in this window'],
-          ['Best range', t.maxRangeKm ? Math.round(t.maxRangeKm) + ' km' : '—', 'furthest any receiver saw'],
-          ['Snapshots', nd2Num(t.snapshots), 'uploads accepted'],
-        ].map(([k, v, sub]) =>
-          `<div class="stat-card"><div class="stat-value">${v}</div>`
+          ['Aircraft Now', nd2Num(t.aircraftNow), 'var(--success)',
+            (t.online || 0) + ' of ' + (t.receivers || 0) + ' receivers online'],
+          ['Positions', nd2Num(t.positions), '#38bdf8', 'reports in this window'],
+          ['Best Range', t.maxRangeKm ? Math.round(t.maxRangeKm) + ' km' : '—', '#fb923c',
+            'furthest any receiver saw'],
+          ['Snapshots', nd2Num(t.snapshots), 'var(--text-primary)', 'uploads accepted'],
+        ].map(([k, v, colour, sub]) =>
+          `<div class="stat-card">`
+          + `<div class="stat-value" style="color: ${colour};">${v}</div>`
           + `<div class="stat-label">${escapeHtml(k)}</div>`
           + `<div class="nd2-stat-sub">${escapeHtml(sub)}</div></div>`).join('');
+        // A receiver that is offline is the one thing on this screen worth
+        // interrupting for, so it is stated rather than left to be inferred
+        // from "1 of 2".
+        if (offline > 0) {
+          const first = tilesEl.querySelector('.stat-card');
+          if (first) first.style.borderColor = 'rgba(248, 113, 113, 0.4)';
+        }
       }
 
       const listEl = document.getElementById('nd2-aov-list');
@@ -7912,7 +7933,7 @@
 
         return [
           `<a href="#" class="nd2-node-link" data-node-id="${escapeHtml(String(r.id))}">${escapeHtml(r.name || String(r.id))}</a>`
-            + `<div style="font-size:0.7rem; ${soft}">${state}</div>`,
+            + `<div class="nd2-aov-state" style="${soft}">${state}</div>`,
           (live.aircraftNow == null ? '—' : nd2Num(live.aircraftNow)),
           (live.msgRate == null ? '—' : Number(live.msgRate).toFixed(1) + '/s'),
           rangeCell,
@@ -8059,16 +8080,19 @@
       el.style.display = '';
       el.innerHTML = ''
         + '<div class="nd2-card">'
-        +   '<div class="nd2-card-h"><span>' + escapeHtml(name) + ' — coverage</span>'
-        +     '<span class="nd2-seg" style="margin-left:auto;">'
-        +       '<button type="button" class="filter-btn" onclick="nd2SetTrackWindow(15, this)">15 min</button>'
-        +       '<button type="button" class="filter-btn active" onclick="nd2SetTrackWindow(60, this)">Last hour</button>'
+        +   '<div class="nd2-card-h nd2-aov-head">'
+        +     '<span>' + escapeHtml(name) + ' — coverage</span>'
+        +     '<span class="nd2-aov-head-ctl">'
+        +       '<span class="nd2-seg">'
+        +         '<button type="button" class="filter-btn" onclick="nd2SetTrackWindow(15, this)">15 min</button>'
+        +         '<button type="button" class="filter-btn active" onclick="nd2SetTrackWindow(60, this)">Last hour</button>'
+        +       '</span>'
+        +       '<button type="button" class="btn btn-secondary btn-sm" onclick="nd2CloseAdsbNodeView()">Close</button>'
         +     '</span>'
-        +     '<button type="button" class="nd2-back" onclick="nd2CloseAdsbNodeView()">Close</button>'
         +   '</div>'
         +   '<div id="nd2-aov-map-wrap">'
-        +     '<div id="nd2-aov-map" style="height:420px; border-radius:8px; overflow:hidden;"></div>'
-        +     '<div id="nd2-aov-map-note" class="nd2-note" style="margin-top:0.5rem;">Loading tracks…</div>'
+        +     '<div id="nd2-aov-map"></div>'
+        +     '<div id="nd2-aov-map-note" class="nd2-note">Loading tracks…</div>'
         +   '</div>'
         + '</div>'
         + '<div class="nd2-card">'
