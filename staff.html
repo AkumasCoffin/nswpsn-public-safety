@@ -8914,7 +8914,7 @@
     }
 
     // Live activity chips: is the node DECODING (radio: SDR-Trunk following the
-    // trunk; pager: readers up) and FEEDING (radio: forwarding to central rdio;
+    // trunk; pager: readers up) and FEEDING (forwarding on — see _feedTarget;
     // pager: uploading to Pagermon). Reuses the .nd-ready chip styles.
     // Map a pager reader label to a short chip name.
     function _pagerFreqShort(label) {
@@ -8957,7 +8957,7 @@
       const installId = node.installId || node.install_id || '';
       const installShort = installId ? escapeHtml(String(installId).slice(0, 8)) + '…' : '—';
       const enabled = node.enabled !== false; // default to enabled unless explicitly false
-      const feedEnabled = node.feedEnabled === true; // feed to central rdio; off by default
+      const feedEnabled = node.feedEnabled === true; // forwarding on; off by default
       const st = node.status || null;
       const kind = node.kind || 'radio';
       const isPager = kind === 'pager';
@@ -8965,7 +8965,7 @@
       const owner = node.ownerUsername ? escapeHtml(node.ownerUsername) : userShort;
       // Decoding: radio = SDR-Trunk up AND following the trunk (control lock or a
       // live call); pager = one or more POCSAG readers running. Feeding: uploads
-      // flowing (radio → central rdio; pager → Pagermon).
+      // flowing (radio → rdio; pager → Pagermon; adsb → the live map).
       const readersUp = st && st.components
         ? Object.entries(st.components).filter(([k, v]) => k.startsWith('reader') && String(v).toLowerCase().includes('run')).length
         : 0;
@@ -9108,9 +9108,20 @@
       }
     }
 
-    // Toggle whether decoded calls are forwarded to the central rdio. Separate
-    // from the node being on — off lets the operator verify config + reception
-    // before feeding the live system.
+    /** What a node kind's feed goes to. The ONE definition — the toast, the
+     *  drawer switch and its tooltip all read it, so they cannot drift apart
+     *  again. `long` is for prose; the short form labels the switch. */
+    function _feedTarget(kind) {
+      switch (kind) {
+        case 'pager': return { short: 'Pagermon', long: 'central Pagermon' };
+        case 'adsb': return { short: 'the map', long: 'the live map' };
+        default: return { short: 'rdio', long: 'central rdio' };
+      }
+    }
+
+    // Toggle whether what this node decodes is forwarded on. Separate from the
+    // node being on — off lets the operator verify config + reception before
+    // feeding the live system.
     async function toggleNodeFeed(id, newValue, inputEl) {
       if (_nodeWriteBlocked()) { if (inputEl) inputEl.checked = !newValue; return; }
       if (inputEl) inputEl.disabled = true;
@@ -9121,7 +9132,13 @@
           body: JSON.stringify({ feed_enabled: newValue })
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        showToast(newValue ? 'Feed to central rdio ENABLED.' : 'Feed disabled (node keeps decoding).', 'success');
+        const target = _feedTarget(((allNodes || []).find(x => String(x.id) === String(id)) || {}).kind);
+        showToast(
+          newValue
+            ? `Feed to ${target.long} ENABLED.`
+            : 'Feed disabled (node keeps decoding).',
+          'success',
+        );
         await loadNodes();
       } catch (e) {
         showToast(`Failed to update feed: ${e.message}`, 'error');
@@ -10010,10 +10027,10 @@
       const locTitle = areaLabel
         ? `Region: ${escapeHtml(areaLabel)}${located ? ' · exact pin set' : ' · no exact pin'}`
         : 'No location set';
-      const isAdsbNode = (n.kind || 'radio') === 'adsb';
+      const feedTarget = _feedTarget(n.kind || 'radio');
       const feedTitle = isPager
         ? 'Forward decoded pages to central Pagermon. Off keeps the node decoding (reception still counts) but stops uploading.'
-        : isAdsbNode
+        : (n.kind === 'adsb')
         ? "Contribute this receiver's aircraft to the live map. Off keeps it decoding — its own statistics still accrue — but nothing it hears reaches the map."
         : "Forward calls to central rdio. Off disables the node's rdio downstream (rdio keeps running, stops uploading).";
       el.innerHTML = `
@@ -10030,7 +10047,7 @@
               <input type="checkbox" ${feedEnabled ? 'checked' : ''} onchange="toggleNodeFeed('${jsArg(id)}', this.checked, this)">
               <span class="track"></span>
             </label>
-            <span>Feed → ${isPager ? 'Pagermon' : isAdsbNode ? 'the map' : 'rdio'} <b>${feedEnabled ? 'on' : 'off'}</b></span>
+            <span>Feed → ${escapeHtml(feedTarget.short)} <b>${feedEnabled ? 'on' : 'off'}</b></span>
           </div>
         </div>
         <div class="nd-controls" style="margin-top:0.8rem;">
