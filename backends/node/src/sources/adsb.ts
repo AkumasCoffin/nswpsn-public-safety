@@ -31,6 +31,7 @@ import { registerSource } from '../services/sourceRegistry.js';
 import { liveStore } from '../store/live.js';
 import { config } from '../config.js';
 import { log } from '../lib/log.js';
+import { nodeAdsbRecords, nodeAdsbFeedCount } from '../services/nodes/adsbNodeStore.js';
 
 // Australia bbox [W,S,E,N]. Filter applies a 0.3° buffer so aircraft
 // riding the edge don't flap in/out between ticks; the API reports the
@@ -119,21 +120,21 @@ const MAX_SEEN_POS_SECS = 60;
 /** Raw readsb v2 aircraft record. Every field except `hex` is optional
  *  in practice — presence varies by aggregator and by message type
  *  (TIS-B/MLAT targets often lack alt_baro, category, etc.). */
-interface RawAircraft {
-  hex?: string;
-  flight?: string;
-  r?: string; // registration
-  t?: string; // ICAO type designator
-  lat?: number;
-  lon?: number;
-  alt_baro?: number | 'ground';
-  gs?: number;
-  track?: number;
-  category?: string;
-  squawk?: string;
-  emergency?: string;
-  seen_pos?: number;
-  dbFlags?: number;
+export interface RawAircraft {
+  hex?: string | null;
+  flight?: string | null;
+  r?: string | null; // registration
+  t?: string | null; // ICAO type designator
+  lat?: number | null;
+  lon?: number | null;
+  alt_baro?: number | 'ground' | null;
+  gs?: number | null;
+  track?: number | null;
+  category?: string | null;
+  squawk?: string | null;
+  emergency?: string | null;
+  seen_pos?: number | null;
+  dbFlags?: number | null;
 }
 interface ReadsbPointResponse {
   ac?: RawAircraft[];
@@ -210,13 +211,13 @@ const ES_CALLSIGN_RULES: ReadonlyArray<{ re: RegExp; tag: EsTag }> = [
 
 export function classifyEmergencyService(
   callsign: string | null,
-  dbFlags: number | undefined,
+  dbFlags: number | null | undefined,
 ): EsTag | null {
   const cs = (callsign ?? '').trim().toUpperCase();
   for (const r of ES_CALLSIGN_RULES) {
     if (r.re.test(cs)) return r.tag;
   }
-  if (dbFlags !== undefined && (dbFlags & 1) === 1) return 'military';
+  if (dbFlags !== undefined && dbFlags !== null && (dbFlags & 1) === 1) return 'military';
   return null;
 }
 
@@ -287,6 +288,45 @@ export function mergeAircraft(records: AdsbAircraft[]): AdsbAircraft[] {
     byHex.set(rec.hex, winner);
   }
   return Array.from(byHex.values());
+}
+
+/**
+ * Convert one ADS-B feeder node's uploaded snapshot into internal records.
+ *
+ * Lives here rather than in the node store because this module owns
+ * `normalizeAircraft` and the age cutoff — and because keeping the runtime
+ * dependency one-way (source -> store) avoids a cycle between the upstream
+ * poller and the node layer.
+ *
+ * `seen_pos` in the payload is relative to the snapshot's own `at`, so transit
+ * and queue delay are added here. Without that, a snapshot delayed by a retry
+ * would present minute-old positions as fresh and beat a genuinely current
+ * aggregator record in the merge.
+ */
+export function normalizeNodeUpload(
+  upload: { at: string; aircraft: RawAircraft[] },
+  sourceId: string,
+  nowMs: number = Date.now(),
+): AdsbAircraft[] {
+  const sentMs = Date.parse(upload.at);
+  // An unparseable or future-dated `at` counts as "now": trusting it could
+  // only ever make node data look fresher than it really is.
+  const transitSec =
+    Number.isFinite(sentMs) && sentMs <= nowMs ? (nowMs - sentMs) / 1000 : 0;
+
+  const out: AdsbAircraft[] = [];
+  for (const raw of upload.aircraft) {
+    const rec = normalizeAircraft(
+      {
+        ...raw,
+        seen_pos:
+          (Number.isFinite(raw.seen_pos) ? (raw.seen_pos as number) : 0) + transitSec,
+      },
+      sourceId,
+    );
+    if (rec) out.push(rec);
+  }
+  return out;
 }
 
 export function inAuBbox(lat: number, lon: number): boolean {
@@ -552,15 +592,31 @@ export function _resetAdsbTrailsForTests(): void {
 export async function fetchAdsbAircraft(): Promise<AdsbSnapshot> {
   // Upstreams in parallel — different hosts, no shared rate limit.
   // Each gets this poll's shard of the circle rotation.
+  // ADSB_DISABLED turns off UPSTREAM polling only; our own feeder nodes keep
+  // reporting through the same pipeline below.
   const tick = _pollTick++;
-  const results = await Promise.all(
-    UPSTREAMS.map((u, i) => fetchUpstream(u, shardCircles(tick, i))),
-  );
+  const results = config.ADSB_DISABLED
+    ? []
+    : await Promise.all(
+        UPSTREAMS.map((u, i) => fetchUpstream(u, shardCircles(tick, i))),
+      );
 
-  const fresh = mergeAircraft(results.flatMap((r) => r.records)).filter((a) =>
-    inAuBbox(a.lat, a.lon),
-  );
-  const allDown = results.every((r) => !r.ok);
+  // Our own ADS-B feeder nodes are just another source: a ~5s cadence against
+  // the aggregators' ~15s, covering whatever the circle rotation misses.
+  // mergeAircraft resolves any overlap — freshest position wins, metadata
+  // backfills from the other record, sources union — so nothing here needs to
+  // know which kind of source a record came from.
+  const nodeRecords = nodeAdsbRecords(Date.now());
+  const nodeFeeds = nodeAdsbFeedCount();
+
+  const fresh = mergeAircraft([
+    ...results.flatMap((r) => r.records),
+    ...nodeRecords,
+  ]).filter((a) => inAuBbox(a.lat, a.lon));
+  // Only a genuine upstream outage is a failure. With ADSB_DISABLED there are
+  // no upstreams to be down, and node data flowing during an aggregator
+  // outage means the source is working — neither should trip the backoff.
+  const allDown = results.length > 0 && results.every((r) => !r.ok);
   if (allDown && fresh.length === 0) {
     // Real outage — throw so the poller's failure counter and backoff
     // engage. Partial failures never reach here.
@@ -588,26 +644,41 @@ export async function fetchAdsbAircraft(): Promise<AdsbSnapshot> {
     aircraft: merged,
     count: merged.length,
     emergency_count: merged.filter((a) => a.esTag !== null).length,
-    upstreams: results.map((r) => {
-      const u: AdsbSnapshot['upstreams'][number] = {
-        id: r.id,
-        ok: r.ok,
-        circles_ok: r.circlesOk,
-        circles_total: r.circlesTotal,
-        count: r.records.length,
-      };
-      if (r.error !== undefined) u.error = r.error;
-      return u;
-    }),
+    upstreams: [
+      ...results.map((r) => {
+        const u: AdsbSnapshot['upstreams'][number] = {
+          id: r.id,
+          ok: r.ok,
+          circles_ok: r.circlesOk,
+          circles_total: r.circlesTotal,
+          count: r.records.length,
+        };
+        if (r.error !== undefined) u.error = r.error;
+        return u;
+      }),
+      // Our own receivers as one synthetic entry, so the status page and the
+      // live view show what the fleet is contributing. circles_* carry the
+      // node count: a receiver is not a circle query, but the shape is shared.
+      {
+        id: 'nodes',
+        ok: nodeFeeds > 0,
+        circles_ok: nodeFeeds,
+        circles_total: nodeFeeds,
+        count: nodeRecords.length,
+      },
+    ],
     bbox: AU_BBOX,
     fetched_at: new Date().toISOString(),
   };
 }
 
 export default function register(): void {
+  // Registered even when ADSB_DISABLED: the flag means "don't poll the public
+  // aggregators", not "drop our own receivers". fetchAdsbAircraft skips the
+  // upstream fetch and serves node data alone, so a deployment can run purely
+  // on its own hardware.
   if (config.ADSB_DISABLED) {
-    log.warn('adsb: disabled via ADSB_DISABLED, source not registered');
-    return;
+    log.warn('adsb: ADSB_DISABLED — upstream aggregators off, feeder nodes still served');
   }
   registerSource<AdsbSnapshot>({
     name: 'adsb_aircraft',

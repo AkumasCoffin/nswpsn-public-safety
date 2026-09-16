@@ -8,13 +8,40 @@ import { getPool } from '../../db/pool.js';
 import { randomUUID } from 'node:crypto';
 import { notifyStaff } from '../staffNotify.js';
 
-/** Feeder node types. Only 'radio' has a working agent today; 'pager'/'adsb'
- *  are provisionable now so their future agents slot in. */
+/** Feeder node types. Each has its own Go agent under feeder-nodes/. */
 export const NODE_KINDS = ['radio', 'pager', 'adsb'] as const;
 export type NodeKind = (typeof NODE_KINDS)[number];
 export function isNodeKind(v: unknown): v is NodeKind {
   return typeof v === 'string' && (NODE_KINDS as readonly string[]).includes(v);
 }
+
+/** Feeder role names, one per node kind. */
+export type FeederRole = 'feeder:radio' | 'feeder:pager' | 'feeder:adsb';
+
+/**
+ * The contributor role that gates a node KIND — the single definition.
+ *
+ * Three places ask this question and they MUST agree: the create/installer
+ * gate (api/feeder.ts), the node-token gate every agent request passes
+ * through (services/auth/nodeToken.ts), and the periodic WS auth
+ * revalidation sweep (api/node-ws.ts). When the sweep hardcoded
+ * feeder:radio, healthy pager nodes were admitted at the upgrade gate and
+ * then cut ~60s later with close 4003 'role revoked', forever. Adding a kind
+ * must therefore never mean editing three copies — hence this function lives
+ * here (registry has no import cycle with any of its callers).
+ */
+export function roleForKind(kind: string): FeederRole {
+  if (kind === 'pager') return 'feeder:pager';
+  if (kind === 'adsb') return 'feeder:adsb';
+  return 'feeder:radio';
+}
+
+/** Every feeder role, for allowlists that accept any contributor. */
+export const FEEDER_ROLES: readonly FeederRole[] = [
+  'feeder:radio',
+  'feeder:pager',
+  'feeder:adsb',
+];
 
 /** Auto-generated node name: `{kind}-{userslug}-{short-uuid}` (e.g.
  *  radio-akumascoffin-a3f9c2d1). Unique + self-describing so operators don't
@@ -116,16 +143,28 @@ export async function createNode(
   kind: string,
   tokenHash: string,
   tokenPrefix: string,
-  loc: { zone: string | null; state: string | null; lga: string | null },
+  loc: {
+    zone: string | null;
+    state: string | null;
+    lga: string | null;
+    /** Exact antenna position. Required at creation for adsb nodes (their
+     *  decoder needs it to report range); null for the other kinds, which set
+     *  it later via PUT /api/feeder/nodes/:id/location. */
+    lat?: number | null;
+    lon?: number | null;
+  },
 ): Promise<NodeRow | null> {
   const pool = await getPool();
   if (!pool) return null;
   const cleanName = clampMeta(name, 120) || `${kind}-node`;
   const res = await pool.query<NodeRow>(
-    `INSERT INTO nodes (user_id, kind, name, token_hash, token_prefix, zone, state, lga)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `INSERT INTO nodes (user_id, kind, name, token_hash, token_prefix, zone, state, lga, lat, lon)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      RETURNING ${NODE_COLS}`,
-    [userId, kind, cleanName, tokenHash, tokenPrefix, loc.zone, loc.state, loc.lga],
+    [
+      userId, kind, cleanName, tokenHash, tokenPrefix,
+      loc.zone, loc.state, loc.lga, loc.lat ?? null, loc.lon ?? null,
+    ],
   );
   const row = res.rows[0] ?? null;
   if (row) {
@@ -425,6 +464,44 @@ export async function setPagerTuning(
     `UPDATE nodes
        SET config_override = (COALESCE(config_override, '{}'::jsonb) - $2::text[]) || $3::jsonb
      WHERE id = $1 AND kind = 'pager'
+     RETURNING ${NODE_COLS}`,
+    [id, removeKeys, JSON.stringify(setObj)],
+  );
+  return res.rows[0] ?? null;
+}
+
+/**
+ * Set (or clear) an ADS-B node's gain / ppm overrides, merged into the JSONB
+ * config_override so they persist across restarts/updates without touching
+ * other keys. Pass a value to set it, `null` to clear it, or `undefined` to
+ * leave that key untouched. Guarded to kind='adsb'.
+ *
+ * Gain and ppm are the ONLY tunables: everything else about the decoder is
+ * fixed policy, and the antenna position comes from the node's own lat/lon
+ * columns rather than an override.
+ */
+export async function setAdsbTuning(
+  id: string,
+  patch: { gain?: string | null; ppm?: number | null },
+): Promise<NodeRow | null> {
+  const pool = await getPool();
+  if (!pool) return null;
+
+  const setObj: Record<string, unknown> = {};
+  const removeKeys: string[] = [];
+  if (patch.gain !== undefined) {
+    if (patch.gain === null || patch.gain === '') removeKeys.push('adsbGain');
+    else setObj['adsbGain'] = patch.gain;
+  }
+  if (patch.ppm !== undefined) {
+    if (patch.ppm === null) removeKeys.push('adsbPpm');
+    else setObj['adsbPpm'] = patch.ppm;
+  }
+
+  const res = await pool.query<NodeRow>(
+    `UPDATE nodes
+       SET config_override = (COALESCE(config_override, '{}'::jsonb) - $2::text[]) || $3::jsonb
+     WHERE id = $1 AND kind = 'adsb'
      RETURNING ${NODE_COLS}`,
     [id, removeKeys, JSON.stringify(setObj)],
   );

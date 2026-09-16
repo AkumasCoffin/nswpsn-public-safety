@@ -85,6 +85,7 @@ export const KNOWN_ROLES: ReadonlySet<string> = new Set([
   'staff',
   'feeder:radio',
   'feeder:pager',
+  'feeder:adsb',
   'feeder:agency_data',
   'feeder:monitor',
   'feeder:manager',
@@ -277,10 +278,13 @@ export async function canFeedMedia(userId: string): Promise<boolean> {
  * Contributor roles that get a personal referral link (profile modal card +
  * GET /api/referral-code). A referral only ATTRIBUTES a signup to its
  * voucher — the review flow is unchanged — so this is the vouching set:
- * radio/pager feeders, Wire contributors, map editors, and the owner.
+ * radio/pager/adsb feeders, Wire contributors, map editors, and the owner.
  */
 export async function canRefer(userId: string): Promise<boolean> {
-  return hasRole(userId, ['owner', 'feeder:radio', 'feeder:pager', 'wire:contributor', 'map:editor']);
+  return hasRole(userId, [
+    'owner', 'feeder:radio', 'feeder:pager', 'feeder:adsb',
+    'wire:contributor', 'map:editor',
+  ]);
 }
 
 /**

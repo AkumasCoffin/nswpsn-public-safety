@@ -91,6 +91,10 @@ import {
 } from './services/videoProcessor.js';
 import { startWirePurge } from './services/wirePurge.js';
 import { startMemoryWatch, stopMemoryWatch } from './services/memoryWatch.js';
+import {
+  startAdsbDailyFlush,
+  stopAdsbDailyFlush,
+} from './services/nodes/adsbNodeStore.js';
 
 // Pre-flight: hydrate the live store, run migrations, register every
 // source, and start the persist + flush + poll + activity-mode loops
@@ -137,6 +141,7 @@ async function preflight(): Promise<void> {
   startRdioIncidentAlertLoop(); // rdio burst → ntfy push (gated by RDIO_INCIDENT_ALERTS_ENABLED)
   startNodeEventsPruner(); // hourly 30-day prune of node_radio_events / node_pager_events
   startNodeHourlyRollup(); // hourly rebuild of node_radio_hourly* from the detail table
+  startAdsbDailyFlush(); // 1-min flush of ADS-B per-node daily counters
   startWhisperHealth();    // probe the faster-whisper backends rdio transcribes through
   startVideoProcessor(); // ffmpeg pass over newly uploaded Wire videos
   startWirePurge(); // purges deleted Wire posts past their 5-day recovery window
@@ -258,6 +263,9 @@ async function shutdown(signal: string) {
     stopRdioIncidentAlertLoop();
     stopNodeEventsPruner();
     stopNodeHourlyRollup();
+    // Awaited: writes out the partial minute of ADS-B counters rather than
+    // discarding it on every restart.
+    await stopAdsbDailyFlush();
     stopWhisperHealth();
     stopVideoProcessor();
     stopMemoryWatch();

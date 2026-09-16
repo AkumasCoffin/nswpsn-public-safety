@@ -31,6 +31,12 @@ import { bumpNodeCallStat, getNode } from '../services/nodes/registry.js';
 import { getPagerIngest } from '../services/nodes/globalConfig.js';
 import { hub } from '../services/nodes/hub.js';
 import {
+  recordNodeAdsbSnapshot,
+  accumulateAdsbDaily,
+  adsbNodeSourceId,
+} from '../services/nodes/adsbNodeStore.js';
+import { normalizeNodeUpload } from '../sources/adsb.js';
+import {
   recordActivityEvents,
   markRecorded,
   mergeAutomaticPatch,
@@ -906,6 +912,126 @@ function normalisePagerDatetime(ts: string | undefined): string {
   if (Number.isNaN(ms)) ms = Date.now();
   return String(Math.floor(ms / 1000));
 }
+
+// ---------------------------------------------------------------------------
+// POST /api/node-ingest/adsb-upload
+//
+// One aircraft snapshot from an ADS-B feeder node: everything its decoder can
+// currently see, plus that decoder's own statistics. Sent every ~5s, so each
+// upload SUPERSEDES the last — nothing here is a durable record of individual
+// positions, and nothing needs to be. What is durable is the per-node daily
+// aggregate powering the staff Data tab.
+// ---------------------------------------------------------------------------
+
+// A busy site tracks a few hundred aircraft; 500 records at ~200 bytes each is
+// ~100 KB, so this caps a snapshot at roughly 2.5x the realistic worst case.
+const MAX_ADSB_BYTES = 256 * 1024;
+
+// Per-node rate limit. Snapshots are every 5s = 12/min; 20 leaves room for a
+// queue draining after a network blip without letting a compromised node
+// hammer the merge. Excess is ACK'd and dropped, never 429'd: a stale snapshot
+// is superseded by the next one, so making the agent retry it would waste both
+// ends' effort on data that is already worthless.
+const adsbRateOk = makeNodeRateLimiter(20, 60_000);
+
+const AdsbAircraftSchema = z.object({
+  // Lowercase ICAO hex; readsb/dump1090 prefix non-ICAO TIS-B ids with '~'.
+  hex: z.string().regex(/^~?[0-9a-fA-F]{3,8}$/),
+  flight: z.string().max(12).nullish(),
+  lat: z.number().min(-90).max(90),
+  lon: z.number().min(-180).max(180),
+  // 'ground' is dump1090's sentinel for a surface position.
+  alt_baro: z.union([z.number(), z.literal('ground')]).nullish(),
+  gs: z.number().nullish(),
+  track: z.number().nullish(),
+  squawk: z.string().max(4).nullish(),
+  emergency: z.string().max(16).nullish(),
+  category: z.string().max(3).nullish(),
+  // Seconds since this position was received, relative to the snapshot's `at`.
+  seen_pos: z.number().min(0).max(3600),
+});
+
+const AdsbUploadSchema = z.object({
+  at: z.string().max(40),
+  aircraft: z.array(AdsbAircraftSchema).max(500),
+  stats: z
+    .object({
+      msgRate: z.number().nullish(),
+      aircraftTotal: z.number().int().nullish(),
+      aircraftWithPos: z.number().int().nullish(),
+      tracksAll: z.number().int().nullish(),
+      maxRangeKm: z.number().nullish(),
+    })
+    .nullish(),
+});
+
+nodeIngestRouter.post('/api/node-ingest/adsb-upload', async (c) => {
+  // 1-2. Node credentials, per-node token resolve (role gated), TOFU install
+  //      match — identical to the other ingest routes.
+  const token = c.req.header('X-Node-Token');
+  const installId = c.req.header('X-Node-Install');
+  if (!token || !installId) {
+    return c.json({ error: 'missing node credentials' }, 401);
+  }
+  const r = await resolveNodeToken(token);
+  if (!r.ok) {
+    if (r.reason === 'no_role') {
+      return c.json({ error: 'contributor role removed' }, 403);
+    }
+    return c.json({ error: 'unauthorized' }, 401);
+  }
+  if (r.installId && r.installId !== installId) {
+    return c.json({ error: 'install mismatch' }, 401);
+  }
+  // Only adsb-kind nodes may use this route.
+  if (r.kind !== 'adsb') {
+    return c.json({ error: 'not an adsb node' }, 403);
+  }
+
+  if (!adsbRateOk(r.nodeId)) {
+    log.warn(`adsb ingest: RATE-LIMITED (dropped) node=${r.nodeId.slice(0, 8)}`);
+    return c.json({ ok: true, dropped: 'rate limit' });
+  }
+
+  // 3. Size guard — require Content-Length and cap it (same rationale as the
+  //    other routes: closes the chunked-body bypass).
+  const lenHeader = c.req.header('content-length');
+  const len = Number(lenHeader ?? '');
+  if (lenHeader === undefined || !Number.isFinite(len)) {
+    return c.json({ error: 'length required' }, 411);
+  }
+  if (len > MAX_ADSB_BYTES) {
+    return c.json({ error: 'snapshot too large' }, 413);
+  }
+
+  // 4. Parse + validate.
+  let parsed: z.infer<typeof AdsbUploadSchema>;
+  try {
+    parsed = AdsbUploadSchema.parse(await c.req.json());
+  } catch {
+    return c.json({ error: 'bad body' }, 400);
+  }
+
+  // 5. Count the upload and fold it into the day's aggregate BEFORE the feed
+  //    gate. Reception is the node's own performance record: a receiver with
+  //    its feed paused is still working, and its Data tab should say so.
+  hub.recordUpload(r.nodeId);
+  accumulateAdsbDaily(r.nodeId, parsed.aircraft.length, parsed.stats ?? null);
+
+  // 6. Feed gate — when off the node stays connected and counted, but nothing
+  //    it hears reaches the live map.
+  if (!r.feedEnabled) {
+    return c.json({ ok: true, fed: false });
+  }
+
+  const nodeRow = await getNode(r.nodeId).catch(() => null);
+  const accepted = recordNodeAdsbSnapshot(
+    r.nodeId,
+    nodeRow?.name ?? null,
+    normalizeNodeUpload(parsed, adsbNodeSourceId(r.nodeId, nodeRow?.name ?? null)),
+  );
+  return c.json({ ok: true, accepted });
+});
 
 // ---------------------------------------------------------------------------
 // GET /api/node-ingest/capabilities

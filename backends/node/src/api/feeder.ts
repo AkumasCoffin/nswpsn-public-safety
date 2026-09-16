@@ -32,6 +32,8 @@ import {
   MAX_NODES_PER_USER,
   isNodeKind,
   autoNodeName,
+  roleForKind,
+  FEEDER_ROLES,
   type NodeRow,
 } from '../services/nodes/registry.js';
 import { getUsername } from './users.js';
@@ -63,11 +65,11 @@ function psSingleQuote(v: string): string {
   return `'${v.replace(/'/g, `''`)}'`;
 }
 
-// The feeder API is open to EITHER contributor role; the specific role a node
+// The feeder API is open to ANY contributor role; the specific role a node
 // KIND needs is checked per-action (see roleForKind + the create handler).
 const requireContributor: MiddlewareHandler = async (c, next) => {
   const userId = c.get('userId');
-  if (!userId || !(await hasRole(userId, ['feeder:radio', 'feeder:pager']))) {
+  if (!userId || !(await hasRole(userId, [...FEEDER_ROLES]))) {
     return c.json({ error: 'not a feeder contributor' }, 403);
   }
   await next();
@@ -75,12 +77,11 @@ const requireContributor: MiddlewareHandler = async (c, next) => {
 
 feederRouter.use('/api/feeder/*', requireSupabaseJwt, requireContributor);
 
-/** The contributor role that gates a given node kind: pager nodes need
- *  feeder:pager; radio (and adsb, until it has its own role) need feeder:radio.
- *  Mirrored in resolveNodeToken so the ongoing gate matches. */
-export function roleForKind(kind: string): 'feeder:radio' | 'feeder:pager' {
-  return kind === 'pager' ? 'feeder:pager' : 'feeder:radio';
-}
+// roleForKind lives in services/nodes/registry.ts — the ONE definition, shared
+// with resolveNodeToken and the node-ws auth sweep so the three gates that
+// decide whether an agent may connect can never disagree. Re-exported here
+// because this module's callers have always imported it from feeder.
+export { roleForKind };
 
 /** The volunteer-facing view of one of their nodes (name/type/key-prefix +
  *  live activity). No secrets — only the token PREFIX, never the token/hash. */
@@ -90,6 +91,7 @@ function feederNodeView(n: NodeRow) {
   const st = live.status;
   const callsLast10m = hub.uploadsInWindow(n.id);
   const isPager = n.kind === 'pager';
+  const isAdsb = n.kind === 'adsb';
 
   // Pager nodes have no SDR-Trunk channels/tuners: their "up/decoding" signal is
   // how many POCSAG readers are running (reported as components "reader:<label>").
@@ -99,27 +101,39 @@ function feederNodeView(n: NodeRow) {
       ).length
     : 0;
 
+  // ADS-B nodes run a single supervised dump1090 child: it is either decoding
+  // or it isn't, so both signals come off that one component.
+  const dump1090Up = String(st?.components?.['dump1090'] ?? '')
+    .toLowerCase()
+    .includes('run');
+
   const sdrUp = isPager
     ? readersUp > 0
-    : !!(
-        st &&
-        (st.components?.['sdrtrunk'] ||
-          (Array.isArray(st.channels) && st.channels.length > 0) ||
-          (Array.isArray(st.tuners) && st.tuners.length > 0))
-      );
+    : isAdsb
+      ? dump1090Up
+      : !!(
+          st &&
+          (st.components?.['sdrtrunk'] ||
+            (Array.isArray(st.channels) && st.channels.length > 0) ||
+            (Array.isArray(st.tuners) && st.tuners.length > 0))
+        );
 
   const decoding = isPager
     ? online && readersUp > 0
-    : online &&
-      sdrUp &&
-      Array.isArray(st?.channels) &&
-      st!.channels.some((c) => {
-        const ch = c as { processing?: boolean; state?: string };
-        return (
-          ch.processing === true ||
-          ['CONTROL', 'CALL', 'ACTIVE', 'DATA'].includes(String(ch.state ?? '').toUpperCase())
-        );
-      });
+    : isAdsb
+      // Messages, not aircraft: a receiver on a quiet night with nothing
+      // overhead is still decoding perfectly well.
+      ? online && dump1090Up && (st?.adsbMsgRate ?? 0) > 0
+      : online &&
+        sdrUp &&
+        Array.isArray(st?.channels) &&
+        st!.channels.some((c) => {
+          const ch = c as { processing?: boolean; state?: string };
+          return (
+            ch.processing === true ||
+            ['CONTROL', 'CALL', 'ACTIVE', 'DATA'].includes(String(ch.state ?? '').toUpperCase())
+          );
+        });
   return {
     id: n.id,
     kind: n.kind,
@@ -146,6 +160,11 @@ function feederNodeView(n: NodeRow) {
     // running-reader count, for the pager card.
     messagesLast10m: callsLast10m,
     readersUp: isPager ? readersUp : null,
+    // ADS-B live figures for the owner's card (null on other kinds).
+    aircraftNow: isAdsb ? st?.adsbAircraftNow ?? null : null,
+    msgRate: isAdsb ? st?.adsbMsgRate ?? null : null,
+    maxRangeKm: isAdsb ? st?.adsbMaxRangeKm ?? null : null,
+    gainNow: isAdsb ? st?.adsbGainNow ?? null : null,
     queueDepth: typeof st?.queueDepth === 'number' ? st.queueDepth : null,
     // Calls accepted from the node's local rdio that it could not persist —
     // lost, since rdio does not retry a downstream. queueDepth stays 0 for
@@ -176,11 +195,12 @@ feederRouter.get('/api/feeder/me', async (c) => {
     const nodes = (await listNodesForUser(userId)).map(feederNodeView);
     // Which node kinds this user may create, by role — so the UI can offer only
     // what they're allowed (backend still enforces it on create).
-    const [radio, pager] = await Promise.all([
+    const [radio, pager, adsb] = await Promise.all([
       hasRole(userId, ['feeder:radio']),
       hasRole(userId, ['feeder:pager']),
+      hasRole(userId, ['feeder:adsb']),
     ]);
-    return c.json({ role: true, nodes, canCreate: { radio, pager } });
+    return c.json({ role: true, nodes, canCreate: { radio, pager, adsb } });
   } catch (err) {
     log.error({ err, userId }, 'Error building feeder me');
     return c.json({ error: 'Failed to load feeder info' }, 500);
@@ -193,21 +213,29 @@ feederRouter.get('/api/feeder/me', async (c) => {
 // ---------------------------------------------------------------------------
 const CreateNodeSchema = z
   .object({
-    // Nodes are always auto-named {kind}-{user}-{uuid}. A coarse area is
-    // REQUIRED at creation — RADIO nodes give the NSW RFS `zone`; PAGER nodes
-    // give `state` (routes their Pagermon relay + frequency plan) and `lga`.
-    // The exact antenna pin (lat/lon) stays optional, set via PUT .../location.
+    // Nodes are always auto-named {kind}-{user}-{uuid}. Location is REQUIRED at
+    // creation, but WHAT is required differs by kind — RADIO gives the NSW RFS
+    // `zone`; PAGER gives `state` (routes its Pagermon relay + frequency plan)
+    // and `lga`; ADSB gives an exact lat/lon pin and nothing else. For radio and
+    // pager the exact pin stays optional (PUT .../location); for adsb it is the
+    // whole point: dump1090 needs --lat/--lon to compute range at all, so a
+    // receiver without a precise position reports no range statistics.
     kind: z.string().refine(isNodeKind, 'invalid node kind'),
     zone: z.string().min(1).refine(isValidZone, 'unknown zone').optional(),
     state: z.enum(AU_STATES as unknown as [string, ...string[]]).optional(),
     // Free text on purpose (ABS LGA vocabulary via the UI's datalist, but ACT
     // has no LGAs and a dev DB may have no boundaries table).
     lga: z.string().trim().min(1).max(120).optional(),
+    lat: z.number().min(-90).max(90).optional(),
+    lon: z.number().min(-180).max(180).optional(),
   })
   .superRefine((v, ctx) => {
     if (v.kind === 'pager') {
       if (!v.state) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['state'], message: 'state required for pager nodes' });
       if (!v.lga) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['lga'], message: 'lga required for pager nodes' });
+    } else if (v.kind === 'adsb') {
+      if (typeof v.lat !== 'number') ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['lat'], message: 'exact antenna position (lat) required for ADS-B nodes' });
+      if (typeof v.lon !== 'number') ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['lon'], message: 'exact antenna position (lon) required for ADS-B nodes' });
     } else if (!v.zone) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['zone'], message: 'zone required' });
     }
@@ -231,10 +259,16 @@ feederRouter.post('/api/feeder/nodes', async (c) => {
     const name = autoNodeName(parsed.data.kind, await getUsername(userId));
     const { token, tokenHash, tokenPrefix } = mintNodeToken();
     const isPagerKind = parsed.data.kind === 'pager';
+    const isAdsbKind = parsed.data.kind === 'adsb';
     const node = await createNode(userId, name, parsed.data.kind, tokenHash, tokenPrefix, {
-      zone: isPagerKind ? null : parsed.data.zone ?? null,
-      state: isPagerKind ? parsed.data.state ?? null : 'NSW',
+      zone: isPagerKind || isAdsbKind ? null : parsed.data.zone ?? null,
+      state: isPagerKind ? parsed.data.state ?? null : isAdsbKind ? null : 'NSW',
       lga: isPagerKind ? parsed.data.lga ?? null : null,
+      // ADS-B nodes are created WITH their pin (schema-enforced above) so the
+      // first config push already carries --lat/--lon; the other kinds set it
+      // later via PUT .../location.
+      lat: isAdsbKind ? parsed.data.lat ?? null : null,
+      lon: isAdsbKind ? parsed.data.lon ?? null : null,
     });
     if (!node) return c.json({ error: 'registry unavailable' }, 503);
     c.header('Cache-Control', 'no-store');
@@ -600,6 +634,11 @@ feederRouter.get('/api/feeder/zones', (c) => {
 // coarse area (RFS `zone` for radio nodes; `state` + `lga` for pager nodes)
 // plus the OPTIONAL exact antenna pin (lat/lon for coverage + channel tuning).
 // Pass null lat/lon for "area only".
+//
+// ADS-B is the exception: the pin IS the location and is mandatory. It is not
+// decoration — dump1090 is launched with --lat/--lon and computes its range
+// statistics from them, so an approximate position produces wrong numbers and
+// a missing one produces none at all.
 // ---------------------------------------------------------------------------
 const RadioLocationSchema = z.object({
   zone: z.string().min(1).refine(isValidZone, 'unknown zone'),
@@ -612,18 +651,39 @@ const PagerLocationSchema = z.object({
   lat: z.number().min(-90).max(90).nullable(),
   lon: z.number().min(-180).max(180).nullable(),
 });
+// Not nullable: an ADS-B node cannot go "area only".
+const AdsbLocationSchema = z.object({
+  lat: z.number().min(-90).max(90),
+  lon: z.number().min(-180).max(180),
+});
 feederRouter.put('/api/feeder/nodes/:id/location', async (c) => {
   const node = await ownedNode(c);
   if (!node) return c.json({ error: 'not your node' }, 404);
   const body = await c.req.json().catch(() => ({}));
   const parsed =
-    node.kind === 'pager' ? PagerLocationSchema.safeParse(body) : RadioLocationSchema.safeParse(body);
-  if (!parsed.success) return c.json({ error: 'invalid location' }, 400);
+    node.kind === 'pager'
+      ? PagerLocationSchema.safeParse(body)
+      : node.kind === 'adsb'
+        ? AdsbLocationSchema.safeParse(body)
+        : RadioLocationSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json(
+      {
+        error:
+          node.kind === 'adsb'
+            ? 'an exact antenna position (lat/lon) is required for ADS-B nodes'
+            : 'invalid location',
+        details: parsed.error.issues,
+      },
+      400,
+    );
+  }
   try {
     const updated = await setNodeLocation(node.id, parsed.data);
-    // A pager node's state selects its frequency plan — re-push so a state
-    // change retunes the node live (no-op when offline or unchanged).
-    if (node.kind === 'pager') await pushConfigToNode(node.id).catch(() => {});
+    // A pager node's state selects its frequency plan, and an ADS-B node's
+    // lat/lon become the decoder's --lat/--lon — re-push so either change
+    // retunes the node live (no-op when offline or unchanged).
+    if (node.kind !== 'radio') await pushConfigToNode(node.id).catch(() => {});
     return c.json({ node: updated ? feederNodeView(updated) : null });
   } catch (err) {
     log.error({ err, id: node.id }, 'Error setting node location');

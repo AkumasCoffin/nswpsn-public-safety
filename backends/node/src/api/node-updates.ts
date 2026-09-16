@@ -45,7 +45,7 @@ const DOWNLOADS_DIR = path.isAbsolute(config.NODE_DOWNLOADS_DIR)
   ? config.NODE_DOWNLOADS_DIR
   : path.resolve(BACKEND_DIR, config.NODE_DOWNLOADS_DIR);
 
-interface Manifest {
+export interface Manifest {
   [component: string]:
     | { version: string; urls: Record<string, string>; sha256: Record<string, string> }
     | string;
@@ -118,22 +118,41 @@ function loadManifest(): Manifest {
 }
 
 /**
- * Tailor the manifest to a node's kind. The agent's self-update code always
- * updates the component named "agent", so for a PAGER node we REMAP the
- * `pager-agent` entry onto `agent` (the pager binary) and drop the radio-only
- * `sdrtrunk`/`rdio` components it doesn't run. Radio nodes get the manifest
- * unchanged minus the internal `pager-agent` entry.
+ * Manifest keys holding a NON-RADIO agent binary, by node kind.
+ *
+ * Every agent's self-update code updates the component literally named
+ * "agent", so each of these is remapped onto that name for its own kind — and
+ * must be filtered OUT for every other kind, or a node would be offered a
+ * binary for different hardware. Adding a kind means adding one line here and
+ * nothing else.
  */
-function manifestForKind(full: Manifest, kind: string): Manifest {
-  if (kind === 'pager') {
+const PER_KIND_AGENTS: Record<string, string> = {
+  pager: 'pager-agent',
+  adsb: 'adsb-agent',
+};
+
+/**
+ * Tailor the manifest to a node's kind. A pager or ADS-B node gets its own
+ * binary served as component "agent" and nothing else — neither runs
+ * SDR-Trunk or rdio. Radio nodes get the manifest unchanged minus every
+ * other kind's agent entry.
+ *
+ * That last filter is load-bearing: it used to skip only 'pager-agent' by
+ * name, so an adsb node (which had no branch at all) fell through to the
+ * radio manifest and would have self-updated itself INTO the radio agent.
+ */
+export function manifestForKind(full: Manifest, kind: string): Manifest {
+  const ownKey = PER_KIND_AGENTS[kind];
+  if (ownKey) {
     const out: Manifest = {};
-    const pa = full['pager-agent'];
-    if (pa) out['agent'] = pa; // pager binary served as component "agent"
+    const own = full[ownKey];
+    if (own) out['agent'] = own; // that kind's binary served as component "agent"
     return out;
   }
+  const perKind = new Set(Object.values(PER_KIND_AGENTS));
   const out: Manifest = {};
   for (const [k, v] of Object.entries(full)) {
-    if (k === 'pager-agent') continue;
+    if (perKind.has(k)) continue;
     out[k] = v;
   }
   return out;

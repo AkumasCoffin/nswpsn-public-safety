@@ -23,6 +23,7 @@ import {
   touchNodeSeen,
   updateNode,
   getNode,
+  roleForKind,
   type HelloMeta,
 } from '../services/nodes/registry.js';
 import {
@@ -150,12 +151,11 @@ export function attachNodeWebSockets(server: Server): void {
             hub.forceDisconnectAgent(a.nodeId, 'node deleted');
             continue;
           }
-          // Kind-aware, matching the upgrade gate (resolveNodeToken) and
-          // roleForKind: pager nodes need feeder:pager. This used to check
+          // Kind-aware, via the shared roleForKind (registry.ts) so this can
+          // never drift from the upgrade gate. This used to hardcode
           // feeder:radio for every kind, so a healthy pager node was revoked
           // at every sweep — connect, helloAck ok, cut ~60s later, repeat.
-          const needed = node.kind === 'pager' ? 'feeder:pager' : 'feeder:radio';
-          if (!(await hasRole(a.userId, [needed]))) {
+          if (!(await hasRole(a.userId, [roleForKind(node.kind)]))) {
             hub.forceDisconnectAgent(a.nodeId, 'role revoked');
           }
         } catch (err) {

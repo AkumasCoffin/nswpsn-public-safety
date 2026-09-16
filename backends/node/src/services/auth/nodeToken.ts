@@ -18,6 +18,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { getPool } from '../../db/pool.js';
 import { hasRole } from './roles.js';
+import { roleForKind } from '../nodes/registry.js';
 
 const TOKEN_PREFIX = 'npsn_';
 // Random hex after the 'npsn_' prefix. 40 hex = 160 bits (20 random bytes).
@@ -138,10 +139,10 @@ export async function resolveNodeToken(token: string): Promise<ResolveResult> {
   }
 
   if (!entry) return { ok: false, reason: 'bad_token' };
-  // Ongoing role gate, matched to the node's KIND: a pager node needs
-  // feeder:pager, radio (and adsb) needs feeder:radio. Losing the relevant role
-  // stops that user's nodes of that kind.
-  const neededRole = entry.kind === 'pager' ? 'feeder:pager' : 'feeder:radio';
+  // Ongoing role gate, matched to the node's KIND (roleForKind is the single
+  // definition — see registry.ts). Losing the relevant role stops that user's
+  // nodes of that kind.
+  const neededRole = roleForKind(entry.kind);
   if (!(await hasRole(entry.userId, [neededRole]))) {
     return { ok: false, reason: 'no_role' };
   }

@@ -4141,6 +4141,129 @@ nodeDataRouter.get(
 );
 
 // ---------------------------------------------------------------------------
+// GET /api/node-data/adsb-node?nodeId=&window=24h|7d|30d
+//
+// One ADS-B receiver's performance: what it is doing right now (live, from the
+// agent's status heartbeat) and how it has been doing (historical, from the
+// node_adsb_daily aggregate).
+//
+// The split matters. Individual aircraft positions are never stored — a fleet
+// uploading every 5s would write millions of rows a day for numbers nobody
+// queries one at a time — so anything instantaneous has to come from the live
+// heartbeat, and anything historical from the daily rollup. There is no middle
+// tier, and adding one would cost far more than it answers.
+//
+// `positions` counts position REPORTS, not distinct aircraft: one aircraft in
+// range for ten minutes contributes ~120 of them. `maxAircraft` is the honest
+// "how busy did it get" figure because it is unaffected by upload cadence.
+// ---------------------------------------------------------------------------
+nodeDataRouter.get(
+  '/api/node-data/adsb-node',
+  requireRole(canViewNodeData),
+  async (c) => {
+    try {
+      const pool = await getPool();
+      if (!pool) return c.json({ error: 'database unavailable' }, 503);
+      const url = new URL(c.req.url);
+      const window = detailWindow(url);
+      const days = window === '24h' ? 1 : window === '7d' ? 7 : 30;
+      const nodeId = (url.searchParams.get('nodeId') ?? '').trim();
+      if (!nodeId) return c.json({ error: 'nodeId is required' }, 400);
+
+      const [nodeQ, totalsQ, seriesQ] = await Promise.all([
+        pool.query<{ id: string; name: string | null; kind: string | null; lat: unknown; lon: unknown }>(
+          'SELECT id, name, kind, lat, lon FROM nodes WHERE id = $1',
+          [nodeId],
+        ),
+        pool.query<{
+          snapshots: unknown; positions: unknown; max_aircraft: unknown;
+          max_range_km: unknown; msg_rate_max: unknown; tracks_max: unknown; days: unknown;
+        }>(
+          `SELECT COALESCE(SUM(snapshots), 0)::int    AS snapshots,
+                  COALESCE(SUM(positions), 0)::bigint AS positions,
+                  COALESCE(MAX(max_aircraft), 0)::int AS max_aircraft,
+                  MAX(max_range_km)                   AS max_range_km,
+                  MAX(msg_rate_max)                   AS msg_rate_max,
+                  MAX(tracks_max)::int                AS tracks_max,
+                  COUNT(*)::int                       AS days
+             FROM node_adsb_daily
+            WHERE node_id = $1 AND day > (now() AT TIME ZONE 'Australia/Sydney')::date - $2::int`,
+          [nodeId, days],
+        ),
+        pool.query<{
+          day: unknown; snapshots: unknown; positions: unknown;
+          max_aircraft: unknown; max_range_km: unknown; msg_rate_max: unknown;
+        }>(
+          `SELECT day, snapshots, positions, max_aircraft, max_range_km, msg_rate_max
+             FROM node_adsb_daily
+            WHERE node_id = $1 AND day > (now() AT TIME ZONE 'Australia/Sydney')::date - $2::int
+            ORDER BY day`,
+          [nodeId, days],
+        ),
+      ]);
+
+      // As with the pager view: the registry row supplies only identity, so a
+      // node that has been deleted is still inspectable rather than a 404.
+      const node = nodeQ.rows[0] ?? { id: nodeId, name: null, kind: null, lat: null, lon: null };
+      const t = totalsQ.rows[0];
+
+      // Live figures come from the agent's 15s heartbeat, so they are absent
+      // whenever the node is offline — deliberately null rather than zero, so
+      // the UI can say "offline" instead of claiming it is hearing nothing.
+      const live = hub.liveStatus(nodeId);
+      const st = live.status;
+      const components = st?.components ?? {};
+      const decoderState = components['dump1090'] ?? null;
+
+      return c.json({
+        window,
+        node: {
+          id: node.id,
+          name: node.name,
+          kind: node.kind,
+          // The antenna position: without it the decoder reports no range at
+          // all, so a null here explains a missing maxRange rather than
+          // leaving it looking like a fault.
+          lat: node.lat,
+          lon: node.lon,
+        },
+        online: hub.isOnline(nodeId),
+        live: {
+          aircraftNow: st?.adsbAircraftNow ?? null,
+          msgRate: st?.adsbMsgRate ?? null,
+          maxRangeKm: st?.adsbMaxRangeKm ?? null,
+          gainNow: st?.adsbGainNow ?? null,
+          queueDepth: st?.queueDepth ?? null,
+          uploadsExpired: st?.uploadsExpired ?? null,
+          decoder: decoderState,
+          configVersion: st?.configVersion ?? null,
+        },
+        totals: {
+          snapshots: num(t?.snapshots),
+          positions: num(t?.positions),
+          maxAircraft: num(t?.max_aircraft),
+          maxRangeKm: t?.max_range_km ?? null,
+          msgRateMax: t?.msg_rate_max ?? null,
+          tracksMax: t?.tracks_max ?? null,
+          daysReporting: num(t?.days),
+        },
+        days: seriesQ.rows.map((r) => ({
+          day: String(r.day instanceof Date ? r.day.toISOString().slice(0, 10) : r.day),
+          snapshots: num(r.snapshots),
+          positions: num(r.positions),
+          maxAircraft: num(r.max_aircraft),
+          maxRangeKm: r.max_range_km ?? null,
+          msgRateMax: r.msg_rate_max ?? null,
+        })),
+      });
+    } catch (err) {
+      log.error({ err }, '/api/node-data/adsb-node error');
+      return c.json({ error: 'failed to load node adsb view' }, 500);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
 // GET /api/node-data/relationships?radio=<id>|talkgroup=<id>[&system=&node=]
 //
 // The radio <-> talkgroup association graph: given a radio, every talkgroup it

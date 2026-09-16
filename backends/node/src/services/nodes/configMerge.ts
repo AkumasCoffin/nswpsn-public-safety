@@ -112,6 +112,33 @@ export interface PagerConfig {
   ppm?: number;
 }
 
+/** ADS-B node config. The decoder itself is fixed policy (device, JSON output
+ *  dir, protocols) — only the tuner is adjustable, plus the antenna position
+ *  the decoder needs to compute range. */
+export interface AdsbConfig {
+  /** Gain mode:
+   *   - absent      = the decoder's own default (max gain)
+   *   - "auto"      = AGENT-MANAGED adaptive gain. The agent already polls
+   *                   stats.json every 5s, so it runs an autogain1090-style
+   *                   loop (wiedehopf/adsb-scripts): step down while strong
+   *                   messages indicate overload, step up while the receiver
+   *                   is quiet, with hysteresis and a settle period. NOT the
+   *                   dongle's hardware AGC, which performs badly on 1090.
+   *   - "<number>"  = fixed gain in dB, autogain off.
+   *  This is the recommended default for a volunteer fleet: optimal gain
+   *  depends on each site's antenna, cabling and RF environment, so a single
+   *  number can't be right everywhere and volunteers shouldn't have to tune. */
+  gain?: string;
+  /** Optional ppm correction. Absent = no correction applied. */
+  ppm?: number;
+  /** Exact antenna position, from the node's own lat/lon columns. dump1090 is
+   *  launched with --lat/--lon and derives its max-range statistic from them,
+   *  so these are functional, not informational. Hashed into configVersion, so
+   *  moving the pin re-pushes and retunes the receiver live. */
+  lat?: number;
+  lon?: number;
+}
+
 export interface ConfigPayload {
   configVersion: string;
   channels: ChannelPlan[];
@@ -131,6 +158,8 @@ export interface ConfigPayload {
   feedEnabled: boolean;
   /** Present only for pager nodes — the frequencies/protocols to decode. */
   pager?: PagerConfig;
+  /** Present only for ADS-B nodes — tuner overrides + antenna position. */
+  adsb?: AdsbConfig;
 }
 
 // Fixed pager plans (decided with the operator), one per Australian state —
@@ -224,6 +253,53 @@ function buildPagerPayload(node: NodeRow): ConfigPayload {
     captureEnabled: node.enabled,
     feedEnabled: node.feed_enabled,
     pager,
+  };
+  const configVersion = sha256Hex(JSON.stringify(canonicalize(payloadNoVersion)));
+  return { configVersion, ...payloadNoVersion };
+}
+
+/** The per-node ADS-B gain override ("auto" or a number-as-string, dB), or
+ *  undefined when unset (the decoder picks its own default). */
+export function adsbGainOf(node: NodeRow): string | undefined {
+  const co = (node.config_override ?? {}) as Record<string, unknown>;
+  const g = co['adsbGain'];
+  if (g === 'auto') return 'auto';
+  if (typeof g === 'string' && g.trim() !== '' && Number.isFinite(Number(g))) return g;
+  return undefined;
+}
+
+/** The per-node ADS-B ppm override, or undefined when unset. */
+export function adsbPpmOf(node: NodeRow): number | undefined {
+  const co = (node.config_override ?? {}) as Record<string, unknown>;
+  const p = co['adsbPpm'];
+  return typeof p === 'number' && Number.isFinite(p) ? p : undefined;
+}
+
+/** Build the lean config payload an ADS-B node receives. No presets, no rdio
+ *  doc, no frequency plan — the decoder's whole adjustable surface is gain/ppm
+ *  plus the antenna position, all hashed into configVersion so any change
+ *  re-syncs the node. */
+function buildAdsbPayload(node: NodeRow): ConfigPayload {
+  const adsb: AdsbConfig = {};
+  // Only attach values when set, so a node without overrides keeps a stable
+  // configVersion (no spurious re-push on unrelated global edits).
+  const gain = adsbGainOf(node);
+  if (gain !== undefined) adsb.gain = gain;
+  const ppm = adsbPpmOf(node);
+  if (ppm !== undefined) adsb.ppm = ppm;
+  if (typeof node.lat === 'number' && typeof node.lon === 'number') {
+    adsb.lat = node.lat;
+    adsb.lon = node.lon;
+  }
+  const payloadNoVersion = {
+    channels: [] as ChannelPlan[],
+    tuners: [] as TunerSettings[],
+    aliases: [] as Alias[],
+    rdioConfig: {} as Record<string, unknown>,
+    streamTargets: [] as StreamTarget[],
+    captureEnabled: node.enabled,
+    feedEnabled: node.feed_enabled,
+    adsb,
   };
   const configVersion = sha256Hex(JSON.stringify(canonicalize(payloadNoVersion)));
   return { configVersion, ...payloadNoVersion };
@@ -347,8 +423,11 @@ export async function buildConfigPayload(
   node: NodeRow,
   global?: GlobalConfig,
 ): Promise<ConfigPayload> {
-  // Pager nodes get a lean, radio-free payload (no presets, no rdio doc).
+  // Pager and ADS-B nodes get lean, radio-free payloads (no presets, no rdio
+  // doc). Both return BEFORE loadPresets() below, which would otherwise throw
+  // on a deployment with no radio presets configured.
   if (node.kind === 'pager') return buildPagerPayload(node);
+  if (node.kind === 'adsb') return buildAdsbPayload(node);
 
   const presets = loadPresets();
   const globalCfg = global ?? (await getGlobalConfig());

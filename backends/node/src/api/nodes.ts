@@ -30,6 +30,7 @@ import {
   rotateNodeToken,
   setPagerPrimary,
   setPagerTuning,
+  setAdsbTuning,
   setNodeLocation,
   countNodesForUser,
   MAX_NODES_PER_USER,
@@ -46,7 +47,15 @@ import { liveCallWindow } from '../services/nodeCallWindow.js';
 import { isAgentCommandAction } from '../services/nodes/protocol.js';
 import { getUsernameMap, getUsername } from './users.js';
 import { ConfigOverrideSchema } from '../services/nodes/configSchema.js';
-import { buildConfigPayload, pagerPrimaryOf, pagerGainOf, pagerPpmOf, pagerPrimaryOptionsFor } from '../services/nodes/configMerge.js';
+import {
+  buildConfigPayload,
+  pagerPrimaryOf,
+  pagerGainOf,
+  pagerPpmOf,
+  pagerPrimaryOptionsFor,
+  adsbGainOf,
+  adsbPpmOf,
+} from '../services/nodes/configMerge.js';
 import { AU_STATES } from '../lib/stateMask.js';
 import { isValidZone } from '../services/nodes/rfsZones.js';
 import { pushConfigToNode, pushConfigToAllNodes } from '../services/nodes/configPush.js';
@@ -111,6 +120,10 @@ function toApi(node: NodeRow, usernames?: Map<string, string>) {
     updating: hub.isUpdating(node.id),
     // Pager: reader labels currently decoding (e.g. ['NSWRFS','FRNSW']).
     pagerDecoding: node.kind === 'pager' ? hub.pagerDecoding(node.id) : null,
+    // ADS-B tuner overrides (persisted); null when unset. gain 'auto' means
+    // agent-managed adaptive gain, not hardware AGC.
+    adsbGain: node.kind === 'adsb' ? adsbGainOf(node) ?? null : null,
+    adsbPpm: node.kind === 'adsb' ? adsbPpmOf(node) ?? null : null,
   };
 }
 
@@ -361,6 +374,57 @@ nodesRouter.put('/api/nodes/:id/pager-tuning', requireRole(canManageNodes), asyn
     return c.json(toApi(updated));
   } catch (err) {
     log.error({ err, id }, 'Error setting pager tuning');
+    return c.json({ error: 'Failed to set tuner overrides' }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// PUT /api/nodes/:id/adsb-tuning — staff set an ADS-B node's gain / ppm.
+// Persisted + pushed live. Send a value to set, null to clear (revert to the
+// decoder's default), or omit to leave unchanged.
+//
+// gain accepts "auto" — agent-managed adaptive gain, the recommended setting —
+// or a fixed 0-49.6 dB. "auto" is NOT the dongle's hardware AGC, which decodes
+// 1090 poorly; the agent runs an autogain loop off the decoder's own
+// statistics, because the right gain depends on each site's antenna, cabling
+// and RF neighbours and no single number suits a national fleet.
+//
+// Antenna position is deliberately NOT tunable here: it comes from the node's
+// own lat/lon, set with the map pin at creation.
+// ---------------------------------------------------------------------------
+const AdsbTuningSchema = z
+  .object({
+    // 49.6 dB is the top step on an R820T/R820T2, the tuner in essentially
+    // every RTL dongle; values above it are silently clamped by librtlsdr.
+    gain: z.union([z.literal('auto'), z.number().min(0).max(49.6), z.null()]).optional(),
+    // Tighter than the pager route's +/-200: a 1090 MHz dongle needing more
+    // than 100 ppm of correction is faulty, not miscalibrated.
+    ppm: z.union([z.number().int().min(-100).max(100), z.null()]).optional(),
+  })
+  .refine((v) => v.gain !== undefined || v.ppm !== undefined, {
+    message: 'provide gain and/or ppm',
+  });
+nodesRouter.put('/api/nodes/:id/adsb-tuning', requireRole(canManageNodes), async (c) => {
+  const id = c.req.param('id');
+  try {
+    const node = await getNode(id);
+    if (!node) return c.json({ error: 'node not found' }, 404);
+    if (node.kind !== 'adsb') return c.json({ error: 'not an adsb node' }, 400);
+    const parsed = AdsbTuningSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.json({ error: 'invalid tuning' }, 400);
+
+    const patch: { gain?: string | null; ppm?: number | null } = {};
+    if (parsed.data.gain !== undefined) {
+      patch.gain = parsed.data.gain === null ? null : String(parsed.data.gain);
+    }
+    if (parsed.data.ppm !== undefined) patch.ppm = parsed.data.ppm;
+
+    const updated = await setAdsbTuning(id, patch);
+    if (!updated) return c.json({ error: 'update failed' }, 500);
+    await pushConfigToNode(id).catch(() => {}); // apply live if online
+    return c.json(toApi(updated));
+  } catch (err) {
+    log.error({ err, id }, 'Error setting adsb tuning');
     return c.json({ error: 'Failed to set tuner overrides' }, 500);
   }
 });

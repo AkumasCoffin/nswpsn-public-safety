@@ -54,6 +54,19 @@ export interface StatusData {
   // Pager nodes: the SDR's supported tuner-gain steps (dB) for the staff gain
   // dropdown. Relayed to staff verbatim.
   pagerGains?: number[];
+  // ADS-B nodes: live decoder figures, read from dump1090's own stats.json
+  // rather than computed by the agent.
+  /** Aircraft with a position fresher than the 60s cutoff right now. */
+  adsbAircraftNow?: number;
+  /** Decoder messages per second over the last minute. */
+  adsbMsgRate?: number;
+  /** Furthest aircraft seen this decoder run, km. Only ever present when the
+   *  node has an exact antenna position — dump1090 cannot compute range
+   *  without --lat/--lon, which is why the pin is mandatory for this kind. */
+  adsbMaxRangeKm?: number;
+  /** The gain the agent's autogain loop has settled on (dB), when gain is set
+   *  to "auto". Absent on fixed gain. */
+  adsbGainNow?: number;
 }
 
 export interface EventData {
