@@ -32,6 +32,7 @@ import {
   sweepStaleUploadParts,
   reconcileOrphanImageDirs,
 } from './incidentImages.js';
+import { DATA_RETENTION_DAYS } from '../lib/retention.js';
 
 // Accept both the canonical var and the name env.sample documented for
 // years (DATA_CLEANUP_INTERVAL) — previously only _SECS was read here
@@ -43,11 +44,10 @@ const DEFAULT_INTERVAL_SECS = Number.parseInt(
     ?? '3600',
   10,
 );
-const RETENTION_DAYS_FALLBACK = 31;
-const DEFAULT_RETENTION_DAYS = (() => {
-  const n = Number.parseInt(process.env['DATA_RETENTION_DAYS'] ?? '', 10);
-  return Number.isFinite(n) && n > 0 ? n : RETENTION_DAYS_FALLBACK;
-})();
+// Imported rather than re-parsed: this pass is what ACTS on the retention
+// window, and the status page and the ADS-B history view both report it. See
+// lib/retention.ts for why that is one definition and not three.
+const DEFAULT_RETENTION_DAYS = DATA_RETENTION_DAYS;
 
 const ARCHIVE_TABLES = [
   'archive_traffic',
@@ -326,6 +326,26 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
           { err: (err as Error).message },
           'cleanup: facets-daily prune failed',
         );
+      }
+
+      // 2c-bis. Prune persisted aircraft tracks (migration 103). Plain
+      // DELETE rather than a partition drop: one row per aircraft per hour is
+      // ~20-25k rows/day, so a whole retention window is under a million and
+      // the partition machinery the archive_* tables need would be pure
+      // overhead here. Parameterised interval for the same NaN reason as 2d.
+      try {
+        const trackDays = Number.isFinite(retentionDays) ? retentionDays : DEFAULT_RETENTION_DAYS;
+        const r = await client.query(
+          `DELETE FROM adsb_tracks
+            WHERE hour_bucket < (NOW() - ($1 || ' days')::interval)`,
+          [String(trackDays)],
+        );
+        if ((r.rowCount ?? 0) > 0) {
+          rowsDeleted += r.rowCount ?? 0;
+          log.info({ rows: r.rowCount }, 'cleanup: pruned adsb_tracks');
+        }
+      } catch (err) {
+        log.warn({ err: (err as Error).message }, 'cleanup: adsb-tracks prune failed');
       }
 
       // 2d. Prune archive_*_latest sidecar entries we haven't seen in

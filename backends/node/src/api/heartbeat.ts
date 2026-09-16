@@ -21,16 +21,16 @@ import {
   recordHeartbeat,
   type HeartbeatAction,
 } from '../services/activityMode.js';
+import { DATA_RETENTION_DAYS } from '../lib/retention.js';
 
 export const heartbeatRouter = new Hono();
 
 const ACTIVE_INTERVAL_SECS = 60;
 const IDLE_INTERVAL_SECS = 300;
-// `data_retention_days` is reported back by Python; we don't enforce it
-// from the Node side (archive retention is owned by the DB partition
-// drop policy) but echo the same default so the frontend's display
-// logic doesn't break.
-const DATA_RETENTION_DAYS = 7;
+// `data_retention_days` is echoed to the frontend for its display logic. It
+// used to be hardcoded to 7 here while the cleanup pass actually kept 31, so
+// this endpoint quietly told every client the wrong window; it now comes from
+// lib/retention.ts like every other reader.
 
 function parseAction(raw: string | null): HeartbeatAction {
   const a = (raw ?? 'ping').toLowerCase();

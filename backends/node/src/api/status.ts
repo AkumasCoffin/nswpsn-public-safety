@@ -47,14 +47,12 @@ const STATUS_HEATMAP_STALE_SECS = 1800;
 const STATUS_BUFFER_WARN_RECORDS = 10_000;
 const FILTER_CACHE_REFRESH_INTERVAL_SECS = 60;
 const ARCHIVE_FLUSH_INTERVAL_SECS_FALLBACK = 30;
-// Defaults MUST mirror services/cleanup.ts — this block only REPORTS the
-// retention/cadence; cleanup.ts is what acts on it. They had drifted
-// (status said 7-day retention while cleanup actually kept 31) and read
-// different env var names for the interval.
-const DATA_RETENTION_DAYS = (() => {
-  const n = Number.parseInt(process.env['DATA_RETENTION_DAYS'] ?? '', 10);
-  return Number.isFinite(n) && n > 0 ? n : 31;
-})();
+// This block only REPORTS the cleanup cadence; services/cleanup.ts is what
+// acts on it. The RETENTION figure is not duplicated here at all any more —
+// it reaches the payload through cleanupStatsForStatus(), which reads the one
+// definition in lib/retention.ts. The local copy this replaced was dead: it
+// was computed on every boot and never read, while the number the endpoint
+// actually served came from cleanup.ts the whole time.
 const DATA_CLEANUP_INTERVAL_SECS = Number.parseInt(
   process.env['DATA_CLEANUP_INTERVAL_SECS']
     ?? process.env['DATA_CLEANUP_INTERVAL']

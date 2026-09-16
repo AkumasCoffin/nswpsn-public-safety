@@ -21,13 +21,82 @@
  */
 import { Hono } from 'hono';
 import { adsbSnapshot, adsbTrailsSnapshot } from '../sources/adsb.js';
+import {
+  adsbHistoryAt,
+  adsbHistoryOldestMs,
+  snapHistoryBucket,
+  HISTORY_TRAIL_DEFAULT_MIN,
+} from '../services/adsbHistory.js';
+import { DATA_RETENTION_DAYS } from '../lib/retention.js';
 import { fetchJson } from '../sources/shared/http.js';
 import { SwrCache } from '../services/swrCache.js';
 import { log } from '../lib/log.js';
 
 export const adsbRouter = new Hono();
 
-adsbRouter.get('/api/adsb/aircraft', (c) => c.json(adsbSnapshot()));
+adsbRouter.get('/api/adsb/aircraft', (c) => {
+  // The history block rides along on the live poll rather than getting its own
+  // endpoint: the map already fetches this every 15s, and the date picker
+  // needs the window bounds before it can offer a first scrub.
+  const now = Date.now();
+  return c.json({
+    ...adsbSnapshot(),
+    history: {
+      retentionDays: DATA_RETENTION_DAYS,
+      oldestMs: adsbHistoryOldestMs(now),
+      newestMs: now,
+    },
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/adsb/history?at=<epoch ms>&trail=<minutes>
+//
+// Where everything was at an instant, plus the track flown into it. Backed by
+// adsb_tracks (migration 103), which stores one row per aircraft per hour.
+//
+// `at` is SNAPPED to a fixed grid inside the service and echoed back, and the
+// response is deliberately not scoped to a viewport. Both choices exist so
+// that many people scrubbing independently converge on the same URLs: a
+// bbox-scoped or millisecond-exact response would give every viewer a private
+// cache entry. The client interpolates within the bucket, so the coarse grid
+// costs nothing on screen.
+// ---------------------------------------------------------------------------
+adsbRouter.get('/api/adsb/history', async (c) => {
+  const url = new URL(c.req.url);
+  const atRaw = Number(url.searchParams.get('at') ?? '');
+  const at = Number.isFinite(atRaw) ? atRaw : Date.now();
+  const trail = Number(url.searchParams.get('trail') ?? HISTORY_TRAIL_DEFAULT_MIN);
+
+  const now = Date.now();
+  const oldest = adsbHistoryOldestMs(now);
+  if (at < oldest) {
+    return c.json({ error: 'outside the retention window', oldestMs: oldest }, 400);
+  }
+
+  try {
+    const data = await adsbHistoryAt(at, trail, now);
+    if (!data) return c.json({ error: 'history unavailable' }, 503);
+
+    // A closed bucket can never change, so it is worth caching hard. The most
+    // recent one is still filling — the archive flushes once a minute — so it
+    // gets the short window instead. Set here rather than left to
+    // CACHEABLE_PATHS, whose blanket 30s would throw away most of the sharing
+    // the bucketing exists to create (that middleware only fills in a
+    // Cache-Control header that is absent).
+    const settled = snapHistoryBucket(now) - data.atMs >= 2 * 60_000;
+    c.header(
+      'Cache-Control',
+      settled
+        ? 'public, max-age=3600, stale-while-revalidate=86400'
+        : 'public, max-age=30, stale-while-revalidate=120',
+    );
+    return c.json(data);
+  } catch (err) {
+    log.warn({ err }, '/api/adsb/history failed');
+    return c.json({ error: 'history query failed' }, 500);
+  }
+});
 
 // Position trails, prebuilt once per poll by the source (see
 // updateTrails in sources/adsb.ts). Fixed path with no query — listed

@@ -32,6 +32,12 @@ import { liveStore } from '../store/live.js';
 import { config } from '../config.js';
 import { log } from '../lib/log.js';
 import { nodeAdsbRecords, nodeAdsbFeedCount } from '../services/nodes/adsbNodeStore.js';
+// One-way, like the node store above: this module hands the archive its
+// trails, the archive never reaches back for them.
+import {
+  noteAdsbIdentities,
+  maybeFlushAdsbTracks,
+} from '../services/adsbTrackArchive.js';
 
 // Australia bbox [W,S,E,N]. Filter applies a 0.3° buffer so aircraft
 // riding the edge don't flap in/out between ticks; the API reports the
@@ -678,6 +684,33 @@ export function adsbTrailsSnapshot(): AdsbTrailsSnapshot {
   return _trailsSnapshot;
 }
 
+/** One aircraft's raw, timestamped trail — the archive's input.
+ *
+ *  The served snapshot drops timestamps (a path does not need them) and rounds
+ *  to 5 dp, both of which history does need, so persistence reads the buffer
+ *  rather than the snapshot. */
+export interface ArchivableTrack {
+  hex: string;
+  /** [epochMs, lat, lon, altFt|null], oldest first. */
+  points: ReadonlyArray<TrailPoint>;
+}
+
+/**
+ * Every live trail, for services/adsbTrackArchive.ts.
+ *
+ * Exposed here rather than exporting `_trails` itself so the buffer stays
+ * owned by this module — the archive reads, it never appends or prunes, and
+ * the decimation rules stay in one place.
+ */
+export function adsbTrailsForArchive(): ArchivableTrack[] {
+  const out: ArchivableTrack[] = [];
+  for (const [hex, points] of _trails) {
+    if (points.length === 0) continue;
+    out.push({ hex, points });
+  }
+  return out;
+}
+
 /** TEST-ONLY: reset trail state between unit tests. */
 export function _resetAdsbTrailsForTests(): void {
   _trails.clear();
@@ -728,7 +761,13 @@ export async function fetchAdsbAircraft(): Promise<AdsbSnapshot> {
   // updateTrails already skips a point identical to the last one, but an
   // estimated record MOVES — without this filter every trail would accumulate
   // fabricated positions indistinguishable from real ones.
-  updateTrails(merged.filter((a) => !a.estimated), Date.now());
+  const observed = merged.filter((a) => !a.estimated);
+  updateTrails(observed, Date.now());
+  // Persist the trails for the historical view. Driven from here rather than
+  // its own timer so it can only ever see trails this poll has finished
+  // writing; it rate-limits itself to once a minute.
+  noteAdsbIdentities(observed);
+  maybeFlushAdsbTracks(adsbTrailsForArchive(), Date.now());
 
   // Stable ordering: emergency services first, then lowest altitude —
   // matches the frontend's render cap so a truncated list keeps the
