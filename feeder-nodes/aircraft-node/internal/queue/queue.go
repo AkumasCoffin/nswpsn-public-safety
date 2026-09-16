@@ -117,20 +117,43 @@ func Open(dir string, maxBytes int64, maxCount int) (*Queue, error) {
 		maxCount = defaultMaxCount
 	}
 	q := &Queue{dir: dir, maxBytes: maxBytes, maxCount: maxCount}
-	// Clean up any stale temp files from a crashed write.
+	// Clean up stale temp files from a crashed write, and any items left by a
+	// different node agent.
 	q.cleanupTemps()
 	return q, nil
 }
 
+// cleanupTemps removes crashed-write temp files, and items belonging to another
+// agent.
+//
+// A host runs one node kind at a time but can be switched between them by
+// re-running the other installer, which reuses this data dir. The radio and
+// pager agents both name their items .call, so leftovers are picked up, sent,
+// refused by the backend's kind gate and deleted — the queue cleans itself.
+// This agent's items are .snapshot, so .call leftovers would be invisible to
+// every scan and sit here for good. Dropping them is safe in both directions:
+// an item for a node kind this host no longer serves can never be delivered.
 func (q *Queue) cleanupTemps() {
 	entries, err := os.ReadDir(q.dir)
 	if err != nil {
 		return
 	}
+	foreign := 0
 	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), tmpExt) {
-			_ = os.Remove(filepath.Join(q.dir, e.Name()))
+		if e.IsDir() {
+			continue
 		}
+		n := e.Name()
+		switch {
+		case strings.HasSuffix(n, tmpExt):
+			_ = os.Remove(filepath.Join(q.dir, n))
+		case !strings.HasSuffix(n, fileExt):
+			_ = os.Remove(filepath.Join(q.dir, n))
+			foreign++
+		}
+	}
+	if foreign > 0 {
+		log.Printf("queue: discarded %d item(s) left by another node agent", foreign)
 	}
 }
 
