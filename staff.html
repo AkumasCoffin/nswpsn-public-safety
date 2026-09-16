@@ -1754,11 +1754,16 @@
       white-space: nowrap;
     }
 
-    /* ADS-B coverage card. The header carries a title, a window toggle and a
-       Close button; on a narrow window those collide unless the controls are
-       allowed to drop to their own line. */
+    /* ADS-B coverage card. The header carries a title and a Close button; on a
+       narrow window those collide unless the controls may drop to their own
+       line. */
     .nd2-aov-head { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
     .nd2-aov-head-ctl { display: flex; align-items: center; gap: 0.5rem; margin-left: auto; }
+    /* .nd2-card has no padding of its own — tables run edge to edge — so
+       anything that is NOT a table has to bring its own gutter or it sits
+       flush against the border, visibly out of line with the header above.
+       The map and its caption are both in that category. */
+    #nd2-aov-map-wrap { padding: 0 1rem 1rem; }
     #nd2-aov-map {
       height: 440px;
       border-radius: 8px;
@@ -3725,7 +3730,7 @@
         <!-- ADS-B receivers: live state + windowed performance per receiver. -->
         <div id="nd2-view-aoverview" style="display: none;">
           <div class="stats-bar" id="nd2-aov-tiles"></div>
-          <div class="nd2-card">
+          <div class="nd2-card nd2-detail-gap">
             <div class="nd2-card-h"><span>Receivers</span></div>
             <div id="nd2-aov-list"><div class="nd2-empty">Loading…</div></div>
           </div>
@@ -7920,13 +7925,20 @@
       const rows = rx.map(r => {
         const live = r.live || {};
         const tot = r.totals || {};
-        let state;
+        // Reported by EXCEPTION only. A healthy receiver said "decoding" under
+        // its own name on every row, which is the normal state of every row
+        // and so carried no information — it just made the table twice as tall
+        // and buried the one row that was actually in trouble. Silence now
+        // means working; anything printed here needs attention.
+        let state = '';
         if (!r.online) state = '<span style="' + soft + '">offline</span>';
         else if (!r.enabled) state = '<span style="' + soft + '">capture off</span>';
-        else if (live.decoder && /run/i.test(live.decoder)) state = '<span style="color:#4ade80;">decoding</span>';
         else if (live.decoder && /crash/i.test(live.decoder)) state = '<span style="color:#fca5a5;">crash-looping</span>';
-        else state = '<span style="color:#fca5a5;">decoder down</span>';
-        if (r.feedEnabled === false) state += ' <span style="' + soft + '">· feed off</span>';
+        else if (!live.decoder || !/run/i.test(live.decoder)) state = '<span style="color:#fca5a5;">decoder down</span>';
+        if (r.feedEnabled === false) {
+          state += (state ? ' <span style="' + soft + '">· feed off</span>'
+                          : '<span style="' + soft + '">feed off</span>');
+        }
 
         // An absent range is explained rather than shown as a fault: without an
         // antenna pin the decoder cannot compute one at all.
@@ -7936,7 +7948,7 @@
 
         return [
           `<a href="#" class="nd2-node-link" data-node-id="${escapeHtml(String(r.id))}">${escapeHtml(r.name || String(r.id))}</a>`
-            + `<div class="nd2-aov-state" style="${soft}">${state}</div>`,
+            + (state ? `<div class="nd2-aov-state" style="${soft}">${state}</div>` : ''),
           (live.aircraftNow == null ? '—' : nd2Num(live.aircraftNow)),
           (live.msgRate == null ? '—' : Number(live.msgRate).toFixed(1) + '/s'),
           rangeCell,
@@ -7970,16 +7982,16 @@
      *
      *  Served from memory, so it resets when the backend restarts and refills
      *  within minutes. */
-    async function nd2LoadAdsbTracks(nodeId, minutes) {
+    async function nd2LoadAdsbTracks(nodeId) {
       _nd2TrackNodeId = nodeId;
-      _nd2TrackMinutes = minutes || 480;
       const wrap = document.getElementById('nd2-aov-map-wrap');
       const note = document.getElementById('nd2-aov-map-note');
       if (!wrap) return;
 
       let d;
       try {
-        d = await nd2Fetch(`/api/node-data/adsb-tracks?nodeId=${encodeURIComponent(nodeId)}&minutes=${_nd2TrackMinutes}`);
+        d = await nd2Fetch(
+          `/api/node-data/adsb-tracks?nodeId=${encodeURIComponent(nodeId)}&minutes=${ND2_TRACK_MINUTES}`);
       } catch (e) {
         if (note) note.textContent = 'Could not load tracks (' + (e && e.message ? e.message : 'request failed') + ').';
         return;
@@ -8038,31 +8050,20 @@
       setTimeout(() => _nd2TrackMap && _nd2TrackMap.invalidateSize(), 60);
 
       if (note) {
-        const mins = d.windowMinutes || _nd2TrackMinutes;
-        const span = mins >= 60 ? (mins / 60) + (mins === 60 ? ' hour' : ' hours') : mins + ' min';
         const parts = [
-          nd2Num(d.aircraft) + ' aircraft in ' + span,
+          nd2Num(d.aircraft) + ' aircraft',
           nd2Num(traces.length) + ' with a path',
           nd2Num(d.points) + ' points',
         ];
         if (!d.site) parts.push('no antenna pin — the receiver cannot be placed');
-        // A thin picture over a short window says nothing about the antenna;
-        // coverage only takes shape once enough traffic has crossed from
-        // enough directions. Worth saying, so a quiet hour is not read as a
-        // fault.
-        if (traces.length < 10 && mins < 480) {
-          parts.push('try 8 hours — coverage needs more traffic than this to show');
+        // A thin picture says nothing about the antenna: coverage only takes
+        // shape once enough traffic has crossed from enough directions. Worth
+        // saying, so a quiet night is not read as a fault.
+        if (traces.length < 10) {
+          parts.push('too little traffic yet to judge coverage');
         }
         note.textContent = parts.join(' · ');
       }
-    }
-
-    function nd2SetTrackWindow(minutes, btn) {
-      if (btn && btn.parentElement) {
-        btn.parentElement.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-      }
-      if (_nd2TrackNodeId) nd2LoadAdsbTracks(_nd2TrackNodeId, minutes);
     }
 
     function nd2DestroyTrackMap() {
@@ -8153,7 +8154,7 @@
       if (!rows.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
       el.style.display = '';
       el.innerHTML = ''
-        + '<div class="nd2-card">'
+        + '<div class="nd2-card nd2-detail-gap">'
         +   '<div class="nd2-card-h"><span>Rejected connections</span></div>'
         +   nd2MiniTable(
               [{ label: 'Install' }, { label: 'Reason' }, { label: 'Attempts', num: true }, { label: 'Last' }],
@@ -8195,15 +8196,11 @@
       if (!el) return;
       el.style.display = '';
       el.innerHTML = ''
-        + '<div class="nd2-card">'
+        + '<div class="nd2-card nd2-detail-gap">'
         +   '<div class="nd2-card-h nd2-aov-head">'
         +     '<span>' + escapeHtml(name) + ' — coverage</span>'
+        +     '<span class="nd2-note">last 8 hours</span>'
         +     '<span class="nd2-aov-head-ctl">'
-        +       '<span class="nd2-seg">'
-        +         '<button type="button" class="filter-btn" onclick="nd2SetTrackWindow(15, this)">15 min</button>'
-        +         '<button type="button" class="filter-btn" onclick="nd2SetTrackWindow(60, this)">1 hour</button>'
-        +         '<button type="button" class="filter-btn active" onclick="nd2SetTrackWindow(480, this)">8 hours</button>'
-        +       '</span>'
         +       '<button type="button" class="btn btn-secondary btn-sm" onclick="nd2CloseAdsbNodeView()">Close</button>'
         +     '</span>'
         +   '</div>'
@@ -8212,16 +8209,16 @@
         +     '<div id="nd2-aov-map-note" class="nd2-note">Loading tracks…</div>'
         +   '</div>'
         + '</div>'
-        + '<div class="nd2-card">'
+        + '<div class="nd2-card nd2-detail-gap">'
         +   '<div class="nd2-card-h"><span>' + escapeHtml(name) + ' — daily</span></div>'
         +   body
         + '</div>'
-        + '<div class="nd2-card">'
+        + '<div class="nd2-card nd2-detail-gap">'
         +   '<div class="nd2-card-h"><span>Recently heard</span>'
         +     '<span class="nd2-note">last 8 hours, held in memory</span></div>'
         +   nd2AdsbRecentCard(d.recent)
         + '</div>'
-        + '<div class="nd2-card">'
+        + '<div class="nd2-card nd2-detail-gap">'
         +   '<div class="nd2-card-h"><span>Upload history</span>'
         +     '<span class="nd2-note">successes collapsed; faults kept</span></div>'
         +   nd2AdsbIssuesCard(d.issues)
@@ -8229,7 +8226,7 @@
       el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       // After the panel is in the DOM and sized, or Leaflet measures zero.
       nd2DestroyTrackMap();
-      nd2LoadAdsbTracks(nodeId, 480);
+      nd2LoadAdsbTracks(nodeId);
     }
 
     function nd2CloseAdsbNodeView() {
@@ -9533,7 +9530,12 @@
     let _nd2TrackMap = null;       // Leaflet map for the ADS-B coverage view
     let _nd2TrackLayer = null;     // the drawn traces, replaced on each refresh
     let _nd2TrackNodeId = null;    // which receiver the map is showing
-    let _nd2TrackMinutes = 480;    // window in minutes (the store retains 8h)
+    // Fixed, not a setting. Coverage is an 8-hour question — a receiver's true
+    // range and its blind bearings only emerge once enough aircraft have
+    // crossed from enough directions, and a quiet 15 minutes looks identical
+    // to a broken antenna. Offering shorter windows invited exactly that
+    // misreading, and the store retains 8 hours anyway.
+    const ND2_TRACK_MINUTES = 480;
     let _ndAudioLabel = null;      // reader label of the active pager audio monitor (null = off)
     let _ndAudioCtx = null;        // Web Audio context for the monitor
     let _ndAudioPlayhead = 0;      // scheduled playback time cursor (ctx clock)
