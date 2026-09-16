@@ -13964,7 +13964,17 @@ function initPagerHoursFromStorage() {
         row('Altitude', a.onGround ? 'On ground' : (a.altFt != null ? a.altFt.toLocaleString() + ' ft' : null)),
         row('Speed', a.gsKt != null ? Math.round(a.gsKt) + ' kt' : null),
         row('Track', Number.isFinite(a.trackDeg) ? Math.round(a.trackDeg) + '°' : null),
-        row('Position age', Math.round(a.ageSec) + 's')
+        row('Position age', Math.round(a.ageSec) + 's'),
+        // Which of our own ADS-B receivers heard this, when any did. The
+        // backend merges feeder-node positions into the same aggregator feed,
+        // so without this there is no way to tell what your own hardware is
+        // actually contributing — and that is the whole question a receiver
+        // operator has. Aggregator ids are deliberately not listed: they are
+        // an implementation detail of where the rest of the picture comes from.
+        row('Heard by', (Array.isArray(a.sources) ? a.sources : [])
+          .filter(function (src) { return String(src).indexOf('node:') === 0; })
+          .map(function (src) { return String(src).slice(5); })
+          .join(', ') || null)
       ].join('');
       const squawkRow = a.squawk
         ? '<div style="display:flex;gap:6px;font-size:12px;line-height:1.4;"><span style="color:#94a3b8;min-width:90px;">Squawk</span><span style="font-weight:700;color:' + (sqBad ? '#ef4444' : '#e2e8f0') + ';">' + escapeHtml(a.squawk) + (sqBad ? ' — EMERGENCY' : '') + '</span></div>'
