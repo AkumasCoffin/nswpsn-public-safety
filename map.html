@@ -1988,6 +1988,51 @@
     .ais-list-empty {
       padding: 18px 12px; text-align: center; color: #64748b; font-size: 11px;
     }
+
+    /* ---- Aircraft table (tar1090-shaped) ----
+       A dense sortable table rather than the two-line rows the vessel list
+       uses. An aircraft's useful facts are all short numbers, so columns let
+       you compare down the list — which is the whole point of tar1090's table
+       and what two-line rows cannot do. Scoped to .adsb-tbl so the vessel
+       section keeps its own row style. */
+    .adsb-tbl { font-size: 11px; }
+    .adsb-tbl-head, .adsb-tbl-row {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr) 38px 52px 38px 38px;
+      align-items: center;
+      gap: 6px;
+      padding: 0 10px;
+    }
+    .adsb-tbl-head {
+      position: sticky; top: 0; z-index: 2;
+      background: rgba(15, 23, 42, 0.97);
+      border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+      font-size: 9px; letter-spacing: 0.05em; text-transform: uppercase;
+      color: #64748b; font-weight: 600; padding-top: 5px; padding-bottom: 5px;
+      user-select: none;
+    }
+    .adsb-th { cursor: pointer; white-space: nowrap; overflow: hidden; }
+    .adsb-th:hover { color: #cbd5e1; }
+    .adsb-th.sorted { color: #c084fc; }
+    .adsb-th.num { text-align: right; }
+    .adsb-tbl-row {
+      padding-top: 4px; padding-bottom: 4px;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.05);
+      cursor: pointer; transition: background 0.12s;
+    }
+    .adsb-tbl-row:hover { background: rgba(192, 132, 252, 0.09); }
+    .adsb-tbl-row.selected { background: rgba(192, 132, 252, 0.16); }
+    .adsb-tbl-row svg { display: block; }
+    .adsb-cell-id { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .adsb-flight { font-weight: 600; color: #f1f5f9; }
+    /* A callsign-less target is identified by hex, which is not a name — dimmed
+       so a list of them does not read as a list of flights. */
+    .adsb-flight.anon { color: #94a3b8; font-weight: 500;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; }
+    .adsb-cell { text-align: right; font-variant-numeric: tabular-nums; color: #cbd5e1;
+      white-space: nowrap; overflow: hidden; }
+    .adsb-cell.dim { color: #64748b; }
+    .adsb-estdot { color: #fbbf24; margin-left: 3px; }
     .ais-list-detail {
       grid-column: 1 / -1;
       margin-top: 6px; padding: 8px 0; border-top: 1px dashed rgba(148, 163, 184, 0.18);
@@ -2116,6 +2161,14 @@
       max-width: 600px !important;
       width: max-content !important;
       backdrop-filter: blur(6px);
+    }
+    /* Aircraft tooltips are label-shaped: a few short lines, sized to their
+       content. The 320px floor above is for the vessel card and would pad
+       this one out to ten times the width it needs. */
+    .leaflet-tooltip.ais-tooltip.adsb-tooltip {
+      min-width: 0 !important;
+      padding: 5px 9px !important;
+      border-radius: 6px !important;
     }
     .leaflet-tooltip.ais-tooltip > div { width: 100%; max-width: 100% !important; }
     /* Recolor the tooltip arrow per anchor direction. Leaflet draws the
@@ -3503,6 +3556,10 @@
         if (sheet && sheet.classList.contains('open')) return;
         const infoP = document.getElementById('incident-info-panel');
         if (infoP && infoP.classList.contains('open')) return;
+        // The aircraft detail card is itself a bottom sheet on touch, so
+        // mirroring the tooltip as well would stack two cards on one tap.
+        const acCard = document.getElementById('adsb-detail-card');
+        if (acCard && acCard.classList.contains('open')) return;
         showMobileTipCard(content);
         if (layer && typeof layer.getLatLng === 'function') panMarkerAboveCard(layer);
       }, 0);
@@ -13852,6 +13909,7 @@ function initPagerHoursFromStorage() {
           labels: { ...adsbLabelSettings },
           trails: adsbTrailsEnabled,
           mineOnly: adsbMineOnly,
+          sort: { ..._adsbSort },
         },
         ais: {
           types: { ...aisTypeFilter },
@@ -13888,6 +13946,13 @@ function initPagerHoursFromStorage() {
         // receiver — see _adsbApplyPendingMineOnly. A stale true would
         // otherwise hide every aircraft with no control on screen to explain it.
         _adsbPendingMineOnly = p.adsb.mineOnly === true;
+        // Validated against the real column list rather than trusted: a stale
+        // or hand-edited pref naming a column that no longer exists would
+        // leave every row sorting equal, with no header marked.
+        const sv = p.adsb.sort;
+        if (sv && ADSB_COLS.some((c) => c.key === sv.key)) {
+          _adsbSort = { key: sv.key, dir: sv.dir === -1 ? -1 : 1 };
+        }
       }
       if (p.ais) {
         _applyKnownKeys(aisTypeFilter, p.ais.types);
@@ -14260,18 +14325,27 @@ function initPagerHoursFromStorage() {
     // Optional-field label parts (rendered under the identity line).
     // Returns an array so the icon builder can wrap them into short
     // lines — a single joined line gets far too wide with every field on.
-    function buildAircraftLabelFields(a) {
+    function buildAircraftFieldParts(a, want) {
       const parts = [];
-      if (adsbLabelSettings.alt) {
+      if (want.alt) {
         parts.push(a.onGround ? 'GND' : (a.altFt != null ? a.altFt.toLocaleString() + 'ft' : null));
       }
-      if (adsbLabelSettings.speed && a.gsKt != null) parts.push(Math.round(a.gsKt) + 'kt');
-      if (adsbLabelSettings.track && Number.isFinite(a.trackDeg)) parts.push(Math.round(a.trackDeg) + '°');
-      if (adsbLabelSettings.reg && a.reg) parts.push(a.reg);
-      if (adsbLabelSettings.type && a.type) parts.push(a.type);
-      if (adsbLabelSettings.squawk && a.squawk) parts.push('sq' + a.squawk);
+      if (want.speed && a.gsKt != null) parts.push(Math.round(a.gsKt) + 'kt');
+      if (want.track && Number.isFinite(a.trackDeg)) parts.push(Math.round(a.trackDeg) + '°');
+      if (want.reg && a.reg) parts.push(a.reg);
+      if (want.type && a.type) parts.push(a.type);
+      if (want.squawk && a.squawk) parts.push('sq' + a.squawk);
       return parts.filter(Boolean);
     }
+
+    // The map label shows only the fields the user turned on.
+    function buildAircraftLabelFields(a) {
+      return buildAircraftFieldParts(a, adsbLabelSettings);
+    }
+
+    // The tooltip shows everything it has: it is a deliberate hover, not
+    // permanent chrome, so there is nothing to keep out of the way.
+    const ADSB_TIP_FIELDS = { alt: 1, speed: 1, track: 1, reg: 1, type: 1, squawk: 1 };
 
     function buildAircraftIcon(a) {
       const es = a.esTag ? ADSB_ES_STYLE[a.esTag] : null;
@@ -14354,51 +14428,60 @@ function initPagerHoursFromStorage() {
       return [adsbIconClass(a), adsbIconSize(a), a.esTag || '-', a.emergencySquawk ? 1 : 0, trackBucket, adsbAltBand(a.altFt), a.onGround ? 1 : 0, a.estimated ? 'e' : '-', label].join('|');
     }
 
+    /**
+     * The hover tooltip, built to read like the map label.
+     *
+     * It used to be a 400px card with a photo and a nine-row table, which made
+     * a hover heavier than the thing it was describing and duplicated the
+     * detail card wholesale. The label chip was already the right shape for a
+     * glance — identity on top, fields paired two to a line — so the tooltip
+     * is now the same chip with every field on, sharing buildAircraftFieldParts
+     * with the label so the two cannot drift.
+     *
+     * The photo lives on the detail card only. Clicking is what asks for
+     * detail; hovering does not.
+     */
     function buildAdsbTooltipHtml(a) {
       const es = a.esTag ? ADSB_ES_STYLE[a.esTag] : null;
-      const color = es ? es.color : '#a855f7';
+      const color = es ? es.color : adsbAltColor(a.altFt);
       const name = a.callsign || a.reg || a.hex.toUpperCase();
       const sqBad = a.squawk && ['7500', '7600', '7700'].indexOf(a.squawk) !== -1;
 
-      function row(label, value) {
-        if (value == null || value === '' || value === '—') return '';
-        return '<div style="display:flex;gap:6px;font-size:12px;line-height:1.4;color:#e2e8f0;"><span style="color:#94a3b8;min-width:90px;">' + escapeHtml(label) + '</span><span style="font-weight:600;">' + escapeHtml(String(value)) + '</span></div>';
+      // Dimmed separator with real margins — a plain ' · ' collapses in HTML
+      // and reads cramped at this size.
+      const sep = '<span style="margin:0 5px;color:#64748b;">·</span>';
+      const parts = buildAircraftFieldParts(a, ADSB_TIP_FIELDS).map((p) => {
+        const txt = escapeHtml(p);
+        // An emergency squawk is the one field that must not read as just
+        // another number in the row.
+        return (sqBad && p === 'sq' + a.squawk)
+          ? '<span style="color:#f87171;font-weight:700;">' + txt + '</span>'
+          : txt;
+      });
+      let lines = '';
+      for (let i = 0; i < parts.length; i += 2) {
+        lines += '<div>' + parts.slice(i, i + 2).join(sep) + '</div>';
       }
 
-      const body = [
-        row('Type', a.type),
-        row('Registration', a.reg),
-        row('Altitude', a.onGround ? 'On ground' : (a.altFt != null ? a.altFt.toLocaleString() + ' ft' : null)),
-        row('Speed', a.gsKt != null ? Math.round(a.gsKt) + ' kt' : null),
-        row('Track', Number.isFinite(a.trackDeg) ? Math.round(a.trackDeg) + '°' : null),
-        row('Position age', Math.round(a.ageSec) + 's')
-      ].join('');
-      // Hovering an estimated aircraft must not read as a normal fix that
-      // happens to be old — the position is projected, not merely stale.
-      const estRow = a.estimated
-        ? '<div style="display:flex;gap:6px;font-size:12px;line-height:1.4;"><span style="color:#94a3b8;min-width:90px;">Position</span><span style="font-weight:700;color:#fbbf24;">Estimated</span></div>'
+      const badge = es
+        ? '<span style="background:' + es.color + ';color:#fff;font-size:9px;padding:1px 5px;'
+          + 'border-radius:3px;font-weight:700;margin-left:5px;">' + escapeHtml(es.label) + '</span>'
         : '';
-      const squawkRow = a.squawk
-        ? '<div style="display:flex;gap:6px;font-size:12px;line-height:1.4;"><span style="color:#94a3b8;min-width:90px;">Squawk</span><span style="font-weight:700;color:' + (sqBad ? '#ef4444' : '#e2e8f0') + ';">' + escapeHtml(a.squawk) + (sqBad ? ' — EMERGENCY' : '') + '</span></div>'
+      // Stated, because every field above it is a projection from the last
+      // real fix rather than something anyone reported.
+      const est = a.estimated
+        ? '<div style="color:#fbbf24;font-size:10px;margin-top:3px;">'
+          + 'estimated · no signal ' + Math.round(a.estimatedSec || a.ageSec) + 's</div>'
         : '';
 
-      // Prefetched photo (from the queue / a previous pin) — shown
-      // straight in the hover tooltip, credit line per Planespotters'
-      // attribution terms.
-      const cachedPhoto = _adsbPhotoCache.get(a.hex);
-      const photoHtml = (cachedPhoto && cachedPhoto !== '__loading__' && cachedPhoto !== '__none__')
-        ? '<img src="' + escapeHtml(cachedPhoto.src) + '" alt="" referrerpolicy="no-referrer" onerror="this.style.display=\'none\';" style="width:100%;max-height:150px;object-fit:cover;border-radius:6px;margin-bottom:2px;background:rgba(0,0,0,0.3);">' +
-          '<div style="font-size:9px;color:#94a3b8;margin-bottom:6px;">Photo © ' + escapeHtml(cachedPhoto.photographer || 'unknown') + ' · Planespotters.net</div>'
-        : '';
-
-      return '<div style="max-width:400px;font-family:system-ui,sans-serif;color:#e2e8f0;">' +
-        '<div style="font-size:15px;font-weight:700;color:' + color + ';margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
-          '<i class="fa-solid ' + (adsbIconClass(a) === 'heli' ? 'fa-helicopter' : 'fa-plane') + '"></i> ' + escapeHtml(name) +
-          (es ? ' <span style="background:' + es.color + ';color:#fff;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:700;">' + es.label + '</span>' : '') +
-        '</div>' +
-        photoHtml +
-        '<div style="padding:6px 8px;background:' + hexToRgba(color, 0.08) + ';border-radius:6px;">' + body + squawkRow + estRow + '</div>' +
-      '</div>';
+      return '<div style="font-family:system-ui,sans-serif;color:#e2e8f0;font-size:11px;'
+        + 'line-height:1.5;text-align:center;white-space:nowrap;">'
+        + '<div style="font-weight:700;font-size:12px;color:' + color + ';">'
+        +   escapeHtml(name) + badge
+        + '</div>'
+        + lines
+        + est
+        + '</div>';
     }
 
     // Diff-update: move existing markers with setLatLng, swap icons only
@@ -14497,7 +14580,7 @@ function initPagerHoursFromStorage() {
         } else {
           const marker = L.marker([a.lat, a.lon], { icon: buildAircraftIcon(a) })
             .bindTooltip(buildAdsbTooltipHtml(a), {
-              className: 'ais-tooltip', sticky: true, opacity: 0.97, direction: 'top'
+              className: 'ais-tooltip adsb-tooltip', sticky: true, opacity: 0.97, direction: 'top'
             });
           // Click → pin tooltip + highlight the list row (AIS pattern).
           marker.on('click', (ev) => {
@@ -14515,10 +14598,6 @@ function initPagerHoursFromStorage() {
           adsbLayer.removeLayer(entry.marker);
           _adsbMarkers.delete(hex);
         }
-      }
-      // Keep the pinned tooltip open across refreshes.
-      if (_adsbPinnedHex && _adsbMarkers.has(_adsbPinnedHex)) {
-        _adsbMarkers.get(_adsbPinnedHex).marker.openTooltip();
       }
       _rebuildAdsbTrails(); // trails follow the rendered-marker set
       adsbListRender();
@@ -15030,6 +15109,48 @@ function initPagerHoursFromStorage() {
     // Build the list. Filters by the search box (callsign / rego / hex /
     // type / squawk) or, with no search, the current map viewport — same
     // shape as aisListRender().
+    /**
+     * Sort order for the aircraft table.
+     *
+     * Distance from the map centre by default, which is tar1090's "nearest
+     * first" adapted to a map that has no fixed receiver site — the aircraft
+     * you are looking at should be at the top of the list.
+     */
+    let _adsbSort = { key: 'dist', dir: 1 };
+
+    const ADSB_COLS = [
+      { key: 'flight', label: 'Flight', num: false },
+      { key: 'type',   label: 'Type',   num: false },
+      { key: 'alt',    label: 'Alt',    num: true },
+      { key: 'spd',    label: 'Spd',    num: true },
+      { key: 'dist',   label: 'Dist',   num: true },
+    ];
+
+    window.adsbSortBy = function (key) {
+      // Clicking the active column flips it; a new column starts ascending,
+      // which for distance and altitude is the order people actually want.
+      if (_adsbSort.key === key) _adsbSort.dir = -_adsbSort.dir;
+      else _adsbSort = { key: key, dir: 1 };
+      adsbListRender();
+      saveMapPrefs();
+    };
+
+    function _adsbDistKm(a, centre) {
+      if (!centre) return null;
+      try { return haversineMeters(centre.lat, centre.lng, a.lat, a.lon) / 1000; }
+      catch (e) { return null; }
+    }
+
+    /** Missing values sort last whichever way the column is pointing — an
+     *  aircraft with no reported altitude is not "the lowest". */
+    function _adsbCmp(x, y, dir) {
+      if (x == null && y == null) return 0;
+      if (x == null) return 1;
+      if (y == null) return -1;
+      if (typeof x === 'string') return x.localeCompare(y) * dir;
+      return (x - y) * dir;
+    }
+
     function adsbListRender() {
       const body = document.getElementById('adsb-list-rows');
       if (!body) return;
@@ -15055,19 +15176,44 @@ function initPagerHoursFromStorage() {
         if (q && !_adsbSearchHay(a).includes(q)) continue;
         matches.push(a);
       }
-      // Emergency services first, then by identity.
+
+      let centre = null;
+      try { centre = map.getCenter(); } catch (e) { /* not yet sized */ }
+      const dist = new Map();
+      for (const a of matches) dist.set(a.hex, _adsbDistKm(a, centre));
+
+      const dir = _adsbSort.dir;
+      const key = _adsbSort.key;
       matches.sort((x, y) => {
+        // Emergency services stay pinned to the top whatever the sort, and
+        // that is a departure from tar1090 on purpose: the list is capped, and
+        // a POLAIR or a firebomber is the one aircraft that must not be the
+        // row that fell off the end.
         const xe = x.esTag !== null || x.emergencySquawk ? 0 : 1;
         const ye = y.esTag !== null || y.emergencySquawk ? 0 : 1;
         if (xe !== ye) return xe - ye;
-        return (x.callsign || x.reg || x.hex).localeCompare(y.callsign || y.reg || y.hex);
+        if (key === 'flight') {
+          // Sorted on exactly the string the row DISPLAYS, hex uppercased and
+          // all. Comparing the raw lowercase hex against upper-case callsigns
+          // would order the list differently from how it reads.
+          return _adsbCmp(
+            x.callsign || x.reg || x.hex.toUpperCase(),
+            y.callsign || y.reg || y.hex.toUpperCase(),
+            dir,
+          );
+        }
+        if (key === 'type') return _adsbCmp(x.type, y.type, dir);
+        if (key === 'alt') return _adsbCmp(x.onGround ? 0 : x.altFt, y.onGround ? 0 : y.altFt, dir);
+        if (key === 'spd') return _adsbCmp(x.gsKt, y.gsKt, dir);
+        return _adsbCmp(dist.get(x.hex), dist.get(y.hex), dir);
       });
+
       _adsbListMatchCount = matches.length;
       const secCount = document.getElementById('adsb-section-count');
       if (secCount) secCount.textContent = `(${matches.length})`;
       updateUnifiedListCount();
-      // Prefetch photos for what's on screen (emergency services sort
-      // first, so they get their photos first too).
+      // Prefetch photos for what's on screen, so the detail card has one ready
+      // before anyone clicks a row.
       if (map.hasLayer(adsbLayer)) adsbQueuePhotoPrefetch(matches.slice(0, 40));
       if (matches.length === 0) {
         body.innerHTML = '<div class="ais-list-empty">' +
@@ -15075,31 +15221,38 @@ function initPagerHoursFromStorage() {
           '</div>';
         return;
       }
+
+      const head = '<div class="adsb-tbl-head"><span></span>' + ADSB_COLS.map((c) =>
+        '<span class="adsb-th' + (c.num ? ' num' : '') + (key === c.key ? ' sorted' : '') + '"'
+        + ' onclick="adsbSortBy(\'' + c.key + '\')">' + c.label
+        + (key === c.key ? (dir === 1 ? ' &#9650;' : ' &#9660;') : '') + '</span>').join('') + '</div>';
+
       const cap = 250;
       const rowsHtml = matches.slice(0, cap).map((a) => {
-        const es = a.esTag ? ADSB_ES_STYLE[a.esTag] : null;
+        const anon = !a.callsign && !a.reg;
         const name = a.callsign || a.reg || a.hex.toUpperCase();
-        const altTxt = a.onGround ? 'On ground' : (a.altFt != null ? a.altFt.toLocaleString() + ' ft' : '');
-        const meta = [a.type, altTxt, es ? es.label : null].filter(Boolean).map((s) => escapeHtml(String(s))).join(' · ');
-        const speedTxt = a.gsKt != null ? Math.round(a.gsKt) + ' kt' : '—';
-        const selected = _adsbPinnedHex === a.hex ? ' selected' : '';
-        const detail = _adsbPinnedHex === a.hex ? adsbListDetailHtml(a) : '';
-        return `
-          <div class="ais-list-row${selected}" onclick="adsbListClickRow('${jsArg(a.hex)}', event)">
-            <div class="ais-list-glyph">${adsbListGlyph(a)}</div>
-            <div class="ais-list-info">
-              <div class="ais-list-name">${escapeHtml(name)}</div>
-              <div class="ais-list-meta">${meta}</div>
-            </div>
-            <div class="ais-list-speed">${speedTxt}</div>
-            ${detail}
-          </div>
-        `;
+        const km = dist.get(a.hex);
+        const altTxt = a.onGround ? 'GND' : (a.altFt != null ? a.altFt.toLocaleString() : '—');
+        return '<div class="adsb-tbl-row' + (_adsbPinnedHex === a.hex ? ' selected' : '') + '"'
+          + ' onclick="adsbListClickRow(\'' + jsArg(a.hex) + '\', event)">'
+          + '<span>' + adsbListGlyph(a) + '</span>'
+          + '<span class="adsb-cell-id"><span class="adsb-flight' + (anon ? ' anon' : '') + '">'
+          +   escapeHtml(name) + '</span>'
+          +   (a.estimated ? '<span class="adsb-estdot" title="Estimated position">&#9671;</span>' : '')
+          + '</span>'
+          + '<span class="adsb-cell' + (a.type ? '' : ' dim') + '">' + escapeHtml(a.type || '—') + '</span>'
+          + '<span class="adsb-cell' + (a.onGround || a.altFt == null ? ' dim' : '') + '">' + altTxt + '</span>'
+          + '<span class="adsb-cell' + (a.gsKt == null ? ' dim' : '') + '">'
+          +   (a.gsKt != null ? Math.round(a.gsKt) : '—') + '</span>'
+          + '<span class="adsb-cell' + (km == null ? ' dim' : '') + '">'
+          +   (km == null ? '—' : (km >= 100 ? Math.round(km) : km.toFixed(0))) + '</span>'
+          + '</div>';
       }).join('');
+
       const overflow = matches.length > cap
         ? `<div class="ais-list-empty">+ ${matches.length - cap} more — refine search to narrow.</div>`
         : '';
-      body.innerHTML = rowsHtml + overflow;
+      body.innerHTML = '<div class="adsb-tbl">' + head + rowsHtml + overflow + '</div>';
     }
 
     function adsbListClickRow(hex, ev) {
@@ -15108,24 +15261,9 @@ function initPagerHoursFromStorage() {
     }
     window.adsbListClickRow = adsbListClickRow;
 
-    // Photo card inside the pinned row. Planespotters' API terms require
-    // attribution — keep the photographer credit + link.
-    function adsbListDetailHtml(a) {
-      const cached = _adsbPhotoCache.get(a.hex);
-      let inner = '';
-      if (cached === '__loading__') {
-        inner = '<div class="row"><span class="k">Loading photo…</span></div>';
-      } else if (cached && cached !== '__none__') {
-        inner = '<img src="' + escapeHtml(cached.src) + '" alt="" referrerpolicy="no-referrer" onerror="this.style.display=\'none\';">' +
-          '<div class="row" style="font-size:10px;color:#94a3b8;">Photo © ' + escapeHtml(cached.photographer || 'unknown') +
-          (cached.link ? ' · <a href="' + escapeHtml(cached.link) + '" target="_blank" rel="noopener" style="color:#7dd3fc;">Planespotters.net</a>' : '') +
-          '</div>';
-      } else if (cached === '__none__') {
-        inner = '<div class="row" style="color:#94a3b8;">No photo available.</div>';
-      }
-      if (!inner) return '';
-      return '<div class="ais-list-detail" onclick="event.stopPropagation();">' + inner + '</div>';
-    }
+    // The pinned row used to expand into a photo card. That is the detail
+    // card's job now, and having both meant one click opened three surfaces —
+    // card, tooltip and row. The row just highlights.
 
     async function adsbFetchPhoto(a) {
       const existing = _adsbPhotoCache.get(a.hex);
@@ -15395,14 +15533,14 @@ function initPagerHoursFromStorage() {
       loadAdsbTrails();
       const entry = _adsbMarkers.get(hex);
       if (entry) {
-        try {
-          entry.marker.openTooltip();
-          panToMarkerClearingUi(entry.marker, 0.4);
-        } catch (e) { /* ignore */ }
+        // Deliberately NOT opened here. The tooltip is the hover glance; the
+        // detail card is the sustained view, and forcing both open at once
+        // stacked three surfaces on one click — card, tooltip and list row.
+        try { panToMarkerClearingUi(entry.marker, 0.4); } catch (e) { /* ignore */ }
       }
       adsbListRender();
       const body = document.getElementById('ais-list-body');
-      const row = body && body.querySelector('#adsb-list-rows .ais-list-row.selected');
+      const row = body && body.querySelector('#adsb-list-rows .adsb-tbl-row.selected');
       if (body && row && typeof body.scrollTo === 'function') {
         const target = row.offsetTop - (body.clientHeight - row.offsetHeight) / 2;
         body.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
