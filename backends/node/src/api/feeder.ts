@@ -22,6 +22,7 @@ import { requireSupabaseJwt } from '../services/auth/supabaseJwt.js';
 import { hasRole } from '../services/auth/roles.js';
 import { mintNodeToken, resolveNodeToken, _clearNodeTokenCache } from '../services/auth/nodeToken.js';
 import { issueEnrolCode } from '../services/auth/nodeEnrol.js';
+import { adsbNodeSourceId } from '../services/nodes/adsbNodeStore.js';
 import {
   listNodesForUser,
   createNode,
@@ -161,6 +162,11 @@ function feederNodeView(n: NodeRow) {
     // running-reader count, for the pager card.
     messagesLast10m: callsLast10m,
     readersUp: isPager ? readersUp : null,
+    // The source label this node's aircraft carry in the merged feed, so the
+    // map can offer its owner an "only my receiver" filter without
+    // reconstructing the string client-side — computed by the same function
+    // that stamps it onto the records, so the two cannot disagree.
+    adsbSourceId: isAdsb ? adsbNodeSourceId(n.id, n.name) : null,
     // ADS-B live figures for the owner's card (null on other kinds).
     aircraftNow: isAdsb ? st?.adsbAircraftNow ?? null : null,
     msgRate: isAdsb ? st?.adsbMsgRate ?? null : null,

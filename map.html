@@ -4859,8 +4859,15 @@
       }
       if (target === 'adsb') {
         const enabled = map.hasLayer(adsbLayer);
-        if (enabled) addFilterButton('adsb');
-        else removeFilterButton('adsb');
+        if (enabled) {
+          addFilterButton('adsb');
+          // Find out whether this visitor runs a receiver, so the panel can
+          // offer them the "only my receiver" pill. Fires once, only when the
+          // layer is actually on, and only ever reaches the network for a
+          // signed-in user — the overwhelming majority of visitors are
+          // anonymous and must not pay for a feature they cannot use.
+          _adsbLoadMyReceivers();
+        } else removeFilterButton('adsb');
         syncUnifiedListPanel();
         if (typeof updateSidebarFilterVisibility === 'function') {
           updateSidebarFilterVisibility();
@@ -13759,6 +13766,12 @@ function initPagerHoursFromStorage() {
       if (!p || typeof p !== 'object' || p.v !== MAP_PREFS_VERSION) return false;
       if (p.adsb) {
         _applyKnownKeys(adsbTypeFilter, p.adsb.types);
+        // A stored set with every category off renders an empty map with no
+        // error and no obvious way back — the worst thing a restored
+        // preference can do. Treat it as corrupt and show everything.
+        if (!Object.values(adsbTypeFilter).some(Boolean)) {
+          for (const k of Object.keys(adsbTypeFilter)) adsbTypeFilter[k] = true;
+        }
         _applyKnownKeys(adsbLabelSettings, p.adsb.labels);
         if (typeof p.adsb.trails === 'boolean') adsbTrailsEnabled = p.adsb.trails;
         // mineOnly is applied only once we know the user actually owns a
@@ -13768,6 +13781,9 @@ function initPagerHoursFromStorage() {
       }
       if (p.ais) {
         _applyKnownKeys(aisTypeFilter, p.ais.types);
+        if (!Object.values(aisTypeFilter).some(Boolean)) {
+          for (const k of Object.keys(aisTypeFilter)) aisTypeFilter[k] = true;
+        }
         _applyKnownKeys(aisLabelSettings, p.ais.labels);
         _applyKnownKeys(aisStatusFilter, p.ais.status);
         if (typeof p.ais.hideDocked === 'boolean') aisHideDocked = p.ais.hideDocked;
@@ -14333,6 +14349,7 @@ function initPagerHoursFromStorage() {
         // the pinned aircraft (follow mode pans the camera to it).
         if (a.hex !== _adsbPinnedHex && !view.contains([a.lat, a.lon])) continue;
         if (!adsbTypeFilter[adsbFilterCategory(a)]) continue;
+        if (adsbMineOnly && !_adsbFromMyNodes(a)) continue;
         // Search filters map markers too, so the map matches the list
         // (same behaviour as AIS).
         if (q && !_adsbSearchHay(a).includes(q)) continue;
@@ -14592,6 +14609,7 @@ function initPagerHoursFromStorage() {
       for (const a of _adsbAircraft) {
         if (!isFinite(a.lat) || !isFinite(a.lon)) continue;
         if (!adsbTypeFilter[adsbFilterCategory(a)]) continue;
+        if (adsbMineOnly && !_adsbFromMyNodes(a)) continue;
         // Ground targets are hidden from the map at low zoom, but a
         // search should still find them (the user typed something
         // specific — don't make them zoom in first).
@@ -14804,6 +14822,77 @@ function initPagerHoursFromStorage() {
       refreshActiveFilterPanel();
       saveMapPrefs();
     };
+    // ---------- "Only my receiver" ----------
+    //
+    // Someone running an ADS-B node wants to see what THEIR antenna is
+    // contributing, which is the question a coverage map answers slowly and
+    // this answers instantly: turn it on and whatever disappears is what you
+    // are not hearing.
+    //
+    // Every aircraft already carries `sources` (the merge unions them), and a
+    // node's records are tagged `node:<nodeName>`, so the filter itself is a
+    // client-side test. The only thing identity buys is knowing WHICH labels
+    // are yours.
+    //
+    // Looked up lazily, once, and only when the aircraft layer is actually on:
+    // the overwhelming majority of visitors are anonymous and must not pay for
+    // a feature they cannot use. Every failure — signed out, not a feeder, API
+    // unreachable — lands in the same place: the pill is simply not offered.
+    let _adsbOwnershipChecked = false;
+
+    async function _adsbLoadMyReceivers() {
+      if (_adsbOwnershipChecked) return;
+      _adsbOwnershipChecked = true;
+      try {
+        if (typeof notifHeaders !== 'function') return;
+        const h = await notifHeaders();
+        if (!h) return;                       // anonymous
+        const r = await fetch(`${API_BASE_URL}/api/feeder/me`, { headers: h });
+        if (!r.ok) return;                    // 403 = not a feeder contributor
+        const data = await r.json().catch(() => ({}));
+        for (const n of (data.nodes || [])) {
+          if (!n || n.kind !== 'adsb') continue;
+          // adsbSourceId comes from the same function that stamps the label
+          // onto the records, so it cannot disagree. The fallback only covers
+          // a response cached from before that field existed.
+          const src = n.adsbSourceId || (n.name ? 'node:' + n.name : null);
+          if (src) _myAdsbSources.add(src);
+        }
+        if (_myAdsbSources.size === 0) return;
+
+        // Only now is it safe to honour a restored "mine only": applying it
+        // before ownership was known would hide every aircraft with no control
+        // on screen to explain why.
+        if (_adsbPendingMineOnly) {
+          adsbMineOnly = true;
+          _adsbPendingMineOnly = false;
+        }
+        _rebuildAdsb();
+        refreshActiveFilterPanel();
+      } catch (e) {
+        /* offline, or signed out between the two calls — no pill, no harm */
+      }
+    }
+
+    /** True when one of this user's receivers heard this aircraft.
+     *
+     *  `some`, not `every`: an aircraft your receiver AND an aggregator both
+     *  heard is still yours. Owning several receivers is just a larger set. */
+    function _adsbFromMyNodes(a) {
+      if (_myAdsbSources.size === 0) return true;   // nothing to filter by
+      const src = a && a.sources;
+      if (!Array.isArray(src)) return false;
+      for (const x of src) if (_myAdsbSources.has(x)) return true;
+      return false;
+    }
+
+    window.toggleAdsbMineOnly = function () {
+      adsbMineOnly = !adsbMineOnly;
+      _rebuildAdsb();
+      refreshActiveFilterPanel();
+      saveMapPrefs();
+    };
+
     FILTER_REGISTRY.adsb = {
       icon: 'fa-plane',
       label: 'Aircraft',
@@ -14840,8 +14929,26 @@ function initPagerHoursFromStorage() {
             <div class="floating-filter-pills">${pills}</div>
           `;
         }
+        // Only rendered for someone who actually runs a receiver. For everyone
+        // else the section does not exist, rather than appearing disabled — a
+        // control you cannot use is worse than no control.
+        let mineHtml = '';
+        if (_myAdsbSources.size > 0) {
+          const label = _myAdsbSources.size === 1
+            ? 'Only my receiver'
+            : `Only my receivers (${_myAdsbSources.size})`;
+          mineHtml = `
+            <div class="ff-section-label">My receiver</div>
+            <div class="floating-filter-pills">${_ffPill(
+              adsbMineOnly,
+              '<i class="fa-solid fa-tower-broadcast"></i> ' + label,
+              'toggleAdsbMineOnly()'
+            )}</div>
+          `;
+        }
         return `
           <h4><i class="fa-solid fa-plane" style="color:#c084fc;"></i> Aircraft</h4>
+          ${mineHtml}
           <div class="ff-section-label">Aircraft type</div>
           <div class="floating-filter-pills">${typePills}</div>
           <div class="ff-section-label">Labels</div>
