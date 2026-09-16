@@ -139,23 +139,51 @@ export function nodeAdsbRecords(nowMs: number = Date.now()): AdsbAircraft[] {
 // holding still (on stand, or in a holding pattern) should not accumulate
 // hundreds of identical points.
 
-/** How far back traces are kept. */
-const TRACE_WINDOW_MS = 60 * 60 * 1000;
+/**
+ * How far back traces are kept.
+ *
+ * Eight hours, matching tar1090's pTracks default, because coverage is a
+ * question you cannot answer from an hour of data: a receiver's true range and
+ * its blind bearings only emerge once enough aircraft have crossed the area
+ * from enough directions. An hour of a quiet afternoon looks identical to a
+ * receiver with a broken antenna.
+ */
+const TRACE_WINDOW_MS = 8 * 60 * 60 * 1000;
 
-/** Minimum gap between stored points for one aircraft. */
-const TRACE_MIN_GAP_MS = 20_000;
+/**
+ * Minimum gap between stored points for one aircraft.
+ *
+ * Coarser than it was, because the window is now eight times longer and this
+ * is the one structure here that grows with traffic. A coverage picture is
+ * about WHERE the receiver hears, not the shape of any single flight, so a
+ * point a minute is ample — and a fast mover still gets extra points from the
+ * distance rule below, which is what stops a jet being drawn cutting corners
+ * it never flew.
+ */
+const TRACE_MIN_GAP_MS = 60_000;
 
 /** Minimum movement to store a point sooner than the gap, in degrees —
  *  ~1km, which is a visible step at coverage-map zoom. */
 const TRACE_MIN_MOVE_DEG = 0.01;
 
-/** Per-aircraft point cap. One hour at the minimum gap is 180; the margin
- *  absorbs the distance-triggered extras for a fast-moving target. */
-const TRACE_MAX_POINTS = 260;
+/**
+ * Per-aircraft point cap. Eight hours at the minimum gap is 480, but no real
+ * aircraft stays in one receiver's range for eight hours — an airliner crosses
+ * in twenty minutes or so. This is the bound for something pathological (a
+ * stuck position, a ground vehicle parked in view), not for normal traffic.
+ */
+const TRACE_MAX_POINTS = 240;
 
-/** Per-node aircraft cap. A busy receiver sees a few hundred an hour; this
- *  bounds a pathological case (or a hostile node) rather than normal use. */
-const TRACE_MAX_AIRCRAFT = 1500;
+/**
+ * Per-node aircraft cap.
+ *
+ * A busy metropolitan receiver sees a few hundred distinct aircraft an hour, so
+ * eight hours could legitimately be a couple of thousand. Above this the OLDEST
+ * traces are evicted rather than new ones refused: the recent picture matters
+ * more than the far end of the window, and silently dropping current aircraft
+ * would make a busy receiver look like it had stopped hearing.
+ */
+const TRACE_MAX_AIRCRAFT = 4000;
 
 interface Trace {
   /** Parallel arrays rather than an array of objects: three number arrays cost
@@ -181,7 +209,7 @@ function recordTraces(nodeId: string, records: AdsbAircraft[], nowMs: number): v
   for (const r of records) {
     const tr = byHex.get(r.hex);
     if (!tr) {
-      if (byHex.size >= TRACE_MAX_AIRCRAFT) continue;
+      if (byHex.size >= TRACE_MAX_AIRCRAFT) evictOldestTrace(byHex);
       byHex.set(r.hex, {
         lat: [r.lat], lon: [r.lon], t: [nowMs],
         callsign: r.callsign, lastMs: nowMs,
@@ -212,6 +240,26 @@ function recordTraces(nodeId: string, records: AdsbAircraft[], nowMs: number): v
       tr.t.shift();
     }
   }
+}
+
+/**
+ * Make room by forgetting the least recently seen aircraft.
+ *
+ * Reached only on a receiver busy enough to fill the cap inside the window, and
+ * the oldest trace is the right one to lose: the near end of the window is what
+ * anyone is looking at, and refusing NEW aircraft instead would make a busy
+ * receiver appear to have stopped hearing.
+ */
+function evictOldestTrace(byHex: Map<string, Trace>): void {
+  let oldestHex: string | null = null;
+  let oldestMs = Infinity;
+  for (const [hex, tr] of byHex) {
+    if (tr.lastMs < oldestMs) {
+      oldestMs = tr.lastMs;
+      oldestHex = hex;
+    }
+  }
+  if (oldestHex) byHex.delete(oldestHex);
 }
 
 /** Drop points and aircraft that have aged out of the window. */

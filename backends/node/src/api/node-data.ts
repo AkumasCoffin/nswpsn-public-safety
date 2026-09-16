@@ -4267,15 +4267,24 @@ nodeDataRouter.get(
       if (!nodeId) return c.json({ error: 'nodeId is required' }, 400);
       // Clamped to what the store actually retains, so a caller asking for more
       // gets the full window rather than a silently short answer.
-      const raw = Number(url.searchParams.get('minutes') ?? 60);
-      const minutes = Number.isFinite(raw) ? Math.min(60, Math.max(1, Math.round(raw))) : 60;
+      // Clamped to what the store actually retains (8h), so a caller asking for
+      // more gets the full window rather than a silently short answer.
+      const raw = Number(url.searchParams.get('minutes') ?? 480);
+      const minutes = Number.isFinite(raw) ? Math.min(480, Math.max(1, Math.round(raw))) : 480;
 
       const t = nodeAdsbTraces(nodeId, minutes);
 
-      // The receiver's own position anchors the picture: a coverage map without
-      // it cannot show which directions are weak.
+      // The receiver anchors the picture — a coverage map cannot show which
+      // bearings are weak without knowing where the centre is — but its EXACT
+      // position is somebody's home address and does not belong in a view that
+      // is scanned, screenshotted and shared.
+      //
+      // So the centre is rounded to ~1 km, which is far finer than the tens of
+      // kilometres a coverage plot is read at and far coarser than a street.
+      // The precise pin stays behind the node's Location control, where opening
+      // it is a deliberate act.
       const pool = await getPool();
-      let site: { lat: number; lon: number; name: string | null } | null = null;
+      let site: { lat: number; lon: number; name: string | null; approx: true } | null = null;
       if (pool) {
         const r = await pool.query<{ name: string | null; lat: unknown; lon: unknown }>(
           'SELECT name, lat, lon FROM nodes WHERE id = $1',
@@ -4283,7 +4292,12 @@ nodeDataRouter.get(
         );
         const row = r.rows[0];
         if (row && typeof row.lat === 'number' && typeof row.lon === 'number') {
-          site = { lat: row.lat, lon: row.lon, name: row.name };
+          site = {
+            lat: Math.round(row.lat * 100) / 100,
+            lon: Math.round(row.lon * 100) / 100,
+            name: row.name,
+            approx: true,
+          };
         }
       }
 

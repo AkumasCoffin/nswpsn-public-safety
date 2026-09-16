@@ -7969,7 +7969,7 @@
      *  within minutes. */
     async function nd2LoadAdsbTracks(nodeId, minutes) {
       _nd2TrackNodeId = nodeId;
-      _nd2TrackMinutes = minutes || 60;
+      _nd2TrackMinutes = minutes || 480;
       const wrap = document.getElementById('nd2-aov-map-wrap');
       const note = document.getElementById('nd2-aov-map-note');
       if (!wrap) return;
@@ -8005,12 +8005,20 @@
         }).addTo(layer);
       }
 
-      // The receiver itself, so a gap in the fan reads as a direction rather
-      // than just empty space.
+      // The receiver anchors the picture — a gap in the fan only reads as a
+      // DIRECTION if you can see the centre. The position is deliberately
+      // rounded server-side to ~1km, so it is drawn as an area rather than a
+      // point: a crisp dot would claim a precision this does not have, and the
+      // exact pin is somebody's home address.
       if (d.site) {
-        L.circleMarker([d.site.lat, d.site.lon], {
-          radius: 5, color: '#f8fafc', weight: 2, fillColor: '#38bdf8', fillOpacity: 1,
-        }).bindTooltip(d.site.name || 'Receiver').addTo(layer);
+        const c = [d.site.lat, d.site.lon];
+        L.circle(c, {
+          radius: 1000, color: '#38bdf8', weight: 1, opacity: 0.5,
+          fillColor: '#38bdf8', fillOpacity: 0.12, interactive: false,
+        }).addTo(layer);
+        L.circleMarker(c, {
+          radius: 4, color: '#f8fafc', weight: 1.5, fillColor: '#38bdf8', fillOpacity: 0.9,
+        }).bindTooltip((d.site.name || 'Receiver') + ' — approximate location').addTo(layer);
       }
       layer.addTo(_nd2TrackMap);
       _nd2TrackLayer = layer;
@@ -8027,11 +8035,21 @@
       setTimeout(() => _nd2TrackMap && _nd2TrackMap.invalidateSize(), 60);
 
       if (note) {
-        const parts = [];
-        parts.push(nd2Num(d.aircraft) + (d.aircraft === 1 ? ' aircraft' : ' aircraft'));
-        parts.push(nd2Num(traces.length) + ' with a path');
-        parts.push(nd2Num(d.points) + ' points');
+        const mins = d.windowMinutes || _nd2TrackMinutes;
+        const span = mins >= 60 ? (mins / 60) + (mins === 60 ? ' hour' : ' hours') : mins + ' min';
+        const parts = [
+          nd2Num(d.aircraft) + ' aircraft in ' + span,
+          nd2Num(traces.length) + ' with a path',
+          nd2Num(d.points) + ' points',
+        ];
         if (!d.site) parts.push('no antenna pin — the receiver cannot be placed');
+        // A thin picture over a short window says nothing about the antenna;
+        // coverage only takes shape once enough traffic has crossed from
+        // enough directions. Worth saying, so a quiet hour is not read as a
+        // fault.
+        if (traces.length < 10 && mins < 480) {
+          parts.push('try 8 hours — coverage needs more traffic than this to show');
+        }
         note.textContent = parts.join(' · ');
       }
     }
@@ -8085,7 +8103,8 @@
         +     '<span class="nd2-aov-head-ctl">'
         +       '<span class="nd2-seg">'
         +         '<button type="button" class="filter-btn" onclick="nd2SetTrackWindow(15, this)">15 min</button>'
-        +         '<button type="button" class="filter-btn active" onclick="nd2SetTrackWindow(60, this)">Last hour</button>'
+        +         '<button type="button" class="filter-btn" onclick="nd2SetTrackWindow(60, this)">1 hour</button>'
+        +         '<button type="button" class="filter-btn active" onclick="nd2SetTrackWindow(480, this)">8 hours</button>'
         +       '</span>'
         +       '<button type="button" class="btn btn-secondary btn-sm" onclick="nd2CloseAdsbNodeView()">Close</button>'
         +     '</span>'
@@ -8102,7 +8121,7 @@
       el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       // After the panel is in the DOM and sized, or Leaflet measures zero.
       nd2DestroyTrackMap();
-      nd2LoadAdsbTracks(nodeId, 60);
+      nd2LoadAdsbTracks(nodeId, 480);
     }
 
     function nd2CloseAdsbNodeView() {
@@ -9406,7 +9425,7 @@
     let _nd2TrackMap = null;       // Leaflet map for the ADS-B coverage view
     let _nd2TrackLayer = null;     // the drawn traces, replaced on each refresh
     let _nd2TrackNodeId = null;    // which receiver the map is showing
-    let _nd2TrackMinutes = 60;     // window in minutes (the store retains 60)
+    let _nd2TrackMinutes = 480;    // window in minutes (the store retains 8h)
     let _ndAudioLabel = null;      // reader label of the active pager audio monitor (null = off)
     let _ndAudioCtx = null;        // Web Audio context for the monitor
     let _ndAudioPlayhead = 0;      // scheduled playback time cursor (ctx clock)

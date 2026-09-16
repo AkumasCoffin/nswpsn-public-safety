@@ -61,18 +61,39 @@ describe('adsb traces', () => {
   });
 
   it('decimates a receiver reporting every 5 seconds', () => {
-    // 12 snapshots a minute for an aircraft that is barely moving must not
-    // become 12 points a minute — the picture needs nothing like that
-    // resolution and the memory is the one thing here that grows with traffic.
+    // 12 snapshots a minute for an aircraft barely moving must not become 12
+    // points a minute. The window is 8 hours, so this is the one structure
+    // that grows with traffic, and a coverage picture needs nothing like that
+    // resolution — a point a minute is ample.
     feed([{ hex: 'ccc333', lat: -33.0, lon: 151.0 }]);
-    for (let i = 0; i < 24; i += 1) {
+    for (let i = 0; i < 120; i += 1) {
       vi.advanceTimersByTime(5_000);
-      feed([{ hex: 'ccc333', lat: -33.0 + i * 0.0001, lon: 151.0 }]);
+      feed([{ hex: 'ccc333', lat: -33.0 + i * 0.00001, lon: 151.0 }]);
     }
-    // 120s elapsed at a 20s minimum gap.
-    const pts = nodeAdsbTraces(NODE, 60).traces[0]!.points;
-    expect(pts.length).toBeGreaterThan(4);
-    expect(pts.length).toBeLessThanOrEqual(8);
+    // 600s of snapshots (120 of them) at a 60s minimum gap.
+    const pts = nodeAdsbTraces(NODE, 480).traces[0]!.points;
+    expect(pts.length).toBeGreaterThan(8);
+    expect(pts.length).toBeLessThanOrEqual(13);
+  });
+
+  it('keeps eight hours, because an hour cannot show coverage', () => {
+    // Coverage is about which bearings a receiver hears and how far. One quiet
+    // afternoon hour looks identical to a broken antenna; it takes a shift's
+    // worth of traffic before the shape means anything.
+    feed([{ hex: 'aaa777', lat: -33.0, lon: 151.0 }]);
+    vi.advanceTimersByTime(7 * 60 * 60_000);
+    feed([{ hex: 'aaa777', lat: -34.0, lon: 152.0 }]);
+
+    const eight = nodeAdsbTraces(NODE, 480);
+    expect(eight.traces[0]!.points).toHaveLength(2);
+    // ...and a shorter window still trims to itself.
+    expect(nodeAdsbTraces(NODE, 60).traces).toHaveLength(0);
+  });
+
+  it('forgets aircraft older than the eight-hour window', () => {
+    feed([{ hex: 'bbb888', lat: -33.0, lon: 151.0 }]);
+    vi.advanceTimersByTime(9 * 60 * 60_000);
+    expect(nodeAdsbTraces(NODE, 480).aircraft).toBe(0);
   });
 
   it('records a fast mover sooner than the time gap', () => {
@@ -81,7 +102,7 @@ describe('adsb traces', () => {
     feed([{ hex: 'ddd444', lat: -33.0, lon: 151.0 }]);
     vi.advanceTimersByTime(5_000);
     feed([{ hex: 'ddd444', lat: -33.5, lon: 151.0 }]);
-    expect(nodeAdsbTraces(NODE, 60).traces[0]!.points).toHaveLength(2);
+    expect(nodeAdsbTraces(NODE, 480).traces[0]!.points).toHaveLength(2);
   });
 
   it('drops points older than the requested window', () => {
@@ -94,10 +115,10 @@ describe('adsb traces', () => {
     expect(nodeAdsbTraces(NODE, 10).traces).toHaveLength(0);
     expect(nodeAdsbTraces(NODE, 10).aircraft).toBe(1);
     // The full window still has both.
-    expect(nodeAdsbTraces(NODE, 60).traces[0]!.points).toHaveLength(2);
+    expect(nodeAdsbTraces(NODE, 480).traces[0]!.points).toHaveLength(2);
   });
 
-  it('forgets aircraft entirely once they age out of the hour', () => {
+  it('reports nothing for a window with no points in it', () => {
     feed([{ hex: 'fff666', lat: -33.0, lon: 151.0 }]);
     vi.advanceTimersByTime(61 * 60_000);
     const t = nodeAdsbTraces(NODE, 60);
@@ -115,14 +136,15 @@ describe('adsb traces', () => {
 
   it('caps points per aircraft rather than growing without bound', () => {
     feed([{ hex: '222bbb', lat: -33.0, lon: 151.0 }]);
-    // Two hours of large jumps: every one qualifies on distance, so only the
-    // cap stops this accumulating forever.
+    // Large jumps: every one qualifies on distance, so only the cap stops this
+    // accumulating forever. Models something pathological — a stuck position,
+    // or a ground vehicle parked in view — not real traffic.
     for (let i = 0; i < 400; i += 1) {
       vi.advanceTimersByTime(20_000);
       feed([{ hex: '222bbb', lat: -33.0 + (i % 2 ? 0.5 : -0.5), lon: 151.0 }]);
     }
-    const pts = nodeAdsbTraces(NODE, 60).traces[0]!.points;
-    expect(pts.length).toBeLessThanOrEqual(260);
+    const pts = nodeAdsbTraces(NODE, 480).traces[0]!.points;
+    expect(pts.length).toBeLessThanOrEqual(240);
   });
 
   it('keeps each receiver separate', () => {

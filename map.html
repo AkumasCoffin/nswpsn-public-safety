@@ -13858,6 +13858,34 @@ function initPagerHoursFromStorage() {
     // (A7 rotorcraft, B1 glider, B2 balloon, B6 UAV, A3-A5 airliner,
     // A1/A2 light); the type-designator regex catches category-less
     // helicopters. Everything else gets the generic plane.
+    /** Icon size in px for an aircraft, from its emitter category.
+     *
+     *  ADS-B category is a size/weight class, which is exactly what this wants:
+     *  A1 light, A2 small, A3 large, A4 high-vortex large (B757), A5 heavy,
+     *  A6 high-performance, A7 rotorcraft, B1 glider, B2 balloon, B6 UAV.
+     *
+     *  Kept to a narrow range (16-26px). tar1090 varies more, but this map
+     *  carries fire, traffic, pager and vessel layers at once, and an icon
+     *  large enough to be unmissable is also large enough to bury whatever it
+     *  is sitting on top of. */
+    const ADSB_ICON_SIZE = {
+      A1: 17, A2: 19, A3: 22, A4: 24, A5: 26, A6: 21, A7: 20,
+      B1: 18, B2: 18, B4: 18, B6: 16, B7: 16,
+    };
+    const ADSB_ICON_SIZE_DEFAULT = 20;
+
+    function adsbIconSize(a) {
+      const cat = (a.category || '').toUpperCase();
+      if (ADSB_ICON_SIZE[cat]) return ADSB_ICON_SIZE[cat];
+      // No category — fall back to the shape class, which is itself derived
+      // from type where category was missing.
+      const cls = adsbIconClass(a);
+      if (cls === 'airliner') return 22;
+      if (cls === 'light') return 18;
+      if (cls === 'drone') return 16;
+      return ADSB_ICON_SIZE_DEFAULT;
+    }
+
     function adsbIconClass(a) {
       const cat = (a.category || '').toUpperCase();
       const t = (a.type || '').toUpperCase();
@@ -13955,10 +13983,11 @@ function initPagerHoursFromStorage() {
       let glyph;
       // Number.isFinite, not global isFinite — trackDeg arrives as null
       // and isFinite(null) is true. Balloons never rotate.
+      const px = adsbIconSize(a);
       if (Number.isFinite(a.trackDeg) && cls !== 'balloon') {
-        glyph = adsbIconSvg(cls, color, a.trackDeg, 20, op);
+        glyph = adsbIconSvg(cls, color, a.trackDeg, px, op);
       } else if (ADSB_HOVER_CLASSES[cls]) {
-        glyph = adsbIconSvg(cls, color, null, 20, op);
+        glyph = adsbIconSvg(cls, color, null, px, op);
       } else {
         // Winged craft with no track — plain dot, same fallback as AIS.
         glyph = '<div style="width:10px;height:10px;border-radius:50%;background:' + color + ';border:1.5px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,0.6);opacity:' + op + ';margin:5px;"></div>';
@@ -14000,7 +14029,10 @@ function initPagerHoursFromStorage() {
       const label = adsbLabelSettings.enabled
         ? (a.callsign || a.reg || a.hex) + '|' + buildAircraftLabelFields(a).join(',')
         : '';
-      return [adsbIconClass(a), a.esTag || '-', a.emergencySquawk ? 1 : 0, trackBucket, adsbAltBand(a.altFt), a.onGround ? 1 : 0, label].join('|');
+      // adsbIconSize is in the key as well as the class: category often arrives
+      // a few reports after first contact, and A3->A4 changes the size without
+      // changing the shape class, so the icon would otherwise stay stale.
+      return [adsbIconClass(a), adsbIconSize(a), a.esTag || '-', a.emergencySquawk ? 1 : 0, trackBucket, adsbAltBand(a.altFt), a.onGround ? 1 : 0, label].join('|');
     }
 
     function buildAdsbTooltipHtml(a) {
