@@ -81,11 +81,13 @@ export function recordNodeAdsbSnapshot(
   nodeName: string | null,
   records: AdsbAircraft[],
 ): number {
+  const nowMs = Date.now();
   snapshots.set(nodeId, {
     name: nodeName ?? '',
-    receivedAtMs: Date.now(),
+    receivedAtMs: nowMs,
     records,
   });
+  recordTraces(nodeId, records, nowMs);
   return records.length;
 }
 
@@ -116,6 +118,166 @@ export function nodeAdsbRecords(nowMs: number = Date.now()): AdsbAircraft[] {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Recent traces (the coverage picture)
+// ---------------------------------------------------------------------------
+//
+// The paths aircraft took through this receiver's coverage over the last hour
+// — tar1090's pTracks view, which is the single most useful diagnostic a
+// receiver operator has: it shows at a glance which directions the antenna
+// actually hears, and how far.
+//
+// In memory, not Postgres, and deliberately so. Storing every position would
+// be millions of rows a day per node for something only ever read as a picture
+// of the last hour; the aggregates in node_adsb_daily already answer every
+// question that outlives the hour. The cost is that a backend restart resets
+// the picture, which for a live coverage view is acceptable — it refills within
+// minutes.
+//
+// Points are decimated on both time and distance: a receiver reports every 5s,
+// but a coverage picture needs nothing like that resolution, and an aircraft
+// holding still (on stand, or in a holding pattern) should not accumulate
+// hundreds of identical points.
+
+/** How far back traces are kept. */
+const TRACE_WINDOW_MS = 60 * 60 * 1000;
+
+/** Minimum gap between stored points for one aircraft. */
+const TRACE_MIN_GAP_MS = 20_000;
+
+/** Minimum movement to store a point sooner than the gap, in degrees —
+ *  ~1km, which is a visible step at coverage-map zoom. */
+const TRACE_MIN_MOVE_DEG = 0.01;
+
+/** Per-aircraft point cap. One hour at the minimum gap is 180; the margin
+ *  absorbs the distance-triggered extras for a fast-moving target. */
+const TRACE_MAX_POINTS = 260;
+
+/** Per-node aircraft cap. A busy receiver sees a few hundred an hour; this
+ *  bounds a pathological case (or a hostile node) rather than normal use. */
+const TRACE_MAX_AIRCRAFT = 1500;
+
+interface Trace {
+  /** Parallel arrays rather than an array of objects: three number arrays cost
+   *  a fraction of the memory of hundreds of small objects, and this is the one
+   *  structure here that grows with traffic. */
+  lat: number[];
+  lon: number[];
+  t: number[];
+  callsign: string | null;
+  lastMs: number;
+}
+
+const traces = new Map<string, Map<string, Trace>>();
+
+/** Fold one snapshot's positions into the node's traces. */
+function recordTraces(nodeId: string, records: AdsbAircraft[], nowMs: number): void {
+  let byHex = traces.get(nodeId);
+  if (!byHex) {
+    byHex = new Map<string, Trace>();
+    traces.set(nodeId, byHex);
+  }
+
+  for (const r of records) {
+    const tr = byHex.get(r.hex);
+    if (!tr) {
+      if (byHex.size >= TRACE_MAX_AIRCRAFT) continue;
+      byHex.set(r.hex, {
+        lat: [r.lat], lon: [r.lon], t: [nowMs],
+        callsign: r.callsign, lastMs: nowMs,
+      });
+      continue;
+    }
+    // Keep the callsign once it is known: an aircraft is usually tracked for a
+    // while before it transmits one, so the first point rarely has it.
+    if (!tr.callsign && r.callsign) tr.callsign = r.callsign;
+
+    const n = tr.lat.length;
+    const dt = nowMs - tr.t[n - 1]!;
+    const moved =
+      Math.abs(r.lat - tr.lat[n - 1]!) > TRACE_MIN_MOVE_DEG ||
+      Math.abs(r.lon - tr.lon[n - 1]!) > TRACE_MIN_MOVE_DEG;
+    if (dt < TRACE_MIN_GAP_MS && !moved) {
+      tr.lastMs = nowMs;
+      continue;
+    }
+
+    tr.lat.push(r.lat);
+    tr.lon.push(r.lon);
+    tr.t.push(nowMs);
+    tr.lastMs = nowMs;
+    if (tr.lat.length > TRACE_MAX_POINTS) {
+      tr.lat.shift();
+      tr.lon.shift();
+      tr.t.shift();
+    }
+  }
+}
+
+/** Drop points and aircraft that have aged out of the window. */
+function pruneTraces(nodeId: string, nowMs: number): void {
+  const byHex = traces.get(nodeId);
+  if (!byHex) return;
+  const cutoff = nowMs - TRACE_WINDOW_MS;
+  for (const [hex, tr] of byHex) {
+    // Points are appended in time order, so the expired ones are a prefix.
+    let drop = 0;
+    while (drop < tr.t.length && tr.t[drop]! < cutoff) drop += 1;
+    if (drop > 0) {
+      tr.lat.splice(0, drop);
+      tr.lon.splice(0, drop);
+      tr.t.splice(0, drop);
+    }
+    if (tr.lat.length === 0) byHex.delete(hex);
+  }
+  if (byHex.size === 0) traces.delete(nodeId);
+}
+
+export interface NodeTrace {
+  hex: string;
+  callsign: string | null;
+  /** [lat, lon] pairs in time order. Timestamps are dropped on the way out —
+   *  the view draws paths, and shipping a third number per point would inflate
+   *  the response for something nothing renders. */
+  points: Array<[number, number]>;
+}
+
+/**
+ * One receiver's traces over the last `minutes`.
+ *
+ * Single-point traces are omitted: an aircraft caught once is a dot, not a
+ * path, and hundreds of them turn the coverage picture into noise. They are
+ * still counted in `aircraft` so the total stays honest.
+ */
+export function nodeAdsbTraces(
+  nodeId: string,
+  minutes: number,
+  nowMs: number = Date.now(),
+): { traces: NodeTrace[]; aircraft: number; points: number; windowMinutes: number } {
+  pruneTraces(nodeId, nowMs);
+  const byHex = traces.get(nodeId);
+  if (!byHex) return { traces: [], aircraft: 0, points: 0, windowMinutes: minutes };
+
+  const cutoff = nowMs - Math.max(1, minutes) * 60_000;
+  const out: NodeTrace[] = [];
+  let points = 0;
+  let aircraft = 0;
+
+  for (const [hex, tr] of byHex) {
+    const pts: Array<[number, number]> = [];
+    for (let i = 0; i < tr.t.length; i += 1) {
+      if (tr.t[i]! < cutoff) continue;
+      pts.push([tr.lat[i]!, tr.lon[i]!]);
+    }
+    if (pts.length === 0) continue;
+    aircraft += 1;
+    points += pts.length;
+    if (pts.length < 2) continue;
+    out.push({ hex, callsign: tr.callsign, points: pts });
+  }
+  return { traces: out, aircraft, points, windowMinutes: minutes };
+}
+
 /** How many nodes currently have a live snapshot (for the upstreams summary). */
 export function nodeAdsbFeedCount(): number {
   return snapshots.size;
@@ -125,6 +287,7 @@ export function nodeAdsbFeedCount(): number {
 export function _resetAdsbNodeStore(): void {
   snapshots.clear();
   pending.clear();
+  traces.clear();
 }
 
 // ---------------------------------------------------------------------------

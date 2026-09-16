@@ -252,6 +252,12 @@ func runAgent(ctx context.Context, configPath string) error {
 	} else {
 		log.Printf("decoder: no persisted config; starting on defaults until the backend pushes")
 	}
+	// Measure the dongle's crystal error BEFORE the decoder starts: rtl_test
+	// needs exclusive access to the device, so doing it afterwards would mean
+	// stopping the decoder we just launched. A pushed ppm overrides this; the
+	// measurement only fills the gap when staff have set nothing.
+	mgr.MeasurePPM()
+
 	if err := mgr.Apply(boot); err != nil {
 		log.Printf("decoder: initial apply failed: %v", err)
 	}

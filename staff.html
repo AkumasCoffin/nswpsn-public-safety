@@ -7891,6 +7891,98 @@
       };
     }
 
+    /** The coverage picture: paths aircraft took through this receiver's range.
+     *
+     *  Modelled on tar1090's pTracks view, which is the most direct answer a
+     *  receiver operator has to "is my antenna hearing in every direction, and
+     *  how far" — a gap in the fan is an obstruction or a bad lobe, and a short
+     *  radius on one bearing is terrain.
+     *
+     *  Served from memory, so it resets when the backend restarts and refills
+     *  within minutes. */
+    async function nd2LoadAdsbTracks(nodeId, minutes) {
+      _nd2TrackNodeId = nodeId;
+      _nd2TrackMinutes = minutes || 60;
+      const wrap = document.getElementById('nd2-aov-map-wrap');
+      const note = document.getElementById('nd2-aov-map-note');
+      if (!wrap) return;
+
+      let d;
+      try {
+        d = await nd2Fetch(`/api/node-data/adsb-tracks?nodeId=${encodeURIComponent(nodeId)}&minutes=${_nd2TrackMinutes}`);
+      } catch (e) {
+        if (note) note.textContent = 'Could not load tracks (' + (e && e.message ? e.message : 'request failed') + ').';
+        return;
+      }
+      if (!d || _nd2TrackNodeId !== nodeId) return;   // superseded by a newer click
+
+      // Build the map lazily: creating it before the panel is visible gives
+      // Leaflet a zero-size container and a blank tile grid.
+      if (!_nd2TrackMap) {
+        const dark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?key=cb1_29rl_1_764d57ded0436220d836abc9',
+          { subdomains: 'abcd', maxZoom: 19, attribution: '© CartoDB' });
+        _nd2TrackMap = L.map('nd2-aov-map', { attributionControl: false, layers: [dark] })
+          .setView([d.site ? d.site.lat : -33.8688, d.site ? d.site.lon : 151.2093], 8);
+      }
+      if (_nd2TrackLayer) { _nd2TrackLayer.remove(); _nd2TrackLayer = null; }
+
+      const layer = L.layerGroup();
+      const traces = d.traces || [];
+      for (const tr of traces) {
+        // One colour per aircraft, from its hex, so adjacent paths stay
+        // distinguishable without a legend nobody would read.
+        const hue = (parseInt(String(tr.hex).slice(-4), 16) || 0) % 360;
+        L.polyline(tr.points, {
+          color: `hsl(${hue}, 80%, 62%)`,
+          weight: 1.4, opacity: 0.75, interactive: false,
+        }).addTo(layer);
+      }
+
+      // The receiver itself, so a gap in the fan reads as a direction rather
+      // than just empty space.
+      if (d.site) {
+        L.circleMarker([d.site.lat, d.site.lon], {
+          radius: 5, color: '#f8fafc', weight: 2, fillColor: '#38bdf8', fillOpacity: 1,
+        }).bindTooltip(d.site.name || 'Receiver').addTo(layer);
+      }
+      layer.addTo(_nd2TrackMap);
+      _nd2TrackLayer = layer;
+
+      // Frame the coverage, not the whole country.
+      if (traces.length) {
+        try {
+          const b = L.latLngBounds([]);
+          for (const tr of traces) for (const p of tr.points) b.extend(p);
+          if (d.site) b.extend([d.site.lat, d.site.lon]);
+          _nd2TrackMap.fitBounds(b.pad(0.08));
+        } catch (_e) { /* a degenerate bounds is not worth failing the view for */ }
+      }
+      setTimeout(() => _nd2TrackMap && _nd2TrackMap.invalidateSize(), 60);
+
+      if (note) {
+        const parts = [];
+        parts.push(nd2Num(d.aircraft) + (d.aircraft === 1 ? ' aircraft' : ' aircraft'));
+        parts.push(nd2Num(traces.length) + ' with a path');
+        parts.push(nd2Num(d.points) + ' points');
+        if (!d.site) parts.push('no antenna pin — the receiver cannot be placed');
+        note.textContent = parts.join(' · ');
+      }
+    }
+
+    function nd2SetTrackWindow(minutes, btn) {
+      if (btn && btn.parentElement) {
+        btn.parentElement.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+      }
+      if (_nd2TrackNodeId) nd2LoadAdsbTracks(_nd2TrackNodeId, minutes);
+    }
+
+    function nd2DestroyTrackMap() {
+      if (_nd2TrackLayer) { _nd2TrackLayer.remove(); _nd2TrackLayer = null; }
+      if (_nd2TrackMap) { _nd2TrackMap.remove(); _nd2TrackMap = null; }
+      _nd2TrackNodeId = null;
+    }
+
     /** One receiver's day-by-day history, shown under the fleet table. */
     async function nd2OpenAdsbNodeView(nodeId) {
       if (!nodeId) return;
@@ -7919,14 +8011,34 @@
       const el = document.getElementById('nd2-aov-detail');
       if (!el) return;
       el.style.display = '';
-      el.innerHTML = '<div class="nd2-card">'
-        + '<div class="nd2-card-h"><span>' + escapeHtml(name) + ' — daily</span>'
-        + '<button type="button" class="nd2-back" onclick="nd2CloseAdsbNodeView()">Close</button></div>'
-        + body + '</div>';
+      el.innerHTML = ''
+        + '<div class="nd2-card">'
+        +   '<div class="nd2-card-h"><span>' + escapeHtml(name) + ' — coverage</span>'
+        +     '<span class="nd2-seg" style="margin-left:auto;">'
+        +       '<button type="button" class="filter-btn" onclick="nd2SetTrackWindow(15, this)">15 min</button>'
+        +       '<button type="button" class="filter-btn active" onclick="nd2SetTrackWindow(60, this)">Last hour</button>'
+        +     '</span>'
+        +     '<button type="button" class="nd2-back" onclick="nd2CloseAdsbNodeView()">Close</button>'
+        +   '</div>'
+        +   '<div id="nd2-aov-map-wrap">'
+        +     '<div id="nd2-aov-map" style="height:420px; border-radius:8px; overflow:hidden;"></div>'
+        +     '<div id="nd2-aov-map-note" class="nd2-note" style="margin-top:0.5rem;">Loading tracks…</div>'
+        +   '</div>'
+        + '</div>'
+        + '<div class="nd2-card">'
+        +   '<div class="nd2-card-h"><span>' + escapeHtml(name) + ' — daily</span></div>'
+        +   body
+        + '</div>';
       el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      // After the panel is in the DOM and sized, or Leaflet measures zero.
+      nd2DestroyTrackMap();
+      nd2LoadAdsbTracks(nodeId, 60);
     }
 
     function nd2CloseAdsbNodeView() {
+      // Tear the map down explicitly: dropping its container via innerHTML
+      // leaves Leaflet's listeners and tile requests alive.
+      nd2DestroyTrackMap();
       const el = document.getElementById('nd2-aov-detail');
       if (el) { el.style.display = 'none'; el.innerHTML = ''; }
     }
@@ -9204,6 +9316,10 @@
     let _ndSpectrumTunerId = null; // tunerId of the active spectrum stream
     let _ndReadersSig = null;      // last-rendered pager Readers-panel signature (rebuild guard)
     let _ndAdsbSig = null;         // ditto for the ADS-B Receiver panel
+    let _nd2TrackMap = null;       // Leaflet map for the ADS-B coverage view
+    let _nd2TrackLayer = null;     // the drawn traces, replaced on each refresh
+    let _nd2TrackNodeId = null;    // which receiver the map is showing
+    let _nd2TrackMinutes = 60;     // window in minutes (the store retains 60)
     let _ndAudioLabel = null;      // reader label of the active pager audio monitor (null = off)
     let _ndAudioCtx = null;        // Web Audio context for the monitor
     let _ndAudioPlayhead = 0;      // scheduled playback time cursor (ctx clock)

@@ -42,6 +42,7 @@ import { log } from '../lib/log.js';
 import { learnedAliasMap } from '../services/capcodeAliasSync.js';
 import { requireRole, canViewNodeData } from '../services/auth/roles.js';
 import { hub } from '../services/nodes/hub.js';
+import { nodeAdsbTraces } from '../services/nodes/adsbNodeStore.js';
 import {
   talkgroupCatalog,
   talkgroupLabels,
@@ -4240,6 +4241,63 @@ nodeDataRouter.get(
     } catch (err) {
       log.error({ err }, '/api/node-data/adsb-overview error');
       return c.json({ error: 'failed to load adsb overview' }, 500);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// GET /api/node-data/adsb-tracks?nodeId=&minutes=60
+//
+// The paths aircraft took through one receiver's coverage recently — the same
+// picture tar1090 draws for ?pTracks, and the most direct answer to "is this
+// antenna hearing in every direction, and how far".
+//
+// Served from memory (see adsbNodeStore), so it resets on a backend restart and
+// refills within minutes. Positions are never persisted: storing them would be
+// millions of rows a day per node for something only ever read as a picture of
+// the last hour.
+// ---------------------------------------------------------------------------
+nodeDataRouter.get(
+  '/api/node-data/adsb-tracks',
+  requireRole(canViewNodeData),
+  async (c) => {
+    try {
+      const url = new URL(c.req.url);
+      const nodeId = (url.searchParams.get('nodeId') ?? '').trim();
+      if (!nodeId) return c.json({ error: 'nodeId is required' }, 400);
+      // Clamped to what the store actually retains, so a caller asking for more
+      // gets the full window rather than a silently short answer.
+      const raw = Number(url.searchParams.get('minutes') ?? 60);
+      const minutes = Number.isFinite(raw) ? Math.min(60, Math.max(1, Math.round(raw))) : 60;
+
+      const t = nodeAdsbTraces(nodeId, minutes);
+
+      // The receiver's own position anchors the picture: a coverage map without
+      // it cannot show which directions are weak.
+      const pool = await getPool();
+      let site: { lat: number; lon: number; name: string | null } | null = null;
+      if (pool) {
+        const r = await pool.query<{ name: string | null; lat: unknown; lon: unknown }>(
+          'SELECT name, lat, lon FROM nodes WHERE id = $1',
+          [nodeId],
+        );
+        const row = r.rows[0];
+        if (row && typeof row.lat === 'number' && typeof row.lon === 'number') {
+          site = { lat: row.lat, lon: row.lon, name: row.name };
+        }
+      }
+
+      return c.json({
+        nodeId,
+        site,
+        windowMinutes: t.windowMinutes,
+        aircraft: t.aircraft,
+        points: t.points,
+        traces: t.traces,
+      });
+    } catch (err) {
+      log.error({ err }, '/api/node-data/adsb-tracks error');
+      return c.json({ error: 'failed to load node adsb tracks' }, 500);
     }
   },
 );

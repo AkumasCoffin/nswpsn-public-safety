@@ -18,6 +18,7 @@ import (
 	"github.com/AkumasCoffin/nswpsn-node/aircraft-node/internal/autogain"
 	"github.com/AkumasCoffin/nswpsn-node/aircraft-node/internal/decoder"
 	"github.com/AkumasCoffin/nswpsn-node/aircraft-node/internal/decoderjson"
+	"github.com/AkumasCoffin/nswpsn-node/aircraft-node/internal/sdrppm"
 	"github.com/AkumasCoffin/nswpsn-node/aircraft-node/internal/supervise"
 	"github.com/AkumasCoffin/nswpsn-node/aircraft-node/internal/wsclient"
 )
@@ -47,6 +48,11 @@ type aircraftManager struct {
 
 	// gain is the autogain controller, non-nil only while gain is "auto".
 	gain *autogain.Controller
+
+	// measuredPPM is the dongle's crystal error as measured at startup, used
+	// only when the backend has pushed no explicit ppm. nil until measured (or
+	// if the measurement failed, which is not an error worth stopping for).
+	measuredPPM *int
 
 	// statsMu guards the figures the heartbeat reads, which are written by the
 	// snapshot loop on a different goroutine.
@@ -105,11 +111,19 @@ func (m *aircraftManager) launchLocked() error {
 		gainDB = fixed
 	}
 
+	// A staff-set ppm always wins: someone who typed a number meant it, and
+	// silently overriding it with our own measurement would make the control
+	// look broken. The measured value fills in only when nothing was pushed.
+	ppm := cfg.Ppm
+	if ppm == nil && m.measuredPPM != nil {
+		ppm = m.measuredPPM
+	}
+
 	scriptPath, err := decoder.Write(m.cfg.DecoderDir(), decoder.Params{
 		Bin:     m.cfg.Dump1090Bin,
 		JSONDir: m.cfg.JSONDir,
 		GainDB:  gainDB,
-		PPM:     cfg.Ppm,
+		PPM:     ppm,
 		Lat:     cfg.Lat,
 		Lon:     cfg.Lon,
 	})
@@ -150,6 +164,25 @@ func (m *aircraftManager) rebuildLocked(comps map[string]agentcfg.ComponentCfg) 
 	m.supCancel = cancel
 }
 
+// MeasurePPM measures the dongle's crystal error and remembers it.
+//
+// Blocking and slow (~20s) because rtl_test holds the dongle for the duration,
+// so this runs BEFORE the decoder starts rather than alongside it. A failure is
+// logged and otherwise ignored: an uncorrected receiver still works, while
+// refusing to start over a missing calibration would be a self-inflicted
+// outage.
+func (m *aircraftManager) MeasurePPM() {
+	ppm, err := sdrppm.Measure(0, sdrppm.MeasureDur)
+	if err != nil {
+		log.Printf("ppm: measurement failed (%v); running without a correction", err)
+		return
+	}
+	log.Printf("ppm: measured %d for the attached SDR", ppm)
+	m.mu.Lock()
+	m.measuredPPM = &ppm
+	m.mu.Unlock()
+}
+
 // Restart restarts the decoder component (staff "Restart" button).
 func (m *aircraftManager) Restart(component string) error {
 	m.mu.Lock()
@@ -161,10 +194,13 @@ func (m *aircraftManager) Restart(component string) error {
 	return sup.Restart(component)
 }
 
-// Rescan stops the decoder, lets the USB device settle, and starts it again —
-// the staff "Recheck SDR" action, for a dongle that was replugged. Unlike the
-// pager agent there is no ppm measurement pass, so this is quick; it is still
-// single-flighted so two clicks can't interleave two teardowns.
+// Rescan re-measures the dongle and restarts the decoder — the staff
+// "Recheck SDR" action, for hardware that was replugged or swapped.
+//
+// The ppm is re-measured because a different dongle has a different crystal,
+// so carrying the old figure over would apply one board's correction to
+// another's. That makes this slow (~20s), so it is single-flighted: two clicks
+// must not interleave two teardowns of the same device.
 func (m *aircraftManager) Rescan() error {
 	if !m.rescanMu.TryLock() {
 		return nil
@@ -172,11 +208,19 @@ func (m *aircraftManager) Rescan() error {
 	defer m.rescanMu.Unlock()
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if !m.hasConfig {
+	configured := m.hasConfig
+	m.mu.Unlock()
+	if !configured {
 		return nil
 	}
-	log.Printf("decoder: rescan — restarting decoder")
+
+	log.Printf("decoder: rescan — re-measuring ppm, then restarting the decoder")
+	// Deliberately outside m.mu: the measurement holds the dongle for ~20s, and
+	// blocking every status heartbeat behind it would make the node look hung.
+	m.MeasurePPM()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.launchLocked()
 }
 
