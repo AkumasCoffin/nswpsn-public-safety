@@ -163,6 +163,18 @@ export interface AdsbAircraft {
   ageSec: number;
   sourceCount: number;
   sources: string[];
+  /**
+   * True when this position was DEAD-RECKONED rather than received.
+   *
+   * Set only by applyHoldover, for an aircraft that has stopped reporting but
+   * was last seen airborne with a known heading and speed. Every consumer must
+   * present it as a guess: it is the only field on this record that is not an
+   * observation, and a client that renders it identically to a real fix is
+   * showing an aircraft somewhere nobody said it was.
+   */
+  estimated: boolean;
+  /** Seconds since the last REAL fix, when `estimated`. Null otherwise. */
+  estimatedSec: number | null;
 }
 
 export interface AdsbSnapshot {
@@ -258,6 +270,10 @@ export function normalizeAircraft(
     ageSec,
     sourceCount: 1,
     sources: [upstreamId],
+    // Everything out of this function IS an observation; only applyHoldover
+    // ever sets these.
+    estimated: false,
+    estimatedSec: null,
   };
 }
 
@@ -371,7 +387,52 @@ let _pollTick = 0;
 // genuinely-gone aircraft still clear inside a couple of polls' worth
 // of the old behaviour (MAX_SEEN_POS_SECS already allowed 60 s).
 const HOLDOVER_MAX_AGE_SECS = 90;
+
+/**
+ * How long a DEAD-RECKONED position may be carried, versus the 90 s a frozen
+ * one gets.
+ *
+ * Longer because a projected aircraft is still telling you something true —
+ * roughly where it went — while a frozen one is just a stale dot. Short
+ * because the error grows with every second: the projection assumes the
+ * aircraft flew straight, and three minutes at 450 kt is ~40 km of committed
+ * straight line. A turn inside that window puts the icon somewhere the
+ * aircraft never was, and no amount of extra time improves the guess.
+ */
+const ESTIMATE_MAX_SECS = 180;
+
+/**
+ * Below this groundspeed, a reported track is mostly noise — a taxiing or
+ * drifting target can report a heading that swings wildly — and projecting
+ * noise produces drift in an arbitrary direction.
+ */
+const ESTIMATE_MIN_GS_KT = 40;
+
 const _lastSeen = new Map<string, { rec: AdsbAircraft; atMs: number }>();
+
+/** Nautical miles per degree of latitude. Longitude shrinks by cos(lat). */
+const NM_PER_DEG = 60;
+
+/**
+ * Project a position forward along a constant heading at a constant speed.
+ *
+ * Flat-earth on purpose: over the three minutes this is allowed to run, the
+ * great-circle correction is metres, well inside the uncertainty the guess
+ * already carries.
+ */
+function deadReckon(
+  lat: number, lon: number, trackDeg: number, gsKt: number, secs: number,
+): { lat: number; lon: number } {
+  const nm = gsKt * (secs / 3600);
+  const rad = (trackDeg * Math.PI) / 180;
+  const dLat = (nm * Math.cos(rad)) / NM_PER_DEG;
+  const cosLat = Math.cos((lat * Math.PI) / 180);
+  // Guard the poles, where a degree of longitude collapses to nothing.
+  const dLon = Math.abs(cosLat) < 1e-6
+    ? 0
+    : (nm * Math.sin(rad)) / (NM_PER_DEG * cosLat);
+  return { lat: lat + dLat, lon: lon + dLon };
+}
 
 export function applyHoldover(fresh: AdsbAircraft[], nowMs: number): AdsbAircraft[] {
   const out = new Map<string, AdsbAircraft>();
@@ -381,11 +442,45 @@ export function applyHoldover(fresh: AdsbAircraft[], nowMs: number): AdsbAircraf
   }
   for (const [hex, h] of _lastSeen) {
     const age = h.rec.ageSec + (nowMs - h.atMs) / 1000;
-    if (age > HOLDOVER_MAX_AGE_SECS) {
+    const rec = h.rec;
+
+    // An aircraft that was moving on a known heading can be projected; one on
+    // the ground, stationary, or without a heading cannot, and stays frozen at
+    // its last real position for the shorter original window.
+    const canEstimate =
+      !rec.onGround &&
+      Number.isFinite(rec.trackDeg) &&
+      (rec.gsKt ?? 0) > ESTIMATE_MIN_GS_KT;
+
+    if (age > (canEstimate ? ESTIMATE_MAX_SECS : HOLDOVER_MAX_AGE_SECS)) {
       _lastSeen.delete(hex);
       continue;
     }
-    if (!out.has(hex)) out.set(hex, { ...h.rec, ageSec: Math.round(age) });
+    if (out.has(hex)) continue;
+
+    if (!canEstimate) {
+      out.set(hex, { ...rec, ageSec: Math.round(age) });
+      continue;
+    }
+
+    const p = deadReckon(
+      rec.lat, rec.lon, rec.trackDeg as number, rec.gsKt as number, age,
+    );
+    // The bbox filter runs BEFORE holdover, so a projection that flies out of
+    // the region has nothing downstream to catch it. Forget it here rather
+    // than serving an aircraft off the edge of the map.
+    if (!inAuBbox(p.lat, p.lon)) {
+      _lastSeen.delete(hex);
+      continue;
+    }
+    out.set(hex, {
+      ...rec,
+      lat: p.lat,
+      lon: p.lon,
+      ageSec: Math.round(age),
+      estimated: true,
+      estimatedSec: Math.round(age),
+    });
   }
   return Array.from(out.values());
 }
@@ -628,7 +723,12 @@ export async function fetchAdsbAircraft(): Promise<AdsbSnapshot> {
   }
 
   const merged = applyHoldover(fresh, Date.now());
-  updateTrails(merged, Date.now());
+  // Trails (and, through them, the persisted history) record only OBSERVED
+  // positions. A frozen holdover record was harmless here because
+  // updateTrails already skips a point identical to the last one, but an
+  // estimated record MOVES — without this filter every trail would accumulate
+  // fabricated positions indistinguishable from real ones.
+  updateTrails(merged.filter((a) => !a.estimated), Date.now());
 
   // Stable ordering: emergency services first, then lowest altitude —
   // matches the frontend's render cap so a truncated list keeps the

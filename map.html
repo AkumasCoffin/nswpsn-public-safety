@@ -14220,7 +14220,10 @@ function initPagerHoursFromStorage() {
     function buildAircraftIcon(a) {
       const es = a.esTag ? ADSB_ES_STYLE[a.esTag] : null;
       const color = es ? es.color : adsbAltColor(a.altFt);
-      const op = a.onGround ? 0.5 : 1;
+      // A dead-reckoned position is a guess and has to look like one, or the
+      // map is quietly asserting an aircraft is somewhere nobody reported it.
+      // Faded, inside a dashed ring — the same visual language FR24 uses.
+      const op = a.onGround ? 0.5 : (a.estimated ? 0.6 : 1);
       // Squawk emergencies pulse red regardless of tag; ES aircraft
       // pulse in their tag colour. Ground targets never pulse.
       const pulseColor = a.emergencySquawk ? '#ef4444' : (es ? es.color : null);
@@ -14260,9 +14263,16 @@ function initPagerHoursFromStorage() {
           fieldLines +
         '</div>';
       }
+      // Sits behind the glyph, sized to the icon rather than the 20px box so
+      // it still reads around the larger airliner shapes.
+      const estRing = a.estimated
+        ? '<div style="position:absolute;top:50%;left:50%;width:' + (px + 8) + 'px;height:' + (px + 8) + 'px;'
+          + 'margin:-' + ((px + 8) / 2) + 'px 0 0 -' + ((px + 8) / 2) + 'px;border-radius:50%;'
+          + 'border:1.5px dashed ' + hexToRgba(color, 0.75) + ';pointer-events:none;"></div>'
+        : '';
       return L.divIcon({
         className: 'adsb-pin',
-        html: '<div style="position:relative;width:20px;height:20px;"><div ' + pulse + '>' + glyph + '</div>' + labelHtml + '</div>',
+        html: '<div style="position:relative;width:20px;height:20px;">' + estRing + '<div ' + pulse + '>' + glyph + '</div>' + labelHtml + '</div>',
         iconSize: [20, 20],
         iconAnchor: [10, 10]
       });
@@ -14280,7 +14290,12 @@ function initPagerHoursFromStorage() {
       // adsbIconSize is in the key as well as the class: category often arrives
       // a few reports after first contact, and A3->A4 changes the size without
       // changing the shape class, so the icon would otherwise stay stale.
-      return [adsbIconClass(a), adsbIconSize(a), a.esTag || '-', a.emergencySquawk ? 1 : 0, trackBucket, adsbAltBand(a.altFt), a.onGround ? 1 : 0, label].join('|');
+      // `estimated` is in the key because the ring and the opacity both hang
+      // off it: without this the icon keeps its solid look for as long as the
+      // aircraft's class, track bucket and altitude band happen not to move —
+      // which, for something flying straight and level out of coverage, is the
+      // entire time it is being guessed at.
+      return [adsbIconClass(a), adsbIconSize(a), a.esTag || '-', a.emergencySquawk ? 1 : 0, trackBucket, adsbAltBand(a.altFt), a.onGround ? 1 : 0, a.estimated ? 'e' : '-', label].join('|');
     }
 
     function buildAdsbTooltipHtml(a) {
@@ -14302,6 +14317,11 @@ function initPagerHoursFromStorage() {
         row('Track', Number.isFinite(a.trackDeg) ? Math.round(a.trackDeg) + '°' : null),
         row('Position age', Math.round(a.ageSec) + 's')
       ].join('');
+      // Hovering an estimated aircraft must not read as a normal fix that
+      // happens to be old — the position is projected, not merely stale.
+      const estRow = a.estimated
+        ? '<div style="display:flex;gap:6px;font-size:12px;line-height:1.4;"><span style="color:#94a3b8;min-width:90px;">Position</span><span style="font-weight:700;color:#fbbf24;">Estimated</span></div>'
+        : '';
       const squawkRow = a.squawk
         ? '<div style="display:flex;gap:6px;font-size:12px;line-height:1.4;"><span style="color:#94a3b8;min-width:90px;">Squawk</span><span style="font-weight:700;color:' + (sqBad ? '#ef4444' : '#e2e8f0') + ';">' + escapeHtml(a.squawk) + (sqBad ? ' — EMERGENCY' : '') + '</span></div>'
         : '';
@@ -14321,7 +14341,7 @@ function initPagerHoursFromStorage() {
           (es ? ' <span style="background:' + es.color + ';color:#fff;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:700;">' + es.label + '</span>' : '') +
         '</div>' +
         photoHtml +
-        '<div style="padding:6px 8px;background:' + hexToRgba(color, 0.08) + ';border-radius:6px;">' + body + squawkRow + '</div>' +
+        '<div style="padding:6px 8px;background:' + hexToRgba(color, 0.08) + ';border-radius:6px;">' + body + squawkRow + estRow + '</div>' +
       '</div>';
     }
 
@@ -14572,7 +14592,10 @@ function initPagerHoursFromStorage() {
         // hundreds of trails stay cheap on the shared canvas.
         const n = latlngs.length - 1;
         const step = focused ? 1 : Math.max(1, Math.ceil(n / 24));
-        const sig = [n, latlngs[n][0], latlngs[n][1], focused ? 'f' : 'b'].join('|');
+        // `estimated` joins the signature for the same reason it joins the
+        // icon key — the head segment's dash depends on it.
+        const estimated = !!(a && a.estimated);
+        const sig = [n, latlngs[n][0], latlngs[n][1], focused ? 'f' : 'b', estimated ? 'e' : '-'].join('|');
         let e = _adsbTrailLines.get(hex);
         if (e && e.sig === sig) continue; // unchanged since last rebuild
         if (e) for (const s of e.segs) adsbTrailsLayer.removeLayer(s);
@@ -14588,10 +14611,15 @@ function initPagerHoursFromStorage() {
           const t = end / n; // 0 tail → 1 head
           const color = adsbTrailAltColor(alts[end] != null ? alts[end] : alts[s]);
           const opacity = focused ? 0.25 + 0.7 * t : 0.12 + 0.38 * t;
+          // The head of the trail already runs from the last OBSERVED point to
+          // wherever the marker is, so when the marker is a projection that
+          // final leg is the projection — drawn dashed, and only that leg.
+          const projected = estimated && end === n;
           const seg = L.polyline(latlngs.slice(s, end + 1), {
             color: color, opacity: opacity, weight: weight,
             renderer: adsbTrailRenderer, interactive: false,
-            lineCap: 'round', lineJoin: 'round'
+            lineCap: 'round', lineJoin: 'round',
+            ...(projected ? { dashArray: '4 5' } : {})
           });
           adsbTrailsLayer.addLayer(seg);
           e.segs.push(seg);
