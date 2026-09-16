@@ -1777,6 +1777,22 @@
     .role-badge.media_feeder        { background: rgba(249, 115, 22, 0.18); color: #fb923c; }
 
     .no-roles { color: var(--text-soft); font-style: italic; font-size: 0.8rem; }
+
+    /* Email addresses in the Members / Users / Signups lists are masked until
+       hovered. These are long lists that get scanned, screenshotted and shared
+       in a support context, and an address is the one column that identifies a
+       real person off-site. Hovering is a deliberate act; scrolling past is
+       not. CSS-only so it cannot break with a script error, and the text is
+       still selectable once shown. */
+    .email-mask { cursor: default; }
+    .email-mask .em-dots { color: var(--text-soft, #94a3b8); letter-spacing: 0.12em; user-select: none; }
+    .email-mask .em-real { display: none; }
+    .email-mask:hover .em-dots,
+    .email-mask:focus-within .em-dots { display: none; }
+    .email-mask:hover .em-real,
+    .email-mask:focus-within .em-real { display: inline; user-select: text; }
+    /* Keyboard users get the same reveal — the dots are focusable. */
+    .email-mask:focus-visible { outline: 1px solid var(--border-subtle, #334155); outline-offset: 2px; border-radius: 3px; }
     .auth-view-note { color: var(--text-soft); font-size: 0.82rem; margin: 0 0 0.75rem; }
     /* Grouped role checkboxes in the approval / edit-roles modals.
        Row layout: [checkbox] [name (never wraps)] [hint (takes the rest)] —
@@ -14303,6 +14319,24 @@
     function realRoles(user) {
       return (user.roles || []).map(r => r.role).filter(r => r && r !== BASE_ROLE);
     }
+    /** An email address, masked until hovered.
+     *
+     *  Used by every list that shows one (Members, Users, Signups). Reveal is
+     *  pure CSS, so it survives a script error elsewhere on the page, and the
+     *  address stays in the DOM — client-side search still matches it, and it
+     *  is selectable once shown.
+     *
+     *  Deliberately NOT a title attribute: a native tooltip cannot be selected
+     *  or copied, and would sit on top of the row it belongs to. */
+    function emailMasked(email) {
+      const e = (email || '').trim();
+      if (!e) return '<span class="no-roles">—</span>';
+      return '<span class="email-mask" tabindex="0" aria-label="Email address, hover to reveal">'
+        + '<span class="em-dots">\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022</span>'
+        + '<span class="em-real">' + escapeHtml(e) + '</span>'
+        + '</span>';
+    }
+
     function isMember(user) { return realRoles(user).length > 0; }
     // Role strings contain ':' which is not valid in a CSS class — swap for '-'
     // so `.role-badge.wire-contributor` styling works.
@@ -14446,7 +14480,7 @@
             <td>${user.username
               ? `<span style="font-weight: 600;">${escapeHtml(user.username)}</span>`
               : '<span class="no-roles">—</span>'}</td>
-            <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(user.email)}</td>
+            <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis;">${emailMasked(user.email)}</td>
             <td>${discordHtml}</td>
             <td>${rolesHtml}</td>
             <td><span class="timestamp">${user.last_sign_in ? fmtDate(user.last_sign_in) : 'Never'}</span></td>
@@ -14749,7 +14783,7 @@
             <td><span class="status-badge ${escapeHtml(req.status)}">${escapeHtml(req.status)}</span>${req.referred_by
                   ? ` <span class="status-badge approved" title="Referred by ${escapeHtml(req.referred_by_name || req.referred_by)}"><i class="fas fa-user-plus"></i> Referred</span>` : ''}</td>
             <td>${typesHtml}</td>
-            <td>${escapeHtml(req.email)}${emailChip}</td>
+            <td>${emailMasked(req.email)}${emailChip}</td>
             <td>${req.discord_id && fmtDiscordId(req.discord_id) !== 'Not linked'
                   ? `<span class="discord-id">${escapeHtml(req.discord_id)}</span>${discordChip}`
                   : '<span class="nd-sub">Not linked</span>'}</td>
