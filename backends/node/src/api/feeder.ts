@@ -21,6 +21,7 @@ import { z } from 'zod';
 import { requireSupabaseJwt } from '../services/auth/supabaseJwt.js';
 import { hasRole } from '../services/auth/roles.js';
 import { mintNodeToken, resolveNodeToken, _clearNodeTokenCache } from '../services/auth/nodeToken.js';
+import { issueEnrolCode } from '../services/auth/nodeEnrol.js';
 import {
   listNodesForUser,
   createNode,
@@ -280,24 +281,24 @@ feederRouter.post('/api/feeder/nodes', async (c) => {
 });
 
 // ---- Linux: one self-contained installer, token baked in --------------------
-function linuxInstaller(token: string, kind: string): string {
-  if (kind === 'pager') return pagerLinuxInstaller(token);
-  if (kind === 'adsb') return adsbLinuxInstaller(token);
-  const T = shSingleQuote(token);
+function linuxInstaller(enrolCode: string, kind: string): string {
+  if (kind === 'pager') return pagerLinuxInstaller(enrolCode);
+  if (kind === 'adsb') return adsbLinuxInstaller(enrolCode);
+  const T = shSingleQuote(enrolCode);
   const S = shSingleQuote(SERVER_URL);
   const D = shSingleQuote(DOWNLOADS_BASE);
   const K = shSingleQuote(kind);
   return [
     `#!/usr/bin/env bash`,
-    `# AusAware feeder node installer. Your node token is baked in below.`,
+    `# AusAware feeder node installer. Carries a single-use enrolment code.`,
     `# Run:  sudo bash install-nswpsn-node.sh    (re-run any time to update)`,
     `set -euo pipefail`,
-    `NODE_TOKEN=${T}`,
+    `ENROL_CODE=${T}`,
     `SERVER_URL=${S}`,
     `DOWNLOADS=${D}`,
     `NODE_KIND=${K}`,
     ``,
-    `if [ "$(id -u)" -ne 0 ]; then exec sudo -E NODE_TOKEN="$NODE_TOKEN" SERVER_URL="$SERVER_URL" DOWNLOADS="$DOWNLOADS" NODE_KIND="$NODE_KIND" bash "$0" "$@"; fi`,
+    `if [ "$(id -u)" -ne 0 ]; then exec sudo -E ENROL_CODE="$ENROL_CODE" SERVER_URL="$SERVER_URL" DOWNLOADS="$DOWNLOADS" NODE_KIND="$NODE_KIND" bash "$0" "$@"; fi`,
     `case "$(uname -m)" in`,
     `  x86_64) ARCH=amd64;;`,
     `  aarch64|arm64) ARCH=arm64;;`,
@@ -338,7 +339,12 @@ function linuxInstaller(token: string, kind: string): string {
     `fi`,
     `cat > /etc/nswpsn-node/agent.yaml <<YAML`,
     `server_url: "\${SERVER_URL}"`,
-    `node_token: "\${NODE_TOKEN}"`,
+    `# Empty on a fresh install: the agent trades the single-use enrolment code`,
+    `# below for a real token on first run, then writes it here. Re-running the`,
+    `# installer issues a NEW code, which is why downloading one no longer`,
+    `# disturbs a node that is already running.`,
+    `node_token: ""`,
+    `enrol_code: "\${ENROL_CODE}"`,
     `install_id: "\${INSTALL_ID}"`,
     `kind: "\${NODE_KIND}"`,
     `data_dir: "/var/lib/nswpsn-node"`,
@@ -396,21 +402,21 @@ function linuxInstaller(token: string, kind: string): string {
 // blacklist, and a systemd unit. The agent auto-detects RTL dongles, assigns
 // distinct EEPROM serials ONLY when they collide, and runs one POCSAG reader per
 // frequency (1 SDR → NSW RFS; 2 → also Fire & Rescue NSW).
-function pagerLinuxInstaller(token: string): string {
-  const T = shSingleQuote(token);
+function pagerLinuxInstaller(enrolCode: string): string {
+  const T = shSingleQuote(enrolCode);
   const S = shSingleQuote(SERVER_URL);
   const D = shSingleQuote(DOWNLOADS_BASE);
   return [
     `#!/usr/bin/env bash`,
-    `# AusAware PAGER feeder node installer. Your node token is baked in below.`,
+    `# AusAware PAGER feeder node installer. Carries a single-use enrolment code.`,
     `# Run:  sudo bash install-nswpsn-node.sh    (re-run any time to update)`,
     `set -euo pipefail`,
-    `NODE_TOKEN=${T}`,
+    `ENROL_CODE=${T}`,
     `SERVER_URL=${S}`,
     `DOWNLOADS=${D}`,
     `NODE_KIND='pager'`,
     ``,
-    `if [ "$(id -u)" -ne 0 ]; then exec sudo -E NODE_TOKEN="$NODE_TOKEN" SERVER_URL="$SERVER_URL" DOWNLOADS="$DOWNLOADS" bash "$0" "$@"; fi`,
+    `if [ "$(id -u)" -ne 0 ]; then exec sudo -E ENROL_CODE="$ENROL_CODE" SERVER_URL="$SERVER_URL" DOWNLOADS="$DOWNLOADS" bash "$0" "$@"; fi`,
     `case "$(uname -m)" in`,
     `  x86_64) ARCH=amd64;;`,
     `  aarch64|arm64) ARCH=arm64;;`,
@@ -453,7 +459,12 @@ function pagerLinuxInstaller(token: string): string {
     `fi`,
     `cat > /etc/nswpsn-node/agent.yaml <<YAML`,
     `server_url: "\${SERVER_URL}"`,
-    `node_token: "\${NODE_TOKEN}"`,
+    `# Empty on a fresh install: the agent trades the single-use enrolment code`,
+    `# below for a real token on first run, then writes it here. Re-running the`,
+    `# installer issues a NEW code, which is why downloading one no longer`,
+    `# disturbs a node that is already running.`,
+    `node_token: ""`,
+    `enrol_code: "\${ENROL_CODE}"`,
     `install_id: "\${INSTALL_ID}"`,
     `kind: "pager"`,
     `data_dir: "/var/lib/nswpsn-node"`,
@@ -523,20 +534,20 @@ function pagerLinuxInstaller(token: string): string {
 //
 // Gain and antenna position are not written here - they arrive by config push,
 // so staff can retune a receiver without touching the host.
-function adsbLinuxInstaller(token: string): string {
-  const T = shSingleQuote(token);
+function adsbLinuxInstaller(enrolCode: string): string {
+  const T = shSingleQuote(enrolCode);
   const S = shSingleQuote(SERVER_URL);
   const D = shSingleQuote(DOWNLOADS_BASE);
   return [
     `#!/usr/bin/env bash`,
-    `# AusAware ADS-B feeder node installer. Your node token is baked in below.`,
+    `# AusAware ADS-B feeder node installer. Carries a single-use enrolment code.`,
     `# Run:  sudo bash install-nswpsn-adsb-node.sh    (re-run any time to update)`,
     `set -euo pipefail`,
-    `NODE_TOKEN=${T}`,
+    `ENROL_CODE=${T}`,
     `SERVER_URL=${S}`,
     `DOWNLOADS=${D}`,
     ``,
-    `if [ "$(id -u)" -ne 0 ]; then exec sudo -E NODE_TOKEN="$NODE_TOKEN" SERVER_URL="$SERVER_URL" DOWNLOADS="$DOWNLOADS" bash "$0" "$@"; fi`,
+    `if [ "$(id -u)" -ne 0 ]; then exec sudo -E ENROL_CODE="$ENROL_CODE" SERVER_URL="$SERVER_URL" DOWNLOADS="$DOWNLOADS" bash "$0" "$@"; fi`,
     `case "$(uname -m)" in`,
     `  x86_64) ARCH=amd64;;`,
     `  aarch64|arm64) ARCH=arm64;;`,
@@ -627,7 +638,12 @@ function adsbLinuxInstaller(token: string): string {
     `esac`,
     `cat > /etc/nswpsn-node/agent.yaml <<YAML`,
     `server_url: "\${SERVER_URL}"`,
-    `node_token: "\${NODE_TOKEN}"`,
+    `# Empty on a fresh install: the agent trades the single-use enrolment code`,
+    `# below for a real token on first run, then writes it here. Re-running the`,
+    `# installer issues a NEW code, which is why downloading one no longer`,
+    `# disturbs a node that is already running.`,
+    `node_token: ""`,
+    `enrol_code: "\${ENROL_CODE}"`,
     `install_id: "\${INSTALL_ID}"`,
     `kind: "adsb"`,
     `data_dir: "/var/lib/nswpsn-node"`,
@@ -689,17 +705,18 @@ function adsbLinuxInstaller(token: string): string {
 }
 
 // ---- Windows: one self-contained PowerShell installer, token baked in -------
-function windowsInstaller(token: string, kind: string): string {
-  const T = psSingleQuote(token);
+function windowsInstaller(enrolCode: string, kind: string): string {
+  const T = psSingleQuote(enrolCode);
   const S = psSingleQuote(SERVER_URL);
   const D = psSingleQuote(DOWNLOADS_BASE);
   const K = psSingleQuote(kind);
   return [
-    `# AusAware radio feeder node installer. Your node token is baked in below.`,
+    `# AusAware radio feeder node installer. A single-use enrolment code is baked`,
+    `# in below; the agent trades it for its own key the first time it runs.`,
     `# Right-click this file -> Run with PowerShell (it will elevate).`,
     `# Re-run any time to update.`,
     `$ErrorActionPreference = 'Stop'`,
-    `$NodeToken = ${T}`,
+    `$EnrolCode = ${T}`,
     `$ServerUrl = (${S}).TrimEnd('/')`,
     `$Downloads = (${D}).TrimEnd('/')`,
     `$NodeKind = ${K}`,
@@ -728,7 +745,8 @@ function windowsInstaller(token: string, kind: string): string {
     `$dataFwd = $data -replace '\\\\','/'`,
     `$yaml = @"`,
     `server_url: "$ServerUrl"`,
-    `node_token: "$NodeToken"`,
+    `node_token: ""`,
+    `enrol_code: "$EnrolCode"`,
     `install_id: "$installId"`,
     `kind: "$NodeKind"`,
     `data_dir: "$dataFwd/data"`,
@@ -743,8 +761,17 @@ function windowsInstaller(token: string, kind: string): string {
 
 /** Confirm a node belongs to the calling contributor. Returns the node or null. */
 async function ownedNode(c: import('hono').Context): Promise<NodeRow | null> {
+  return ownedNodeById(c, c.req.param('id'));
+}
+
+/** The same ownership check for a node id taken from the BODY rather than the
+ *  path — the installer download identifies its node that way, since a node id
+ *  is not a secret and passing the token no longer serves any purpose. */
+async function ownedNodeById(
+  c: import('hono').Context,
+  id: string | undefined,
+): Promise<NodeRow | null> {
   const userId = c.get('userId') as string;
-  const id = c.req.param('id');
   if (!id) return null;
   const node = await getNode(id);
   return node && node.user_id === userId ? node : null;
@@ -902,33 +929,45 @@ feederRouter.delete('/api/feeder/nodes/:id', async (c) => {
   }
 });
 
-// Installer download is POST with the node token in the BODY (never a URL/query,
-// so it can't leak via logs/referrer). The token is not re-derivable, so the
-// caller passes the plaintext it got at create/rotate time. We resolve it to the
-// node (which also confirms ownership + role) and bake token + kind in.
-const DownloadSchema = z.object({ token: z.string().min(1) });
+// Installer download is POST with the NODE ID in the body (never a URL/query,
+// so nothing leaks via logs or referrer).
+//
+// It used to take the node's plaintext token, because the token was baked into
+// the script. The token is hashed at rest and never re-derivable, so the page
+// could only supply one it still held in memory — and after a reload it had to
+// MINT A NEW ONE, silently killing whatever agent was already running on that
+// node. The downloaded file was also a permanent credential sitting in a
+// volunteer's home directory.
+//
+// Now the script carries a single-use enrolment code instead, and the node's
+// token is untouched by downloading. A running node keeps running; the change
+// of credential happens when an installer is RUN, which is what the operator
+// actually meant.
+const DownloadSchema = z.object({ nodeId: z.string().min(1) });
 
 async function serveInstaller(c: import('hono').Context, os: 'linux' | 'windows') {
-  const userId = c.get('userId') as string;
   const parsed = DownloadSchema.safeParse(await c.req.json().catch(() => ({})));
-  if (!parsed.success) return c.json({ error: 'token required' }, 400);
-  const token = parsed.data.token;
-  const resolved = await resolveNodeToken(token);
-  if (!resolved.ok) return c.json({ error: 'invalid node token' }, 401);
-  if (resolved.userId !== userId) return c.json({ error: 'not your node' }, 403);
+  if (!parsed.success) return c.json({ error: 'nodeId required' }, 400);
+  // ownedNodeById does the JWT-user ownership check, so a node id — which is
+  // not a secret — is all the caller needs to supply.
+  const node = await ownedNodeById(c, parsed.data.nodeId);
+  if (!node) return c.json({ error: 'not your node' }, 404);
   // Only radio nodes have a Windows agent. Pager (rtl_fm | multimon-ng) and
   // ADS-B (dump1090 + a bash launcher) are both Linux-only stacks, so this
   // gate is stated as an allowlist — a future kind is Linux-only by default
   // rather than silently handed a PowerShell script that cannot work.
-  if (resolved.kind !== 'radio' && os === 'windows') {
-    return c.json({ error: resolved.kind + ' nodes are Linux only' }, 400);
+  if (node.kind !== 'radio' && os === 'windows') {
+    return c.json({ error: node.kind + ' nodes are Linux only' }, 400);
   }
-  const body = os === 'linux' ? linuxInstaller(token, resolved.kind) : windowsInstaller(token, resolved.kind);
+  const code = await issueEnrolCode(node.id);
+  if (!code) return c.json({ error: 'could not issue an enrolment code' }, 503);
+
+  const body = os === 'linux' ? linuxInstaller(code, node.kind) : windowsInstaller(code, node.kind);
   const ext = os === 'linux' ? 'sh' : 'ps1';
   return c.body(body, 200, {
     'Content-Type': os === 'linux' ? 'text/x-shellscript' : 'text/plain; charset=utf-8',
     // Name the file by node kind so a radio vs pager installer is identifiable.
-    'Content-Disposition': `attachment; filename="install-nswpsn-${resolved.kind}-node.${ext}"`,
+    'Content-Disposition': `attachment; filename="install-nswpsn-${node.kind}-node.${ext}"`,
     'Access-Control-Expose-Headers': 'Content-Disposition',
     'Cache-Control': 'no-store',
   });

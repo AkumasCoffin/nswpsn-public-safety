@@ -1607,33 +1607,22 @@
     // Download a node's installer (POST, token in body). Uses the session token if
     // known; otherwise rotates to mint a fresh one first.
     async function downloadInstaller(platform, nodeId, btn) {
-      // Location is optional — no gate here. (n used for the never-connected check below.)
+      // Used below to name the downloaded file by node kind.
       const n = (_feederNodes || []).find(x => x.id === nodeId);
       const original = btn ? btn.innerHTML : '';
       if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing…'; }
       try {
         const jwt = await getToken();
         if (!jwt) { window.location.href = 'login?redirect=' + encodeURIComponent('/feeder'); return; }
-        let token = _nodeTokens[nodeId];
-        if (!token) {
-          // The key is shown once (hash-only at rest) and kept only in memory,
-          // so after a reload we must issue a fresh one. If the node has never
-          // connected there's no working installer to break — do it silently.
-          // Only warn once a machine has actually bound/run this node.
-          const everConnected = !!(n && (n.installId || n.lastSeenAt));
-          if (everConnected && !await confirmDialog({
-            title: 'Issue a new key?',
-            message: 'This issues a NEW key for the node. The current installer stops working and the node must be re-installed with the new one.',
-            confirmLabel: 'Issue new key', danger: true,
-          })) return;
-          token = await rotateNodeToken(nodeId);
-          if (!token) throw new Error('could not get a node key');
-          await refreshNodes();
-        }
+        // Downloading no longer touches the node's key. The installer carries a
+        // single-use enrolment code that the agent trades for a token when it
+        // RUNS, so a node already running keeps running and this needs no
+        // warning — which is the whole point of the change. The key only moves
+        // when an installer is actually executed on a machine.
         const res = await fetch(`${API_BASE_URL}/api/feeder/download/${platform}`, {
           method: 'POST',
           headers: { 'Authorization': 'Bearer ' + jwt, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token }),
+          body: JSON.stringify({ nodeId }),
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
 

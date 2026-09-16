@@ -73,6 +73,9 @@ export const PUBLIC_ENDPOINT_PREFIXES: readonly string[] = [
   // feeder token (X-Node-Token/X-Node-Install), verified inside the
   // handler — NOT the site NSWPSN_API_KEY — so it must skip this gate.
   '/api/node-ingest/',
+  // A freshly installed agent has no keys of any kind — trading its enrolment
+  // code for a token is how it gets one. The code is the credential here.
+  '/api/node-enrol',
   // Scanner feed: a third-party rdio DOWNSTREAM cannot send custom headers, so
   // it authenticates with its key as a form field, verified in the handler.
   '/api/scanner-ingest/',

@@ -31,6 +31,14 @@ type Config struct {
 	ServerURL string `yaml:"server_url"`
 	WSURL     string `yaml:"ws_url"`
 	NodeToken string `yaml:"node_token"`
+	// EnrolCode is a single-use code written by the installer on a fresh install.
+	// The agent trades it for a real node token on first run (see internal/enrol)
+	// and clears it. Empty on an already-enrolled agent.
+	//
+	// This exists so that DOWNLOADING an installer no longer disturbs a running
+	// node: the token used to be baked into the script, and since it is hashed at
+	// rest and never re-derivable, each download had to mint a new one.
+	EnrolCode string `yaml:"enrol_code"`
 	InstallID string `yaml:"install_id"`
 	// Kind is the node type this agent runs as (radio/pager/adsb). Declared to
 	// the backend in hello; defaults to pager (the only type this agent serves).
@@ -182,6 +190,18 @@ func (c *Config) ensureDirs() error {
 		}
 	}
 	return nil
+}
+
+// SetNodeToken records a token issued by enrolment and clears the spent code,
+// then writes the config back to disk.
+//
+// Written immediately rather than kept in memory: if the agent dies before
+// persisting, the code it spent is already gone server-side, and the install
+// would need a fresh download to recover.
+func (c *Config) SetNodeToken(path, token string) error {
+	c.NodeToken = token
+	c.EnrolCode = ""
+	return c.Save(path)
 }
 
 // QueueDir is the disk queue directory.

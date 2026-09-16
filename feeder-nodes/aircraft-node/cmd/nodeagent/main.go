@@ -13,6 +13,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -20,10 +21,13 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/kardianos/service"
+
+	"github.com/AkumasCoffin/nswpsn-node/aircraft-node/internal/enrol"
 
 	"github.com/AkumasCoffin/nswpsn-node/aircraft-node/internal/agentcfg"
 	"github.com/AkumasCoffin/nswpsn-node/aircraft-node/internal/queue"
@@ -208,6 +212,50 @@ func runAgent(ctx context.Context, configPath string) error {
 	}
 	log.Printf("config loaded: server=%s ws=%s install=%s data=%s json=%s decoder=%s",
 		cfg.ServerURL, cfg.WSURL, cfg.InstallID, cfg.DataDir, cfg.JSONDir, cfg.Dump1090Bin)
+
+	// A fresh install arrives with an enrolment code and no token. Trade it now,
+	// before the updater, the WS client or the uploader ask for a credential —
+	// every one of them would otherwise spend its first minutes being refused.
+	//
+	// Retried, because a node can easily boot before its network is up, and an
+	// install that needs running twice for that reason is a poor experience. A
+	// PERMANENT refusal (unknown or expired code) stops the loop: only the
+	// operator can fix that, by downloading the installer again.
+	if strings.TrimSpace(cfg.NodeToken) == "" && strings.TrimSpace(cfg.EnrolCode) != "" {
+		log.Printf("enrol: no token yet — trading the enrolment code for one")
+		for attempt := 1; ; attempt++ {
+			token, eerr := enrol.Exchange(cfg.ServerURL, cfg.EnrolCode, cfg.InstallID, cfg.Kind, version.UserAgent())
+			if eerr == nil {
+				if serr := cfg.SetNodeToken(configPath, token); serr != nil {
+					// The token works but could not be saved, so the next start
+					// would try to enrol again with a code that is now spent.
+					// Say so loudly; the agent still runs for this session.
+					log.Printf("enrol: token received but could NOT be saved to %s (%v) — "+
+						"this node will need a fresh installer if it restarts", configPath, serr)
+					cfg.NodeToken = token
+				} else {
+					log.Printf("enrol: enrolled successfully; token saved")
+				}
+				break
+			}
+			var perm *enrol.ErrPermanent
+			if errors.As(eerr, &perm) {
+				log.Printf("enrol: %s", perm.Msg)
+				log.Printf("enrol: this installer cannot enrol. Download a new one from the Feeder page and run it.")
+				break
+			}
+			wait := time.Duration(attempt) * 5 * time.Second
+			if wait > 60*time.Second {
+				wait = 60 * time.Second
+			}
+			log.Printf("enrol: %v — retrying in %s", eerr, wait)
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(wait):
+			}
+		}
+	}
 
 	// Disk-backed queue.
 	q, err := queue.Open(cfg.QueueDir(), 0, 0)
