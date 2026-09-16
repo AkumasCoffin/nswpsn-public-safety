@@ -394,6 +394,20 @@
     .fs-aun i, .fs-asite i { opacity: 0.6; font-size: 0.72rem; }
     .fs-arx { text-align: right; }
     .fs-rx { color: var(--text-soft); font-size: 0.7rem; font-variant-numeric: tabular-nums; }
+
+    /* ---- ADS-B receiver activity (showAdsbStats) ---- */
+    .ab-map { height: 320px; border-radius: 10px; overflow: hidden; border: 1px solid var(--border-subtle); }
+    .ab-note { font-size: 0.7rem; color: var(--text-soft); margin: 0.4rem 0 0.9rem; }
+    .ab-scroll { max-height: 34vh; overflow-y: auto; }
+    .ab-tbl { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+    .ab-tbl th { text-align: left; font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.06em;
+      color: var(--text-soft); font-weight: 600; padding: 0.3rem 0.5rem; position: sticky; top: 0;
+      background: var(--bg-elevated, #0f172a); z-index: 1; }
+    .ab-tbl td { padding: 0.3rem 0.5rem; border-top: 1px solid var(--border-subtle); vertical-align: top; }
+    .ab-tbl .num { text-align: right; font-variant-numeric: tabular-nums; }
+    .ab-hex { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #7dd3fc; }
+    .ab-soft { color: var(--text-soft); }
+    .ab-detail { color: var(--text-soft); font-size: 0.7rem; }
     .fs-enc { color: #fcd34d; background: rgba(234,179,8,0.14); border: 1px solid rgba(234,179,8,0.4);
       font-size: 0.58rem; font-weight: 700; padding: 0.02rem 0.28rem; border-radius: 4px; margin-right: 0.35rem; vertical-align: middle; }
     @media (max-width: 640px) {
@@ -955,6 +969,15 @@
           const msgs = Number(node.messagesLast10m ?? node.callsLast10m ?? 0);
           parts.push(`<b>${msgs}</b> message${msgs === 1 ? '' : 's'} · last 10 min`);
           if (typeof node.readersUp === 'number') parts.push(`<b>${node.readersUp}</b> reader${node.readersUp === 1 ? '' : 's'} running`);
+        } else if (isAdsb) {
+          // Snapshots, not calls: an ADS-B node uploads its whole aircraft
+          // table every 5 seconds, so ~120 in ten minutes is the healthy
+          // number and "120 calls" would read as 120 separate events.
+          const snaps = Number(node.callsLast10m || 0);
+          parts.push(`<b>${snaps}</b> snapshot${snaps === 1 ? '' : 's'} uploaded · last 10 min`);
+          if (typeof node.aircraftNow === 'number') {
+            parts.push(`<b>${node.aircraftNow}</b> aircraft right now`);
+          }
         } else {
           const calls = Number(node.callsLast10m || 0);
           parts.push(`<b>${calls}</b> call${calls === 1 ? '' : 's'} uploaded · last 10 min`);
@@ -1006,9 +1029,13 @@
         ? `<button class="mini-btn" title="Show recent decoded pages" onclick="showNodeMessages('${node.id}')"><i class="fas fa-envelope"></i> Messages</button>`
         : '';
       // Radio nodes: a light activity/stats view (calls, receptions, top
-      // talkgroup/unit/site + recent calls) for their own node.
+      // talkgroup/unit/site + recent calls) for their own node. ADS-B nodes get
+      // their own renderer rather than a branch inside that one — the two
+      // payloads share nothing beyond the word "activity".
       const statsBtn = isRadio
         ? `<button class="mini-btn" title="Show this node's activity & stats" onclick="showNodeStats('${node.id}')"><i class="fas fa-chart-line"></i> Activity</button>`
+        : isAdsb
+        ? `<button class="mini-btn" title="Show this receiver's performance & coverage" onclick="showAdsbStats('${node.id}')"><i class="fas fa-chart-line"></i> Activity</button>`
         : '';
       const actions = `
         <div class="node-actions">
@@ -1234,6 +1261,247 @@
       if (_statsPoll) { clearInterval(_statsPoll); _statsPoll = null; }
       _statsNodeId = null;
       const m = document.getElementById('stats-modal'); if (m) m.remove();
+    }
+
+    // ---- ADS-B receiver activity ----------------------------------------
+    //
+    // The owner's view of their own receiver, served by the same backend code
+    // as the staff Data tab's — /api/feeder/nodes/:id/adsb calls the shared
+    // adsbNodeView service, gated on ownership instead of a staff role, so the
+    // two can never drift apart.
+    //
+    // The coverage map is loaded ONCE on open. The 15s poll refreshes the tiles
+    // and tables, because redrawing several hundred polylines every fifteen
+    // seconds inside a modal is not acceptable — and coverage built from eight
+    // hours of traffic does not visibly change in that time anyway.
+    let _abNodeId = null;
+    let _abWindow = '24h';
+    let _abPoll = null;
+    let _abMap = null;
+    let _abLayer = null;
+
+    const AB_OUTCOME = {
+      ok:               ['Uploading normally', '#4ade80'],
+      feed_off:         ['Feed paused — received, but not shown on the map', '#fbbf24'],
+      rate_limited:     ['Uploading too fast — snapshots dropped', '#fbbf24'],
+      too_large:        ['Snapshot rejected: too large', '#f87171'],
+      length_required:  ['Snapshot rejected: no Content-Length', '#f87171'],
+      bad_body:         ['Snapshot rejected: malformed', '#f87171'],
+      not_adsb:         ['Refused: this node is not set up as ADS-B', '#f87171'],
+      install_mismatch: ['Refused: a different machine used these credentials', '#f87171'],
+    };
+
+    /** Epoch ms → local clock time. The backend sends ms for these. */
+    function _abClock(ms) {
+      if (!ms) return '—';
+      const d = new Date(ms);
+      if (Number.isNaN(d.getTime())) return '—';
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+
+    async function showAdsbStats(nodeId) {
+      closeAdsbStats();
+      _abNodeId = nodeId;
+      _abWindow = '24h';
+      const overlay = document.createElement('div');
+      overlay.id = 'adsb-modal';
+      overlay.className = 'modal-overlay';
+      const winBtn = (w, lbl) => `<button class="fs-win${w === _abWindow ? ' active' : ''}" data-w="${w}" onclick="setAdsbWindow('${w}')">${lbl}</button>`;
+      overlay.innerHTML = `
+        <div class="modal msg-modal fs-modal">
+          <div class="msg-head">
+            <h3><i class="fas fa-plane"></i> ${escapeHtml(_statsName(nodeId))} · receiver</h3>
+            <button class="mini-btn" onclick="closeAdsbStats()">Close</button>
+          </div>
+          <div class="fs-wins">${winBtn('24h', '24h')}${winBtn('7d', '7 days')}${winBtn('30d', '30 days')}</div>
+          <div id="adsb-body"><div class="loading" style="padding:2rem;"><i class="fas fa-spinner"></i></div></div>
+          <div class="fs-act-h">Coverage — last 8 hours</div>
+          <div class="ab-map" id="adsb-map"></div>
+          <div class="ab-note" id="adsb-map-note">Loading coverage…</div>
+        </div>`;
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) closeAdsbStats(); });
+      document.body.appendChild(overlay);
+      await loadAdsbStats();
+      // Only after the overlay is in the DOM and sized, or Leaflet measures a
+      // zero-height container and renders a blank tile grid.
+      loadAdsbCoverage();
+      _abPoll = setInterval(loadAdsbStats, 15000);
+    }
+
+    function setAdsbWindow(w) {
+      if (w === _abWindow) return;
+      _abWindow = w;
+      document.querySelectorAll('#adsb-modal .fs-win').forEach(b => b.classList.toggle('active', b.dataset.w === w));
+      loadAdsbStats();
+    }
+
+    async function loadAdsbStats() {
+      const nodeId = _abNodeId;
+      if (!nodeId) return;
+      try {
+        const jwt = await getToken();
+        const res = await fetch(`${API_BASE_URL}/api/feeder/nodes/${nodeId}/adsb?window=${encodeURIComponent(_abWindow)}`, {
+          headers: { 'Authorization': 'Bearer ' + jwt },
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (document.getElementById('adsb-modal') && _abNodeId === nodeId) _renderAdsbStats(data);
+      } catch (e) {
+        const body = document.getElementById('adsb-body');
+        if (body) body.innerHTML = `<div class="msg-empty">Couldn't load this receiver — try again shortly.</div>`;
+      }
+    }
+
+    function _renderAdsbStats(d) {
+      const body = document.getElementById('adsb-body');
+      if (!body) return;
+      const t = d.totals || {};
+      const live = d.live || {};
+      const online = !!d.online;
+
+      // Live figures come from the agent's heartbeat, so they are absent while
+      // the receiver is offline — shown as "—", never as zero, which would
+      // claim a working receiver is hearing nothing.
+      const tile = (v, label) => `<div class="fs-tile"><div class="fs-tile-v">${v}</div><div class="fs-tile-l">${label}</div></div>`;
+      const n = (v) => (v == null ? '—' : Number(v).toLocaleString());
+      const tiles = `<div class="fs-tiles" style="grid-template-columns:repeat(4,1fr);">
+        ${tile(online ? n(live.aircraftNow) : '—', 'Aircraft now')}
+        ${tile(live.msgRate == null ? '—' : Number(live.msgRate).toFixed(1) + '/s', 'Message rate')}
+        ${tile(live.maxRangeKm == null ? '—' : Math.round(live.maxRangeKm) + ' km', 'Range now')}
+        ${tile(live.gainNow == null ? '—' : Number(live.gainNow).toFixed(1) + ' dB', 'Gain')}
+      </div>
+      <div class="fs-tiles" style="grid-template-columns:repeat(4,1fr);">
+        ${tile(n(t.positions), 'Positions')}
+        ${tile(n(t.snapshots), 'Snapshots')}
+        ${tile(n(t.maxAircraft), 'Peak aircraft')}
+        ${tile(t.maxRangeKm == null ? '—' : Math.round(t.maxRangeKm) + ' km', 'Best range')}
+      </div>`;
+
+      const days = (d.days || []).slice().reverse();
+      const daily = days.length
+        ? `<div class="ab-scroll"><table class="ab-tbl">
+            <thead><tr><th>Day</th><th class="num">Positions</th><th class="num">Peak aircraft</th><th class="num">Best range</th><th class="num">Peak msg rate</th></tr></thead>
+            <tbody>${days.map(x => `<tr>
+              <td>${escapeHtml(String(x.day))}</td>
+              <td class="num">${Number(x.positions || 0).toLocaleString()}</td>
+              <td class="num">${Number(x.maxAircraft || 0).toLocaleString()}</td>
+              <td class="num">${x.maxRangeKm ? Math.round(x.maxRangeKm) + ' km' : '—'}</td>
+              <td class="num">${x.msgRateMax ? Number(x.msgRateMax).toFixed(1) + '/s' : '—'}</td>
+            </tr>`).join('')}</tbody></table></div>`
+        : `<div class="msg-empty">Nothing recorded in this window yet.</div>`;
+
+      const recent = d.recent || [];
+      const heard = recent.length
+        ? `<div class="ab-scroll"><table class="ab-tbl">
+            <thead><tr><th>Aircraft</th><th class="num">Altitude</th><th class="num">Peak</th><th class="num">Reports</th><th>First</th><th>Last</th></tr></thead>
+            <tbody>${recent.map(a => `<tr>
+              <td><span class="ab-hex">${escapeHtml(String(a.hex || '').toUpperCase())}</span>${a.callsign ? ` <span class="ab-soft">${escapeHtml(a.callsign)}</span>` : ''}</td>
+              <td class="num">${a.lastAltFt == null ? '—' : Number(a.lastAltFt).toLocaleString() + ' ft'}</td>
+              <td class="num">${a.maxAltFt == null ? '—' : Number(a.maxAltFt).toLocaleString() + ' ft'}</td>
+              <td class="num">${Number(a.reports || 0).toLocaleString()}</td>
+              <td class="ab-soft">${_abClock(a.firstMs)}</td>
+              <td class="ab-soft">${_abClock(a.lastMs)}</td>
+            </tr>`).join('')}</tbody></table></div>`
+        : `<div class="msg-empty">Nothing heard in the last 8 hours.</div>`;
+
+      const issues = d.issues || [];
+      const log = issues.length
+        ? `<div class="ab-scroll"><table class="ab-tbl">
+            <thead><tr><th>Outcome</th><th class="num">Uploads</th><th>From</th><th>Until</th></tr></thead>
+            <tbody>${issues.map(e => {
+              const meta = AB_OUTCOME[e.outcome] || [e.outcome, 'var(--text-primary)'];
+              return `<tr>
+                <td><span style="color:${meta[1]};">${escapeHtml(meta[0])}</span>${e.detail ? `<div class="ab-detail">${escapeHtml(e.detail)}</div>` : ''}</td>
+                <td class="num">${Number(e.count || 0).toLocaleString()}</td>
+                <td class="ab-soft">${_abClock(e.firstMs)}</td>
+                <td class="ab-soft">${_abClock(e.lastMs)}</td>
+              </tr>`;
+            }).join('')}</tbody></table></div>`
+        : `<div class="msg-empty">No uploads recorded yet.</div>`;
+
+      body.innerHTML = `${tiles}
+        <div class="fs-act-h">Daily</div>${daily}
+        <div class="fs-act-h">Recently heard <span class="ab-soft" style="text-transform:none;letter-spacing:0;">— last 8 hours, held in memory</span></div>${heard}
+        <div class="fs-act-h">Upload history <span class="ab-soft" style="text-transform:none;letter-spacing:0;">— successes collapsed, faults kept</span></div>${log}`;
+    }
+
+    /** The coverage picture — which bearings this antenna actually hears, and
+     *  how far. A gap in the fan is an obstruction; a short radius on one
+     *  bearing is terrain.
+     *
+     *  The centre is deliberately rounded server-side to ~1 km and drawn as an
+     *  area rather than a dot: it exists so a gap reads as a DIRECTION, and a
+     *  crisp point would claim a precision the response does not carry. */
+    async function loadAdsbCoverage() {
+      const nodeId = _abNodeId;
+      if (!nodeId) return;
+      const note = document.getElementById('adsb-map-note');
+      let d;
+      try {
+        const jwt = await getToken();
+        const res = await fetch(`${API_BASE_URL}/api/feeder/nodes/${nodeId}/adsb-tracks?minutes=480`, {
+          headers: { 'Authorization': 'Bearer ' + jwt },
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        d = await res.json();
+      } catch (e) {
+        if (note) note.textContent = 'Could not load coverage — try again shortly.';
+        return;
+      }
+      if (!d || _abNodeId !== nodeId || !document.getElementById('adsb-map')) return;
+
+      if (!_abMap) {
+        const dark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?key=cb1_29rl_1_764d57ded0436220d836abc9',
+          { subdomains: 'abcd', maxZoom: 19, attribution: '© CartoDB' });
+        _abMap = L.map('adsb-map', { attributionControl: false, layers: [dark] })
+          .setView([d.site ? d.site.lat : -33.8688, d.site ? d.site.lon : 151.2093], 8);
+      }
+      if (_abLayer) { _abLayer.remove(); _abLayer = null; }
+
+      const layer = L.layerGroup();
+      const traces = d.traces || [];
+      for (const tr of traces) {
+        // One colour per aircraft, derived from its hex, so adjacent paths stay
+        // distinguishable without a legend nobody would read.
+        const hue = (parseInt(String(tr.hex).slice(-4), 16) || 0) % 360;
+        L.polyline(tr.points, { color: `hsl(${hue}, 80%, 62%)`, weight: 1.4, opacity: 0.75, interactive: false }).addTo(layer);
+      }
+      if (d.site) {
+        const c = [d.site.lat, d.site.lon];
+        L.circle(c, { radius: 1000, color: '#38bdf8', weight: 1, opacity: 0.5, fillColor: '#38bdf8', fillOpacity: 0.12, interactive: false }).addTo(layer);
+        L.circleMarker(c, { radius: 4, color: '#f8fafc', weight: 1.5, fillColor: '#38bdf8', fillOpacity: 0.9 })
+          .bindTooltip('Your receiver — approximate').addTo(layer);
+      }
+      layer.addTo(_abMap);
+      _abLayer = layer;
+
+      if (traces.length) {
+        try {
+          const b = L.latLngBounds([]);
+          for (const tr of traces) for (const pt of tr.points) b.extend(pt);
+          if (d.site) b.extend([d.site.lat, d.site.lon]);
+          _abMap.fitBounds(b.pad(0.08));
+        } catch (_e) { /* degenerate bounds is not worth failing the view for */ }
+      }
+      setTimeout(() => _abMap && _abMap.invalidateSize(), 60);
+
+      if (note) {
+        note.textContent = traces.length
+          ? `${d.aircraft} aircraft · ${Number(d.points).toLocaleString()} positions. Your receiver is drawn as an approximate area, not its exact pin.`
+          : (d.site
+            ? 'No aircraft heard in the last 8 hours.'
+            : 'Set your exact antenna pin under Location to anchor the coverage picture.');
+      }
+    }
+
+    function closeAdsbStats() {
+      if (_abPoll) { clearInterval(_abPoll); _abPoll = null; }
+      _abNodeId = null;
+      // Tear the map down explicitly: removing its container via innerHTML
+      // leaves Leaflet's listeners and tile requests alive.
+      if (_abLayer) { _abLayer.remove(); _abLayer = null; }
+      if (_abMap) { _abMap.remove(); _abMap = null; }
+      const m = document.getElementById('adsb-modal'); if (m) m.remove();
     }
 
     // Create a node. A coarse area is REQUIRED (radio: RFS zone; pager: State +

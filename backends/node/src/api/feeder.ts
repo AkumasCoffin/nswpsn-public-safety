@@ -24,6 +24,11 @@ import { mintNodeToken, resolveNodeToken, _clearNodeTokenCache } from '../servic
 import { issueEnrolCode } from '../services/auth/nodeEnrol.js';
 import { adsbNodeSourceId, clearAdsbNodeState } from '../services/nodes/adsbNodeStore.js';
 import {
+  adsbNodeView,
+  adsbNodeTracks,
+  ADSB_TRACKS_MAX_MINUTES,
+} from '../services/nodes/adsbNodeView.js';
+import {
   listNodesForUser,
   createNode,
   getNode,
@@ -828,6 +833,62 @@ feederRouter.get('/api/feeder/nodes/:id/stats', async (c) => {
   } catch (err) {
     log.error({ err, id: node.id }, 'Error building feeder node stats');
     return c.json({ error: 'Failed to load stats' }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/feeder/nodes/:id/adsb?window=24h|7d|30d
+// GET /api/feeder/nodes/:id/adsb-tracks?minutes=
+//
+// An ADS-B receiver's owner seeing their OWN receiver — live figures, daily
+// history, what it recently heard, why an upload was refused, and the coverage
+// picture.
+//
+// Same implementation as the staff routes in node-data.ts, called through the
+// shared service rather than copied. That is deliberate: roleForKind lived in
+// three files until a stale copy started revoking healthy pager nodes, and the
+// feed-target label lived in three places until two of them told pager
+// operators their pages went to rdio. One implementation, two gates.
+//
+// The gate here is ownership, NOT canViewNodeData — that role stays exactly as
+// narrow as it is, and /api/node-data/* is not retro-fitted with node scoping.
+// Those routes take any node id by design for staff, and making them
+// owner-aware would mean threading ownership through a dozen siblings.
+//
+// Neither route can leak the antenna pin: the view emits a hasPosition boolean
+// and the tracks route rounds its centre to ~1 km inside the shared service,
+// with no flag to skip it.
+// ---------------------------------------------------------------------------
+feederRouter.get('/api/feeder/nodes/:id/adsb', async (c) => {
+  const node = await ownedNode(c);
+  if (!node) return c.json({ error: 'not your node' }, 404);
+  // Mirrors the radio-only guard on /stats: the payloads share nothing, so a
+  // radio node asking here is a caller bug, not an empty result.
+  if (node.kind !== 'adsb') return c.json({ error: 'not an adsb node' }, 400);
+  try {
+    const url = new URL(c.req.url);
+    const wRaw = (url.searchParams.get('window') ?? '24h').toLowerCase();
+    const window = (['24h', '7d', '30d'] as const).find((w) => w === wRaw) ?? '24h';
+    const view = await adsbNodeView(node.id, window);
+    if (!view) return c.json({ error: 'database unavailable' }, 503);
+    return c.json(view);
+  } catch (err) {
+    log.error({ err, id: node.id }, 'Error building feeder adsb view');
+    return c.json({ error: 'Failed to load receiver' }, 500);
+  }
+});
+
+feederRouter.get('/api/feeder/nodes/:id/adsb-tracks', async (c) => {
+  const node = await ownedNode(c);
+  if (!node) return c.json({ error: 'not your node' }, 404);
+  if (node.kind !== 'adsb') return c.json({ error: 'not an adsb node' }, 400);
+  try {
+    const url = new URL(c.req.url);
+    const minutes = Number(url.searchParams.get('minutes') ?? ADSB_TRACKS_MAX_MINUTES);
+    return c.json(await adsbNodeTracks(node.id, minutes));
+  } catch (err) {
+    log.error({ err, id: node.id }, 'Error building feeder adsb tracks');
+    return c.json({ error: 'Failed to load coverage' }, 500);
   }
 });
 
