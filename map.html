@@ -13770,19 +13770,75 @@ function initPagerHoursFromStorage() {
 
     // Civilian tint by altitude band — brighter = lower. Size stays
     // constant; scaling by altitude makes low traffic visually dominate.
-    function adsbAltColor(altFt) {
-      if (altFt == null) return '#c084fc';
-      if (altFt <= 5000) return '#e9d5ff';
-      if (altFt <= 15000) return '#c084fc';
-      if (altFt <= 25000) return '#a855f7';
-      return '#7e22ce';
+    // ---------- Altitude palette ----------
+    //
+    // The hue ramp tar1090 uses, which is the thing that makes an ADS-B map
+    // readable at a glance: altitude is a COLOUR, not a number you stop to
+    // read. Low traffic is warm (orange/yellow), circuit and approach heights
+    // green, and cruise cools through cyan and blue to violet — so a descent
+    // reads as a colour change down a trail without any labels on.
+    //
+    // Replaces a four-step purple ramp that put everything from the ground to
+    // 15,000 ft in two neighbouring shades, which is most of what actually
+    // flies here.
+    //
+    // Stops are (altitude ft, hue deg), linearly interpolated between.
+    const ADSB_ALT_HUE_STOPS = [
+      [0, 20], [2000, 32.5], [4000, 43], [6000, 54], [8000, 72], [10000, 85],
+      [11000, 95], [16000, 170], [19000, 190], [23000, 210], [28000, 240],
+      [36000, 255], [48000, 300],
+    ];
+    const ADSB_ALT_SAT = 85;
+    const ADSB_ALT_LIGHT = 52;
+
+    function hslToHex(h, sPct, lPct) {
+      const sat = sPct / 100;
+      const lig = lPct / 100;
+      const k = (n) => (n + h / 30) % 12;
+      const a = sat * Math.min(lig, 1 - lig);
+      const f = (n) => {
+        const v = lig - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+        return Math.round(255 * v).toString(16).padStart(2, '0');
+      };
+      return '#' + f(0) + f(8) + f(4);
     }
+
+    /** Aircraft/trail colour for an altitude in feet. */
+    function adsbAltColor(altFt) {
+      // No altitude at all — grey, so a Mode S target with no baro alt is
+      // never mistaken for one sitting on the ground.
+      if (altFt == null) return '#9ca3af';
+      // On the deck: a desaturated tone that reads as "not flying" rather than
+      // as the bottom of the ramp, which would make every parked aircraft the
+      // most eye-catching thing on screen.
+      if (altFt <= 0) return '#7d8590';
+
+      const stops = ADSB_ALT_HUE_STOPS;
+      let hue = stops[stops.length - 1][1];
+      if (altFt <= stops[0][0]) {
+        hue = stops[0][1];
+      } else {
+        for (let i = 1; i < stops.length; i++) {
+          if (altFt <= stops[i][0]) {
+            const [a0, h0] = stops[i - 1];
+            const [a1, h1] = stops[i];
+            hue = h0 + ((altFt - a0) / (a1 - a0)) * (h1 - h0);
+            break;
+          }
+        }
+      }
+      return hslToHex(hue, ADSB_ALT_SAT, ADSB_ALT_LIGHT);
+    }
+
+    /** Quantised altitude, used ONLY in the marker-icon cache key.
+     *
+     *  The palette is continuous now, so this has to be fine enough that a
+     *  visible colour change rebuilds the icon, and coarse enough that ordinary
+     *  altitude jitter does not rebuild every marker on every poll. 500 ft is
+     *  roughly one perceptible step on the ramp. */
     function adsbAltBand(altFt) {
-      if (altFt == null) return 1;
-      if (altFt <= 5000) return 0;
-      if (altFt <= 15000) return 1;
-      if (altFt <= 25000) return 2;
-      return 3;
+      if (altFt == null) return -1;
+      return Math.round(altFt / 500);
     }
 
     function hexToRgba(hex, alpha) {
