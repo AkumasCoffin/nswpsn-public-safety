@@ -350,11 +350,56 @@
       gap: 1.15rem;
     }
     /* Feeder node cards a bit larger than the generic device cards. */
-    #nodes-grid {
+    /* The page is now a stack of per-kind sections, each holding its own grid. */
+    #nodes-grid { display: flex; flex-direction: column; gap: 1.6rem; }
+    .nd-group-grid {
+      display: grid;
       grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
       gap: 1.1rem;
+      /* Cards stretch to the tallest in their ROW; letting them size to their
+         own content instead left ragged gaps under the short ones. */
+      align-items: stretch;
     }
-    #nodes-grid .dev-card { padding: 1.3rem 1.35rem 1.1rem; }
+    .nd-group-h {
+      display: flex; align-items: center; gap: 0.5rem;
+      font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.08em; color: var(--text-soft);
+      margin: 0 0 0.7rem;
+    }
+    .nd-group-h::after {
+      content: ''; flex: 1 1 auto; height: 1px;
+      background: var(--border-subtle);
+    }
+    .nd-group-n {
+      font-size: 0.68rem; font-weight: 600; letter-spacing: 0;
+      color: #7dd3fc; background: rgba(56,189,248,0.12);
+      border-radius: 999px; padding: 0.05rem 0.4rem;
+      /* Before the rule, or the count floats at the far end of the line. */
+      order: 0;
+    }
+    #nodes-grid .dev-card {
+      padding: 1.3rem 1.35rem 1.1rem;
+      display: flex; flex-direction: column;
+    }
+    /* Push the metadata line to the bottom so cards of differing chip counts
+       still line their footers up. */
+    #nodes-grid .dev-card > .dev-card-secondary:last-child { margin-top: auto; }
+
+    /* Versions read as reference, not status: one quiet line rather than a row
+       of bright chips competing with the ones that mean something. */
+    .nd-vers {
+      display: flex; flex-wrap: wrap; gap: 0.15rem 0.7rem;
+      font-size: 0.68rem; color: var(--text-soft);
+      margin: 0.3rem 0 0.6rem;
+    }
+    .nd-vers .k { text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.7; }
+    .nd-meta-place { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    .nd-meta-install {
+      margin-left: auto; font-family: var(--font-mono, ui-monospace, monospace);
+      opacity: 0.55; font-size: 0.7rem;
+    }
+    .nd-meta-pin { font-size: 0.68rem; color: #7dd3fc; }
+    .nd-meta-warn { color: #fbbf24; }
     /* Whole node card is a button opening the drawer. */
     .node-card-btn { cursor: pointer; }
     .node-card-btn:focus-visible { outline: 2px solid var(--accent, #38bdf8); outline-offset: 2px; }
@@ -428,11 +473,6 @@
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-    }
-    .node-kind-badge {
-      font-size: 0.58rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
-      color: #7dd3fc; background: rgba(56,189,248,0.14); border: 1px solid rgba(56,189,248,0.35);
-      padding: 0.05rem 0.35rem; border-radius: 4px; vertical-align: middle;
     }
     .btn.has-loc { color: #7dd3fc; border-color: rgba(56,189,248,0.4); }
     .loc-view-overlay {
@@ -2698,7 +2738,7 @@
       .stat-card { padding: 0.85rem 0.9rem; }
       .stat-card .stat-value { font-size: 1.45rem; }
       .tab-btn { padding: 0.5rem 0.8rem; font-size: 0.82rem; }
-      .dev-card-grid, #nodes-grid { grid-template-columns: 1fr; }
+      .dev-card-grid, .nd-group-grid { grid-template-columns: 1fr; }
       .dev-overall { padding: 1rem; }
       .node-drawer-head { padding: 0.9rem 1rem; }
       .gc-body { grid-template-rows: auto 1fr; }
@@ -3067,7 +3107,7 @@
           </div>
           <div class="wh-rows" id="whisper-rows"></div>
         </div>
-        <div class="dev-card-grid" id="nodes-grid">
+        <div id="nodes-grid">
           <div class="loading" style="grid-column: 1 / -1;">
             <i class="fas fa-spinner"></i>
           </div>
@@ -9762,6 +9802,24 @@
             .map(b => `<span${b.bad ? ' style="color:var(--danger);"' : ''}>${escapeHtml(b.label)} <strong>${escapeHtml(b.value)}</strong></span>`).join('')}</div>`
         : '';
 
+      // Where it is. Every kind answers the same question, so it is phrased the
+      // same way: a place if there is one, and whether the exact pin is set.
+      // A receiver with no pin is called out, because range cannot be measured
+      // without one — that is a fault, not a blank field.
+      const place = isPager ? [node.state, node.lga].filter(Boolean).join(' · ') : node.zone;
+      const pinned = typeof node.lat === 'number' && typeof node.lon === 'number';
+      let placeHtml;
+      if (isAdsb && !pinned) {
+        placeHtml = '<span class="nd-meta-warn">no antenna pin</span>';
+      } else if (place) {
+        placeHtml = `<strong>${escapeHtml(place)}</strong>`
+          + (pinned ? ' <i class="fas fa-location-dot nd-meta-pin" title="Exact pin set"></i>' : '');
+      } else if (pinned) {
+        placeHtml = '<i class="fas fa-location-dot nd-meta-pin"></i> pinned';
+      } else {
+        placeHtml = '<span class="nd-meta-warn">no region</span>';
+      }
+
       // The whole card is a button that opens the details drawer — all controls
       // (on/off, feed, key, location, delete) now live inside the drawer.
       return `
@@ -9770,26 +9828,19 @@
              onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openNodeDrawer('${jsArg(id)}')}">
           <div class="dev-card-head" style="padding-right: 0;">
             <span class="node-dot ${updating ? 'updating' : (online ? 'online' : '')}" title="${updating ? 'Updating…' : (online ? 'Online' : 'Offline')}"></span>
-            <div class="dev-card-name">${escapeHtml(name)} <span class="node-kind-badge">${escapeHtml(node.kind || 'radio')}</span></div>
+            <div class="dev-card-name">${escapeHtml(name)}</div>
             <i class="fas fa-chevron-right nd-card-open" aria-hidden="true"></i>
           </div>
-          <div class="node-versions">
-            ${_nodeVer('agent', node.agentVersion)}
-            ${(isPager || isAdsb) ? '' : `${_nodeVer('sdrtrunk', node.sdrtrunkVersion)}
-            ${_nodeVer('rdio', node.rdioVersion)}`}
-          </div>
+          <div class="nd-vers">${[
+            ['agent', node.agentVersion],
+            ...((isPager || isAdsb) ? [] : [['sdrtrunk', node.sdrtrunkVersion], ['rdio', node.rdioVersion]]),
+          ].map(([k, v]) => `<span><span class="k">${k}</span> ${escapeHtml(v == null ? '—' : String(v))}</span>`).join('')}</div>
           ${(isPager || isAdsb) ? '' : _ndReadinessHtml(st, sdrUp)}
           ${_ndActivityHtml(online, sdrUp, decoding, feedEnabled, uploading, kind, updating, node.pagerDecoding)}
           <div class="dev-card-secondary">
-            <span>owner <span class="node-mono" title="${escapeHtml(userId)}">${owner}</span></span>
-            <span>install <span class="node-mono">${installShort}</span></span>
-          </div>
-          <div class="dev-card-secondary">
-            ${isAdsb
-              ? `<span><i class="fas fa-location-dot"></i> ${(typeof node.lat === 'number' && typeof node.lon === 'number')
-                  ? 'antenna <strong>pinned</strong>'
-                  : '<span style="color:#fbbf24">no antenna pin — range cannot be measured</span>'}</span>`
-              : `<span><i class="fas fa-map"></i> region ${(() => { const a = isPager ? [node.state, node.lga].filter(Boolean).join(' · ') : node.zone; return a ? `<strong>${escapeHtml(a)}</strong>` : '<span style="color:#fbbf24">not set</span>'; })()}${(typeof node.lat === 'number') ? ' · <i class="fas fa-location-dot" title="Exact pin set"></i> pin' : ''}</span>`}
+            <span title="${escapeHtml(userId)}">${owner}</span>
+            <span class="nd-meta-place">${placeHtml}</span>
+            <span class="nd-meta-install" title="Install id ${escapeHtml(String(installId) || 'not yet bound')}">${installShort}</span>
           </div>
           ${statusRow}
         </div>`;
@@ -9819,7 +9870,31 @@
           </div>`;
         return;
       }
-      grid.innerHTML = feederNodes.map(_nodeCard).join('');
+      // Grouped by kind. Interleaved, the kinds were impossible to scan: a
+      // radio card and a pager card carry different chips, different versions
+      // and a different idea of "region", so reading down a mixed grid meant
+      // re-orienting at every card. Grouping also makes the per-card kind badge
+      // redundant, which is one less thing on every card.
+      const GROUPS = [
+        { kind: 'radio', label: 'Radio' },
+        { kind: 'pager', label: 'Pager' },
+        { kind: 'adsb', label: 'ADS-B' },
+      ];
+      const seen = new Set(GROUPS.map(g => g.kind));
+      // Anything of a kind not listed still has to appear, or a new node kind
+      // would silently vanish from this page until someone noticed.
+      const others = feederNodes.filter(n => !seen.has(n.kind || 'radio'));
+      const sections = GROUPS
+        .map(g => ({ ...g, nodes: feederNodes.filter(n => (n.kind || 'radio') === g.kind) }))
+        .concat(others.length ? [{ kind: 'other', label: 'Other', nodes: others }] : [])
+        .filter(g => g.nodes.length > 0);
+
+      grid.innerHTML = sections.map(g => `
+        <div class="nd-group">
+          <div class="nd-group-h">${escapeHtml(g.label)}
+            <span class="nd-group-n">${g.nodes.length}</span></div>
+          <div class="nd-group-grid">${g.nodes.map(_nodeCard).join('')}</div>
+        </div>`).join('');
       // Keep the open drawer's moved controls in sync with the latest poll.
       if (typeof _ndRenderNodeControls === 'function'
           && document.getElementById('node-drawer')?.classList.contains('open')) {
