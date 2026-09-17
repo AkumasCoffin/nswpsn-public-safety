@@ -41,7 +41,7 @@ import {
 } from '../services/nodes/adsbNodeStore.js';
 import { foldCoverage } from '../services/nodes/adsbCoverage.js';
 import { maybeFlushNodeTracks } from '../services/nodes/nodeTrackArchive.js';
-import { normalizeNodeUpload } from '../sources/adsb.js';
+import { normalizeNodeUploadWithTrails, ingestNodeTrailPoints } from '../sources/adsb.js';
 import {
   recordActivityEvents,
   markRecorded,
@@ -975,6 +975,21 @@ const AdsbAircraftSchema = z.object({
   category: z.string().max(3).nullish(),
   // Seconds since this position was received, relative to the snapshot's `at`.
   seen_pos: z.number().min(0).max(3600),
+  // Positions seen between uploads, oldest first, as
+  // [secondsBeforeAt, lat, lon, altFt]. Sent from agent 0.1.8 on: the decoder
+  // has them at about 2 Hz, but aircraft.json only holds the current one, so
+  // before this the map could never be denser than the poll that read it.
+  // Ages are relative to `at` like seen_pos, so the node clock correction
+  // covers them too.
+  positions: z
+    .array(z.tuple([
+      z.number().min(0).max(3600),
+      z.number().min(-90).max(90),
+      z.number().min(-180).max(180),
+      z.number().nullish(),
+    ]))
+    .max(32)
+    .nullish(),
 });
 
 const AdsbUploadSchema = z.object({
@@ -1089,7 +1104,7 @@ nodeIngestRouter.post('/api/node-ingest/adsb-upload', async (c) => {
   //    gate: they are the receiver's own record, not something it publishes.
   //    Recording them after the gate left a paused node showing a coverage
   //    envelope with no tracks inside it.
-  const records = normalizeNodeUpload(
+  const { records, trails } = normalizeNodeUploadWithTrails(
     parsed, adsbNodeSourceId(r.nodeId, nodeRow?.name ?? null));
   recordNodeAdsbReception(r.nodeId, records, range);
   // Persist the traces so the eight-hour map survives a restart. Rate-limits
@@ -1104,6 +1119,10 @@ nodeIngestRouter.post('/api/node-ingest/adsb-upload', async (c) => {
   }
 
   const accepted = recordNodeAdsbSnapshot(r.nodeId, nodeRow?.name ?? null, records);
+  // Behind the gate with the snapshot, not beside the traces above: these
+  // points are drawn on the PUBLIC map, so a paused feed must not add to them.
+  const nowMs = Date.now();
+  for (const [hex, pts] of trails) ingestNodeTrailPoints(hex, pts, nowMs);
   return c.json({ ok: true, accepted });
 });
 

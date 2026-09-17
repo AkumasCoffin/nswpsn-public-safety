@@ -29,9 +29,26 @@ const (
 	// 20/min limiter.
 	snapshotInterval = 5 * time.Second
 
+	// sampleInterval is how often aircraft.json is READ, as against how often a
+	// snapshot is sent.
+	//
+	// An airborne transponder reports position about twice a second, but
+	// aircraft.json only ever holds each aircraft's CURRENT state — the
+	// positions between two reads are gone before anyone can ask for them. So
+	// reading once per upload threw away four fifths of what the decoder had,
+	// and the map drew five-second straight lines through turns the aircraft
+	// actually flew. Reading every second and carrying the positions forward
+	// costs one more file read per second from tmpfs and no extra requests.
+	sampleInterval = time.Second
+
 	// maxPositionAge matches the backend's own cutoff: it discards any position
 	// older than this, so shipping them would be pure waste.
 	maxPositionAge = 60.0
+
+	// maxTrailPerAircraft bounds the carried positions per upload. Five reads
+	// fit in an interval; the slack absorbs a slow read without letting a
+	// stalled uploader accumulate without bound.
+	maxTrailPerAircraft = 16
 
 	// maxAircraftPerSnapshot matches the server's schema cap. Reaching it would
 	// take an extraordinarily busy site; truncating is still better than having
@@ -54,6 +71,15 @@ type snapshotAircraft struct {
 	Emerg    string   `json:"emergency,omitempty"`
 	Category string   `json:"category,omitempty"`
 	SeenPos  float64  `json:"seen_pos"`
+
+	// Positions seen since the last upload, oldest first, as
+	// [secondsBeforeAt, lat, lon, altFt]. Relative to the snapshot's own `at`
+	// rather than absolute, so the backend's correction for this node's clock
+	// applies to them exactly as it does to seen_pos.
+	//
+	// Omitted when the aircraft produced only the position already carried
+	// above, which is the common case for anything parked or barely moving.
+	Positions [][]*float64 `json:"positions,omitempty"`
 }
 
 type snapshotStats struct {
@@ -77,10 +103,74 @@ type snapshotBody struct {
 	Stats    *snapshotStats     `json:"stats,omitempty"`
 }
 
+// trailPoint is one position, timed by the node's own clock.
+type trailPoint struct {
+	atMs int64
+	lat  float64
+	lon  float64
+	alt  *float64
+}
+
+// positionTrail carries the positions seen between uploads.
+//
+// Keyed on WHEN THE POSITION WAS MEASURED, not when it was read: seen_pos gives
+// the age of the fix, so the same fix read three times in a row resolves to one
+// timestamp and collapses on its own. No comparison of coordinates is needed,
+// and an aircraft genuinely holding still contributes one point rather than
+// five identical ones.
+type positionTrail struct {
+	byHex map[string][]trailPoint
+}
+
+func newPositionTrail() *positionTrail {
+	return &positionTrail{byHex: make(map[string][]trailPoint)}
+}
+
+func (t *positionTrail) observe(air *decoderjson.AircraftFile, now time.Time) {
+	nowMs := now.UnixMilli()
+	for i := range air.Aircraft {
+		a := &air.Aircraft[i]
+		if !a.HasPosition() || a.SeenPos == nil || *a.SeenPos > maxPositionAge {
+			continue
+		}
+		// Rounded to a tenth, which is the resolution seen_pos is reported at.
+		atMs := (nowMs - int64(*a.SeenPos*1000)) / 100 * 100
+		buf := t.byHex[a.Hex]
+		if n := len(buf); n > 0 && buf[n-1].atMs >= atMs {
+			continue // same fix, or an older one after a decoder restart
+		}
+		if len(buf) >= maxTrailPerAircraft {
+			buf = buf[1:]
+		}
+		var alt *float64
+		// A surface position has no barometric altitude to carry; the point is
+		// still worth keeping, it simply has no height.
+		if v, onGround, ok := a.AltBaroValue(); ok && !onGround {
+			alt = &v
+		}
+		t.byHex[a.Hex] = append(buf, trailPoint{atMs: atMs, lat: *a.Lat, lon: *a.Lon, alt: alt})
+	}
+}
+
+// take returns the buffered points and empties the buffer.
+func (t *positionTrail) take() map[string][]trailPoint {
+	out := t.byHex
+	t.byHex = make(map[string][]trailPoint)
+	return out
+}
+
 // runSnapshotLoop polls the decoder's JSON output until ctx is cancelled.
 func runSnapshotLoop(ctx context.Context, m *aircraftManager, q *queue.Queue) {
-	t := time.NewTicker(snapshotInterval)
+	// Two rates from one ticker: read every second, send every fifth read. The
+	// reads are what give a track its shape; the sends are what cost requests.
+	t := time.NewTicker(sampleInterval)
 	defer t.Stop()
+	readsPerUpload := int(snapshotInterval / sampleInterval)
+	if readsPerUpload < 1 {
+		readsPerUpload = 1
+	}
+	reads := 0
+	trail := newPositionTrail()
 
 	// warnedNotReady keeps the "decoder hasn't written anything yet" message to
 	// one line per outage instead of one every 5 seconds.
@@ -93,6 +183,12 @@ func runSnapshotLoop(ctx context.Context, m *aircraftManager, q *queue.Queue) {
 		case <-t.C:
 		}
 
+		reads++
+		upload := reads >= readsPerUpload
+		if upload {
+			reads = 0
+		}
+
 		air, err := m.reader.Aircraft()
 		if err != nil {
 			if errors.Is(err, decoderjson.ErrNotReady) {
@@ -101,15 +197,28 @@ func runSnapshotLoop(ctx context.Context, m *aircraftManager, q *queue.Queue) {
 					warnedNotReady = true
 				}
 			} else {
-				log.Printf("snapshot: reading aircraft.json failed: %v", err)
+				// Only on an upload tick, or a decoder that is down logs this
+				// once a second forever.
+				if upload {
+					log.Printf("snapshot: reading aircraft.json failed: %v", err)
+				}
 			}
 			// No aircraft data means no usable heartbeat figures either.
-			m.setStats(wsclient.AdsbStats{})
+			if upload {
+				m.setStats(wsclient.AdsbStats{})
+			}
 			continue
 		}
 		if warnedNotReady {
 			log.Printf("snapshot: decoder output is flowing")
 			warnedNotReady = false
+		}
+
+		// Every read contributes to the carried positions; only the fifth
+		// builds and sends a snapshot.
+		trail.observe(air, time.Now())
+		if !upload {
+			continue
 		}
 
 		// stats.json is optional: its absence degrades the figures but must
@@ -121,6 +230,7 @@ func runSnapshotLoop(ctx context.Context, m *aircraftManager, q *queue.Queue) {
 
 		now := time.Now()
 		list := buildAircraft(air)
+		attachTrails(list, trail.take(), now)
 		body := snapshotBody{
 			At:       now.UTC().Format(time.RFC3339),
 			Aircraft: list,
@@ -154,6 +264,33 @@ func runSnapshotLoop(ctx context.Context, m *aircraftManager, q *queue.Queue) {
 		if err := q.Enqueue("application/json", enc); err != nil {
 			log.Printf("snapshot: enqueue failed: %v", err)
 		}
+	}
+}
+
+// attachTrails hangs each aircraft's carried positions off its record.
+//
+// Ages are relative to the snapshot's `at`, matching seen_pos, so the backend's
+// correction for this node's clock covers them without knowing they exist. A
+// lone point is dropped: it is the position already on the record, and sending
+// it again would be payload for nothing — which matters, since this is the part
+// of the upload that can grow with traffic.
+func attachTrails(list []snapshotAircraft, byHex map[string][]trailPoint, at time.Time) {
+	atMs := at.UnixMilli()
+	for i := range list {
+		pts := byHex[list[i].Hex]
+		if len(pts) < 2 {
+			continue
+		}
+		out := make([][]*float64, 0, len(pts))
+		for _, p := range pts {
+			age := float64(atMs-p.atMs) / 1000
+			if age < 0 {
+				age = 0
+			}
+			lat, lon := p.lat, p.lon
+			out = append(out, []*float64{&age, &lat, &lon, p.alt})
+		}
+		list[i].Positions = out
 	}
 }
 

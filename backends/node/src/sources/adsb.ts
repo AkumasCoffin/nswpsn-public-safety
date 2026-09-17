@@ -382,12 +382,34 @@ export function normalizeNodeUpload(
   sourceId: string,
   nowMs: number = Date.now(),
 ): AdsbAircraft[] {
+  return normalizeNodeUploadWithTrails(upload, sourceId, nowMs).records;
+}
+
+/**
+ * The same normalisation, plus the positions each aircraft carried between
+ * uploads.
+ *
+ * One function rather than two passes because the transit correction must be
+ * measured ONCE per upload: nodeTransitSec learns from every delta it is shown,
+ * and calling it twice for the same snapshot would weight that upload double in
+ * the clock estimate.
+ */
+export function normalizeNodeUploadWithTrails(
+  upload: { at: string; aircraft: RawAircraft[] },
+  sourceId: string,
+  nowMs: number = Date.now(),
+): { records: AdsbAircraft[]; trails: Map<string, TrailPoint[]> } {
   const sentMs = Date.parse(upload.at);
   const transitSec = Number.isFinite(sentMs)
     ? nodeTransitSec(sourceId, sentMs, nowMs)
     : 0;
+  // `at` on the node's clock is not a usable instant, but `at` corrected by the
+  // transit we just derived is: it is the moment the snapshot describes, in our
+  // time. Carried positions are ages relative to it.
+  const atMs = nowMs - transitSec * 1000;
 
   const out: AdsbAircraft[] = [];
+  const trails = new Map<string, TrailPoint[]>();
   for (const raw of upload.aircraft) {
     const rec = normalizeAircraft(
       {
@@ -397,9 +419,24 @@ export function normalizeNodeUpload(
       },
       sourceId,
     );
-    if (rec) out.push(rec);
+    if (!rec) continue;
+    out.push(rec);
+
+    const carried = (raw as { positions?: unknown }).positions;
+    if (!Array.isArray(carried) || carried.length === 0) continue;
+    const pts: TrailPoint[] = [];
+    for (const c of carried) {
+      if (!Array.isArray(c) || c.length < 3) continue;
+      const [age, lat, lon, alt] = c as [number, number, number, number | null];
+      if (!Number.isFinite(age) || !Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+      pts.push([atMs - age * 1000, lat, lon,
+        typeof alt === 'number' && Number.isFinite(alt) ? alt : null]);
+    }
+    // Oldest first, whatever order they arrived in.
+    pts.sort((a, b) => a[0] - b[0]);
+    if (pts.length > 0) trails.set(rec.hex, pts);
   }
-  return out;
+  return { records: out, trails };
 }
 
 export function inAuBbox(lat: number, lon: number): boolean {
@@ -795,6 +832,83 @@ export function simplifyTrail(pts: TrailPoint[], epsilon: number): TrailPoint[] 
   return pts.filter((_, i) => keep[i]);
 }
 
+/**
+ * Keep one trail within its budget: simplify what is past the full-resolution
+ * window, and crush the whole thing if it is still too long.
+ *
+ * Shared, because node uploads now add points here too and a trail that grew
+ * through one path while only the other trimmed it would run away.
+ */
+function trimTrail(buf: TrailPoint[], nowMs: number): void {
+  if (buf.length <= TRAIL_SIMPLIFY_TRIGGER) return;
+  const cut = buf.findIndex((p) => p[0] >= nowMs - TRAIL_RECENT_MS);
+  const splitAt = cut === -1 ? buf.length : cut;
+  if (splitAt > 2) {
+    const older = simplifyTrail(buf.slice(0, splitAt), TRAIL_DP_EPSILON_DEG);
+    const next = older.concat(buf.slice(splitAt));
+    buf.length = 0;
+    buf.push(...next);
+  }
+  if (buf.length > TRAIL_MAX_POINTS) {
+    const crushed = simplifyTrail(buf, TRAIL_DP_EPSILON_DEG * 3);
+    buf.length = 0;
+    buf.push(...crushed.slice(-TRAIL_MAX_POINTS));
+  }
+}
+
+/** Two points close enough in time to be the same fix seen twice. */
+const TRAIL_SAME_FIX_MS = 400;
+
+/**
+ * Add the positions a node carried between its uploads.
+ *
+ * The poller samples the merged picture on its own schedule, so a trail built
+ * from it alone has one point per poll however fast the aircraft was actually
+ * being heard. A receiver of ours reads its decoder every second and ships what
+ * it saw, so these are the positions that were always there and never had a way
+ * to reach the map.
+ *
+ * Points can be OLDER than what the poller has already appended — they are
+ * stamped when the fix was taken, while the poller stamps when it looked — so
+ * this merges by time rather than appending, and drops anything that lands on a
+ * fix already held.
+ */
+export function ingestNodeTrailPoints(
+  hex: string,
+  points: ReadonlyArray<TrailPoint>,
+  nowMs: number,
+): void {
+  if (!hex || points.length === 0) return;
+  let buf = _trails.get(hex);
+  if (!buf) {
+    buf = [];
+    _trails.set(hex, buf);
+  }
+
+  const fresh = points.filter((p) => p[0] <= nowMs && p[0] > nowMs - TRAIL_RECENT_MS);
+  if (fresh.length === 0) return;
+
+  const last = buf[buf.length - 1];
+  if (!last || fresh[0]![0] > last[0] + TRAIL_SAME_FIX_MS) {
+    // The common case: everything carried is newer than anything held.
+    for (const p of fresh) buf.push([p[0], p[1], p[2], p[3]]);
+  } else {
+    const all = buf.concat(fresh.map((p) => [p[0], p[1], p[2], p[3]] as TrailPoint));
+    all.sort((a, b) => a[0] - b[0]);
+    const merged: TrailPoint[] = [];
+    for (const p of all) {
+      const prev = merged[merged.length - 1];
+      // Same instant, or the same place: one fix, however many ways it arrived.
+      if (prev && (p[0] - prev[0] <= TRAIL_SAME_FIX_MS
+        || (prev[1] === p[1] && prev[2] === p[2]))) continue;
+      merged.push(p);
+    }
+    buf.length = 0;
+    buf.push(...merged);
+  }
+  trimTrail(buf, nowMs);
+}
+
 function updateTrails(aircraft: AdsbAircraft[], nowMs: number): void {
   const seen = new Set<string>();
   for (const a of aircraft) {
@@ -808,22 +922,7 @@ function updateTrails(aircraft: AdsbAircraft[], nowMs: number): void {
     // Parked/stationary aircraft don't accumulate duplicate points.
     if (last && last[1] === a.lat && last[2] === a.lon) continue;
     buf.push([nowMs, a.lat, a.lon, a.altFt]);
-    if (buf.length > TRAIL_SIMPLIFY_TRIGGER) {
-      // Simplify the portion older than the full-resolution window.
-      const cut = buf.findIndex((p) => p[0] >= nowMs - TRAIL_RECENT_MS);
-      const splitAt = cut === -1 ? buf.length : cut;
-      if (splitAt > 2) {
-        const older = simplifyTrail(buf.slice(0, splitAt), TRAIL_DP_EPSILON_DEG);
-        const next = older.concat(buf.slice(splitAt));
-        buf.length = 0;
-        buf.push(...next);
-      }
-      if (buf.length > TRAIL_MAX_POINTS) {
-        const crushed = simplifyTrail(buf, TRAIL_DP_EPSILON_DEG * 3);
-        buf.length = 0;
-        buf.push(...crushed.slice(-TRAIL_MAX_POINTS));
-      }
-    }
+    trimTrail(buf, nowMs);
   }
   // Landed / out-of-coverage: absent hexes keep their trail for a
   // dropout grace, then delete.
