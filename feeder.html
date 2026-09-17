@@ -518,6 +518,15 @@
     #loc-map { height: 340px; border-radius: 8px; margin-bottom: 1rem; border: 1px solid var(--border-subtle); }
     #loc-map, #loc-map * { box-sizing: initial; } /* Leaflet needs its own box model */
     .leaflet-container { background: #0b1220; }
+    /* Clicking a track drew a huge rectangle over the map: the browser's focus
+       ring follows an SVG path's BOUNDING BOX, and a track crossing the frame
+       diagonally has a bounding box the size of the frame. The paths only
+       became focusable at all because they were made interactive to answer a
+       hover.
+
+       Suppressed for pointer focus only — :focus-visible still shows the ring
+       for anyone tabbing, who has no other way to tell what is selected. */
+    .leaflet-container path.leaflet-interactive:focus:not(:focus-visible) { outline: none; }
     .node-ver {
       font-size: 0.72rem; color: #7dd3fc;
       background: var(--accent-soft);
