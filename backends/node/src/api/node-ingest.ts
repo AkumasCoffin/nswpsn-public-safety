@@ -34,9 +34,9 @@ import {
   recordNodeAdsbSnapshot,
   accumulateAdsbDaily,
   adsbNodeSourceId,
-  snapshotMaxRangeKm,
   recordAdsbAuthFailure,
 } from '../services/nodes/adsbNodeStore.js';
+import { foldCoverage } from '../services/nodes/adsbCoverage.js';
 import { normalizeNodeUpload } from '../sources/adsb.js';
 import {
   recordActivityEvents,
@@ -1057,8 +1057,11 @@ nodeIngestRouter.post('/api/node-ingest/adsb-upload', async (c) => {
   //    antenna pin is what the range is measured FROM, and range belongs to
   //    that same performance record.
   const nodeRow = await getNode(r.nodeId).catch(() => null);
-  const rangeKm = snapshotMaxRangeKm(
-    nodeRow?.lat, nodeRow?.lon,
+  //    One walk over the aircraft does both jobs: the furthest one (the range
+  //    figure) and its bearing (the coverage envelope). Neither costs more
+  //    than the trig on a loop that has to run anyway.
+  const rangeKm = foldCoverage(
+    r.nodeId, nodeRow?.lat, nodeRow?.lon,
     parsed.aircraft.filter(
       (a): a is typeof a & { lat: number; lon: number } =>
         typeof a.lat === 'number' && typeof a.lon === 'number',

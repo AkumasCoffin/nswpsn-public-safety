@@ -15,6 +15,8 @@
  */
 import { getPool } from '../../db/pool.js';
 import { hub } from './hub.js';
+import { adsbCoverageFor, type CoverageView } from './adsbCoverage.js';
+import { DATA_RETENTION_DAYS } from '../../lib/retention.js';
 import {
   nodeAdsbTraces,
   nodeAdsbRecentAircraft,
@@ -229,6 +231,12 @@ export interface AdsbNodeTracks {
   aircraft: number;
   points: number;
   traces: NodeTrace[];
+  /**
+   * The persisted coverage envelope — the half of this response that survives
+   * a restart. `traces` is the live picture and is deliberately NOT stored;
+   * this is the accumulated one. Null only when there is no database.
+   */
+  coverage: CoverageView | null;
 }
 
 /** The store retains 8 hours; asking for more gets the full window rather than
@@ -279,6 +287,12 @@ export async function adsbNodeTracks(
     }
   }
 
+  // The envelope spans the whole retention window, not `minutes`: the tracks
+  // are "what crossed recently" and the coverage is "what this antenna has
+  // ever demonstrated it can hear". Conflating their windows was the original
+  // mistake — it is why a restart looked like a receiver that had gone deaf.
+  const coverage = await adsbCoverageFor(nodeId, DATA_RETENTION_DAYS);
+
   return {
     nodeId,
     site,
@@ -286,5 +300,6 @@ export async function adsbNodeTracks(
     aircraft: t.aircraft,
     points: t.points,
     traces: t.traces,
+    coverage,
   };
 }

@@ -348,6 +348,25 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
         log.warn({ err: (err as Error).message }, 'cleanup: adsb-tracks prune failed');
       }
 
+      // 2c-ter. Prune stored coverage envelopes (migration 104). One row per
+      // node per day, so this is a handful of rows even for a large fleet —
+      // it exists for tidiness and for the FK-less case of a node whose rows
+      // outlived it, not because the table can grow.
+      try {
+        const covDays = Number.isFinite(retentionDays) ? retentionDays : DEFAULT_RETENTION_DAYS;
+        const r = await client.query(
+          `DELETE FROM node_adsb_coverage
+            WHERE day < (NOW() - ($1 || ' days')::interval)::date`,
+          [String(covDays)],
+        );
+        if ((r.rowCount ?? 0) > 0) {
+          rowsDeleted += r.rowCount ?? 0;
+          log.info({ rows: r.rowCount }, 'cleanup: pruned node_adsb_coverage');
+        }
+      } catch (err) {
+        log.warn({ err: (err as Error).message }, 'cleanup: adsb-coverage prune failed');
+      }
+
       // 2d. Prune archive_*_latest sidecar entries we haven't seen in
       // a poll for longer than the retention window. Pruning by
       // last_seen_at (NOT latest_fetched_at) is intentional: with the

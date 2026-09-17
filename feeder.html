@@ -1398,6 +1398,41 @@
         <div class="fs-act-h">Recently heard <span class="ab-soft" style="text-transform:none;letter-spacing:0;">— last 8 hours, held in memory</span></div>${heard}`;
     }
 
+
+    /* ---- Coverage envelope ----
+     *
+     * The furthest aircraft heard per 5-degree bearing, accumulated across the
+     * retention window and drawn as a closed ring around the receiver. This is
+     * the half of the picture that survives a restart; the coloured tracks over
+     * it are the live 8-hour view and are deliberately not stored.
+     *
+     * A bearing nothing has ever been heard on is a null, not a zero, and is
+     * rendered as a NOTCH pulled in to the centre rather than as a point on the
+     * ring — the gap in the fan is the diagnostic, and smoothing over it would
+     * erase the one thing the plot exists to show. */
+    function ENV_ringLatLngs(buckets, centreLat, centreLon) {
+      const pts = [];
+      const n = buckets.length;
+      for (let i = 0; i < n; i++) {
+        const km = buckets[i];
+        const bearing = (i + 0.5) * (360 / n);
+        const rad = bearing * Math.PI / 180;
+        // Nulls collapse to the centre, so an unheard bearing reads as a bite
+        // out of the ring instead of being interpolated across.
+        const d = (typeof km === 'number' && isFinite(km)) ? km : 0;
+        const dLat = (d * Math.cos(rad)) / 111.19;
+        const cosLat = Math.cos(centreLat * Math.PI / 180) || 1;
+        const dLon = (d * Math.sin(rad)) / (111.19 * cosLat);
+        pts.push([centreLat + dLat, centreLon + dLon]);
+      }
+      return pts;
+    }
+
+    /** True when at least one bearing has ever been heard on. */
+    function ENV_hasData(buckets) {
+      return Array.isArray(buckets) && buckets.some((v) => typeof v === 'number' && isFinite(v));
+    }
+
     /** The coverage picture — which bearings this antenna actually hears, and
      *  how far. A gap in the fan is an obstruction; a short radius on one
      *  bearing is terrain.
@@ -1433,6 +1468,29 @@
 
       const layer = L.layerGroup();
       const traces = d.traces || [];
+      // The accumulated envelope goes on FIRST: Leaflet paints a layer group
+      // in the order things are added, so anything added later sits on top.
+      // A translucent fill drawn over the tracks would dull every one of them.
+      if (d.site && d.coverage && ENV_hasData(d.coverage.buckets)) {
+        const cc = [d.site.lat, d.site.lon];
+        // Centred on the ROUNDED site. The envelope is computed server-side
+        // from the true pin, and a ~1 km offset on a 200 km plot is invisible
+        // while the exact position stays where it belongs.
+        L.polygon(ENV_ringLatLngs(d.coverage.buckets, cc[0], cc[1]), {
+          color: '#c084fc', weight: 1, opacity: 0.55,
+          fillColor: '#c084fc', fillOpacity: 0.07, interactive: false,
+        }).addTo(layer);
+        // The last 24 hours over the long envelope. A bearing inside the outer
+        // ring but outside this one is a lobe that has STOPPED hearing —
+        // which no amount of staring at tracks would reveal.
+        if (ENV_hasData(d.coverage.recent)) {
+          L.polygon(ENV_ringLatLngs(d.coverage.recent, cc[0], cc[1]), {
+            color: '#4ade80', weight: 1.5, opacity: 0.8,
+            fill: false, dashArray: '5 4', interactive: false,
+          }).addTo(layer);
+        }
+      }
+
       for (const tr of traces) {
         // One colour per aircraft, derived from its hex, so adjacent paths stay
         // distinguishable without a legend nobody would read.
@@ -1448,22 +1506,33 @@
       layer.addTo(_abMap);
       _abLayer = layer;
 
-      if (traces.length) {
-        try {
-          const b = L.latLngBounds([]);
-          for (const tr of traces) for (const pt of tr.points) b.extend(pt);
-          if (d.site) b.extend([d.site.lat, d.site.lon]);
-          _abMap.fitBounds(b.pad(0.08));
-        } catch (_e) { /* degenerate bounds is not worth failing the view for */ }
-      }
+      try {
+        const b = L.latLngBounds([]);
+        for (const tr of traces) for (const pt of tr.points) b.extend(pt);
+        if (d.site) {
+          b.extend([d.site.lat, d.site.lon]);
+          if (d.coverage && ENV_hasData(d.coverage.buckets)) {
+            for (const pt of ENV_ringLatLngs(d.coverage.buckets, d.site.lat, d.site.lon)) b.extend(pt);
+          }
+        }
+        if (b.isValid()) _abMap.fitBounds(b.pad(0.08));
+      } catch (_e) { /* degenerate bounds is not worth failing the view for */ }
       setTimeout(() => _abMap && _abMap.invalidateSize(), 60);
 
       if (note) {
-        note.textContent = traces.length
-          ? `${d.aircraft} aircraft · ${Number(d.points).toLocaleString()} positions. Your receiver is drawn as an approximate area, not its exact pin.`
-          : (d.site
-            ? 'No aircraft heard in the last 8 hours.'
-            : 'Set your exact antenna pin under Location to anchor the coverage picture.');
+        if (!d.site) {
+          note.textContent = 'Set your exact antenna pin under Location to anchor the coverage picture.';
+        } else {
+          const cov = d.coverage;
+          const parts = [];
+          if (cov && cov.maxKm != null) {
+            parts.push(`Reaches ${Math.round(cov.maxKm)} km, from ${cov.daysCovered} `
+              + `${cov.daysCovered === 1 ? 'day' : 'days'} of listening`);
+          }
+          parts.push(`${d.aircraft} aircraft in the last 8 hours`);
+          parts.push('Your receiver is drawn as an approximate area, not its exact pin');
+          note.textContent = parts.join(' · ') + '.';
+        }
       }
     }
 
