@@ -22,6 +22,7 @@
  */
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { getPool } from '../../db/pool.js';
+import { log } from '../../lib/log.js';
 import { mintNodeToken, _clearNodeTokenCache } from './nodeToken.js';
 
 /** Distinct from the token's 'npsn_' so the two can never be confused, in a
@@ -89,6 +90,18 @@ export type EnrolResult =
  * and enrolment is exactly the moment that binding should be (re)made: the
  * operator has just declared "this machine is that node" by running the
  * installer on it.
+ *
+ * REPURPOSING A MACHINE is part of that. nodes carries UNIQUE(user_id,
+ * install_id), so a box that used to run a radio node and is now running an
+ * ADS-B one still has its old node row holding the same machine id — and the
+ * claim below would violate the constraint and fail the enrolment outright.
+ * That workflow used to work, before enrolment codes existed, because the
+ * agent arrived with a permanent token and the install binding was
+ * trust-on-first-use rather than something enrolment had to write.
+ *
+ * So the id is RELEASED from whatever else held it for this owner first, in
+ * the same transaction. One machine has one install id: if a new node is
+ * claiming it, the node that held it is not on that machine any more.
  */
 export async function consumeEnrolCode(
   code: string,
@@ -104,8 +117,11 @@ export async function consumeEnrolCode(
 
   // Read first, so an expired code can be reported as expired rather than as
   // an unknown one — the difference is the whole of the operator's next step.
-  const found = await pool.query<{ id: string; enrol_expires_at: Date | null; enrol_code_hash: string }>(
-    `SELECT id, enrol_expires_at, enrol_code_hash FROM nodes WHERE enrol_code_hash = $1`,
+  const found = await pool.query<{
+    id: string; user_id: string; enrol_expires_at: Date | null; enrol_code_hash: string;
+  }>(
+    `SELECT id, user_id, enrol_expires_at, enrol_code_hash
+       FROM nodes WHERE enrol_code_hash = $1`,
     [hash],
   );
   const row = found.rows[0];
@@ -117,28 +133,63 @@ export async function consumeEnrolCode(
   }
 
   const { token, tokenHash, tokenPrefix } = mintNodeToken();
-  // The WHERE clause re-checks the code and the expiry, so this is still the
-  // atomic claim even though the read above is separate: if anything changed in
-  // between, zero rows update and nobody gets a token.
-  const claimed = await pool.query<{ id: string; kind: string }>(
-    `UPDATE nodes
-        SET token_hash = $2,
-            token_prefix = $3,
-            token_rotated_at = now(),
-            install_id = $4,
-            enrol_code_hash = NULL,
-            enrol_issued_at = NULL,
-            enrol_expires_at = NULL
-      WHERE enrol_code_hash = $1
-        AND (enrol_expires_at IS NULL OR enrol_expires_at > now())
-      RETURNING id, kind`,
-    [hash, tokenHash, tokenPrefix, installId],
-  );
-  const claimedRow = claimed.rows[0];
-  if (!claimedRow) return { ok: false, reason: 'bad_code' };
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
 
-  // The node's old token is now invalid; drop it from the resolve cache so a
-  // previous agent stops being accepted on a cached entry.
-  _clearNodeTokenCache();
-  return { ok: true, nodeId: claimedRow.id, kind: claimedRow.kind, token };
+    // Release the machine id from any OTHER node this owner has bound to it —
+    // the repurposed-box case. Scoped to the same owner because that is the
+    // scope of the constraint, and to other rows so the claim below is not
+    // fighting a release of its own binding.
+    const released = await client.query(
+      `UPDATE nodes
+          SET install_id = NULL
+        WHERE user_id = $1 AND install_id = $2 AND id <> $3`,
+      [row.user_id, installId, row.id],
+    );
+    if ((released.rowCount ?? 0) > 0) {
+      // Worth saying out loud: the previous node on this machine has just lost
+      // its binding, and someone wondering why it stopped should find this.
+      log.warn(
+        { nodeId: row.id, installId, released: released.rowCount },
+        'node enrol: machine reassigned — released its install id from a previous node',
+      );
+    }
+
+    // The WHERE clause re-checks the code and the expiry, so this is still the
+    // atomic claim even though the read above is separate: if anything changed
+    // in between, zero rows update and nobody gets a token.
+    const claimed = await client.query<{ id: string; kind: string }>(
+      `UPDATE nodes
+          SET token_hash = $2,
+              token_prefix = $3,
+              token_rotated_at = now(),
+              install_id = $4,
+              enrol_code_hash = NULL,
+              enrol_issued_at = NULL,
+              enrol_expires_at = NULL
+        WHERE enrol_code_hash = $1
+          AND (enrol_expires_at IS NULL OR enrol_expires_at > now())
+        RETURNING id, kind`,
+      [hash, tokenHash, tokenPrefix, installId],
+    );
+    const claimedRow = claimed.rows[0];
+    if (!claimedRow) {
+      // Someone else claimed the code between the read and here. Roll back so
+      // the release does not strand a node that is still perfectly valid.
+      await client.query('ROLLBACK');
+      return { ok: false, reason: 'bad_code' };
+    }
+    await client.query('COMMIT');
+
+    // The node's old token is now invalid; drop it from the resolve cache so a
+    // previous agent stops being accepted on a cached entry.
+    _clearNodeTokenCache();
+    return { ok: true, nodeId: claimedRow.id, kind: claimedRow.kind, token };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
 }

@@ -74,8 +74,13 @@ func Exchange(serverURL, code, installID, kind, userAgent string) (string, error
 	switch {
 	case res.StatusCode == http.StatusOK && parsed.Token != "":
 		return parsed.Token, nil
-	case res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusBadRequest:
-		// The code is unknown or spent. Retrying cannot help.
+	case res.StatusCode == http.StatusUnauthorized ||
+		res.StatusCode == http.StatusBadRequest ||
+		res.StatusCode == http.StatusConflict:
+		// The code is unknown or spent (401/400), or this machine is already
+		// enrolled under another account (409). None of those change by asking
+		// again, and retrying a 409 every twenty seconds forever just buries
+		// the one message that says what to do about it.
 		msg := parsed.Error
 		if msg == "" {
 			msg = "enrolment refused"

@@ -110,6 +110,18 @@ nodeEnrolRouter.post('/api/node-enrol', async (c) => {
     c.header('Cache-Control', 'no-store');
     return c.json({ token: r.token, nodeId: r.nodeId, kind: r.kind });
   } catch (err) {
+    // A machine-id collision is a CONFIGURATION answer, not a server fault, and
+    // it used to surface as a bare 500 the agent retried forever. The claim
+    // releases the id from a previous node of the same owner, so reaching here
+    // means it is held by a DIFFERENT owner — two accounts, one machine — which
+    // no amount of retrying will resolve.
+    if ((err as { code?: string })?.code === '23505') {
+      log.warn({ err, installId }, 'node enrol: machine id already bound elsewhere');
+      return c.json({
+        error: 'this machine is already enrolled under another account — '
+             + 'remove that node first, or install on a different machine',
+      }, 409);
+    }
     log.error({ err }, 'node enrol failed');
     return c.json({ error: 'enrolment failed' }, 500);
   }

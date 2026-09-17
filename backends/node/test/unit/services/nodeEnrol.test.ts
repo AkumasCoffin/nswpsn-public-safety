@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // A minimal in-memory stand-in for the one table these functions touch.
 interface Row {
   id: string;
+  user_id: string;
   kind: string;
   token_hash: string | null;
   token_prefix: string | null;
@@ -17,12 +18,47 @@ interface Row {
 }
 let rows: Row[] = [];
 let poolAvailable = true;
+/** Statements the claim issued, so the transaction can be asserted. */
+let issued: string[] = [];
+/** Simulate another agent claiming the code between the read and the claim. */
+let stealCodeAfterRead = false;
+
+/** The real table carries UNIQUE(user_id, install_id); without it here the
+ *  repurposed-machine test would pass for the wrong reason. */
+function assertUnique(r: Row) {
+  if (r.install_id === null) return;
+  const clash = rows.some(
+    (x) => x !== r && x.user_id === r.user_id && x.install_id === r.install_id,
+  );
+  if (clash) {
+    const err = new Error(
+      'duplicate key value violates unique constraint "nodes_user_id_install_id_key"',
+    ) as Error & { code?: string };
+    err.code = '23505';
+    throw err;
+  }
+}
 
 function makePool() {
   return {
     async query(sql: string, params: unknown[] = []) {
       const s = sql.replace(/\s+/g, ' ').trim();
+      issued.push(s.slice(0, 40));
 
+      if (s === 'BEGIN' || s === 'COMMIT' || s === 'ROLLBACK') {
+        return { rowCount: 0, rows: [] };
+      }
+      if (s.startsWith('UPDATE nodes SET install_id = NULL')) {
+        const [userId, installId, keepId] = params as [string, string, string];
+        let n = 0;
+        for (const r of rows) {
+          if (r.user_id === userId && r.install_id === installId && r.id !== keepId) {
+            r.install_id = null;
+            n += 1;
+          }
+        }
+        return { rowCount: n, rows: [] };
+      }
       if (s.startsWith('UPDATE nodes SET enrol_code_hash = $2')) {
         const [id, hash, expires] = params as [string, string, Date];
         const r = rows.find((x) => x.id === id);
@@ -31,10 +67,12 @@ function makePool() {
         r.enrol_expires_at = expires;
         return { rowCount: 1, rows: [] };
       }
-      if (s.startsWith('SELECT id, enrol_expires_at, enrol_code_hash')) {
+      if (s.startsWith('SELECT id, user_id, enrol_expires_at, enrol_code_hash')) {
         const [hash] = params as [string];
         const r = rows.find((x) => x.enrol_code_hash === hash);
-        return { rowCount: r ? 1 : 0, rows: r ? [r] : [] };
+        const out = { rowCount: r ? 1 : 0, rows: r ? [{ ...r }] : [] };
+        if (r && stealCodeAfterRead) r.enrol_code_hash = null;
+        return out;
       }
       if (s.startsWith('UPDATE nodes SET token_hash = $2')) {
         const [hash, tokenHash, tokenPrefix, installId] = params as [string, string, string, string];
@@ -46,7 +84,14 @@ function makePool() {
         if (!r) return { rowCount: 0, rows: [] };
         r.token_hash = tokenHash;
         r.token_prefix = tokenPrefix;
+        const wasInstall = r.install_id;
         r.install_id = installId;
+        try {
+          assertUnique(r);
+        } catch (e) {
+          r.install_id = wasInstall;   // the statement did not take effect
+          throw e;
+        }
         r.enrol_code_hash = null;
         r.enrol_expires_at = null;
         return { rowCount: 1, rows: [{ id: r.id, kind: r.kind }] };
@@ -57,7 +102,12 @@ function makePool() {
 }
 
 vi.mock('../../../src/db/pool.js', () => ({
-  getPool: async () => (poolAvailable ? makePool() : null),
+  getPool: async () => {
+    if (!poolAvailable) return null;
+    const pool = makePool();
+    // consumeEnrolCode takes a client for its transaction.
+    return { ...pool, connect: async () => ({ ...pool, release() {} }) };
+  },
 }));
 
 const { issueEnrolCode, consumeEnrolCode, ENROL_TTL_MS } = await import(
@@ -67,15 +117,110 @@ const { issueEnrolCode, consumeEnrolCode, ENROL_TTL_MS } = await import(
 describe('enrolment codes', () => {
   beforeEach(() => {
     poolAvailable = true;
+    issued = [];
+    stealCodeAfterRead = false;
     rows = [
       {
-        id: 'node-1', kind: 'adsb',
+        id: 'node-1', user_id: 'owner-1', kind: 'adsb',
         token_hash: 'old-hash', token_prefix: 'npsn_old', install_id: null,
         enrol_code_hash: null, enrol_expires_at: null,
       },
     ];
   });
   afterEach(() => vi.useRealTimers());
+
+  it('re-enrols a machine that used to run a different node', async () => {
+    // The reported failure: a box that had been a radio node was reinstalled
+    // as an ADS-B one, and enrolment died with a 500 forever. nodes carries
+    // UNIQUE(user_id, install_id), so the old node row still holding the
+    // machine id made the claim violate the constraint. That workflow worked
+    // before enrolment codes, when the install binding was trust-on-first-use.
+    rows.push({
+      id: 'node-old', user_id: 'owner-1', kind: 'radio',
+      token_hash: 'radio-hash', token_prefix: 'npsn_rad',
+      install_id: 'machine-a',
+      enrol_code_hash: null, enrol_expires_at: null,
+    });
+    const code = await issueEnrolCode('node-1');
+    const r = await consumeEnrolCode(code!, 'machine-a');
+
+    expect(r.ok).toBe(true);
+    expect(rows.find((x) => x.id === 'node-1')!.install_id).toBe('machine-a');
+    // The previous holder loses the binding, because one machine has one id
+    // and it is not on that machine any more.
+    expect(rows.find((x) => x.id === 'node-old')!.install_id).toBeNull();
+  });
+
+  it('only releases the id from the SAME owner', async () => {
+    // The constraint is per-owner, so another account's node keeps its binding
+    // — and the claim then fails loudly rather than silently stealing it.
+    rows.push({
+      id: 'node-other', user_id: 'owner-2', kind: 'radio',
+      token_hash: 'h', token_prefix: 'p', install_id: 'machine-a',
+      enrol_code_hash: null, enrol_expires_at: null,
+    });
+    const code = await issueEnrolCode('node-1');
+    const r = await consumeEnrolCode(code!, 'machine-a');
+
+    expect(r.ok).toBe(true);
+    expect(rows.find((x) => x.id === 'node-other')!.install_id).toBe('machine-a');
+  });
+
+  it('claims inside a transaction', async () => {
+    rows.push({
+      id: 'node-old', user_id: 'owner-1', kind: 'radio',
+      token_hash: 'h', token_prefix: 'p', install_id: 'machine-a',
+      enrol_code_hash: null, enrol_expires_at: null,
+    });
+    const code = await issueEnrolCode('node-1');
+    await consumeEnrolCode(code!, 'machine-a');
+    expect(issued).toContain('BEGIN');
+    expect(issued).toContain('COMMIT');
+    expect(issued.indexOf('BEGIN')).toBeLessThan(
+      issued.findIndex((x) => x.startsWith('UPDATE nodes SET install_id = NULL')));
+  });
+
+  it('does not release a binding when the code turns out to be spent', async () => {
+    // The property that matters: a failed enrolment must not strand a node
+    // that was working. A spent code is refused at the READ, before a
+    // transaction is even opened, so nothing is released — and the claim's
+    // own rollback covers the narrower race where the code is taken between
+    // the read and the claim.
+    rows.push({
+      id: 'node-old', user_id: 'owner-1', kind: 'radio',
+      token_hash: 'h', token_prefix: 'p', install_id: 'machine-a',
+      enrol_code_hash: null, enrol_expires_at: null,
+    });
+    const code = await issueEnrolCode('node-1');
+    await consumeEnrolCode(code!, 'machine-a');       // first agent wins
+    rows.find((x) => x.id === 'node-old')!.install_id = 'machine-b';
+    issued = [];
+
+    const second = await consumeEnrolCode(code!, 'machine-b');
+    expect(second.ok).toBe(false);
+    expect(rows.find((x) => x.id === 'node-old')!.install_id).toBe('machine-b');
+    expect(issued.some((x) => x.startsWith('UPDATE nodes SET install_id = NULL'))).toBe(false);
+    expect(issued).not.toContain('BEGIN');
+  });
+
+  it('rolls back if the code is taken between the read and the claim', async () => {
+    // The real race. The release has already run inside the transaction, so
+    // without the rollback the losing agent would leave the previous node
+    // unbound for an enrolment that never completed.
+    rows.push({
+      id: 'node-old', user_id: 'owner-1', kind: 'radio',
+      token_hash: 'h', token_prefix: 'p', install_id: 'machine-a',
+      enrol_code_hash: null, enrol_expires_at: null,
+    });
+    const code = await issueEnrolCode('node-1');
+    stealCodeAfterRead = true;
+    const r = await consumeEnrolCode(code!, 'machine-a');
+    stealCodeAfterRead = false;
+
+    expect(r.ok).toBe(false);
+    expect(issued).toContain('ROLLBACK');
+    expect(issued).not.toContain('COMMIT');
+  });
 
   it('issues a code that is distinguishable from a node token', async () => {
     const code = await issueEnrolCode('node-1');
