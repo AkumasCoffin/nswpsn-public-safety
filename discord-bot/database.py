@@ -286,6 +286,13 @@ class Database:
                         incident_guid TEXT NOT NULL,
                         channel_id BIGINT NOT NULL,
                         message_url TEXT NOT NULL,
+                        -- The snowflake, so an update can REPLY to this
+                        -- message. Derivable from the last path segment of
+                        -- message_url, but parsing a URL on the send path to
+                        -- recover something we were handed is not worth it.
+                        -- Nullable: rows written before this column existed
+                        -- have no id, and are treated as un-replyable.
+                        message_id BIGINT,
                         status TEXT,
                         created_at TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD"T"HH24:MI:SS')),
                         UNIQUE(incident_guid, channel_id, status)
@@ -407,6 +414,12 @@ class Database:
                 c.execute("ALTER TABLE alert_presets ADD COLUMN IF NOT EXISTS filters JSONB NOT NULL DEFAULT '{}'::jsonb")
                 # Live-DB migration: HMAC signature column for bot-action rows.
                 c.execute("ALTER TABLE pending_bot_actions ADD COLUMN IF NOT EXISTS sig TEXT")
+                # Live-DB migration: the message snowflake, so an incident's
+                # updates can REPLY to the message that first reported it.
+                # Rows written before this stay NULL and are simply not
+                # replied to — a missing reply is invisible, where guessing an
+                # id would attach the update to somebody else's message.
+                c.execute("ALTER TABLE incident_messages ADD COLUMN IF NOT EXISTS message_id BIGINT")
             else:
                 # SQLite DDL — alert_configs / pager_configs are gone (Phase 3).
                 # SQLite is also no longer the supported runtime; the bot expects
@@ -434,6 +447,7 @@ class Database:
                         incident_guid TEXT NOT NULL,
                         channel_id INTEGER NOT NULL,
                         message_url TEXT NOT NULL,
+                        message_id INTEGER,
                         status TEXT,
                         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                         UNIQUE(incident_guid, channel_id, status)
@@ -1176,7 +1190,8 @@ class Database:
     
     # ==================== INCIDENT MESSAGE TRACKING ====================
     
-    def save_incident_message(self, incident_guid: str, channel_id: int, message_url: str, status: str = None):
+    def save_incident_message(self, incident_guid: str, channel_id: int, message_url: str,
+                              status: str = None, message_id: int = None):
         conn = self._connect()
         try:
             c = conn.cursor()
@@ -1189,15 +1204,15 @@ class Database:
             now = datetime.now(timezone.utc).isoformat()
             if USE_POSTGRES:
                 c.execute('''
-                    INSERT INTO incident_messages (incident_guid, channel_id, message_url, status, created_at)
-                    VALUES (%s, %s, %s, %s, %s)
-                    ON CONFLICT (incident_guid, channel_id, status) DO UPDATE SET message_url = EXCLUDED.message_url, created_at = EXCLUDED.created_at
-                ''', (incident_guid, channel_id, message_url, status, now))
+                    INSERT INTO incident_messages (incident_guid, channel_id, message_url, message_id, status, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (incident_guid, channel_id, status) DO UPDATE SET message_url = EXCLUDED.message_url, message_id = EXCLUDED.message_id, created_at = EXCLUDED.created_at
+                ''', (incident_guid, channel_id, message_url, message_id, status, now))
             else:
                 c.execute('''
-                    INSERT OR REPLACE INTO incident_messages (incident_guid, channel_id, message_url, status, created_at)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (incident_guid, channel_id, message_url, status, now))
+                    INSERT OR REPLACE INTO incident_messages (incident_guid, channel_id, message_url, message_id, status, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (incident_guid, channel_id, message_url, message_id, status, now))
             conn.commit()
         finally:
             conn.close()
@@ -1224,6 +1239,37 @@ class Database:
             conn.close()
         return dict(row) if row else None
     
+    def get_incident_reply_target(self, incident_guid: str, channel_id: int) -> Optional[int]:
+        """The message an update to this incident should reply to.
+
+        The OLDEST row that actually carries a message_id — not simply the
+        oldest row. Rows written before the message_id column existed have
+        NULL, and picking one of those would mean an incident first seen
+        before the migration could never be replied to, even though every
+        update since has a perfectly good id.
+
+        Returns None when nothing is replyable, which is the correct outcome
+        for a first sighting.
+        """
+        conn = self._connect()
+        try:
+            c = conn.cursor()
+            p = self._param(1)
+            c.execute(
+                f"""SELECT message_id FROM incident_messages
+                     WHERE incident_guid = {p} AND channel_id = {p}
+                       AND message_id IS NOT NULL
+                     ORDER BY created_at ASC LIMIT 1""",
+                (incident_guid, channel_id),
+            )
+            row = c.fetchone()
+        finally:
+            conn.close()
+        if not row:
+            return None
+        mid = row['message_id'] if USE_POSTGRES else row[0]
+        return int(mid) if mid else None
+
     def get_incident_message_count(self, incident_guid: str, channel_id: int) -> int:
         conn = self._connect()
         try:

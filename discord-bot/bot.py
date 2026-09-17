@@ -913,12 +913,30 @@ class NSWPSNBot(commands.Bot):
                 channel = await self.fetch_channel(channel_id)
             if not channel:
                 return 'skip'
+            # An update replies to the message that first reported the
+            # incident. fail_if_not_exists=False is not optional here: the
+            # original is routinely gone — deleted by a moderator, or purged
+            # past the 14-day incident_messages retention — and without it
+            # Discord rejects the whole send and the update is simply lost.
+            reference = None
+            reply_to = item.get('reply_to_message_id')
+            if reply_to:
+                try:
+                    reference = discord.MessageReference(
+                        message_id=int(reply_to),
+                        channel_id=int(channel_id),
+                        fail_if_not_exists=False,
+                    )
+                except (TypeError, ValueError):
+                    reference = None
+
             if view is not None:
                 # Components V2 (LayoutView) forbids `content` — role mentions
                 # live inside a TextDisplay in the view instead.
-                message = await channel.send(view=view)
+                message = await channel.send(view=view, reference=reference)
             else:
-                message = await channel.send(content=content, embeds=embeds)
+                message = await channel.send(content=content, embeds=embeds,
+                                             reference=reference)
 
             alert_type = item.get('alert_type')
             if alert_type:
@@ -931,6 +949,7 @@ class NSWPSNBot(commands.Bot):
             if incident_guid and message:
                 status = item.get('incident_status')
                 message_url = message.jump_url
+                message_id = message.id
                 loop = asyncio.get_event_loop()
                 await loop.run_in_executor(
                     None,
@@ -939,6 +958,7 @@ class NSWPSNBot(commands.Bot):
                         channel_id=channel_id,
                         message_url=message_url,
                         status=status,
+                        message_id=message_id,
                     ),
                 )
             return 'sent'
@@ -1445,11 +1465,16 @@ class NSWPSNBot(commands.Bot):
                       incident_guid: str = None, incident_status: str = None,
                       alert_type: str = None, alert_id: str = None,
                       embeds: List[discord.Embed] = None,
-                      view: Optional[discord.ui.View] = None):
+                      view: Optional[discord.ui.View] = None,
+                      reply_to_message_id: int = None):
         """Add a message to the queue for rate-limited sending.
 
         Pass one of: `embed` (single), `embeds` (list of up to 10), or `view`
         (Components V2 LayoutView). Precedence: view > embeds > embed.
+
+        `reply_to_message_id` makes this message a REPLY to an earlier one —
+        used so an incident's updates hang off the message that first reported
+        it instead of scattering down the channel.
         """
         item = {
             'channel_id': channel_id,
@@ -1462,7 +1487,8 @@ class NSWPSNBot(commands.Bot):
             'incident_guid': incident_guid,
             'incident_status': incident_status,
             'alert_type': alert_type,
-            'alert_id': alert_id
+            'alert_id': alert_id,
+            'reply_to_message_id': reply_to_message_id,
         }
         if self.message_queue.full():
             logger.warning(f"Message queue full ({self.message_queue.maxsize}), dropping oldest message")
@@ -1526,12 +1552,23 @@ class NSWPSNBot(commands.Bot):
         return role_ids
 
     async def _dispatch_alerts_batched(self, new_alerts: list):
-        """Fan `new_alerts` out to their configured channels, batching
-        multiple alerts into a single LayoutView per channel.
+        """Fan `new_alerts` out to their configured channels, ONE MESSAGE PER
+        ALERT.
 
-        Ordering preserved: alerts keep their poll-result order within each
-        channel bucket, so the first alert sent in the cycle renders first
-        in the combined message.
+        This used to pack a poll's alerts for a channel into a single
+        LayoutView. That saved messages when the Waze firehose was running,
+        but it cost two things that matter more now the volume is lower:
+
+          - Incident tracking. Only the FIRST incident-bearing alert in a
+            batch could have its message recorded, because the row stores one
+            jump_url per message. Every other incident in that batch was never
+            written down, so it could never be linked to — or, now, replied to
+            — when it updated.
+          - Legibility. Five unrelated incidents shared one timestamp and one
+            block, and an update could only ever reply to the whole batch.
+
+        Alerts still keep their poll-result order within a channel; they are
+        simply queued one at a time, and the send queue paces them.
         """
         if not new_alerts:
             return
@@ -1632,10 +1669,22 @@ class NSWPSNBot(commands.Bot):
                     # one — when an incident has 4-5 updates the "first" message
                     # has scrolled far up the channel and looks random.
                     previous_message = None
+                    reply_to_message_id = None
                     if incident_guid:
                         previous_message = await loop.run_in_executor(
                             None,
                             self.db.get_previous_incident_message,
+                            incident_guid,
+                            channel_id,
+                        )
+                        # Replies hang off the FIRST report, not the previous
+                        # update. Chaining reply-to-reply would build a ladder
+                        # that Discord renders one rung deep anyway, and the
+                        # first message is the one people recognise as "that
+                        # fire".
+                        reply_to_message_id = await loop.run_in_executor(
+                            None,
+                            self.db.get_incident_reply_target,
                             incident_guid,
                             channel_id,
                         )
@@ -1646,6 +1695,7 @@ class NSWPSNBot(commands.Bot):
                         'previous_message': previous_message,
                         'incident_guid': incident_guid,
                         'incident_status': incident_status,
+                        'reply_to_message_id': reply_to_message_id,
                     })
                 # Union role ids only when this preset's effective_ping is on;
                 # _resolve_ping_role_ids also filters deleted roles.
@@ -1655,68 +1705,57 @@ class NSWPSNBot(commands.Bot):
                     for rid in self._resolve_ping_role_ids(ping_view):
                         bucket['role_ids_set'].add(rid)
 
-        # Build + queue one LayoutView per channel (chunked if oversized).
+        # Build + queue ONE message per alert.
         from embeds import chunk_containers_for_message
 
         for channel_id, bucket in buckets.items():
-            items = bucket['alerts']
-            if not items:
-                continue
+            # Role pings ride on every message now, not once per batch: each
+            # alert is its own notification, and a ping attached only to the
+            # first would leave the rest silent.
+            role_ids = sorted(bucket['role_ids_set'])
+            ping_text = ' '.join(f'<@&{rid}>' for rid in role_ids) if role_ids else None
 
-            containers = []
-            # Track incident info so we can still call save_incident_message
-            # for the first incident-bearing alert in this message — older
-            # messages keep their existing jump_urls as "previous" links.
-            primary_incident_guid = None
-            primary_incident_status = None
-            for it in items:
-                # Build per alert inside a guard: a single malformed alert
-                # must never raise out of the loop and drop every other
-                # alert queued for this channel.
+            for it in bucket['alerts']:
+                alert = it.get('alert') or {}
+                # Built inside a guard: one malformed alert must never raise
+                # out of the loop and drop every other alert for this channel.
                 try:
                     container = self.embed_builder.build_alert_container(
-                        it['alert'], previous_message=it['previous_message'],
+                        alert, previous_message=it['previous_message'],
                     )
                 except Exception:
                     logger.exception(
                         "Failed to build container for %s alert %s — skipping",
-                        (it.get('alert') or {}).get('type'),
-                        (it.get('alert') or {}).get('id'),
+                        alert.get('type'), alert.get('id'),
                     )
                     continue
-                containers.append(container)
-                if primary_incident_guid is None and it['incident_guid']:
-                    primary_incident_guid = it['incident_guid']
-                    primary_incident_status = it['incident_status']
 
-            # Build a TextDisplay for role pings once — Discord still parses
-            # `<@&id>` from TextDisplay content to produce a real mention.
-            role_ids = sorted(bucket['role_ids_set'])
-            ping_text = ' '.join(f'<@&{rid}>' for rid in role_ids) if role_ids else None
+                # Still chunked, for the rare single alert that overflows the
+                # character budget on its own.
+                groups = chunk_containers_for_message([container])
+                for i, group in enumerate(groups):
+                    view = discord.ui.LayoutView(timeout=None)
+                    if i == 0 and ping_text:
+                        view.add_item(discord.ui.TextDisplay(content=ping_text))
+                    if not safe_add_containers(view, group) and not (i == 0 and ping_text):
+                        continue  # container rejected — nothing to send
 
-            groups = chunk_containers_for_message(containers)
-            for i, group in enumerate(groups):
-                view = discord.ui.LayoutView(timeout=None)
-                if i == 0 and ping_text:
-                    view.add_item(discord.ui.TextDisplay(content=ping_text))
-                if not safe_add_containers(view, group) and not (i == 0 and ping_text):
-                    continue  # every container rejected — nothing to send
-
-                # Only attach incident-tracking metadata to the first chunk.
-                # The DB row records which jump_url was sent first — if we
-                # wrote it for chunk N we'd link updates to that one instead
-                # of the top of the batch.
-                queue_kwargs = {
-                    'channel_id': channel_id,
-                    'view': view,
-                    'config_id': bucket['any_preset_id'],
-                    'config_type': 'alert',
-                    'alert_type': 'batch',  # batched; logging-only
-                }
-                if i == 0 and primary_incident_guid:
-                    queue_kwargs['incident_guid'] = primary_incident_guid
-                    queue_kwargs['incident_status'] = primary_incident_status
-                self.queue_message(**queue_kwargs)
+                    queue_kwargs = {
+                        'channel_id': channel_id,
+                        'view': view,
+                        'config_id': bucket['any_preset_id'],
+                        'config_type': 'alert',
+                        'alert_type': alert.get('type') or 'alert',
+                    }
+                    # Every incident-bearing alert now records its own message,
+                    # where the batch could only ever record its first. The
+                    # metadata rides on the first chunk: that is the message an
+                    # update should reply to.
+                    if i == 0 and it['incident_guid']:
+                        queue_kwargs['incident_guid'] = it['incident_guid']
+                        queue_kwargs['incident_status'] = it['incident_status']
+                        queue_kwargs['reply_to_message_id'] = it.get('reply_to_message_id')
+                    self.queue_message(**queue_kwargs)
 
         if fires:
             await loop.run_in_executor(None, self.db.log_preset_fires, fires)

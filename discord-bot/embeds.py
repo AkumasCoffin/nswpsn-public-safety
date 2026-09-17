@@ -460,6 +460,95 @@ def chunk_containers_for_message(containers: list, max_chars: int = 3600,
     return groups
 
 
+# ---------------------------------------------------------------------------
+# The shared card
+# ---------------------------------------------------------------------------
+#
+# Every alert renders through one layout. Before this each of the thirteen
+# builders invented its own, so no two sources looked alike and the same facts
+# were printed twice — the location line repeating the title, the incident type
+# named in the heading and again in the status line.
+#
+# The body carries NO emoji. One icon in the heading is an identity; six in a
+# row is noise, and at a glance it was impossible to tell which glyph meant
+# severity and which meant "this is a fire". Field labels do that job in plain
+# words that also survive being read aloud by a screen reader.
+#
+#     [icon] Phillip St, St Marys
+#     **Advice** - Being controlled
+#     Type   Grass Fire · 0 ha
+#     Area   Penrith · Fire and Rescue NSW
+#
+#     NSW RFS · 2 hours ago
+#     [Map] [Details]
+
+# Words a title-caser must not touch. Upstream feeds shout their titles
+# (QLD sends "FIRE VEGETATION - LAMMERMOOR"), and naive .title() would turn
+# every one of these into "Rfs" or "Mva".
+_KEEP_UPPER = {
+    'RFS', 'CFA', 'SES', 'MFS', 'CFS', 'DFES', 'QFD', 'QFES', 'EMV', 'ESTA',
+    'NSW', 'VIC', 'QLD', 'WA', 'SA', 'NT', 'ACT', 'TAS', 'AFP', 'BOM',
+    'MVA', 'CBD', 'LPG', 'ATV', 'SUV', 'EV', 'ETA', 'GPS', 'UHF', 'VHF',
+    'NE', 'NW', 'SE', 'SW',
+}
+# Deliberately NOT here: ST, RD, HWY, AVE, PDE, CRES. They look like acronyms
+# but they are street suffixes, and "Illawong ST" reads worse than
+# "Illawong St" — the point of calming a shouted address is to calm all of it.
+
+
+
+def _detitle_word(word: str) -> str:
+    bare = word.strip('.,;:()[]-/')
+    if not bare or bare in _KEEP_UPPER:
+        return word
+    return word.replace(bare, bare.capitalize(), 1)
+
+
+def smart_title(text: str) -> str:
+    """Calm down a SHOUTED title, leaving mixed-case text alone.
+
+    Works PER WORD, not per string: feeds shout inconsistently, and
+    "Oceana Cres, LAMMERMOOR" needs the suburb fixed while the rest is already
+    fine. A word that is not entirely upper-case is left exactly as it is,
+    which is what protects names like "McKinnon" and "St Marys" from being
+    re-cased into nonsense.
+    """
+    t = (text or '').strip()
+    if not t:
+        return ''
+    out = []
+    for word in t.split(' '):
+        letters = [c for c in word if c.isalpha()]
+        # Untouched unless the word is ALL capitals and long enough to be a
+        # word rather than an initial.
+        if len(letters) >= 2 and all(c.isupper() for c in letters):
+            out.append(_detitle_word(word))
+        else:
+            out.append(word)
+    return ' '.join(out)
+
+
+def _norm_compare(text: str) -> str:
+    """Letters and digits only, lowered — for deciding whether two strings say
+    the same thing. Punctuation, case and spacing differ constantly between a
+    feed's title and its location field, and none of it matters here."""
+    return re.sub(r'[^a-z0-9]', '', (text or '').lower())
+
+
+def says_the_same(a: str, b: str) -> bool:
+    """True when `b` adds nothing to `a`.
+
+    The St Marys case: a title of "Phillip St, St Marys" followed by a location
+    of "Phillip St, St Marys NSW 2760" is the same fact with a postcode glued
+    on. Containment either way counts, since feeds disagree about which field
+    gets the fuller version.
+    """
+    na, nb = _norm_compare(a), _norm_compare(b)
+    if not na or not nb:
+        return False
+    return na in nb or nb in na
+
+
 # Endpoints whose payload is a GeoJSON Feature the interstate container reads.
 # At module level, not on the class: a comprehension inside a class body gets
 # its own scope and cannot see sibling class attributes, so deriving the set
@@ -472,9 +561,11 @@ _INTERSTATE_ENDPOINTS = (
     '/api/sa-fire/',
     '/api/act-ambulance/',
 )
-_INTERSTATE_TYPES = frozenset(
-    t['key'] for t in alert_catalog.TYPE_DEFS
-    if str(t.get('endpoint') or '').startswith(_INTERSTATE_ENDPOINTS)
+_INCIDENT_TYPES = frozenset(
+    ['rfs'] + [
+        t['key'] for t in alert_catalog.TYPE_DEFS
+        if str(t.get('endpoint') or '').startswith(_INTERSTATE_ENDPOINTS)
+    ]
 )
 
 
@@ -1070,7 +1161,9 @@ class EmbedBuilder:
         footer line so every alert advertises where it came from.
         """
         if source:
-            footer_bits = [f"📡 {source}", *(footer_bits or [])]
+            # No glyph: the time beside it is bare, and one lone emoji on an
+            # otherwise plain muted line reads as a leftover.
+            footer_bits = [str(source), *(footer_bits or [])]
         if not footer_bits:
             return
         subtle_parts = []
@@ -1285,6 +1378,71 @@ class EmbedBuilder:
     # batching (multiple alerts -> one message).
     # ============================================================
 
+    def _card(self, *, icon: str, title: str, color: int,
+              headline: str = '', fields=None, body: str = '',
+              source: str = '', footer_bits=None):
+        """Render the shared card.
+
+        `headline`  the severity/status line, already formatted.
+        `fields`    [(label, value)] — label is one short word, rendered in
+                    the muted style; a None or empty value drops the row.
+        `body`      free prose (advice text), after the fields.
+        """
+        container = discord.ui.Container(accent_colour=color)
+        heading = smart_title(strip_html(title or '')) or 'Alert'
+        container.add_item(discord.ui.TextDisplay(
+            content=self._clip_text(f"### {icon} {heading}".strip())
+        ))
+
+        lines = []
+        if headline:
+            lines.append(headline)
+        for label, value in (fields or []):
+            if value is None:
+                continue
+            v = str(value).strip()
+            if not v or not is_valid_value(v):
+                continue
+            # `-#` is Discord's small-text marker; it makes the label recede
+            # without an emoji doing the work.
+            lines.append(f"**{label}** {v}")
+        if lines:
+            container.add_item(discord.ui.TextDisplay(
+                content=self._clip_text('\n'.join(lines))
+            ))
+        if body:
+            clean = strip_html(body).strip()
+            if clean and is_valid_value(clean):
+                container.add_item(discord.ui.TextDisplay(
+                    content=self._clip_text(clean[:1200])
+                ))
+
+        self._append_container_footer(container, footer_bits or [], source=source)
+        return container
+
+    @staticmethod
+    def _join(parts, sep=' · '):
+        """Join the non-empty bits of a line, or return '' so the row drops."""
+        got = [str(p).strip() for p in parts if p is not None and str(p).strip()]
+        return sep.join(got) if got else ''
+
+    def _update_line(self, previous_message, status: str, alert_level: str) -> str:
+        """State what changed, for an update that replies to the first report.
+
+        Written to stand alone. A reply is very often read without its parent
+        in view, so "Update · now Under control" has to make sense by itself —
+        which is why it names the new state rather than only the old one.
+        """
+        if not previous_message:
+            return ''
+        was = (previous_message.get('status') or '').strip()
+        now = (status or alert_level or '').strip()
+        if was and now and _norm_compare(was) != _norm_compare(now):
+            return f"**Update** {was} → {now}"
+        if now:
+            return f"**Update** now {now}"
+        return "**Update**"
+
     def build_alert_container(self, alert: Dict[str, Any],
                               previous_message: Dict[str, Any] = None):
         """Route an alert dict to the right container builder.
@@ -1296,8 +1454,9 @@ class EmbedBuilder:
         alert_type = alert.get('type', 'unknown')
         data = alert.get('data', {})
 
-        if alert_type == 'rfs':
-            return self.build_rfs_container(data, previous_message=previous_message)
+        if alert_type in self._INCIDENT_TYPES:
+            return self.build_incident_container(
+                data, alert_type, previous_message=previous_message)
         elif alert_type == 'firms':
             return self.build_firms_container(data)
         elif alert_type.startswith('bom_'):
@@ -1308,8 +1467,6 @@ class EmbedBuilder:
               or alert_type == 'ausgrid'
               or alert_type.startswith('essential_')):
             return self.build_power_container(data, alert_type)
-        elif alert_type in self._INTERSTATE_TYPES:
-            return self.build_interstate_fire_container(data, alert_type)
         elif alert_type == 'wire_article':
             return self.build_wire_article_container(data)
         elif alert_type == 'wire_fleet':
@@ -1319,123 +1476,134 @@ class EmbedBuilder:
         else:
             return self.build_generic_container(data, alert_type)
 
-    # ---- RFS ---------------------------------------------------
-    def build_rfs_container(self, data: Dict[str, Any],
-                            previous_message: Dict[str, Any] = None):
-        """Components V2 container for NSW RFS major incidents."""
-        props = data.get('properties', {})
-        title = strip_html(props.get('title', 'Unknown Incident'))
-        link = props.get('link', '')
-        raw_desc = props.get('description', '') or ''
+    # ---- Emergency incidents (one builder, ten sources) --------
+    #
+    # RFS, CFA, DEECA, VICSES, EMV, ESTA, QFD, DFES, SA CFS/MFS, NT and ACT
+    # all render here. That is possible because the BACKEND already normalises
+    # them: every one of those feeds arrives as a GeoJSON Feature whose
+    # properties are `title, status, location, alertLevel, fireType,
+    # responsibleAgency, updatedISO, guid, polygons`. There was never a data
+    # reason for ten different layouts.
 
-        status = props.get('status', '')
-        location = props.get('location', '')
-        size = props.get('size', '')
-        alert_level = props.get('alertLevel', '')
-        council = props.get('councilArea', '')
-        fire_type = props.get('fireType', '')
-        updated = props.get('updated', '')
-        updated_iso = props.get('updatedISO', '')
-        responsible_agency = props.get('responsibleAgency', '')
+    _LEVEL_STYLE = (
+        # (match, colour, rank) — rank orders severity for the accent colour.
+        ('emergency', 0xEF4444, 3),
+        ('watch',     0xF97316, 2),
+        ('advice',    0xFACC15, 1),
+    )
 
-        if raw_desc and not status and not location:
-            parsed = self._parse_rfs_description(raw_desc)
-            alert_level = parsed.get('alert_level', '') or alert_level
-            status = parsed.get('status', '') or status
-            location = parsed.get('location', '') or location
-            size = parsed.get('size', '') or size
-            council = parsed.get('council_area', '') or council
-            fire_type = parsed.get('type', '') or fire_type
-            updated = parsed.get('updated', '') or updated
+    def _level_color(self, alert_level: str, default: int) -> int:
+        low = (alert_level or '').lower()
+        for word, color, _rank in self._LEVEL_STYLE:
+            if word in low:
+                return color
+        return default
 
+    def build_incident_container(self, data: Dict[str, Any], alert_type: str,
+                                 previous_message: Dict[str, Any] = None):
+        """The shared card for every emergency-service incident feed."""
+        data = data or {}
+        props = data.get('properties') or {}
+
+        title = strip_html(props.get('title') or '')
+        status = strip_html(props.get('status') or '')
+        # ACT Ambulance is the one source the backend did not fully normalise:
+        # it uses location_text, category/subcategory, and an epoch timestamp.
+        location = strip_html(props.get('location') or props.get('location_text') or '')
+        alert_level = strip_html(props.get('alertLevel') or '')
+        fire_type = strip_html(
+            props.get('fireType') or props.get('subcategory') or props.get('category') or ''
+        )
+        agency = strip_html(props.get('responsibleAgency') or '')
+        council = strip_html(props.get('councilArea') or props.get('district')
+                             or props.get('region') or '')
+        size = strip_html(props.get('size') or props.get('sizeFmt') or '')
+
+        # An alertLevel that arrived as a whole sentence — RFS sometimes puts
+        # the full advice line in the field. Keep the leading classification.
         if alert_level and len(alert_level) > 30:
-            match = re.match(r'^(Advice|Watch and Act|Emergency Warning|Emergency)',
-                             alert_level, re.IGNORECASE)
-            alert_level = match.group(1) if match else ''
+            m = re.match(r'^(Advice|Watch and Act|Emergency Warning|Emergency)',
+                         alert_level, re.IGNORECASE)
+            alert_level = m.group(1) if m else ''
 
-        color = self.COLORS['rfs']
-        level_emoji = '🟡'
+        # RFS omits alertLevel on older records but its status implies one.
         if not alert_level and status:
-            status_lower = status.lower()
-            if 'out of control' in status_lower:
+            low = status.lower()
+            if 'out of control' in low:
                 alert_level = 'Emergency Warning'
-            elif 'being controlled' in status_lower:
+            elif 'being controlled' in low:
                 alert_level = 'Watch and Act'
-            elif 'under control' in status_lower:
+            elif 'under control' in low:
                 alert_level = 'Advice'
 
-        if alert_level:
-            level_lower = alert_level.lower()
-            if 'emergency' in level_lower:
-                color = 0xFF0000
-                level_emoji = '🔴'
-            elif 'watch' in level_lower:
-                color = 0xFF8C00
-                level_emoji = '🟠'
-            elif 'advice' in level_lower:
-                color = 0xFFD700
-                level_emoji = '🟡'
+        color = self._level_color(alert_level, self.COLORS.get(alert_type, 0xEF4444))
+        icon = self.ICONS.get(alert_type, '🔥')
 
-        container = discord.ui.Container(accent_colour=color)
-        container.add_item(discord.ui.TextDisplay(content=f"### 🔥 {title}"))
+        # The severity line. Level is the loud part; status qualifies it.
+        headline = self._join(
+            [f"**{alert_level}**" if alert_level else '', status], sep=' — ',
+        )
 
-        meta_bits = []
-        if alert_level:
-            meta_bits.append(f"{level_emoji} **{alert_level}**")
-        if status:
-            meta_bits.append(f"📊 {status}")
-        if fire_type:
-            meta_bits.append(f"🔥 {fire_type}")
+        fields = []
+        upd = self._update_line(previous_message, status, alert_level)
+        if upd:
+            fields = []          # the update line leads; it is not a field
+            headline = self._join([upd, headline], sep='\n')
+
+        # The type is dropped when the heading already says it — QLD titles are
+        # literally "FIRE VEGETATION - LAMMERMOOR" beside a fireType of
+        # "FIRE VEGETATION", which is what made those cards read as stutter.
+        type_bits = []
+        if fire_type and not says_the_same(title, fire_type):
+            type_bits.append(smart_title(fire_type))
         if size:
-            meta_bits.append(f"📏 {size}")
-        if meta_bits:
-            container.add_item(discord.ui.TextDisplay(
-                content=self._clip_text(' · '.join(meta_bits))
-            ))
+            type_bits.append(size)
+        fields.append(('Type', self._join(type_bits)))
 
-        loc_bits = []
-        if location:
-            loc_bits.append(f"📍 {location}")
-        agency_bits = []
+        # The location is dropped when it merely restates the title, which for
+        # most of these feeds it does — the title IS the place.
+        area_bits = []
+        if location and not says_the_same(title, location):
+            area_bits.append(smart_title(location))
         if council:
-            agency_bits.append(f"🏛️ {council}")
-        if responsible_agency:
-            agency_bits.append(f"🚒 {responsible_agency}")
-        if agency_bits:
-            loc_bits.append(' · '.join(agency_bits))
-        if loc_bits:
-            container.add_item(discord.ui.TextDisplay(
-                content=self._clip_text('\n'.join(loc_bits))
-            ))
+            area_bits.append(council)
+        if agency:
+            area_bits.append(agency)
+        fields.append(('Area', self._join(area_bits)))
 
-        dt_updated = parse_timestamp_to_datetime(updated_iso)
+        # Public advice, where the feed carries it.
+        body = ''
+        for key in ('action', 'whatToDo', 'adviceToPublic', 'warningText',
+                    'headline', 'text', 'currentSituation'):
+            v = props.get(key)
+            if isinstance(v, str) and v.strip() and not says_the_same(title, v):
+                body = v
+                break
+
         footer_bits = []
-        if dt_updated:
-            footer_bits.append(f"🕐 <t:{int(dt_updated.timestamp())}:R>")
+        dt = parse_timestamp_to_datetime(
+            props.get('updatedISO') or props.get('timestamp') or props.get('updated') or '')
+        if dt:
+            footer_bits.append(f"<t:{int(dt.timestamp())}:R>")
 
-        geometry = data.get('geometry', {})
-        if isinstance(geometry, dict) and geometry.get('coordinates') is not None:
-            # RFS firegrounds are often Polygon/MultiPolygon, not Point, so
-            # reduce to a representative point instead of assuming coords is
-            # a flat [lon, lat] pair (which produced lat=[...] dead links).
-            lon, lat = representative_lonlat(geometry['coordinates'])
+        geom = data.get('geometry') or {}
+        if isinstance(geom, dict) and geom.get('coordinates') is not None:
+            lon, lat = representative_lonlat(geom['coordinates'])
             if lat is not None and lon is not None:
-                map_url = build_map_url(lat, lon, label=title, layer="rfs")
-                footer_bits.append(f"[🗺️ Map]({map_url})")
+                layer = 'rfs' if alert_type == 'rfs' else 'incidents'
+                footer_bits.append(
+                    f"[Map]({build_map_url(lat, lon, label=title, layer=layer)})")
+        url = (props.get('url') or props.get('link') or '').strip()
+        if url:
+            footer_bits.append(f"[Details]({url})")
 
-        if link:
-            footer_bits.append(f"[ℹ️ Details]({link})")
+        return self._card(
+            icon=icon, title=title, color=color,
+            headline=headline, fields=fields, body=body,
+            source=self._INCIDENT_SOURCES.get(alert_type, 'Emergency services'),
+            footer_bits=footer_bits,
+        )
 
-        if previous_message and previous_message.get('message_url'):
-            prev_status = previous_message.get('status', 'initial')
-            footer_bits.append(
-                f"[📜 Previous ({prev_status})]({previous_message['message_url']})"
-            )
-
-        self._append_container_footer(container, footer_bits, source="NSW RFS")
-        return container
-
-    # ---- FIRMS (satellite fire hotspots) -----------------------
     def build_firms_container(self, data: Dict[str, Any]):
         """Components V2 container for a NASA FIRMS satellite fire-hotspot cluster."""
         props = data.get('properties', {})
@@ -1655,7 +1823,8 @@ class EmbedBuilder:
     # All of these serve RFS-shaped GeoJSON properties (title / status /
     # alertLevel / location / fireType / updatedISO / url), so one builder
     # covers every agency — only the accent colour and source label differ.
-    _INTERSTATE_SOURCES = {
+    _INCIDENT_SOURCES = {
+        'rfs': 'NSW RFS',
         'cfa': 'CFA (Vic)',
         'deeca': 'DEECA (Vic)',
         'vicses': 'VICSES',
@@ -1686,74 +1855,7 @@ class EmbedBuilder:
     # Keyed on the endpoint because that is what actually determines the
     # payload shape: two types served by the same route cannot need different
     # renderers, and a new type on an existing route now routes itself.
-    _INTERSTATE_TYPES = _INTERSTATE_TYPES
-
-    def build_interstate_fire_container(self, data: Dict[str, Any], alert_type: str):
-        """Components V2 container for an interstate fire-service incident."""
-        data = data or {}
-        props = data.get('properties') or {}
-        color = self.COLORS.get(alert_type, 0xEF4444)
-        container = discord.ui.Container(accent_colour=color)
-        icon = self.ICONS.get(alert_type, '🔥')
-        title = props.get('title') or 'Incident'
-        container.add_item(discord.ui.TextDisplay(
-            content=self._clip_text(f"### {icon} {title}")
-        ))
-
-        meta_bits = []
-        status = (props.get('status') or '').strip()
-        if status:
-            meta_bits.append(f"Status: **{status}**")
-        level = (props.get('alertLevel') or '').strip()
-        if level:
-            meta_bits.append(f"⚠️ {level}")
-        ftype = (props.get('fireType') or '').strip()
-        if ftype:
-            meta_bits.append(ftype)
-        if meta_bits:
-            container.add_item(discord.ui.TextDisplay(
-                content=self._clip_text(' · '.join(meta_bits))
-            ))
-
-        location = (props.get('location') or props.get('location_text') or '').strip()
-        if location:
-            container.add_item(discord.ui.TextDisplay(
-                content=self._clip_text(f"📍 {location}")
-            ))
-
-        # WA warnings put the public instruction in `action` (status is '').
-        action = (props.get('action') or '').strip()
-        if action:
-            container.add_item(discord.ui.TextDisplay(
-                content=self._clip_text(f"❗ {action}")
-            ))
-
-        footer_bits = []
-        # ACT has no updatedISO — an epoch-seconds `timestamp` instead;
-        # parse_timestamp_to_datetime handles both.
-        dt_upd = parse_timestamp_to_datetime(
-            props.get('updatedISO') or props.get('timestamp') or '')
-        if dt_upd:
-            footer_bits.append(f"🕐 <t:{int(dt_upd.timestamp())}:R>")
-        # Point features carry [lng, lat]; NT warnings can be a Polygon —
-        # unwrap nested rings to a representative pair for the map link.
-        coords = (data.get('geometry') or {}).get('coordinates')
-        while (isinstance(coords, (list, tuple)) and coords
-               and isinstance(coords[0], (list, tuple))):
-            coords = coords[len(coords) // 2]
-        if isinstance(coords, (list, tuple)) and len(coords) >= 2:
-            try:
-                map_url = build_map_url(float(coords[1]), float(coords[0]),
-                                        label=title, layer="incidents")
-                footer_bits.append(f"[🗺️ Map]({map_url})")
-            except (TypeError, ValueError):
-                pass
-        url = (props.get('url') or '').strip()
-        if url:
-            footer_bits.append(f"[🔗 Details]({url})")
-        source = self._INTERSTATE_SOURCES.get(alert_type, 'Interstate feed')
-        self._append_container_footer(container, footer_bits, source=source)
-        return container
+    _INCIDENT_TYPES = _INCIDENT_TYPES
 
     # ---- The Wire ----------------------------------------------
     def build_wire_article_container(self, data: Dict[str, Any]):
@@ -2356,7 +2458,7 @@ class EmbedBuilder:
             if isinstance(v, str) and is_valid_value(strip_html(v)):
                 title = strip_html(v)
                 break
-        label = self._INTERSTATE_SOURCES.get(alert_type) or alert_type.replace('_', ' ').title()
+        label = self._INCIDENT_SOURCES.get(alert_type) or alert_type.replace('_', ' ').title()
         heading = title or f"{label} alert"
         container.add_item(discord.ui.TextDisplay(
             content=self._clip_text(f"### {icon} {heading}")
