@@ -207,7 +207,7 @@ describe('snapshotRangeKm', () => {
   });
 });
 
-describe('the daily peak takes whichever is larger', () => {
+describe('the daily peak is what WE observed', () => {
   /** Flush and read back the max_range_km parameter that was written. */
   async function writtenRange(): Promise<number | null> {
     await flushAdsbDaily();
@@ -222,10 +222,22 @@ describe('the daily peak takes whichever is larger', () => {
     return writtenRange().then((v) => expect(v).toBe(187.4));
   });
 
-  it('keeps the decoder’s when it is larger', async () => {
-    // It measures every position it DECODED, which can beat what reached us.
+  it('ignores the decoder’s figure even when it is larger', async () => {
+    // The decoder's max_distance covers the `total` window — since the DECODER
+    // STARTED, not since midnight. Taking the larger stamped a distance
+    // reached days ago onto today's row, so "best range today" became "best
+    // range ever" and disagreed with the coverage plot beside it.
     accumulateAdsbDaily(NODE, 12, { maxRangeKm: 240 }, 187.4);
-    expect(await writtenRange()).toBe(240);
+    expect(await writtenRange()).toBe(187.4);
+  });
+
+  it('agrees with what the coverage envelope could draw', async () => {
+    // The two are folded from the same list of positioned aircraft in the same
+    // upload, so a day's best range and the envelope's outer reach describe
+    // one measurement. They are allowed to be lower than the decoder's
+    // lifetime best; they are not allowed to disagree with each other.
+    accumulateAdsbDaily(NODE, 12, { maxRangeKm: 500 }, 212.5);
+    expect(await writtenRange()).toBe(212.5);
   });
 
   it('keeps ours when it is larger', async () => {

@@ -785,10 +785,21 @@ export function accumulateAdsbDaily(
   cur.snapshots += 1;
   cur.positions += positions;
   cur.maxAircraft = Math.max(cur.maxAircraft, positions);
-  // Both, and the larger wins. The decoder measures every position it
-  // DECODED, which can beat what we were sent; our own measurement exists
-  // because the decoder's is so often simply absent.
-  cur.maxRangeKm = maxOrNull(cur.maxRangeKm, stats?.maxRangeKm);
+  // OUR measurement only, deliberately, even though the decoder reports one.
+  //
+  // The decoder's figure is its max_distance over the `total` window, which
+  // means since the decoder process started — not since midnight. Folding it
+  // into a per-day row stamped a distance reached last Tuesday onto every day
+  // that followed, so "best range today" quietly became "best range ever", and
+  // it disagreed with the coverage plot beside it for the same reason.
+  //
+  // What is lost is the sampling gap: the decoder sees every position it
+  // decodes, while we see the aircraft present in the snapshots it uploads, so
+  // a distant contact that came and went between two uploads counts for the
+  // decoder and not for us. That is a smaller error than attributing a
+  // measurement to the wrong day, and it has the merit of being a figure we
+  // can actually stand behind — the decoder's lifetime best is still reported
+  // live, where "since it started" is what the number means.
   cur.maxRangeKm = maxOrNull(cur.maxRangeKm, observedRange);
   cur.msgRateMax = maxOrNull(cur.msgRateMax, stats?.msgRate);
   cur.tracksMax = maxOrNull(cur.tracksMax, stats?.tracksAll);
@@ -802,7 +813,8 @@ export function accumulateAdsbDaily(
   h.snapshots += 1;
   h.positions += positions;
   h.maxAircraft = Math.max(h.maxAircraft, positions);
-  h.maxRangeKm = maxOrNull(h.maxRangeKm, stats?.maxRangeKm);
+  // Same reasoning as the daily row above, and more sharply: an hour is a much
+  // smaller bucket for a run-total to contaminate.
   h.maxRangeKm = maxOrNull(h.maxRangeKm, observedRange);
   h.msgRateMax = maxOrNull(h.msgRateMax, stats?.msgRate);
   // Signal is dBFS and always negative; 0 is not a plausible reading, so it is

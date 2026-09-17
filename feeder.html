@@ -1414,7 +1414,7 @@
         ${tile(n(t.snapshots), 'Snapshots')}
         ${tile(n(t.maxAircraft), 'Peak aircraft')}
         ${tile(t.maxRangeKm == null ? '—' : Math.round(t.maxRangeKm) + ' km', 'Best range',
-          'The furthest the DECODER measured. The coverage plot can read lower: it maps only positions that reached the server, and the ones at extreme range are the likeliest to arrive too stale to plot.')}
+          'The furthest aircraft seen in the uploads this receiver sent, over the selected window. The decoder can report a higher lifetime best: it sees every position it decodes, while this sees the aircraft present each time it uploads.')}
       </div>`;
 
       const days = (d.days || []).slice().reverse();
