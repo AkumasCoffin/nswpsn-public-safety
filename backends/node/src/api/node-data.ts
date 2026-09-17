@@ -44,6 +44,7 @@ import { requireRole, canViewNodeData } from '../services/auth/roles.js';
 import { hub } from '../services/nodes/hub.js';
 import {
   adsbAuthFailures,
+  nodeAdsbObservedRange,
   nodeAdsbObservedRangeKm,
 } from '../services/nodes/adsbNodeStore.js';
 import {
@@ -4215,6 +4216,10 @@ nodeDataRouter.get(
             msgRate: st?.adsbMsgRate ?? null,
             // Falls back to our own measurement — see adsbNodeView.
             maxRangeKm: st?.adsbMaxRangeKm ?? nodeAdsbObservedRangeKm(r.id),
+            // Both ends of the sky currently in view, null together once the
+            // upload they came from ages out.
+            nearestKm: nodeAdsbObservedRange(r.id)?.minKm ?? null,
+            furthestKm: nodeAdsbObservedRange(r.id)?.maxKm ?? null,
             gainNow: st?.adsbGainNow ?? null,
             decoder: st?.components?.['dump1090'] ?? null,
             queueDepth: st?.queueDepth ?? null,

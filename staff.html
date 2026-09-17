@@ -3121,6 +3121,12 @@
             <button class="filter-btn" data-nd2-view="capcodes" onclick="nd2SetView('capcodes')">Capcodes</button>
           </div>
         </div>
+        <div class="nd2-controls nd2-viewbar" id="nd2-viewbar-adsb" style="display: none;">
+          <div class="nd2-seg" role="group" aria-label="ADS-B data view">
+            <button class="filter-btn active" data-nd2-view="aoverview" onclick="nd2SetView('aoverview')">Overview</button>
+            <button class="filter-btn" data-nd2-view="anodes" onclick="nd2SetView('anodes')">Receivers</button>
+          </div>
+        </div>
 
         <div class="nd2-error" id="nd2-error" style="display: none;"></div>
         <!-- Node drill-down chrome. Deliberately placed ABOVE every nd2-view-*
@@ -3738,12 +3744,55 @@
         <!-- ADS-B receivers: live state + windowed performance per receiver. -->
         <div id="nd2-view-aoverview" style="display: none;">
           <div class="stats-bar" id="nd2-aov-tiles"></div>
-          <div class="nd2-card nd2-detail-gap">
-            <div class="nd2-card-h"><span>Receivers</span></div>
+          <div id="nd2-aov-auth" style="display: none;"></div>
+        </div>
+
+        <!-- ===== ADS-B Receivers (list) ===== -->
+        <div id="nd2-view-anodes" style="display: none;">
+          <div class="nd2-card">
+            <div class="nd2-card-h"><span>Receivers</span>
+              <span class="nd2-note">choose one to see its coverage and tracks</span></div>
             <div id="nd2-aov-list"><div class="nd2-empty">Loading…</div></div>
           </div>
-          <div id="nd2-aov-auth" style="display: none;"></div>
-          <div id="nd2-aov-detail" style="display: none;"></div>
+        </div>
+
+        <!-- ADS-B node drill-down. Same shape as the radio chrome above, but it
+             cannot reuse those panels: a receiver shares no vocabulary with a
+             radio node, so its tabs own four panels of their own, declared
+             directly beneath. -->
+        <div id="nd2-adsb-node-ctx" style="display: none;">
+          <div class="nd2-detail-head">
+            <button type="button" class="nd2-back" onclick="nd2AdsbNodeGoList()"><i class="fas fa-arrow-left"></i> Back</button>
+            <h3 class="nd2-detail-title" id="nd2-anode-title">Receiver</h3>
+          </div>
+          <div class="nd2-ctx node" id="nd2-anode-strip"></div>
+          <div class="nd2-controls nd2-systab-bar">
+            <div class="nd2-seg" role="group" aria-label="Receiver detail view">
+              <button class="filter-btn active" data-nd2-anodetab="overview" onclick="nd2AdsbNodeSetTab('overview')">Overview</button>
+              <button class="filter-btn" data-nd2-anodetab="coverage" onclick="nd2AdsbNodeSetTab('coverage')">Coverage</button>
+              <button class="filter-btn" data-nd2-anodetab="tracks" onclick="nd2AdsbNodeSetTab('tracks')">Tracks</button>
+              <button class="filter-btn" data-nd2-anodetab="heard" onclick="nd2AdsbNodeSetTab('heard')">Recently heard</button>
+            </div>
+          </div>
+          <div id="nd2-anode-overview" style="display: none;">
+            <div class="stats-bar" id="nd2-anode-tiles"></div>
+            <div class="nd2-card nd2-detail-gap">
+              <div class="nd2-card-h"><span>Daily</span></div>
+              <div id="nd2-anode-daily"><div class="nd2-empty">Loading…</div></div>
+            </div>
+          </div>
+          <div id="nd2-anode-coverage" style="display: none;"></div>
+          <div id="nd2-anode-tracks" style="display: none;">
+            <div class="nd2-card">
+              <div class="nd2-card-h"><span>Tracks</span>
+                <span class="nd2-note">last 8 hours, as received by this receiver</span></div>
+              <div id="nd2-aov-map-wrap">
+                <div id="nd2-aov-map"></div>
+                <div id="nd2-aov-map-note" class="nd2-note">Loading tracks…</div>
+              </div>
+            </div>
+          </div>
+          <div id="nd2-anode-heard" style="display: none;"></div>
         </div>
 
         <div id="nd2-view-poverview" style="display: none;">
@@ -4646,6 +4695,10 @@
       // panels (overview/systems/live/events) scoped by nd2.node, rather than
       // duplicating four renderers; `tab` is which of them is showing.
       nodes: { level: 'list', tab: 'overview', nodeId: null, name: null },
+      // Receivers view: list -> one receiver. Unlike `nodes` this cannot reuse
+      // the top-level panels — a receiver has no talkgroups, sites or calls —
+      // so its four panels are its own and `tab` is which of them is showing.
+      anodes: { level: 'list', tab: 'overview', nodeId: null, name: null },
       sys: { level: 'list', tab: 'sites', siteTab: 'overview', system: null, wacn: null, rfss: null, site: null, siteName: null },
       sysExpanded: {},     // system id → bool: which folder rows are open (persisted)
       // Talkgroups / Radios sub-tabs (scoped to the open system): search + paging.
@@ -4742,7 +4795,7 @@
     // this drives the panel show/hide sweep and the saved-view whitelist).
     const ND2_RADIO_VIEWS = ['overview', 'live', 'events', 'systems', 'nodes', 'talkgroups', 'aliases'];
     const ND2_PAGER_VIEWS = ['poverview', 'capcodes'];
-    const ND2_ADSB_VIEWS = ['aoverview'];
+    const ND2_ADSB_VIEWS = ['aoverview', 'anodes'];
     // Transcripts is a single view opened straight from the Data dropdown —
     // no pill row of its own, so no view LIST, just the one name.
     const _nd2AllViews = [...ND2_RADIO_VIEWS, ...ND2_PAGER_VIEWS, ...ND2_ADSB_VIEWS, 'transcripts'];
@@ -4796,6 +4849,10 @@
           case 'events': if (nd2.evOffset === 0) nd2LoadEvents(); break;
           case 'poverview': nd2LoadPagerOverview(); break;
           case 'aoverview': nd2LoadAdsbOverview(); break;
+          case 'anodes':
+            if (nd2.anodes.level === 'detail') nd2AdsbNodeRefresh();
+            else nd2LoadAdsbOverview();
+            break;
           case 'transcripts': nd2LoadTranscripts(); break;
           case 'capcodes': if (nd2.capLevel === 'list' && nd2.cap.offset === 0) nd2LoadCapcodes(); break;
         }
@@ -4836,6 +4893,10 @@
         case 'events': await Promise.all([nd2LoadOverview(), nd2LoadEvents()]); break;
         case 'poverview': await nd2LoadPagerOverview(); break;
         case 'aoverview': await nd2LoadAdsbOverview(); break;
+        case 'anodes':
+          if (nd2.anodes.level === 'detail') await nd2AdsbNodeRefresh();
+          else await nd2LoadAdsbOverview();
+          break;
         case 'capcodes': await nd2LoadCapcodesView(); break;
       }
     }
@@ -4896,11 +4957,14 @@
       _nd2MarkDataMenu();
       const rBar = document.getElementById('nd2-viewbar-radio');
       const pBar = document.getElementById('nd2-viewbar-pager');
+      const aBar = document.getElementById('nd2-viewbar-adsb');
       if (rBar) rBar.style.display = mode === 'radio' ? '' : 'none';
       if (pBar) pBar.style.display = mode === 'pager' ? '' : 'none';
-      // ADS-B has a single view, so like Transcripts it gets no pill row: one
-      // lone pill reads as a control that does nothing.
-      // Transcripts and ADS-B have ONE view each, so they get no pill row.
+      if (aBar) aBar.style.display = mode === 'adsb' ? '' : 'none';
+      // Leaving ADS-B mode must tear the track map down: hiding its container
+      // leaves Leaflet's listeners and tile requests alive behind it.
+      if (mode !== 'adsb') nd2AdsbLeaveDetail();
+      // Transcripts has ONE view, so it gets no pill row.
       // The per-node scope selector is a Radio-mode control (pager stays
       // fleet-wide); hide it entirely in Pager mode.
       const nodeCtl = document.getElementById('nd2-node-ctl');
@@ -4945,7 +5009,15 @@
         if (nsel) nsel.value = '';
       }
       nd2ShowNodeChrome(false);
+      // Same reasoning for the receiver drill-down: its chrome sits above the
+      // view panels, so leaving it up would frame an unrelated view as though
+      // it were still scoped to that receiver — and its map would keep running.
+      if (view !== 'anodes') nd2AdsbLeaveDetail();
       if (view === 'nodes') { const l = document.getElementById('nd2-view-nodes'); if (l) l.style.display = ''; }
+      if (view === 'anodes' && nd2.anodes.level === 'detail') {
+        const l = document.getElementById('nd2-view-anodes');
+        if (l) l.style.display = 'none';
+      }
       if (view === 'systems') { nd2.sys.tab = 'sites'; nd2.sys.siteTab = 'overview'; nd2SysShow('list'); nd2SysCrumbs(); }
       // Fleet-wide Talkgroups borrows the shared panel from the Systems
       // drill-down, so it has to be moved here before nd2Refresh() paints it.
@@ -6431,6 +6503,15 @@
     /** Open one node's drill-down from anywhere in the Data tab. */
     function nd2OpenNodeFromData(nodeId, name, kind) {
       if (!nodeId) return;
+      // A receiver has none of the radio vocabulary, so its drill-down here
+      // could only ever show an Overview with everything else hidden. It has
+      // its own view now — hand it over rather than half-render it.
+      if (kind === 'adsb') {
+        nd2SetMode('adsb');
+        nd2SetView('anodes');
+        nd2OpenAdsbNodeFromData(nodeId, name || '');
+        return;
+      }
       nd2.nodes.level = 'detail';
       nd2.nodes.nodeId = nodeId;
       nd2.nodes.name = name || null;
@@ -7949,35 +8030,41 @@
         }
 
         // An absent range is explained rather than shown as a fault: without an
-        // antenna pin the decoder cannot compute one at all.
-        const rangeCell = !r.hasPosition
-          ? '<span style="' + soft + '" title="Set the node\'s exact antenna pin to enable range">no pin</span>'
-          : (tot.maxRangeKm ? Math.round(tot.maxRangeKm) + ' km' : '—');
+        // antenna pin the receiver cannot compute one at all.
+        const noPin = '<span style="' + soft + '" title="Set the node\'s exact antenna pin to enable range">no pin</span>';
+        const km = (v) => (v == null ? '—' : Math.round(v) + ' km');
+        const nearCell = !r.hasPosition ? noPin : km(live.nearestKm);
+        const farCell = !r.hasPosition ? noPin : km(live.furthestKm);
 
         return [
-          `<a href="#" class="nd2-node-link" data-node-id="${escapeHtml(String(r.id))}">${escapeHtml(r.name || String(r.id))}</a>`
+          `<a href="#" class="nd2-node-link" data-node-id="${escapeHtml(String(r.id))}"`
+            + ` data-node-name="${escapeHtml(r.name || String(r.id))}">${escapeHtml(r.name || String(r.id))}</a>`
             + (state ? `<div class="nd2-aov-state" style="${soft}">${state}</div>` : ''),
           (live.aircraftNow == null ? '—' : nd2Num(live.aircraftNow)),
           (live.msgRate == null ? '—' : Number(live.msgRate).toFixed(1) + '/s'),
-          rangeCell,
+          nearCell,
+          farCell,
           nd2Num(tot.positions),
           nd2Num(tot.maxAircraft),
-          (tot.tracksMax == null ? '—' : nd2Num(tot.tracksMax)),
         ];
       });
 
       listEl.innerHTML = nd2MiniTable(
         [{ label: 'Receiver' }, { label: 'Aircraft', num: true }, { label: 'Msg rate', num: true },
-         { label: 'Max range', num: true }, { label: 'Positions', num: true },
-         { label: 'Peak aircraft', num: true }, { label: 'Unique', num: true }],
-        rows);
+         { label: 'Closest', num: true }, { label: 'Furthest', num: true },
+         { label: 'Positions', num: true }, { label: 'Peak aircraft', num: true }],
+        rows, () => 'nd2-rowlink');
 
-      // Delegated so it survives the poll re-render.
+      // Delegated so it survives the poll re-render. The whole row is the
+      // target, matching the radio node list; the link inside it stays for
+      // keyboard reach, and carries the ids the row itself cannot.
       listEl.onclick = (e) => {
-        const a = e.target.closest('.nd2-node-link');
+        const tr = e.target.closest('tr');
+        if (!tr || !listEl.contains(tr)) return;
+        const a = tr.querySelector('.nd2-node-link');
         if (!a) return;
         e.preventDefault();
-        nd2OpenAdsbNodeView(a.dataset.nodeId);
+        nd2OpenAdsbNodeFromData(a.dataset.nodeId, a.dataset.nodeName || '');
       };
     }
 
@@ -8136,13 +8223,18 @@
      *  how far" — a gap in the fan is an obstruction or a bad lobe, and a short
      *  radius on one bearing is terrain.
      *
-     *  Served from memory, so it resets when the backend restarts and refills
-     *  within minutes. */
+     *  Persisted per receiver, so it survives a backend restart — see
+     *  node_adsb_tracks. */
     async function nd2LoadAdsbTracks(nodeId) {
       _nd2TrackNodeId = nodeId;
       const wrap = document.getElementById('nd2-aov-map-wrap');
       const note = document.getElementById('nd2-aov-map-note');
       if (!wrap) return;
+      // One response feeds two tabs — the traces and the envelope are built
+      // from the same stored rows — but only the Tracks tab may touch Leaflet.
+      // Building a map into a hidden panel gives it a zero-size container and
+      // a blank tile grid that never recovers.
+      const drawMap = nd2.anodes.tab === 'tracks';
 
       let d;
       try {
@@ -8154,12 +8246,21 @@
       }
       if (!d || _nd2TrackNodeId !== nodeId) return;   // superseded by a newer click
 
+      if (!drawMap) {
+        nd2RenderAdsbCoverage(d);
+        return;
+      }
+
       // Build the map lazily: creating it before the panel is visible gives
       // Leaflet a zero-size container and a blank tile grid.
       if (!_nd2TrackMap) {
         const dark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?key=cb1_29rl_1_764d57ded0436220d836abc9',
           { subdomains: 'abcd', maxZoom: 19, attribution: '© CartoDB' });
-        _nd2TrackMap = L.map('nd2-aov-map', { attributionControl: false, layers: [dark] })
+        // The wheel scrolls the page here, as it does on the feeder card: this
+        // map sits inside a scrolling column, and swallowing the wheel traps
+        // anyone trying to get past it.
+        _nd2TrackMap = L.map('nd2-aov-map',
+          { attributionControl: false, scrollWheelZoom: false, layers: [dark] })
           .setView([d.site ? d.site.lat : -33.8688, d.site ? d.site.lon : 151.2093], 8);
       }
       if (_nd2TrackLayer) { _nd2TrackLayer.remove(); _nd2TrackLayer = null; }
@@ -8220,10 +8321,21 @@
         note.textContent = parts.join(' · ');
       }
 
-      // The coverage plot is rebuilt from the same response, since this is the
-      // call that carries it.
-      const cov = document.getElementById('nd2-aov-polar');
-      if (cov) cov.innerHTML = nd2AdsbPolarBody(d.coverage);
+      // The coverage tab is rebuilt from the same response, since this is the
+      // call that carries it — so switching to it does not have to refetch.
+      nd2RenderAdsbCoverage(d);
+    }
+
+    /** Paint the Coverage tab from a tracks response. */
+    function nd2RenderAdsbCoverage(d) {
+      const el = document.getElementById('nd2-anode-coverage');
+      if (!el) return;
+      const name = nd2.anodes.name || 'Receiver';
+      el.innerHTML = '<div class="nd2-card">'
+        + '<div class="nd2-card-h"><span>' + escapeHtml(name) + ' — coverage</span>'
+        +   '<span class="nd2-note">how far it hears, per bearing</span></div>'
+        + '<div id="nd2-aov-polar">' + nd2AdsbPolarBody(d.coverage) + '</div>'
+        + '</div>';
     }
 
     function nd2DestroyTrackMap() {
@@ -8294,15 +8406,6 @@
 
     /** The coverage plot's card shell. Its contents are filled by the tracks
      *  fetch, which is the call that carries the envelope. */
-    function nd2AdsbCoverageCard(name) {
-      return ''
-        + '<div class="nd2-card nd2-detail-gap">'
-        +   '<div class="nd2-card-h"><span>' + escapeHtml(name) + ' — coverage</span>'
-        +     '<span class="nd2-note">how far it hears, per bearing</span></div>'
-        +   '<div id="nd2-aov-polar"><div class="nd2-empty">Loading coverage…</div></div>'
-        + '</div>';
-    }
-
     function nd2AdsbPolarBody(cov) {
       if (!cov || !ENV_hasData(cov.buckets)) {
         return '<div class="nd2-empty">Nothing heard yet — a coverage picture '
@@ -8330,8 +8433,101 @@
     }
 
     /** One receiver's day-by-day history, shown under the fleet table. */
-    async function nd2OpenAdsbNodeView(nodeId) {
+    const ND2_ANODE_TAB_PANEL = {
+      overview: 'nd2-anode-overview',
+      coverage: 'nd2-anode-coverage',
+      tracks: 'nd2-anode-tracks',
+      heard: 'nd2-anode-heard',
+    };
+
+    /** Open one receiver's drill-down, replacing the list. */
+    function nd2OpenAdsbNodeFromData(nodeId, name) {
       if (!nodeId) return;
+      nd2.anodes.level = 'detail';
+      nd2.anodes.nodeId = nodeId;
+      nd2.anodes.name = name || null;
+
+      const title = document.getElementById('nd2-anode-title');
+      if (title) title.textContent = name || nd2ShortNode(nodeId);
+      const strip = document.getElementById('nd2-anode-strip');
+      if (strip) {
+        strip.innerHTML = `<span class="nd2-ctx-kind">RECEIVER</span>`
+          + `<span class="nd2-ctx-name">${escapeHtml(name || nd2ShortNode(nodeId))}</span>`
+          + `<span class="nd-sub">${escapeHtml(nd2ShortNode(nodeId))}</span>`;
+      }
+      nd2AdsbNodeSetTab('overview', true);
+    }
+
+    /** Back to the receiver list. */
+    function nd2AdsbNodeGoList() {
+      nd2AdsbLeaveDetail();
+      const list = document.getElementById('nd2-view-anodes');
+      if (list) list.style.display = '';
+      nd2LoadAdsbOverview();
+    }
+
+    /** Drop the drill-down, wherever we are leaving it from.
+     *
+     *  Tearing the map down is the part that matters: hiding its container
+     *  leaves Leaflet holding listeners and pulling tiles for a panel nobody
+     *  can see, and re-entering would then build a second map over the first. */
+    function nd2AdsbLeaveDetail() {
+      nd2DestroyTrackMap();
+      nd2.anodes.level = 'list';
+      nd2.anodes.nodeId = null;
+      const ctx = document.getElementById('nd2-adsb-node-ctx');
+      if (ctx) ctx.style.display = 'none';
+      Object.values(ND2_ANODE_TAB_PANEL).forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = 'none';
+      });
+    }
+
+    /** Show one of the receiver's own panels. */
+    function nd2AdsbNodeSetTab(tab, force) {
+      if (!ND2_ANODE_TAB_PANEL[tab]) return;
+      if (!force && nd2.anodes.tab === tab && nd2.anodes.level === 'detail') return;
+      nd2.anodes.tab = tab;
+      document.querySelectorAll('[data-nd2-anodetab]').forEach(b =>
+        b.classList.toggle('active', b.dataset.nd2Anodetab === tab));
+      const list = document.getElementById('nd2-view-anodes');
+      if (list) list.style.display = 'none';
+      const ctx = document.getElementById('nd2-adsb-node-ctx');
+      if (ctx) ctx.style.display = '';
+      Object.entries(ND2_ANODE_TAB_PANEL).forEach(([k, id]) => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = k === tab ? '' : 'none';
+      });
+      // A map built while its panel was hidden measured zero, and one built
+      // earlier has been sized for a panel that was not on screen. Either way
+      // it needs re-measuring now that this one is.
+      if (tab === 'tracks' && _nd2TrackMap) {
+        setTimeout(() => _nd2TrackMap && _nd2TrackMap.invalidateSize(), 60);
+      }
+      // These two panels are built entirely in JS, so without this they sit
+      // blank for the length of the fetch and read as "nothing here".
+      if (tab === 'coverage' || tab === 'heard') {
+        const el = document.getElementById(ND2_ANODE_TAB_PANEL[tab]);
+        if (el && !el.innerHTML.trim()) {
+          el.innerHTML = '<div class="nd2-card"><div class="nd2-empty">Loading…</div></div>';
+        }
+      }
+      nd2AdsbNodeRefresh();
+    }
+
+    /** Load whichever panel the receiver detail is showing.
+     *
+     *  Two endpoints, split by what each tab is actually asking. Overview and
+     *  Recently heard are the receiver's record (adsb-node); Coverage and
+     *  Tracks both come from adsb-tracks, which carries the envelope alongside
+     *  the traces because both are built from the same stored rows. */
+    async function nd2AdsbNodeRefresh() {
+      const nodeId = nd2.anodes.nodeId;
+      if (!nodeId) return;
+      if (nd2.anodes.tab === 'tracks' || nd2.anodes.tab === 'coverage') {
+        await nd2LoadAdsbTracks(nodeId);
+        return;
+      }
       let d;
       try {
         d = await nd2Fetch(`/api/node-data/adsb-node?nodeId=${encodeURIComponent(nodeId)}&window=${encodeURIComponent(nd2.window)}`);
@@ -8339,60 +8535,67 @@
         showToast('Could not load that receiver: ' + (e && e.message ? e.message : 'request failed'), 'error');
         return;
       }
-      if (!d) return;
-      const days = d.days || [];
-      const name = (d.node && (d.node.name || d.node.id)) || 'Receiver';
-      const body = days.length
-        ? nd2MiniTable(
-            [{ label: 'Day' }, { label: 'Positions', num: true }, { label: 'Peak aircraft', num: true },
-             { label: 'Max range', num: true }, { label: 'Peak msg rate', num: true }],
-            days.slice().reverse().map(x => [
-              escapeHtml(String(x.day)),
-              nd2Num(x.positions),
-              nd2Num(x.maxAircraft),
-              x.maxRangeKm ? Math.round(x.maxRangeKm) + ' km' : '—',
-              x.msgRateMax ? Number(x.msgRateMax).toFixed(1) + '/s' : '—',
-            ]))
-        : '<div class="nd2-empty">Nothing recorded for this receiver in this window.</div>';
-      const el = document.getElementById('nd2-aov-detail');
-      if (!el) return;
-      el.style.display = '';
-      el.innerHTML = ''
-        + nd2AdsbCoverageCard(name)
-        + '<div class="nd2-card nd2-detail-gap">'
-        +   '<div class="nd2-card-h nd2-aov-head">'
-        +     '<span>' + escapeHtml(name) + ' — tracks</span>'
-        +     '<span class="nd2-note">last 8 hours, as received by this receiver</span>'
-        +     '<span class="nd2-aov-head-ctl">'
-        +       '<button type="button" class="btn btn-secondary btn-sm" onclick="nd2CloseAdsbNodeView()">Close</button>'
-        +     '</span>'
-        +   '</div>'
-        +   '<div id="nd2-aov-map-wrap">'
-        +     '<div id="nd2-aov-map"></div>'
-        +     '<div id="nd2-aov-map-note" class="nd2-note">Loading tracks…</div>'
-        +   '</div>'
-        + '</div>'
-        + '<div class="nd2-card nd2-detail-gap">'
-        +   '<div class="nd2-card-h"><span>' + escapeHtml(name) + ' — daily</span></div>'
-        +   body
-        + '</div>'
-        + '<div class="nd2-card nd2-detail-gap">'
-        +   '<div class="nd2-card-h"><span>Recently heard</span>'
-        +     '<span class="nd2-note">last 8 hours</span></div>'
-        +   nd2AdsbRecentCard(d.recent)
-        + '</div>';
-      el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      // After the panel is in the DOM and sized, or Leaflet measures zero.
-      nd2DestroyTrackMap();
-      nd2LoadAdsbTracks(nodeId);
+      if (!d || nd2.anodes.nodeId !== nodeId) return;   // superseded while in flight
+      if (nd2.anodes.tab === 'overview') nd2RenderAdsbNodeOverview(d);
+      else if (nd2.anodes.tab === 'heard') nd2RenderAdsbNodeHeard(d);
     }
 
-    function nd2CloseAdsbNodeView() {
-      // Tear the map down explicitly: dropping its container via innerHTML
-      // leaves Leaflet's listeners and tile requests alive.
-      nd2DestroyTrackMap();
-      const el = document.getElementById('nd2-aov-detail');
-      if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+    function nd2RenderAdsbNodeOverview(d) {
+      const live = d.live || {};
+      const days = d.days || [];
+      const hasPin = !!(d.node && d.node.hasPosition);
+      const km = (v) => (v == null ? '—' : Math.round(v) + ' km');
+
+      const tilesEl = document.getElementById('nd2-anode-tiles');
+      if (tilesEl) {
+        // Aircraft now and message rate are live or they are nothing: a stale
+        // figure would read as a receiver still hearing. Closest and furthest
+        // come from the last upload and clear with it for the same reason.
+        const tile = (v, label, colour, sub) =>
+          '<div class="stat-card"' + (colour ? ' style="border-color:' + colour + '33;"' : '') + '>'
+          + '<div class="stat-value"' + (colour ? ' style="color:' + colour + ';"' : '') + '>' + v + '</div>'
+          + '<div class="stat-label">' + label + '</div>'
+          + (sub ? '<div class="nd2-stat-sub">' + sub + '</div>' : '')
+          + '</div>';
+        tilesEl.innerHTML = [
+          tile(d.online ? (live.aircraftNow == null ? '—' : nd2Num(live.aircraftNow)) : '—',
+            'Aircraft now', 'var(--success)', d.online ? 'with a position' : 'receiver offline'),
+          tile(live.msgRate == null ? '—' : Number(live.msgRate).toFixed(1) + '/s',
+            'Message rate', null, 'last minute'),
+          tile(hasPin ? km(live.nearestKm) : '—', 'Closest aircraft', null,
+            hasPin ? 'in the last upload' : 'needs an antenna pin'),
+          tile(hasPin ? km(live.furthestKm) : '—', 'Furthest aircraft', null,
+            hasPin ? 'in the last upload' : 'needs an antenna pin'),
+          tile(live.gainNow == null ? '—' : Number(live.gainNow).toFixed(1) + ' dB',
+            'Gain', null, live.decoder ? escapeHtml(live.decoder) : 'decoder unknown'),
+        ].join('');
+      }
+
+      const dailyEl = document.getElementById('nd2-anode-daily');
+      if (dailyEl) {
+        dailyEl.innerHTML = days.length
+          ? nd2MiniTable(
+              [{ label: 'Day' }, { label: 'Positions', num: true }, { label: 'Peak aircraft', num: true },
+               { label: 'Best range', num: true }, { label: 'Peak msg rate', num: true }],
+              days.slice().reverse().map(x => [
+                escapeHtml(String(x.day)),
+                nd2Num(x.positions),
+                nd2Num(x.maxAircraft),
+                x.maxRangeKm ? Math.round(x.maxRangeKm) + ' km' : '—',
+                x.msgRateMax ? Number(x.msgRateMax).toFixed(1) + '/s' : '—',
+              ]))
+          : '<div class="nd2-empty">Nothing recorded for this receiver in this window.</div>';
+      }
+    }
+
+    function nd2RenderAdsbNodeHeard(d) {
+      const el = document.getElementById('nd2-anode-heard');
+      if (!el) return;
+      el.innerHTML = '<div class="nd2-card">'
+        + '<div class="nd2-card-h"><span>Recently heard</span>'
+        +   '<span class="nd2-note">last 8 hours</span></div>'
+        + nd2AdsbRecentCard(d.recent)
+        + '</div>';
     }
 
     async function nd2LoadPagerOverview() {
@@ -13743,7 +13946,10 @@
         // Mode first: nd2SetMode resets the view to that mode's first view, so
         // restoring the view before the mode would immediately discard it.
         const rememberedMode = staffRecall(STAFF_DATA_MODE_KEY);
-        if (rememberedMode === 'radio' || rememberedMode === 'pager') {
+        // ADS-B was missing from this list, so reloading while in it silently
+        // dropped you back into Radio.
+        if (rememberedMode === 'radio' || rememberedMode === 'pager'
+            || rememberedMode === 'adsb') {
           nd2SetMode(rememberedMode);
         }
         // Whitelisted against the known view list — a stored value is
