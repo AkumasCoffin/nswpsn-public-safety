@@ -28,6 +28,10 @@ import {
   HISTORY_TRAIL_DEFAULT_MIN,
 } from '../services/adsbHistory.js';
 import { DATA_RETENTION_DAYS } from '../lib/retention.js';
+import { requireRole, canViewNodeData } from '../services/auth/roles.js';
+import { listNodes } from '../services/nodes/registry.js';
+import { adsbNodeSourceId } from '../services/nodes/adsbNodeStore.js';
+import { hub } from '../services/nodes/hub.js';
 import { fetchJson } from '../sources/shared/http.js';
 import { SwrCache } from '../services/swrCache.js';
 import { log } from '../lib/log.js';
@@ -47,6 +51,38 @@ adsbRouter.get('/api/adsb/aircraft', (c) => {
       newestMs: now,
     },
   });
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/adsb/receivers
+//
+// The ADS-B receivers in the fleet, so the map can offer a per-node filter to
+// someone allowed to see node data. Same gate as the staff Data tab
+// (canViewNodeData = owner | feeder:manager | feeder:monitor), because it is
+// the same question: which receivers exist.
+//
+// DELIBERATELY MINIMAL. `sourceId` is the label the merge already stamps onto
+// each record's `sources[]`, so the filter is a client-side set test and the
+// client never has to reconstruct that string itself. Everything else a node
+// row carries — the antenna pin above all, but also token prefixes, install
+// ids and notes — is absent: this lands in a PUBLIC page's JavaScript, and the
+// only thing that page needs is a name to show and a label to match.
+// ---------------------------------------------------------------------------
+adsbRouter.get('/api/adsb/receivers', requireRole(canViewNodeData), async (c) => {
+  try {
+    const nodes = (await listNodes()).filter((n) => n.kind === 'adsb');
+    return c.json({
+      receivers: nodes.map((n) => ({
+        id: n.id,
+        name: n.name,
+        sourceId: adsbNodeSourceId(n.id, n.name),
+        online: hub.isOnline(n.id),
+      })),
+    });
+  } catch (err) {
+    log.error({ err }, '/api/adsb/receivers failed');
+    return c.json({ error: 'failed to list receivers' }, 500);
+  }
 });
 
 // ---------------------------------------------------------------------------

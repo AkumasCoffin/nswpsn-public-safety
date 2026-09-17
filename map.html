@@ -1446,6 +1446,15 @@
       align-items: center;
       gap: 8px;
     }
+    .floating-filter-panel .ff-select {
+      width: 100%; margin-top: 4px; padding: 4px 6px;
+      background: rgba(148, 163, 184, 0.12);
+      border: 1px solid rgba(148, 163, 184, 0.3);
+      border-radius: 6px; color: #e2e8f0; font-size: 11px;
+      font-family: inherit; cursor: pointer;
+    }
+    .floating-filter-panel .ff-select:focus { outline: none; border-color: #c084fc; }
+    .floating-filter-panel .ff-select option { background: #0f172a; color: #e2e8f0; }
     .floating-filter-panel .ff-section-label {
       font-size: 10px;
       color: #94a3b8;
@@ -5040,6 +5049,10 @@
           // signed-in user — the overwhelming majority of visitors are
           // anonymous and must not pay for a feature they cannot use.
           _adsbLoadMyReceivers();
+          // Separate call, separate gate: owning a receiver and being allowed
+          // to see the whole fleet are different permissions, and plenty of
+          // people have one without the other.
+          _adsbLoadAllReceivers();
         } else removeFilterButton('adsb');
         syncUnifiedListPanel();
         if (typeof updateSidebarFilterVisibility === 'function') {
@@ -13901,6 +13914,23 @@ function initPagerHoursFromStorage() {
     // "Only my receiver" state. Declared here with the rest of the persisted
     // filters; the control that drives it, and the identity lookup that decides
     // whether to offer it at all, come later in the ADS-B section.
+    // ---------- Per-receiver filter (node-data roles) ----------
+    //
+    // "Only my receiver" answers "what is MY antenna contributing". This
+    // answers the fleet version of it: show only what our own hardware heard,
+    // and optionally narrow to one receiver. Same data behind both — every
+    // aircraft carries `sources`, and a node's records are tagged
+    // `node:<name>` — so the filtering is a client-side test either way. The
+    // only thing the extra privilege buys is the LIST of receivers.
+    //
+    // Offered only to someone the backend already lets read node data
+    // (owner / feeder:manager / feeder:monitor). Everyone else never sees the
+    // control, rather than seeing one that does nothing.
+    let adsbNodesOnly = false;          // any of our receivers
+    let adsbNodeSource = null;          // one specific receiver, or null for any
+    let _adsbAllReceivers = [];         // [{ id, name, sourceId, online }]
+    let _adsbPendingNodeScope = null;   // restored pref, held until the list is known
+
     let adsbMineOnly = false;
     let _adsbPendingMineOnly = false;  // restored value, held until ownership is known
     let _myAdsbSources = new Set();    // 'node:<name>' labels this user owns
@@ -13915,6 +13945,9 @@ function initPagerHoursFromStorage() {
           labels: { ...adsbLabelSettings },
           trails: adsbTrailsEnabled,
           mineOnly: adsbMineOnly,
+          // Persisted as one object so "on, no receiver" and "on, this
+          // receiver" cannot drift apart across a reload.
+          nodeScope: adsbNodesOnly ? { source: adsbNodeSource } : null,
           sort: { ..._adsbSort },
         },
         ais: {
@@ -13953,6 +13986,16 @@ function initPagerHoursFromStorage() {
         // receiver — see _adsbApplyPendingMineOnly. A stale true would
         // otherwise hide every aircraft with no control on screen to explain it.
         _adsbPendingMineOnly = p.adsb.mineOnly === true;
+        // Held, not applied: the receiver list has not loaded yet, and a scope
+        // applied before it is known would hide every aircraft with no control
+        // on screen to explain why.
+        if (p.adsb.nodeScope && typeof p.adsb.nodeScope === 'object') {
+          _adsbPendingNodeScope = {
+            source: typeof p.adsb.nodeScope.source === 'string'
+              ? p.adsb.nodeScope.source
+              : null,
+          };
+        }
         // Validated against the real column list rather than trusted: a stale
         // or hand-edited pref naming a column that no longer exists would
         // leave every row sorting equal, with no header marked.
@@ -14570,6 +14613,7 @@ function initPagerHoursFromStorage() {
         if (a.hex !== _adsbPinnedHex && !view.contains([a.lat, a.lon])) continue;
         if (!adsbTypeFilter[adsbFilterCategory(a)]) continue;
         if (adsbMineOnly && !_adsbFromMyNodes(a)) continue;
+        if (!_adsbInNodeScope(a)) continue;
         // Search filters map markers too, so the map matches the list
         // (same behaviour as AIS).
         if (q && !_adsbSearchHay(a).includes(q)) continue;
@@ -15175,6 +15219,7 @@ function initPagerHoursFromStorage() {
         if (!isFinite(a.lat) || !isFinite(a.lon)) continue;
         if (!adsbTypeFilter[adsbFilterCategory(a)]) continue;
         if (adsbMineOnly && !_adsbFromMyNodes(a)) continue;
+        if (!_adsbInNodeScope(a)) continue;
         // Ground targets are hidden from the map at low zoom, but a
         // search should still find them (the user typed something
         // specific — don't make them zoom in first).
@@ -15666,6 +15711,81 @@ function initPagerHoursFromStorage() {
       }
     }
 
+    /**
+     * The fleet's receivers, for the per-node dropdown.
+     *
+     * Same lazy, once-only, layer-on-only shape as the ownership lookup above,
+     * and the same failure posture: anonymous, under-privileged, or offline all
+     * land in the same place — the control is simply not offered.
+     */
+    async function _adsbLoadAllReceivers() {
+      try {
+        if (typeof notifHeaders !== 'function') return;
+        const h = await notifHeaders();
+        if (!h) return;                         // anonymous
+        const r = await fetch(`${API_BASE_URL}/api/adsb/receivers`, { headers: h });
+        if (!r.ok) return;                      // 403 = not a node-data role
+        const data = await r.json().catch(() => ({}));
+        const list = Array.isArray(data.receivers) ? data.receivers : [];
+        _adsbAllReceivers = list.filter((n) => n && n.sourceId);
+        if (_adsbAllReceivers.length === 0) return;
+
+        // Only now is a restored scope safe to apply — the same trap the
+        // mine-only pref has. Worse here: a saved receiver that has since been
+        // deleted would filter every aircraft away with a dropdown showing a
+        // name that no longer exists, so it is validated against the real list
+        // rather than trusted.
+        const want = _adsbPendingNodeScope;
+        _adsbPendingNodeScope = null;
+        if (want) {
+          adsbNodesOnly = true;
+          adsbNodeSource = _adsbAllReceivers.some((n) => n.sourceId === want.source)
+            ? want.source
+            : null;
+        }
+        _rebuildAdsb();
+        refreshActiveFilterPanel();
+      } catch (e) {
+        /* offline, or signed out between the two calls — no control, no harm */
+      }
+    }
+
+    /** True when this aircraft passes the receiver scope.
+     *
+     *  `some`, not `every`: an aircraft one of our receivers AND an aggregator
+     *  both heard was still heard by us. */
+    function _adsbInNodeScope(a) {
+      if (!adsbNodesOnly) return true;
+      const src = a && a.sources;
+      if (!Array.isArray(src)) return false;
+      if (adsbNodeSource) return src.indexOf(adsbNodeSource) !== -1;
+      // Any of ours. Every node label starts `node:`, and no aggregator id
+      // does, so this needs no membership set.
+      for (const x of src) if (typeof x === 'string' && x.startsWith('node:')) return true;
+      return false;
+    }
+
+    window.toggleAdsbNodesOnly = function () {
+      adsbNodesOnly = !adsbNodesOnly;
+      // Turning the scope off drops the receiver with it: leaving a selection
+      // armed but inert is how a filter surprises you the next time it is
+      // switched on.
+      if (!adsbNodesOnly) adsbNodeSource = null;
+      _rebuildAdsb();
+      refreshActiveFilterPanel();
+      saveMapPrefs();
+    };
+
+    window.setAdsbNodeSource = function (value) {
+      adsbNodeSource = value || null;
+      // Picking a receiver implies wanting only receiver traffic; without this
+      // the dropdown would silently do nothing.
+      if (adsbNodeSource) adsbNodesOnly = true;
+      _rebuildAdsb();
+      refreshActiveFilterPanel();
+      saveMapPrefs();
+    };
+
     /** True when one of this user's receivers heard this aircraft.
      *
      *  `some`, not `every`: an aircraft your receiver AND an aggregator both
@@ -15742,8 +15862,37 @@ function initPagerHoursFromStorage() {
             )}</div>
           `;
         }
+        // Only rendered for someone the backend lets read node data. The
+        // dropdown appears only once the scope is on, since narrowing to one
+        // receiver while showing every aircraft means nothing.
+        let fleetHtml = '';
+        if (_adsbAllReceivers.length > 0) {
+          const opts = ['<option value="">Any receiver</option>'].concat(
+            _adsbAllReceivers.map((n) => {
+              const name = n.name || n.sourceId.replace(/^node:/, '');
+              const sel = adsbNodeSource === n.sourceId ? ' selected' : '';
+              // Offline receivers stay listed: their aircraft are still in the
+              // feed for up to two minutes, and hiding the row would make a
+              // filter that was working look like it had vanished.
+              return `<option value="${escapeHtml(n.sourceId)}"${sel}>`
+                + `${escapeHtml(name)}${n.online ? '' : ' (offline)'}</option>`;
+            }),
+          ).join('');
+          fleetHtml = `
+            <div class="ff-section-label">Our receivers</div>
+            <div class="floating-filter-pills">${_ffPill(
+              adsbNodesOnly,
+              '<i class="fa-solid fa-satellite-dish"></i> Heard by our receivers',
+              'toggleAdsbNodesOnly()'
+            )}</div>
+            ${adsbNodesOnly
+              ? `<select class="ff-select" onchange="setAdsbNodeSource(this.value)">${opts}</select>`
+              : ''}
+          `;
+        }
         return `
           <h4><i class="fa-solid fa-plane" style="color:#c084fc;"></i> Aircraft</h4>
+          ${fleetHtml}
           ${mineHtml}
           <div class="ff-section-label">Aircraft type</div>
           <div class="floating-filter-pills">${typePills}</div>
