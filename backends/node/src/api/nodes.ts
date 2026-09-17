@@ -43,6 +43,7 @@ import {
   type NodePatch,
 } from '../services/nodes/registry.js';
 import { hub } from '../services/nodes/hub.js';
+import { nodeUptimeMany } from '../services/nodes/nodeUptime.js';
 import { liveCallWindow } from '../services/nodeCallWindow.js';
 import { isAgentCommandAction } from '../services/nodes/protocol.js';
 import { getUsernameMap, getUsername } from './users.js';
@@ -146,7 +147,19 @@ const PatchSchema = z.object({
 nodesRouter.get('/api/nodes', requireRole(canViewNodeData), async (c) => {
   try {
     const [nodes, usernames] = await Promise.all([listNodes(), getUsernameMap()]);
-    return c.json({ nodes: nodes.map((n) => toApi(n, usernames)) });
+    // One query for the whole page rather than one per card.
+    const uptime = await nodeUptimeMany(nodes.map((n) => n.id), '7d');
+    return c.json({
+      nodes: nodes.map((n) => {
+        const u = uptime.get(n.id);
+        return {
+          ...toApi(n, usernames),
+          uptimePct: u?.pct ?? null,
+          uptimeRunMs: u?.currentRunMs ?? null,
+          uptimeWindow: '7d',
+        };
+      }),
+    });
   } catch (err) {
     log.error({ err }, 'Error listing nodes');
     return c.json({ error: 'Failed to list nodes' }, 500);

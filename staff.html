@@ -400,6 +400,16 @@
     }
     .nd-meta-pin { font-size: 0.68rem; color: #7dd3fc; }
     .nd-meta-warn { color: #fbbf24; }
+    /* Uptime sits on its own line above the identifiers: it is a health
+       figure, not metadata, and burying it among owner and install ids read
+       as one more id. */
+    .nd-uptime-row { gap: 0.45rem; align-items: baseline; }
+    .nd-up { font-weight: 700; font-size: 0.82rem; color: var(--text-primary); }
+    .nd-up.ok { color: #86efac; }
+    .nd-up.warn { color: #fbbf24; }
+    .nd-up-run { color: var(--text-soft); }
+    .nd-up-down { color: #fca5a5; }
+    .nd-up-none { color: var(--text-soft); opacity: 0.7; }
     /* Whole node card is a button opening the drawer. */
     .node-card-btn { cursor: pointer; }
     .node-card-btn:focus-visible { outline: 2px solid var(--accent, #38bdf8); outline-offset: 2px; }
@@ -3097,16 +3107,9 @@
             <i class="fas fa-sync-alt"></i> Refresh
           </button>
         </div>
-        <!-- Which of the two whisper servers rdio is transcribing through.
-             The PC one comes and goes with the desktop being idle, so "which
-             one right now" is a real question the panel has to answer. -->
-        <div class="wh-card" id="whisper-card" style="display:none;">
-          <div class="wh-head">
-            <i class="fas fa-microphone"></i> Transcription
-            <span class="wh-sub" id="whisper-sub"></span>
-          </div>
-          <div class="wh-rows" id="whisper-rows"></div>
-        </div>
+        <!-- Transcription status lives on Data > Transcripts, which shows this
+             same card plus the throughput and latency charts. A second copy
+             here was the same fetch drawn twice, above a page about nodes. -->
         <div id="nodes-grid">
           <div class="loading" style="grid-column: 1 / -1;">
             <i class="fas fa-spinner"></i>
@@ -6530,7 +6533,11 @@
       const shown = v >= 99.95 ? '100' : v.toFixed(1);
       const cls = v >= 99 ? 'nd2-up-ok' : v >= 95 ? '' : 'nd2-up-warn';
       const run = nd2UptimeRun(runMs);
-      return `<span class="${cls}" title="${run ? 'Up ' + escapeHtml(run) : 'Not up now'}">${shown}%</span>`;
+      // The run goes on the line beneath rather than into a tooltip: the two
+      // figures answer different questions and a tooltip only answers one of
+      // them to whoever thinks to hover.
+      return `<span class="${cls}">${shown}%</span>`
+        + `<div class="nd-sub">${run ? 'up ' + escapeHtml(run) : 'not up now'}</div>`;
     }
 
     /** A run length, in the largest unit that stays readable. */
@@ -9616,22 +9623,6 @@
       return res.json();
     }
 
-    async function loadWhisperStatus() {
-      const card = document.getElementById('whisper-card');
-      const rows = document.getElementById('whisper-rows');
-      const sub = document.getElementById('whisper-sub');
-      if (!card || !rows) return;
-      try {
-        whRenderStatus(card, sub, rows, await whFetchStatus());
-      } catch (e) {
-        console.error('Error loading whisper status:', e);
-        card.style.display = '';
-        sub.textContent = '';
-        rows.innerHTML = `<div class="wh-row"><span class="nd-ready unknown">status unavailable</span>` +
-          `<span class="wh-err">${escapeHtml(e.message)}</span></div>`;
-      }
-    }
-
     /**
      * Local time for an ISO string, dated once it is not today.
      *
@@ -9660,7 +9651,6 @@
         allNodes = data.nodes || [];
         renderNodes();
         loadAutoUpdateState();
-        loadWhisperStatus();
       } catch (e) {
         console.error('Error loading nodes:', e);
         if (grid) grid.innerHTML = `
@@ -9802,6 +9792,29 @@
             .map(b => `<span${b.bad ? ' style="color:var(--danger);"' : ''}>${escapeHtml(b.label)} <strong>${escapeHtml(b.value)}</strong></span>`).join('')}</div>`
         : '';
 
+      // Uptime: the share of the last week the node was reporting, and how long
+      // the current run has lasted. Both, because neither answers the other —
+      // 99% with a four-minute run is a node that keeps dropping, and 80% with
+      // a six-day run is a node that had one bad outage and has been solid
+      // since. Both come from the same record of which minutes it was heard in,
+      // so neither resets when the backend is redeployed.
+      const upPct = node.uptimePct;
+      const upRun = nd2UptimeRun(node.uptimeRunMs);
+      let uptimeHtml;
+      if (upPct === null || upPct === undefined) {
+        uptimeHtml = '<span class="nd-up-none" title="No presence recorded yet">uptime —</span>';
+      } else {
+        const v = upPct * 100;
+        // One decimal below 99.95%, so a node that is very nearly perfect is
+        // not rounded up into claiming it was.
+        const shown = v >= 99.95 ? '100' : v.toFixed(1);
+        const cls = v >= 99 ? 'ok' : v >= 95 ? '' : 'warn';
+        uptimeHtml = `<span class="nd-up ${cls}" title="Seen in ${Math.round((node.uptimePct || 0) * 100)}% of the last 7 days">${shown}%</span>`
+          + (upRun
+            ? ` <span class="nd-up-run">up ${escapeHtml(upRun)}</span>`
+            : ' <span class="nd-up-run nd-up-down">not up now</span>');
+      }
+
       // Where it is. Every kind answers the same question, so it is phrased the
       // same way: a place if there is one, and whether the exact pin is set.
       // A receiver with no pin is called out, because range cannot be measured
@@ -9837,6 +9850,7 @@
           ].map(([k, v]) => `<span><span class="k">${k}</span> ${escapeHtml(v == null ? '—' : String(v))}</span>`).join('')}</div>
           ${(isPager || isAdsb) ? '' : _ndReadinessHtml(st, sdrUp)}
           ${_ndActivityHtml(online, sdrUp, decoding, feedEnabled, uploading, kind, updating, node.pagerDecoding)}
+          <div class="dev-card-secondary nd-uptime-row">${uptimeHtml}</div>
           <div class="dev-card-secondary">
             <span title="${escapeHtml(userId)}">${owner}</span>
             <span class="nd-meta-place">${placeHtml}</span>
