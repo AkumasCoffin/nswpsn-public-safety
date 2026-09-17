@@ -20,7 +20,7 @@ vi.mock('../../../src/db/pool.js', () => ({
 const HOUR = 3_600_000;
 const H0 = Date.UTC(2026, 8, 17, 4, 0, 0);
 
-const { flushNodeTracks, storedNodeTracks } = await import(
+const { flushNodeTracks, storedNodeTracks, _resetNodeTrackArchive } = await import(
   '../../../src/services/nodes/nodeTrackArchive.js'
 );
 
@@ -37,6 +37,9 @@ beforeEach(() => {
   queryMock.mockReset();
   queryMock.mockResolvedValue({ rows: [] });
   poolAvailable = true;
+  // The archive remembers what it has written; without this every test after
+  // the first would send an empty delta and assert nothing.
+  _resetNodeTrackArchive();
 });
 
 describe('writing', () => {
@@ -100,11 +103,79 @@ describe('writing', () => {
     expect(n).toBe(2);
   });
 
-  it('appends rather than replaces only when the slices are disjoint', async () => {
+  it('always appends, because only unsent points are ever sent', async () => {
     await flushNodeTracks([track('node-a', 'a1', [pt(H0 + 60_000, -33, 151)])], H0 + 120_000);
     const sql = queryMock.mock.calls[0]![0] as string;
-    expect(sql).toContain('WHEN EXCLUDED.first_seen > node_adsb_tracks.last_seen');
     expect(sql).toContain('node_adsb_tracks.points || EXCLUDED.points');
+    // The old clause replaced the row whenever the incoming slice was not
+    // strictly newer than what was stored, which is exactly what the second
+    // flush after a restart looks like.
+    expect(sql).not.toContain('ELSE EXCLUDED.points');
+    // The overflow guard must keep what is stored, never swap it for the
+    // incoming slice — otherwise it becomes the same bug at 400 points.
+    expect(sql).toContain('ELSE node_adsb_tracks.points');
+  });
+
+  it('sends only what it has not already written', async () => {
+    const t = (pts: Array<[number, number, number, number | null]>) =>
+      track('node-a', 'abc123', pts);
+    await flushNodeTracks([t([pt(H0 + 60_000, -33, 151)])], H0 + 90_000);
+    await flushNodeTracks(
+      [t([pt(H0 + 60_000, -33, 151), pt(H0 + 120_000, -33.1, 151.1)])],
+      H0 + 150_000,
+    );
+
+    expect(queryMock).toHaveBeenCalledTimes(2);
+    const second = JSON.parse(queryMock.mock.calls[1]![1]![9] as string);
+    // Just the new point — re-sending the first would double it in the row,
+    // since the statement now appends unconditionally.
+    expect(second).toEqual([[120, -33.1, 151.1, 30000]]);
+  });
+
+  it('writes nothing when nothing is new', async () => {
+    const pts = [pt(H0 + 60_000, -33, 151)];
+    await flushNodeTracks([track('node-a', 'abc123', pts)], H0 + 90_000);
+    expect(await flushNodeTracks([track('node-a', 'abc123', pts)], H0 + 120_000)).toBe(0);
+    expect(queryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-sends the same points after a failed write', async () => {
+    // The mark may only move once the delta is durable. Advancing it on a
+    // failure would drop those points permanently — the next pass would
+    // consider them already written.
+    queryMock.mockRejectedValueOnce(new Error('deadlock detected'));
+    const pts = [pt(H0 + 60_000, -33, 151), pt(H0 + 120_000, -33.1, 151.1)];
+    await flushNodeTracks([track('node-a', 'abc123', pts)], H0 + 150_000);
+    await flushNodeTracks([track('node-a', 'abc123', pts)], H0 + 180_000);
+
+    const resent = JSON.parse(queryMock.mock.calls[1]![1]![9] as string);
+    expect(resent).toEqual([[60, -33, 151, 30000], [120, -33.1, 151.1, 30000]]);
+  });
+
+  it('keeps a track that straddles the hour in one statement', async () => {
+    // Two rows, one mark. Splitting them across statements would let the mark
+    // advance past a row that never landed.
+    await flushNodeTracks([
+      track('node-a', 'abc123', [
+        pt(H0 + 55 * 60_000, -33, 151),
+        pt(H0 + 62 * 60_000, -33.2, 151.2),
+      ]),
+    ], H0 + 65 * 60_000);
+    expect(queryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('appends the whole window again after a restart', async () => {
+    // A restart empties the marks, and memory restarts at boot — strictly
+    // after anything already stored — so the first delta is the full live
+    // trace and it appends cleanly onto the stored half.
+    await flushNodeTracks([track('node-a', 'abc123', [pt(H0 + 60_000, -33, 151)])], H0 + 90_000);
+    _resetNodeTrackArchive();
+    await flushNodeTracks(
+      [track('node-a', 'abc123', [pt(H0 + 120_000, -33.1, 151.1)])],
+      H0 + 150_000,
+    );
+    const after = JSON.parse(queryMock.mock.calls[1]![1]![9] as string);
+    expect(after).toEqual([[120, -33.1, 151.1, 30000]]);
   });
 
   it('is a no-op without a database, or without tracks', async () => {
@@ -153,6 +224,24 @@ describe('reading back', () => {
     expect(out[0]!.points).toHaveLength(2);
     expect(out[0]!.points[0]![0]).toBeLessThan(out[0]!.points[1]![0]);
     expect(out[0]!.callsign).toBe('QFA1');
+    // reports is the whole-trace running total stamped into every hour row,
+    // so the largest row IS the total. Summing tripled a three-hour flight.
+    expect(out[0]!.reports).toBe(5);
+  });
+
+  it('collapses a point written twice', async () => {
+    // A flush that commits but reports failure re-sends its delta, and the
+    // statement appends unconditionally, so the row can hold the same second
+    // twice.
+    queryMock.mockResolvedValue({
+      rows: [row('abc123', H0, [
+        [60, -33.0, 151.0, 30000],
+        [60, -33.0, 151.0, 30000],
+        [120, -33.1, 151.1, 30000],
+      ])],
+    });
+    const out = await storedNodeTracks('node-a', 480, H0 + 5 * 60_000);
+    expect(out[0]!.points).toHaveLength(2);
   });
 
   it('clips points outside the window even when the row overlaps it', async () => {

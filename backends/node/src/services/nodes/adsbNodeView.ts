@@ -124,6 +124,26 @@ export interface AdsbNodeView {
  * Memory wins for an aircraft in both: it holds the same history plus whatever
  * has arrived since the last flush.
  */
+const STORED_READ_WARN_MS = 60_000;
+let lastStoredReadWarnMs = 0;
+
+/**
+ * Report a failed read of the stored tracks, at most once a minute.
+ *
+ * These were debug-level, and the default level is info — so when every read
+ * started failing on a column the schema did not have, the pages just showed
+ * an empty history and nothing anywhere said why.
+ */
+function warnStoredRead(err: unknown, nodeId: string, msg: string): void {
+  const now = Date.now();
+  if (now - lastStoredReadWarnMs >= STORED_READ_WARN_MS) {
+    lastStoredReadWarnMs = now;
+    log.warn({ err, nodeId }, msg);
+  } else {
+    log.debug({ err, nodeId }, msg);
+  }
+}
+
 async function recentForNode(nodeId: string): Promise<NodeRecentAircraft[]> {
   const live = nodeAdsbRecentAircraft(nodeId, ADSB_RECENT_MAX);
   let stored: Awaited<ReturnType<typeof storedNodeTracks>> = [];
@@ -131,7 +151,7 @@ async function recentForNode(nodeId: string): Promise<NodeRecentAircraft[]> {
     stored = await storedNodeTracks(nodeId, TRACE_WINDOW_MINUTES);
   } catch (err) {
     // Losing the older half costs history, not the table.
-    log.debug({ err, nodeId }, 'stored recent aircraft unavailable');
+    warnStoredRead(err, nodeId, 'stored recent aircraft unavailable');
   }
   if (stored.length === 0) return live.slice(0, VIEW_RECENT_LIMIT);
 
@@ -150,9 +170,25 @@ async function recentForNode(nodeId: string): Promise<NodeRecentAircraft[]> {
   }
   for (const l of live) {
     const prev = byHex.get(l.hex);
-    // First-heard comes from whichever source saw it earlier: the stored rows
-    // reach back before this process started.
-    byHex.set(l.hex, prev ? { ...l, firstMs: Math.min(prev.firstMs, l.firstMs) } : l);
+    if (!prev) {
+      byHex.set(l.hex, l);
+      continue;
+    }
+    // Take the wider span and the larger counters from either side. The live
+    // figures restart from zero on a deploy, so an aircraft heard all morning
+    // would otherwise be relabelled as first heard a minute ago with a handful
+    // of reports — the stored row is the one that remembers.
+    byHex.set(l.hex, {
+      ...l,
+      firstMs: Math.min(prev.firstMs, l.firstMs),
+      lastMs: Math.max(prev.lastMs, l.lastMs),
+      points: Math.max(prev.points, l.points),
+      reports: Math.max(prev.reports, l.reports),
+      maxAltFt: prev.maxAltFt === null ? l.maxAltFt
+        : l.maxAltFt === null ? prev.maxAltFt
+        : Math.max(prev.maxAltFt, l.maxAltFt),
+      lastAltFt: l.lastAltFt ?? prev.lastAltFt,
+    });
   }
   return Array.from(byHex.values())
     .sort((a, b) => b.lastMs - a.lastMs)
@@ -323,31 +359,66 @@ export async function adsbNodeTracks(
   // a receiver that had heard sixty aircraft that day showed one. What is on
   // disk covers everything up to the last flush — including before a restart —
   // and memory covers the current minute, so the answer is the union.
-  let merged = t.traces;
+  //
+  // A union POINT BY POINT, not entry by entry. Letting a live trace replace a
+  // stored one for the same aircraft looked equivalent — memory is normally a
+  // superset — but it is not after a restart, which is the only time any of
+  // this matters: the live trace then holds a few minutes and silently threw
+  // away the stored hours for every aircraft still in the sky.
+  let merged: NodeTrace[] = [];
   let aircraft = t.aircraft;
   let points = t.points;
+  let joined = false;
   try {
     const stored = await storedNodeTracks(nodeId, clamped);
     if (stored.length > 0) {
-      const byHex = new Map<string, NodeTrace>();
-      for (const s of stored) {
-        byHex.set(s.hex, {
-          hex: s.hex,
-          callsign: s.callsign,
-          points: s.points.map((p) => [p[1], p[2]] as [number, number]),
-        });
-      }
-      // Memory wins for an aircraft in both: it is the same data, plus
-      // whatever has arrived since the last flush.
-      for (const live of t.traces) byHex.set(live.hex, live);
-      merged = Array.from(byHex.values()).filter((x) => x.points.length >= 2);
+      interface Merged { callsign: string | null; pts: Map<number, [number, number]> }
+      const byHex = new Map<string, Merged>();
+      const add = (
+        hex: string, callsign: string | null,
+        pts: ReadonlyArray<readonly [number, number, number]>,
+      ) => {
+        let m = byHex.get(hex);
+        if (!m) {
+          m = { callsign, pts: new Map() };
+          byHex.set(hex, m);
+        } else if (callsign) {
+          m.callsign = callsign;
+        }
+        // Keyed by whole second: the slicer rounds stored points to seconds,
+        // so matching on raw milliseconds would never dedupe across the flush
+        // boundary and every handover would draw a doubled-back leg.
+        for (const p of pts) m.pts.set(Math.round(p[0] / 1000), [p[1], p[2]]);
+      };
+
+      for (const s of stored) add(s.hex, s.callsign, s.points);
+      for (const live of t.traces) add(live.hex, live.callsign, live.points);
+
       aircraft = byHex.size;
       points = 0;
-      for (const x of byHex.values()) points += x.points.length;
+      for (const [hex, m] of byHex) {
+        points += m.pts.size;
+        if (m.pts.size < 2) continue;   // a dot, not a path
+        const pts = Array.from(m.pts.entries())
+          .sort((a, b) => a[0] - b[0])
+          .map(([, ll]) => ll);
+        merged.push({ hex, callsign: m.callsign, points: pts });
+      }
+      joined = true;
     }
   } catch (err) {
-    // A read failure costs the older half of the picture, not the view.
-    log.debug({ err, nodeId }, 'stored node tracks unavailable');
+    warnStoredRead(err, nodeId, 'stored node tracks unavailable');
+  }
+  if (!joined) {
+    // Nothing on disk (or the read failed): memory alone, minus the aircraft
+    // seen exactly once, which nodeAdsbTraces now leaves in for the merge.
+    merged = t.traces
+      .filter((x) => x.points.length >= 2)
+      .map((x) => ({
+        hex: x.hex,
+        callsign: x.callsign,
+        points: x.points.map((p) => [p[1], p[2]] as [number, number]),
+      }));
   }
 
   const pool = await getPool();

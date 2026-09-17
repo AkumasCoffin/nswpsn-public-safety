@@ -117,7 +117,10 @@ describe('adsb traces', () => {
     expect(aircraft).toBe(1);
     expect(traces).toHaveLength(1);
     expect(traces[0]!.points).toHaveLength(3);
-    expect(traces[0]!.points[0]).toEqual([-33.0, 151.0]);
+    // [epochMs, lat, lon] — the time is what lets the view dedupe a live point
+    // against the same point already flushed to disk.
+    expect(traces[0]!.points[0]!.slice(1)).toEqual([-33.0, 151.0]);
+    expect(traces[0]!.points[0]![0]).toBeLessThan(traces[0]!.points[2]![0]);
     // The callsign arrives on the first report here, but often does not — it is
     // kept once seen rather than overwritten with null by later reports.
     expect(traces[0]!.callsign).toBe('QFA1');
@@ -158,8 +161,8 @@ describe('adsb traces', () => {
 
     const eight = nodeAdsbTraces(NODE, 480);
     expect(eight.traces[0]!.points).toHaveLength(2);
-    // ...and a shorter window still trims to itself.
-    expect(nodeAdsbTraces(NODE, 60).traces).toHaveLength(0);
+    // ...and a shorter window still trims to itself: one point left, not two.
+    expect(nodeAdsbTraces(NODE, 60).traces[0]!.points).toHaveLength(1);
   });
 
   it('forgets aircraft older than the eight-hour window', () => {
@@ -182,9 +185,11 @@ describe('adsb traces', () => {
     vi.advanceTimersByTime(30 * 60_000);
     feed([{ hex: 'eee555', lat: -33.5, lon: 151.5 }]);
 
-    // A 10-minute window keeps only the recent point, so this is a dot, not a
-    // path — and single-point traces are not drawn.
-    expect(nodeAdsbTraces(NODE, 10).traces).toHaveLength(0);
+    // A 10-minute window keeps only the recent point. It is still reported
+    // here — a lone live point may be the newest leg of a flight whose earlier
+    // path is on disk, so only the view, holding both halves, can decide it is
+    // a dot rather than a path.
+    expect(nodeAdsbTraces(NODE, 10).traces[0]!.points).toHaveLength(1);
     expect(nodeAdsbTraces(NODE, 10).aircraft).toBe(1);
     // The full window still has both.
     expect(nodeAdsbTraces(NODE, 480).traces[0]!.points).toHaveLength(2);
@@ -198,12 +203,15 @@ describe('adsb traces', () => {
     expect(t.points).toBe(0);
   });
 
-  it('counts a single-point aircraft but does not draw it', () => {
-    // One catch is a dot, not a path; hundreds of them would bury the picture.
+  it('reports a single-point aircraft and leaves the drawing decision upstream', () => {
+    // One catch is a dot, not a path, and hundreds of them would bury the
+    // picture — but that filter moved to adsbNodeTracks, which is the only
+    // caller that can tell a dot from the live tip of a stored track.
     feed([{ hex: '111aaa', lat: -33.0, lon: 151.0 }]);
     const t = nodeAdsbTraces(NODE, 60);
     expect(t.aircraft).toBe(1);
-    expect(t.traces).toHaveLength(0);
+    expect(t.traces).toHaveLength(1);
+    expect(t.traces[0]!.points).toHaveLength(1);
   });
 
   it('caps points per aircraft rather than growing without bound', () => {

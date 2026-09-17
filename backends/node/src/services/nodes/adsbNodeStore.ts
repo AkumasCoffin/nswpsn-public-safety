@@ -417,37 +417,46 @@ export interface NodeTrace {
   points: Array<[number, number]>;
 }
 
+/** The same trace with its timings intact, for merging against stored history.
+ *  Timestamps are dropped again before the view goes on the wire. */
+export interface NodeTraceTimed {
+  hex: string;
+  callsign: string | null;
+  /** [epochMs, lat, lon], oldest first. */
+  points: Array<[number, number, number]>;
+}
+
 /**
- * One receiver's traces over the last `minutes`.
+ * One receiver's traces over the last `minutes`, with times.
  *
- * Single-point traces are omitted: an aircraft caught once is a dot, not a
- * path, and hundreds of them turn the coverage picture into noise. They are
- * still counted in `aircraft` so the total stays honest.
+ * Single-point traces are KEPT here, unlike the view's own output: a lone live
+ * point may be the newest position of an aircraft whose earlier path is on
+ * disk, and dropping it at this level would lose the join. The caller decides
+ * what is too short to draw once both halves are in hand.
  */
 export function nodeAdsbTraces(
   nodeId: string,
   minutes: number,
   nowMs: number = Date.now(),
-): { traces: NodeTrace[]; aircraft: number; points: number; windowMinutes: number } {
+): { traces: NodeTraceTimed[]; aircraft: number; points: number; windowMinutes: number } {
   pruneTraces(nodeId, nowMs);
   const byHex = traces.get(nodeId);
   if (!byHex) return { traces: [], aircraft: 0, points: 0, windowMinutes: minutes };
 
   const cutoff = nowMs - Math.max(1, minutes) * 60_000;
-  const out: NodeTrace[] = [];
+  const out: NodeTraceTimed[] = [];
   let points = 0;
   let aircraft = 0;
 
   for (const [hex, tr] of byHex) {
-    const pts: Array<[number, number]> = [];
+    const pts: Array<[number, number, number]> = [];
     for (let i = 0; i < tr.t.length; i += 1) {
       if (tr.t[i]! < cutoff) continue;
-      pts.push([tr.lat[i]!, tr.lon[i]!]);
+      pts.push([tr.t[i]!, tr.lat[i]!, tr.lon[i]!]);
     }
     if (pts.length === 0) continue;
     aircraft += 1;
     points += pts.length;
-    if (pts.length < 2) continue;
     out.push({ hex, callsign: tr.callsign, points: pts });
   }
   return { traces: out, aircraft, points, windowMinutes: minutes };

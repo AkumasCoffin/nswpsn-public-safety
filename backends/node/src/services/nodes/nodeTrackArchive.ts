@@ -26,6 +26,33 @@ const BATCH_SIZE = 200;
 
 const HOUR_MS = 3_600_000;
 
+/**
+ * Points per stored hour, as a backstop only. Decimation upstream puts a real
+ * hour at roughly sixty, so reaching this means something is wrong; the row
+ * stops growing rather than growing without bound.
+ */
+const MAX_POINTS_PER_HOUR = 400;
+
+/** How long a high-water mark is worth keeping. Only the current and previous
+ *  hours are ever written, so anything older can never be consulted again. */
+const HWM_RETENTION_MS = 2 * HOUR_MS;
+
+/**
+ * The newest point time CONFIRMED WRITTEN for each `nodeId|hex`.
+ *
+ * This is what makes the write an append. Re-cutting the whole hour from memory
+ * every minute and letting the statement decide append-or-replace could not
+ * work: after a restart the second flush's slice starts before what the first
+ * flush had already stored, so the replace branch threw the pre-restart half of
+ * the hour away sixty seconds after saving it. Sending only what is new sidesteps
+ * the choice entirely.
+ *
+ * Empty after a restart, which is correct rather than merely tolerable: memory
+ * then starts at boot time, strictly after whatever the last pre-restart flush
+ * stored, so the first delta appends cleanly with nothing duplicated.
+ */
+const flushedThrough = new Map<string, number>();
+
 let lastFlushMs = 0;
 let flushing = false;
 
@@ -54,21 +81,50 @@ export async function flushNodeTracks(
     hourMs: number; firstMs: number; lastMs: number; reports: number;
     lastAltFt: number | null; maxAltFt: number | null;
     points: Array<[number, number, number, number | null]>; }
-  const rows: Row[] = [];
+  /** One track's rows travel together: a flight over the hour boundary yields
+   *  two, and advancing the mark when only one of them landed would lose the
+   *  other for good. */
+  interface Group { key: string; deltaMaxMs: number; rows: Row[] }
+
+  const groups: Group[] = [];
   for (const t of tracks) {
-    for (const s of sliceTrailByHour(t.hex, t.points, nowMs)) {
+    const key = `${t.nodeId}|${t.hex}`;
+    const since = flushedThrough.get(key) ?? -Infinity;
+    const fresh = t.points.filter((p) => p[0] > since);
+    if (fresh.length === 0) continue;
+
+    const rows: Row[] = [];
+    for (const s of sliceTrailByHour(t.hex, fresh, nowMs)) {
       rows.push({
         nodeId: t.nodeId, hex: t.hex, callsign: t.callsign,
         hourMs: s.hourMs, firstMs: s.firstMs, lastMs: s.lastMs, points: s.points,
         reports: t.reports, lastAltFt: t.lastAltFt, maxAltFt: t.maxAltFt,
       });
     }
+    if (rows.length === 0) continue;
+    groups.push({ key, deltaMaxMs: fresh[fresh.length - 1]![0], rows });
   }
-  if (rows.length === 0) return 0;
+  if (groups.length === 0) return 0;
+
+  // Pack whole groups until the row budget is reached, so no group straddles
+  // two statements.
+  const batches: Group[][] = [];
+  let current: Group[] = [];
+  let currentRows = 0;
+  for (const g of groups) {
+    if (currentRows > 0 && currentRows + g.rows.length > BATCH_SIZE) {
+      batches.push(current);
+      current = [];
+      currentRows = 0;
+    }
+    current.push(g);
+    currentRows += g.rows.length;
+  }
+  if (current.length > 0) batches.push(current);
 
   let written = 0;
-  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
-    const batch = rows.slice(i, i + BATCH_SIZE);
+  for (const group of batches) {
+    const batch = group.flatMap((g) => g.rows);
     const values: unknown[] = [];
     const tuples = batch.map((r) => {
       const b = values.length;
@@ -85,10 +141,15 @@ export async function flushNodeTracks(
             reports, last_alt_ft, max_alt_ft, points)
          VALUES ${tuples.join(', ')}
          ON CONFLICT (node_id, hex, hour_bucket) DO UPDATE SET
+           -- Unconditionally an append: the caller only ever sends points it
+           -- has not stored before. The guard caps a pathological row rather
+           -- than choosing between the two versions — note it keeps the STORED
+           -- points, never EXCLUDED, so overflow stops growth instead of
+           -- discarding history.
            points = CASE
-             WHEN EXCLUDED.first_seen > node_adsb_tracks.last_seen
+             WHEN jsonb_array_length(node_adsb_tracks.points) < ${MAX_POINTS_PER_HOUR}
              THEN node_adsb_tracks.points || EXCLUDED.points
-             ELSE EXCLUDED.points
+             ELSE node_adsb_tracks.points
            END,
            first_seen  = LEAST(node_adsb_tracks.first_seen, EXCLUDED.first_seen),
            last_seen   = GREATEST(node_adsb_tracks.last_seen, EXCLUDED.last_seen),
@@ -101,12 +162,23 @@ export async function flushNodeTracks(
                                   COALESCE(EXCLUDED.max_alt_ft, node_adsb_tracks.max_alt_ft))`,
         values,
       );
+      // Only now is the delta durable, so only now may the mark move. A
+      // failure leaves it where it was and the next pass re-sends the same
+      // points.
+      for (const g of group) {
+        flushedThrough.set(g.key, Math.max(flushedThrough.get(g.key) ?? 0, g.deltaMaxMs));
+      }
       written += batch.length;
     } catch (err) {
-      // One interval at worst; the next pass re-cuts the same hours from
-      // memory. Same posture as the other ADS-B flushes.
-      log.debug({ err, rows: batch.length }, 'node track flush failed');
+      // Loud, unlike the rest of the ADS-B flushes: this one failing is
+      // indistinguishable from the feature working until someone notices the
+      // map is empty, which is exactly how a missing column went unseen.
+      log.warn({ err, rows: batch.length }, 'node track flush failed');
     }
+  }
+
+  for (const [key, at] of flushedThrough) {
+    if (at < nowMs - HWM_RETENTION_MS) flushedThrough.delete(key);
   }
   return written;
 }
@@ -118,8 +190,15 @@ export function maybeFlushNodeTracks(nowMs: number = Date.now()): void {
   lastFlushMs = nowMs;
   flushing = true;
   void flushNodeTracks(nodeTracesForArchive(), nowMs)
-    .catch((err) => log.debug({ err }, 'node track flush threw'))
+    .catch((err) => log.warn({ err }, 'node track flush threw'))
     .finally(() => { flushing = false; });
+}
+
+/** Test seam: the high-water marks outlive a single test otherwise. */
+export function _resetNodeTrackArchive(): void {
+  flushedThrough.clear();
+  lastFlushMs = 0;
+  flushing = false;
 }
 
 export interface StoredTrack {
@@ -182,9 +261,10 @@ export async function storedNodeTracks(
     } else if (!track.callsign && row.callsign) {
       track.callsign = row.callsign;
     }
-    // Rows arrive hour by hour, so an aircraft heard across three hours has
-    // its counters summed and its span widened rather than overwritten.
-    track.reports += Number(row.reports ?? 0);
+    // reports is the whole-trace running total stamped into every hour row
+    // (GREATEST on write), not a per-hour count — so the largest row IS the
+    // trace total. Summing them tripled a three-hour flight.
+    track.reports = Math.max(track.reports, Number(row.reports ?? 0));
     if (row.last_alt_ft !== null) track.lastAltFt = row.last_alt_ft;
     if (row.max_alt_ft !== null
         && (track.maxAltFt === null || row.max_alt_ft > track.maxAltFt)) {
@@ -206,6 +286,10 @@ export async function storedNodeTracks(
   for (const t of byHex.values()) {
     if (t.points.length === 0) continue;
     t.points.sort((a, b) => a[0] - b[0]);
+    // A flush that committed but reported failure re-sends its delta, so the
+    // same second can land twice. Points are second-granular once sliced, so
+    // equal timestamps are the same observation.
+    t.points = t.points.filter((p, i) => i === 0 || p[0] !== t.points[i - 1]![0]);
     out.push(t);
   }
   return out;

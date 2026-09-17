@@ -65,6 +65,11 @@ vi.mock('../../../src/services/nodes/hub.js', () => ({
 const { adsbNodeView, adsbNodeTracks, ADSB_TRACKS_MAX_MINUTES } = await import(
   '../../../src/services/nodes/adsbNodeView.js'
 );
+// The real store, so the merge is exercised against traces built the way the
+// ingest path builds them rather than against a hand-made shape.
+const { recordNodeAdsbReception, _resetAdsbNodeStore } = await import(
+  '../../../src/services/nodes/adsbNodeStore.js'
+);
 
 describe('adsbNodeView', () => {
   beforeEach(() => {
@@ -243,6 +248,79 @@ describe('adsbNodeTracks survives a restart', () => {
     // Counted, because it was heard — but a single point is a dot, not a path.
     expect(t.aircraft).toBe(1);
     expect(t.traces).toHaveLength(0);
+    vi.useRealTimers();
+  });
+
+  /** Put one live position into the real store, as an upload would. */
+  const heard = (hex: string, lat: number, lon: number) =>
+    recordNodeAdsbReception('n1', [{
+      hex, flight: null, lat, lon, altFt: 30000, gsKt: 400, trackDeg: 90,
+      verticalRateFpm: null, squawk: null, onGround: false, seenPosSec: 0,
+      rssi: null, messages: 10, source: 'node:n1', receivedAtMs: Date.now(),
+    } as never], null);
+
+  it('joins the stored half of a flight to the live half', async () => {
+    // THE regression. Memory is normally a superset of what is stored, so
+    // letting a live trace replace a stored one looked equivalent — but after
+    // a restart the live trace is minutes old, and for every aircraft still in
+    // the sky it silently discarded the stored hours. The map then showed one
+    // track: whatever had crossed since the deploy.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(HOUR_UTC + 30 * 60_000));
+    _resetAdsbNodeStore();
+
+    storedRows = [stored('aaa111', [[60, -33.0, 151.0], [120, -33.1, 151.1]])];
+    heard('aaa111', -33.4, 151.4);
+    vi.setSystemTime(new Date(HOUR_UTC + 31 * 60_000));
+    heard('aaa111', -33.5, 151.5);
+
+    const t = await adsbNodeTracks('n1', 480);
+    expect(t.traces).toHaveLength(1);
+    // Both stored points AND both live ones, in time order.
+    expect(t.traces[0]!.points).toHaveLength(4);
+    expect(t.traces[0]!.points[0]).toEqual([-33.0, 151.0]);
+    expect(t.traces[0]!.points[3]).toEqual([-33.5, 151.5]);
+
+    _resetAdsbNodeStore();
+    vi.useRealTimers();
+  });
+
+  it('counts a point heard on both sides once', async () => {
+    // Stored points are rounded to whole seconds by the slicer, so the merge
+    // keys on seconds; matching raw milliseconds would double every point
+    // around the flush boundary and draw a track that doubles back.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(HOUR_UTC + 30 * 60_000));
+    _resetAdsbNodeStore();
+
+    heard('aaa111', -33.4, 151.4);
+    // The same observation, as the flush would have stored it.
+    storedRows = [stored('aaa111', [[60, -33.0, 151.0], [30 * 60, -33.4, 151.4]])];
+
+    const t = await adsbNodeTracks('n1', 480);
+    expect(t.traces[0]!.points).toHaveLength(2);
+    expect(t.points).toBe(2);
+
+    _resetAdsbNodeStore();
+    vi.useRealTimers();
+  });
+
+  it('keeps a lone live point that extends a stored track', async () => {
+    // A single live position is a dot on its own, but it is the newest leg of
+    // an aircraft whose path is on disk — so it cannot be dropped before the
+    // merge, only after.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(HOUR_UTC + 30 * 60_000));
+    _resetAdsbNodeStore();
+
+    storedRows = [stored('aaa111', [[60, -33.0, 151.0], [120, -33.1, 151.1]])];
+    heard('aaa111', -33.9, 151.9);
+
+    const t = await adsbNodeTracks('n1', 480);
+    expect(t.traces[0]!.points).toHaveLength(3);
+    expect(t.traces[0]!.points[2]).toEqual([-33.9, 151.9]);
+
+    _resetAdsbNodeStore();
     vi.useRealTimers();
   });
 });
