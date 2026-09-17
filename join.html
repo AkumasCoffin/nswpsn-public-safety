@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script defer src="https://analytics.forcequit.xyz/script.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
+  <meta charset="UTF-8" />
+  <title>AusAware – Feed the map</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#0f172a">
+
+  <meta name="description" content="Run a receiver at home and feed Australia's live emergency map — radio, pager or ADS-B. An RTL-SDR, an antenna and a computer that stays on is the whole list.">
+  <meta name="author" content="Forcequit">
+
+  <!-- Share card. og:video makes Discord and Twitter play the clip inline
+       instead of showing a still, which is the point of having a video at all.
+       All URLs absolute: a scraper has no page context to resolve against. -->
+  <meta property="og:type" content="video.other">
+  <meta property="og:url" content="https://nswpsn.forcequit.xyz/join">
+  <meta property="og:site_name" content="AusAware">
+  <meta property="og:title" content="Feed the map — AusAware">
+  <meta property="og:description" content="Run a receiver at home and help build Australia's live emergency picture. Radio, pager or ADS-B — an RTL-SDR, an antenna and a computer that stays on.">
+  <meta property="og:image" content="https://nswpsn.forcequit.xyz/assets/promo/feeders-poster.jpg">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="675">
+  <meta property="og:video" content="https://nswpsn.forcequit.xyz/assets/promo/feeders.mp4">
+  <meta property="og:video:secure_url" content="https://nswpsn.forcequit.xyz/assets/promo/feeders.mp4">
+  <meta property="og:video:type" content="video/mp4">
+  <meta property="og:video:width" content="1280">
+  <meta property="og:video:height" content="720">
+
+  <meta name="twitter:card" content="player">
+  <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/join">
+  <meta name="twitter:title" content="Feed the map — AusAware">
+  <meta name="twitter:description" content="Run a receiver at home and help build Australia's live emergency picture. Radio, pager or ADS-B.">
+  <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/promo/feeders-poster.jpg">
+  <meta name="twitter:player" content="https://nswpsn.forcequit.xyz/assets/promo/feeders.mp4">
+  <meta name="twitter:player:width" content="1280">
+  <meta name="twitter:player:height" content="720">
+
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="canonical" href="https://nswpsn.forcequit.xyz/join">
+  <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="./assets/ausaware-icon-192.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="./assets/ausaware-icon-180.png">
+  <link rel="manifest" href="./site.webmanifest">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+<style>
+  /* Deliberately standalone: this is a link people arrive at from outside, so
+     it carries no sidebar, no auth and nothing to navigate away into except
+     the two things it is asking for. */
+  .jn { max-width: 960px; margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }
+  .jn-head { text-align: center; margin-bottom: 2rem; }
+  .jn-logo { width: 84px; height: 84px; border-radius: 20px; }
+  .jn-kick {
+    margin-top: 1.1rem; font-size: 0.78rem; font-weight: 700;
+    letter-spacing: 0.16em; text-transform: uppercase; color: #94a3b8;
+  }
+  .jn-kick .a { color: #f97316; }
+  .jn-h1 {
+    margin: 0.5rem 0 0; font-size: clamp(1.9rem, 5vw, 3rem); line-height: 1.08;
+    font-weight: 700; letter-spacing: -0.02em; color: #f9fafb;
+  }
+  .jn-h1 .o { color: #f97316; }
+  .jn-lede {
+    margin: 0.9rem auto 0; max-width: 46ch; color: #a1a5b6;
+    font-size: clamp(0.98rem, 2.2vw, 1.1rem); line-height: 1.55;
+  }
+
+  .jn-video {
+    width: 100%; display: block; border-radius: 14px;
+    border: 1px solid rgba(148,163,184,0.22);
+    background: #020617; box-shadow: 0 18px 48px rgba(0,0,0,0.6);
+  }
+
+  .jn-sec { margin-top: 2.8rem; }
+  .jn-sec-h {
+    font-size: 0.76rem; font-weight: 700; letter-spacing: 0.14em;
+    text-transform: uppercase; color: #94a3b8; margin-bottom: 0.9rem;
+  }
+
+  .jn-grid { display: grid; gap: 0.85rem; grid-template-columns: repeat(3, 1fr); }
+  @media (max-width: 720px) { .jn-grid { grid-template-columns: 1fr; } }
+  .jn-card {
+    background: #10131b; border: 1px solid rgba(148,163,184,0.22);
+    border-radius: 14px; padding: 1.1rem 1.15rem;
+  }
+  .jn-card h3 {
+    margin: 0 0 0.35rem; font-size: 1rem; letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .jn-card p { margin: 0; color: #9aa3b2; font-size: 0.9rem; line-height: 1.45; }
+
+  .jn-need { display: flex; flex-direction: column; gap: 0.7rem; }
+  .jn-need li {
+    list-style: none; display: flex; gap: 0.9rem; align-items: flex-start;
+    background: #10131b; border: 1px solid rgba(148,163,184,0.22);
+    border-radius: 12px; padding: 0.95rem 1.1rem;
+  }
+  .jn-need .n {
+    flex: none; width: 30px; height: 30px; border-radius: 9px;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; color: #0b1220; font-size: 0.95rem;
+  }
+  .jn-need b { display: block; font-size: 1rem; color: #f1f5f9; }
+  .jn-need span { color: #9aa3b2; font-size: 0.88rem; line-height: 1.45; }
+
+  .jn-cta { margin-top: 2.6rem; display: grid; gap: 0.9rem; grid-template-columns: 1fr 1fr; }
+  @media (max-width: 720px) { .jn-cta { grid-template-columns: 1fr; } }
+  .jn-btn {
+    display: block; text-decoration: none; border-radius: 14px; padding: 1.15rem 1.25rem;
+    border: 1px solid rgba(148,163,184,0.3); background: #10131b; color: #f1f5f9;
+    transition: border-color 0.15s ease, transform 0.15s ease;
+  }
+  .jn-btn:hover { border-color: #f97316; transform: translateY(-2px); }
+  .jn-btn .t { display: block; font-weight: 700; font-size: 1.05rem; }
+  .jn-btn .d { display: block; color: #9aa3b2; font-size: 0.88rem; margin-top: 0.25rem; line-height: 1.45; }
+  .jn-btn.primary { background: linear-gradient(180deg, rgba(249,115,22,0.16), #10131b 70%); border-color: rgba(249,115,22,0.45); }
+
+  .jn-foot {
+    margin-top: 2.6rem; text-align: center; color: #64748b; font-size: 0.82rem;
+  }
+  .jn-foot a { color: #94a3b8; }
+</style>
+</head>
+<body>
+  <main class="jn">
+    <header class="jn-head">
+      <img class="jn-logo" src="./assets/ausaware-icon-512.png" alt="AusAware">
+      <div class="jn-kick">AusAware <span class="a">·</span> Feeders wanted</div>
+      <h1 class="jn-h1">The map is only as good as <span class="o">who&rsquo;s listening.</span></h1>
+      <p class="jn-lede">
+        Australia&rsquo;s live emergency picture is stitched together from public feeds
+        &mdash; and from receivers people run at home. One of those could be yours.
+      </p>
+    </header>
+
+    <!-- playsinline so iOS plays it in place rather than going fullscreen;
+         preload=metadata so arriving here does not cost a megabyte before
+         anyone has decided to watch. -->
+    <video class="jn-video" controls playsinline preload="metadata"
+           poster="./assets/promo/feeders-poster.jpg">
+      <source src="./assets/promo/feeders.mp4" type="video/mp4">
+      Your browser cannot play this video.
+    </video>
+
+    <section class="jn-sec">
+      <div class="jn-sec-h">Three ways to feed</div>
+      <div class="jn-grid">
+        <div class="jn-card">
+          <h3 style="color:#f97316;">Radio</h3>
+          <p>Trunked emergency radio &mdash; fire, ambulance, rescue.</p>
+        </div>
+        <div class="jn-card">
+          <h3 style="color:#22c55e;">Pager</h3>
+          <p>The dispatch messages crews are paged with.</p>
+        </div>
+        <div class="jn-card">
+          <h3 style="color:#38bdf8;">ADS-B</h3>
+          <p>Aircraft positions, straight off the transponder.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="jn-sec">
+      <div class="jn-sec-h">What you need</div>
+      <ul class="jn-need">
+        <li>
+          <span class="n" style="background:#f97316;">1</span>
+          <span><b>An RTL-SDR dongle</b>The USB receiver that does the listening.</span>
+        </li>
+        <li>
+          <span class="n" style="background:#22c55e;">2</span>
+          <span><b>An antenna and cable</b>Which antenna depends on the frequency you are feeding.</span>
+        </li>
+        <li>
+          <span class="n" style="background:#38bdf8;">3</span>
+          <span><b>A computer that stays on</b>An old laptop is fine, as long as it can stay on close to 24/7.</span>
+        </li>
+      </ul>
+    </section>
+
+    <section class="jn-sec">
+      <div class="jn-sec-h">The Wire &mdash; a different way in</div>
+      <div class="jn-grid">
+        <div class="jn-card"><p>You serve with an emergency service.</p></div>
+        <div class="jn-card"><p>You photograph or film emergency vehicles.</p></div>
+        <div class="jn-card"><p>You&rsquo;re an independent journalist or stringer.</p></div>
+      </div>
+    </section>
+
+    <!-- Both land on the same contributor form; `want` pre-ticks the boxes so
+         nobody arrives from a video about ADS-B and has to work out which of
+         five checkboxes applied to them. -->
+    <div class="jn-cta">
+      <a class="jn-btn primary" href="./signup.html?as=contributor&amp;want=radio_feeder,pager_feeder,adsb_feeder">
+        <span class="t">Run a receiver</span>
+        <span class="d">Radio, pager or ADS-B. Tick whichever you can run &mdash; you can change it on the form.</span>
+      </a>
+      <a class="jn-btn" href="./signup.html?as=contributor&amp;want=media_feeder">
+        <span class="t">Contribute to The Wire</span>
+        <span class="d">Photos, video and articles from people who are actually there.</span>
+      </a>
+    </div>
+
+    <p class="jn-foot">
+      Free &middot; Ad-free &middot; Unofficial &nbsp;·&nbsp;
+      <a href="./index.html">AusAware home</a> &nbsp;·&nbsp;
+      <a href="./about.html">About</a> &nbsp;·&nbsp;
+      <a href="./map.html">The live map</a>
+    </p>
+  </main>
+</body>
+</html>

@@ -458,6 +458,11 @@
                 <span style="color: #64748b; font-size: 0.8rem;">- Stream radio audio</span>
               </label>
               <label style="display: flex; align-items: center; gap: 0.6rem; cursor: pointer;">
+                <input type="checkbox" name="request-type" value="adsb_feeder" onchange="toggleFeederSetup()" style="width: 18px; height: 18px; accent-color: var(--accent);">
+                <span>✈️ ADS-B Feeder</span>
+                <span style="color: #64748b; font-size: 0.8rem;">- Contribute aircraft positions</span>
+              </label>
+              <label style="display: flex; align-items: center; gap: 0.6rem; cursor: pointer;">
                 <input type="checkbox" name="request-type" value="media_feeder" onchange="toggleFeederSetup()" style="width: 18px; height: 18px; accent-color: var(--accent);">
                 <span>📸 Wire Contributor</span>
                 <span style="color: #64748b; font-size: 0.8rem;">- Post photos, video &amp; articles to The Wire</span>
@@ -1162,6 +1167,19 @@
       const p = new URLSearchParams(location.search);
       const ref = (p.get('ref') || '').trim().toUpperCase();
       if (/^[A-Z0-9]{4,32}$/.test(ref)) _referralCode = ref;
+      // Pre-tick the roles a referring page was asking for. Whitelisted
+      // against the checkboxes that actually exist — the value reaches a
+      // selector, and an unknown one should do nothing rather than anything.
+      const want = (p.get('want') || '').split(',').map((v) => v.trim()).filter(Boolean);
+      if (want.length) {
+        let ticked = 0;
+        document.querySelectorAll('input[name="request-type"]').forEach((cb) => {
+          if (want.includes(cb.value)) { cb.checked = true; ticked += 1; }
+        });
+        // toggleFeederSetup reveals the feeder-only fields; it has to run after
+        // the boxes change or those fields stay hidden on a link arrival.
+        if (ticked && typeof toggleFeederSetup === 'function') toggleFeederSetup();
+      }
       const as = p.get('as');
       if (as === 'user' || as === 'contributor') chooseAccountType(as);
       else if (_referralCode) chooseAccountType('contributor');
