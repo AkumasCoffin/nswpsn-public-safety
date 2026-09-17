@@ -120,13 +120,24 @@ export function snapshotMaxRangeKm(
  * snapshots because it has exactly their lifetime: it means nothing once the
  * snapshot it was measured from has aged out.
  */
-const observedRangeKm = new Map<string, number>();
+const observedRangeKm = new Map<string, { km: number; atMs: number }>();
 
-/** Range from this node's most recent upload, or null if it has not reported
- *  one (no pin, an empty sky, or the node has gone away). */
+/**
+ * Range from this node's most recent upload, or null if it has not reported
+ * one (no pin, an empty sky, or the node has gone away).
+ *
+ * Expiry keys off its OWN timestamp rather than the presence of a live
+ * snapshot: a node whose feed is paused still reports, and still has a current
+ * range, but deliberately has no snapshot on the map to hang that off.
+ */
 export function nodeAdsbObservedRangeKm(nodeId: string): number | null {
-  if (!snapshots.has(nodeId)) return null;
-  return observedRangeKm.get(nodeId) ?? null;
+  const held = observedRangeKm.get(nodeId);
+  if (!held) return null;
+  if (Date.now() - held.atMs > NODE_SNAPSHOT_TTL_MS) {
+    observedRangeKm.delete(nodeId);
+    return null;
+  }
+  return held.km;
 }
 
 /** The source id a node's records carry, e.g. `node:adsb-akumascoffin-a3f9`.
@@ -150,17 +161,37 @@ export function recordNodeAdsbSnapshot(
   nodeId: string,
   nodeName: string | null,
   records: AdsbAircraft[],
-  rangeKm: number | null = null,
 ): number {
-  const nowMs = Date.now();
-  if (rangeKm !== null) observedRangeKm.set(nodeId, rangeKm);
   snapshots.set(nodeId, {
     name: nodeName ?? '',
-    receivedAtMs: nowMs,
+    receivedAtMs: Date.now(),
     records,
   });
-  recordTraces(nodeId, records, nowMs);
   return records.length;
+}
+
+/**
+ * Record what a receiver HEARD, whether or not its feed is on.
+ *
+ * Split from the snapshot above because the two answer different questions and
+ * are gated differently. The snapshot is what reaches the public map, so it is
+ * rightly behind the feed gate. Traces, recent aircraft and range-now are the
+ * node's OWN performance record — the same category as the daily counters and
+ * the coverage envelope, both of which are already accumulated before that
+ * gate for exactly this reason.
+ *
+ * Having this behind the gate meant a receiver with its feed paused showed a
+ * coverage envelope (accumulated before the gate) and no tracks at all
+ * (recorded after it), which reads as a broken map rather than a paused feed.
+ */
+export function recordNodeAdsbReception(
+  nodeId: string,
+  records: AdsbAircraft[],
+  rangeKm: number | null = null,
+): void {
+  const nowMs = Date.now();
+  if (rangeKm !== null) observedRangeKm.set(nodeId, { km: rangeKm, atMs: nowMs });
+  recordTraces(nodeId, records, nowMs);
 }
 
 /**

@@ -5,6 +5,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { buildConfigPayload, adsbGainOf, adsbPpmOf } from '../../../src/services/nodes/configMerge.js';
 import {
   recordNodeAdsbSnapshot,
+  recordNodeAdsbReception,
   nodeAdsbRecords,
   nodeAdsbFeedCount,
   adsbNodeSourceId,
@@ -97,7 +98,9 @@ describe('adsb node store', () => {
   });
 
   function store(nodeId: string, name: string, u = upload()): number {
-    return recordNodeAdsbSnapshot(nodeId, name, normalizeNodeUpload(u, adsbNodeSourceId(nodeId, name)));
+    const records = normalizeNodeUpload(u, adsbNodeSourceId(nodeId, name));
+    recordNodeAdsbReception(nodeId, records);
+    return recordNodeAdsbSnapshot(nodeId, name, records);
   }
 
   it('tags records with the node as their source', () => {

@@ -8,6 +8,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   recordNodeAdsbSnapshot,
+  recordNodeAdsbReception,
   nodeAdsbRecentAircraft,
   recordAdsbAuthFailure,
   adsbAuthFailures,
@@ -24,14 +25,13 @@ const NODE = 'node-logs-1';
 function feed(
   aircraft: Array<{ hex: string; lat: number; lon: number; flight?: string; alt_baro?: number }>,
 ) {
-  recordNodeAdsbSnapshot(
-    NODE,
-    'adsb-test',
-    normalizeNodeUpload(
-      { at: new Date().toISOString(), aircraft: aircraft.map((a) => ({ ...a, seen_pos: 1 })) },
-      adsbNodeSourceId(NODE, 'adsb-test'),
-    ),
+  const records = normalizeNodeUpload(
+    { at: new Date().toISOString(), aircraft: aircraft.map((a) => ({ ...a, seen_pos: 1 })) },
+    adsbNodeSourceId(NODE, 'adsb-test'),
   );
+  // As the route does: reception before the feed gate, snapshot after.
+  recordNodeAdsbReception(NODE, records);
+  recordNodeAdsbSnapshot(NODE, 'adsb-test', records);
 }
 
 describe('recent aircraft', () => {

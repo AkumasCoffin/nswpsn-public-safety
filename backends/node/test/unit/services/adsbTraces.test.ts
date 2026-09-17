@@ -5,6 +5,9 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import {
   recordNodeAdsbSnapshot,
+  recordNodeAdsbReception,
+  nodeAdsbRecords,
+  nodeAdsbObservedRangeKm,
   nodeAdsbTraces,
   adsbNodeSourceId,
   _resetAdsbNodeStore,
@@ -19,12 +22,81 @@ function feed(aircraft: Array<{ hex: string; lat: number; lon: number; flight?: 
     at: new Date().toISOString(),
     aircraft: aircraft.map((a) => ({ ...a, seen_pos: 1 })),
   };
-  recordNodeAdsbSnapshot(
-    NODE,
-    'adsb-test',
-    normalizeNodeUpload(upload, adsbNodeSourceId(NODE, 'adsb-test')),
-  );
+  const records = normalizeNodeUpload(upload, adsbNodeSourceId(NODE, 'adsb-test'));
+  // Mirrors the ingest route: reception (traces, range) is recorded before the
+  // feed gate, the live snapshot after it.
+  recordNodeAdsbReception(NODE, records);
+  recordNodeAdsbSnapshot(NODE, 'adsb-test', records);
 }
+
+describe('a paused feed leaves the receiver diagnostics intact', () => {
+  // The reported fault: an ADS-B node's coverage map showed the envelope ring
+  // but no tracks at all.
+  //
+  // recordTraces lived inside recordNodeAdsbSnapshot, which sits AFTER the
+  // feed gate, while the coverage envelope and the daily counters are folded
+  // in before it. So a receiver with its feed paused accumulated a ring with
+  // nothing inside it — which reads as a broken map rather than a paused feed.
+  //
+  // Traces are the receiver's own record, not something it publishes. Only the
+  // live snapshot belongs behind the gate.
+  beforeEach(() => {
+    _resetAdsbNodeStore();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-17T00:00:00Z'));
+  });
+  afterEach(() => vi.useRealTimers());
+
+  /** An upload arriving at a node whose feed is OFF: reception only. */
+  function receiveUnfed(
+    aircraft: Array<{ hex: string; lat: number; lon: number }>,
+  ): void {
+    const records = normalizeNodeUpload(
+      { at: new Date().toISOString(), aircraft: aircraft.map((a) => ({ ...a, seen_pos: 1 })) },
+      adsbNodeSourceId(NODE, 'adsb-test'),
+    );
+    recordNodeAdsbReception(NODE, records);
+  }
+
+  it('records tracks even while the feed is off', () => {
+    receiveUnfed([{ hex: 'aaa111', lat: -33.0, lon: 151.0 }]);
+    vi.advanceTimersByTime(90_000);
+    receiveUnfed([{ hex: 'aaa111', lat: -33.3, lon: 151.3 }]);
+
+    const t = nodeAdsbTraces(NODE, 480);
+    expect(t.aircraft).toBe(1);
+    expect(t.traces).toHaveLength(1);
+    expect(t.traces[0]!.points.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('keeps that node off the live map, which is what the gate is for', () => {
+    receiveUnfed([{ hex: 'aaa111', lat: -33.0, lon: 151.0 }]);
+    expect(nodeAdsbRecords()).toHaveLength(0);
+  });
+
+  it('still reports range now, which has no snapshot to hang off', () => {
+    // The liveness guard used to key off the presence of a live snapshot, so a
+    // paused node reported no range even though it had just measured one.
+    const records = normalizeNodeUpload(
+      { at: new Date().toISOString(),
+        aircraft: [{ hex: 'aaa111', lat: -33.0, lon: 151.0, seen_pos: 1 }] },
+      adsbNodeSourceId(NODE, 'adsb-test'),
+    );
+    recordNodeAdsbReception(NODE, records, 212.5);
+    expect(nodeAdsbObservedRangeKm(NODE)).toBe(212.5);
+  });
+
+  it('but range now still expires when the node goes quiet', () => {
+    const records = normalizeNodeUpload(
+      { at: new Date().toISOString(),
+        aircraft: [{ hex: 'aaa111', lat: -33.0, lon: 151.0, seen_pos: 1 }] },
+      adsbNodeSourceId(NODE, 'adsb-test'),
+    );
+    recordNodeAdsbReception(NODE, records, 212.5);
+    vi.advanceTimersByTime(5 * 60_000);
+    expect(nodeAdsbObservedRangeKm(NODE)).toBeNull();
+  });
+});
 
 describe('adsb traces', () => {
   beforeEach(() => {

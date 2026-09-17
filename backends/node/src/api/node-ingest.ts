@@ -32,6 +32,7 @@ import { getPagerIngest } from '../services/nodes/globalConfig.js';
 import { hub } from '../services/nodes/hub.js';
 import {
   recordNodeAdsbSnapshot,
+  recordNodeAdsbReception,
   accumulateAdsbDaily,
   adsbNodeSourceId,
   recordAdsbAuthFailure,
@@ -1070,18 +1071,21 @@ nodeIngestRouter.post('/api/node-ingest/adsb-upload', async (c) => {
   hub.recordUpload(r.nodeId);
   accumulateAdsbDaily(r.nodeId, parsed.aircraft.length, parsed.stats ?? null, rangeKm);
 
-  // 6. Feed gate — when off the node stays connected and counted, but nothing
-  //    it hears reaches the live map.
+  //    Traces, recent aircraft and range-now are recorded here too, BEFORE the
+  //    gate: they are the receiver's own record, not something it publishes.
+  //    Recording them after the gate left a paused node showing a coverage
+  //    envelope with no tracks inside it.
+  const records = normalizeNodeUpload(
+    parsed, adsbNodeSourceId(r.nodeId, nodeRow?.name ?? null));
+  recordNodeAdsbReception(r.nodeId, records, rangeKm);
+
+  // 6. Feed gate — when off the node stays connected and counted, and its own
+  //    Data tab stays complete, but nothing it hears reaches the live map.
   if (!r.feedEnabled) {
     return c.json({ ok: true, fed: false });
   }
 
-  const accepted = recordNodeAdsbSnapshot(
-    r.nodeId,
-    nodeRow?.name ?? null,
-    normalizeNodeUpload(parsed, adsbNodeSourceId(r.nodeId, nodeRow?.name ?? null)),
-    rangeKm,
-  );
+  const accepted = recordNodeAdsbSnapshot(r.nodeId, nodeRow?.name ?? null, records);
   return c.json({ ok: true, accepted });
 });
 

@@ -16,6 +16,7 @@ import {
   distanceKm,
   snapshotMaxRangeKm,
   recordNodeAdsbSnapshot,
+  recordNodeAdsbReception,
   nodeAdsbRecords,
   nodeAdsbObservedRangeKm,
   accumulateAdsbDaily,
@@ -101,14 +102,13 @@ describe('snapshotMaxRangeKm', () => {
 
 describe('range now', () => {
   function feed(rangeKm: number | null, aircraft: Array<{ hex: string; lat: number; lon: number }>) {
-    recordNodeAdsbSnapshot(
-      NODE, 'adsb-test',
-      normalizeNodeUpload(
-        { at: new Date().toISOString(), aircraft: aircraft.map((a) => ({ ...a, seen_pos: 1 })) },
-        adsbNodeSourceId(NODE, 'adsb-test'),
-      ),
-      rangeKm,
+    const records = normalizeNodeUpload(
+      { at: new Date().toISOString(), aircraft: aircraft.map((a) => ({ ...a, seen_pos: 1 })) },
+      adsbNodeSourceId(NODE, 'adsb-test'),
     );
+    // As the route does: reception before the feed gate, snapshot after.
+    recordNodeAdsbReception(NODE, records, rangeKm);
+    recordNodeAdsbSnapshot(NODE, 'adsb-test', records);
   }
 
   it('reports the latest upload, not a running peak', () => {
