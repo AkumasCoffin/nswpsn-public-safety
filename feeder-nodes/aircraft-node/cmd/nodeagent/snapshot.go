@@ -50,6 +50,16 @@ const (
 	// stalled uploader accumulate without bound.
 	maxTrailPerAircraft = 16
 
+	// maxTrailPointsTotal bounds the carried positions across the WHOLE
+	// snapshot, which is what the server's 256 KB body cap actually sees.
+	//
+	// At the 500-aircraft schema limit, six positions each would put the
+	// payload within sight of that cap, and a snapshot refused with 413 is a
+	// snapshot lost. Positions are also worth least exactly when there are most
+	// of them: a map showing five hundred aircraft is not short of detail. So
+	// the busiest sites shed this first and keep sending every position.
+	maxTrailPointsTotal = 2000
+
 	// maxAircraftPerSnapshot matches the server's schema cap. Reaching it would
 	// take an extraordinarily busy site; truncating is still better than having
 	// the whole snapshot rejected as malformed.
@@ -276,11 +286,13 @@ func runSnapshotLoop(ctx context.Context, m *aircraftManager, q *queue.Queue) {
 // of the upload that can grow with traffic.
 func attachTrails(list []snapshotAircraft, byHex map[string][]trailPoint, at time.Time) {
 	atMs := at.UnixMilli()
+	budget := maxTrailPointsTotal
 	for i := range list {
 		pts := byHex[list[i].Hex]
-		if len(pts) < 2 {
+		if len(pts) < 2 || len(pts) > budget {
 			continue
 		}
+		budget -= len(pts)
 		out := make([][]*float64, 0, len(pts))
 		for _, p := range pts {
 			age := float64(atMs-p.atMs) / 1000

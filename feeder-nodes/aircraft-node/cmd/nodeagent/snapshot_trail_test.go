@@ -178,3 +178,44 @@ func TestAttachedPositionsMarshalAsCompactArrays(t *testing.T) {
 		t.Fatalf("absent altitude became %v", *back.Positions[0][3])
 	}
 }
+
+func TestAttachTrailsStaysWithinTheBodyCap(t *testing.T) {
+	// The server refuses a snapshot over 256 KB, and a refused snapshot is a
+	// lost one. At the 500-aircraft schema limit, carrying positions for every
+	// one of them would put the payload within sight of that cap.
+	at := time.Unix(1_800_000_000, 0)
+	list := make([]snapshotAircraft, 0, 500)
+	byHex := map[string][]trailPoint{}
+	for i := 0; i < 500; i++ {
+		hex := "a" + itoaPad(i)
+		list = append(list, snapshotAircraft{Hex: hex})
+		pts := make([]trailPoint, 0, 6)
+		for j := 0; j < 6; j++ {
+			pts = append(pts, trailPoint{
+				atMs: at.Add(-time.Duration(6-j) * time.Second).UnixMilli(),
+				lat:  -33 + float64(j)*0.01, lon: 151,
+			})
+		}
+		byHex[hex] = pts
+	}
+	attachTrails(list, byHex, at)
+
+	total := 0
+	for i := range list {
+		total += len(list[i].Positions)
+	}
+	if total > maxTrailPointsTotal {
+		t.Fatalf("carried %d points, over the budget of %d", total, maxTrailPointsTotal)
+	}
+	// And the ones that did fit are whole tracks, not fragments.
+	for i := range list {
+		if n := len(list[i].Positions); n != 0 && n != 6 {
+			t.Fatalf("aircraft %d carried a partial track of %d points", i, n)
+		}
+	}
+}
+
+func itoaPad(v int) string {
+	const digits = "0123456789abcdef"
+	return string([]byte{digits[(v>>8)&15], digits[(v>>4)&15], digits[v&15]})
+}
