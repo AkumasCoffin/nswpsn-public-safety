@@ -264,14 +264,27 @@ func runAgent(ctx context.Context, configPath string) error {
 	}
 	log.Printf("queue opened at %s (depth=%d)", cfg.QueueDir(), q.Depth())
 
-	// Reap any decoder left running by a previous agent. A re-exec self-update
-	// keeps the PID/cgroup, so an orphaned dump1090 survives holding the dongle
-	// open and the replacement would crash-loop on "usb_claim_interface error".
-	// Match on OUR decoder-script path (unique to this agent's data dir), never
-	// a bare "dump1090" — that would kill a decoder the operator runs for their
-	// own purposes. KillStale kills the matched process group.
-	if n := supervise.KillStale([]string{cfg.DecoderDir()}); n > 0 {
+	// Reap any decoder left running by a previous agent — one killed with the
+	// agent, or orphaned by a re-exec self-update, which keeps the PID and so
+	// does not tear its children down. An orphan holds the dongle open and the
+	// replacement crash-loops on "usb_claim_interface error -6" indefinitely.
+	//
+	// BOTH paths are matched, and the second is the one that works. The launch
+	// script ends in `exec dump1090 ...` so that the supervised process IS the
+	// decoder — which also means bash replaces itself and the script path
+	// vanishes from the cmdline the moment it starts. Matching the decoder
+	// directory alone therefore found nothing a second after launch, which is
+	// every case that matters. The JSON directory survives the exec, because
+	// the decoder is still being told to write there.
+	//
+	// Both are specific to THIS agent's install. Never match a bare "dump1090":
+	// that would kill a decoder the operator runs for their own purposes.
+	// KillStale kills the matched process group.
+	if n := supervise.KillStale([]string{cfg.DecoderDir(), cfg.JSONDir}); n > 0 {
 		log.Printf("startup: reaped stale decoder group(s) before launch (%d)", n)
+		// SIGKILL is asynchronous and the USB interface is not free until the
+		// kernel has reaped the process.
+		time.Sleep(decoderSwapSettle)
 	}
 
 	// Fetch the update manifest best-effort. Informational at startup — the WS

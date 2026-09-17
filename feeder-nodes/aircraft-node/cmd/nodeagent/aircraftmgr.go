@@ -213,6 +213,24 @@ func (m *aircraftManager) MeasurePPM() {
 	m.mu.Unlock()
 }
 
+// StopDecoder tears the decoder down and waits for the dongle to come free.
+//
+// Used on the self-update path. It deliberately leaves hasConfig alone: the
+// replacement agent reads the same persisted config on boot, and clearing it
+// here would make the node look unconfigured for the length of the swap.
+func (m *aircraftManager) StopDecoder() {
+	m.mu.Lock()
+	if m.supCancel != nil {
+		m.supCancel()
+		m.supCancel = nil
+		m.sup = nil
+	}
+	m.mu.Unlock()
+	// The kernel does not release the USB interface the instant the process
+	// dies, and the next thing to run is a fresh agent opening the same device.
+	time.Sleep(decoderSwapSettle)
+}
+
 // Restart restarts the decoder component (staff "Restart" button).
 func (m *aircraftManager) Restart(component string) error {
 	m.mu.Lock()

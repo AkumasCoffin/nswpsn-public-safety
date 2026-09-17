@@ -70,6 +70,11 @@ type ConfigApplier interface {
 	// Rescan stops the decoder, lets the USB device settle, and starts it
 	// again — the staff "Recheck SDR" action. Call in a goroutine.
 	Rescan() error
+	// StopDecoder kills the decoder and waits for the USB device to come free.
+	// Called before a self-update re-execs this process: syscall.Exec replaces
+	// the image but keeps the PID, so children are NOT torn down and an
+	// orphaned dump1090 would still hold the dongle when the new image starts.
+	StopDecoder()
 }
 
 // StatusProvider returns the current component states (name -> status) for
@@ -584,6 +589,11 @@ func (c *Client) runUpdateCheck(reason string) (string, bool) {
 			_ = c.sendMessage(protocol.TypeEvent, map[string]any{"kind": "updating", "version": newVer})
 			go func() {
 				time.Sleep(1 * time.Second)
+				// Let go of the SDR before the image is replaced. Re-exec keeps
+				// the PID, so anything still running under it survives into the
+				// new agent's life holding the device open, and the replacement
+				// crash-loops on "usb_claim_interface error -6" forever.
+				c.applier.StopDecoder()
 				if swerr := update.SwapAndRestart(pending); swerr != nil {
 					log.Printf("wsclient: update: swap + restart failed: %v", swerr)
 					c.swapScheduled.Store(false) // allow a retry if the swap didn't take
