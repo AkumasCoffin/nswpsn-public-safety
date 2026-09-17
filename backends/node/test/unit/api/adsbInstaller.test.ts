@@ -56,6 +56,54 @@ describe('the FlightAware repository fetch', () => {
   });
 });
 
+describe('the DVB driver that holds the dongle', () => {
+  // A receiver was found crash-looping dump1090 every three seconds with
+  // "usb_claim_interface error -6" — the DVB-T driver had the SDR and would
+  // not release it. The installer wrote the blacklist (which only helps the
+  // NEXT boot), called `modprobe -r` on one module, hid its output and
+  // reported success, so the machine was left permanently unable to decode
+  // with nothing said about it.
+
+  it('removes the whole module stack, not just the leaf', () => {
+    // rtl2832 is what dvb_usb_rtl28xxu sits on; removing the base while the
+    // leaf is loaded fails, so order and coverage both matter.
+    const loop = /for m in ([a-z0-9_ ]+); do/.exec(script);
+    expect(loop).not.toBeNull();
+    const mods = loop![1]!.trim().split(/\s+/);
+    expect(mods[0]).toBe('dvb_usb_rtl28xxu');
+    expect(mods).toContain('rtl2832');
+    expect(mods).toContain('rtl2830');
+  });
+
+  it('still blacklists, because eviction does not survive a reboot', () => {
+    expect(script).toContain('/etc/modprobe.d/blacklist-nswpsn-rtl.conf');
+    expect(script).toContain('blacklist dvb_usb_rtl28xxu');
+  });
+
+  it('proves the SDR opens rather than assuming it did', () => {
+    // The whole failure was a silent one: modprobe -r says nothing when it
+    // cannot remove a module that is in use.
+    expect(script).toMatch(/rtl_test -t/);
+    expect(script).toContain('SDR_OK');
+  });
+
+  it('names the remedy when the driver still has the dongle', () => {
+    expect(script).toMatch(/WARNING: the SDR could not be opened/);
+    expect(script).toContain('lsmod');
+    // A reboot is the fix once the blacklist is in place, and saying so is the
+    // difference between a broken node and a two-minute one.
+    expect(script).toMatch(/REBOOT/);
+    expect(script).toMatch(/dump1090 will crash-loop/);
+  });
+
+  it('does not abort the install over it', () => {
+    // The node still enrols and starts; it simply cannot decode yet. Failing
+    // the install would throw away the working half.
+    const warn = script.slice(script.indexOf('SDR_OK'));
+    expect(warn.slice(0, warn.indexOf('cat > /etc/systemd'))).not.toContain('exit 1');
+  });
+});
+
 describe('the generated script', () => {
   it('is syntactically valid shell', () => {
     // The probe URL lives inside a JS template literal, so `${FA_POOL}` has to
