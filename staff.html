@@ -1766,10 +1766,13 @@
     #nd2-aov-map-wrap { padding: 0 1rem 1rem; }
     /* The polar coverage plot sits beside its own caption rather than on the
        map — see ENV_polarSvg. */
-    .nd2-polar-wrap { display: flex; gap: 1.2rem; align-items: center;
-      flex-wrap: wrap; padding: 0 1rem 1rem; }
-    .nd2-polar-wrap svg { flex: 0 0 auto; }
+    .nd2-polar-wrap { display: flex; gap: 2rem; align-items: center;
+      flex-wrap: wrap; padding: 0 1rem 1rem; justify-content: center; }
+    .nd2-polar-wrap svg { flex: 0 0 auto; max-width: 100%; height: auto; }
     .nd2-polar-legend { font-size: 0.75rem; color: var(--text-soft); line-height: 1.7; }
+    /* On its own tab the plot is the content, not a thumbnail beside a table. */
+    .nd2-polar-card .nd2-polar-wrap { padding: 1.4rem 1rem 1.8rem; }
+    .nd2-polar-card .nd2-polar-legend { font-size: 0.82rem; line-height: 1.9; }
     .nd2-polar-key { display: inline-block; width: 14px; height: 0; margin-right: 6px;
       vertical-align: middle; border-top-width: 2px; border-top-style: solid; }
     #nd2-aov-map {
@@ -3744,6 +3747,7 @@
         <!-- ADS-B receivers: live state + windowed performance per receiver. -->
         <div id="nd2-view-aoverview" style="display: none;">
           <div class="stats-bar" id="nd2-aov-tiles"></div>
+          <div class="nd2-card nd2-chart-card nd2-detail-gap"><div class="nd2-card-h"><i class="fas fa-chart-line"></i> <span>Aircraft seen</span><span class="nd2-note" id="nd2-afleet-ac-note"></span></div><div class="nd2-chart-wrap"><canvas id="nd2-afleet-ac" aria-label="Aircraft seen per hour" role="img"></canvas></div><div class="nd2-empty" id="nd2-afleet-ac-empty" style="display:none;">Nothing heard in this window.</div></div><div class="nd2-card nd2-chart-card nd2-detail-gap"><div class="nd2-card-h"><i class="fas fa-chart-line"></i> <span>Range</span><span class="nd2-note" id="nd2-afleet-rng-note"></span></div><div class="nd2-chart-wrap"><canvas id="nd2-afleet-rng" aria-label="Furthest aircraft per hour" role="img"></canvas></div><div class="nd2-empty" id="nd2-afleet-rng-empty" style="display:none;">No range recorded — a receiver needs an antenna pin to measure one.</div></div><div class="nd2-card nd2-chart-card nd2-detail-gap"><div class="nd2-card-h"><i class="fas fa-chart-line"></i> <span>Signal level</span><span class="nd2-note" id="nd2-afleet-sig-note"></span></div><div class="nd2-chart-wrap"><canvas id="nd2-afleet-sig" aria-label="Receive level per hour" role="img"></canvas></div><div class="nd2-empty" id="nd2-afleet-sig-empty" style="display:none;">No signal readings yet. Receivers report this from agent 0.1.6 on.</div></div><div class="nd2-card nd2-chart-card nd2-detail-gap"><div class="nd2-card-h"><i class="fas fa-chart-line"></i> <span>Message rate</span><span class="nd2-note" id="nd2-afleet-msg-note"></span></div><div class="nd2-chart-wrap"><canvas id="nd2-afleet-msg" aria-label="Decoder message rate per hour" role="img"></canvas></div><div class="nd2-empty" id="nd2-afleet-msg-empty" style="display:none;">No decoder statistics in this window.</div></div>
           <div id="nd2-aov-auth" style="display: none;"></div>
         </div>
 
@@ -3776,10 +3780,8 @@
           </div>
           <div id="nd2-anode-overview" style="display: none;">
             <div class="stats-bar" id="nd2-anode-tiles"></div>
-            <div class="nd2-card nd2-detail-gap">
-              <div class="nd2-card-h"><span>Daily</span></div>
-              <div id="nd2-anode-daily"><div class="nd2-empty">Loading…</div></div>
-            </div>
+            <div class="stats-bar" id="nd2-anode-totals"></div>
+            <div class="nd2-card nd2-chart-card nd2-detail-gap"><div class="nd2-card-h"><i class="fas fa-chart-line"></i> <span>Aircraft seen</span><span class="nd2-note" id="nd2-anode-ac-note"></span></div><div class="nd2-chart-wrap"><canvas id="nd2-anode-ac" aria-label="Aircraft seen per hour" role="img"></canvas></div><div class="nd2-empty" id="nd2-anode-ac-empty" style="display:none;">Nothing heard in this window.</div></div><div class="nd2-card nd2-chart-card nd2-detail-gap"><div class="nd2-card-h"><i class="fas fa-chart-line"></i> <span>Range</span><span class="nd2-note" id="nd2-anode-rng-note"></span></div><div class="nd2-chart-wrap"><canvas id="nd2-anode-rng" aria-label="Furthest aircraft per hour" role="img"></canvas></div><div class="nd2-empty" id="nd2-anode-rng-empty" style="display:none;">No range recorded — a receiver needs an antenna pin to measure one.</div></div><div class="nd2-card nd2-chart-card nd2-detail-gap"><div class="nd2-card-h"><i class="fas fa-chart-line"></i> <span>Signal level</span><span class="nd2-note" id="nd2-anode-sig-note"></span></div><div class="nd2-chart-wrap"><canvas id="nd2-anode-sig" aria-label="Receive level per hour" role="img"></canvas></div><div class="nd2-empty" id="nd2-anode-sig-empty" style="display:none;">No signal readings yet. Receivers report this from agent 0.1.6 on.</div></div><div class="nd2-card nd2-chart-card nd2-detail-gap"><div class="nd2-card-h"><i class="fas fa-chart-line"></i> <span>Message rate</span><span class="nd2-note" id="nd2-anode-msg-note"></span></div><div class="nd2-chart-wrap"><canvas id="nd2-anode-msg" aria-label="Decoder message rate per hour" role="img"></canvas></div><div class="nd2-empty" id="nd2-anode-msg-empty" style="display:none;">No decoder statistics in this window.</div></div>
           </div>
           <div id="nd2-anode-coverage" style="display: none;"></div>
           <div id="nd2-anode-tracks" style="display: none;">
@@ -4963,7 +4965,7 @@
       if (aBar) aBar.style.display = mode === 'adsb' ? '' : 'none';
       // Leaving ADS-B mode must tear the track map down: hiding its container
       // leaves Leaflet's listeners and tile requests alive behind it.
-      if (mode !== 'adsb') nd2AdsbLeaveDetail();
+      if (mode !== 'adsb') { nd2AdsbLeaveDetail(); nd2DestroyAdsbCharts('nd2-afleet'); }
       // Transcripts has ONE view, so it gets no pill row.
       // The per-node scope selector is a Radio-mode control (pager stays
       // fleet-wide); hide it entirely in Pager mode.
@@ -8055,6 +8057,8 @@
          { label: 'Positions', num: true }, { label: 'Peak aircraft', num: true }],
         rows, () => 'nd2-rowlink');
 
+      void nd2LoadAdsbSeries('nd2-afleet', null);
+
       // Delegated so it survives the poll re-render. The whole row is the
       // target, matching the radio node list; the link inside it stays for
       // keyboard reach, and carries the ids the row itself cannot.
@@ -8256,11 +8260,11 @@
       if (!_nd2TrackMap) {
         const dark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?key=cb1_29rl_1_764d57ded0436220d836abc9',
           { subdomains: 'abcd', maxZoom: 19, attribution: '© CartoDB' });
-        // The wheel scrolls the page here, as it does on the feeder card: this
-        // map sits inside a scrolling column, and swallowing the wheel traps
-        // anyone trying to get past it.
+        // The wheel zooms. This is a full-page tab, not a card wedged into a
+        // scrolling column, so the map IS what you came to the tab for and
+        // taking its wheel away just makes it unusable.
         _nd2TrackMap = L.map('nd2-aov-map',
-          { attributionControl: false, scrollWheelZoom: false, layers: [dark] })
+          { attributionControl: false, layers: [dark] })
           .setView([d.site ? d.site.lat : -33.8688, d.site ? d.site.lon : 151.2093], 8);
       }
       if (_nd2TrackLayer) { _nd2TrackLayer.remove(); _nd2TrackLayer = null; }
@@ -8331,10 +8335,10 @@
       const el = document.getElementById('nd2-anode-coverage');
       if (!el) return;
       const name = nd2.anodes.name || 'Receiver';
-      el.innerHTML = '<div class="nd2-card">'
+      el.innerHTML = '<div class="nd2-card nd2-polar-card">'
         + '<div class="nd2-card-h"><span>' + escapeHtml(name) + ' — coverage</span>'
         +   '<span class="nd2-note">how far it hears, per bearing</span></div>'
-        + '<div id="nd2-aov-polar">' + nd2AdsbPolarBody(d.coverage) + '</div>'
+        + '<div id="nd2-aov-polar">' + nd2AdsbPolarBody(d.coverage, 460) + '</div>'
         + '</div>';
     }
 
@@ -8404,14 +8408,157 @@
         + '</div>';
     }
 
+
+    /* ---- ADS-B performance charts ----
+     *
+     * Four metrics an operator actually tunes against: how much it saw, how far
+     * it reached, how loud that was, and how hard the decoder worked. Modelled
+     * on graphs1090, which is the reference every ADS-B operator already knows.
+     *
+     * Hourly buckets from /api/node-data/adsb-series. The daily rollup could
+     * not drive these: on the 24h window it is one point.
+     *
+     * Chart.js has no date adapter loaded here — a time-scale axis throws
+     * mid-render — so every chart is a category axis over pre-formatted labels,
+     * the same as the radio ones.
+     */
+    const ND2_ADSB_CHARTS = [
+      { key: 'aircraft', id: 'ac', label: 'Aircraft', colour: '#38bdf8',
+        fmt: (v) => nd2Num(v) },
+      { key: 'rangeKm', id: 'rng', label: 'Range', colour: '#a78bfa',
+        fmt: (v) => Math.round(v) + ' km', axisFmt: (v) => Math.round(v) + ' km' },
+      { key: 'signalDbfs', id: 'sig', label: 'Mean signal', colour: '#f59e0b',
+        fmt: (v) => Number(v).toFixed(1) + ' dBFS',
+        axisFmt: (v) => Number(v).toFixed(0) + ' dB',
+        // The peak rides the same axis: both are dBFS and the gap between them
+        // is the interesting part — a peak far above the mean is a handful of
+        // very close aircraft, not a better antenna.
+        extra: { key: 'signalPeakDbfs', label: 'Peak', dash: [4, 3] } },
+      { key: 'msgRate', id: 'msg', label: 'Messages', colour: '#4ade80',
+        fmt: (v) => Number(v).toFixed(1) + '/s',
+        axisFmt: (v) => Number(v).toFixed(0) + '/s' },
+    ];
+
+    /** Live Chart instances, by canvas id, so each is destroyed before reuse. */
+    const _nd2AdsbCharts = {};
+
+    function nd2AdsbChartLabels(points, window) {
+      return points.map((p) => {
+        const d = new Date(p.hour);
+        return window === '24h'
+          ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : d.toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit' });
+      });
+    }
+
+    /** Draw one metric into one canvas. */
+    function nd2AdsbDrawChart(prefix, spec, points, window) {
+      const cid = prefix + '-' + spec.id;
+      const canvas = document.getElementById(cid);
+      const emptyEl = document.getElementById(cid + '-empty');
+      const noteEl = document.getElementById(cid + '-note');
+      if (!canvas || typeof Chart === 'undefined') return;
+
+      if (_nd2AdsbCharts[cid]) { _nd2AdsbCharts[cid].destroy(); delete _nd2AdsbCharts[cid]; }
+
+      const vals = points.map((p) => (typeof p[spec.key] === 'number' ? p[spec.key] : null));
+      const has = vals.some((v) => v !== null);
+      if (emptyEl) emptyEl.style.display = has ? 'none' : '';
+      if (canvas.parentElement) canvas.parentElement.style.display = has ? '' : 'none';
+      if (noteEl) noteEl.textContent = has ? 'per hour' : '';
+      if (!has) return;
+
+      const datasets = [{
+        label: spec.label, data: vals,
+        borderColor: spec.colour, backgroundColor: spec.colour + '14',
+        borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, pointHitRadius: 12,
+        // spanGaps stays FALSE throughout: a hole is a receiver that was not
+        // reporting, and bridging it draws steady performance through an outage.
+        fill: true, tension: 0.3, spanGaps: false,
+      }];
+      if (spec.extra) {
+        const ev = points.map((p) => (typeof p[spec.extra.key] === 'number' ? p[spec.extra.key] : null));
+        if (ev.some((v) => v !== null)) {
+          datasets.push({
+            label: spec.extra.label, data: ev,
+            borderColor: spec.colour + '88', borderWidth: 1.5, borderDash: spec.extra.dash,
+            pointRadius: 0, pointHoverRadius: 4, pointHitRadius: 12,
+            fill: false, tension: 0.3, spanGaps: false,
+          });
+        }
+      }
+
+      _nd2AdsbCharts[cid] = new Chart(canvas, {
+        type: 'line',
+        data: { labels: nd2AdsbChartLabels(points, window), datasets },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: { display: datasets.length > 1,
+              labels: { color: '#94a3b8', boxWidth: 10, font: { family: 'Space Grotesk', size: 10 } } },
+            tooltip: {
+              backgroundColor: '#121e33',
+              borderColor: 'rgba(148,163,184,0.25)', borderWidth: 1,
+              callbacks: {
+                label: (ctx) => ctx.parsed.y === null ? null
+                  : ctx.dataset.label + ': ' + spec.fmt(ctx.parsed.y),
+              },
+            },
+          },
+          scales: {
+            x: { ticks: { color: '#64748b', font: { family: 'Space Grotesk', size: 10 }, maxTicksLimit: 8 },
+                 grid: { color: 'rgba(148,163,184,0.08)' } },
+            y: {
+              // Signal is negative dBFS, so its axis must not be forced to zero
+              // — that would squash every reading into the top of the chart.
+              beginAtZero: spec.key !== 'signalDbfs',
+              ticks: { color: '#64748b', font: { family: 'Space Grotesk', size: 10 },
+                       maxTicksLimit: 5,
+                       callback: (v) => (spec.axisFmt ? spec.axisFmt(v) : nd2Num(v)) },
+              grid: { color: 'rgba(148,163,184,0.08)' },
+            },
+          },
+        },
+      });
+    }
+
+    /** Fetch a series and paint all four charts for it. */
+    async function nd2LoadAdsbSeries(prefix, nodeId) {
+      let d;
+      try {
+        const q = nodeId ? '&nodeId=' + encodeURIComponent(nodeId) : '';
+        d = await nd2Fetch('/api/node-data/adsb-series?window='
+          + encodeURIComponent(nd2.window) + q);
+      } catch (e) {
+        return;
+      }
+      if (!d) return;
+      // A stale response must not paint over a newer receiver's charts.
+      if (nodeId && nd2.anodes.nodeId !== nodeId) return;
+      const points = d.points || [];
+      for (const spec of ND2_ADSB_CHARTS) {
+        nd2AdsbDrawChart(prefix, spec, points, d.window || nd2.window);
+      }
+    }
+
+    /** Drop every chart instance. Chart.js leaks its canvases otherwise. */
+    function nd2DestroyAdsbCharts(prefix) {
+      for (const cid of Object.keys(_nd2AdsbCharts)) {
+        if (prefix && cid.indexOf(prefix) !== 0) continue;
+        _nd2AdsbCharts[cid].destroy();
+        delete _nd2AdsbCharts[cid];
+      }
+    }
+
     /** The coverage plot's card shell. Its contents are filled by the tracks
      *  fetch, which is the call that carries the envelope. */
-    function nd2AdsbPolarBody(cov) {
+    function nd2AdsbPolarBody(cov, size) {
       if (!cov || !ENV_hasData(cov.buckets)) {
         return '<div class="nd2-empty">Nothing heard yet — a coverage picture '
              + 'needs traffic from enough directions to take shape.</div>';
       }
-      const svg = ENV_polarSvg(cov.buckets, cov.recent, { size: 260 });
+      const svg = ENV_polarSvg(cov.buckets, cov.recent, { size: size || 260 });
       const days = nd2Num(cov.daysCovered) + (cov.daysCovered === 1 ? ' day' : ' days');
       const legend = []
         .concat('<div><span class="nd2-polar-key" style="border-top-color:#c084fc;"></span>'
@@ -8473,6 +8620,7 @@
      *  can see, and re-entering would then build a second map over the first. */
     function nd2AdsbLeaveDetail() {
       nd2DestroyTrackMap();
+      nd2DestroyAdsbCharts('nd2-anode');
       nd2.anodes.level = 'list';
       nd2.anodes.nodeId = null;
       const ctx = document.getElementById('nd2-adsb-node-ctx');
@@ -8542,21 +8690,21 @@
 
     function nd2RenderAdsbNodeOverview(d) {
       const live = d.live || {};
-      const days = d.days || [];
       const hasPin = !!(d.node && d.node.hasPosition);
       const km = (v) => (v == null ? '—' : Math.round(v) + ' km');
 
+      // Aircraft now and message rate are live or they are nothing: a stale
+      // figure would read as a receiver still hearing. Closest and furthest
+      // come from the last upload and clear with it for the same reason.
+      const tile = (v, label, colour, sub) =>
+        '<div class="stat-card"' + (colour ? ' style="border-color:' + colour + '33;"' : '') + '>'
+        + '<div class="stat-value"' + (colour ? ' style="color:' + colour + ';"' : '') + '>' + v + '</div>'
+        + '<div class="stat-label">' + label + '</div>'
+        + (sub ? '<div class="nd2-stat-sub">' + sub + '</div>' : '')
+        + '</div>';
+
       const tilesEl = document.getElementById('nd2-anode-tiles');
       if (tilesEl) {
-        // Aircraft now and message rate are live or they are nothing: a stale
-        // figure would read as a receiver still hearing. Closest and furthest
-        // come from the last upload and clear with it for the same reason.
-        const tile = (v, label, colour, sub) =>
-          '<div class="stat-card"' + (colour ? ' style="border-color:' + colour + '33;"' : '') + '>'
-          + '<div class="stat-value"' + (colour ? ' style="color:' + colour + ';"' : '') + '>' + v + '</div>'
-          + '<div class="stat-label">' + label + '</div>'
-          + (sub ? '<div class="nd2-stat-sub">' + sub + '</div>' : '')
-          + '</div>';
         tilesEl.innerHTML = [
           tile(d.online ? (live.aircraftNow == null ? '—' : nd2Num(live.aircraftNow)) : '—',
             'Aircraft now', 'var(--success)', d.online ? 'with a position' : 'receiver offline'),
@@ -8571,21 +8719,26 @@
         ].join('');
       }
 
-      const dailyEl = document.getElementById('nd2-anode-daily');
-      if (dailyEl) {
-        dailyEl.innerHTML = days.length
-          ? nd2MiniTable(
-              [{ label: 'Day' }, { label: 'Positions', num: true }, { label: 'Peak aircraft', num: true },
-               { label: 'Best range', num: true }, { label: 'Peak msg rate', num: true }],
-              days.slice().reverse().map(x => [
-                escapeHtml(String(x.day)),
-                nd2Num(x.positions),
-                nd2Num(x.maxAircraft),
-                x.maxRangeKm ? Math.round(x.maxRangeKm) + ' km' : '—',
-                x.msgRateMax ? Number(x.msgRateMax).toFixed(1) + '/s' : '—',
-              ]))
-          : '<div class="nd2-empty">Nothing recorded for this receiver in this window.</div>';
+      // Totals for the window, as cards. The day-by-day table this replaces
+      // was a chart pretending to be a table — every column was a series, read
+      // one row at a time. The series are charts now, so what is left is the
+      // summary, which is what a card is for.
+      const totEl = document.getElementById('nd2-anode-totals');
+      if (totEl) {
+        const t = d.totals || {};
+        totEl.innerHTML = [
+          tile(nd2Num(t.positions), 'Positions', null, 'reports accepted'),
+          tile(nd2Num(t.maxAircraft), 'Peak aircraft', null, 'most seen at once'),
+          tile(hasPin ? km(t.maxRangeKm) : '—', 'Best range', null,
+            hasPin ? 'furthest heard' : 'needs an antenna pin'),
+          tile(t.msgRateMax == null ? '—' : Number(t.msgRateMax).toFixed(1) + '/s',
+            'Peak msg rate', null, 'busiest minute'),
+          tile(nd2Num(t.snapshots), 'Uploads', null,
+            nd2Num(t.daysReporting) + (t.daysReporting === 1 ? ' day' : ' days') + ' reporting'),
+        ].join('');
       }
+
+      void nd2LoadAdsbSeries('nd2-anode', nd2.anodes.nodeId);
     }
 
     function nd2RenderAdsbNodeHeard(d) {

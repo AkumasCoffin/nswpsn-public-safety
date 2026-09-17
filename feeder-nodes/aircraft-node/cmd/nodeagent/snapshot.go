@@ -62,6 +62,13 @@ type snapshotStats struct {
 	AircraftWithPos int      `json:"aircraftWithPos"`
 	TracksAll       int64    `json:"tracksAll"`
 	MaxRangeKm      *float64 `json:"maxRangeKm,omitempty"`
+	// Receive level over the decoder's last minute, in dBFS — negative, closer
+	// to zero being stronger. dump1090 has always reported these and this agent
+	// has always parsed them for its own gain loop; they were simply never put
+	// on the wire, so the backend could not chart the one figure that says
+	// whether an antenna or a gain setting is actually any good.
+	SignalDbfs     *float64 `json:"signalDbfs,omitempty"`
+	SignalPeakDbfs *float64 `json:"signalPeakDbfs,omitempty"`
 }
 
 type snapshotBody struct {
@@ -203,7 +210,33 @@ func buildStats(air *decoderjson.AircraftFile, s *decoderjson.StatsFile, withPos
 		// "how far did this receiver reach", and a quiet minute must not
 		// under-report it.
 		MaxRangeKm: s.Total.MaxRangeKm(),
+		// Signal, unlike range, is deliberately the LAST MINUTE: it is a
+		// measure of current conditions, and a run-total mean would flatten out
+		// exactly the change an operator is watching for after moving an
+		// antenna or altering gain.
+		SignalDbfs:     signalMean(s),
+		SignalPeakDbfs: signalPeak(s),
 	}
+}
+
+// signalMean and signalPeak read the last minute's receive level, or nil.
+//
+// `local` is a POINTER to an optional block: dump1090 omits it entirely when
+// it has nothing to report, and a decoder that is not dump1090 may never write
+// it at all. Reaching through it unguarded panics the agent on a field that is
+// only ever nice to have.
+func signalMean(s *decoderjson.StatsFile) *float64 {
+	if s == nil || s.Last1Min.Local == nil {
+		return nil
+	}
+	return s.Last1Min.Local.SignalStrength
+}
+
+func signalPeak(s *decoderjson.StatsFile) *float64 {
+	if s == nil || s.Last1Min.Local == nil {
+		return nil
+	}
+	return s.Last1Min.Local.PeakSignal
 }
 
 func tracksAll(s *decoderjson.StatsFile) int64 {

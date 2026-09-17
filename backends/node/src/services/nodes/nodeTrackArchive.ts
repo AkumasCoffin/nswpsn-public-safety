@@ -27,11 +27,14 @@ const BATCH_SIZE = 200;
 const HOUR_MS = 3_600_000;
 
 /**
- * Points per stored hour, as a backstop only. Decimation upstream puts a real
- * hour at roughly sixty, so reaching this means something is wrong; the row
- * stops growing rather than growing without bound.
+ * Points per stored hour, as a backstop only.
+ *
+ * Decimation upstream stores a moving aircraft about every ten seconds, so a
+ * full hour in view is around 360. This sits well clear of that: reaching it
+ * means something is wrong, and the row stops growing rather than growing
+ * without bound.
  */
-const MAX_POINTS_PER_HOUR = 400;
+const MAX_POINTS_PER_HOUR = 1000;
 
 /** How long a high-water mark is worth keeping. Only the current and previous
  *  hours are ever written, so anything older can never be consulted again. */

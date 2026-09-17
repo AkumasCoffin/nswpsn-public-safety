@@ -384,6 +384,24 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
         log.warn({ err: (err as Error).message }, 'cleanup: node-tracks prune failed');
       }
 
+      // 2c-quinquies. Prune the hourly chart buckets (migration 107). The daily
+      // rows outlive these deliberately: a day is one row and worth keeping,
+      // whereas an hour is twenty-four and only exists to be drawn.
+      try {
+        const nhDays = Number.isFinite(retentionDays) ? retentionDays : DEFAULT_RETENTION_DAYS;
+        const r = await client.query(
+          `DELETE FROM node_adsb_hourly
+            WHERE hour < (NOW() - ($1 || ' days')::interval)`,
+          [String(nhDays)],
+        );
+        if ((r.rowCount ?? 0) > 0) {
+          rowsDeleted += r.rowCount ?? 0;
+          log.info({ rows: r.rowCount }, 'cleanup: pruned node_adsb_hourly');
+        }
+      } catch (err) {
+        log.warn({ err: (err as Error).message }, 'cleanup: node-hourly prune failed');
+      }
+
       // 2d. Prune archive_*_latest sidecar entries we haven't seen in
       // a poll for longer than the retention window. Pruning by
       // last_seen_at (NOT latest_fetched_at) is intentional: with the

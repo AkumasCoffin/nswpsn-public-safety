@@ -52,6 +52,7 @@ import {
   adsbNodeTracks,
   ADSB_TRACKS_MAX_MINUTES,
 } from '../services/nodes/adsbNodeView.js';
+import { adsbNodeSeries, adsbFleetSeries } from '../services/nodes/adsbSeries.js';
 import {
   talkgroupCatalog,
   talkgroupLabels,
@@ -4275,6 +4276,36 @@ nodeDataRouter.get(
 // millions of rows a day per node for something only ever read as a picture of
 // the last hour.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// GET /api/node-data/adsb-series?window=24h|7d|30d[&nodeId=]
+//
+// Four metrics by the hour, for the charts: aircraft seen, range reached,
+// message rate and receive level. With a nodeId it is one receiver; without,
+// the fleet.
+//
+// Hourly rather than daily because a chart of node_adsb_daily on a 24h window
+// is a single point. Signal is null before agent 0.1.6 — the figure was always
+// measured by the decoder and always parsed by the agent, but never sent.
+// ---------------------------------------------------------------------------
+nodeDataRouter.get(
+  '/api/node-data/adsb-series',
+  requireRole(canViewNodeData),
+  async (c) => {
+    try {
+      const url = new URL(c.req.url);
+      const window = (url.searchParams.get('window') ?? '24h').trim();
+      const nodeId = (url.searchParams.get('nodeId') ?? '').trim();
+      const points = nodeId
+        ? await adsbNodeSeries(nodeId, window)
+        : await adsbFleetSeries(window);
+      return c.json({ window, nodeId: nodeId || null, points });
+    } catch (err) {
+      log.warn({ err }, 'adsb series failed');
+      return c.json({ error: 'series unavailable' }, 500);
+    }
+  },
+);
+
 nodeDataRouter.get(
   '/api/node-data/adsb-tracks',
   requireRole(canViewNodeData),

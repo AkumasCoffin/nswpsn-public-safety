@@ -135,20 +135,48 @@ describe('adsb traces', () => {
     expect(nodeAdsbTraces(NODE, 60).traces[0]!.callsign).toBe('JST9');
   });
 
-  it('decimates a receiver reporting every 5 seconds', () => {
-    // 12 snapshots a minute for an aircraft barely moving must not become 12
-    // points a minute. The window is 8 hours, so this is the one structure
-    // that grows with traffic, and a coverage picture needs nothing like that
-    // resolution — a point a minute is ample.
+  it('does not store a point for an aircraft going nowhere', () => {
+    // 12 uploads a minute for an aircraft barely moving must not become 12
+    // points a minute. Movement, not the clock, is what earns a point — this
+    // one drifts about a metre per upload and never travels far enough, so
+    // only the idle rule fires and it records presence rather than a path.
     feed([{ hex: 'ccc333', lat: -33.0, lon: 151.0 }]);
     for (let i = 0; i < 120; i += 1) {
       vi.advanceTimersByTime(5_000);
       feed([{ hex: 'ccc333', lat: -33.0 + i * 0.00001, lon: 151.0 }]);
     }
-    // 600s of snapshots (120 of them) at a 60s minimum gap.
+    // 600s at the 120s idle gap: five or six points, not 120.
     const pts = nodeAdsbTraces(NODE, 480).traces[0]!.points;
-    expect(pts.length).toBeGreaterThan(8);
-    expect(pts.length).toBeLessThanOrEqual(13);
+    expect(pts.length).toBeLessThanOrEqual(7);
+    expect(pts.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('keeps every upload for an aircraft that is actually moving', () => {
+    // The reported fault: tracks drawn as long straight hops. A transponder
+    // reports twice a second and the agent samples every five, so five seconds
+    // is the finest resolution that can reach us and it must not be thrown
+    // away — at cruise a minute between points is a thirteen-kilometre chord
+    // straight through whatever turn the aircraft actually flew.
+    feed([{ hex: 'ccc444', lat: -33.0, lon: 151.0 }]);
+    for (let i = 1; i <= 20; i += 1) {
+      vi.advanceTimersByTime(5_000);
+      feed([{ hex: 'ccc444', lat: -33.0 + i * 0.012, lon: 151.0 }]);
+    }
+    expect(nodeAdsbTraces(NODE, 480).traces[0]!.points).toHaveLength(21);
+  });
+
+  it('measures movement as distance, not per axis', () => {
+    // The actual bug. The old test was two thresholds, one per axis, so an
+    // aircraft flying due north tripped it in one step while the SAME aircraft
+    // at the same speed heading north-east split its movement between the two,
+    // tripped neither, and fell back on the idle rule. Diagonal tracks were
+    // the chunky ones.
+    feed([{ hex: 'ccc555', lat: -33.0, lon: 151.0 }]);
+    vi.advanceTimersByTime(5_000);
+    // ~0.8 km on each axis: under a per-axis 1 km threshold, over it as a
+    // diagonal distance.
+    feed([{ hex: 'ccc555', lat: -33.0 + 0.0072, lon: 151.0 + 0.0086 }]);
+    expect(nodeAdsbTraces(NODE, 480).traces[0]!.points).toHaveLength(2);
   });
 
   it('keeps eight hours, because an hour cannot show coverage', () => {
@@ -171,13 +199,21 @@ describe('adsb traces', () => {
     expect(nodeAdsbTraces(NODE, 480).aircraft).toBe(0);
   });
 
-  it('records a fast mover sooner than the time gap', () => {
+  it('records a fast mover on the very next upload', () => {
     // A jet crossing the coverage would otherwise be drawn as a few long
     // straight hops, cutting corners the aircraft never flew.
     feed([{ hex: 'ddd444', lat: -33.0, lon: 151.0 }]);
     vi.advanceTimersByTime(5_000);
     feed([{ hex: 'ddd444', lat: -33.5, lon: 151.0 }]);
     expect(nodeAdsbTraces(NODE, 480).traces[0]!.points).toHaveLength(2);
+  });
+
+  it('will not store two points for the same instant', () => {
+    // Two uploads landing in the same second is a retry or a double-poll, not
+    // motion, however far apart the positions claim to be.
+    feed([{ hex: 'ddd555', lat: -33.0, lon: 151.0 }]);
+    feed([{ hex: 'ddd555', lat: -33.5, lon: 151.0 }]);
+    expect(nodeAdsbTraces(NODE, 480).traces[0]!.points).toHaveLength(1);
   });
 
   it('drops points older than the requested window', () => {
@@ -219,12 +255,12 @@ describe('adsb traces', () => {
     // Large jumps: every one qualifies on distance, so only the cap stops this
     // accumulating forever. Models something pathological — a stuck position,
     // or a ground vehicle parked in view — not real traffic.
-    for (let i = 0; i < 400; i += 1) {
+    for (let i = 0; i < 900; i += 1) {
       vi.advanceTimersByTime(20_000);
       feed([{ hex: '222bbb', lat: -33.0 + (i % 2 ? 0.5 : -0.5), lon: 151.0 }]);
     }
     const pts = nodeAdsbTraces(NODE, 480).traces[0]!.points;
-    expect(pts.length).toBeLessThanOrEqual(240);
+    expect(pts.length).toBeLessThanOrEqual(720);
   });
 
   it('keeps each receiver separate', () => {

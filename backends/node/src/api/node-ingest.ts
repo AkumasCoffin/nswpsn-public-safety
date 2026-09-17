@@ -986,6 +986,10 @@ const AdsbUploadSchema = z.object({
       aircraftWithPos: z.number().int().nullish(),
       tracksAll: z.number().int().nullish(),
       maxRangeKm: z.number().nullish(),
+      // dBFS, always negative. Sent only by agents from 0.1.6 on, so these
+      // stay absent on an un-updated receiver rather than arriving as zero.
+      signalDbfs: z.number().nullish(),
+      signalPeakDbfs: z.number().nullish(),
     })
     .nullish(),
 });

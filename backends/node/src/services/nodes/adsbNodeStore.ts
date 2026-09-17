@@ -38,6 +38,13 @@ export interface NodeAdsbStats {
   aircraftWithPos?: number | null;
   tracksAll?: number | null;
   maxRangeKm?: number | null;
+  /** Mean and peak receive level over the decoder's last minute, in dBFS —
+   *  always negative, closer to zero being stronger. Absent from any receiver
+   *  running an agent older than 0.1.6: dump1090 has always reported these and
+   *  the agent has always read them for its own gain loop, but they were never
+   *  put on the wire. */
+  signalDbfs?: number | null;
+  signalPeakDbfs?: number | null;
 }
 
 /**
@@ -280,28 +287,49 @@ export function nodeAdsbRecords(nowMs: number = Date.now()): AdsbAircraft[] {
 const TRACE_WINDOW_MS = 8 * 60 * 60 * 1000;
 
 /**
- * Minimum gap between stored points for one aircraft.
+ * Shortest gap between stored points for a MOVING aircraft.
  *
- * Coarser than it was, because the window is now eight times longer and this
- * is the one structure here that grows with traffic. A coverage picture is
- * about WHERE the receiver hears, not the shape of any single flight, so a
- * point a minute is ample — and a fast mover still gets extra points from the
- * distance rule below, which is what stops a jet being drawn cutting corners
- * it never flew.
+ * An airborne transponder reports position about twice a second, but the agent
+ * samples the decoder's state file every five, so five seconds IS the finest
+ * resolution that can reach us — anything longer here throws away uploads we
+ * already paid for and turns a curve back into straight hops. The distance
+ * rule below is what stops this becoming twelve points a minute for an
+ * aircraft that is not going anywhere.
  */
-const TRACE_MIN_GAP_MS = 60_000;
-
-/** Minimum movement to store a point sooner than the gap, in degrees —
- *  ~1km, which is a visible step at coverage-map zoom. */
-const TRACE_MIN_MOVE_DEG = 0.01;
+const TRACE_MIN_GAP_MS = 5_000;
 
 /**
- * Per-aircraft point cap. Eight hours at the minimum gap is 480, but no real
- * aircraft stays in one receiver's range for eight hours — an airliner crosses
- * in twenty minutes or so. This is the bound for something pathological (a
- * stuck position, a ground vehicle parked in view), not for normal traffic.
+ * Longest gap before a point is stored regardless of movement.
+ *
+ * A parked aircraft still has to appear somewhere, and its position is the only
+ * evidence the receiver is still hearing it at all.
  */
-const TRACE_MAX_POINTS = 240;
+const TRACE_IDLE_GAP_MS = 120_000;
+
+/**
+ * Movement that counts as having gone somewhere, in km.
+ *
+ * TRUE DISTANCE, not each axis separately. It used to be a per-axis threshold
+ * of 0.01 degrees, which quietly depended on heading: an aircraft flying due
+ * north covered it in one step, while the same aircraft at the same speed
+ * heading north-EAST split its movement between the two axes, tripped neither,
+ * and fell back on the idle rule. Those tracks were drawn as minute-long
+ * straight lines — about thirteen kilometres at cruise — through turns the
+ * aircraft actually flew.
+ */
+const TRACE_MIN_MOVE_KM = 0.15;
+
+/**
+ * Per-aircraft point cap.
+ *
+ * An hour of continuous movement at the minimum gap. Airliners cross a
+ * receiver's range in twenty minutes or so, so this bounds the pathological
+ * case — a stuck position, a helicopter orbiting all afternoon — rather than
+ * normal traffic. Anything evicted here has already been flushed to
+ * node_adsb_tracks, so the map still draws it: the archive is what holds the
+ * long tail, and memory only has to hold what has not been written yet.
+ */
+const TRACE_MAX_POINTS = 720;
 
 /**
  * Per-node aircraft cap.
@@ -375,10 +403,14 @@ function recordTraces(nodeId: string, records: AdsbAircraft[], nowMs: number): v
 
     const n = tr.lat.length;
     const dt = nowMs - tr.t[n - 1]!;
-    const moved =
-      Math.abs(r.lat - tr.lat[n - 1]!) > TRACE_MIN_MOVE_DEG ||
-      Math.abs(r.lon - tr.lon[n - 1]!) > TRACE_MIN_MOVE_DEG;
-    if (dt < TRACE_MIN_GAP_MS && !moved) {
+    const movedKm = distanceKm(tr.lat[n - 1]!, tr.lon[n - 1]!, r.lat, r.lon);
+    // Moving and enough time has passed, OR it has been long enough that even
+    // a stationary aircraft is worth a point. The first keeps a track smooth;
+    // the second stops an aircraft parked in view filling the buffer.
+    const worthStoring =
+      (dt >= TRACE_MIN_GAP_MS && movedKm >= TRACE_MIN_MOVE_KM) ||
+      dt >= TRACE_IDLE_GAP_MS;
+    if (!worthStoring) {
       tr.lastMs = nowMs;
       continue;
     }
@@ -693,6 +725,34 @@ interface PendingDay {
  *  days correctly rather than attributing the lot to whichever day wins. */
 const pending = new Map<string, PendingDay>();
 
+/**
+ * The same figures by the hour, for the charts.
+ *
+ * A separate accumulator rather than a finer `pending`, because the two are
+ * bucketed differently: the daily rows are Sydney-local calendar days (that is
+ * what an operator means by "yesterday"), while an hour is an hour anywhere and
+ * is kept in UTC so a chart does not gain or lose an hour twice a year.
+ */
+interface PendingHour {
+  snapshots: number;
+  positions: number;
+  maxAircraft: number;
+  maxRangeKm: number | null;
+  msgRateMax: number | null;
+  /** Running sum and count, so the mean can be weighted on read. Averaging a
+   *  stream of averages without its weight quietly favours quiet minutes. */
+  signalSum: number;
+  signalN: number;
+  signalPeak: number | null;
+}
+
+/** Keyed `${nodeId}|${epochMsOfHour}`. */
+const pendingHour = new Map<string, PendingHour>();
+
+function hourStartMs(ms: number): number {
+  return Math.floor(ms / 3_600_000) * 3_600_000;
+}
+
 const FLUSH_INTERVAL_MS = 60_000;
 let flushTimer: NodeJS.Timeout | null = null;
 
@@ -733,6 +793,32 @@ export function accumulateAdsbDaily(
   cur.msgRateMax = maxOrNull(cur.msgRateMax, stats?.msgRate);
   cur.tracksMax = maxOrNull(cur.tracksMax, stats?.tracksAll);
   pending.set(key, cur);
+
+  const hKey = `${nodeId}|${hourStartMs(Date.now())}`;
+  const h =
+    pendingHour.get(hKey) ??
+    { snapshots: 0, positions: 0, maxAircraft: 0, maxRangeKm: null,
+      msgRateMax: null, signalSum: 0, signalN: 0, signalPeak: null };
+  h.snapshots += 1;
+  h.positions += positions;
+  h.maxAircraft = Math.max(h.maxAircraft, positions);
+  h.maxRangeKm = maxOrNull(h.maxRangeKm, stats?.maxRangeKm);
+  h.maxRangeKm = maxOrNull(h.maxRangeKm, observedRange);
+  h.msgRateMax = maxOrNull(h.msgRateMax, stats?.msgRate);
+  // Signal is dBFS and always negative; 0 is not a plausible reading, so it is
+  // treated as absent rather than as a very strong one.
+  if (typeof stats?.signalDbfs === 'number' && Number.isFinite(stats.signalDbfs)
+      && stats.signalDbfs < 0) {
+    h.signalSum += stats.signalDbfs;
+    h.signalN += 1;
+  }
+  if (typeof stats?.signalPeakDbfs === 'number' && Number.isFinite(stats.signalPeakDbfs)
+      && stats.signalPeakDbfs < 0) {
+    h.signalPeak = h.signalPeak === null
+      ? stats.signalPeakDbfs
+      : Math.max(h.signalPeak, stats.signalPeakDbfs);
+  }
+  pendingHour.set(hKey, h);
 }
 
 /**
@@ -745,6 +831,7 @@ export function accumulateAdsbDaily(
  * warrant.
  */
 export async function flushAdsbDaily(): Promise<void> {
+  await flushAdsbHourly();
   if (pending.size === 0) return;
   const batch = Array.from(pending.entries());
   pending.clear();
@@ -776,6 +863,53 @@ export async function flushAdsbDaily(): Promise<void> {
     } catch (err) {
       // A deleted node (FK violation) or a transient DB blip: log once and drop.
       log.debug({ err, nodeId, day }, 'adsb daily flush failed');
+    }
+  }
+}
+
+/** The hourly half of the same flush. Same posture on failure: a lost minute
+ *  beats a double count, and these are performance figures, not billing. */
+export async function flushAdsbHourly(): Promise<void> {
+  if (pendingHour.size === 0) return;
+  const batch = Array.from(pendingHour.entries());
+  pendingHour.clear();
+
+  const pool = await getPool();
+  if (!pool) return;
+
+  for (const [key, agg] of batch) {
+    const sep = key.lastIndexOf('|');
+    const nodeId = key.slice(0, sep);
+    const hourMs = Number(key.slice(sep + 1));
+    try {
+      await pool.query(
+        `INSERT INTO node_adsb_hourly
+           (node_id, hour, snapshots, positions, max_aircraft, max_range_km,
+            msg_rate_max, signal_sum, signal_n, signal_peak)
+         VALUES ($1, $2::timestamptz, $3, $4, $5, $6, $7, $8, $9, $10)
+         ON CONFLICT (node_id, hour) DO UPDATE SET
+           snapshots    = node_adsb_hourly.snapshots + EXCLUDED.snapshots,
+           positions    = node_adsb_hourly.positions + EXCLUDED.positions,
+           max_aircraft = GREATEST(node_adsb_hourly.max_aircraft, EXCLUDED.max_aircraft),
+           max_range_km = GREATEST(COALESCE(node_adsb_hourly.max_range_km, 0),
+                                   COALESCE(EXCLUDED.max_range_km, 0)),
+           msg_rate_max = GREATEST(COALESCE(node_adsb_hourly.msg_rate_max, 0),
+                                   COALESCE(EXCLUDED.msg_rate_max, 0)),
+           -- The mean's two halves accumulate together or the average drifts.
+           signal_sum   = COALESCE(node_adsb_hourly.signal_sum, 0) + COALESCE(EXCLUDED.signal_sum, 0),
+           signal_n     = COALESCE(node_adsb_hourly.signal_n, 0) + COALESCE(EXCLUDED.signal_n, 0),
+           -- dBFS is negative, so the STRONGEST signal is the greatest value.
+           signal_peak  = GREATEST(node_adsb_hourly.signal_peak, EXCLUDED.signal_peak)`,
+        [
+          nodeId, new Date(hourMs).toISOString(), agg.snapshots, agg.positions,
+          agg.maxAircraft, agg.maxRangeKm, agg.msgRateMax,
+          agg.signalN > 0 ? agg.signalSum : null,
+          agg.signalN > 0 ? agg.signalN : null,
+          agg.signalPeak,
+        ],
+      );
+    } catch (err) {
+      log.debug({ err, nodeId, hourMs }, 'adsb hourly flush failed');
     }
   }
 }
