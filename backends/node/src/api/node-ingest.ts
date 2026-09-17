@@ -30,6 +30,7 @@ import { resolveNodeToken } from '../services/auth/nodeToken.js';
 import { bumpNodeCallStat, getNode, touchNodeSeenThrottled } from '../services/nodes/registry.js';
 import { getPagerIngest } from '../services/nodes/globalConfig.js';
 import { hub } from '../services/nodes/hub.js';
+import { markNodeSeen } from '../services/nodes/nodeUptime.js';
 import {
   recordNodeAdsbSnapshot,
   recordNodeAdsbReception,
@@ -1082,6 +1083,7 @@ nodeIngestRouter.post('/api/node-ingest/adsb-upload', async (c) => {
   //    bumped nothing durable, so a receiver working perfectly could read as
   //    last seen hours ago. Rate-limited, because this runs on every upload.
   void touchNodeSeenThrottled(r.nodeId);
+  markNodeSeen(r.nodeId);
 
   //    Traces, recent aircraft and range-now are recorded here too, BEFORE the
   //    gate: they are the receiver's own record, not something it publishes.

@@ -45,6 +45,7 @@ import {
 } from '../services/nodes/registry.js';
 import { getUsername } from './users.js';
 import { hub } from '../services/nodes/hub.js';
+import { nodeUptime, nodeUptimeMany } from '../services/nodes/nodeUptime.js';
 import { liveCallWindow } from '../services/nodeCallWindow.js';
 import { getZoneGroups, isValidZone } from '../services/nodes/rfsZones.js';
 import { AU_STATES } from '../lib/stateMask.js';
@@ -156,6 +157,12 @@ function feederNodeView(n: NodeRow) {
     lga: n.lga,
     online,
     lastSeenAt: n.last_seen_at,
+    /** Filled in by the routes that read it; a view built from a row alone
+     *  cannot know it, since it comes from a separate table. */
+    uptime: null as null | {
+      pct: number | null; minutesUp: number; minutesWindow: number;
+      currentRunMs: number | null; window: string;
+    },
     agentVersion: n.agent_version,
     sdrtrunkVersion: n.sdrtrunk_version,
     rdioVersion: n.rdio_version,
@@ -204,7 +211,18 @@ function feederNodeView(n: NodeRow) {
 feederRouter.get('/api/feeder/me', async (c) => {
   const userId = c.get('userId') as string;
   try {
-    const nodes = (await listNodesForUser(userId)).map(feederNodeView);
+    const rows = await listNodesForUser(userId);
+    const nodes = rows.map(feederNodeView);
+    // Uptime is read for every node in ONE query rather than per card: a feeder
+    // with several nodes would otherwise pay a round trip each.
+    const uptime = await nodeUptimeMany(rows.map((n) => n.id), '7d');
+    for (const n of nodes) {
+      const u = uptime.get(n.id);
+      n.uptime = u
+        ? { pct: u.pct, minutesUp: u.minutesUp, minutesWindow: u.minutesWindow,
+            currentRunMs: u.currentRunMs, window: '7d' }
+        : null;
+    }
     // Which node kinds this user may create, by role — so the UI can offer only
     // what they're allowed (backend still enforces it on create).
     const [radio, pager, adsb] = await Promise.all([
@@ -898,6 +916,24 @@ feederRouter.get('/api/feeder/nodes/:id/adsb', async (c) => {
   } catch (err) {
     log.error({ err, id: node.id }, 'Error building feeder adsb view');
     return c.json({ error: 'Failed to load receiver' }, 500);
+  }
+});
+
+// Uptime for one of the caller's own nodes, with its hour-by-hour series.
+// Every kind, not just ADS-B: the presence record is the WS heartbeat, which
+// radio and pager send too.
+feederRouter.get('/api/feeder/nodes/:id/uptime', async (c) => {
+  const node = await ownedNode(c);
+  if (!node) return c.json({ error: 'not your node' }, 404);
+  try {
+    const url = new URL(c.req.url);
+    const window = (url.searchParams.get('window') ?? '7d').trim();
+    const u = await nodeUptime(node.id, window);
+    if (!u) return c.json({ error: 'database unavailable' }, 503);
+    return c.json({ window, ...u });
+  } catch (err) {
+    log.error({ err, id: node.id }, 'Error building feeder uptime');
+    return c.json({ error: 'Failed to load uptime' }, 500);
   }
 });
 

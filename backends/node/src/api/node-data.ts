@@ -53,6 +53,7 @@ import {
   ADSB_TRACKS_MAX_MINUTES,
 } from '../services/nodes/adsbNodeView.js';
 import { adsbNodeSeries, adsbFleetSeries } from '../services/nodes/adsbSeries.js';
+import { nodeUptime, nodeUptimeMany } from '../services/nodes/nodeUptime.js';
 import {
   talkgroupCatalog,
   talkgroupLabels,
@@ -4198,6 +4199,9 @@ nodeDataRouter.get(
         [days],
       );
 
+      // One query for the list, like the radio Nodes tab.
+      const uptimeById = await nodeUptimeMany(rows.rows.map((r) => r.id), '7d');
+
       const receivers = rows.rows.map((r) => {
         // Live figures come from the agent's heartbeat, so they are null while
         // a node is offline — deliberately, so the UI can say "offline" rather
@@ -4209,6 +4213,8 @@ nodeDataRouter.get(
           name: r.name,
           enabled: r.enabled,
           feedEnabled: r.feed_enabled,
+          uptimePct: uptimeById.get(r.id)?.pct ?? null,
+          uptimeRunMs: uptimeById.get(r.id)?.currentRunMs ?? null,
           // Null here explains an absent range rather than looking like a fault.
           hasPosition: typeof r.lat === 'number' && typeof r.lon === 'number',
           online: hub.isOnline(r.id),
@@ -4276,6 +4282,32 @@ nodeDataRouter.get(
 // millions of rows a day per node for something only ever read as a picture of
 // the last hour.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// GET /api/node-data/node-uptime?nodeId=&window=24h|7d|30d
+//
+// How much of the window a node was present, and how long it has been up now.
+// Every kind: the presence record is the WS status heartbeat, which radio,
+// pager and ADS-B all send.
+// ---------------------------------------------------------------------------
+nodeDataRouter.get(
+  '/api/node-data/node-uptime',
+  requireRole(canViewNodeData),
+  async (c) => {
+    try {
+      const url = new URL(c.req.url);
+      const nodeId = (url.searchParams.get('nodeId') ?? '').trim();
+      if (!nodeId) return c.json({ error: 'nodeId is required' }, 400);
+      const window = (url.searchParams.get('window') ?? '7d').trim();
+      const u = await nodeUptime(nodeId, window);
+      if (!u) return c.json({ error: 'uptime unavailable' }, 503);
+      return c.json({ window, nodeId, ...u });
+    } catch (err) {
+      log.warn({ err }, 'node uptime failed');
+      return c.json({ error: 'uptime unavailable' }, 500);
+    }
+  },
+);
+
 // ---------------------------------------------------------------------------
 // GET /api/node-data/adsb-series?window=24h|7d|30d[&nodeId=]
 //
@@ -4544,11 +4576,14 @@ nodeDataRouter.get('/api/node-data/nodes', requireRole(canViewNodeData), async (
     }>('SELECT id, name, kind, last_seen_at FROM nodes');
     const connected = new Set(hub.agentList().map((a) => a.nodeId));
 
-    const nodes = meta.rows
-      .filter((m) => {
-        const kind = m.kind ?? 'radio';
-        return kind === 'radio' || kind === 'scanner';
-      })
+    const shown = meta.rows.filter((m) => {
+      const kind = m.kind ?? 'radio';
+      return kind === 'radio' || kind === 'scanner';
+    });
+    // One query for the whole list rather than one per row.
+    const uptime = await nodeUptimeMany(shown.map((m) => m.id), '7d');
+
+    const nodes = shown
       .map((m) => {
         const r = byId.get(m.id);
         const kind = m.kind ?? 'radio';
@@ -4572,6 +4607,10 @@ nodeDataRouter.get('/api/node-data/nodes', requireRole(canViewNodeData), async (
           // reads as "heard none" rather than "cannot know".
           sites: isScanner ? null : num(r?.sites),
           lastSeen: r?.last_seen ? iso(r.last_seen) : null,
+          // Presence over the last week. Null for a node never observed, which
+          // is not the same as nought per cent.
+          uptimePct: uptime.get(m.id)?.pct ?? null,
+          uptimeRunMs: uptime.get(m.id)?.currentRunMs ?? null,
         };
       })
       .sort((a, b) => b.calls - a.calls || (a.name ?? '').localeCompare(b.name ?? ''));

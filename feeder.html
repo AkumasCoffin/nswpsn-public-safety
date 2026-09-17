@@ -327,6 +327,11 @@
     .node-head .node-name { flex: 1; }
     .node-sub .st-on { color: #86efac; font-weight: 600; }
     .node-sub .st-off { color: var(--text-soft); font-weight: 600; }
+    /* Uptime is coloured only when it is worth noticing: a healthy figure
+       should not compete with the status word beside it. */
+    .node-uptime { font-weight: 600; }
+    .node-uptime.ok { color: #86efac; }
+    .node-uptime.warn { color: #fbbf24; }
     .node-sub .st-upd { color: #c084fc; font-weight: 600; }
     /* Location / key meta line — icon+label items, comfortably spaced + wrapping. */
     .node-loc { display: flex; flex-wrap: wrap; gap: 0.2rem 0.8rem; margin-top: 0.3rem; font-size: 0.75rem; color: var(--text-soft); }
@@ -893,6 +898,32 @@
       const updating = !!node.updating;
       const name = node.name || 'Unnamed node';
       const lastSeen = fmtLastSeen(node.lastSeenAt);
+
+      // Uptime over the last seven days, plus how long this run has lasted.
+      // Both come from the same stored record of which MINUTES the node was
+      // heard in, so neither resets when the backend is redeployed — an uptime
+      // that restarts whenever WE restart is measuring the wrong machine.
+      const up = node.uptime;
+      const fmtRun = (ms) => {
+        if (ms == null) return null;
+        const m = Math.floor(ms / 60000);
+        if (m < 60) return m + 'm';
+        const h = Math.floor(m / 60);
+        if (h < 24) return h + 'h ' + (m % 60) + 'm';
+        return Math.floor(h / 24) + 'd ' + (h % 24) + 'h';
+      };
+      let uptimeHtml = '';
+      if (up && up.pct !== null) {
+        const pct = up.pct * 100;
+        // One decimal below 99.95%, so a node that is very nearly perfect is
+        // not rounded into claiming it was.
+        const shown = pct >= 99.95 ? '100' : pct.toFixed(1);
+        const cls = pct >= 99 ? 'ok' : pct >= 95 ? '' : 'warn';
+        const run = fmtRun(up.currentRunMs);
+        uptimeHtml = ` · <span class="node-uptime ${cls}" title="Seen in ${up.minutesUp} of the last ${up.minutesWindow} minutes">`
+          + `${shown}% uptime (7d)</span>`
+          + (run ? ` · up ${escapeHtml(run)}` : '');
+      }
       const kind = node.kind || 'radio';
       const isRadio = kind === 'radio';
       const isPager = kind === 'pager';
@@ -1066,7 +1097,7 @@
               <div class="node-name">${escapeHtml(name)} <span class="node-kind">${escapeHtml(_kindLabel[kind] || kind)}</span></div>
               ${agentHtml}
             </div>
-            <div class="node-sub"><span class="${statusCls}">${statusText}</span> · last seen ${escapeHtml(lastSeen)}</div>
+            <div class="node-sub"><span class="${statusCls}">${statusText}</span> · last seen ${escapeHtml(lastSeen)}${uptimeHtml}</div>
             <div class="node-loc">${regionItem}${pinItem}${keyItem}</div>
             <div class="node-chips">${chips}</div>
             ${statHtml}

@@ -17,6 +17,7 @@ import { resolveNodeToken } from '../services/auth/nodeToken.js';
 import { verifySupabaseToken } from '../services/auth/supabaseJwt.js';
 import { hasRole } from '../services/auth/roles.js';
 import { hub } from '../services/nodes/hub.js';
+import { markNodeSeen } from '../services/nodes/nodeUptime.js';
 import {
   refreshNodeOnHello,
   bindInstallId,
@@ -326,6 +327,7 @@ async function handleAgentMessage(
       liveCallWindow.observe(ctx.nodeId, st, Date.now());
       hub.recordStatus(ctx.nodeId, st);
       void touchNodeSeen(ctx.nodeId);
+      markNodeSeen(ctx.nodeId);
       return;
     }
     case 'event': {
