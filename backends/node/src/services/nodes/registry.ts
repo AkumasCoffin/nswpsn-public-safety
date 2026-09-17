@@ -5,6 +5,7 @@
  * lives in hub.ts and is merged on top by the API layer.
  */
 import { getPool } from '../../db/pool.js';
+import { log } from '../../lib/log.js';
 import { randomUUID } from 'node:crypto';
 import { notifyStaff } from '../staffNotify.js';
 
@@ -512,6 +513,43 @@ export async function touchNodeSeen(id: string): Promise<void> {
   const pool = await getPool();
   if (!pool) return;
   await pool.query('UPDATE nodes SET last_seen_at = now() WHERE id = $1', [id]);
+}
+
+/** How often one node may write its last-seen. */
+const TOUCH_SEEN_INTERVAL_MS = 60_000;
+const lastTouchedMs = new Map<string, number>();
+
+/**
+ * Mark a node seen, at most once a minute.
+ *
+ * last_seen_at was only written by the WebSocket status path, so an ADS-B node
+ * whose socket had dropped but whose uploads were arriving over HTTP looked
+ * last seen hours ago while working perfectly. The upload path is the better
+ * evidence of life — it carries data, where a heartbeat only carries a claim.
+ *
+ * Throttled because uploads land about twelve times a minute per node, and the
+ * column's resolution is "recently" — a write per upload would be pure noise
+ * against the database for no extra truth. Failures are swallowed: this is a
+ * liveness hint, and it must never be able to fail an upload.
+ */
+export async function touchNodeSeenThrottled(id: string): Promise<void> {
+  const now = Date.now();
+  const last = lastTouchedMs.get(id) ?? 0;
+  if (now - last < TOUCH_SEEN_INTERVAL_MS) return;
+  lastTouchedMs.set(id, now);
+  try {
+    await touchNodeSeen(id);
+  } catch (err) {
+    // Put the mark back so the next upload retries rather than waiting out
+    // the interval on a write that never happened.
+    lastTouchedMs.set(id, last);
+    log.debug({ err, nodeId: id }, 'touch node seen failed');
+  }
+}
+
+/** Test seam — the throttle outlives a single test otherwise. */
+export function _resetTouchSeenThrottle(): void {
+  lastTouchedMs.clear();
 }
 
 export async function deleteNode(id: string): Promise<boolean> {

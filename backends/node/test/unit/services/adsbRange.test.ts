@@ -15,9 +15,11 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import {
   distanceKm,
   snapshotMaxRangeKm,
+  snapshotRangeKm,
   recordNodeAdsbSnapshot,
   recordNodeAdsbReception,
   nodeAdsbRecords,
+  nodeAdsbObservedRange,
   nodeAdsbObservedRangeKm,
   accumulateAdsbDaily,
   flushAdsbDaily,
@@ -107,7 +109,8 @@ describe('range now', () => {
       adsbNodeSourceId(NODE, 'adsb-test'),
     );
     // As the route does: reception before the feed gate, snapshot after.
-    recordNodeAdsbReception(NODE, records, rangeKm);
+    recordNodeAdsbReception(
+      NODE, records, rangeKm === null ? null : { minKm: rangeKm, maxKm: rangeKm });
     recordNodeAdsbSnapshot(NODE, 'adsb-test', records);
   }
 
@@ -142,6 +145,65 @@ describe('range now', () => {
     feed(210, [{ hex: 'a1', lat: -33, lon: 151 }]);
     clearAdsbNodeState(NODE);
     expect(nodeAdsbObservedRangeKm(NODE)).toBeNull();
+  });
+
+  it('keeps both ends, and loses them together', () => {
+    // The pair is only meaningful as a pair: a nearest surviving without a
+    // furthest would read as a receiver hearing one aircraft overhead.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-17T00:00:00Z'));
+    const records = normalizeNodeUpload(
+      { at: new Date().toISOString(),
+        aircraft: [{ hex: 'a1', lat: -33, lon: 151, seen_pos: 1 }] },
+      adsbNodeSourceId(NODE, 'adsb-test'),
+    );
+    recordNodeAdsbReception(NODE, records, { minKm: 12, maxKm: 210 });
+    expect(nodeAdsbObservedRange(NODE)).toEqual({ minKm: 12, maxKm: 210 });
+    // The single-figure reader still answers, for the callers that bank a peak.
+    expect(nodeAdsbObservedRangeKm(NODE)).toBe(210);
+
+    vi.advanceTimersByTime(5 * 60_000);
+    expect(nodeAdsbObservedRange(NODE)).toBeNull();
+    expect(nodeAdsbObservedRangeKm(NODE)).toBeNull();
+    vi.useRealTimers();
+  });
+});
+
+describe('snapshotRangeKm', () => {
+  it('measures both ends of the sky in view', () => {
+    const r = snapshotRangeKm(SITE.lat, SITE.lon, [
+      { lat: SITE.lat + 0.5, lon: SITE.lon },
+      { lat: SITE.lat + 2.0, lon: SITE.lon },
+      { lat: SITE.lat + 1.0, lon: SITE.lon },
+    ]);
+    expect(r).not.toBeNull();
+    expect(r!.minKm).toBeLessThan(r!.maxKm);
+    // The furthest must agree with the single-figure reading, or the two
+    // numbers on the page would be measuring different things.
+    expect(r!.maxKm).toBe(snapshotMaxRangeKm(SITE.lat, SITE.lon, [
+      { lat: SITE.lat + 0.5, lon: SITE.lon },
+      { lat: SITE.lat + 2.0, lon: SITE.lon },
+      { lat: SITE.lat + 1.0, lon: SITE.lon },
+    ]));
+  });
+
+  it('is null without a pin or without aircraft', () => {
+    expect(snapshotRangeKm(null, null, [{ lat: -33, lon: 151 }])).toBeNull();
+    expect(snapshotRangeKm(SITE.lat, SITE.lon, [])).toBeNull();
+  });
+
+  it('collapses to a single distance for one aircraft', () => {
+    const r = snapshotRangeKm(SITE.lat, SITE.lon, [{ lat: SITE.lat + 1, lon: SITE.lon }]);
+    expect(r!.minKm).toBe(r!.maxKm);
+  });
+
+  it('ignores aircraft with no usable position', () => {
+    const r = snapshotRangeKm(SITE.lat, SITE.lon, [
+      { lat: Number.NaN, lon: 151 },
+      { lat: SITE.lat + 1, lon: SITE.lon },
+    ]);
+    expect(r).not.toBeNull();
+    expect(r!.minKm).toBe(r!.maxKm);
   });
 });
 

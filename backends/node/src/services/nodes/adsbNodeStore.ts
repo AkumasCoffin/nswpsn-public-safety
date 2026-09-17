@@ -91,36 +91,57 @@ export function distanceKm(
   return 2 * EARTH_RADIUS_KM * Math.asin(Math.min(1, Math.sqrt(a)));
 }
 
+/** Nearest and furthest aircraft in one upload, in km from the pin. */
+export interface SnapshotRange { minKm: number; maxKm: number }
+
 /**
- * The furthest aircraft in one upload, measured from the receiver's own pin.
+ * How near and how far this receiver is hearing, in one upload.
  *
- * Null when the node has no pin — there is nothing to measure from, and the
- * UI already explains an absent range that way ("no pin") rather than showing
- * it as a fault.
+ * Both ends, because one number could not say what it was being asked. A lone
+ * "range" reads as reach, but the figure moves whenever the furthest aircraft
+ * leaves, so it was really "the furthest thing in the sky right now" — which
+ * says as much about the traffic as the receiver. Alongside the nearest it is
+ * legible: the pair describes the slice of sky currently in view, and a
+ * nearest that climbs is the sign of a receiver going deaf close in.
+ *
+ * Null when the node has no pin — there is nothing to measure from, and the UI
+ * already explains an absent range that way ("no pin") rather than as a fault.
  */
-export function snapshotMaxRangeKm(
+export function snapshotRangeKm(
   lat: unknown,
   lon: unknown,
   records: ReadonlyArray<{ lat: number; lon: number }>,
-): number | null {
+): SnapshotRange | null {
   if (typeof lat !== 'number' || typeof lon !== 'number') return null;
+  let min: number | null = null;
   let max: number | null = null;
   for (const r of records) {
     if (!Number.isFinite(r.lat) || !Number.isFinite(r.lon)) continue;
     const d = distanceKm(lat, lon, r.lat, r.lon);
     if (max === null || d > max) max = d;
+    if (min === null || d < min) min = d;
   }
-  return max;
+  return max === null || min === null ? null : { minKm: min, maxKm: max };
+}
+
+/** The furthest aircraft alone, for the callers that only bank the peak. */
+export function snapshotMaxRangeKm(
+  lat: unknown,
+  lon: unknown,
+  records: ReadonlyArray<{ lat: number; lon: number }>,
+): number | null {
+  return snapshotRangeKm(lat, lon, records)?.maxKm ?? null;
 }
 
 /**
- * The furthest aircraft in each node's LATEST upload.
+ * The nearest and furthest aircraft in each node's LATEST upload.
  *
- * "Range now", as against the day's peak in node_adsb_daily. Kept beside the
- * snapshots because it has exactly their lifetime: it means nothing once the
- * snapshot it was measured from has aged out.
+ * Both are "right now", as against the day's peak in node_adsb_daily. Kept
+ * beside the snapshots because they have exactly their lifetime: they mean
+ * nothing once the upload they were measured from has aged out, and a stale
+ * pair is worse than none — it reads as a receiver still hearing.
  */
-const observedRangeKm = new Map<string, { km: number; atMs: number }>();
+const observedRangeKm = new Map<string, { range: SnapshotRange; atMs: number }>();
 
 /**
  * Range from this node's most recent upload, or null if it has not reported
@@ -130,14 +151,19 @@ const observedRangeKm = new Map<string, { km: number; atMs: number }>();
  * snapshot: a node whose feed is paused still reports, and still has a current
  * range, but deliberately has no snapshot on the map to hang that off.
  */
-export function nodeAdsbObservedRangeKm(nodeId: string): number | null {
+export function nodeAdsbObservedRange(nodeId: string): SnapshotRange | null {
   const held = observedRangeKm.get(nodeId);
   if (!held) return null;
   if (Date.now() - held.atMs > NODE_SNAPSHOT_TTL_MS) {
     observedRangeKm.delete(nodeId);
     return null;
   }
-  return held.km;
+  return held.range;
+}
+
+/** The furthest of the two, for callers that bank a single peak. */
+export function nodeAdsbObservedRangeKm(nodeId: string): number | null {
+  return nodeAdsbObservedRange(nodeId)?.maxKm ?? null;
 }
 
 /** The source id a node's records carry, e.g. `node:adsb-akumascoffin-a3f9`.
@@ -187,10 +213,10 @@ export function recordNodeAdsbSnapshot(
 export function recordNodeAdsbReception(
   nodeId: string,
   records: AdsbAircraft[],
-  rangeKm: number | null = null,
+  range: SnapshotRange | null = null,
 ): void {
   const nowMs = Date.now();
-  if (rangeKm !== null) observedRangeKm.set(nodeId, { km: rangeKm, atMs: nowMs });
+  if (range !== null) observedRangeKm.set(nodeId, { range, atMs: nowMs });
   recordTraces(nodeId, records, nowMs);
 }
 

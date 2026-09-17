@@ -27,6 +27,7 @@ import {
   nodeAdsbTraces,
   nodeAdsbRecentAircraft,
   ADSB_RECENT_MAX,
+  nodeAdsbObservedRange,
   nodeAdsbObservedRangeKm,
   type NodeTrace,
   type NodeRecentAircraft,
@@ -79,6 +80,10 @@ export interface AdsbNodeView {
     aircraftNow: number | null;
     msgRate: number | null;
     maxRangeKm: number | null;
+    /** Nearest and furthest aircraft in the latest upload. Both null together
+     *  once it ages out: a stale pair reads as a receiver still hearing. */
+    nearestKm: number | null;
+    furthestKm: number | null;
     gainNow: number | null;
     queueDepth: number | null;
     uploadsExpired: number | null;
@@ -285,6 +290,12 @@ export async function adsbNodeView(
       // entirely if anything in that chain is missing. Measured from the last
       // upload, so it is "range now" rather than the decoder's run total.
       maxRangeKm: st?.adsbMaxRangeKm ?? nodeAdsbObservedRangeKm(nodeId),
+      // Measured here rather than taken from the heartbeat: the agent reports
+      // one range, and the pair is only derivable from the positions we hold.
+      // Null together with the rest once the upload ages out — a stale pair
+      // would read as a receiver still hearing.
+      nearestKm: nodeAdsbObservedRange(nodeId)?.minKm ?? null,
+      furthestKm: nodeAdsbObservedRange(nodeId)?.maxKm ?? null,
       gainNow: st?.adsbGainNow ?? null,
       queueDepth: st?.queueDepth ?? null,
       uploadsExpired: st?.uploadsExpired ?? null,

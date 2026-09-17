@@ -82,7 +82,7 @@ describe('a paused feed leaves the receiver diagnostics intact', () => {
         aircraft: [{ hex: 'aaa111', lat: -33.0, lon: 151.0, seen_pos: 1 }] },
       adsbNodeSourceId(NODE, 'adsb-test'),
     );
-    recordNodeAdsbReception(NODE, records, 212.5);
+    recordNodeAdsbReception(NODE, records, { minKm: 18.2, maxKm: 212.5 });
     expect(nodeAdsbObservedRangeKm(NODE)).toBe(212.5);
   });
 

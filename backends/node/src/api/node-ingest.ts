@@ -27,12 +27,13 @@ import { config } from '../config.js';
 import { log } from '../lib/log.js';
 import { describeRelayError } from '../lib/relayError.js';
 import { resolveNodeToken } from '../services/auth/nodeToken.js';
-import { bumpNodeCallStat, getNode } from '../services/nodes/registry.js';
+import { bumpNodeCallStat, getNode, touchNodeSeenThrottled } from '../services/nodes/registry.js';
 import { getPagerIngest } from '../services/nodes/globalConfig.js';
 import { hub } from '../services/nodes/hub.js';
 import {
   recordNodeAdsbSnapshot,
   recordNodeAdsbReception,
+  snapshotRangeKm,
   accumulateAdsbDaily,
   adsbNodeSourceId,
   recordAdsbAuthFailure,
@@ -1059,18 +1060,24 @@ nodeIngestRouter.post('/api/node-ingest/adsb-upload', async (c) => {
   //    antenna pin is what the range is measured FROM, and range belongs to
   //    that same performance record.
   const nodeRow = await getNode(r.nodeId).catch(() => null);
+  const positioned = parsed.aircraft.filter(
+    (a): a is typeof a & { lat: number; lon: number } =>
+      typeof a.lat === 'number' && typeof a.lon === 'number',
+  );
   //    One walk over the aircraft does both jobs: the furthest one (the range
   //    figure) and its bearing (the coverage envelope). Neither costs more
   //    than the trig on a loop that has to run anyway.
-  const rangeKm = foldCoverage(
-    r.nodeId, nodeRow?.lat, nodeRow?.lon,
-    parsed.aircraft.filter(
-      (a): a is typeof a & { lat: number; lon: number } =>
-        typeof a.lat === 'number' && typeof a.lon === 'number',
-    ),
-  );
+  const rangeKm = foldCoverage(r.nodeId, nodeRow?.lat, nodeRow?.lon, positioned);
+  //    Nearest as well as furthest: on its own, "range" moves whenever the
+  //    furthest aircraft leaves, so it described the traffic as much as the
+  //    receiver. The pair describes the slice of sky actually in view.
+  const range = snapshotRangeKm(nodeRow?.lat, nodeRow?.lon, positioned);
   hub.recordUpload(r.nodeId);
   accumulateAdsbDaily(r.nodeId, parsed.aircraft.length, parsed.stats ?? null, rangeKm);
+  //    An ADS-B node that uploads over HTTP but whose WebSocket has dropped
+  //    bumped nothing durable, so a receiver working perfectly could read as
+  //    last seen hours ago. Rate-limited, because this runs on every upload.
+  void touchNodeSeenThrottled(r.nodeId);
 
   //    Traces, recent aircraft and range-now are recorded here too, BEFORE the
   //    gate: they are the receiver's own record, not something it publishes.
@@ -1078,7 +1085,7 @@ nodeIngestRouter.post('/api/node-ingest/adsb-upload', async (c) => {
   //    envelope with no tracks inside it.
   const records = normalizeNodeUpload(
     parsed, adsbNodeSourceId(r.nodeId, nodeRow?.name ?? null));
-  recordNodeAdsbReception(r.nodeId, records, rangeKm);
+  recordNodeAdsbReception(r.nodeId, records, range);
   // Persist the traces so the eight-hour map survives a restart. Rate-limits
   // itself to a minute, and is driven from here so it can only ever read
   // traces this upload has finished writing.

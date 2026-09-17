@@ -1366,10 +1366,16 @@
       // claim a working receiver is hearing nothing.
       const tile = (v, label) => `<div class="fs-tile"><div class="fs-tile-v">${v}</div><div class="fs-tile-l">${label}</div></div>`;
       const n = (v) => (v == null ? '—' : Number(v).toLocaleString());
-      const tiles = `<div class="fs-tiles" style="grid-template-columns:repeat(4,1fr);">
+      // Closest and furthest rather than one "range": alone, the figure moved
+      // whenever the furthest aircraft left the sky, so it described the
+      // traffic as much as the receiver. The pair reads as the slice of sky in
+      // view, and a closest that climbs is a receiver going deaf near in.
+      const km = (v) => (v == null ? '—' : Math.round(v) + ' km');
+      const tiles = `<div class="fs-tiles" style="grid-template-columns:repeat(5,1fr);">
         ${tile(online ? n(live.aircraftNow) : '—', 'Aircraft now')}
         ${tile(live.msgRate == null ? '—' : Number(live.msgRate).toFixed(1) + '/s', 'Message rate')}
-        ${tile(live.maxRangeKm == null ? '—' : Math.round(live.maxRangeKm) + ' km', 'Range now')}
+        ${tile(km(live.nearestKm), 'Closest aircraft')}
+        ${tile(km(live.furthestKm), 'Furthest aircraft')}
         ${tile(live.gainNow == null ? '—' : Number(live.gainNow).toFixed(1) + ' dB', 'Gain')}
       </div>
       <div class="fs-tiles" style="grid-template-columns:repeat(4,1fr);">
