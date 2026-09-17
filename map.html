@@ -1340,20 +1340,53 @@
       color: #e2e8f0; border-radius: 6px; padding: 3px 6px; font-size: 11.5px;
       font-family: inherit; color-scheme: dark;
     }
-    .adsb-hb-clock { font-size: 15px; font-weight: 700; color: #c084fc;
-      font-variant-numeric: tabular-nums; flex: 1; text-align: center; }
+    /* The clock is typeable. A day on a 460px bar is roughly four minutes per
+       pixel, so aiming at a time with the slider alone was guesswork; this is
+       the way to land on one exactly. */
+    .adsb-hb-clock {
+      flex: 1; min-width: 0; text-align: center;
+      background: rgba(192,132,252,0.10); border: 1px solid rgba(192,132,252,0.30);
+      border-radius: 6px; padding: 2px 4px;
+      font-size: 15px; font-weight: 700; color: #c084fc;
+      font-variant-numeric: tabular-nums; font-family: inherit;
+      color-scheme: dark; cursor: text;
+    }
+    .adsb-hb-clock:focus { outline: none; border-color: #c084fc; }
+    .adsb-hb-btn {
+      background: rgba(148,163,184,0.12); border: 1px solid rgba(148,163,184,0.28);
+      color: #e2e8f0; border-radius: 6px; cursor: pointer;
+      font-size: 11px; line-height: 1; padding: 5px 7px; font-family: inherit;
+    }
+    .adsb-hb-btn:hover { background: rgba(148,163,184,0.22); }
+    .adsb-hb-btn:disabled { opacity: 0.35; cursor: default; }
+    .adsb-hb-play { background: rgba(192,132,252,0.18); border-color: rgba(192,132,252,0.45);
+      color: #e9d5ff; min-width: 28px; }
+    .adsb-hb-play.on { background: #c084fc; border-color: #c084fc; color: #1e1b2e; }
+    .adsb-hb-speed {
+      background: rgba(148,163,184,0.12); border: 1px solid rgba(148,163,184,0.28);
+      color: #cbd5e1; border-radius: 6px; padding: 4px 3px; font-size: 10.5px;
+      font-family: inherit; color-scheme: dark; cursor: pointer;
+    }
     .adsb-hb-live {
       background: #22c55e; color: #fff; border: none; padding: 4px 11px;
       border-radius: 6px; font-size: 11px; font-weight: 700; cursor: pointer;
       white-space: nowrap;
     }
     .adsb-hb-live:hover { opacity: 0.9; }
-    .adsb-hb-range { width: 100%; height: 5px; -webkit-appearance: none; appearance: none;
-      background: #334155; border-radius: 3px; cursor: pointer; display: block; }
+    .adsb-hb-range { width: 100%; height: 18px; -webkit-appearance: none; appearance: none;
+      background: transparent; cursor: pointer; display: block; }
+    .adsb-hb-range::-webkit-slider-runnable-track { height: 6px; background: #334155;
+      border-radius: 3px; }
+    .adsb-hb-range::-moz-range-track { height: 6px; background: #334155; border-radius: 3px; }
+    /* Tall rather than round: a bar is easier to place on a minute than a dot,
+       and the pointer area is the full height of the control either way. */
     .adsb-hb-range::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
-      width: 15px; height: 15px; background: #c084fc; border-radius: 50%; cursor: grab; }
-    .adsb-hb-range::-moz-range-thumb { width: 15px; height: 15px; background: #c084fc;
-      border: none; border-radius: 50%; cursor: grab; }
+      width: 10px; height: 18px; margin-top: -6px; background: #c084fc;
+      border: 1px solid #f3e8ff; border-radius: 3px; cursor: grab; }
+    .adsb-hb-range::-moz-range-thumb { width: 10px; height: 18px; background: #c084fc;
+      border: 1px solid #f3e8ff; border-radius: 3px; cursor: grab; }
+    .adsb-hb-range:focus { outline: none; }
+    .adsb-hb-range:focus::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(192,132,252,0.35); }
     .adsb-hb-foot { display: flex; justify-content: space-between; font-size: 9.5px;
       color: #64748b; margin-top: 3px; }
     .adsb-hb-note { color: #94a3b8; }
@@ -14880,6 +14913,24 @@ function initPagerHoursFromStorage() {
     let _adsbHistLoading = false;
     let _adsbHistCount = null;        // aircraft in the last response, for the footer
     let _adsbHistTruncated = false;
+
+    /* ---- Playback ----
+     *
+     * The server snaps `at` to a sixty-second grid and caches closed buckets
+     * hard, precisely so independent viewers converge on the same URLs. So
+     * playback steps in WHOLE MINUTES: a finer step would be snapped to the
+     * same bucket and fetch a response we already have, and a step off the grid
+     * would miss the shared cache entirely.
+     *
+     * Speed is therefore minutes-per-tick on a fixed one-second tick, which is
+     * also the honest way to label it — "5m/s" says what you get, where a "300x"
+     * would imply a smoothness this cannot have.
+     */
+    const ADSB_PLAY_TICK_MS = 1000;
+    const ADSB_PLAY_SPEEDS = [1, 5, 15];   // minutes of history per tick
+    let _adsbPlaying = false;
+    let _adsbPlaySpeed = 1;
+    let _adsbPlayTimer = null;
     // Filled from /api/adsb/aircraft, which the live poll already fetches — the
     // date picker needs its bounds before it can offer a first scrub.
     let _adsbHistWindow = { retentionDays: null, oldestMs: null };
@@ -14931,11 +14982,11 @@ function initPagerHoursFromStorage() {
         ? Math.max(0, Math.floor((Date.now() - ADSB_HIST_LAG_MS - dayStart) / 60_000))
         : 1439;
 
-      let note;
-      if (_adsbHistLoading) note = 'Loading…';
-      else if (_adsbHistCount === null) note = '';
-      else if (_adsbHistTruncated) note = _adsbHistCount.toLocaleString() + ' aircraft (capped)';
-      else note = _adsbHistCount.toLocaleString() + ' aircraft';
+      const note = _adsbHistNote();
+
+      // At the newest instant there is nothing left to play into, so the
+      // button says so rather than starting a run that stops immediately.
+      const atEnd = Math.min(minuteOfDay, maxMinute) >= maxMinute;
 
       el.classList.add('open');
       el.innerHTML = ''
@@ -14945,7 +14996,24 @@ function initPagerHoursFromStorage() {
         +     ' min="' + _adsbHistDateValue(oldest) + '"'
         +     ' max="' + _adsbHistDateValue(Date.now()) + '"'
         +     ' onchange="adsbHistorySetDate(this.value)">'
-        +   '<div class="adsb-hb-clock">' + _adsbHistClock(at) + '</div>'
+        +   '<button class="adsb-hb-btn" title="Back one minute"'
+        +     ' onclick="adsbHistoryNudge(-1)">&#9664;</button>'
+        // type=time so an exact instant can be typed instead of aimed at.
+        +   '<input type="time" class="adsb-hb-clock" id="adsb-hb-time"'
+        +     ' value="' + _adsbHistTimeValue(at) + '"'
+        +     ' onchange="adsbHistorySetTime(this.value)">'
+        +   '<button class="adsb-hb-btn" title="Forward one minute"'
+        +     ' onclick="adsbHistoryNudge(1)"' + (atEnd ? ' disabled' : '') + '>&#9654;</button>'
+        +   '<button class="adsb-hb-btn adsb-hb-play' + (_adsbPlaying ? ' on' : '') + '"'
+        +     ' id="adsb-hb-play" title="' + (_adsbPlaying ? 'Pause' : 'Play') + '"'
+        +     ' onclick="adsbHistoryTogglePlay()"' + ((atEnd && !_adsbPlaying) ? ' disabled' : '')
+        +     '>' + (_adsbPlaying ? '&#10074;&#10074;' : '&#9654;') + '</button>'
+        +   '<select class="adsb-hb-speed" title="Playback speed"'
+        +     ' onchange="adsbHistorySetSpeed(this.value)">'
+        +     ADSB_PLAY_SPEEDS.map((m) =>
+              '<option value="' + m + '"' + (m === _adsbPlaySpeed ? ' selected' : '') + '>'
+              + m + 'm/s</option>').join('')
+        +   '</select>'
         +   '<button class="adsb-hb-live" onclick="adsbHistoryGoLive()">&#9679; LIVE</button>'
         + '</div>'
         + '<input type="range" class="adsb-hb-range" id="adsb-hb-range" min="0" max="' + maxMinute + '"'
@@ -14956,6 +15024,111 @@ function initPagerHoursFromStorage() {
         +   '<span class="adsb-hb-note">' + escapeHtml(note) + '</span>'
         +   '<span>' + _adsbHistClock(dayStart + maxMinute * 60_000) + '</span>'
         + '</div>';
+    }
+
+    /**
+     * Update only what moves: the time, the slider and the count.
+     *
+     * Playback ticks once a second, and re-rendering the whole bar each time
+     * would rebuild the speed menu under an open dropdown and take focus from
+     * the time field mid-edit. The full render is for changes of SHAPE — play
+     * to pause, a new date — not for the clock advancing.
+     */
+    function _adsbHistSyncControls() {
+      const bar = document.getElementById('adsb-history-bar');
+      if (!bar || !_adsbHistAtMs) return;
+      const t = bar.querySelector('#adsb-hb-time');
+      // Not while it is being edited, or a half-typed time is overwritten.
+      if (t && document.activeElement !== t) t.value = _adsbHistTimeValue(_adsbHistAtMs);
+      const r = bar.querySelector('#adsb-hb-range');
+      if (r && document.activeElement !== r) {
+        const minute = Math.floor((_adsbHistAtMs - _adsbHistDayStart(_adsbHistAtMs)) / 60_000);
+        r.value = String(Math.min(minute, Number(r.max) || 1439));
+      }
+      const n = bar.querySelector('.adsb-hb-note');
+      if (n) n.textContent = _adsbHistNote();
+    }
+
+    /** The footer's caption: what the last response held, or that one is due. */
+    function _adsbHistNote() {
+      if (_adsbHistLoading) return 'Loading…';
+      if (_adsbHistCount === null) return '';
+      return _adsbHistCount.toLocaleString()
+        + (_adsbHistTruncated ? ' aircraft (capped)' : ' aircraft');
+    }
+
+    /** HH:MM in local time, for the time input. */
+    function _adsbHistTimeValue(ms) {
+      const d = new Date(ms);
+      return String(d.getHours()).padStart(2, '0') + ':'
+        + String(d.getMinutes()).padStart(2, '0');
+    }
+
+    window.adsbHistorySetTime = function (value) {
+      const m = /^(\d{1,2}):(\d{2})/.exec(String(value || ''));
+      if (!m) return;
+      const minute = Number(m[1]) * 60 + Number(m[2]);
+      if (!Number.isFinite(minute)) return;
+      adsbHistoryStopPlay();
+      adsbHistorySetMinute(minute);
+      adsbHistoryBarRender();
+    };
+
+    /** Step by whole minutes, which is the grid the server buckets on. */
+    window.adsbHistoryNudge = function (delta) {
+      const base = _adsbHistAtMs || Date.now();
+      const next = base + delta * 60_000;
+      const newest = Date.now() - ADSB_HIST_LAG_MS;
+      if (next > newest) return;
+      const oldest = _adsbHistWindow.oldestMs;
+      if (oldest && next < oldest) return;
+      adsbHistoryStopPlay();
+      _adsbHistAtMs = next;
+      adsbHistoryBarRender();
+      adsbHistoryFetchSoon();
+    };
+
+    window.adsbHistorySetSpeed = function (value) {
+      const m = Number(value);
+      if (!ADSB_PLAY_SPEEDS.includes(m)) return;
+      _adsbPlaySpeed = m;
+      // Restart the timer so a speed change takes effect on the next tick
+      // rather than after the current one has run out.
+      if (_adsbPlaying) { adsbHistoryStartPlay(); }
+    };
+
+    window.adsbHistoryTogglePlay = function () {
+      if (_adsbPlaying) adsbHistoryStopPlay();
+      else adsbHistoryStartPlay();
+      adsbHistoryBarRender();
+    };
+
+    function adsbHistoryStartPlay() {
+      if (_adsbPlayTimer) clearInterval(_adsbPlayTimer);
+      _adsbPlaying = true;
+      _adsbPlayTimer = setInterval(() => {
+        if (!adsbHistoryMode) { adsbHistoryStopPlay(); adsbHistoryBarRender(); return; }
+        const newest = Date.now() - ADSB_HIST_LAG_MS;
+        const next = (_adsbHistAtMs || newest) + _adsbPlaySpeed * 60_000;
+        if (next >= newest) {
+          // Run out of history to play. Stop at the newest instant rather than
+          // jumping to live: leaving history is a decision, not a side effect
+          // of having watched to the end.
+          _adsbHistAtMs = newest;
+          adsbHistoryStopPlay();
+          adsbHistoryBarRender();
+          adsbHistoryFetchSoon();
+          return;
+        }
+        _adsbHistAtMs = next;
+        _adsbHistSyncControls();
+        adsbHistoryFetchSoon();
+      }, ADSB_PLAY_TICK_MS);
+    }
+
+    function adsbHistoryStopPlay() {
+      _adsbPlaying = false;
+      if (_adsbPlayTimer) { clearInterval(_adsbPlayTimer); _adsbPlayTimer = null; }
     }
 
     window.adsbHistorySetDate = function (value) {
@@ -14976,11 +15149,18 @@ function initPagerHoursFromStorage() {
     window.adsbHistorySetMinute = function (value) {
       const minute = Number(value);
       if (!Number.isFinite(minute)) return;
+      // Dragging is an explicit "show me here", so it takes over from playback
+      // rather than being dragged back by the next tick. Done without a full
+      // render: rebuilding the bar mid-drag would drop the thumb.
+      if (_adsbPlaying) {
+        adsbHistoryStopPlay();
+        const b = document.getElementById('adsb-hb-play');
+        if (b) { b.classList.remove('on'); b.innerHTML = '&#9654;'; b.title = 'Play'; }
+      }
       _adsbHistAtMs = _adsbHistDayStart(_adsbHistAtMs || Date.now()) + minute * 60_000;
       // The clock updates immediately; the fetch is debounced, so dragging the
       // slider reads as continuous rather than as a burst of requests.
-      const clock = document.querySelector('#adsb-history-bar .adsb-hb-clock');
-      if (clock) clock.textContent = _adsbHistClock(_adsbHistAtMs);
+      _adsbHistSyncControls();
       adsbHistoryFetchSoon();
     };
 
@@ -15061,7 +15241,7 @@ function initPagerHoursFromStorage() {
       if (!at) return;
       const seq = ++_adsbHistSeq;
       _adsbHistLoading = true;
-      adsbHistoryBarRender();
+      _adsbHistSyncControls();
       try {
         const res = await apiFetch(
           `${PROXY_BASE}/api/adsb/history?at=${at}&trail=${ADSB_HIST_TRAIL_MIN}`);
@@ -15108,7 +15288,11 @@ function initPagerHoursFromStorage() {
       } finally {
         if (seq === _adsbHistSeq) {
           _adsbHistLoading = false;
-          adsbHistoryBarRender();
+          // Light while playing (the bar keeps its shape and the viewer may be
+          // holding the speed menu open); a full render otherwise, because the
+          // end of today moves the slider's maximum.
+          if (_adsbPlaying) _adsbHistSyncControls();
+          else adsbHistoryBarRender();
         }
       }
     }
@@ -15118,6 +15302,7 @@ function initPagerHoursFromStorage() {
     };
 
     function adsbHistoryStart() {
+      adsbHistoryStopPlay();   // a stale timer from a previous visit
       adsbHistoryMode = true;
       _adsbHistAtMs = Date.now() - ADSB_HIST_LAG_MS;
       _adsbHistCount = null;
@@ -15131,6 +15316,7 @@ function initPagerHoursFromStorage() {
 
     window.adsbHistoryGoLive = function () {
       if (!adsbHistoryMode) return;
+      adsbHistoryStopPlay();
       adsbHistoryMode = false;
       _adsbHistAtMs = null;
       _adsbHistSeq++;              // abandon anything still in flight
