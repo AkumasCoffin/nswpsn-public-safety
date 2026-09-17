@@ -2480,6 +2480,18 @@
        made interactive to answer a hover. Pointer focus only — :focus-visible
        keeps the ring for anyone tabbing. */
     #nd2-aov-map path.leaflet-interactive:focus:not(:focus-visible) { outline: none; }
+    .nd2-cov-btn {
+      cursor: pointer; font-family: inherit;
+      font-size: 0.7rem; font-weight: 600; letter-spacing: 0.04em;
+      padding: 0.2rem 0.55rem; border-radius: 999px;
+      color: #cbd5e1; background: rgba(148,163,184,0.12);
+      border: 1px solid rgba(148,163,184,0.3);
+    }
+    .nd2-cov-btn:hover { background: rgba(148,163,184,0.22); }
+    .nd2-cov-btn.on {
+      color: #e9d5ff; background: rgba(192,132,252,0.22);
+      border-color: rgba(192,132,252,0.55);
+    }
     .nd2-up-ok { color: #86efac; font-weight: 600; }
     .nd2-up-warn { color: #fbbf24; font-weight: 600; }
     .nd2-rowlink { cursor: pointer; }
@@ -3838,7 +3850,12 @@
           <div id="nd2-anode-tracks" style="display: none;">
             <div class="nd2-card">
               <div class="nd2-card-h"><span>Tracks</span>
-                <span class="nd2-note">last 8 hours, as received by this receiver</span></div>
+                <span class="nd2-note">last 8 hours, as received by this receiver</span>
+                <span class="nd2-aov-head-ctl">
+                  <button type="button" class="nd2-cov-btn" id="nd2-cov-btn"
+                          onclick="nd2ToggleCoverage()"
+                          title="Draw the coverage envelope over the map">Show coverage</button>
+                </span></div>
               <div id="nd2-aov-map-wrap">
                 <div id="nd2-aov-map"></div>
                 <div id="nd2-aov-map-note" class="nd2-note">Loading tracks…</div>
@@ -8368,6 +8385,13 @@
       }
       nd2PaintHeard();
 
+      // Kept whether or not it is showing, so the toggle is instant and needs
+      // no fetch of its own.
+      _nd2CoverageRingPts = nd2CoverageRing(d.site, d.coverage && d.coverage.buckets);
+      const covBtn = document.getElementById('nd2-cov-btn');
+      if (covBtn) covBtn.style.display = _nd2CoverageRingPts ? '' : 'none';
+      nd2ApplyCoverage();
+
       // The receiver anchors the picture — a gap in the fan only reads as a
       // DIRECTION if you can see the centre. The position is deliberately
       // rounded server-side to ~1km, so it is drawn as an area rather than a
@@ -8452,6 +8476,72 @@
      *  distinguishable without a legend nobody would read. Shared by a track
      *  and its row — matching them is the whole reason the two live on one
      *  tab now. */
+    /** Where a bearing and a distance put you, from a point on the globe.
+     *
+     *  The coverage envelope is polar — a reach in km for each of 72 bearings —
+     *  so putting it on a map means solving for the destination of each one.
+     *  Great-circle rather than a flat offset: at 200km the difference shows,
+     *  and it is the far bearings the picture is about. */
+    function nd2Destination(lat, lon, bearingDeg, km) {
+      const R = 6371;
+      const d = km / R;
+      const br = bearingDeg * Math.PI / 180;
+      const la1 = lat * Math.PI / 180;
+      const lo1 = lon * Math.PI / 180;
+      const la2 = Math.asin(Math.sin(la1) * Math.cos(d)
+        + Math.cos(la1) * Math.sin(d) * Math.cos(br));
+      const lo2 = lo1 + Math.atan2(
+        Math.sin(br) * Math.sin(d) * Math.cos(la1),
+        Math.cos(d) - Math.sin(la1) * Math.sin(la2));
+      return [la2 * 180 / Math.PI, ((lo2 * 180 / Math.PI) + 540) % 360 - 180];
+    }
+
+    /** The envelope as a ring of map points.
+     *
+     *  A bearing never heard on pulls to the receiver rather than being
+     *  skipped — the convention the polar plot already uses, so a blind lobe
+     *  reads as a bite instead of the ring quietly cutting the corner as
+     *  though the gap were covered. */
+    function nd2CoverageRing(site, buckets) {
+      if (!site || !Array.isArray(buckets) || !buckets.length) return null;
+      const n = buckets.length;
+      const ring = [];
+      for (let i = 0; i < n; i++) {
+        const km = typeof buckets[i] === 'number' && isFinite(buckets[i]) ? buckets[i] : 0;
+        const bearing = (i + 0.5) * (360 / n);
+        ring.push(km > 0 ? nd2Destination(site.lat, site.lon, bearing, km)
+                         : [site.lat, site.lon]);
+      }
+      return ring;
+    }
+
+    let _nd2CoverageOn = false;
+    let _nd2CoverageLayer = null;
+    let _nd2CoverageRingPts = null;
+
+    window.nd2ToggleCoverage = function () {
+      _nd2CoverageOn = !_nd2CoverageOn;
+      nd2ApplyCoverage();
+    };
+
+    /** Add or remove the overlay to match the toggle. */
+    function nd2ApplyCoverage() {
+      const btn = document.getElementById('nd2-cov-btn');
+      if (btn) {
+        btn.classList.toggle('on', _nd2CoverageOn);
+        btn.textContent = _nd2CoverageOn ? 'Hide coverage' : 'Show coverage';
+      }
+      if (_nd2CoverageLayer) { _nd2CoverageLayer.remove(); _nd2CoverageLayer = null; }
+      if (!_nd2CoverageOn || !_nd2TrackMap || !_nd2CoverageRingPts) return;
+      _nd2CoverageLayer = L.polygon(_nd2CoverageRingPts, {
+        color: '#c084fc', weight: 1.5, opacity: 0.75,
+        fillColor: '#c084fc', fillOpacity: 0.07, interactive: false,
+      }).addTo(_nd2TrackMap);
+      // Behind the tracks. Leaflet paints later additions on top, and an
+      // envelope over the paths would hide what the map is for.
+      _nd2CoverageLayer.bringToBack();
+    }
+
     function nd2AdsbHexColour(hex) {
       const hue = (parseInt(String(hex).slice(-4), 16) || 0) % 360;
       return `hsl(${hue}, 80%, 62%)`;

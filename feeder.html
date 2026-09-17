@@ -518,6 +518,18 @@
     #loc-map { height: 340px; border-radius: 8px; margin-bottom: 1rem; border: 1px solid var(--border-subtle); }
     #loc-map, #loc-map * { box-sizing: initial; } /* Leaflet needs its own box model */
     .leaflet-container { background: #0b1220; }
+    .ab-cov-btn {
+      float: right; cursor: pointer; font-family: inherit;
+      font-size: 0.7rem; font-weight: 600; letter-spacing: 0.04em;
+      text-transform: none; padding: 0.2rem 0.55rem; border-radius: 999px;
+      color: #cbd5e1; background: rgba(148,163,184,0.12);
+      border: 1px solid rgba(148,163,184,0.3);
+    }
+    .ab-cov-btn:hover { background: rgba(148,163,184,0.22); }
+    .ab-cov-btn.on {
+      color: #e9d5ff; background: rgba(192,132,252,0.22);
+      border-color: rgba(192,132,252,0.55);
+    }
     /* Clicking a track drew a huge rectangle over the map: the browser's focus
        ring follows an SVG path's BOUNDING BOX, and a track crossing the frame
        diagonally has a bounding box the size of the frame. The paths only
@@ -1335,6 +1347,72 @@
     /** One colour per aircraft, derived from its hex, so adjacent paths stay
      *  distinguishable without a legend nobody would read. Shared by the track
      *  and its row in the table — the whole point is that they match. */
+    /** Where a bearing and a distance put you, from a point on the globe.
+     *
+     *  The coverage envelope is polar — a reach in km for each of 72 bearings —
+     *  so putting it on a map means solving for the destination of each one.
+     *  Great-circle rather than a flat offset: at 200km the difference is
+     *  visible, and it is the far bearings that the picture is about. */
+    function _abDestination(lat, lon, bearingDeg, km) {
+      const R = 6371;
+      const d = km / R;
+      const br = bearingDeg * Math.PI / 180;
+      const la1 = lat * Math.PI / 180;
+      const lo1 = lon * Math.PI / 180;
+      const la2 = Math.asin(Math.sin(la1) * Math.cos(d)
+        + Math.cos(la1) * Math.sin(d) * Math.cos(br));
+      const lo2 = lo1 + Math.atan2(
+        Math.sin(br) * Math.sin(d) * Math.cos(la1),
+        Math.cos(d) - Math.sin(la1) * Math.sin(la2));
+      return [la2 * 180 / Math.PI, ((lo2 * 180 / Math.PI) + 540) % 360 - 180];
+    }
+
+    /** The envelope as a ring of map points.
+     *
+     *  A bearing that has never been heard on pulls to the receiver rather than
+     *  being skipped — the same convention the polar plot uses, so a blind lobe
+     *  reads as a bite out of the shape instead of the ring quietly cutting the
+     *  corner as though the gap were covered. */
+    function _abCoverageRing(site, buckets) {
+      if (!site || !Array.isArray(buckets) || !buckets.length) return null;
+      const n = buckets.length;
+      const ring = [];
+      for (let i = 0; i < n; i++) {
+        const km = typeof buckets[i] === 'number' && isFinite(buckets[i]) ? buckets[i] : 0;
+        const bearing = (i + 0.5) * (360 / n);
+        ring.push(km > 0 ? _abDestination(site.lat, site.lon, bearing, km)
+                         : [site.lat, site.lon]);
+      }
+      return ring;
+    }
+
+    let _abCoverageOn = false;
+    let _abCoverageLayer = null;
+    let _abCoverageRingPts = null;
+
+    window.abToggleCoverage = function () {
+      _abCoverageOn = !_abCoverageOn;
+      _abApplyCoverage();
+    };
+
+    /** Add or remove the overlay to match the toggle. */
+    function _abApplyCoverage() {
+      const btn = document.getElementById('adsb-cov-btn');
+      if (btn) {
+        btn.classList.toggle('on', _abCoverageOn);
+        btn.textContent = _abCoverageOn ? 'Hide coverage' : 'Show coverage';
+      }
+      if (_abCoverageLayer) { _abCoverageLayer.remove(); _abCoverageLayer = null; }
+      if (!_abCoverageOn || !_abMap || !_abCoverageRingPts) return;
+      _abCoverageLayer = L.polygon(_abCoverageRingPts, {
+        color: '#c084fc', weight: 1.5, opacity: 0.75,
+        fillColor: '#c084fc', fillOpacity: 0.07, interactive: false,
+      }).addTo(_abMap);
+      // Behind the tracks. Leaflet paints later additions on top, and an
+      // envelope over the paths would hide the thing the map is for.
+      _abCoverageLayer.bringToBack();
+    }
+
     function _abHexColour(hex) {
       const hue = (parseInt(String(hex).slice(-4), 16) || 0) % 360;
       return `hsl(${hue}, 80%, 62%)`;
@@ -1396,7 +1474,11 @@
           <div id="adsb-body"><div class="loading" style="padding:2rem;"><i class="fas fa-spinner"></i></div></div>
           <div class="fs-act-h">Coverage</div>
           <div id="adsb-polar"><div class="ab-note">Loading coverage…</div></div>
-          <div class="fs-act-h">Tracks — last 8 hours</div>
+          <div class="fs-act-h">Tracks — last 8 hours
+            <button type="button" class="ab-cov-btn" id="adsb-cov-btn"
+                    onclick="abToggleCoverage()"
+                    title="Draw the coverage envelope over the map">Show coverage</button>
+          </div>
           <div class="ab-map" id="adsb-map"></div>
           <div class="ab-note" id="adsb-map-note">Loading tracks…</div>
         </div>`;
@@ -1702,6 +1784,13 @@
           .addTo(layer);
       }
       _abPaintHeard();
+
+      // Kept whether or not it is showing, so the toggle is instant and does
+      // not need its own fetch.
+      _abCoverageRingPts = _abCoverageRing(d.site, d.coverage && d.coverage.buckets);
+      const covBtn = document.getElementById('adsb-cov-btn');
+      if (covBtn) covBtn.style.display = _abCoverageRingPts ? '' : 'none';
+      _abApplyCoverage();
       if (d.site) {
         const c = [d.site.lat, d.site.lon];
         L.circle(c, { radius: 1000, color: '#38bdf8', weight: 1, opacity: 0.5, fillColor: '#38bdf8', fillOpacity: 0.12, interactive: false }).addTo(layer);
