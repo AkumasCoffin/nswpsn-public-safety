@@ -879,14 +879,20 @@ export function ingestNodeTrailPoints(
   nowMs: number,
 ): void {
   if (!hex || points.length === 0) return;
+
+  // Filtered and ordered BEFORE anything is created: a call carrying only
+  // points from the future or from beyond the window must leave no trace, and
+  // the fast path below reads points[0] as the oldest.
+  const fresh = points
+    .filter((p) => p[0] <= nowMs && p[0] > nowMs - TRAIL_RECENT_MS)
+    .sort((a, b) => a[0] - b[0]);
+  if (fresh.length === 0) return;
+
   let buf = _trails.get(hex);
   if (!buf) {
     buf = [];
     _trails.set(hex, buf);
   }
-
-  const fresh = points.filter((p) => p[0] <= nowMs && p[0] > nowMs - TRAIL_RECENT_MS);
-  if (fresh.length === 0) return;
 
   const last = buf[buf.length - 1];
   if (!last || fresh[0]![0] > last[0] + TRAIL_SAME_FIX_MS) {

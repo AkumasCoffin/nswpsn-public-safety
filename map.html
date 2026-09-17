@@ -15120,8 +15120,16 @@ function initPagerHoursFromStorage() {
           adsbHistoryFetchSoon();
           return;
         }
+        // Crossing midnight changes the SHAPE of the bar — a new date, and a
+        // new end-of-day for the slider — so that one tick needs the full
+        // render. Without it playback ran on into the next day while the date
+        // picker still showed the old one and the slider kept yesterday's
+        // maximum.
+        const dayChanged =
+          _adsbHistDayStart(next) !== _adsbHistDayStart(_adsbHistAtMs || next);
         _adsbHistAtMs = next;
-        _adsbHistSyncControls();
+        if (dayChanged) adsbHistoryBarRender();
+        else _adsbHistSyncControls();
         adsbHistoryFetchSoon();
       }, ADSB_PLAY_TICK_MS);
     }
