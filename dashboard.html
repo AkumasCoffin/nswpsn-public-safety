@@ -451,6 +451,14 @@
     .subtype-group-chips { display: flex; flex-wrap: wrap; gap: 0.3rem; }
 
     /* Provider-grouped alert-type selector (used by editor + wizard). */
+    .provider-search {
+      margin-bottom: 0.55rem;
+    }
+    .provider-divider {
+      height: 1px;
+      background: var(--border-subtle, rgba(148,163,184,0.18));
+      margin: 0.5rem 0;
+    }
     .provider-list {
       display: flex; flex-direction: column;
       gap: 0.45rem;
@@ -1973,6 +1981,99 @@ function discordColorToHex(color) {
 
 /* -------------------- Render (dispatch) -------------------- */
 
+/* -------------------- Scoped repaints --------------------
+ *
+ * render() rebuilds the ENTIRE application: topbar, sidebar, every card in the
+ * editor, and it tears down each Leaflet geofilter map on the way. That is
+ * correct for navigation and ruinous for a toggle — patchPreset used to call
+ * it twice per edit, so flipping one subtype chip rebuilt the page twice and
+ * destroyed a map the user was in the middle of drawing on.
+ *
+ * These let a mutation repaint only what it actually changed. Each editor card
+ * is wrapped in a slot with a stable id, so a card can be swapped in place
+ * while everything around it — including any map — is left running.
+ */
+
+/** Wrap an editor card so repaintCard() can find and replace it. */
+function cardSlot(name, node) {
+  const slot = el('div', { class: 'card-slot', 'data-slot': name });
+  slot.appendChild(node);
+  return slot;
+}
+
+/** Replace one editor card. Returns false when the slot is not on screen, so
+ *  callers can fall back to a wider repaint rather than silently doing
+ *  nothing. */
+function repaintCard(name, build) {
+  const slot = document.querySelector(`.card-slot[data-slot="${name}"]`);
+  if (!slot) return false;
+  const preset = presetById(state.selectedPresetId);
+  if (!preset) return false;
+  // The geofilter map lives inside the filters card, so replacing THAT slot
+  // must still tear its map down or the Leaflet instance leaks with its
+  // window listeners attached.
+  if (name === 'filters') destroyGeofilterMaps();
+  slot.innerHTML = '';
+  slot.appendChild(build(preset));
+  return true;
+}
+
+/** Repaint the sidebar only — preset names, badges, mute switches. */
+function repaintSidebar() {
+  const old = document.getElementById('sidebar');
+  if (!old || !old.parentNode) return false;
+  old.parentNode.replaceChild(renderSidebar(), old);
+  syncDrawer();
+  return true;
+}
+
+/** Repaint the whole content pane, maps included. Still far cheaper than
+ *  render(), which also rebuilds the topbar and the sidebar. */
+function repaintContent() {
+  const old = document.getElementById('content');
+  if (!old || !old.parentNode) return false;
+  destroyGeofilterMaps();
+  old.parentNode.replaceChild(renderContentPane(), old);
+  return true;
+}
+
+/**
+ * Repaint the least that can be correct for a given patch.
+ *
+ * Keyed on WHICH fields changed, because that is what determines where the
+ * change is visible. A rename shows in the sidebar and the breadcrumb; a
+ * filters edit shows only inside its own card; an alert-type toggle changes
+ * both the card's counts and the sidebar's badge.
+ */
+function repaintForPatch(patch) {
+  const keys = Object.keys(patch || {});
+  if (keys.length === 0) return;
+  let handled = true;
+  for (const k of keys) {
+    if (k === 'alert_types') {
+      handled = repaintCard('types', renderAlertTypeChips) && handled;
+      repaintSidebar();
+    } else if (k === 'filters') {
+      handled = repaintCard('filters', renderFiltersCard) && handled;
+    } else if (k === 'pager_enabled' || k === 'pager_capcodes') {
+      handled = repaintCard('pager', renderPagerCard) && handled;
+    } else if (k === 'role_ids') {
+      handled = repaintCard('roles', renderRolesCard) && handled;
+    } else if (k === 'enabled' || k === 'enabled_ping') {
+      handled = repaintCard('mute', renderPresetMuteCard) && handled;
+      repaintSidebar();
+    } else if (k === 'name') {
+      // The name appears in the breadcrumb and title row, which are not in a
+      // slot — the content pane is the smallest honest scope for it.
+      handled = repaintContent() && handled;
+      repaintSidebar();
+    } else {
+      handled = false;   // unknown key: fall back
+    }
+  }
+  if (!handled) render();
+}
+
 function render() {
   renderTopbar();
   const root = qs('app-root');
@@ -2579,29 +2680,29 @@ function renderPresetEditor(preset) {
     el('span', { class: 'cap' }, 'Alert types'),
     el('span', { class: 'inherit-note' }, `${(preset.alert_types||[]).length} selected`),
   ]));
-  wrap.appendChild(renderAlertTypeChips(preset));
+  wrap.appendChild(cardSlot('types', renderAlertTypeChips(preset)));
 
   // -------- Pager --------
   wrap.appendChild(el('div', { class: 'section-label' }, 'Pager'));
-  wrap.appendChild(renderPagerCard(preset));
+  wrap.appendChild(cardSlot('pager', renderPagerCard(preset)));
 
   // -------- Roles to ping --------
   wrap.appendChild(el('div', { class: 'section-label' }, [
     el('span', { class: 'cap' }, 'Roles to ping'),
     el('span', { class: 'inherit-note' }, `${(preset.role_ids||[]).length} / ${MAX_ROLES}`),
   ]));
-  wrap.appendChild(renderRolesCard(preset));
+  wrap.appendChild(cardSlot('roles', renderRolesCard(preset)));
 
   // -------- Filters (optional) --------
   wrap.appendChild(el('div', { class: 'section-label' }, [
     el('span', { class: 'cap' }, 'Filters (optional)'),
     el('span', { class: 'inherit-note' }, filtersSummary(preset)),
   ]));
-  wrap.appendChild(renderFiltersCard(preset));
+  wrap.appendChild(cardSlot('filters', renderFiltersCard(preset)));
 
   // -------- Preset mute --------
   wrap.appendChild(el('div', { class: 'section-label' }, 'Mute'));
-  wrap.appendChild(renderPresetMuteCard(preset));
+  wrap.appendChild(cardSlot('mute', renderPresetMuteCard(preset)));
 
   // -------- Per-type overrides --------
   if ((preset.alert_types||[]).length > 0) {
@@ -2609,7 +2710,7 @@ function renderPresetEditor(preset) {
       el('span', { class: 'cap' }, 'Per-type overrides'),
       el('span', { class: 'inherit-note' }, 'Fine-tune individual alert types'),
     ]));
-    wrap.appendChild(renderOverridesCard(preset));
+    wrap.appendChild(cardSlot('overrides', renderOverridesCard(preset)));
   }
 
   return wrap;
@@ -2744,6 +2845,29 @@ function _renderProviderSection(provider, selected, opts) {
   return section;
 }
 
+/** Does this provider match what was typed?
+ *
+ *  Searches the provider's own name and every type label and key under it, so
+ *  "flood" finds the source carrying a flood sub-type even though the provider
+ *  is called something else.
+ *
+ *  Matches on WORD PREFIXES, not raw substrings. A plain `includes` looked
+ *  fine until you typed "vic" and got NSW Rural Fire Ser-VIC-e back, which is
+ *  the kind of result that makes a search box feel broken. Every term in the
+ *  query must prefix some word, so "vic em" narrows rather than widens.
+ */
+function _providerMatches(provider, q) {
+  if (!q) return true;
+  const words = [
+    provider.name || '',
+    provider.key || '',
+    ...(provider.types || []).map(t => `${t.label || ''} ${t.key || ''}`),
+  ].join(' ').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  const terms = q.split(/[^a-z0-9]+/).filter(Boolean);
+  if (terms.length === 0) return true;
+  return terms.every(term => words.some(w => w.startsWith(term)));
+}
+
 function renderAlertTypeChips(preset) {
   const selected = new Set(preset.alert_types || []);
   const wrap = el('div', { class: 'provider-list' });
@@ -2753,16 +2877,68 @@ function renderAlertTypeChips(preset) {
     wrap.appendChild(el('div', { class: 'empty' }, state.catalogError));
     return wrap;
   }
-  for (const provider of PROVIDERS) {
-    const hasSelected = provider.types.some(t => selected.has(t.key));
+
+  // Sixteen providers, always all of them, in a fixed order — so turning one
+  // source on meant scrolling to find it. Typing three letters is quicker than
+  // any amount of rearranging, and the ones already ON float to the top
+  // because they are what a returning user came back to check. The ordering
+  // and filtering live in _fillProviderRows, which is also what a keystroke
+  // re-runs.
+  //
+  // The list is a child of the card, not the card itself, so typing replaces
+  // only the rows — the input keeps focus and the caret stays where it was.
+  const listWrap = el('div', { class: 'provider-rows' });
+
+  const search = el('input', {
+    class: 'form-input provider-search',
+    type: 'search',
+    placeholder: 'Search sources…',
+    value: state.typeSearch || '',
+    oninput: (e) => {
+      state.typeSearch = e.target.value || '';
+      listWrap.innerHTML = '';
+      _fillProviderRows(listWrap, preset, selected);
+    },
+  });
+  wrap.appendChild(search);
+  _fillProviderRows(listWrap, preset, selected);
+  wrap.appendChild(listWrap);
+  return wrap;
+}
+
+function _fillProviderRows(listWrap, preset, selected) {
+  const q = (state.typeSearch || '').trim().toLowerCase();
+  const isOn = (pv) => (pv.types || []).some(t => selected.has(t.key));
+  const ordered = PROVIDERS.slice().sort((a, b) =>
+    (isOn(b) ? 1 : 0) - (isOn(a) ? 1 : 0));
+  const shown = ordered.filter(pv => _providerMatches(pv, q));
+
+  if (shown.length === 0) {
+    listWrap.appendChild(el('div', { class: 'empty' },
+      `No source matches “${state.typeSearch}”.`));
+    return;
+  }
+
+  let dividerDrawn = false;
+  for (const provider of shown) {
+    // One rule between the enabled sources and the rest, so "what is on" is
+    // readable without counting badges. Only while unsearched — during a
+    // search the order is the answer and a divider would just be a stray line.
+    if (!q && !dividerDrawn && !isOn(provider) && shown.some(isOn)) {
+      listWrap.appendChild(el('div', { class: 'provider-divider' }));
+      dividerDrawn = true;
+    }
+    const hasSelected = isOn(provider);
     const expanded = isProviderOpen(preset.id, provider.key, hasSelected);
-    wrap.appendChild(_renderProviderSection(provider, selected, {
+    listWrap.appendChild(_renderProviderSection(provider, selected, {
       presetId: preset.id,
       expanded,
       onExpand: (open) => {
         setProviderOpen(preset.id, provider.key, open);
-        // Replace this section in-place to keep editor scroll position.
-        render();
+        // Expanding an accordion used to rebuild the whole application. It
+        // repaints its own card, which also keeps the editor's scroll
+        // position — the reason the old comment here wanted an in-place swap.
+        if (!repaintCard('types', renderAlertTypeChips)) render();
       },
       onToggleType: (typeKey) => toggleAlertType(preset.id, typeKey),
       onSelectAll: (turnOn) => {
@@ -2776,7 +2952,6 @@ function renderAlertTypeChips(preset) {
       },
     }));
   }
-  return wrap;
 }
 
 function renderPagerCard(preset) {
@@ -3992,18 +4167,24 @@ function renderOverridesCard(preset) {
 async function patchPreset(presetId, patch) {
   const prev = presetById(presetId);
   if (!prev) return;
-  // Optimistic
+  // Optimistic. Repaints only the cards this patch is visible in, rather than
+  // rebuilding the application — see repaintForPatch.
   const optimistic = { ...prev, ...patch };
   replacePreset(optimistic);
-  render();
+  repaintForPatch(patch);
   try {
     const res = await api(`/api/dashboard/guilds/${state.activeGuildId}/presets/${presetId}`, {
       method: 'PATCH',
       body: JSON.stringify(patch),
     });
     if (res && res.preset) {
+      // The second repaint is skipped when the server agreed with the guess,
+      // which is the overwhelmingly common case. Repainting anyway was the
+      // other half of the double rebuild: it threw away the DOM the user was
+      // already looking at to redraw something identical.
+      const changed = !presetsMatchOn(presetById(presetId), res.preset, Object.keys(patch));
       replacePreset(res.preset);
-      render();
+      if (changed) repaintForPatch(patch);
     }
   } catch (e) {
     // Revert only the keys this patch touched, layered onto the *latest* state
@@ -4013,10 +4194,20 @@ async function patchPreset(presetId, patch) {
       const reverted = { ...latest };
       for (const k of Object.keys(patch)) reverted[k] = prev[k];
       replacePreset(reverted);
-      render();
+      repaintForPatch(patch);
     }
     handleApiError(e, 'Failed to update preset.');
   }
+}
+
+/** Do two presets agree on just these keys? Used to decide whether the
+ *  server's answer differs from what was optimistically drawn. */
+function presetsMatchOn(a, b, keys) {
+  if (!a || !b) return false;
+  for (const k of keys) {
+    if (JSON.stringify(a[k] ?? null) !== JSON.stringify(b[k] ?? null)) return false;
+  }
+  return true;
 }
 
 async function renamePreset(presetId, name) {
@@ -4064,6 +4255,20 @@ async function deletePreset(presetId) {
   }
 }
 
+/** A type override changes the counts and the per-source rows, and nothing
+ *  else on the page. */
+function repaintTypeOverride() {
+  if (!repaintCard('types', renderAlertTypeChips)) render();
+}
+
+/** Mute state is read in two places: the sidebar switches, and the effective
+ *  state shown against every card in the editor. Both, and only both. */
+function repaintMuteState() {
+  const a = repaintSidebar();
+  const b = repaintContent();
+  if (!a && !b) render();
+}
+
 async function setTypeOverride(presetId, alertType, body) {
   const prev = presetById(presetId);
   if (!prev) return;
@@ -4072,7 +4277,7 @@ async function setTypeOverride(presetId, alertType, body) {
   const nextOverrides = { ...(prev.type_overrides || {}) };
   nextOverrides[alertType] = { ...body };
   replacePreset({ ...prev, type_overrides: nextOverrides });
-  render();
+  repaintTypeOverride();
   try {
     const res = await api(
       `/api/dashboard/guilds/${state.activeGuildId}/presets/${presetId}/type-overrides/${alertType}`,
@@ -4080,7 +4285,7 @@ async function setTypeOverride(presetId, alertType, body) {
     );
     if (res && res.preset) {
       replacePreset(res.preset);
-      render();
+      repaintTypeOverride();
     }
   } catch (e) {
     // Revert
@@ -4088,7 +4293,7 @@ async function setTypeOverride(presetId, alertType, body) {
     if (prevOv) revertOv[alertType] = prevOv;
     else delete revertOv[alertType];
     replacePreset({ ...prev, type_overrides: revertOv });
-    render();
+    repaintTypeOverride();
     handleApiError(e, 'Failed to set override.');
   }
 }
@@ -4101,7 +4306,7 @@ async function clearTypeOverride(presetId, alertType) {
   const nextOverrides = { ...(prev.type_overrides || {}) };
   delete nextOverrides[alertType];
   replacePreset({ ...prev, type_overrides: nextOverrides });
-  render();
+  repaintTypeOverride();
   try {
     const res = await api(
       `/api/dashboard/guilds/${state.activeGuildId}/presets/${presetId}/type-overrides/${alertType}`,
@@ -4109,14 +4314,14 @@ async function clearTypeOverride(presetId, alertType) {
     );
     if (res && res.preset) {
       replacePreset(res.preset);
-      render();
+      repaintTypeOverride();
     }
   } catch (e) {
     // Revert
     const revertOv = { ...(prev.type_overrides || {}) };
     if (prevOv) revertOv[alertType] = prevOv;
     replacePreset({ ...prev, type_overrides: revertOv });
-    render();
+    repaintTypeOverride();
     handleApiError(e, 'Failed to reset override.');
   }
 }
@@ -4132,7 +4337,7 @@ function replacePreset(preset) {
 async function setGuildMute(patch) {
   const prev = { ...state.muteState.guild };
   state.muteState.guild = { ...prev, ...patch };
-  render();
+  repaintMuteState();
   try {
     // If both enabled+enabled_ping are back to true, we can DELETE; else PUT.
     const next = state.muteState.guild;
@@ -4146,12 +4351,12 @@ async function setGuildMute(patch) {
       });
       if (res && res.guild) {
         state.muteState.guild = { enabled: !!res.guild.enabled, enabled_ping: !!res.guild.enabled_ping };
-        render();
+        repaintMuteState();
       }
     }
   } catch (e) {
     state.muteState.guild = prev;
-    render();
+    repaintMuteState();
     handleApiError(e, 'Failed to update guild mute.');
   }
 }
@@ -4161,13 +4366,13 @@ async function setChannelMute(chId, patch) {
   const prev = { ...channelMute(chId) };
   const next = { ...prev, ...patch, channel_id: key };
   state.muteState.channels.set(key, next);
-  render();
+  repaintMuteState();
   try {
     if (next.enabled === true && next.enabled_ping === true) {
       await api(`/api/dashboard/guilds/${state.activeGuildId}/mute-state/channels/${chId}`, { method: 'DELETE' });
       // Keep optimistic (both true); equivalent to no record.
       state.muteState.channels.delete(key);
-      render();
+      repaintMuteState();
     } else {
       const res = await api(`/api/dashboard/guilds/${state.activeGuildId}/mute-state/channels/${chId}`, {
         method: 'PUT', body: JSON.stringify(patch),
@@ -4178,12 +4383,12 @@ async function setChannelMute(chId, patch) {
           enabled: !!res.channel.enabled,
           enabled_ping: !!res.channel.enabled_ping,
         });
-        render();
+        repaintMuteState();
       }
     }
   } catch (e) {
     state.muteState.channels.set(key, prev);
-    render();
+    repaintMuteState();
     handleApiError(e, 'Failed to update channel mute.');
   }
 }
