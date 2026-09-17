@@ -8387,9 +8387,9 @@
 
       // Kept whether or not it is showing, so the toggle is instant and needs
       // no fetch of its own.
-      _nd2CoverageRingPts = nd2CoverageRing(d.site, d.coverage && d.coverage.buckets);
+      _nd2CoverageGeom = nd2CoverageRing(d.site, d.coverage && d.coverage.buckets);
       const covBtn = document.getElementById('nd2-cov-btn');
-      if (covBtn) covBtn.style.display = _nd2CoverageRingPts ? '' : 'none';
+      if (covBtn) covBtn.style.display = _nd2CoverageGeom ? '' : 'none';
       nd2ApplyCoverage();
 
       // The receiver anchors the picture — a gap in the fan only reads as a
@@ -8496,28 +8496,45 @@
       return [la2 * 180 / Math.PI, ((lo2 * 180 / Math.PI) + 540) % 360 - 180];
     }
 
-    /** The envelope as a ring of map points.
+    /** The envelope as map geometry.
      *
-     *  A bearing never heard on pulls to the receiver rather than being
-     *  skipped — the convention the polar plot already uses, so a blind lobe
-     *  reads as a bite instead of the ring quietly cutting the corner as
-     *  though the gap were covered. */
+     *  Returns BOTH renderings, because which one is honest depends on how
+     *  much of the circle has been heard on. A filled polygon over a sparse
+     *  envelope draws straight edges between the few bearings that have data,
+     *  cutting across bearings that have none — which is why tracks along a
+     *  perfectly well-covered bearing appeared to fall outside the shape. The
+     *  polar plot already makes this distinction; the map now makes the same
+     *  one, with the same threshold.
+     *
+     *  Nulls still pull to the receiver in the polygon case, so a blind lobe
+     *  reads as a bite rather than the ring quietly cutting the corner. */
     function nd2CoverageRing(site, buckets) {
       if (!site || !Array.isArray(buckets) || !buckets.length) return null;
       const n = buckets.length;
+      const centre = [site.lat, site.lon];
       const ring = [];
+      const spokes = [];
+      let filled = 0;
       for (let i = 0; i < n; i++) {
         const km = typeof buckets[i] === 'number' && isFinite(buckets[i]) ? buckets[i] : 0;
         const bearing = (i + 0.5) * (360 / n);
-        ring.push(km > 0 ? nd2Destination(site.lat, site.lon, bearing, km)
-                         : [site.lat, site.lon]);
+        if (km > 0) {
+          filled++;
+          const p = nd2Destination(site.lat, site.lon, bearing, km);
+          ring.push(p);
+          spokes.push([centre, p]);
+        } else {
+          ring.push(centre);
+        }
       }
-      return ring;
+      if (!filled) return null;
+      // Same threshold the polar plot uses.
+      return { ring, spokes, sparse: filled / n < 0.45 };
     }
 
     let _nd2CoverageOn = false;
     let _nd2CoverageLayer = null;
-    let _nd2CoverageRingPts = null;
+    let _nd2CoverageGeom = null;
 
     window.nd2ToggleCoverage = function () {
       _nd2CoverageOn = !_nd2CoverageOn;
@@ -8532,14 +8549,26 @@
         btn.textContent = _nd2CoverageOn ? 'Hide coverage' : 'Show coverage';
       }
       if (_nd2CoverageLayer) { _nd2CoverageLayer.remove(); _nd2CoverageLayer = null; }
-      if (!_nd2CoverageOn || !_nd2TrackMap || !_nd2CoverageRingPts) return;
-      _nd2CoverageLayer = L.polygon(_nd2CoverageRingPts, {
-        color: '#c084fc', weight: 1.5, opacity: 0.75,
-        fillColor: '#c084fc', fillOpacity: 0.07, interactive: false,
-      }).addTo(_nd2TrackMap);
-      // Behind the tracks. Leaflet paints later additions on top, and an
-      // envelope over the paths would hide what the map is for.
-      _nd2CoverageLayer.bringToBack();
+      if (!_nd2CoverageOn || !_nd2TrackMap || !_nd2CoverageGeom) return;
+
+      const g = _nd2CoverageGeom;
+      const style = { color: '#c084fc', opacity: 0.75, interactive: false };
+      const layer = L.layerGroup();
+      if (g.sparse) {
+        // One line per bearing that has actually been heard on. No fill: there
+        // is nothing to claim about the gaps between them.
+        for (const sp of g.spokes) {
+          L.polyline(sp, { ...style, weight: 1.6 }).addTo(layer);
+        }
+      } else {
+        L.polygon(g.ring, {
+          ...style, weight: 1.5, fillColor: '#c084fc', fillOpacity: 0.07,
+        }).addTo(layer);
+      }
+      _nd2CoverageLayer = layer.addTo(_nd2TrackMap);
+      // Behind the tracks. Leaflet paints later additions on top, and coverage
+      // over the paths hides the thing the map is for.
+      layer.eachLayer((l) => l.bringToBack && l.bringToBack());
     }
 
     function nd2AdsbHexColour(hex) {
