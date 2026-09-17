@@ -8496,40 +8496,67 @@
       return [la2 * 180 / Math.PI, ((lo2 * 180 / Math.PI) + 540) % 360 - 180];
     }
 
-    /** The envelope as map geometry.
+    /** The envelope as map shapes: one filled fan per run of bearings that
+     *  have actually been heard on.
      *
-     *  Returns BOTH renderings, because which one is honest depends on how
-     *  much of the circle has been heard on. A filled polygon over a sparse
-     *  envelope draws straight edges between the few bearings that have data,
-     *  cutting across bearings that have none — which is why tracks along a
-     *  perfectly well-covered bearing appeared to fall outside the shape. The
-     *  polar plot already makes this distinction; the map now makes the same
-     *  one, with the same threshold.
+     *  NOT one ring through all 72 bearings. That was the previous attempt and
+     *  it produced the spikes: a bearing with no data has no radius, so it was
+     *  pulled to the receiver, and the polygon then ran from a real reach all
+     *  the way to the centre and back out again. Those long edges cut straight
+     *  through airspace the receiver covers perfectly well, which is why the
+     *  tracks appeared to escape the shape.
      *
-     *  Nulls still pull to the receiver in the polygon case, so a blind lobe
-     *  reads as a bite rather than the ring quietly cutting the corner. */
+     *  A bucket is a five-degree SECTOR, so that is what gets drawn — out along
+     *  one edge, across at its measured range, back down the other. Runs of
+     *  neighbouring buckets are merged into a single fan so there are no seams
+     *  inside a covered region, and a gap is simply absent rather than being
+     *  drawn as a notch. Nothing is claimed about a bearing that has never
+     *  heard anything, which is the whole point. */
     function nd2CoverageRing(site, buckets) {
       if (!site || !Array.isArray(buckets) || !buckets.length) return null;
       const n = buckets.length;
+      const step = 360 / n;
       const centre = [site.lat, site.lon];
-      const ring = [];
-      const spokes = [];
-      let filled = 0;
-      for (let i = 0; i < n; i++) {
-        const km = typeof buckets[i] === 'number' && isFinite(buckets[i]) ? buckets[i] : 0;
-        const bearing = (i + 0.5) * (360 / n);
-        if (km > 0) {
-          filled++;
-          const p = nd2Destination(site.lat, site.lon, bearing, km);
-          ring.push(p);
-          spokes.push([centre, p]);
-        } else {
-          ring.push(centre);
+      const km = buckets.map((v) =>
+        (typeof v === 'number' && isFinite(v) && v > 0) ? v : 0);
+      if (!km.some((v) => v > 0)) return null;
+
+      const edge = (i, r) => nd2Destination(site.lat, site.lon, i * step, r);
+      // The outer boundary of one bucket: a step at its own radius, rather
+      // than a line sloping to its neighbour's.
+      const wedge = (out, i) => { out.push(edge(i, km[i]), edge(i + 1, km[i])); };
+
+      // Every bearing heard on: one closed ring, no centre point at all.
+      if (km.every((v) => v > 0)) {
+        const ring = [];
+        for (let i = 0; i < n; i++) wedge(ring, i);
+        return [ring];
+      }
+
+      // Otherwise walk from a gap so a run cannot be split across the wrap.
+      let start = 0;
+      while (km[start] > 0) start += 1;
+
+      const shapes = [];
+      let run = null;
+      for (let c = 0; c < n; c++) {
+        const i = (start + c) % n;
+        if (km[i] > 0) {
+          if (!run) run = [];
+          run.push(i);
+        } else if (run) {
+          shapes.push(run);
+          run = null;
         }
       }
-      if (!filled) return null;
-      // Same threshold the polar plot uses.
-      return { ring, spokes, sparse: filled / n < 0.45 };
+      if (run) shapes.push(run);
+
+      return shapes.map((r) => {
+        const poly = [centre];
+        for (const i of r) wedge(poly, i);
+        poly.push(centre);
+        return poly;
+      });
     }
 
     let _nd2CoverageOn = false;
@@ -8551,18 +8578,11 @@
       if (_nd2CoverageLayer) { _nd2CoverageLayer.remove(); _nd2CoverageLayer = null; }
       if (!_nd2CoverageOn || !_nd2TrackMap || !_nd2CoverageGeom) return;
 
-      const g = _nd2CoverageGeom;
-      const style = { color: '#c084fc', opacity: 0.75, interactive: false };
       const layer = L.layerGroup();
-      if (g.sparse) {
-        // One line per bearing that has actually been heard on. No fill: there
-        // is nothing to claim about the gaps between them.
-        for (const sp of g.spokes) {
-          L.polyline(sp, { ...style, weight: 1.6 }).addTo(layer);
-        }
-      } else {
-        L.polygon(g.ring, {
-          ...style, weight: 1.5, fillColor: '#c084fc', fillOpacity: 0.07,
+      for (const poly of _nd2CoverageGeom) {
+        L.polygon(poly, {
+          color: '#c084fc', weight: 1, opacity: 0.55,
+          fillColor: '#c084fc', fillOpacity: 0.10, interactive: false,
         }).addTo(layer);
       }
       _nd2CoverageLayer = layer.addTo(_nd2TrackMap);
