@@ -434,7 +434,77 @@ const ESTIMATE_MIN_GS_KT = 40;
  */
 const ESTIMATE_MIN_ABSENT_SEC = 45;
 
-const _lastSeen = new Map<string, { rec: AdsbAircraft; atMs: number }>();
+/**
+ * The running state of each aircraft, which is more than its last record.
+ *
+ * ADS-B sends position, velocity and identity in SEPARATE message types, and a
+ * point query against an aggregator returns whatever it happened to hold at
+ * that instant. So a perfectly healthy aircraft routinely arrives with a
+ * position and nothing else — no altitude, no track, no callsign — which the
+ * map drew as a bare dot labelled with a hex, filling itself in a poll or two
+ * later. That is what "shows as on the ground then starts moving" is: not a
+ * ground record at all, but a record with no velocity yet.
+ *
+ * Every real ADS-B display keeps an assembled state table for exactly this
+ * reason — dump1090's own aircraft.json IS one. This is ours.
+ *
+ * Altitude and velocity carry their OWN observation times, separate from when
+ * a record last arrived: a stale value must age out on the clock of the thing
+ * that was measured, not on the clock of the last packet to mention the
+ * aircraft.
+ */
+interface LastSeen {
+  rec: AdsbAircraft;
+  /** When any record for this hex last arrived. */
+  atMs: number;
+  altFt: number | null;
+  altAtMs: number;
+  gsKt: number | null;
+  trackDeg: number | null;
+  velAtMs: number;
+}
+
+const _lastSeen = new Map<string, LastSeen>();
+
+/**
+ * How long a carried-over altitude or velocity stays usable.
+ *
+ * Generous, because an airborne aircraft transmits both continuously and a gap
+ * this long means the aggregators — not the aircraft — went quiet. Short
+ * enough that a landed aircraft stops claiming a cruise altitude.
+ */
+const CARRY_MAX_SEC = 120;
+
+/**
+ * Fill a fresh record's gaps from what we already knew about that aircraft.
+ *
+ * Identity (callsign, registration, type, category, service tag) is carried
+ * unconditionally: it does not go stale, and losing it mid-flight is what made
+ * a labelled aircraft revert to a bare hex.
+ *
+ * Altitude and velocity are carried only while recent, and never across the
+ * ground boundary in either direction — an aircraft that has just landed must
+ * not keep its cruise altitude, and one just airborne must not inherit zero.
+ */
+function backfillFromState(a: AdsbAircraft, prev: LastSeen, nowMs: number): AdsbAircraft {
+  const out = { ...a };
+  out.callsign = out.callsign ?? prev.rec.callsign;
+  out.reg = out.reg ?? prev.rec.reg;
+  out.type = out.type ?? prev.rec.type;
+  out.category = out.category ?? prev.rec.category;
+  out.esTag = out.esTag ?? prev.rec.esTag;
+
+  if (!out.onGround && !prev.rec.onGround) {
+    if (out.altFt === null && prev.altFt !== null
+        && (nowMs - prev.altAtMs) / 1000 <= CARRY_MAX_SEC) {
+      out.altFt = prev.altFt;
+    }
+    const velFresh = (nowMs - prev.velAtMs) / 1000 <= CARRY_MAX_SEC;
+    if (out.gsKt === null && prev.gsKt !== null && velFresh) out.gsKt = prev.gsKt;
+    if (out.trackDeg === null && prev.trackDeg !== null && velFresh) out.trackDeg = prev.trackDeg;
+  }
+  return out;
+}
 
 /** Nautical miles per degree of latitude. Longitude shrinks by cos(lat). */
 const NM_PER_DEG = 60;
@@ -462,9 +532,22 @@ function deadReckon(
 
 export function applyHoldover(fresh: AdsbAircraft[], nowMs: number): AdsbAircraft[] {
   const out = new Map<string, AdsbAircraft>();
-  for (const a of fresh) {
+  for (const raw of fresh) {
+    const prev = _lastSeen.get(raw.hex);
+    const a = prev ? backfillFromState(raw, prev, nowMs) : raw;
     out.set(a.hex, a);
-    _lastSeen.set(a.hex, { rec: a, atMs: nowMs });
+    // Each measurement keeps the time it was actually OBSERVED, so a value
+    // carried across several polls still expires on its own age rather than
+    // being refreshed by whatever packet happened to arrive next.
+    _lastSeen.set(a.hex, {
+      rec: a,
+      atMs: nowMs,
+      altFt: raw.altFt !== null ? raw.altFt : (prev?.altFt ?? null),
+      altAtMs: raw.altFt !== null ? nowMs : (prev?.altAtMs ?? 0),
+      gsKt: raw.gsKt !== null ? raw.gsKt : (prev?.gsKt ?? null),
+      trackDeg: raw.trackDeg !== null ? raw.trackDeg : (prev?.trackDeg ?? null),
+      velAtMs: (raw.gsKt !== null || raw.trackDeg !== null) ? nowMs : (prev?.velAtMs ?? 0),
+    });
   }
   for (const [hex, h] of _lastSeen) {
     const rec = h.rec;

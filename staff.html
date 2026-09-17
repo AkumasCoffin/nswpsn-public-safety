@@ -7988,30 +7988,54 @@
      * different questions and want different framing: coverage is "how far, on
      * every bearing, over weeks"; tracks are "what crossed in the last eight
      * hours". Drawing the envelope on the map also forced the map to frame the
-     * whole envelope, which squashed the tracks down to a few pixels — the
-     * thing the map is FOR.
+     * whole envelope, which squashed the tracks down to a few pixels.
      *
      * Inline SVG rather than a chart library: feeder.html carries no charting
-     * dependency, and this has to render identically in both pages.
-     *
-     * A bearing nothing was ever heard on is drawn pulled IN to the centre, so
-     * a blocked lobe reads as a bite out of the shape. Interpolating across it
-     * would draw coverage that does not exist. */
-    const ENV_TICKS = [5, 10, 25, 50, 100, 150, 200, 250, 300, 400, 500];
+     * dependency, and this has to render identically in both pages. */
 
-    /** Round a max range up to a tick that divides into readable rings. */
-    function ENV_niceMax(km) {
-      for (const t of ENV_TICKS) {
-        if (km <= t) return t;
+    /** Ring steps, so the labels are always round numbers.
+     *
+     *  Scaling to the max and dividing by four gave rings "every 13 km", which
+     *  is a number nobody can read a distance off. The step is chosen first
+     *  and the outer ring follows from it. */
+    const ENV_STEPS = [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500];
+
+    /** {step, rings, max} for a given furthest range. Four or five rings, so a
+     *  step that fits is always available without stretching the plot. */
+    function ENV_scaleFor(maxKm) {
+      for (const step of ENV_STEPS) {
+        if (step * 5 >= maxKm) {
+          const rings = Math.max(1, Math.ceil(maxKm / step));
+          return { step, rings, max: step * rings };
+        }
       }
-      return Math.ceil(km / 250) * 250;
+      const step = Math.ceil(maxKm / 5 / 500) * 500;
+      return { step, rings: 5, max: step * 5 };
+    }
+
+    /**
+     * How much of the circle has ever been heard on.
+     *
+     * Decides how the shape is drawn. A polygon through mostly-empty bearings
+     * collapses into a star of thin spikes — each measured bearing reaching
+     * out and every neighbour pinned to the centre — which reads as a fault
+     * rather than as a young receiver. Below the threshold the measured
+     * bearings are drawn as spokes instead, which is honest about being sparse
+     * and looks deliberate.
+     */
+    function ENV_filledRatio(buckets) {
+      const n = (buckets || []).length;
+      if (!n) return 0;
+      let got = 0;
+      for (const v of buckets) if (typeof v === 'number' && isFinite(v)) got++;
+      return got / n;
     }
 
     function ENV_polarSvg(buckets, recent, opts) {
       const o = opts || {};
       const size = o.size || 260;
       const c = size / 2;
-      const r = c - 26;                       // room for the km labels
+      const r = c - 24;
       const n = (buckets || []).length || 72;
 
       let maxKm = 0;
@@ -8019,53 +8043,75 @@
         if (typeof v === 'number' && isFinite(v) && v > maxKm) maxKm = v;
       }
       if (maxKm <= 0) return '';
-      const scaleMax = ENV_niceMax(maxKm);
+      const sc = ENV_scaleFor(maxKm);
 
       // Bearing i is clockwise from north; SVG y grows downward, so north is
       // -y and east is +x.
       const pt = (i, km) => {
         const a = ((i + 0.5) * (360 / n) - 90) * Math.PI / 180;
-        const rad = r * Math.max(0, Math.min(1, (km || 0) / scaleMax));
+        const rad = r * Math.max(0, Math.min(1, (km || 0) / sc.max));
         return [c + rad * Math.cos(a), c + rad * Math.sin(a)];
       };
-      const poly = (vals) => (vals || []).map((v, i) => {
-        // Null pulls to the centre — the gap IS the diagnostic.
-        const km = (typeof v === 'number' && isFinite(v)) ? v : 0;
-        const p = pt(i, km);
-        return p[0].toFixed(1) + ',' + p[1].toFixed(1);
-      }).join(' ');
 
       let grid = '';
-      for (let k = 1; k <= 4; k++) {
-        const rr = (r * k) / 4;
+      for (let k = 1; k <= sc.rings; k++) {
+        const rr = (r * k) / sc.rings;
         grid += '<circle cx="' + c + '" cy="' + c + '" r="' + rr.toFixed(1) + '" fill="none" '
-             +  'stroke="rgba(148,163,184,0.18)" stroke-width="1"/>';
-        grid += '<text x="' + (c + 2) + '" y="' + (c - rr + 9).toFixed(1) + '" '
-             +  'fill="#64748b" font-size="8" font-family="system-ui,sans-serif">'
-             +  Math.round((scaleMax * k) / 4) + '</text>';
+             +  'stroke="rgba(148,163,184,0.16)" stroke-width="1"/>';
+        // Only the outermost ring is labelled: four numbers stacked up the
+        // vertical made the middle of the plot busier than the data.
+        if (k === sc.rings) {
+          grid += '<text x="' + (c + 3) + '" y="' + (c - rr + 10).toFixed(1) + '" '
+               +  'fill="#94a3b8" font-size="9" font-family="system-ui,sans-serif">'
+               +  sc.max + ' km</text>';
+        }
       }
-      // Cardinal spokes only: eight would fight the shape.
       for (const d of [[0, -1], [1, 0], [0, 1], [-1, 0]]) {
         grid += '<line x1="' + c + '" y1="' + c + '" x2="' + (c + d[0] * r)
-             +  '" y2="' + (c + d[1] * r) + '" stroke="rgba(148,163,184,0.14)" stroke-width="1"/>';
+             +  '" y2="' + (c + d[1] * r) + '" stroke="rgba(148,163,184,0.12)" stroke-width="1"/>';
       }
       const lbl = (t, x, y, anchor) =>
-        '<text x="' + x + '" y="' + y + '" text-anchor="' + anchor + '" fill="#94a3b8" '
+        '<text x="' + x + '" y="' + y + '" text-anchor="' + anchor + '" fill="#64748b" '
         + 'font-size="9" font-family="system-ui,sans-serif">' + t + '</text>';
-      grid += lbl('N', c, 10, 'middle') + lbl('E', size - 4, c + 3, 'end')
-           +  lbl('S', c, size - 3, 'middle') + lbl('W', 4, c + 3, 'start');
+      grid += lbl('N', c, 11, 'middle') + lbl('E', size - 3, c + 3, 'end')
+           +  lbl('S', c, size - 2, 'middle') + lbl('W', 3, c + 3, 'start');
 
-      let shapes = '<polygon points="' + poly(buckets) + '" fill="rgba(192,132,252,0.18)" '
-                 + 'stroke="#c084fc" stroke-width="1.5"/>';
-      // The last 24 hours over the long envelope: a bearing inside the filled
-      // shape but outside this outline is a lobe that has STOPPED hearing.
-      if (ENV_hasData(recent)) {
-        shapes += '<polygon points="' + poly(recent) + '" fill="none" stroke="#4ade80" '
-               +  'stroke-width="1.5" stroke-dasharray="4 3"/>';
+      const sparse = ENV_filledRatio(buckets) < 0.45;
+
+      const spokes = (vals, color, width) => {
+        let out = '';
+        (vals || []).forEach((v, i) => {
+          if (typeof v !== 'number' || !isFinite(v)) return;
+          const p = pt(i, v);
+          out += '<line x1="' + c + '" y1="' + c + '" x2="' + p[0].toFixed(1)
+              +  '" y2="' + p[1].toFixed(1) + '" stroke="' + color + '" stroke-width="'
+              +  width + '" stroke-linecap="round" opacity="0.85"/>';
+        });
+        return out;
+      };
+      const polygon = (vals, fill, stroke, dash) => {
+        const pts = (vals || []).map((v, i) => {
+          // Null pulls to the centre, so a blocked lobe is a bite out of the
+          // shape rather than a smoothed-over curve.
+          const km = (typeof v === 'number' && isFinite(v)) ? v : 0;
+          const p = pt(i, km);
+          return p[0].toFixed(1) + ',' + p[1].toFixed(1);
+        }).join(' ');
+        return '<polygon points="' + pts + '" fill="' + fill + '" stroke="' + stroke
+             + '" stroke-width="1.5"' + (dash ? ' stroke-dasharray="4 3"' : '') + '/>';
+      };
+
+      let shapes;
+      if (sparse) {
+        shapes = spokes(buckets, '#c084fc', 2.5);
+        if (ENV_hasData(recent)) shapes += spokes(recent, '#4ade80', 1.2);
+      } else {
+        shapes = polygon(buckets, 'rgba(192,132,252,0.16)', '#c084fc', false);
+        if (ENV_hasData(recent)) shapes += polygon(recent, 'none', '#4ade80', true);
       }
 
       return '<svg viewBox="0 0 ' + size + ' ' + size + '" width="' + size + '" height="'
-           + size + '" role="img" aria-label="Coverage by bearing, to ' + scaleMax + ' km">'
+           + size + '" role="img" aria-label="Coverage by bearing, to ' + sc.max + ' km">'
            + grid + shapes + '</svg>';
     }
 
@@ -8075,7 +8121,7 @@
       for (const v of (buckets || [])) {
         if (typeof v === 'number' && isFinite(v) && v > m) m = v;
       }
-      return m > 0 ? ENV_niceMax(m) : 0;
+      return m > 0 ? ENV_scaleFor(m).max : 0;
     }
 
     /** True when at least one bearing has ever been heard on. */
@@ -8278,7 +8324,7 @@
         .concat(cov.daysCovered < 2
           ? '<div style="color:#fbbf24;">Too little history yet to judge this</div>'
           : [])
-        .concat('<div>Rings every ' + Math.round(ENV_scaleKm(cov.buckets) / 4) + ' km</div>');
+        .concat('<div>Outer ring ' + ENV_scaleKm(cov.buckets) + ' km</div>');
       return '<div class="nd2-polar-wrap">' + svg
            + '<div class="nd2-polar-legend">' + legend.join('') + '</div></div>';
     }

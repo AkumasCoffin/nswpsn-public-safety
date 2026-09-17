@@ -143,6 +143,89 @@ describe('the projection itself', () => {
   });
 });
 
+describe('an aircraft keeps what we already knew about it', () => {
+  // The reported fault: aircraft appearing as a bare dot with a hex for a
+  // label and no altitude, then "starting to move" a poll or two later.
+  //
+  // Nothing was wrong with them. ADS-B sends position, velocity and identity
+  // in separate message types, and a point query returns whatever the
+  // aggregator held at that instant — so a position-only record is routine.
+  // Drawing it as though we had learned the aircraft has no altitude and no
+  // heading was the mistake.
+
+  it('carries altitude and velocity into a position-only record', async () => {
+    await poll(T0, [flying({ alt_baro: 34000, gs: 450, track: 90 })]);
+    // The next poll returns a position and nothing else.
+    const snap = await poll(T0 + 15_000, [{ hex: 'abc123', ...POS, seen_pos: 0 }]);
+    const rec = snap.aircraft.find((a) => a.hex === 'abc123')!;
+    expect(rec.altFt).toBe(34000);
+    expect(rec.gsKt).toBe(450);
+    expect(rec.trackDeg).toBe(90);
+    expect(rec.estimated).toBe(false);   // a real position, just a sparse one
+  });
+
+  it('carries identity, so a named flight does not revert to a hex', async () => {
+    await poll(T0, [flying({ flight: 'RSCU533', r: 'VH-XIH', t: 'A139' })]);
+    const snap = await poll(T0 + 15_000, [{ hex: 'abc123', ...POS, seen_pos: 0 }]);
+    const rec = snap.aircraft.find((a) => a.hex === 'abc123')!;
+    expect(rec.callsign).toBe('RSCU533');
+    expect(rec.reg).toBe('VH-XIH');
+    expect(rec.type).toBe('A139');
+  });
+
+  it('prefers a fresh value over a carried one', async () => {
+    await poll(T0, [flying({ alt_baro: 34000, gs: 450 })]);
+    const snap = await poll(T0 + 15_000, [flying({ alt_baro: 12000, gs: 200 })]);
+    const rec = snap.aircraft.find((a) => a.hex === 'abc123')!;
+    expect(rec.altFt).toBe(12000);
+    expect(rec.gsKt).toBe(200);
+  });
+
+  it('lets a carried value expire on its OWN age', async () => {
+    // The subtle one. Position-only records keep arriving, so "when we last
+    // heard from this aircraft" stays fresh forever — the altitude has to age
+    // out on the clock of when it was MEASURED, or a stale figure is renewed
+    // indefinitely by packets that never mention it.
+    await poll(T0, [flying({ alt_baro: 34000 })]);
+    for (let t = 15_000; t <= 105_000; t += 15_000) {
+      await poll(T0 + t, [{ hex: 'abc123', ...POS, seen_pos: 0 }]);
+    }
+    expect(
+      (await poll(T0 + 110_000, [{ hex: 'abc123', ...POS, seen_pos: 0 }]))
+        .aircraft.find((a) => a.hex === 'abc123')!.altFt,
+    ).toBe(34000);
+    const after = await poll(T0 + 130_000, [{ hex: 'abc123', ...POS, seen_pos: 0 }]);
+    expect(after.aircraft.find((a) => a.hex === 'abc123')!.altFt).toBeNull();
+  });
+
+  it('never carries an altitude across the ground boundary', async () => {
+    // A landed aircraft must not keep claiming a cruise altitude.
+    await poll(T0, [flying({ alt_baro: 34000, gs: 450, track: 90 })]);
+    const snap = await poll(T0 + 15_000, [
+      { hex: 'abc123', ...POS, seen_pos: 0, alt_baro: 'ground' },
+    ]);
+    const rec = snap.aircraft.find((a) => a.hex === 'abc123')!;
+    expect(rec.onGround).toBe(true);
+    expect(rec.altFt).toBeNull();
+    expect(rec.gsKt).toBeNull();
+  });
+
+  it('does not inherit anything from a previously-grounded record', async () => {
+    await poll(T0, [{ hex: 'abc123', ...POS, seen_pos: 0, alt_baro: 'ground', gs: 5 }]);
+    const snap = await poll(T0 + 15_000, [{ hex: 'abc123', ...POS, seen_pos: 0 }]);
+    const rec = snap.aircraft.find((a) => a.hex === 'abc123')!;
+    expect(rec.altFt).toBeNull();
+    expect(rec.gsKt).toBeNull();
+  });
+
+  it('leaves a first sighting exactly as it arrived', async () => {
+    const snap = await poll(T0, [{ hex: 'new001', ...POS, seen_pos: 0 }]);
+    const rec = snap.aircraft.find((a) => a.hex === 'new001')!;
+    expect(rec.altFt).toBeNull();
+    expect(rec.callsign).toBeNull();
+  });
+});
+
 describe('a gap in reporting is not evidence the aircraft is gone', () => {
   // The reported fault: aircraft showing as estimated over ground with good
   // coverage. Absence from ONE poll happens constantly for benign reasons —
