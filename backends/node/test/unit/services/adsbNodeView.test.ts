@@ -136,6 +136,62 @@ describe('adsbNodeView', () => {
   });
 });
 
+describe('Recently heard survives a restart too', () => {
+  // The gap left by the first pass at this: the TRACK MAP was served from disk
+  // but "Recently heard" still read memory alone, so it went on claiming one
+  // aircraft after a restart while the map beside it showed the full window.
+  // Both are derived from the same traces and both had to be fixed.
+  const HOUR_UTC2 = Date.UTC(2026, 8, 17, 4, 0, 0);
+  beforeEach(() => {
+    nodeRow = { ...ROW_NODE };
+    storedRows = [];
+    storedFails = false;
+    poolAvailable = true;
+  });
+
+  const storedRow = (hex: string, offs: number[], reports: number) => ({
+    hex, callsign: null, hour_bucket: new Date(HOUR_UTC2),
+    points: offs.map((o, i) => [o, -33 - i * 0.1, 151 + i * 0.1, null]),
+    reports, last_alt_ft: 30000, max_alt_ft: 34000,
+    first_seen: new Date(HOUR_UTC2 + offs[0]! * 1000),
+    last_seen: new Date(HOUR_UTC2 + offs[offs.length - 1]! * 1000),
+  });
+
+  it('lists aircraft heard before the process started', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(HOUR_UTC2 + 30 * 60_000));
+    storedRows = [
+      storedRow('aaa111', [60, 600], 42),
+      storedRow('bbb222', [120, 700], 17),
+    ];
+    const v = await adsbNodeView('n1', '24h');
+    expect(v!.recent).toHaveLength(2);
+    const a = v!.recent.find((x) => x.hex === 'aaa111')!;
+    expect(a.reports).toBe(42);
+    expect(a.maxAltFt).toBe(34000);
+    expect(a.points).toBe(2);
+    vi.useRealTimers();
+  });
+
+  it('orders by last heard, newest first', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(HOUR_UTC2 + 30 * 60_000));
+    storedRows = [
+      storedRow('older0', [60, 120], 3),
+      storedRow('newer0', [60, 900], 4),
+    ];
+    const v = await adsbNodeView('n1', '24h');
+    expect(v!.recent.map((x) => x.hex)).toEqual(['newer0', 'older0']);
+    vi.useRealTimers();
+  });
+
+  it('still answers when the stored read fails', async () => {
+    storedFails = true;
+    const v = await adsbNodeView('n1', '24h');
+    expect(Array.isArray(v!.recent)).toBe(true);
+  });
+});
+
 describe('adsbNodeTracks survives a restart', () => {
   // The reported fault: a receiver that had heard sixty-odd aircraft in a day
   // showed ONE on its eight-hour map, because the traces were memory-only and
@@ -151,7 +207,10 @@ describe('adsbNodeTracks survives a restart', () => {
   const HOUR_UTC = Date.UTC(2026, 8, 17, 4, 0, 0);
   const stored = (hex: string, pts: Array<[number, number, number]>) => ({
     hex, callsign: null, hour_bucket: new Date(HOUR_UTC),
-    points: pts.map((p) => [p[0], p[1], p[2], 30000]),
+    points: pts.map((p) => [p[0], p[1], p[2], null]),
+    reports: 9, last_alt_ft: 30000, max_alt_ft: 34000,
+    first_seen: new Date(HOUR_UTC + pts[0]![0] * 1000),
+    last_seen: new Date(HOUR_UTC + pts[pts.length - 1]![0] * 1000),
   });
 
   it('serves tracks from disk when memory holds none', async () => {

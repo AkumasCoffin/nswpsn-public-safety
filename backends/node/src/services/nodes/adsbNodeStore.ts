@@ -458,7 +458,12 @@ export interface NodeArchivableTrack {
   nodeId: string;
   hex: string;
   callsign: string | null;
-  /** [epochMs, lat, lon, altFt|null], oldest first. */
+  reports: number;
+  lastAltFt: number | null;
+  maxAltFt: number | null;
+  /** [epochMs, lat, lon, null], oldest first. The fourth slot keeps the shape
+   *  of the global archive's points and is always null: a Trace holds altitude
+   *  as two scalars, not per point. */
   points: ReadonlyArray<[number, number, number, number | null]>;
 }
 
@@ -476,9 +481,15 @@ export function nodeTracesForArchive(): NodeArchivableTrack[] {
       if (tr.t.length === 0) continue;
       const points: Array<[number, number, number, number | null]> = [];
       for (let i = 0; i < tr.t.length; i += 1) {
-        points.push([tr.t[i]!, tr.lat[i]!, tr.lon[i]!, tr.lastAltFt]);
+        // null, not tr.lastAltFt: that is the CURRENT altitude, and stamping
+        // it onto every historical point would claim the aircraft flew the
+        // whole track at whatever height it is at now.
+        points.push([tr.t[i]!, tr.lat[i]!, tr.lon[i]!, null]);
       }
-      out.push({ nodeId, hex, callsign: tr.callsign, points });
+      out.push({
+        nodeId, hex, callsign: tr.callsign, points,
+        reports: tr.reports, lastAltFt: tr.lastAltFt, maxAltFt: tr.maxAltFt,
+      });
     }
   }
   return out;

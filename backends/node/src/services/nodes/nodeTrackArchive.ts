@@ -51,7 +51,8 @@ export async function flushNodeTracks(
   if (!pool) return 0;
 
   interface Row { nodeId: string; hex: string; callsign: string | null;
-    hourMs: number; firstMs: number; lastMs: number;
+    hourMs: number; firstMs: number; lastMs: number; reports: number;
+    lastAltFt: number | null; maxAltFt: number | null;
     points: Array<[number, number, number, number | null]>; }
   const rows: Row[] = [];
   for (const t of tracks) {
@@ -59,6 +60,7 @@ export async function flushNodeTracks(
       rows.push({
         nodeId: t.nodeId, hex: t.hex, callsign: t.callsign,
         hourMs: s.hourMs, firstMs: s.firstMs, lastMs: s.lastMs, points: s.points,
+        reports: t.reports, lastAltFt: t.lastAltFt, maxAltFt: t.maxAltFt,
       });
     }
   }
@@ -71,14 +73,16 @@ export async function flushNodeTracks(
     const tuples = batch.map((r) => {
       const b = values.length;
       values.push(r.nodeId, r.hex, iso(r.hourMs), iso(r.firstMs), iso(r.lastMs),
-        r.callsign, JSON.stringify(r.points));
+        r.callsign, r.reports, r.lastAltFt, r.maxAltFt, JSON.stringify(r.points));
       return `($${b + 1}, $${b + 2}, $${b + 3}::timestamptz, $${b + 4}::timestamptz,`
-        + ` $${b + 5}::timestamptz, $${b + 6}, $${b + 7}::jsonb)`;
+        + ` $${b + 5}::timestamptz, $${b + 6}, $${b + 7}, $${b + 8}, $${b + 9},`
+        + ` $${b + 10}::jsonb)`;
     });
     try {
       await pool.query(
         `INSERT INTO node_adsb_tracks
-           (node_id, hex, hour_bucket, first_seen, last_seen, callsign, points)
+           (node_id, hex, hour_bucket, first_seen, last_seen, callsign,
+            reports, last_alt_ft, max_alt_ft, points)
          VALUES ${tuples.join(', ')}
          ON CONFLICT (node_id, hex, hour_bucket) DO UPDATE SET
            points = CASE
@@ -86,9 +90,15 @@ export async function flushNodeTracks(
              THEN node_adsb_tracks.points || EXCLUDED.points
              ELSE EXCLUDED.points
            END,
-           first_seen = LEAST(node_adsb_tracks.first_seen, EXCLUDED.first_seen),
-           last_seen  = GREATEST(node_adsb_tracks.last_seen, EXCLUDED.last_seen),
-           callsign   = COALESCE(EXCLUDED.callsign, node_adsb_tracks.callsign)`,
+           first_seen  = LEAST(node_adsb_tracks.first_seen, EXCLUDED.first_seen),
+           last_seen   = GREATEST(node_adsb_tracks.last_seen, EXCLUDED.last_seen),
+           callsign    = COALESCE(EXCLUDED.callsign, node_adsb_tracks.callsign),
+           -- Counters only ever climb, and the peak is a peak.
+           reports     = GREATEST(COALESCE(node_adsb_tracks.reports, 0),
+                                  COALESCE(EXCLUDED.reports, 0)),
+           last_alt_ft = COALESCE(EXCLUDED.last_alt_ft, node_adsb_tracks.last_alt_ft),
+           max_alt_ft  = GREATEST(COALESCE(node_adsb_tracks.max_alt_ft, EXCLUDED.max_alt_ft),
+                                  COALESCE(EXCLUDED.max_alt_ft, node_adsb_tracks.max_alt_ft))`,
         values,
       );
       written += batch.length;
@@ -117,6 +127,13 @@ export interface StoredTrack {
   callsign: string | null;
   /** [epochMs, lat, lon] in time order, clipped to the window. */
   points: Array<[number, number, number]>;
+  /** The scalars "Recently heard" is built from, so that table survives a
+   *  restart too — it reads the same traces the map does. */
+  reports: number;
+  lastAltFt: number | null;
+  maxAltFt: number | null;
+  firstMs: number;
+  lastMs: number;
 }
 
 /**
@@ -138,8 +155,11 @@ export async function storedNodeTracks(
   const hourFrom = Math.floor(t0 / HOUR_MS) * HOUR_MS;
 
   const r = await pool.query<{ hex: string; callsign: string | null;
-    hour_bucket: Date; points: unknown }>(
-    `SELECT hex, callsign, hour_bucket, points
+    hour_bucket: Date; points: unknown; reports: number | null;
+    last_alt_ft: number | null; max_alt_ft: number | null;
+    first_seen: Date; last_seen: Date }>(
+    `SELECT hex, callsign, hour_bucket, points, reports, last_alt_ft, max_alt_ft,
+            first_seen, last_seen
        FROM node_adsb_tracks
       WHERE node_id = $1
         AND hour_bucket >= $2::timestamptz
@@ -153,11 +173,25 @@ export async function storedNodeTracks(
     const hourMs = row.hour_bucket.getTime();
     let track = byHex.get(row.hex);
     if (!track) {
-      track = { hex: row.hex, callsign: row.callsign, points: [] };
+      track = {
+        hex: row.hex, callsign: row.callsign, points: [],
+        reports: 0, lastAltFt: null, maxAltFt: null,
+        firstMs: row.first_seen.getTime(), lastMs: row.last_seen.getTime(),
+      };
       byHex.set(row.hex, track);
     } else if (!track.callsign && row.callsign) {
       track.callsign = row.callsign;
     }
+    // Rows arrive hour by hour, so an aircraft heard across three hours has
+    // its counters summed and its span widened rather than overwritten.
+    track.reports += Number(row.reports ?? 0);
+    if (row.last_alt_ft !== null) track.lastAltFt = row.last_alt_ft;
+    if (row.max_alt_ft !== null
+        && (track.maxAltFt === null || row.max_alt_ft > track.maxAltFt)) {
+      track.maxAltFt = row.max_alt_ft;
+    }
+    track.firstMs = Math.min(track.firstMs, row.first_seen.getTime());
+    track.lastMs = Math.max(track.lastMs, row.last_seen.getTime());
     const raw = Array.isArray(row.points) ? row.points : [];
     for (const p of raw as Array<[number, number, number, number | null]>) {
       const tMs = hourMs + p[0] * 1000;

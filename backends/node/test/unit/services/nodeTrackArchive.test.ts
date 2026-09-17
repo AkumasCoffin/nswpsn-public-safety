@@ -31,7 +31,7 @@ const track = (
   nodeId: string, hex: string,
   points: Array<[number, number, number, number | null]>,
   callsign: string | null = null,
-) => ({ nodeId, hex, callsign, points });
+) => ({ nodeId, hex, callsign, points, reports: 12, lastAltFt: 30000, maxAltFt: 34000 });
 
 beforeEach(() => {
   queryMock.mockReset();
@@ -53,7 +53,12 @@ describe('writing', () => {
     expect(values[0]).toBe('node-a');
     expect(values[1]).toBe('abc123');
     expect(values[5]).toBe('QFA1');
-    expect(JSON.parse(values[6] as string)).toEqual([
+    expect(values[6]).toBe(12);                     // reports
+    expect(values[7]).toBe(30000);                  // last_alt_ft
+    expect(values[8]).toBe(34000);                  // max_alt_ft
+    // Altitude is a per-hour scalar, so the points carry null rather than
+    // stamping the current altitude across the whole track.
+    expect(JSON.parse(values[9] as string)).toEqual([
       [60, -33, 151, 30000], [120, -33.1, 151.1, 30000],
     ]);
   });
@@ -67,7 +72,7 @@ describe('writing', () => {
     ], H0 + 120_000);
     const values = queryMock.mock.calls[0]![1] as unknown[];
     expect(values[0]).toBe('node-a');
-    expect(values[7]).toBe('node-b');
+    expect(values[10]).toBe('node-b');   // ten columns per row
   });
 
   it('splits a flight across the hour boundary', async () => {
@@ -121,8 +126,12 @@ describe('writing', () => {
 describe('reading back', () => {
   const row = (hex: string, hourMs: number,
     points: Array<[number, number, number, number | null]>,
-    callsign: string | null = null) =>
-    ({ hex, callsign, hour_bucket: new Date(hourMs), points });
+    callsign: string | null = null) => ({
+    hex, callsign, hour_bucket: new Date(hourMs), points,
+    reports: 5, last_alt_ft: 30000, max_alt_ft: 34000,
+    first_seen: new Date(hourMs + (points[0]?.[0] ?? 0) * 1000),
+    last_seen: new Date(hourMs + (points[points.length - 1]?.[0] ?? 0) * 1000),
+  });
 
   it('bounds on the hour first, then the window', async () => {
     await storedNodeTracks('node-a', 480, H0 + 30 * 60_000);

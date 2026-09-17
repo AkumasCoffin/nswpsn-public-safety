@@ -18,10 +18,15 @@ import { log } from '../../lib/log.js';
 import { hub } from './hub.js';
 import { adsbCoverageFor, type CoverageView } from './adsbCoverage.js';
 import { storedNodeTracks } from './nodeTrackArchive.js';
+
+/** The trace window, in minutes — the span both the map and "Recently heard"
+ *  describe as "the last 8 hours". */
+const TRACE_WINDOW_MINUTES = 480;
 import { DATA_RETENTION_DAYS } from '../../lib/retention.js';
 import {
   nodeAdsbTraces,
   nodeAdsbRecentAircraft,
+  ADSB_RECENT_MAX,
   nodeAdsbObservedRangeKm,
   type NodeTrace,
   type NodeRecentAircraft,
@@ -107,6 +112,51 @@ export interface AdsbNodeView {
    * adsbNodeStore.
    */
   recent: NodeRecentAircraft[];
+}
+
+/**
+ * What this receiver recently heard, from memory AND from disk.
+ *
+ * "Recently heard" reads the same traces the track map does, so it was emptied
+ * by a restart for the same reason — and fixing only the map would have left
+ * the table beside it still claiming one aircraft.
+ *
+ * Memory wins for an aircraft in both: it holds the same history plus whatever
+ * has arrived since the last flush.
+ */
+async function recentForNode(nodeId: string): Promise<NodeRecentAircraft[]> {
+  const live = nodeAdsbRecentAircraft(nodeId, ADSB_RECENT_MAX);
+  let stored: Awaited<ReturnType<typeof storedNodeTracks>> = [];
+  try {
+    stored = await storedNodeTracks(nodeId, TRACE_WINDOW_MINUTES);
+  } catch (err) {
+    // Losing the older half costs history, not the table.
+    log.debug({ err, nodeId }, 'stored recent aircraft unavailable');
+  }
+  if (stored.length === 0) return live.slice(0, VIEW_RECENT_LIMIT);
+
+  const byHex = new Map<string, NodeRecentAircraft>();
+  for (const s of stored) {
+    byHex.set(s.hex, {
+      hex: s.hex,
+      callsign: s.callsign,
+      firstMs: s.firstMs,
+      lastMs: s.lastMs,
+      points: s.points.length,
+      reports: s.reports,
+      lastAltFt: s.lastAltFt,
+      maxAltFt: s.maxAltFt,
+    });
+  }
+  for (const l of live) {
+    const prev = byHex.get(l.hex);
+    // First-heard comes from whichever source saw it earlier: the stored rows
+    // reach back before this process started.
+    byHex.set(l.hex, prev ? { ...l, firstMs: Math.min(prev.firstMs, l.firstMs) } : l);
+  }
+  return Array.from(byHex.values())
+    .sort((a, b) => b.lastMs - a.lastMs)
+    .slice(0, VIEW_RECENT_LIMIT);
 }
 
 /**
@@ -214,7 +264,7 @@ export async function adsbNodeView(
       tracksMax: numOrNull(t?.tracks_max),
       daysReporting: num(t?.days),
     },
-    recent: nodeAdsbRecentAircraft(nodeId, VIEW_RECENT_LIMIT),
+    recent: await recentForNode(nodeId),
     days: seriesQ.rows.map((r) => ({
       day: r.day,
       snapshots: num(r.snapshots),

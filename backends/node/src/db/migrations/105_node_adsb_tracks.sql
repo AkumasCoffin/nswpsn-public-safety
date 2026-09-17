@@ -28,10 +28,28 @@ CREATE TABLE IF NOT EXISTS node_adsb_tracks (
   first_seen  TIMESTAMPTZ NOT NULL,
   last_seen   TIMESTAMPTZ NOT NULL,
   callsign    TEXT,
-  -- [[secondsIntoTheHour, lat, lon, altFt|null], ...] in time order.
+  -- How many uploads this aircraft appeared in during the hour, including the
+  -- ones the decimation declines to store as points. The "how solidly was it
+  -- held" signal a point count cannot give.
+  reports     integer,
+  -- Altitude is a per-HOUR scalar, not per point. The in-memory trace keeps
+  -- lat/lon/time as parallel arrays and altitude as two scalars, deliberately
+  -- — a fourth array would be 4000 aircraft x 240 altitudes stored to render
+  -- one number per row of a table. The track map colours by aircraft, not by
+  -- altitude, so nothing needs it per point.
+  last_alt_ft real,
+  max_alt_ft  real,
+  -- [[secondsIntoTheHour, lat, lon, null], ...] in time order. The fourth
+  -- slot keeps the shape of the global archive's points; it is always null
+  -- here, for the reason above.
   points      JSONB       NOT NULL,
   PRIMARY KEY (node_id, hex, hour_bucket)
 );
+
+-- Idempotent, in case this migration already ran before the columns existed.
+ALTER TABLE node_adsb_tracks ADD COLUMN IF NOT EXISTS reports     integer;
+ALTER TABLE node_adsb_tracks ADD COLUMN IF NOT EXISTS last_alt_ft real;
+ALTER TABLE node_adsb_tracks ADD COLUMN IF NOT EXISTS max_alt_ft  real;
 
 -- The only read: "this receiver's tracks over the last N hours".
 CREATE INDEX IF NOT EXISTS idx_node_adsb_tracks_node_hour
