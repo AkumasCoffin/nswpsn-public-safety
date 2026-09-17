@@ -367,6 +367,23 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
         log.warn({ err: (err as Error).message }, 'cleanup: adsb-coverage prune failed');
       }
 
+      // 2c-quater. Prune per-receiver tracks (migration 105), on the same
+      // window as everything else.
+      try {
+        const ntDays = Number.isFinite(retentionDays) ? retentionDays : DEFAULT_RETENTION_DAYS;
+        const r = await client.query(
+          `DELETE FROM node_adsb_tracks
+            WHERE hour_bucket < (NOW() - ($1 || ' days')::interval)`,
+          [String(ntDays)],
+        );
+        if ((r.rowCount ?? 0) > 0) {
+          rowsDeleted += r.rowCount ?? 0;
+          log.info({ rows: r.rowCount }, 'cleanup: pruned node_adsb_tracks');
+        }
+      } catch (err) {
+        log.warn({ err: (err as Error).message }, 'cleanup: node-tracks prune failed');
+      }
+
       // 2d. Prune archive_*_latest sidecar entries we haven't seen in
       // a poll for longer than the retention window. Pruning by
       // last_seen_at (NOT latest_fetched_at) is intentional: with the

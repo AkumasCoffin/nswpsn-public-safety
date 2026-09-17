@@ -14,8 +14,10 @@
  * the logic.
  */
 import { getPool } from '../../db/pool.js';
+import { log } from '../../lib/log.js';
 import { hub } from './hub.js';
 import { adsbCoverageFor, type CoverageView } from './adsbCoverage.js';
+import { storedNodeTracks } from './nodeTrackArchive.js';
 import { DATA_RETENTION_DAYS } from '../../lib/retention.js';
 import {
   nodeAdsbTraces,
@@ -267,6 +269,37 @@ export async function adsbNodeTracks(
 
   const t = nodeAdsbTraces(nodeId, clamped);
 
+  // The tracks were memory-only, so a deploy emptied the eight-hour window and
+  // a receiver that had heard sixty aircraft that day showed one. What is on
+  // disk covers everything up to the last flush — including before a restart —
+  // and memory covers the current minute, so the answer is the union.
+  let merged = t.traces;
+  let aircraft = t.aircraft;
+  let points = t.points;
+  try {
+    const stored = await storedNodeTracks(nodeId, clamped);
+    if (stored.length > 0) {
+      const byHex = new Map<string, NodeTrace>();
+      for (const s of stored) {
+        byHex.set(s.hex, {
+          hex: s.hex,
+          callsign: s.callsign,
+          points: s.points.map((p) => [p[1], p[2]] as [number, number]),
+        });
+      }
+      // Memory wins for an aircraft in both: it is the same data, plus
+      // whatever has arrived since the last flush.
+      for (const live of t.traces) byHex.set(live.hex, live);
+      merged = Array.from(byHex.values()).filter((x) => x.points.length >= 2);
+      aircraft = byHex.size;
+      points = 0;
+      for (const x of byHex.values()) points += x.points.length;
+    }
+  } catch (err) {
+    // A read failure costs the older half of the picture, not the view.
+    log.debug({ err, nodeId }, 'stored node tracks unavailable');
+  }
+
   const pool = await getPool();
   let site: AdsbNodeTracks['site'] = null;
   if (pool) {
@@ -297,9 +330,9 @@ export async function adsbNodeTracks(
     nodeId,
     site,
     windowMinutes: t.windowMinutes,
-    aircraft: t.aircraft,
-    points: t.points,
-    traces: t.traces,
+    aircraft,
+    points,
+    traces: merged,
     coverage,
   };
 }

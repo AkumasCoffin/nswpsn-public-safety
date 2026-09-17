@@ -38,6 +38,7 @@ import {
   recordAdsbAuthFailure,
 } from '../services/nodes/adsbNodeStore.js';
 import { foldCoverage } from '../services/nodes/adsbCoverage.js';
+import { maybeFlushNodeTracks } from '../services/nodes/nodeTrackArchive.js';
 import { normalizeNodeUpload } from '../sources/adsb.js';
 import {
   recordActivityEvents,
@@ -1078,6 +1079,10 @@ nodeIngestRouter.post('/api/node-ingest/adsb-upload', async (c) => {
   const records = normalizeNodeUpload(
     parsed, adsbNodeSourceId(r.nodeId, nodeRow?.name ?? null));
   recordNodeAdsbReception(r.nodeId, records, rangeKm);
+  // Persist the traces so the eight-hour map survives a restart. Rate-limits
+  // itself to a minute, and is driven from here so it can only ever read
+  // traces this upload has finished writing.
+  maybeFlushNodeTracks();
 
   // 6. Feed gate — when off the node stays connected and counted, and its own
   //    Data tab stays complete, but nothing it hears reaches the live map.

@@ -24,6 +24,11 @@ let nodeRow: Record<string, unknown> | undefined = { ...ROW_NODE };
 let totalsRow: Record<string, unknown> | undefined = { ...ROW_TOTALS };
 let dayRows = ROWS_DAYS;
 let poolAvailable = true;
+/** Rows node_adsb_tracks returns — the half of the picture that outlives a
+ *  restart. Empty unless a test is about the merge. */
+let storedRows: Array<Record<string, unknown>> = [];
+/** Make the stored-track read throw, to prove the view survives losing it. */
+let storedFails = false;
 
 vi.mock('../../../src/db/pool.js', () => ({
   getPool: async () =>
@@ -41,6 +46,11 @@ vi.mock('../../../src/db/pool.js', () => ({
               return { rows: totalsRow ? [totalsRow] : [] };
             }
             if (s.includes('to_char(day')) return { rows: dayRows };
+            if (s.includes('FROM node_adsb_tracks')) {
+              if (storedFails) throw new Error('relation missing');
+              return { rows: storedRows };
+            }
+            if (s.includes('FROM node_adsb_coverage')) return { rows: [] };
             throw new Error('unexpected SQL: ' + s.slice(0, 60));
           },
         }
@@ -61,6 +71,8 @@ describe('adsbNodeView', () => {
     nodeRow = { ...ROW_NODE };
     totalsRow = { ...ROW_TOTALS };
     dayRows = ROWS_DAYS;
+    storedRows = [];
+    storedFails = false;
     poolAvailable = true;
   });
 
@@ -121,6 +133,58 @@ describe('adsbNodeView', () => {
     // Formatted in SQL precisely so the server's timezone cannot shift them.
     const v = await adsbNodeView('n1', '7d');
     expect(v!.days.map((d) => d.day)).toEqual(['2026-09-15', '2026-09-16']);
+  });
+});
+
+describe('adsbNodeTracks survives a restart', () => {
+  // The reported fault: a receiver that had heard sixty-odd aircraft in a day
+  // showed ONE on its eight-hour map, because the traces were memory-only and
+  // every deploy emptied them. The coverage envelope beside it was persisted
+  // and looked healthy, which made the map read as broken rather than young.
+  beforeEach(() => {
+    nodeRow = { ...ROW_NODE };
+    storedRows = [];
+    storedFails = false;
+    poolAvailable = true;
+  });
+
+  const HOUR_UTC = Date.UTC(2026, 8, 17, 4, 0, 0);
+  const stored = (hex: string, pts: Array<[number, number, number]>) => ({
+    hex, callsign: null, hour_bucket: new Date(HOUR_UTC),
+    points: pts.map((p) => [p[0], p[1], p[2], 30000]),
+  });
+
+  it('serves tracks from disk when memory holds none', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(HOUR_UTC + 30 * 60_000));
+    storedRows = [
+      stored('aaa111', [[60, -33.0, 151.0], [600, -33.2, 151.2]]),
+      stored('bbb222', [[120, -34.0, 152.0], [700, -34.2, 152.2]]),
+    ];
+    const t = await adsbNodeTracks('n1', 480);
+    expect(t.aircraft).toBe(2);
+    expect(t.traces).toHaveLength(2);
+    expect(t.points).toBe(4);
+    vi.useRealTimers();
+  });
+
+  it('still answers when the stored read fails', async () => {
+    // Losing the older half of the picture must not lose the view.
+    storedFails = true;
+    const t = await adsbNodeTracks('n1', 480);
+    expect(t.site).not.toBeNull();
+    expect(Array.isArray(t.traces)).toBe(true);
+  });
+
+  it('drops a stored track too short to draw', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(HOUR_UTC + 30 * 60_000));
+    storedRows = [stored('aaa111', [[60, -33.0, 151.0]])];
+    const t = await adsbNodeTracks('n1', 480);
+    // Counted, because it was heard — but a single point is a dot, not a path.
+    expect(t.aircraft).toBe(1);
+    expect(t.traces).toHaveLength(0);
+    vi.useRealTimers();
   });
 });
 

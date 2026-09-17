@@ -453,6 +453,37 @@ export function nodeAdsbTraces(
   return { traces: out, aircraft, points, windowMinutes: minutes };
 }
 
+/** One node's raw trace, for services/nodes/nodeTrackArchive.ts. */
+export interface NodeArchivableTrack {
+  nodeId: string;
+  hex: string;
+  callsign: string | null;
+  /** [epochMs, lat, lon, altFt|null], oldest first. */
+  points: ReadonlyArray<[number, number, number, number | null]>;
+}
+
+/**
+ * Every node's live traces, for persistence.
+ *
+ * Exposed here rather than exporting the map itself so the buffer stays owned
+ * by this module — the archive reads, it never appends or prunes, and the
+ * decimation rules stay in one place.
+ */
+export function nodeTracesForArchive(): NodeArchivableTrack[] {
+  const out: NodeArchivableTrack[] = [];
+  for (const [nodeId, byHex] of traces) {
+    for (const [hex, tr] of byHex) {
+      if (tr.t.length === 0) continue;
+      const points: Array<[number, number, number, number | null]> = [];
+      for (let i = 0; i < tr.t.length; i += 1) {
+        points.push([tr.t[i]!, tr.lat[i]!, tr.lon[i]!, tr.lastAltFt]);
+      }
+      out.push({ nodeId, hex, callsign: tr.callsign, points });
+    }
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Recent aircraft (what this receiver actually heard)
 // ---------------------------------------------------------------------------
