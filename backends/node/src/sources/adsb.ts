@@ -324,17 +324,68 @@ export function mergeAircraft(records: AdsbAircraft[]): AdsbAircraft[] {
  * and queue delay are added here. Without that, a snapshot delayed by a retry
  * would present minute-old positions as fresh and beat a genuinely current
  * aggregator record in the merge.
+ *
+ * The delay is measured against the NODE'S OWN CLOCK, so the raw difference is
+ * transit plus however far that clock is out — see nodeTransitSec.
  */
+/** Recent (backendNow - nodeAt) deltas per node, newest last. */
+const _nodeClockDeltas = new Map<string, number[]>();
+
+/** How many uploads the clock estimate looks back over. At one upload every
+ *  five seconds this is a few minutes — long enough to be stable, short enough
+ *  to follow an NTP correction rather than being pinned by it forever. */
+const NODE_CLOCK_SAMPLES = 32;
+
+/**
+ * How long this upload really took to arrive, in seconds.
+ *
+ * The obvious answer — backend clock minus the `at` the node stamped — is not
+ * transit. It is transit PLUS the node's clock error, and that error is
+ * unbounded: a receiver a minute behind made every one of its records look a
+ * minute old, so they lost the merge to whatever an aggregator had and, past
+ * MAX_AGE_SEC, were dropped before reaching the map at all. The symptom was a
+ * node feeding perfectly while its aircraft went stale or never appeared.
+ *
+ * The clock error cannot be measured directly, but it is very nearly the
+ * SMALLEST delta seen recently: across many uploads the quickest one is the
+ * one that spent almost no time in transit, so whatever is left in it is the
+ * offset. Subtracting that leaves about zero for an ordinary upload and the
+ * genuine extra for one held up by a retry, which is exactly what this figure
+ * is for — and it works whichever way the clock is wrong, where the old
+ * `sentMs <= nowMs` guard only caught clocks running fast.
+ */
+export function nodeTransitSec(sourceId: string, sentMs: number, nowMs: number): number {
+  const delta = nowMs - sentMs;
+  let ring = _nodeClockDeltas.get(sourceId);
+  if (!ring) {
+    ring = [];
+    _nodeClockDeltas.set(sourceId, ring);
+  }
+  ring.push(delta);
+  if (ring.length > NODE_CLOCK_SAMPLES) ring.shift();
+
+  let floor = ring[0]!;
+  for (const d of ring) if (d < floor) floor = d;
+  // Never negative: an upload cannot arrive before it was sent, and the first
+  // upload from a node has nothing to compare against, so it counts as prompt.
+  return Math.max(0, (delta - floor) / 1000);
+}
+
+/** Test seam, and for forgetting a node that has gone. */
+export function _resetNodeClock(sourceId?: string): void {
+  if (sourceId) _nodeClockDeltas.delete(sourceId);
+  else _nodeClockDeltas.clear();
+}
+
 export function normalizeNodeUpload(
   upload: { at: string; aircraft: RawAircraft[] },
   sourceId: string,
   nowMs: number = Date.now(),
 ): AdsbAircraft[] {
   const sentMs = Date.parse(upload.at);
-  // An unparseable or future-dated `at` counts as "now": trusting it could
-  // only ever make node data look fresher than it really is.
-  const transitSec =
-    Number.isFinite(sentMs) && sentMs <= nowMs ? (nowMs - sentMs) / 1000 : 0;
+  const transitSec = Number.isFinite(sentMs)
+    ? nodeTransitSec(sourceId, sentMs, nowMs)
+    : 0;
 
   const out: AdsbAircraft[] = [];
   for (const raw of upload.aircraft) {
