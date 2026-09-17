@@ -143,6 +143,73 @@ describe('the projection itself', () => {
   });
 });
 
+describe('a gap in reporting is not evidence the aircraft is gone', () => {
+  // The reported fault: aircraft showing as estimated over ground with good
+  // coverage. Absence from ONE poll happens constantly for benign reasons —
+  // four upstreams rotating across the circles, any one of them failing or
+  // answering late, partial circle failures tolerated silently, and any record
+  // whose own seen_pos exceeds 60s dropped before it gets here.
+
+  it('holds position through a single missed poll', async () => {
+    await poll(T0, [flying()]);
+    const snap = await poll(T0 + 15_000, []);      // one tick, ~15s
+    const rec = snap.aircraft.find((a) => a.hex === 'abc123')!;
+    expect(rec.estimated).toBe(false);
+    expect(rec.lat).toBe(POS.lat);
+    expect(rec.lon).toBe(POS.lon);
+  });
+
+  it('still holds through two missed polls', async () => {
+    await poll(T0, [flying()]);
+    await poll(T0 + 15_000, []);
+    const snap = await poll(T0 + 30_000, []);
+    expect(snap.aircraft.find((a) => a.hex === 'abc123')!.estimated).toBe(false);
+  });
+
+  it('projects once it has genuinely been quiet', async () => {
+    await poll(T0, [flying()]);
+    const snap = await poll(T0 + 50_000, []);
+    const rec = snap.aircraft.find((a) => a.hex === 'abc123')!;
+    expect(rec.estimated).toBe(true);
+    expect(rec.lon).toBeGreaterThan(POS.lon);
+  });
+
+  it('does not project a record that merely ARRIVED stale', async () => {
+    // The sharpest form of the bug. An aggregator reports an aircraft whose
+    // position is already 50s old; one missed poll later the total position
+    // age is past every threshold, but we have only been without news of it
+    // for 15 seconds and a fresher fix almost certainly exists upstream.
+    await poll(T0, [flying({ seen_pos: 50 })]);
+    const snap = await poll(T0 + 15_000, []);
+    const rec = snap.aircraft.find((a) => a.hex === 'abc123')!;
+    expect(rec.estimated).toBe(false);
+    expect(rec.lon).toBe(POS.lon);
+  });
+
+  it('keeps a stale-arriving aircraft alive long enough to be projected', async () => {
+    // Its position age crosses the 90s frozen window while it is still inside
+    // the grace period. Expiring on that would drop it before it ever got the
+    // chance to be projected — so the window keys off whether the record
+    // COULD be projected, not whether it is being.
+    await poll(T0, [flying({ seen_pos: 50 })]);
+    const snap = await poll(T0 + 50_000, []);
+    const rec = snap.aircraft.find((a) => a.hex === 'abc123');
+    expect(rec).toBeDefined();
+    expect(rec!.estimated).toBe(true);
+  });
+
+  it('never shows an estimate for an aircraft that came back in time', async () => {
+    // The common case over good coverage: a gap, then a fresh report.
+    await poll(T0, [flying()]);
+    const gap = await poll(T0 + 20_000, []);
+    expect(gap.aircraft.find((a) => a.hex === 'abc123')!.estimated).toBe(false);
+    const back = await poll(T0 + 35_000, [flying({ lat: -33.9, lon: 151.3 })]);
+    const rec = back.aircraft.find((a) => a.hex === 'abc123')!;
+    expect(rec.estimated).toBe(false);
+    expect(rec.lon).toBe(151.3);
+  });
+});
+
 describe('what may not be projected', () => {
   it('freezes an aircraft with no reported track', async () => {
     await poll(T0, [flying({ track: undefined })]);

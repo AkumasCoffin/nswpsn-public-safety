@@ -414,6 +414,26 @@ const ESTIMATE_MAX_SECS = 180;
  */
 const ESTIMATE_MIN_GS_KT = 40;
 
+/**
+ * How long an aircraft must go UNREPORTED before it is projected rather than
+ * simply held.
+ *
+ * Absence from one poll is not evidence an aircraft has gone. The circles are
+ * split across four upstreams that rotate each tick, any one of them can fail
+ * or answer late, partial circle failures are tolerated silently, and
+ * normalizeAircraft drops any record whose own seen_pos already exceeds 60s.
+ * All of those produce a gap for an aircraft sitting in perfectly good
+ * coverage — which is exactly what was showing up as "estimated" over
+ * well-covered ground.
+ *
+ * At a ~15s effective cadence this is three consecutive misses: enough that
+ * the aircraft really is not being reported, while still leaving most of the
+ * 180s horizon for the projection itself. Until then the record is HELD at its
+ * last real position, which is what the holdover did before estimation
+ * existed and is the right answer for a transient gap.
+ */
+const ESTIMATE_MIN_ABSENT_SEC = 45;
+
 const _lastSeen = new Map<string, { rec: AdsbAircraft; atMs: number }>();
 
 /** Nautical miles per degree of latitude. Longitude shrinks by cos(lat). */
@@ -447,24 +467,41 @@ export function applyHoldover(fresh: AdsbAircraft[], nowMs: number): AdsbAircraf
     _lastSeen.set(a.hex, { rec: a, atMs: nowMs });
   }
   for (const [hex, h] of _lastSeen) {
-    const age = h.rec.ageSec + (nowMs - h.atMs) / 1000;
     const rec = h.rec;
+    // TWO different clocks, and conflating them was the bug.
+    //
+    //   age         — how old the POSITION is: the aggregator's own seen_pos
+    //                 when we received it, plus the time held since. This is
+    //                 the distance to project, and it is right for that.
+    //   sinceHeard  — how long since we last RECEIVED anything about this
+    //                 aircraft. This is the evidence that it is missing.
+    //
+    // Projecting on `age` alone meant a record that arrived already 40s stale
+    // began dead-reckoning after a single missed poll — on ground with full
+    // coverage, where a fresher real position existed and simply had not
+    // reached us that tick.
+    const age = rec.ageSec + (nowMs - h.atMs) / 1000;
+    const sinceHeard = (nowMs - h.atMs) / 1000;
 
-    // An aircraft that was moving on a known heading can be projected; one on
-    // the ground, stationary, or without a heading cannot, and stays frozen at
-    // its last real position for the shorter original window.
-    const canEstimate =
+    // Whether the record SUPPORTS dead reckoning at all. An aircraft on the
+    // ground, stationary, or without a heading never can.
+    const projectable =
       !rec.onGround &&
       Number.isFinite(rec.trackDeg) &&
       (rec.gsKt ?? 0) > ESTIMATE_MIN_GS_KT;
 
-    if (age > (canEstimate ? ESTIMATE_MAX_SECS : HOLDOVER_MAX_AGE_SECS)) {
+    // The expiry window keys off `projectable`, NOT off whether it is being
+    // projected right now: an aircraft still inside the grace period must not
+    // be dropped at 90s before it ever gets the chance to be projected.
+    if (age > (projectable ? ESTIMATE_MAX_SECS : HOLDOVER_MAX_AGE_SECS)) {
       _lastSeen.delete(hex);
       continue;
     }
     if (out.has(hex)) continue;
 
-    if (!canEstimate) {
+    // Held, not projected, until it has genuinely been quiet for a while.
+    const estimating = projectable && sinceHeard >= ESTIMATE_MIN_ABSENT_SEC;
+    if (!estimating) {
       out.set(hex, { ...rec, ageSec: Math.round(age) });
       continue;
     }
