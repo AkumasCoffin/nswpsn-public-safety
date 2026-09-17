@@ -42,10 +42,17 @@ import (
 var rtlTestBin = "rtl_test"
 
 // MeasureDur is the LONGEST rtl_test -p is allowed to run. It is a ceiling, not
-// a duration: the measurement returns as soon as the reading settles, normally
-// within thirty seconds. Only a dongle whose reading never settles spends the
-// whole budget, and that dongle's reading was never going to be usable.
-const MeasureDur = 2 * time.Minute
+// a duration: the measurement returns as soon as the reading settles, which
+// needs three agreeing readings and so takes about thirty seconds.
+//
+// A minute, not the "few minutes" rtl_test itself suggests, because this holds
+// the dongle and the decoder cannot start until it lets go. A longer budget
+// buys a correction on marginal hardware at the price of real decoding time on
+// every boot, and a receiver that is deaf for two minutes is worse off than one
+// running a few ppm out. Hosts whose reading never settles at all are common
+// enough to plan for — a VM's clock jitters, and rtl_test measures the dongle
+// against it.
+const MeasureDur = time.Minute
 
 const (
 	// StableWindow is how many consecutive cumulative readings must agree

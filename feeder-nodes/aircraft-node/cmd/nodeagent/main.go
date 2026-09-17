@@ -300,16 +300,6 @@ func runAgent(ctx context.Context, configPath string) error {
 	} else {
 		log.Printf("decoder: no persisted config; starting on defaults until the backend pushes")
 	}
-	// Measure the dongle's crystal error BEFORE the decoder starts: rtl_test
-	// needs exclusive access to the device, so doing it afterwards would mean
-	// stopping the decoder we just launched. A pushed ppm overrides this; the
-	// measurement only fills the gap when staff have set nothing.
-	mgr.MeasurePPM()
-
-	if err := mgr.Apply(boot); err != nil {
-		log.Printf("decoder: initial apply failed: %v", err)
-	}
-
 	// WS control client. The manager is config applier, status provider and
 	// stats provider.
 	ws := wsclient.New(cfg, q, mgr, mgr.Status, mgr.Stats)
@@ -317,12 +307,32 @@ func runAgent(ctx context.Context, configPath string) error {
 	// The queue sender POSTs each buffered snapshot to the backend.
 	sender := newSender(cfg)
 
-	// Launch the long-lived goroutines.
+	// Launch the long-lived goroutines FIRST. None of them touch the dongle, and
+	// nothing below should delay them: the ppm measurement used to run ahead of
+	// this and hold the whole startup for its full budget, so a node whose
+	// reading never settled sat invisible to the backend for two minutes every
+	// boot — long enough that restarting it never appeared to help.
 	go runSnapshotLoop(ctx, mgr, q)
 	go q.RunSender(ctx, sender.send)
 	go ws.Run(ctx)
 
 	log.Printf("nodeagent-adsb running")
+
+	// Now the parts that need exclusive access to the SDR, in the background.
+	// The measurement has to precede the decoder — rtl_test cannot open a device
+	// dump1090 already holds — but neither has to precede the node being online.
+	go func() {
+		mgr.MeasurePPM()
+		// ApplyBoot, not Apply: the backend may have pushed a real config while
+		// the measurement was running, and re-applying the on-disk copy over it
+		// would silently undo that push.
+		applied, err := mgr.ApplyBoot(boot)
+		if err != nil {
+			log.Printf("decoder: initial apply failed: %v", err)
+		} else if !applied {
+			log.Printf("decoder: config already pushed while measuring; keeping it")
+		}
+	}()
 
 	<-ctx.Done()
 	log.Printf("shutdown signal received; stopping...")

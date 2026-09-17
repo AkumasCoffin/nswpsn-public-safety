@@ -3,6 +3,7 @@ package sdrppm
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // The banner rtl_test prints before any reading. Reproduced because the parser
@@ -138,13 +139,19 @@ func TestKeepsDrainingAfterInterrupting(t *testing.T) {
 	}
 }
 
-func TestMeasureDurIsACeilingNotATwentySecondRun(t *testing.T) {
-	// rtl_test prints a reading every ten seconds and asks for "a few minutes".
-	// The old twenty-second budget could not fill even one StableWindow, which
-	// is why it returned whichever single noisy line landed last.
+func TestMeasureDurFitsAWindowWithoutStallingTheDecoder(t *testing.T) {
+	// Two bounds, pulling opposite ways. Below StableWindow readings the
+	// measurement can never settle, which is what the old twenty-second budget
+	// got wrong. Above a minute it becomes the startup cost itself: the decoder
+	// cannot open the dongle until this lets go, and a receiver that hears
+	// nothing for two minutes every boot is worse off than one running a few
+	// ppm out.
 	minimum := StableWindow * 10
 	if MeasureDur.Seconds() < float64(minimum) {
 		t.Fatalf("MeasureDur %s cannot fit %d readings ten seconds apart",
 			MeasureDur, StableWindow)
+	}
+	if MeasureDur > time.Minute {
+		t.Fatalf("MeasureDur %s holds the dongle too long; the decoder waits on it", MeasureDur)
 	}
 }

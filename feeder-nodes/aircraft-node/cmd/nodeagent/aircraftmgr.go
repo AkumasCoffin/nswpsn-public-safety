@@ -79,6 +79,24 @@ func (m *aircraftManager) Apply(cfg wsclient.AdsbConfig) error {
 	return m.launchLocked()
 }
 
+// ApplyBoot applies the boot config only if nothing has been applied yet.
+//
+// The boot launch happens on a background goroutine, because it waits on a ppm
+// measurement that holds the dongle for up to a minute. That leaves a window in
+// which the backend can push a real config first, and applying the boot copy
+// afterwards would quietly roll it back to whatever was on disk at startup.
+// Reports whether it actually applied.
+func (m *aircraftManager) ApplyBoot(cfg wsclient.AdsbConfig) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.hasConfig {
+		return false, nil
+	}
+	m.applied = cfg
+	m.hasConfig = true
+	return true, m.launchLocked()
+}
+
 // launchLocked builds the decoder params from the applied config and restarts
 // the supervisor. Caller must hold m.mu.
 func (m *aircraftManager) launchLocked() error {
