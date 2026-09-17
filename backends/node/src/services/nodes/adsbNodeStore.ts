@@ -485,97 +485,9 @@ export function nodeAdsbRecentAircraft(
   return out.slice(0, n);
 }
 
-// ---------------------------------------------------------------------------
-// Ingest issues (why an upload was refused)
-// ---------------------------------------------------------------------------
-//
-// A per-node fault log, in memory. Not `nodeEvents` — that is Postgres-backed
-// with a 30-day pruner, far too heavy a tier for something an owner glances at
-// while their receiver is misbehaving. Not `hub` — that is WebSocket plumbing
-// and these outcomes come off the REST upload route.
-//
-// THE DESIGN PROBLEM IS THE 5-SECOND CADENCE. A healthy node uploads every 5s,
-// so recording each success would push the last real error out of a 40-entry
-// window in about three minutes — destroying the one thing the buffer exists
-// for. Hence the two rules below: successes are recorded only as state changes,
-// and consecutive identical outcomes coalesce in place. What is left reads as a
-// fault log with explicit "recovered" markers.
-
-export type AdsbIngestOutcome =
-  | 'ok'
-  | 'install_mismatch'
-  | 'not_adsb'
-  | 'rate_limited'
-  | 'length_required'
-  | 'too_large'
-  | 'bad_body'
-  | 'feed_off';
-
-export interface AdsbIngestIssue {
-  outcome: AdsbIngestOutcome;
-  firstMs: number;
-  lastMs: number;
-  /** How many uploads this entry stands for. A rate-limit loop is one entry
-   *  with a count in the thousands, not thousands of entries. */
-  count: number;
-  detail: string | null;
-}
-
-const ISSUE_RING = 40;
-
-/** Consecutive identical outcomes inside this window bump a count in place.
- *  Without it a rate-limit loop fills the whole ring in 200 seconds. */
-const ISSUE_COALESCE_MS = 60_000;
-
-/** How long a run of successes is held as one entry before a fresh "still
- *  fine" marker is started. Long enough that a healthy node writes four
- *  entries an hour, short enough that the log is not silent for a whole shift. */
-const ISSUE_OK_HEARTBEAT_MS = 15 * 60_000;
-
-const issues = new Map<string, AdsbIngestIssue[]>();
-
-/**
- * Record one upload's outcome against its node.
- *
- * Called only AFTER the token resolves, so the node is known. Authentication
- * failures deliberately do not come here — see `recordAdsbAuthFailure`.
- */
-export function recordAdsbIngestOutcome(
-  nodeId: string,
-  outcome: AdsbIngestOutcome,
-  detail: string | null = null,
-  nowMs: number = Date.now(),
-): void {
-  let ring = issues.get(nodeId);
-  if (!ring) {
-    ring = [];
-    issues.set(nodeId, ring);
-  }
-  const last = ring[ring.length - 1];
-
-  if (last && last.outcome === outcome) {
-    // A success stays folded into the running entry for a quarter of an hour;
-    // every other outcome coalesces on the tighter window, so a fault that
-    // stops and restarts later reads as two episodes rather than one long one.
-    const hold = outcome === 'ok' ? ISSUE_OK_HEARTBEAT_MS : ISSUE_COALESCE_MS;
-    if (nowMs - last.lastMs < hold) {
-      last.lastMs = nowMs;
-      last.count += 1;
-      if (detail) last.detail = detail;
-      return;
-    }
-  }
-
-  ring.push({ outcome, firstMs: nowMs, lastMs: nowMs, count: 1, detail });
-  while (ring.length > ISSUE_RING) ring.shift();
-}
-
-/** One node's issue log, newest first. */
-export function nodeAdsbIssues(nodeId: string): AdsbIngestIssue[] {
-  const ring = issues.get(nodeId);
-  if (!ring) return [];
-  return ring.slice().reverse();
-}
+/** One machine retrying the same rejected token inside this window bumps a
+ *  count rather than filling the ring with identical rows. */
+const AUTH_COALESCE_MS = 60_000;
 
 // --- Authentication failures (fleet-wide, staff only) ----------------------
 //
@@ -609,7 +521,7 @@ export function recordAdsbAuthFailure(
   const last = authFailures[authFailures.length - 1];
   if (
     last && last.install === install && last.reason === reason &&
-    nowMs - last.lastMs < ISSUE_COALESCE_MS
+    nowMs - last.lastMs < AUTH_COALESCE_MS
   ) {
     last.lastMs = nowMs;
     last.count += 1;
@@ -638,7 +550,6 @@ export function clearAdsbNodeState(nodeId: string): void {
   snapshots.delete(nodeId);
   observedRangeKm.delete(nodeId);
   traces.delete(nodeId);
-  issues.delete(nodeId);
 }
 
 /** How many nodes currently have a live snapshot (for the upstreams summary). */
@@ -652,7 +563,6 @@ export function _resetAdsbNodeStore(): void {
   observedRangeKm.clear();
   pending.clear();
   traces.clear();
-  issues.clear();
   authFailures.length = 0;
 }
 

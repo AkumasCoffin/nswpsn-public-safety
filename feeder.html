@@ -1280,17 +1280,6 @@
     let _abMap = null;
     let _abLayer = null;
 
-    const AB_OUTCOME = {
-      ok:               ['Uploading normally', '#4ade80'],
-      feed_off:         ['Feed paused — received, but not shown on the map', '#fbbf24'],
-      rate_limited:     ['Uploading too fast — snapshots dropped', '#fbbf24'],
-      too_large:        ['Snapshot rejected: too large', '#f87171'],
-      length_required:  ['Snapshot rejected: no Content-Length', '#f87171'],
-      bad_body:         ['Snapshot rejected: malformed', '#f87171'],
-      not_adsb:         ['Refused: this node is not set up as ADS-B', '#f87171'],
-      install_mismatch: ['Refused: a different machine used these credentials', '#f87171'],
-    };
-
     /** Epoch ms → local clock time. The backend sends ms for these. */
     function _abClock(ms) {
       if (!ms) return '—';
@@ -1404,25 +1393,9 @@
             </tr>`).join('')}</tbody></table></div>`
         : `<div class="msg-empty">Nothing heard in the last 8 hours.</div>`;
 
-      const issues = d.issues || [];
-      const log = issues.length
-        ? `<div class="ab-scroll"><table class="ab-tbl">
-            <thead><tr><th>Outcome</th><th class="num">Uploads</th><th>From</th><th>Until</th></tr></thead>
-            <tbody>${issues.map(e => {
-              const meta = AB_OUTCOME[e.outcome] || [e.outcome, 'var(--text-primary)'];
-              return `<tr>
-                <td><span style="color:${meta[1]};">${escapeHtml(meta[0])}</span>${e.detail ? `<div class="ab-detail">${escapeHtml(e.detail)}</div>` : ''}</td>
-                <td class="num">${Number(e.count || 0).toLocaleString()}</td>
-                <td class="ab-soft">${_abClock(e.firstMs)}</td>
-                <td class="ab-soft">${_abClock(e.lastMs)}</td>
-              </tr>`;
-            }).join('')}</tbody></table></div>`
-        : `<div class="msg-empty">No uploads recorded yet.</div>`;
-
       body.innerHTML = `${tiles}
         <div class="fs-act-h">Daily</div>${daily}
-        <div class="fs-act-h">Recently heard <span class="ab-soft" style="text-transform:none;letter-spacing:0;">— last 8 hours, held in memory</span></div>${heard}
-        <div class="fs-act-h">Upload history <span class="ab-soft" style="text-transform:none;letter-spacing:0;">— successes collapsed, faults kept</span></div>${log}`;
+        <div class="fs-act-h">Recently heard <span class="ab-soft" style="text-transform:none;letter-spacing:0;">— last 8 hours, held in memory</span></div>${heard}`;
     }
 
     /** The coverage picture — which bearings this antenna actually hears, and

@@ -1,16 +1,14 @@
-// What a receiver heard, and why an upload was refused.
+// What a receiver recently heard, and the fleet-wide log of uploads whose
+// token did not resolve.
 //
-// Both are in-memory rings whose whole design problem is the 5-second upload
-// cadence: recorded naively, a healthy node's own success messages would flush
-// the last real fault out of the buffer in about three minutes. So the tests
-// that matter here are the ones about what is deliberately NOT recorded.
+// The per-node upload-outcome ring that used to live here was removed: a
+// healthy node's only entry said "uploading normally", which is the state of
+// every healthy node and so said nothing.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   recordNodeAdsbSnapshot,
   nodeAdsbRecentAircraft,
-  recordAdsbIngestOutcome,
-  nodeAdsbIssues,
   recordAdsbAuthFailure,
   adsbAuthFailures,
   clearAdsbNodeState,
@@ -102,71 +100,6 @@ describe('recent aircraft', () => {
   });
 });
 
-describe('ingest issues', () => {
-  beforeEach(() => {
-    _resetAdsbNodeStore();
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-09-16T00:00:00Z'));
-  });
-  afterEach(() => vi.useRealTimers());
-
-  it('does not let a healthy node flush its own fault history', () => {
-    // 200 uploads at the real 5s cadence is nearly 17 minutes — long enough to
-    // cross the heartbeat once, and that is the only new entry allowed.
-    for (let i = 0; i < 200; i += 1) {
-      recordAdsbIngestOutcome(NODE, 'ok');
-      vi.advanceTimersByTime(5_000);
-    }
-    const log = nodeAdsbIssues(NODE);
-    expect(log.length).toBeLessThanOrEqual(2);
-    expect(log.every((e) => e.outcome === 'ok')).toBe(true);
-    expect(log.reduce((n, e) => n + e.count, 0)).toBe(200);
-  });
-
-  it('coalesces a failure loop into one entry with a count', () => {
-    for (let i = 0; i < 100; i += 1) {
-      recordAdsbIngestOutcome(NODE, 'rate_limited');
-      vi.advanceTimersByTime(500);
-    }
-    const log = nodeAdsbIssues(NODE);
-    expect(log).toHaveLength(1);
-    expect(log[0]!.count).toBe(100);
-    expect(log[0]!.lastMs - log[0]!.firstMs).toBe(99 * 500);
-  });
-
-  it('reads a fault and its recovery as exactly two entries', () => {
-    recordAdsbIngestOutcome(NODE, 'ok');
-    vi.advanceTimersByTime(5_000);
-    recordAdsbIngestOutcome(NODE, 'too_large', '900000 bytes, cap 512000');
-    vi.advanceTimersByTime(5_000);
-    recordAdsbIngestOutcome(NODE, 'ok');
-    // Newest first.
-    expect(nodeAdsbIssues(NODE).map((e) => e.outcome)).toEqual(['ok', 'too_large', 'ok']);
-    expect(nodeAdsbIssues(NODE)[1]!.detail).toBe('900000 bytes, cap 512000');
-  });
-
-  it('starts a new episode when the same fault returns much later', () => {
-    recordAdsbIngestOutcome(NODE, 'bad_body');
-    vi.advanceTimersByTime(10 * 60_000);
-    recordAdsbIngestOutcome(NODE, 'bad_body');
-    expect(nodeAdsbIssues(NODE)).toHaveLength(2);
-  });
-
-  it('caps the ring at 40', () => {
-    for (let i = 0; i < 100; i += 1) {
-      recordAdsbIngestOutcome(NODE, i % 2 ? 'bad_body' : 'feed_off');
-      vi.advanceTimersByTime(1_000);
-    }
-    expect(nodeAdsbIssues(NODE)).toHaveLength(40);
-  });
-
-  it('keeps one node out of another node’s log', () => {
-    recordAdsbIngestOutcome(NODE, 'feed_off');
-    recordAdsbIngestOutcome('other-node', 'bad_body');
-    expect(nodeAdsbIssues(NODE).map((e) => e.outcome)).toEqual(['feed_off']);
-  });
-});
-
 describe('auth failures', () => {
   beforeEach(() => {
     _resetAdsbNodeStore();
@@ -215,17 +148,15 @@ describe('clearAdsbNodeState', () => {
   });
   afterEach(() => vi.useRealTimers());
 
-  it('forgets a deleted node’s snapshot, traces and issues at once', () => {
+  it('forgets a deleted node’s snapshot and traces at once', () => {
     feed([{ hex: 'fff555', lat: -33.0, lon: 151.0 }]);
     vi.advanceTimersByTime(60_000);
     feed([{ hex: 'fff555', lat: -33.5, lon: 151.5 }]);
-    recordAdsbIngestOutcome(NODE, 'feed_off');
     expect(nodeAdsbTraces(NODE, 60).aircraft).toBe(1);
 
     clearAdsbNodeState(NODE);
 
     expect(nodeAdsbTraces(NODE, 60).aircraft).toBe(0);
     expect(nodeAdsbRecentAircraft(NODE, 10)).toHaveLength(0);
-    expect(nodeAdsbIssues(NODE)).toHaveLength(0);
   });
 });

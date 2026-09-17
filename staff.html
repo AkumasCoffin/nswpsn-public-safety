@@ -8079,19 +8079,6 @@
      * the coverage map rather than two more fetches — the view route already
      * carries them. */
 
-    /** Plain-English name and colour for an upload outcome. The raw codes are
-     *  the wire format; nobody reading a fault log should have to decode them. */
-    const ND2_ADSB_OUTCOME = {
-      ok:               ['Uploading normally', '#4ade80'],
-      feed_off:         ['Feed paused — received, but not put on the map', '#fbbf24'],
-      rate_limited:     ['Uploading too fast — snapshots dropped', '#fbbf24'],
-      too_large:        ['Snapshot rejected: too large', '#fca5a5'],
-      length_required:  ['Snapshot rejected: no Content-Length', '#fca5a5'],
-      bad_body:         ['Snapshot rejected: malformed', '#fca5a5'],
-      not_adsb:         ['Refused: this node is not set up as ADS-B', '#fca5a5'],
-      install_mismatch: ['Refused: a different machine used these credentials', '#fca5a5'],
-    };
-
     /** Epoch ms → clock time. The backend sends ms; nd2Time takes anything
      *  `new Date()` accepts. */
     function nd2AdsbWhen(ms) {
@@ -8120,28 +8107,6 @@
           nd2AdsbWhen(a.firstMs),
           nd2AdsbWhen(a.lastMs) + ' <span style="' + soft + '">' + escapeHtml(nd2Ago(new Date(a.lastMs).toISOString())) + '</span>',
         ]));
-    }
-
-    function nd2AdsbIssuesCard(issues) {
-      const list = issues || [];
-      if (!list.length) {
-        return '<div class="nd2-empty">No uploads recorded yet.</div>';
-      }
-      const soft = 'color:var(--text-soft,#94a3b8);';
-      return nd2MiniTable(
-        [{ label: 'Outcome' }, { label: 'Uploads', num: true }, { label: 'From' }, { label: 'Until' }],
-        list.map(e => {
-          const meta = ND2_ADSB_OUTCOME[e.outcome] || [e.outcome, 'var(--text-primary)'];
-          return [
-            '<span style="color:' + meta[1] + ';">' + escapeHtml(meta[0]) + '</span>'
-              + (e.detail ? '<div style="' + soft + '">' + escapeHtml(e.detail) + '</div>' : ''),
-            // One entry can stand for thousands of uploads — a rate-limit loop
-            // is coalesced rather than repeated, so the count is the severity.
-            nd2Num(e.count),
-            nd2AdsbWhen(e.firstMs),
-            nd2AdsbWhen(e.lastMs),
-          ];
-        }));
     }
 
     /** Uploads whose token did not resolve — fleet-wide, because at that point
@@ -8217,11 +8182,6 @@
         +   '<div class="nd2-card-h"><span>Recently heard</span>'
         +     '<span class="nd2-note">last 8 hours, held in memory</span></div>'
         +   nd2AdsbRecentCard(d.recent)
-        + '</div>'
-        + '<div class="nd2-card nd2-detail-gap">'
-        +   '<div class="nd2-card-h"><span>Upload history</span>'
-        +     '<span class="nd2-note">successes collapsed; faults kept</span></div>'
-        +   nd2AdsbIssuesCard(d.issues)
         + '</div>';
       el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       // After the panel is in the DOM and sized, or Leaflet measures zero.
