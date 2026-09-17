@@ -545,6 +545,10 @@ function pagerLinuxInstaller(enrolCode: string): string {
 //
 // Gain and antenna position are not written here - they arrive by config push,
 // so staff can retune a receiver without touching the host.
+export function _adsbLinuxInstaller(enrolCode: string): string {
+  return adsbLinuxInstaller(enrolCode);
+}
+
 function adsbLinuxInstaller(enrolCode: string): string {
   const T = shSingleQuote(enrolCode);
   const S = shSingleQuote(SERVER_URL);
@@ -573,11 +577,26 @@ function adsbLinuxInstaller(enrolCode: string): string {
     `  apt-get update -qq || true`,
     `  apt-get install -y --no-install-recommends rtl-sdr curl ca-certificates || true`,
     `  if ! command -v dump1090-fa >/dev/null 2>&1; then`,
+    `    # FlightAware publish ONE versioned repository package and delete the`,
+    `    # previous one when they bump it, so a hardcoded version eventually`,
+    `    # 404s. That failure is quiet - the install carries on and every new`,
+    `    # node lands on dump1090-mutability, which writes no stats.json and so`,
+    `    # reports no range. Walk down from the newest known version instead and`,
+    `    # take the first that exists, which survives the next bump unattended.`,
     `    TMP_DEB="$(mktemp)"`,
-    `    if curl -fsSL "https://www.flightaware.com/adsb/piaware/files/packages/pool/piaware/f/flightaware-apt-repository/flightaware-apt-repository_1.2_all.deb" -o "$TMP_DEB"; then`,
+    `    FA_POOL="https://www.flightaware.com/adsb/piaware/files/packages/pool/piaware/f/flightaware-apt-repository"`,
+    `    FA_VER=""`,
+    `    for v in 1.6 1.5 1.4 1.3; do`,
+    `      if curl -fsSL "\${FA_POOL}/flightaware-apt-repository_\${v}_all.deb" -o "$TMP_DEB" 2>/dev/null; then`,
+    `        FA_VER="$v"; break`,
+    `      fi`,
+    `    done`,
+    `    if [ -n "$FA_VER" ]; then`,
     `      dpkg -i "$TMP_DEB" >/dev/null 2>&1 || true`,
     `      apt-get update -qq || true`,
     `      apt-get install -y --no-install-recommends dump1090-fa || true`,
+    `    else`,
+    `      echo "note: FlightAware's repository was unreachable; falling back to the distro decoder." >&2`,
     `    fi`,
     `    rm -f "$TMP_DEB"`,
     `  fi`,
@@ -592,7 +611,11 @@ function adsbLinuxInstaller(enrolCode: string): string {
     `if [ -z "$DECODER_BIN" ]; then`,
     `  echo "error: no dump1090 found on PATH. Install dump1090-fa and re-run." >&2; exit 1`,
     `fi`,
-    `echo "Using decoder: $DECODER_BIN"`,
+    `if [ "$DECODER_BIN" = "dump1090-fa" ]; then`,
+    `  echo "Using decoder: $DECODER_BIN"`,
+    `else`,
+    `  echo "Using decoder: $DECODER_BIN (dump1090-fa unavailable - range statistics will be limited)"`,
+    `fi`,
     ``,
     `# The decoder packages ship their own auto-starting service, which would`,
     `# claim the dongle before our agent can open it. Mask so an apt upgrade`,
