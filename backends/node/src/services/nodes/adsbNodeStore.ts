@@ -59,6 +59,75 @@ interface NodeSnapshot {
 
 const snapshots = new Map<string, NodeSnapshot>();
 
+// ---------------------------------------------------------------------------
+// Range, measured here rather than taken from the decoder
+// ---------------------------------------------------------------------------
+//
+// dump1090 computes a max-range statistic of its own, and the agent forwards
+// it — but ONLY when the decoder was given --lat/--lon, and only in whatever
+// field name that build happens to use. When any link in that chain is missing
+// the figure is simply absent, and every range cell on the Data tab reads "—"
+// while the coverage map plainly shows aircraft two hundred kilometres out.
+//
+// We do not need to depend on it. The backend holds both halves already: the
+// receiver's exact pin, and every position that receiver just reported. So the
+// distance is measured from what arrived. The decoder's own number is still
+// taken when present (see accumulateAdsbDaily, which keeps the larger of the
+// two), but nothing depends on it any more.
+
+const EARTH_RADIUS_KM = 6371;
+
+/** Great-circle distance in km. */
+export function distanceKm(
+  lat1: number, lon1: number, lat2: number, lon2: number,
+): number {
+  const toRad = Math.PI / 180;
+  const dLat = (lat2 - lat1) * toRad;
+  const dLon = (lon2 - lon1) * toRad;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * toRad) * Math.cos(lat2 * toRad) * Math.sin(dLon / 2) ** 2;
+  return 2 * EARTH_RADIUS_KM * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+/**
+ * The furthest aircraft in one upload, measured from the receiver's own pin.
+ *
+ * Null when the node has no pin — there is nothing to measure from, and the
+ * UI already explains an absent range that way ("no pin") rather than showing
+ * it as a fault.
+ */
+export function snapshotMaxRangeKm(
+  lat: unknown,
+  lon: unknown,
+  records: ReadonlyArray<{ lat: number; lon: number }>,
+): number | null {
+  if (typeof lat !== 'number' || typeof lon !== 'number') return null;
+  let max: number | null = null;
+  for (const r of records) {
+    if (!Number.isFinite(r.lat) || !Number.isFinite(r.lon)) continue;
+    const d = distanceKm(lat, lon, r.lat, r.lon);
+    if (max === null || d > max) max = d;
+  }
+  return max;
+}
+
+/**
+ * The furthest aircraft in each node's LATEST upload.
+ *
+ * "Range now", as against the day's peak in node_adsb_daily. Kept beside the
+ * snapshots because it has exactly their lifetime: it means nothing once the
+ * snapshot it was measured from has aged out.
+ */
+const observedRangeKm = new Map<string, number>();
+
+/** Range from this node's most recent upload, or null if it has not reported
+ *  one (no pin, an empty sky, or the node has gone away). */
+export function nodeAdsbObservedRangeKm(nodeId: string): number | null {
+  if (!snapshots.has(nodeId)) return null;
+  return observedRangeKm.get(nodeId) ?? null;
+}
+
 /** The source id a node's records carry, e.g. `node:adsb-akumascoffin-a3f9`.
  *  Shows up in the aircraft's `sources[]` on the map, so a position that came
  *  from our own hardware is distinguishable from an aggregator's. */
@@ -80,8 +149,10 @@ export function recordNodeAdsbSnapshot(
   nodeId: string,
   nodeName: string | null,
   records: AdsbAircraft[],
+  rangeKm: number | null = null,
 ): number {
   const nowMs = Date.now();
+  if (rangeKm !== null) observedRangeKm.set(nodeId, rangeKm);
   snapshots.set(nodeId, {
     name: nodeName ?? '',
     receivedAtMs: nowMs,
@@ -565,6 +636,7 @@ export function adsbAuthFailures(): AdsbAuthFailure[] {
  */
 export function clearAdsbNodeState(nodeId: string): void {
   snapshots.delete(nodeId);
+  observedRangeKm.delete(nodeId);
   traces.delete(nodeId);
   issues.delete(nodeId);
 }
@@ -577,6 +649,7 @@ export function nodeAdsbFeedCount(): number {
 /** Test seam — drops all in-memory state. */
 export function _resetAdsbNodeStore(): void {
   snapshots.clear();
+  observedRangeKm.clear();
   pending.clear();
   traces.clear();
   issues.clear();
@@ -623,6 +696,7 @@ export function accumulateAdsbDaily(
   nodeId: string,
   positions: number,
   stats?: NodeAdsbStats | null,
+  observedRange: number | null = null,
 ): void {
   const key = `${nodeId}|${sydneyDay(Date.now())}`;
   const cur =
@@ -631,7 +705,11 @@ export function accumulateAdsbDaily(
   cur.snapshots += 1;
   cur.positions += positions;
   cur.maxAircraft = Math.max(cur.maxAircraft, positions);
+  // Both, and the larger wins. The decoder measures every position it
+  // DECODED, which can beat what we were sent; our own measurement exists
+  // because the decoder's is so often simply absent.
   cur.maxRangeKm = maxOrNull(cur.maxRangeKm, stats?.maxRangeKm);
+  cur.maxRangeKm = maxOrNull(cur.maxRangeKm, observedRange);
   cur.msgRateMax = maxOrNull(cur.msgRateMax, stats?.msgRate);
   cur.tracksMax = maxOrNull(cur.tracksMax, stats?.tracksAll);
   pending.set(key, cur);

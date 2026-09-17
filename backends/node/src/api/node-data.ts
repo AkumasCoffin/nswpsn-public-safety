@@ -42,7 +42,10 @@ import { log } from '../lib/log.js';
 import { learnedAliasMap } from '../services/capcodeAliasSync.js';
 import { requireRole, canViewNodeData } from '../services/auth/roles.js';
 import { hub } from '../services/nodes/hub.js';
-import { adsbAuthFailures } from '../services/nodes/adsbNodeStore.js';
+import {
+  adsbAuthFailures,
+  nodeAdsbObservedRangeKm,
+} from '../services/nodes/adsbNodeStore.js';
 import {
   adsbNodeView,
   adsbNodeTracks,
@@ -4210,7 +4213,8 @@ nodeDataRouter.get(
           live: {
             aircraftNow: st?.adsbAircraftNow ?? null,
             msgRate: st?.adsbMsgRate ?? null,
-            maxRangeKm: st?.adsbMaxRangeKm ?? null,
+            // Falls back to our own measurement — see adsbNodeView.
+            maxRangeKm: st?.adsbMaxRangeKm ?? nodeAdsbObservedRangeKm(r.id),
             gainNow: st?.adsbGainNow ?? null,
             decoder: st?.components?.['dump1090'] ?? null,
             queueDepth: st?.queueDepth ?? null,

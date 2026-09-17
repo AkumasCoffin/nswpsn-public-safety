@@ -19,6 +19,7 @@ import {
   nodeAdsbTraces,
   nodeAdsbRecentAircraft,
   nodeAdsbIssues,
+  nodeAdsbObservedRangeKm,
   type NodeTrace,
   type NodeRecentAircraft,
   type AdsbIngestIssue,
@@ -192,7 +193,11 @@ export async function adsbNodeView(
     live: {
       aircraftNow: st?.adsbAircraftNow ?? null,
       msgRate: st?.adsbMsgRate ?? null,
-      maxRangeKm: st?.adsbMaxRangeKm ?? null,
+      // Ours when the decoder does not report one, which is most of the time:
+      // dump1090 only computes range with --lat/--lon, and the figure vanishes
+      // entirely if anything in that chain is missing. Measured from the last
+      // upload, so it is "range now" rather than the decoder's run total.
+      maxRangeKm: st?.adsbMaxRangeKm ?? nodeAdsbObservedRangeKm(nodeId),
       gainNow: st?.adsbGainNow ?? null,
       queueDepth: st?.queueDepth ?? null,
       uploadsExpired: st?.uploadsExpired ?? null,

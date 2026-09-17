@@ -34,6 +34,7 @@ import {
   recordNodeAdsbSnapshot,
   accumulateAdsbDaily,
   adsbNodeSourceId,
+  snapshotMaxRangeKm,
   recordAdsbIngestOutcome,
   recordAdsbAuthFailure,
 } from '../services/nodes/adsbNodeStore.js';
@@ -1056,8 +1057,20 @@ nodeIngestRouter.post('/api/node-ingest/adsb-upload', async (c) => {
   // 5. Count the upload and fold it into the day's aggregate BEFORE the feed
   //    gate. Reception is the node's own performance record: a receiver with
   //    its feed paused is still working, and its Data tab should say so.
+  //
+  //    The node row is read here rather than after the gate because the
+  //    antenna pin is what the range is measured FROM, and range belongs to
+  //    that same performance record.
+  const nodeRow = await getNode(r.nodeId).catch(() => null);
+  const rangeKm = snapshotMaxRangeKm(
+    nodeRow?.lat, nodeRow?.lon,
+    parsed.aircraft.filter(
+      (a): a is typeof a & { lat: number; lon: number } =>
+        typeof a.lat === 'number' && typeof a.lon === 'number',
+    ),
+  );
   hub.recordUpload(r.nodeId);
-  accumulateAdsbDaily(r.nodeId, parsed.aircraft.length, parsed.stats ?? null);
+  accumulateAdsbDaily(r.nodeId, parsed.aircraft.length, parsed.stats ?? null, rangeKm);
 
   // 6. Feed gate — when off the node stays connected and counted, but nothing
   //    it hears reaches the live map.
@@ -1068,11 +1081,11 @@ nodeIngestRouter.post('/api/node-ingest/adsb-upload', async (c) => {
     return c.json({ ok: true, fed: false });
   }
 
-  const nodeRow = await getNode(r.nodeId).catch(() => null);
   const accepted = recordNodeAdsbSnapshot(
     r.nodeId,
     nodeRow?.name ?? null,
     normalizeNodeUpload(parsed, adsbNodeSourceId(r.nodeId, nodeRow?.name ?? null)),
+    rangeKm,
   );
   recordAdsbIngestOutcome(r.nodeId, 'ok', `${accepted} aircraft`);
   return c.json({ ok: true, accepted });
