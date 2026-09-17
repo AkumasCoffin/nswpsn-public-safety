@@ -333,3 +333,58 @@ describe('reading history back', () => {
     expect(h!.truncated).toBe(false);
   });
 });
+
+describe('which receiver heard it, at the instant being viewed', () => {
+  /** A stored row, as the archive writes one. */
+  const row = (hourMs: number, sources: string[], secs: number[]) => ({
+    hex: 'abc123', hour_bucket: new Date(hourMs),
+    callsign: null, reg: null, type: null, es_tag: null,
+    sources,
+    points: secs.map((s) => [s, -33.8, 151.2, 30000]),
+  });
+
+  it('reports only the sources from the hour on screen', async () => {
+    // The reported fault: the map's receiver filter showed aircraft a node had
+    // heard at some OTHER point in the trail. Sources are recorded per hour and
+    // the stitch unioned every hour the trail touched, so scrubbing to 04:05
+    // inherited attribution from an aircraft the node only caught at 05:55.
+    queryMock.mockResolvedValue({
+      rows: [
+        row(H0, ['agg:one'], [300]),
+        row(H0 + HOUR, ['agg:one', 'node:ours'], [3300]),
+      ],
+    });
+    const d = await adsbHistoryAt(H0 + 5 * 60_000, 120, H0 + 2 * HOUR);
+    expect(d!.aircraft[0]!.sources).toEqual(['agg:one']);
+  });
+
+  it('still reports the node in the hour it actually heard it', async () => {
+    queryMock.mockResolvedValue({
+      rows: [
+        row(H0, ['agg:one'], [300]),
+        row(H0 + HOUR, ['agg:one', 'node:ours'], [3300]),
+      ],
+    });
+    const d = await adsbHistoryAt(H0 + HOUR + 55 * 60_000, 120, H0 + 2 * HOUR);
+    expect(d!.aircraft[0]!.sources).toContain('node:ours');
+  });
+
+  it('keeps the union when the viewed hour has no row of its own', async () => {
+    // A trail can reach into the window from an earlier hour. There is no
+    // attribution for an hour that recorded none, and the union is the only
+    // thing left to say — better than claiming nothing heard it.
+    queryMock.mockResolvedValue({
+      rows: [row(H0, ['agg:one', 'node:ours'], [3599])],
+    });
+    const d = await adsbHistoryAt(H0 + HOUR + 60_000, 120, H0 + 2 * HOUR);
+    expect(d!.aircraft[0]!.sources).toEqual(['agg:one', 'node:ours']);
+  });
+
+  it('de-duplicates a repeated source', async () => {
+    queryMock.mockResolvedValue({
+      rows: [row(H0, ['node:ours', 'node:ours', 'agg:one'], [300])],
+    });
+    const d = await adsbHistoryAt(H0 + 5 * 60_000, 120, H0 + HOUR);
+    expect(d!.aircraft[0]!.sources).toEqual(['node:ours', 'agg:one']);
+  });
+});

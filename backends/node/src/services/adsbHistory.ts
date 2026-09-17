@@ -144,10 +144,19 @@ export async function adsbHistoryAt(
     ],
   );
 
+  // Which hour the viewed instant falls in. Sources are recorded per hour, so
+  // this is the row whose attribution actually describes the moment on screen.
+  const viewedHour = Math.floor(atMs / HOUR_MS) * HOUR_MS;
+
   const byHex = new Map<string, HistoryTrack>();
+  /** Sources from the viewed hour alone, where that hour has a row. */
+  const viewedHourSources = new Map<string, string[]>();
   for (const row of r.rows) {
     const hourMs = row.hour_bucket.getTime();
     const raw = Array.isArray(row.points) ? row.points : [];
+    if (hourMs === viewedHour && row.sources) {
+      viewedHourSources.set(row.hex, Array.from(new Set(row.sources)));
+    }
 
     let track = byHex.get(row.hex);
     if (!track) {
@@ -182,6 +191,24 @@ export async function adsbHistoryAt(
       if (tMs < t0 || tMs > t1) continue;
       track.points.push([tMs, p[1], p[2], p[3]]);
     }
+  }
+
+  // Narrow each track's sources to the hour being VIEWED.
+  //
+  // The union above spans every hour the trail touches, which is up to three.
+  // That made the map's receiver filter show aircraft a node had heard at some
+  // other point in the window — scrub to 14:05 and something the receiver only
+  // caught at 14:55 was still attributed to it, because both instants live in
+  // the same union.
+  //
+  // Per-hour is as fine as this can get: the stored points carry no source of
+  // their own, so which receiver heard any individual position is not
+  // recoverable. Where the viewed hour has no row for an aircraft — its trail
+  // reaches into the window from an earlier hour — the union stays, being the
+  // only attribution there is.
+  for (const [hex, t] of byHex) {
+    const narrowed = viewedHourSources.get(hex);
+    if (narrowed) t.sources = narrowed;
   }
 
   // An aircraft whose every point fell outside the window contributed a row
