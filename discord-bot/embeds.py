@@ -460,6 +460,24 @@ def chunk_containers_for_message(containers: list, max_chars: int = 3600,
     return groups
 
 
+# Endpoints whose payload is a GeoJSON Feature the interstate container reads.
+# At module level, not on the class: a comprehension inside a class body gets
+# its own scope and cannot see sibling class attributes, so deriving the set
+# in there raises NameError at import — which takes the whole bot down.
+_INTERSTATE_ENDPOINTS = (
+    '/api/vic-emergency/',
+    '/api/qld-fire/',
+    '/api/wa-emergency/',
+    '/api/nt-fire/',
+    '/api/sa-fire/',
+    '/api/act-ambulance/',
+)
+_INTERSTATE_TYPES = frozenset(
+    t['key'] for t in alert_catalog.TYPE_DEFS
+    if str(t.get('endpoint') or '').startswith(_INTERSTATE_ENDPOINTS)
+)
+
+
 class EmbedBuilder:
     """Builds beautiful Discord embeds for different alert types"""
     
@@ -1290,9 +1308,7 @@ class EmbedBuilder:
               or alert_type == 'ausgrid'
               or alert_type.startswith('essential_')):
             return self.build_power_container(data, alert_type)
-        elif alert_type in ('cfa', 'deeca', 'qfd', 'dfes', 'sa_cfs',
-                            'sa_mfs', 'nt_fire', 'qld_warning', 'wa_warning',
-                            'act_ambulance'):
+        elif alert_type in self._INTERSTATE_TYPES:
             return self.build_interstate_fire_container(data, alert_type)
         elif alert_type == 'wire_article':
             return self.build_wire_article_container(data)
@@ -1642,15 +1658,35 @@ class EmbedBuilder:
     _INTERSTATE_SOURCES = {
         'cfa': 'CFA (Vic)',
         'deeca': 'DEECA (Vic)',
+        'vicses': 'VICSES',
+        'emv': 'Emergency Management Vic',
+        'esta': 'Triple Zero (Vic)',
         'qfd': 'QLD Fire Dept',
+        'qfd_warning': 'QLD Fire Dept',
         'dfes': 'DFES (WA)',
+        'dfes_warning': 'DFES (WA)',
         'sa_cfs': 'SA CFS',
         'sa_mfs': 'SA MFS',
         'nt_fire': 'NT Fire & Rescue',
-        'qld_warning': 'QLD Fire Dept',
-        'wa_warning': 'DFES (WA)',
+        'nt_bushfires': 'Bushfires NT',
         'act_ambulance': 'ACT Ambulance',
     }
+
+    # Every alert type served by a state emergency feed — that is, every type
+    # whose payload is a GeoJSON Feature the interstate container knows how to
+    # read.
+    #
+    # DERIVED FROM THE CATALOG, not hand-listed. The hand-list this replaces
+    # had drifted from alert_catalog in both directions: it still routed
+    # `qld_warning` and `wa_warning`, which had been renamed to `qfd_warning`
+    # and `dfes_warning`, and it had never gained `vicses`, `emv`, `esta` or
+    # `nt_bushfires`. All six fell through to the generic fallback, which is
+    # why they posted as bare "Alert" cards with no body at all.
+    #
+    # Keyed on the endpoint because that is what actually determines the
+    # payload shape: two types served by the same route cannot need different
+    # renderers, and a new type on an existing route now routes itself.
+    _INTERSTATE_TYPES = _INTERSTATE_TYPES
 
     def build_interstate_fire_container(self, data: Dict[str, Any], alert_type: str):
         """Components V2 container for an interstate fire-service incident."""
@@ -2286,21 +2322,64 @@ class EmbedBuilder:
 
     # ---- Generic fallback --------------------------------------
     def build_generic_container(self, data: Dict[str, Any], alert_type: str):
-        """Fallback Components V2 container for unknown alert types."""
+        """Fallback Components V2 container for unknown alert types.
+
+        Reached only by a type with no dedicated builder. It still has to
+        produce something a reader can act on: a card with a title and nothing
+        else is worse than an ugly card, because it tells the channel an
+        incident happened and then refuses to say what.
+
+        The GeoJSON unwrap below is why this used to fail completely. Most of
+        our feeds are FeatureCollections, so a Feature's only top-level keys
+        are `type`, `geometry` and `properties` — and the loop skipped all
+        three. Everything worth printing was inside `properties`, which was on
+        the skip list.
+        """
+        data = data or {}
         icon = self.ICONS.get(alert_type, '📢')
         color = self.COLORS.get(alert_type, 0x5865F2)
         container = discord.ui.Container(accent_colour=color)
-        container.add_item(discord.ui.TextDisplay(content=f"### {icon} Alert"))
+
+        # A GeoJSON Feature keeps its content in `properties`; anything else is
+        # already flat. Both are read, so a hybrid shape loses nothing.
+        props = data.get('properties')
+        fields = dict(data)
+        if isinstance(props, dict):
+            fields.update(props)
+
+        # Give the card a real heading when the payload offers one, rather than
+        # the bare word "Alert" that made these unreadable.
+        title = ''
+        for key in ('title', 'headline', 'name', 'displayName', 'event',
+                    'capEvent', 'description'):
+            v = fields.get(key)
+            if isinstance(v, str) and is_valid_value(strip_html(v)):
+                title = strip_html(v)
+                break
+        label = self._INTERSTATE_SOURCES.get(alert_type) or alert_type.replace('_', ' ').title()
+        heading = title or f"{label} alert"
+        container.add_item(discord.ui.TextDisplay(
+            content=self._clip_text(f"### {icon} {heading}")
+        ))
+
         lines = []
-        for key, value in (data or {}).items():
-            if value and key not in ['geometry', 'properties', 'type']:
-                if isinstance(value, (dict, list)):
-                    continue
-                clean_value = strip_html(str(value))
-                if is_valid_value(clean_value):
-                    lines.append(f"**{key.replace('_', ' ').title()}:** {clean_value[:500]}")
+        for key, value in fields.items():
+            if key in ('geometry', 'properties', 'type'):
+                continue
+            if not value or isinstance(value, (dict, list)):
+                continue
+            clean_value = strip_html(str(value))
+            if is_valid_value(clean_value):
+                lines.append(f"**{key.replace('_', ' ').title()}:** {clean_value[:500]}")
         if lines:
             container.add_item(discord.ui.TextDisplay(
                 content=self._clip_text('\n'.join(lines))
+            ))
+        elif not title:
+            # Nothing printable at all. Say so, rather than posting a card that
+            # looks like a rendering bug — which is exactly how the blank ones
+            # read in the channel.
+            container.add_item(discord.ui.TextDisplay(
+                content='_No details were included with this alert._'
             ))
         return container
