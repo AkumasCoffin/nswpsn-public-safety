@@ -2474,6 +2474,12 @@
     }
     .nd2-back:hover { background: rgba(56, 189, 248, 0.1); color: var(--text-primary); border-color: var(--accent); }
     .nd2-detail-title { margin: 0; font-size: 1.15rem; font-weight: 700; color: var(--text-primary); }
+    /* Clicking a track drew a huge rectangle: the focus ring follows an SVG
+       path's BOUNDING BOX, and a track crossing the frame diagonally has one
+       the size of the frame. The paths only became focusable when they were
+       made interactive to answer a hover. Pointer focus only — :focus-visible
+       keeps the ring for anyone tabbing. */
+    #nd2-aov-map path.leaflet-interactive:focus:not(:focus-visible) { outline: none; }
     .nd2-up-ok { color: #86efac; font-weight: 600; }
     .nd2-up-warn { color: #fbbf24; font-weight: 600; }
     .nd2-rowlink { cursor: pointer; }
@@ -3821,7 +3827,6 @@
               <button class="filter-btn active" data-nd2-anodetab="overview" onclick="nd2AdsbNodeSetTab('overview')">Overview</button>
               <button class="filter-btn" data-nd2-anodetab="coverage" onclick="nd2AdsbNodeSetTab('coverage')">Coverage</button>
               <button class="filter-btn" data-nd2-anodetab="tracks" onclick="nd2AdsbNodeSetTab('tracks')">Tracks</button>
-              <button class="filter-btn" data-nd2-anodetab="heard" onclick="nd2AdsbNodeSetTab('heard')">Recently heard</button>
             </div>
           </div>
           <div id="nd2-anode-overview" style="display: none;">
@@ -3839,8 +3844,8 @@
                 <div id="nd2-aov-map-note" class="nd2-note">Loading tracks…</div>
               </div>
             </div>
+            <div id="nd2-anode-heard"></div>
           </div>
-          <div id="nd2-anode-heard" style="display: none;"></div>
         </div>
 
         <div id="nd2-view-poverview" style="display: none;">
@@ -8352,15 +8357,16 @@
 
       const layer = L.layerGroup();
       const traces = d.traces || [];
+      _nd2TrackColour = {};
       for (const tr of traces) {
-        // One colour per aircraft, from its hex, so adjacent paths stay
-        // distinguishable without a legend nobody would read.
-        const hue = (parseInt(String(tr.hex).slice(-4), 16) || 0) % 360;
-        L.polyline(tr.points, {
-          color: `hsl(${hue}, 80%, 62%)`,
-          weight: 1.4, opacity: 0.75, interactive: false,
-        }).addTo(layer);
+        const colour = nd2AdsbHexColour(tr.hex);
+        _nd2TrackColour[String(tr.hex).toLowerCase()] = colour;
+        // interactive, so the path answers a hover.
+        L.polyline(tr.points, { color: colour, weight: 1.4, opacity: 0.75 })
+          .bindTooltip(nd2AdsbTraceLabel(tr), { sticky: true, direction: 'top' })
+          .addTo(layer);
       }
+      nd2PaintHeard();
 
       // The receiver anchors the picture — a gap in the fan only reads as a
       // DIRECTION if you can see the centre. The position is deliberately
@@ -8442,6 +8448,43 @@
       return ms ? nd2Time(new Date(ms).toISOString()) : '—';
     }
 
+    /** One colour per aircraft, from its hex, so adjacent paths stay
+     *  distinguishable without a legend nobody would read. Shared by a track
+     *  and its row — matching them is the whole reason the two live on one
+     *  tab now. */
+    function nd2AdsbHexColour(hex) {
+      const hue = (parseInt(String(hex).slice(-4), 16) || 0) % 360;
+      return `hsl(${hue}, 80%, 62%)`;
+    }
+
+    /** hex -> colour, for the traces actually DRAWN. An aircraft heard too
+     *  briefly to make a path is not in here, so its row stays default —
+     *  which is the honest signal that there is no line to go looking for. */
+    let _nd2TrackColour = {};
+
+    /** Hover label, matching the public map: what it is called, what it is,
+     *  and the hex, which is the only part always known. A receiver cannot
+     *  know a registration — the backend fills that in from the global track
+     *  table, which carries what the aggregators resolved. */
+    function nd2AdsbTraceLabel(tr) {
+      const bits = [];
+      if (tr.callsign) bits.push('<b>' + escapeHtml(String(tr.callsign).trim()) + '</b>');
+      if (tr.reg) bits.push(escapeHtml(tr.reg));
+      if (tr.type) bits.push('<span style="opacity:0.75">' + escapeHtml(tr.type) + '</span>');
+      bits.push('<span style="opacity:0.55">' + escapeHtml(String(tr.hex).toUpperCase()) + '</span>');
+      return bits.join(' · ');
+    }
+
+    /** Tint the Recently heard rows to their track colour.
+     *
+     *  Called from both sides — either response can land first, and rebuilding
+     *  one must not silently drop the other's work. */
+    function nd2PaintHeard() {
+      document.querySelectorAll('#nd2-anode-heard [data-hex]').forEach((el) => {
+        el.style.color = _nd2TrackColour[el.dataset.hex] || '';
+      });
+    }
+
     function nd2AdsbRecentCard(recent) {
       const list = recent || [];
       if (!list.length) {
@@ -8453,7 +8496,9 @@
         [{ label: 'Aircraft' }, { label: 'Altitude', num: true }, { label: 'Peak', num: true },
          { label: 'Reports', num: true }, { label: 'First heard' }, { label: 'Last heard' }],
         list.map(a => [
-          '<span style="font-family:var(--font-mono,monospace);">' + escapeHtml(String(a.hex || '')).toUpperCase() + '</span>'
+          '<span data-hex="' + escapeHtml(String(a.hex || '').toLowerCase())
+            + '" style="font-family:var(--font-mono,monospace);">'
+            + escapeHtml(String(a.hex || '')).toUpperCase() + '</span>'
             + (a.callsign ? ' <span style="' + soft + '">' + escapeHtml(a.callsign) + '</span>' : ''),
           a.lastAltFt == null ? '—' : nd2Num(a.lastAltFt) + ' ft',
           a.maxAltFt == null ? '—' : nd2Num(a.maxAltFt) + ' ft',
@@ -8664,8 +8709,11 @@
     const ND2_ANODE_TAB_PANEL = {
       overview: 'nd2-anode-overview',
       coverage: 'nd2-anode-coverage',
+      // Tracks carries the "Recently heard" table beneath its map. They are two
+      // views of one thing — the same aircraft over the same eight hours — and
+      // apart they could not share the colour that tells you which line is
+      // which row.
       tracks: 'nd2-anode-tracks',
-      heard: 'nd2-anode-heard',
     };
 
     /** Open one receiver's drill-down, replacing the list. */
@@ -8735,7 +8783,7 @@
       }
       // These two panels are built entirely in JS, so without this they sit
       // blank for the length of the fetch and read as "nothing here".
-      if (tab === 'coverage' || tab === 'heard') {
+      if (tab === 'coverage') {
         const el = document.getElementById(ND2_ANODE_TAB_PANEL[tab]);
         if (el && !el.innerHTML.trim()) {
           el.innerHTML = '<div class="nd2-card"><div class="nd2-empty">Loading…</div></div>';
@@ -8753,10 +8801,15 @@
     async function nd2AdsbNodeRefresh() {
       const nodeId = nd2.anodes.nodeId;
       if (!nodeId) return;
-      if (nd2.anodes.tab === 'tracks' || nd2.anodes.tab === 'coverage') {
+      // Coverage needs only the tracks response; Tracks needs BOTH, because
+      // the map and the table beneath it come from different endpoints.
+      if (nd2.anodes.tab === 'coverage') {
         await nd2LoadAdsbTracks(nodeId);
         return;
       }
+      const wantTracks = nd2.anodes.tab === 'tracks';
+      if (wantTracks) void nd2LoadAdsbTracks(nodeId);
+
       let d;
       try {
         d = await nd2Fetch(`/api/node-data/adsb-node?nodeId=${encodeURIComponent(nodeId)}&window=${encodeURIComponent(nd2.window)}`);
@@ -8766,7 +8819,7 @@
       }
       if (!d || nd2.anodes.nodeId !== nodeId) return;   // superseded while in flight
       if (nd2.anodes.tab === 'overview') nd2RenderAdsbNodeOverview(d);
-      else if (nd2.anodes.tab === 'heard') nd2RenderAdsbNodeHeard(d);
+      else if (wantTracks) nd2RenderAdsbNodeHeard(d);
     }
 
     function nd2RenderAdsbNodeOverview(d) {
@@ -8825,11 +8878,14 @@
     function nd2RenderAdsbNodeHeard(d) {
       const el = document.getElementById('nd2-anode-heard');
       if (!el) return;
-      el.innerHTML = '<div class="nd2-card">'
+      el.innerHTML = '<div class="nd2-card nd2-detail-gap">'
         + '<div class="nd2-card-h"><span>Recently heard</span>'
-        +   '<span class="nd2-note">last 8 hours</span></div>'
+        +   '<span class="nd2-note">last 8 hours · coloured to match the tracks above</span></div>'
         + nd2AdsbRecentCard(d.recent)
         + '</div>';
+      // The tracks response may already have landed, and rebuilding this table
+      // threw its tinting away with the old rows.
+      nd2PaintHeard();
     }
 
     async function nd2LoadPagerOverview() {
