@@ -356,6 +356,46 @@ export const ADSB_TRACKS_MAX_MINUTES = 480;
  * parameter is exactly what later gets passed true from somewhere it should
  * not be.
  */
+/**
+ * Fill in registration and type for a set of traces, in one query.
+ *
+ * Reads the GLOBAL track table rather than the per-node one: a node's rows
+ * carry only what its decoder knows (hex and transmitted callsign), while the
+ * public feed's rows carry the registration an aggregator's database resolved
+ * that hex to. DISTINCT ON takes the most recent row that actually has one, so
+ * an aircraft whose newest hour happens to lack a registration still gets the
+ * one it had an hour ago.
+ *
+ * Best-effort throughout: this is a hover label. Anything the public feed never
+ * saw simply stays null, and a failure leaves every trace as it was.
+ */
+async function attachRegistrations(traces: NodeTrace[]): Promise<void> {
+  if (traces.length === 0) return;
+  const pool = await getPool();
+  if (!pool) return;
+  try {
+    const hexes = traces.map((t) => t.hex);
+    const r = await pool.query<{ hex: string; reg: string | null; type: string | null }>(
+      `SELECT DISTINCT ON (hex) hex, reg, type
+         FROM adsb_tracks
+        WHERE hex = ANY($1::text[])
+          AND hour_bucket >= now() - interval '31 days'
+          AND (reg IS NOT NULL OR type IS NOT NULL)
+        ORDER BY hex, hour_bucket DESC`,
+      [hexes],
+    );
+    const byHex = new Map(r.rows.map((row) => [row.hex, row]));
+    for (const t of traces) {
+      const hit = byHex.get(t.hex);
+      if (!hit) continue;
+      t.reg = hit.reg;
+      t.type = hit.type;
+    }
+  } catch (err) {
+    log.debug({ err }, 'trace registration lookup unavailable');
+  }
+}
+
 export async function adsbNodeTracks(
   nodeId: string,
   minutes: number,
@@ -431,6 +471,14 @@ export async function adsbNodeTracks(
         points: x.points.map((p) => [p[1], p[2]] as [number, number]),
       }));
   }
+
+  // Registration and type for whatever ended up drawn. A receiver cannot know
+  // either: the decoder reports a hex and whatever the aircraft transmits as a
+  // callsign, and the registration behind that hex lives in a database the
+  // aggregators carry. The global track table already holds it for anything
+  // that reached the public feed, which — for a receiver that is feeding — is
+  // most of what it hears.
+  await attachRegistrations(merged);
 
   const pool = await getPool();
   let site: AdsbNodeTracks['site'] = null;

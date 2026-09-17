@@ -1323,6 +1323,45 @@
     let _abLayer = null;
 
     /** Epoch ms → local clock time. The backend sends ms for these. */
+    /** One colour per aircraft, derived from its hex, so adjacent paths stay
+     *  distinguishable without a legend nobody would read. Shared by the track
+     *  and its row in the table — the whole point is that they match. */
+    function _abHexColour(hex) {
+      const hue = (parseInt(String(hex).slice(-4), 16) || 0) % 360;
+      return `hsl(${hue}, 80%, 62%)`;
+    }
+
+    /** hex -> colour for the traces actually DRAWN. Only aircraft with a path
+     *  are in here, so the table tints exactly the rows the map can show. */
+    let _abTrackColour = {};
+
+    /** Hover label: callsign if it transmitted one, the registration and type
+     *  the aggregators resolved, and the hex, which is the only part always
+     *  known. */
+    function _abTraceLabel(tr) {
+      const bits = [];
+      if (tr.callsign) bits.push(`<b>${escapeHtml(String(tr.callsign).trim())}</b>`);
+      if (tr.reg) bits.push(escapeHtml(tr.reg));
+      if (tr.type) bits.push(`<span style="opacity:0.75">${escapeHtml(tr.type)}</span>`);
+      bits.push(`<span style="opacity:0.55">${escapeHtml(String(tr.hex).toUpperCase())}</span>`);
+      return bits.join(' · ');
+    }
+
+    /** Tint the Recently heard rows to their track colour.
+     *
+     *  Called from both sides: the tracks response paints whatever table is
+     *  already there, and the table paints itself from what the tracks response
+     *  left behind. Either can land first, and a re-render of one must not
+     *  silently drop the other's work. */
+    function _abPaintHeard() {
+      document.querySelectorAll('#adsb-body .ab-hex[data-hex]').forEach((el) => {
+        const c = _abTrackColour[el.dataset.hex];
+        // No colour means no path was drawn for it — heard, but not enough to
+        // draw. Leaving it default is the honest signal.
+        el.style.color = c || '';
+      });
+    }
+
     function _abClock(ms) {
       if (!ms) return '—';
       const d = new Date(ms);
@@ -1435,7 +1474,7 @@
         ? `<div class="ab-scroll"><table class="ab-tbl">
             <thead><tr><th>Aircraft</th><th class="num">Altitude</th><th class="num">Peak</th><th class="num">Reports</th><th>First</th><th>Last</th></tr></thead>
             <tbody>${recent.map(a => `<tr>
-              <td><span class="ab-hex">${escapeHtml(String(a.hex || '').toUpperCase())}</span>${a.callsign ? ` <span class="ab-soft">${escapeHtml(a.callsign)}</span>` : ''}</td>
+              <td><span class="ab-hex" data-hex="${escapeHtml(String(a.hex || '').toLowerCase())}">${escapeHtml(String(a.hex || '').toUpperCase())}</span>${a.callsign ? ` <span class="ab-soft">${escapeHtml(a.callsign)}</span>` : ''}</td>
               <td class="num">${a.lastAltFt == null ? '—' : Number(a.lastAltFt).toLocaleString() + ' ft'}</td>
               <td class="num">${a.maxAltFt == null ? '—' : Number(a.maxAltFt).toLocaleString() + ' ft'}</td>
               <td class="num">${Number(a.reports || 0).toLocaleString()}</td>
@@ -1447,6 +1486,9 @@
       body.innerHTML = `${tiles}
         <div class="fs-act-h">Daily</div>${daily}
         <div class="fs-act-h">Recently heard <span class="ab-soft" style="text-transform:none;letter-spacing:0;">— last 8 hours</span></div>${heard}`;
+      // The tracks response may already have landed, and rebuilding this table
+      // threw its tinting away with the old rows.
+      _abPaintHeard();
     }
 
 
@@ -1625,24 +1667,32 @@
       if (!_abMap) {
         const dark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?key=cb1_29rl_1_764d57ded0436220d836abc9',
           { subdomains: 'abcd', maxZoom: 19, attribution: '© CartoDB' });
-        // scrollWheelZoom off: the map sits inside a scrolling modal, and a
-        // wheel that zooms instead of scrolling traps you at the map with the
-        // rest of the panel unreachable below it. The +/- control and
-        // double-click still zoom.
+        // The wheel zooms. It was off because this map sits in a scrolling
+        // panel and swallowing the wheel traps you at it — but the trap only
+        // bites when the pointer is over the map, and a tracks map you cannot
+        // zoom is not much of a tracks map. Leaflet re-enables page scrolling
+        // the moment the pointer leaves, so the escape is just moving away.
         _abMap = L.map('adsb-map', {
-          attributionControl: false, layers: [dark], scrollWheelZoom: false,
+          attributionControl: false, layers: [dark],
         }).setView([d.site ? d.site.lat : -33.8688, d.site ? d.site.lon : 151.2093], 8);
       }
       if (_abLayer) { _abLayer.remove(); _abLayer = null; }
 
       const layer = L.layerGroup();
       const traces = d.traces || [];
+      // Remembered so "Recently heard" can be tinted to match, whichever of the
+      // two responses arrives first.
+      _abTrackColour = {};
       for (const tr of traces) {
-        // One colour per aircraft, derived from its hex, so adjacent paths stay
-        // distinguishable without a legend nobody would read.
-        const hue = (parseInt(String(tr.hex).slice(-4), 16) || 0) % 360;
-        L.polyline(tr.points, { color: `hsl(${hue}, 80%, 62%)`, weight: 1.4, opacity: 0.75, interactive: false }).addTo(layer);
+        const colour = _abHexColour(tr.hex);
+        _abTrackColour[String(tr.hex).toLowerCase()] = colour;
+        // interactive, so the path answers a hover. The label is what the map
+        // page shows: what it is called, and what it actually is.
+        L.polyline(tr.points, { color: colour, weight: 1.4, opacity: 0.75 })
+          .bindTooltip(_abTraceLabel(tr), { sticky: true, direction: 'top' })
+          .addTo(layer);
       }
+      _abPaintHeard();
       if (d.site) {
         const c = [d.site.lat, d.site.lon];
         L.circle(c, { radius: 1000, color: '#38bdf8', weight: 1, opacity: 0.5, fillColor: '#38bdf8', fillOpacity: 0.12, interactive: false }).addTo(layer);

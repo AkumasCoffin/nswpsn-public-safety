@@ -469,6 +469,13 @@ function pruneTraces(nodeId: string, nowMs: number): void {
 export interface NodeTrace {
   hex: string;
   callsign: string | null;
+  /** Registration and type, filled in by the view from the global track table.
+   *  A receiver never knows these — dump1090 reports a hex and whatever the
+   *  aircraft transmits as its callsign, and the registration behind that hex
+   *  comes from a database the aggregators carry. Null for anything that never
+   *  reached the public feed. */
+  reg?: string | null;
+  type?: string | null;
   /** [lat, lon] pairs in time order. Timestamps are dropped on the way out —
    *  the view draws paths, and shipping a third number per point would inflate
    *  the response for something nothing renders. */
