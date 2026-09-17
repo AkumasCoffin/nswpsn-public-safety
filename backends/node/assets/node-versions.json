@@ -26,8 +26,8 @@
     }
   },
   "adsb-agent": {
-    "_comment": "The ADS-B node agent binary (Linux only, amd64/arm64). Served to adsb nodes as component 'agent' by /api/node-updates/manifest (kind-aware remap); the adsb agent supervises dump1090-fa and has no sdrtrunk/rdio components.",
-    "version": "0.1.4",
+    "_comment": "The ADS-B node agent binary (Linux only, amd64/arm64). Served to adsb nodes as component 'agent' by /api/node-updates/manifest (kind-aware remap); the adsb agent supervises dump1090-fa and has no sdrtrunk/rdio components. deploy.sh SKIPS the Go rebuild when the built binary already reports this version, so agent changes only reach nodes once this is bumped.",
+    "version": "0.1.5",
     "urls": {
       "linux-amd64": "https://nswpsn.forcequit.xyz/downloads/nodeagent-adsb-linux-amd64",
       "linux-arm64": "https://nswpsn.forcequit.xyz/downloads/nodeagent-adsb-linux-arm64"

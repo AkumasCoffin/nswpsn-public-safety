@@ -166,11 +166,12 @@ func (m *aircraftManager) rebuildLocked(comps map[string]agentcfg.ComponentCfg) 
 
 // MeasurePPM measures the dongle's crystal error and remembers it.
 //
-// Blocking and slow (~20s) because rtl_test holds the dongle for the duration,
-// so this runs BEFORE the decoder starts rather than alongside it. A failure is
-// logged and otherwise ignored: an uncorrected receiver still works, while
-// refusing to start over a missing calibration would be a self-inflicted
-// outage.
+// Blocking because rtl_test holds the dongle for the duration, so this runs
+// BEFORE the decoder starts rather than alongside it. It returns as soon as the
+// reading settles — about thirty seconds on a healthy dongle — and gives up at
+// sdrppm.MeasureDur. A failure is logged and otherwise ignored: an uncorrected
+// receiver still works, while refusing to start over a missing calibration
+// would be a self-inflicted outage.
 func (m *aircraftManager) MeasurePPM() {
 	ppm, err := sdrppm.Measure(0, sdrppm.MeasureDur)
 	if err != nil {
@@ -188,7 +189,7 @@ func (m *aircraftManager) MeasurePPM() {
 		}
 		return
 	}
-	log.Printf("ppm: measured %d for the attached SDR", ppm)
+	log.Printf("ppm: settled at %d for the attached SDR", ppm)
 	m.mu.Lock()
 	m.measuredPPM = &ppm
 	m.mu.Unlock()
@@ -210,8 +211,8 @@ func (m *aircraftManager) Restart(component string) error {
 //
 // The ppm is re-measured because a different dongle has a different crystal,
 // so carrying the old figure over would apply one board's correction to
-// another's. That makes this slow (~20s), so it is single-flighted: two clicks
-// must not interleave two teardowns of the same device.
+// another's. That makes this slow — tens of seconds — so it is single-flighted:
+// two clicks must not interleave two teardowns of the same device.
 func (m *aircraftManager) Rescan() error {
 	if !m.rescanMu.TryLock() {
 		return nil
@@ -243,8 +244,9 @@ func (m *aircraftManager) Rescan() error {
 	// interface the instant the process dies.
 	time.Sleep(decoderSwapSettle)
 
-	// Deliberately outside m.mu: the measurement holds the dongle for ~20s, and
-	// blocking every status heartbeat behind it would make the node look hung.
+	// Deliberately outside m.mu: the measurement holds the dongle for tens of
+	// seconds, and blocking every status heartbeat behind it would make the node
+	// look hung.
 	m.MeasurePPM()
 
 	m.mu.Lock()

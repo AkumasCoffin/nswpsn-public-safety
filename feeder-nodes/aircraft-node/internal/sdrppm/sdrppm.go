@@ -6,17 +6,30 @@
 // exactly the traffic a receiver exists to hear.
 //
 // So the agent measures it the same way the pager agent does: run `rtl_test -p`
-// briefly at startup and take its last cumulative reading. The measurement is
-// only used when the backend has not pushed an explicit ppm; a staff-set value
-// always wins, since someone who typed a number meant it.
+// and take its cumulative reading. The measurement is only used when the
+// backend has not pushed an explicit ppm; a staff-set value always wins, since
+// someone who typed a number meant it.
 //
-// This costs ~20s of startup during which the dongle is busy, so it runs BEFORE
-// the decoder is launched and never again while the agent is up.
+// WAITING FOR THE READING TO SETTLE IS THE WHOLE JOB. rtl_test prints a
+// cumulative figure every ten seconds and tells you, in its own startup banner,
+// to "press ^C after a few minutes" — the early readings are dominated by USB
+// transfer jitter and startup transients. This package used to run for twenty
+// seconds and take whatever the last line said, which is one or two readings of
+// noise. One node measured -1, 28, -94 and 10 ppm on four consecutive boots of
+// the same dongle; -94 ppm is ~102 kHz at 1090 MHz, and applying it would have
+// been far worse than not correcting at all.
+//
+// So readings are now accepted only once consecutive ones agree, and the run
+// stops as soon as they do — which costs about thirty seconds on a healthy
+// dongle rather than the full budget. A dongle that never settles yields an
+// error, and the caller keeps its previous correction or runs without one.
 package sdrppm
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"regexp"
@@ -25,12 +38,26 @@ import (
 	"time"
 )
 
-const rtlTestBin = "rtl_test"
+// rtlTestBin is a var, not a const, so tests can point it at a stub.
+var rtlTestBin = "rtl_test"
 
-// MeasureDur is how long rtl_test -p runs. It reports a cumulative figure that
-// settles within a few seconds; 20s is a compromise between a stable reading
-// and the reception lost while the dongle is occupied.
-const MeasureDur = 20 * time.Second
+// MeasureDur is the LONGEST rtl_test -p is allowed to run. It is a ceiling, not
+// a duration: the measurement returns as soon as the reading settles, normally
+// within thirty seconds. Only a dongle whose reading never settles spends the
+// whole budget, and that dongle's reading was never going to be usable.
+const MeasureDur = 2 * time.Minute
+
+const (
+	// StableWindow is how many consecutive cumulative readings must agree
+	// before the figure is believed. rtl_test prints one every ten seconds, so
+	// three is the shortest window that can distinguish a settled reading from
+	// two noisy ones that happen to land near each other.
+	StableWindow = 3
+
+	// StableTolerance is the spread those readings may span, in ppm. Two ppm is
+	// ~2 kHz at 1090 MHz, which is far below what costs a message.
+	StableTolerance = 2
+)
 
 // MaxPlausible bounds what is accepted. A dongle needing more correction than
 // this is faulty or the reading is noise, and writing an absurd ppm into the
@@ -40,8 +67,8 @@ const MaxPlausible = 100
 // cumPpmRe captures the integer from rtl_test's "cumulative PPM: <n>" lines.
 var cumPpmRe = regexp.MustCompile(`cumulative PPM:\s*(-?\d+)`)
 
-// Measure runs rtl_test -p against the given device index and returns its last
-// cumulative ppm reading.
+// Measure runs rtl_test -p against the given device index and returns a settled
+// cumulative ppm reading, or an error if it never settles.
 func Measure(index int, dur time.Duration) (int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), dur)
 	defer cancel()
@@ -55,24 +82,107 @@ func Measure(index int, dur time.Duration) (int, error) {
 	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
 	cmd.WaitDelay = 5 * time.Second
 
-	// The interrupt makes this return an error; the readings printed before the
-	// stop are what we want, so the error is deliberately ignored.
-	out, _ := cmd.CombinedOutput()
-	text := string(out)
-
-	ms := cumPpmRe.FindAllStringSubmatch(text, -1)
-	if len(ms) == 0 {
-		return 0, fmt.Errorf("%s -p produced no cumulative PPM reading for device %d: %s",
-			rtlTestBin, index, strings.TrimSpace(tail(text, 200)))
-	}
-	ppm, err := strconv.Atoi(ms[len(ms)-1][1])
+	// One os.Pipe for both streams rather than two StdoutPipe/StderrPipe
+	// readers: these are *os.File, so exec hands the same descriptor to the
+	// child twice and there is no interleaving goroutine to race. rtl_test
+	// reports on stderr, but that is its choice to change, not ours to assume.
+	pr, pw, err := os.Pipe()
 	if err != nil {
-		return 0, fmt.Errorf("parse ppm %q: %w", ms[len(ms)-1][1], err)
+		return 0, fmt.Errorf("pipe for %s: %w", rtlTestBin, err)
+	}
+	cmd.Stdout = pw
+	cmd.Stderr = pw
+
+	if err := cmd.Start(); err != nil {
+		_ = pw.Close()
+		_ = pr.Close()
+		return 0, fmt.Errorf("start %s: %w", rtlTestBin, err)
+	}
+	// Drop the parent's writer so the read side sees EOF when the child exits.
+	_ = pw.Close()
+
+	ppm, ok, seen, raw := scanForStable(pr, func() {
+		_ = cmd.Process.Signal(os.Interrupt)
+	})
+	_ = pr.Close()
+	_ = cmd.Wait()
+
+	if !ok {
+		if len(seen) == 0 {
+			return 0, fmt.Errorf("%s -p produced no cumulative PPM reading for device %d: %s",
+				rtlTestBin, index, strings.TrimSpace(tail(raw, 200)))
+		}
+		lo, hi := spread(seen)
+		// The spread is the useful part of this message: it separates "the
+		// dongle is drifting" from "the dongle was never opened".
+		return 0, fmt.Errorf("%s -p never settled for device %d: %d readings spanning %d..%d ppm over %s",
+			rtlTestBin, index, len(seen), lo, hi, dur)
 	}
 	if ppm > MaxPlausible || ppm < -MaxPlausible {
 		return 0, fmt.Errorf("measured ppm %d is outside the plausible range (+/-%d)", ppm, MaxPlausible)
 	}
 	return ppm, nil
+}
+
+// scanForStable reads rtl_test's output and returns the first cumulative
+// reading backed by StableWindow consecutive readings agreeing to within
+// StableTolerance.
+//
+// On success it calls stop (which interrupts rtl_test) and then KEEPS READING
+// until EOF. Returning straight away would close the pipe under a child that is
+// still writing, killing it with SIGPIPE — and only a clean exit releases the
+// USB device, which is the difference between the decoder starting and the
+// decoder crash-looping on "usb_claim_interface error".
+func scanForStable(r io.Reader, stop func()) (ppm int, ok bool, seen []int, raw string) {
+	var b strings.Builder
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
+
+	for sc.Scan() {
+		line := sc.Text()
+		// Enough context for an error message, not the whole run.
+		if b.Len() < 8192 {
+			b.WriteString(line)
+			b.WriteByte('\n')
+		}
+		m := cumPpmRe.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		v, err := strconv.Atoi(m[1])
+		if err != nil {
+			continue
+		}
+		seen = append(seen, v)
+		if ok || len(seen) < StableWindow {
+			continue
+		}
+		lo, hi := spread(seen[len(seen)-StableWindow:])
+		if hi-lo <= StableTolerance {
+			// The newest reading integrates the longest run, so it is the best
+			// of the window rather than an average of it.
+			ppm, ok = v, true
+			if stop != nil {
+				stop()
+			}
+		}
+	}
+	return ppm, ok, seen, b.String()
+}
+
+// spread returns the smallest and largest of vs. Callers only reach it with a
+// non-empty slice.
+func spread(vs []int) (lo, hi int) {
+	lo, hi = vs[0], vs[0]
+	for _, v := range vs {
+		if v < lo {
+			lo = v
+		}
+		if v > hi {
+			hi = v
+		}
+	}
+	return lo, hi
 }
 
 // tail returns up to the last n bytes of s, for compact error context.
