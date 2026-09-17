@@ -2186,6 +2186,12 @@
        bottom card (#mobile-tip-card) instead. Gated on body.is-touch (set in JS
        from pointer:coarse) so a narrow desktop window keeps normal tooltips. */
     body.is-touch .leaflet-tooltip { display: none !important; }
+    /* Labels already put the identity and the fields on the map permanently,
+       so a hover tooltip repeats them a few pixels away. Suppressed by CSS
+       rather than by unbinding, the same way the touch rule above works: it
+       takes effect the instant the pill flips, with no marker churn through
+       _rebuildAdsb's diff. Scoped to .adsb-tooltip so vessels keep theirs. */
+    body.adsb-labels-on .leaflet-tooltip.adsb-tooltip { display: none !important; }
     /* Repeaters use a Leaflet popup (.repeater-popup); on touch hide the anchored
        popup — its content is mirrored into the bottom card instead. */
     body.is-touch .repeater-popup { display: none !important; }
@@ -13941,6 +13947,7 @@ function initPagerHoursFromStorage() {
           for (const k of Object.keys(adsbTypeFilter)) adsbTypeFilter[k] = true;
         }
         _applyKnownKeys(adsbLabelSettings, p.adsb.labels);
+        _adsbSyncLabelClass();
         if (typeof p.adsb.trails === 'boolean') adsbTrailsEnabled = p.adsb.trails;
         // mineOnly is applied only once we know the user actually owns a
         // receiver — see _adsbApplyPendingMineOnly. A stale true would
@@ -15581,8 +15588,16 @@ function initPagerHoursFromStorage() {
       refreshActiveFilterPanel();
       saveMapPrefs();
     };
+    /** Mirror the labels setting onto <body>, which is what the tooltip rule
+     *  keys off. One function, called from the toggle AND from prefs restore —
+     *  a reload with labels saved on would otherwise bring the tooltips back. */
+    function _adsbSyncLabelClass() {
+      document.body.classList.toggle('adsb-labels-on', !!adsbLabelSettings.enabled);
+    }
+
     window.toggleAdsbLabelsPill = function () {
       adsbLabelSettings.enabled = !adsbLabelSettings.enabled;
+      _adsbSyncLabelClass();
       _rebuildAdsb();
       refreshActiveFilterPanel();
       saveMapPrefs();
