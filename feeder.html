@@ -1395,7 +1395,7 @@
       // Live figures come from the agent's heartbeat, so they are absent while
       // the receiver is offline — shown as "—", never as zero, which would
       // claim a working receiver is hearing nothing.
-      const tile = (v, label) => `<div class="fs-tile"><div class="fs-tile-v">${v}</div><div class="fs-tile-l">${label}</div></div>`;
+      const tile = (v, label, tip) => `<div class="fs-tile"${tip ? ` title="${escapeHtml(tip)}"` : ''}><div class="fs-tile-v">${v}</div><div class="fs-tile-l">${label}</div></div>`;
       const n = (v) => (v == null ? '—' : Number(v).toLocaleString());
       // Closest and furthest rather than one "range": alone, the figure moved
       // whenever the furthest aircraft left the sky, so it described the
@@ -1413,7 +1413,8 @@
         ${tile(n(t.positions), 'Positions')}
         ${tile(n(t.snapshots), 'Snapshots')}
         ${tile(n(t.maxAircraft), 'Peak aircraft')}
-        ${tile(t.maxRangeKm == null ? '—' : Math.round(t.maxRangeKm) + ' km', 'Best range')}
+        ${tile(t.maxRangeKm == null ? '—' : Math.round(t.maxRangeKm) + ' km', 'Best range',
+          'The furthest the DECODER measured. The coverage plot can read lower: it maps only positions that reached the server, and the ones at extreme range are the likeliest to arrive too stale to plot.')}
       </div>`;
 
       const days = (d.days || []).slice().reverse();
@@ -1687,7 +1688,7 @@
       const svg = ENV_polarSvg(cov.buckets, cov.recent, { size: 240 });
       const days = `${cov.daysCovered} ${cov.daysCovered === 1 ? 'day' : 'days'}`;
       let legend = `<div><span class="ab-polar-key" style="border-top-color:#c084fc;"></span>`
-        + `All time · reaches ${Math.round(cov.maxKm)} km</div>`;
+        + `All time · mapped to ${Math.round(cov.maxKm)} km</div>`;
       if (ENV_hasData(cov.recent)) {
         legend += `<div><span class="ab-polar-key" style="border-top-color:#4ade80;`
           + `border-top-style:dashed;"></span>Last 24 hours</div>`;

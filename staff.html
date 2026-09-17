@@ -8643,7 +8643,7 @@
       const days = nd2Num(cov.daysCovered) + (cov.daysCovered === 1 ? ' day' : ' days');
       const legend = []
         .concat('<div><span class="nd2-polar-key" style="border-top-color:#c084fc;"></span>'
-              + 'All time · reaches ' + Math.round(cov.maxKm) + ' km</div>')
+              + 'All time · mapped to ' + Math.round(cov.maxKm) + ' km</div>')
         .concat(ENV_hasData(cov.recent)
           ? '<div><span class="nd2-polar-key" style="border-top-color:#4ade80;'
             + 'border-top-style:dashed;"></span>Last 24 hours</div>'
@@ -8811,7 +8811,7 @@
           tile(nd2Num(t.positions), 'Positions', null, 'reports accepted'),
           tile(nd2Num(t.maxAircraft), 'Peak aircraft', null, 'most seen at once'),
           tile(hasPin ? km(t.maxRangeKm) : '—', 'Best range', null,
-            hasPin ? 'furthest heard' : 'needs an antenna pin'),
+            hasPin ? 'furthest the decoder measured' : 'needs an antenna pin'),
           tile(t.msgRateMax == null ? '—' : Number(t.msgRateMax).toFixed(1) + '/s',
             'Peak msg rate', null, 'busiest minute'),
           tile(nd2Num(t.snapshots), 'Uploads', null,
