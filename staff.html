@@ -9696,13 +9696,29 @@
       return label;
     }
 
-    function _ndActivityHtml(online, sdrUp, decoding, feedEnabled, uploading, kind, updating, decodedLabels) {
+    /** What each kind calls the thing that does its decoding.
+     *
+     *  An ADS-B receiver has no SDR-Trunk — it supervises dump1090 — so telling
+     *  its owner "SDR-Trunk down" named a component the machine has never run.
+     *  The kinds fell into two branches when there are three. */
+    function _ndDecoderDown(kind, state) {
+      const st = String(state || '').toLowerCase();
+      // The agent keeps "crashlooped" separate from "stopped" deliberately: a
+      // decoder that keeps dying is a different problem from one that was
+      // turned off, and flattening them lost the distinction on the way here.
+      const looping = st.includes('crash');
+      if (kind === 'pager') return looping ? 'Readers crash-looping' : 'No readers';
+      if (kind === 'adsb') return looping ? 'Decoder crash-looping' : 'Decoder down';
+      return looping ? 'SDR-Trunk crash-looping' : 'SDR-Trunk down';
+    }
+
+    function _ndActivityHtml(online, sdrUp, decoding, feedEnabled, uploading, kind, updating, decodedLabels, decoderState) {
       const chip = (state, label) => `<span class="nd-ready ${state}">${label}</span>`;
       const isPager = kind === 'pager';
       let dec;
       if (updating) dec = chip('updating', '<i class="fas fa-arrows-rotate"></i> Updating');
       else if (!online) dec = chip('unknown', 'Offline');
-      else if (!sdrUp) dec = chip('bad', isPager ? 'No readers' : 'SDR-Trunk down');
+      else if (!sdrUp) dec = chip('bad', _ndDecoderDown(kind, decoderState));
       else if (decoding) {
         // Pager: name which frequencies are decoding (RFS / FR / both) so staff
         // AND owners can see coverage at a glance; fall back to a generic label.
@@ -9746,6 +9762,15 @@
       // nothing overhead is decoding perfectly well.
       const dump1090Up = !!(st && st.components
         && String(st.components.dump1090 || '').toLowerCase().includes('run'));
+      // Whichever component IS this kind's decoder, so a down chip can say what
+      // actually happened to it rather than just that something is wrong.
+      const decoderState = st && st.components
+        ? (isAdsb
+            ? st.components.dump1090
+            : isPager
+              ? (Object.entries(st.components).find(([k]) => k.startsWith('reader')) || [])[1]
+              : st.components.sdrtrunk)
+        : null;
       const sdrUp = isPager
         ? readersUp > 0
         : isAdsb
@@ -9849,7 +9874,7 @@
             ...((isPager || isAdsb) ? [] : [['sdrtrunk', node.sdrtrunkVersion], ['rdio', node.rdioVersion]]),
           ].map(([k, v]) => `<span><span class="k">${k}</span> ${escapeHtml(v == null ? '—' : String(v))}</span>`).join('')}</div>
           ${(isPager || isAdsb) ? '' : _ndReadinessHtml(st, sdrUp)}
-          ${_ndActivityHtml(online, sdrUp, decoding, feedEnabled, uploading, kind, updating, node.pagerDecoding)}
+          ${_ndActivityHtml(online, sdrUp, decoding, feedEnabled, uploading, kind, updating, node.pagerDecoding, decoderState)}
           <div class="dev-card-secondary nd-uptime-row">${uptimeHtml}</div>
           <div class="dev-card-secondary">
             <span title="${escapeHtml(userId)}">${owner}</span>
