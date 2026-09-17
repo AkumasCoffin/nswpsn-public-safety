@@ -396,6 +396,11 @@
     .fs-rx { color: var(--text-soft); font-size: 0.7rem; font-variant-numeric: tabular-nums; }
 
     /* ---- ADS-B receiver activity (showAdsbStats) ---- */
+    .ab-polar-wrap { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;
+      margin-bottom: 0.9rem; }
+    .ab-polar-legend { font-size: 0.72rem; color: var(--text-soft); line-height: 1.7; }
+    .ab-polar-key { display: inline-block; width: 14px; height: 0; margin-right: 6px;
+      vertical-align: middle; border-top-width: 2px; border-top-style: solid; }
     .ab-map { height: 320px; border-radius: 10px; overflow: hidden; border: 1px solid var(--border-subtle); }
     .ab-note { font-size: 0.7rem; color: var(--text-soft); margin: 0.4rem 0 0.9rem; }
     .ab-scroll { max-height: 34vh; overflow-y: auto; }
@@ -1304,9 +1309,11 @@
           </div>
           <div class="fs-wins">${winBtn('24h', '24h')}${winBtn('7d', '7 days')}${winBtn('30d', '30 days')}</div>
           <div id="adsb-body"><div class="loading" style="padding:2rem;"><i class="fas fa-spinner"></i></div></div>
-          <div class="fs-act-h">Coverage — last 8 hours</div>
+          <div class="fs-act-h">Coverage</div>
+          <div id="adsb-polar"><div class="ab-note">Loading coverage…</div></div>
+          <div class="fs-act-h">Tracks — last 8 hours</div>
           <div class="ab-map" id="adsb-map"></div>
-          <div class="ab-note" id="adsb-map-note">Loading coverage…</div>
+          <div class="ab-note" id="adsb-map-note">Loading tracks…</div>
         </div>`;
       overlay.addEventListener('click', (e) => { if (e.target === overlay) closeAdsbStats(); });
       document.body.appendChild(overlay);
@@ -1399,33 +1406,100 @@
     }
 
 
-    /* ---- Coverage envelope ----
+    /* ---- Coverage, as a polar range plot ----
      *
-     * The furthest aircraft heard per 5-degree bearing, accumulated across the
-     * retention window and drawn as a closed ring around the receiver. This is
-     * the half of the picture that survives a restart; the coloured tracks over
-     * it are the live 8-hour view and are deliberately not stored.
+     * Its own picture, not an overlay on the track map. The two answer
+     * different questions and want different framing: coverage is "how far, on
+     * every bearing, over weeks"; tracks are "what crossed in the last eight
+     * hours". Drawing the envelope on the map also forced the map to frame the
+     * whole envelope, which squashed the tracks down to a few pixels — the
+     * thing the map is FOR.
      *
-     * A bearing nothing has ever been heard on is a null, not a zero, and is
-     * rendered as a NOTCH pulled in to the centre rather than as a point on the
-     * ring — the gap in the fan is the diagnostic, and smoothing over it would
-     * erase the one thing the plot exists to show. */
-    function ENV_ringLatLngs(buckets, centreLat, centreLon) {
-      const pts = [];
-      const n = buckets.length;
-      for (let i = 0; i < n; i++) {
-        const km = buckets[i];
-        const bearing = (i + 0.5) * (360 / n);
-        const rad = bearing * Math.PI / 180;
-        // Nulls collapse to the centre, so an unheard bearing reads as a bite
-        // out of the ring instead of being interpolated across.
-        const d = (typeof km === 'number' && isFinite(km)) ? km : 0;
-        const dLat = (d * Math.cos(rad)) / 111.19;
-        const cosLat = Math.cos(centreLat * Math.PI / 180) || 1;
-        const dLon = (d * Math.sin(rad)) / (111.19 * cosLat);
-        pts.push([centreLat + dLat, centreLon + dLon]);
+     * Inline SVG rather than a chart library: feeder.html carries no charting
+     * dependency, and this has to render identically in both pages.
+     *
+     * A bearing nothing was ever heard on is drawn pulled IN to the centre, so
+     * a blocked lobe reads as a bite out of the shape. Interpolating across it
+     * would draw coverage that does not exist. */
+    const ENV_TICKS = [5, 10, 25, 50, 100, 150, 200, 250, 300, 400, 500];
+
+    /** Round a max range up to a tick that divides into readable rings. */
+    function ENV_niceMax(km) {
+      for (const t of ENV_TICKS) {
+        if (km <= t) return t;
       }
-      return pts;
+      return Math.ceil(km / 250) * 250;
+    }
+
+    function ENV_polarSvg(buckets, recent, opts) {
+      const o = opts || {};
+      const size = o.size || 260;
+      const c = size / 2;
+      const r = c - 26;                       // room for the km labels
+      const n = (buckets || []).length || 72;
+
+      let maxKm = 0;
+      for (const v of (buckets || [])) {
+        if (typeof v === 'number' && isFinite(v) && v > maxKm) maxKm = v;
+      }
+      if (maxKm <= 0) return '';
+      const scaleMax = ENV_niceMax(maxKm);
+
+      // Bearing i is clockwise from north; SVG y grows downward, so north is
+      // -y and east is +x.
+      const pt = (i, km) => {
+        const a = ((i + 0.5) * (360 / n) - 90) * Math.PI / 180;
+        const rad = r * Math.max(0, Math.min(1, (km || 0) / scaleMax));
+        return [c + rad * Math.cos(a), c + rad * Math.sin(a)];
+      };
+      const poly = (vals) => (vals || []).map((v, i) => {
+        // Null pulls to the centre — the gap IS the diagnostic.
+        const km = (typeof v === 'number' && isFinite(v)) ? v : 0;
+        const p = pt(i, km);
+        return p[0].toFixed(1) + ',' + p[1].toFixed(1);
+      }).join(' ');
+
+      let grid = '';
+      for (let k = 1; k <= 4; k++) {
+        const rr = (r * k) / 4;
+        grid += '<circle cx="' + c + '" cy="' + c + '" r="' + rr.toFixed(1) + '" fill="none" '
+             +  'stroke="rgba(148,163,184,0.18)" stroke-width="1"/>';
+        grid += '<text x="' + (c + 2) + '" y="' + (c - rr + 9).toFixed(1) + '" '
+             +  'fill="#64748b" font-size="8" font-family="system-ui,sans-serif">'
+             +  Math.round((scaleMax * k) / 4) + '</text>';
+      }
+      // Cardinal spokes only: eight would fight the shape.
+      for (const d of [[0, -1], [1, 0], [0, 1], [-1, 0]]) {
+        grid += '<line x1="' + c + '" y1="' + c + '" x2="' + (c + d[0] * r)
+             +  '" y2="' + (c + d[1] * r) + '" stroke="rgba(148,163,184,0.14)" stroke-width="1"/>';
+      }
+      const lbl = (t, x, y, anchor) =>
+        '<text x="' + x + '" y="' + y + '" text-anchor="' + anchor + '" fill="#94a3b8" '
+        + 'font-size="9" font-family="system-ui,sans-serif">' + t + '</text>';
+      grid += lbl('N', c, 10, 'middle') + lbl('E', size - 4, c + 3, 'end')
+           +  lbl('S', c, size - 3, 'middle') + lbl('W', 4, c + 3, 'start');
+
+      let shapes = '<polygon points="' + poly(buckets) + '" fill="rgba(192,132,252,0.18)" '
+                 + 'stroke="#c084fc" stroke-width="1.5"/>';
+      // The last 24 hours over the long envelope: a bearing inside the filled
+      // shape but outside this outline is a lobe that has STOPPED hearing.
+      if (ENV_hasData(recent)) {
+        shapes += '<polygon points="' + poly(recent) + '" fill="none" stroke="#4ade80" '
+               +  'stroke-width="1.5" stroke-dasharray="4 3"/>';
+      }
+
+      return '<svg viewBox="0 0 ' + size + ' ' + size + '" width="' + size + '" height="'
+           + size + '" role="img" aria-label="Coverage by bearing, to ' + scaleMax + ' km">'
+           + grid + shapes + '</svg>';
+    }
+
+    /** The plot's outer-ring value, so a caption can name the scale. */
+    function ENV_scaleKm(buckets) {
+      let m = 0;
+      for (const v of (buckets || [])) {
+        if (typeof v === 'number' && isFinite(v) && v > m) m = v;
+      }
+      return m > 0 ? ENV_niceMax(m) : 0;
     }
 
     /** True when at least one bearing has ever been heard on. */
@@ -1468,29 +1542,6 @@
 
       const layer = L.layerGroup();
       const traces = d.traces || [];
-      // The accumulated envelope goes on FIRST: Leaflet paints a layer group
-      // in the order things are added, so anything added later sits on top.
-      // A translucent fill drawn over the tracks would dull every one of them.
-      if (d.site && d.coverage && ENV_hasData(d.coverage.buckets)) {
-        const cc = [d.site.lat, d.site.lon];
-        // Centred on the ROUNDED site. The envelope is computed server-side
-        // from the true pin, and a ~1 km offset on a 200 km plot is invisible
-        // while the exact position stays where it belongs.
-        L.polygon(ENV_ringLatLngs(d.coverage.buckets, cc[0], cc[1]), {
-          color: '#c084fc', weight: 1, opacity: 0.55,
-          fillColor: '#c084fc', fillOpacity: 0.07, interactive: false,
-        }).addTo(layer);
-        // The last 24 hours over the long envelope. A bearing inside the outer
-        // ring but outside this one is a lobe that has STOPPED hearing —
-        // which no amount of staring at tracks would reveal.
-        if (ENV_hasData(d.coverage.recent)) {
-          L.polygon(ENV_ringLatLngs(d.coverage.recent, cc[0], cc[1]), {
-            color: '#4ade80', weight: 1.5, opacity: 0.8,
-            fill: false, dashArray: '5 4', interactive: false,
-          }).addTo(layer);
-        }
-      }
-
       for (const tr of traces) {
         // One colour per aircraft, derived from its hex, so adjacent paths stay
         // distinguishable without a legend nobody would read.
@@ -1509,31 +1560,50 @@
       try {
         const b = L.latLngBounds([]);
         for (const tr of traces) for (const pt of tr.points) b.extend(pt);
-        if (d.site) {
-          b.extend([d.site.lat, d.site.lon]);
-          if (d.coverage && ENV_hasData(d.coverage.buckets)) {
-            for (const pt of ENV_ringLatLngs(d.coverage.buckets, d.site.lat, d.site.lon)) b.extend(pt);
-          }
-        }
+        // Framed on the TRACKS, not the envelope. The envelope spans weeks
+        // and would zoom this out until the last eight hours of traffic were
+        // a few pixels across — which is the whole point of this map.
+        if (d.site) b.extend([d.site.lat, d.site.lon]);
         if (b.isValid()) _abMap.fitBounds(b.pad(0.08));
       } catch (_e) { /* degenerate bounds is not worth failing the view for */ }
       setTimeout(() => _abMap && _abMap.invalidateSize(), 60);
 
       if (note) {
-        if (!d.site) {
-          note.textContent = 'Set your exact antenna pin under Location to anchor the coverage picture.';
-        } else {
-          const cov = d.coverage;
-          const parts = [];
-          if (cov && cov.maxKm != null) {
-            parts.push(`Reaches ${Math.round(cov.maxKm)} km, from ${cov.daysCovered} `
-              + `${cov.daysCovered === 1 ? 'day' : 'days'} of listening`);
-          }
-          parts.push(`${d.aircraft} aircraft in the last 8 hours`);
-          parts.push('Your receiver is drawn as an approximate area, not its exact pin');
-          note.textContent = parts.join(' · ') + '.';
-        }
+        note.textContent = !d.site
+          ? 'Set your exact antenna pin under Location to anchor the picture.'
+          : `${d.aircraft} aircraft · ${traces.length} with a path · `
+            + `${Number(d.points).toLocaleString()} positions. Your receiver is drawn `
+            + 'as an approximate area, not its exact pin.';
       }
+
+      // Same response carries the envelope, so the plot is filled from here.
+      const polar = document.getElementById('adsb-polar');
+      if (polar) polar.innerHTML = _abPolarBody(d.coverage);
+    }
+
+    /** The polar coverage plot — how far this receiver hears on every bearing,
+     *  accumulated across the retention window. Its own picture rather than an
+     *  overlay on the track map: the two answer different questions, and the
+     *  envelope's extent was squashing the tracks into a few pixels. */
+    function _abPolarBody(cov) {
+      if (!cov || !ENV_hasData(cov.buckets)) {
+        return '<div class="ab-note">Nothing heard yet — a coverage picture needs '
+             + 'traffic from enough directions to take shape.</div>';
+      }
+      const svg = ENV_polarSvg(cov.buckets, cov.recent, { size: 240 });
+      const days = `${cov.daysCovered} ${cov.daysCovered === 1 ? 'day' : 'days'}`;
+      let legend = `<div><span class="ab-polar-key" style="border-top-color:#c084fc;"></span>`
+        + `All time · reaches ${Math.round(cov.maxKm)} km</div>`;
+      if (ENV_hasData(cov.recent)) {
+        legend += `<div><span class="ab-polar-key" style="border-top-color:#4ade80;`
+          + `border-top-style:dashed;"></span>Last 24 hours</div>`;
+      }
+      legend += `<div>Built from ${days}</div>`;
+      if (cov.daysCovered < 2) {
+        legend += `<div style="color:#fbbf24;">Too little history yet to judge this</div>`;
+      }
+      legend += `<div>Rings every ${Math.round(ENV_scaleKm(cov.buckets) / 4)} km</div>`;
+      return `<div class="ab-polar-wrap">${svg}<div class="ab-polar-legend">${legend}</div></div>`;
     }
 
     function closeAdsbStats() {

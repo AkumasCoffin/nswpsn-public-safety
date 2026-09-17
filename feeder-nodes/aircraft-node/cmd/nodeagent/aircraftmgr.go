@@ -174,7 +174,18 @@ func (m *aircraftManager) rebuildLocked(comps map[string]agentcfg.ComponentCfg) 
 func (m *aircraftManager) MeasurePPM() {
 	ppm, err := sdrppm.Measure(0, sdrppm.MeasureDur)
 	if err != nil {
-		log.Printf("ppm: measurement failed (%v); running without a correction", err)
+		// The previously measured value is deliberately KEPT, so this is only
+		// "without a correction" on a node that never had one. Saying so
+		// plainly matters: the old wording claimed the correction had been
+		// dropped, which sent people looking for a fault that was not there.
+		m.mu.Lock()
+		had := m.measuredPPM
+		m.mu.Unlock()
+		if had != nil {
+			log.Printf("ppm: measurement failed (%v); keeping the previous correction of %d", err, *had)
+		} else {
+			log.Printf("ppm: measurement failed (%v); running without a correction", err)
+		}
 		return
 	}
 	log.Printf("ppm: measured %d for the attached SDR", ppm)
@@ -214,7 +225,24 @@ func (m *aircraftManager) Rescan() error {
 		return nil
 	}
 
-	log.Printf("decoder: rescan — re-measuring ppm, then restarting the decoder")
+	log.Printf("decoder: rescan — stopping the decoder, re-measuring ppm, then restarting it")
+
+	// STOP THE DECODER FIRST. rtl_test opens the same device, and it cannot
+	// while dump1090 holds it — the measurement failed every time with
+	// "usb_claim_interface error -6", so the button re-measured nothing and
+	// relaunched exactly as it was. MeasurePPM's own contract says it runs
+	// before the decoder starts; only the boot path was honouring it.
+	m.mu.Lock()
+	if m.supCancel != nil {
+		m.supCancel()
+		m.supCancel = nil
+		m.sup = nil
+	}
+	m.mu.Unlock()
+	// Same settle the config swap uses: the kernel does not release the USB
+	// interface the instant the process dies.
+	time.Sleep(decoderSwapSettle)
+
 	// Deliberately outside m.mu: the measurement holds the dongle for ~20s, and
 	// blocking every status heartbeat behind it would make the node look hung.
 	m.MeasurePPM()
