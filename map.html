@@ -2222,6 +2222,17 @@
     .leaflet-tooltip-left.ais-tooltip::before { border-left-color: rgba(15, 23, 42, 0.96) !important; }
     .leaflet-tooltip-right.ais-tooltip::before { border-right-color: rgba(15, 23, 42, 0.96) !important; }
 
+    /* Aeronautical tooltips are two or three short lines of reference data.
+       They ride the aircraft tooltip's shape and only soften the heading —
+       an airspace name is not a callsign and should not shout like one. */
+    .leaflet-tooltip.aero-tooltip {
+      font-size: 0.74rem !important;
+      line-height: 1.45 !important;
+      border-color: rgba(148, 163, 184, 0.35) !important;
+    }
+    .leaflet-tooltip.aero-tooltip b { color: #f1f5f9 !important; font-weight: 600; }
+    .leaflet-tooltip.aero-tooltip .aero-sub { color: #94a3b8 !important; }
+
     /* Touch devices: don't render the map-anchored tooltip at all — its fixed
        320/350px min-width covered most of a phone screen and often opened under
        the top bars or off the edge. Its content is mirrored into the fixed
@@ -16128,60 +16139,93 @@ function initPagerHoursFromStorage() {
      * couple of megabytes, and making everyone who opens the map pay for a
      * chart they did not ask for would be the wrong default.
      */
+    // ?v= because the fetch below is force-cache: without a new URL a browser
+    // that already holds one of these keeps it forever, and a rebuild (new
+    // fields, corrected labels) would never reach anyone who had looked once.
+    // Bump it whenever scripts/build-aero-geojson.py is re-run.
+    const AERO_V = 2;
     const AERO = {
-      airspace: { on: false, url: 'assets/geo/au-airspace.geojson', layer: null, loading: false },
-      airports: { on: false, url: 'assets/geo/au-airports.geojson', layer: null, loading: false },
-      navaids:  { on: false, url: 'assets/geo/au-navaids.geojson',  layer: null, loading: false },
+      airspace: { on: false, url: `assets/geo/au-airspace.geojson?v=${AERO_V}`, layer: null, loading: false },
+      airports: { on: false, url: `assets/geo/au-airports.geojson?v=${AERO_V}`, layer: null, loading: false },
+      navaids:  { on: false, url: `assets/geo/au-navaids.geojson?v=${AERO_V}`,  layer: null, loading: false },
     };
 
     /* Class drives the colour, because that is what tells a pilot whether they
      * may be there. Everything without one — restricted and danger areas — is
-     * red, since those are the ones you may not simply fly into. */
+     * red, since those are the ones you may not simply fly into.
+     *
+     * Muted on purpose. An aeronautical chart is dozens of overlapping
+     * boundaries; at full saturation the east coast turned into a ball of
+     * neon with the traffic lost inside it. These are the paper underneath. */
     const AERO_CLASS_COLOUR = {
-      A: '#f472b6', C: '#60a5fa', D: '#38bdf8', E: '#4ade80', G: '#94a3b8',
+      A: '#a78bfa', C: '#60a5fa', D: '#7dd3fc', E: '#5eead4', G: '#94a3b8',
     };
 
+    /* BORDERS ONLY — `fill: false`, and that is doing two jobs.
+     *
+     * Visually it is what an airspace boundary is: a line on a chart, not a
+     * wash of colour. Even at 4% opacity the fills stacked, because airspace
+     * nests — a CTA step inside a FIR inside an oceanic sector — and six
+     * translucent layers is an opaque one.
+     *
+     * It also fixes the hover. With a fill, every polygon under the cursor
+     * claimed the pointer, so one hover over open airspace stacked three
+     * tooltips on top of each other. Without one, only the boundary line is
+     * interactive: point at the edge you want to identify and you get that
+     * edge, which is the question anyone hovering a boundary is asking. */
     function _aeroAirspaceStyle(f) {
       const p = f.properties || {};
       const restricted = p.t === 'Restricted' || p.t === 'Danger' || p.t === 'Prohibited';
-      const colour = restricted ? '#ef4444' : (AERO_CLASS_COLOUR[p.c] || '#64748b');
       return {
-        color: colour, weight: 1, opacity: 0.7,
-        fillColor: colour, fillOpacity: restricted ? 0.10 : 0.04,
+        color: restricted ? '#f87171' : (AERO_CLASS_COLOUR[p.c] || '#64748b'),
+        weight: restricted ? 1 : 0.8,
+        opacity: restricted ? 0.6 : 0.45,
+        fill: false,
       };
+    }
+
+    /** Name in white, everything else in the muted sub colour — the name is
+     *  what identifies it, the rest is detail you read after finding it. */
+    function _aeroSub(parts) {
+      const kept = parts.filter(Boolean);
+      return kept.length ? '<span class="aero-sub">' + kept.join(' · ') + '</span>' : '';
     }
 
     function _aeroAirspaceLabel(p) {
       const bits = ['<b>' + escapeHtml(p.n || 'Airspace') + '</b>'];
-      const sub = [];
-      if (p.c) sub.push('Class ' + escapeHtml(p.c));
-      if (p.t) sub.push(escapeHtml(p.t));
-      if (sub.length) bits.push(sub.join(' · '));
-      // Both limits or neither: half a vertical extent is not useful.
-      if (p.l && p.u) bits.push(escapeHtml(p.l) + ' – ' + escapeHtml(p.u));
+      const sub = _aeroSub([
+        p.c ? 'Class ' + escapeHtml(p.c) : '',
+        p.t ? escapeHtml(p.t) : '',
+        // Both limits or neither: half a vertical extent is not useful.
+        (p.l && p.u) ? escapeHtml(p.l) + '–' + escapeHtml(p.u) : '',
+      ]);
+      if (sub) bits.push(sub);
       return bits.join('<br>');
     }
 
     function _aeroAirportLabel(p) {
-      const codes = [p.i, p.a].filter(Boolean).map(escapeHtml).join(' · ');
-      const bits = ['<b>' + escapeHtml(p.n || 'Airport') + '</b>'];
-      if (codes) bits.push(codes);
-      const sub = [];
-      if (p.k) sub.push(escapeHtml(p.k));
-      if (typeof p.e === 'number') sub.push(p.e.toLocaleString() + ' ft');
-      if (p.pr) sub.push('Private');
-      if (p.ppr) sub.push('PPR');
-      if (sub.length) bits.push(sub.join(' · '));
+      // Codes on the heading line: an ICAO code identifies the field as much
+      // as its name does, and pairing them saves a line.
+      const codes = [p.i, p.a].filter(Boolean).map(escapeHtml).join(' / ');
+      const bits = ['<b>' + escapeHtml(p.n || 'Airport') + (codes ? ' · ' + codes : '') + '</b>'];
+      const sub = _aeroSub([
+        p.k ? escapeHtml(p.k) : '',
+        typeof p.e === 'number' ? p.e.toLocaleString() + ' ft' : '',
+        p.pr ? 'Private' : '',
+        p.ppr ? 'PPR' : '',
+      ]);
+      if (sub) bits.push(sub);
       return bits.join('<br>');
     }
 
     function _aeroNavaidLabel(p) {
-      const bits = ['<b>' + escapeHtml((p.n || '') + (p.id ? ' (' + p.id + ')' : '')) + '</b>'];
-      const sub = [];
-      if (p.t) sub.push(escapeHtml(p.t));
-      if (p.f) sub.push(escapeHtml(p.f));
-      if (p.ch) sub.push('Ch ' + escapeHtml(String(p.ch)));
-      if (sub.length) bits.push(sub.join(' · '));
+      const bits = ['<b>' + escapeHtml((p.n || 'Navaid') + (p.id ? ' · ' + p.id : '')) + '</b>'];
+      const sub = _aeroSub([
+        p.t ? escapeHtml(p.t) : '',
+        p.f ? escapeHtml(p.f) : '',
+        p.ch ? 'Ch ' + escapeHtml(String(p.ch)) : '',
+      ]);
+      if (sub) bits.push(sub);
       return bits.join('<br>');
     }
 
@@ -16190,33 +16234,38 @@ function initPagerHoursFromStorage() {
         return L.geoJSON(data, {
           style: _aeroAirspaceStyle,
           onEachFeature: (f, l) => l.bindTooltip(_aeroAirspaceLabel(f.properties || {}),
-            { sticky: true, direction: 'top' }),
+            { sticky: true, direction: 'top', className: 'ais-tooltip adsb-tooltip aero-tooltip' }),
         });
       }
       if (kind === 'airports') {
         return L.geoJSON(data, {
           pointToLayer: (f, latlng) => {
             const p = f.properties || {};
+            // Size says how big the field is, colour says who it belongs to.
+            // 1655 of the ~1770 airfields are ordinary civil strips, so the
+            // small dot has to stay small or the coast becomes a solid line.
             const major = !!p.maj;
+            const mil = !!p.mil;
             return L.circleMarker(latlng, {
-              radius: major ? 5 : 3,
-              color: p.k === 'Military' ? '#f59e0b' : '#e2e8f0',
-              weight: major ? 1.6 : 1,
-              fillColor: p.k === 'Military' ? '#f59e0b' : '#0ea5e9',
-              fillOpacity: major ? 0.95 : 0.6,
+              radius: major ? 4.5 : 2.5,
+              color: mil ? '#fbbf24' : '#cbd5e1',
+              weight: major ? 1.4 : 0.9,
+              opacity: major ? 0.9 : 0.65,
+              fillColor: mil ? '#f59e0b' : '#0ea5e9',
+              fillOpacity: major ? 0.9 : 0.5,
             });
           },
           onEachFeature: (f, l) => l.bindTooltip(_aeroAirportLabel(f.properties || {}),
-            { sticky: true, direction: 'top' }),
+            { sticky: true, direction: 'top', className: 'ais-tooltip adsb-tooltip aero-tooltip' }),
         });
       }
       return L.geoJSON(data, {
         pointToLayer: (f, latlng) => L.circleMarker(latlng, {
-          radius: 4, color: '#a78bfa', weight: 1.4,
-          fillColor: '#7c3aed', fillOpacity: 0.85,
+          radius: 3, color: '#c4b5fd', weight: 1,
+          opacity: 0.8, fillColor: '#7c3aed', fillOpacity: 0.8,
         }),
         onEachFeature: (f, l) => l.bindTooltip(_aeroNavaidLabel(f.properties || {}),
-          { sticky: true, direction: 'top' }),
+          { sticky: true, direction: 'top', className: 'ais-tooltip adsb-tooltip aero-tooltip' }),
       });
     }
 

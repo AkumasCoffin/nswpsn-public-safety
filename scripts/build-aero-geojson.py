@@ -23,12 +23,20 @@ mislabelled airspace class on an aviation map is worse than no label:
     type     military fields (Amberley, Darwin, Nowra, Tindal), i.e. TACAN and
              VORTAC. 3 has no channel, 4 does: VOR and VOR/DME.
 
-Airport `type` is deliberately NOT turned into a label. 3 and 9 both hold
-capital-city airports (Sydney is 3, Brisbane is 9) so the distinction could not
-be pinned down from the data, and guessing at it would put a wrong word under a
-real airport. It drives marker SIZE only, where being wrong costs nothing, and
-the categories that are unambiguous — military, heliport, water, glider — are
-the only ones named.
+Airport `type` was left unlabelled at first because 3 and 9 both hold
+capital-city airports (Sydney is 3, Brisbane is 9). openAIP's own site supplied
+the distinction — 3 "International Airport", 9 "Airport resp. Airfield IFR",
+2 "Airfield Civil" — and the rest of the enum then agreed with the data on
+every code present:
+
+  0  the joint civil/military fields (Curtin, Darwin, Townsville, Wagga)
+  1  gliding sites (Bunyan, Bathurst Pipersfield)
+  2  1655 ordinary civil airfields, Archerfield among them
+  5  Amberley, Richmond, Williamtown, East Sale — RAAF
+  7  helipads: Batman Park, and the Bass Strait platforms
+  8  Katoomba and Yagga Yagga, both closed
+  10 Rose Bay, Elizabeth Quay, Melville — water
+  11 farm strips (Midway Farm Stall, Whorouly)
 
     python scripts/build-aero-geojson.py <src-dir>
 """
@@ -55,9 +63,25 @@ ASP_TYPE = {
     26: 'Control area',
 }
 NAV_TYPE = {0: 'DME', 1: 'TACAN', 2: 'NDB', 3: 'VOR', 4: 'VOR/DME', 5: 'VORTAC'}
-# Only the unambiguous ones get a word.
-APT_KIND = {1: 'Glider site', 5: 'Military', 7: 'Heliport', 10: 'Water'}
-APT_MAJOR = {3, 9}
+APT_KIND = {
+    0: 'Airport (civil/military)',
+    1: 'Glider site',
+    2: 'Civil airfield',
+    3: 'International airport',
+    4: 'Heliport (military)',
+    5: 'Military aerodrome',
+    6: 'Ultralight strip',
+    7: 'Heliport',
+    8: 'Closed',
+    9: 'Airport (IFR)',
+    10: 'Water aerodrome',
+    11: 'Landing strip',
+    12: 'Agricultural strip',
+    13: 'Altiport',
+}
+# Drawn larger: the ones an airliner uses.
+APT_MAJOR = {0, 3, 9}
+APT_MIL = {4, 5}
 
 
 def limit(v):
@@ -186,6 +210,7 @@ def build(src):
                 'a': p.get('iataCode'),
                 'k': APT_KIND.get(p.get('type')),
                 'maj': 1 if p.get('type') in APT_MAJOR else 0,
+                'mil': 1 if p.get('type') in APT_MIL else 0,
                 'e': round(el) if isinstance(el, (int, float)) else None,
                 'pr': 1 if p.get('private') else 0,
                 'ppr': 1 if p.get('ppr') else 0,
