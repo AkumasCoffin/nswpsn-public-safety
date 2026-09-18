@@ -16084,10 +16084,30 @@ function initPagerHoursFromStorage() {
               : ''}
           `;
         }
+        // Aeronautical reference layers. Off by default and fetched only when
+        // first switched on: airspace alone is a couple of megabytes, and most
+        // people looking at aircraft do not want the chart underneath them.
+        const aeroHtml = `
+          <div class="ff-section-label">Aeronautical</div>
+          <div class="floating-filter-pills">${_ffPill(
+            AERO.airspace.on,
+            '<i class="fa-solid fa-draw-polygon"></i> Airspace',
+            "toggleAero('airspace')"
+          )}${_ffPill(
+            AERO.airports.on,
+            '<i class="fa-solid fa-tower-observation"></i> Airports',
+            "toggleAero('airports')"
+          )}${_ffPill(
+            AERO.navaids.on,
+            '<i class="fa-solid fa-tower-broadcast"></i> Navaids',
+            "toggleAero('navaids')"
+          )}</div>`;
+
         return `
           <h4><i class="fa-solid fa-plane" style="color:#c084fc;"></i> Aircraft</h4>
           ${fleetHtml}
           ${mineHtml}
+          ${aeroHtml}
           <div class="ff-section-label">Aircraft type</div>
           <div class="floating-filter-pills">${typePills}</div>
           <div class="ff-section-label">Labels</div>
@@ -16095,6 +16115,147 @@ function initPagerHoursFromStorage() {
           ${fieldsHtml}
         `;
       },
+    };
+
+    /* ---- Aeronautical reference layers ----
+     *
+     * Airspace, airports and navaids, from openAIP exports trimmed by
+     * scripts/build-aero-geojson.py. Static files rather than an endpoint:
+     * they change a few times a year, so a fetch the browser and the CDN can
+     * both cache indefinitely beats a round trip to us.
+     *
+     * Each is loaded ONCE, the first time it is switched on. Airspace is a
+     * couple of megabytes, and making everyone who opens the map pay for a
+     * chart they did not ask for would be the wrong default.
+     */
+    const AERO = {
+      airspace: { on: false, url: 'assets/geo/au-airspace.geojson', layer: null, loading: false },
+      airports: { on: false, url: 'assets/geo/au-airports.geojson', layer: null, loading: false },
+      navaids:  { on: false, url: 'assets/geo/au-navaids.geojson',  layer: null, loading: false },
+    };
+
+    /* Class drives the colour, because that is what tells a pilot whether they
+     * may be there. Everything without one — restricted and danger areas — is
+     * red, since those are the ones you may not simply fly into. */
+    const AERO_CLASS_COLOUR = {
+      A: '#f472b6', C: '#60a5fa', D: '#38bdf8', E: '#4ade80', G: '#94a3b8',
+    };
+
+    function _aeroAirspaceStyle(f) {
+      const p = f.properties || {};
+      const restricted = p.t === 'Restricted' || p.t === 'Danger' || p.t === 'Prohibited';
+      const colour = restricted ? '#ef4444' : (AERO_CLASS_COLOUR[p.c] || '#64748b');
+      return {
+        color: colour, weight: 1, opacity: 0.7,
+        fillColor: colour, fillOpacity: restricted ? 0.10 : 0.04,
+      };
+    }
+
+    function _aeroAirspaceLabel(p) {
+      const bits = ['<b>' + escapeHtml(p.n || 'Airspace') + '</b>'];
+      const sub = [];
+      if (p.c) sub.push('Class ' + escapeHtml(p.c));
+      if (p.t) sub.push(escapeHtml(p.t));
+      if (sub.length) bits.push(sub.join(' · '));
+      // Both limits or neither: half a vertical extent is not useful.
+      if (p.l && p.u) bits.push(escapeHtml(p.l) + ' – ' + escapeHtml(p.u));
+      return bits.join('<br>');
+    }
+
+    function _aeroAirportLabel(p) {
+      const codes = [p.i, p.a].filter(Boolean).map(escapeHtml).join(' · ');
+      const bits = ['<b>' + escapeHtml(p.n || 'Airport') + '</b>'];
+      if (codes) bits.push(codes);
+      const sub = [];
+      if (p.k) sub.push(escapeHtml(p.k));
+      if (typeof p.e === 'number') sub.push(p.e.toLocaleString() + ' ft');
+      if (p.pr) sub.push('Private');
+      if (p.ppr) sub.push('PPR');
+      if (sub.length) bits.push(sub.join(' · '));
+      return bits.join('<br>');
+    }
+
+    function _aeroNavaidLabel(p) {
+      const bits = ['<b>' + escapeHtml((p.n || '') + (p.id ? ' (' + p.id + ')' : '')) + '</b>'];
+      const sub = [];
+      if (p.t) sub.push(escapeHtml(p.t));
+      if (p.f) sub.push(escapeHtml(p.f));
+      if (p.ch) sub.push('Ch ' + escapeHtml(String(p.ch)));
+      if (sub.length) bits.push(sub.join(' · '));
+      return bits.join('<br>');
+    }
+
+    function _aeroBuild(kind, data) {
+      if (kind === 'airspace') {
+        return L.geoJSON(data, {
+          style: _aeroAirspaceStyle,
+          onEachFeature: (f, l) => l.bindTooltip(_aeroAirspaceLabel(f.properties || {}),
+            { sticky: true, direction: 'top' }),
+        });
+      }
+      if (kind === 'airports') {
+        return L.geoJSON(data, {
+          pointToLayer: (f, latlng) => {
+            const p = f.properties || {};
+            const major = !!p.maj;
+            return L.circleMarker(latlng, {
+              radius: major ? 5 : 3,
+              color: p.k === 'Military' ? '#f59e0b' : '#e2e8f0',
+              weight: major ? 1.6 : 1,
+              fillColor: p.k === 'Military' ? '#f59e0b' : '#0ea5e9',
+              fillOpacity: major ? 0.95 : 0.6,
+            });
+          },
+          onEachFeature: (f, l) => l.bindTooltip(_aeroAirportLabel(f.properties || {}),
+            { sticky: true, direction: 'top' }),
+        });
+      }
+      return L.geoJSON(data, {
+        pointToLayer: (f, latlng) => L.circleMarker(latlng, {
+          radius: 4, color: '#a78bfa', weight: 1.4,
+          fillColor: '#7c3aed', fillOpacity: 0.85,
+        }),
+        onEachFeature: (f, l) => l.bindTooltip(_aeroNavaidLabel(f.properties || {}),
+          { sticky: true, direction: 'top' }),
+      });
+    }
+
+    window.toggleAero = async function (kind) {
+      const a = AERO[kind];
+      if (!a || a.loading) return;
+
+      if (a.on) {
+        a.on = false;
+        if (a.layer) map.removeLayer(a.layer);
+        refreshActiveFilterPanel();
+        return;
+      }
+
+      a.on = true;
+      refreshActiveFilterPanel();   // the pill lights up while the fetch runs
+
+      if (!a.layer) {
+        a.loading = true;
+        try {
+          const res = await fetch(a.url, { cache: 'force-cache' });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          a.layer = _aeroBuild(kind, await res.json());
+        } catch (e) {
+          console.warn('[aero] ' + kind + ' failed to load:', e);
+          a.on = false;
+          a.loading = false;
+          showToast && showToast('Could not load ' + kind + '.', 'error');
+          refreshActiveFilterPanel();
+          return;
+        }
+        a.loading = false;
+      }
+      // Still wanted? The toggle may have been switched off during the fetch.
+      if (!a.on) return;
+      a.layer.addTo(map);
+      // Under the live traffic. These are the chart, not the thing being read
+      // off it, and airspace fill over an aircraft hides what you came for.
+      a.layer.bringToBack();
     };
 
     // Ground-target visibility depends on zoom; re-diff when the zoom
