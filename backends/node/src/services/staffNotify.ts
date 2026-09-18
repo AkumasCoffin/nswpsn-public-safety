@@ -13,12 +13,21 @@
  * which marks everything present at bot start as "seen" — a pending signup
  * request would otherwise be silently swallowed by a restart.
  *
- * WHY THESE MESSAGES CARRY NO PERSONAL DATA. Discord history is
- * searchable, screenshottable and outside our control, and the channel id
- * is operator-configured so it can be pointed at the wrong place. The
- * payloads below are deliberately limited to non-identifying context plus
- * a link back to the staff page. In particular `editor_requests.notes`
- * holds a generated temp password and must never be sent anywhere.
+ * WHAT THESE MESSAGES MAY CARRY. They go to a private staff channel, so
+ * they carry the detail needed to triage a request without opening the
+ * site — an applicant's email, a node's name, a new account's handle. The
+ * summary-only form they started as was worse than useless: it announced
+ * that something had happened without saying enough to act on, so every
+ * notification became a prompt to go and look the thing up.
+ *
+ * WHAT THEY MUST NEVER CARRY IS SECRETS. Discord history is searchable,
+ * screenshottable and outside our control, and the channel id is
+ * operator-configured so it can be pointed at the wrong place. In
+ * particular `editor_requests.notes` holds the generated temp password for
+ * an approved signup, and sending that whole string is exactly how the
+ * password reached a staff channel once. Send the fact that a password was
+ * issued, never the password; the same goes for node tokens (the prefix is
+ * fine, the token is not) and for anything read out of app_settings.
  *
  * Every function here is best-effort: a notification must never fail, slow
  * or roll back the moderation action that triggered it.

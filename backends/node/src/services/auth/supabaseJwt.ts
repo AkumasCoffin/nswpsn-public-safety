@@ -38,6 +38,9 @@ declare module 'hono' {
     /** Discord (OAuth) avatar URL from user_metadata, when present. Captured so
      *  a contributor's profile picture can be shown publicly without a custom pfp. */
     userAvatar?: string;
+    /** Identity provider the account authenticated through ('discord',
+     *  'google', 'email'), from app_metadata. */
+    userProvider?: string;
   }
 }
 
@@ -138,6 +141,8 @@ export const optionalSupabaseJwt: MiddlewareHandler = async (c, next) => {
       }
       const av = avatarFromClaims(payload as Record<string, unknown>);
       if (av) c.set('userAvatar', av);
+      const prov = providerFromClaims(payload as Record<string, unknown>);
+      if (prov) c.set('userProvider', prov);
     }
   } catch (err) {
     // Verification failed — log at debug because clients legitimately
@@ -163,6 +168,16 @@ export function avatarFromClaims(payload: Record<string, unknown>): string {
   const meta = payload['user_metadata'] as Record<string, unknown> | undefined;
   const v = meta?.['avatar_url'];
   return typeof v === 'string' && /^https?:\/\//i.test(v) ? v.trim().slice(0, 300) : '';
+}
+
+/** Which identity provider the account signed in with — 'discord', 'google',
+ *  'email'. Supabase puts it in app_metadata; it is the single most useful
+ *  thing to know about a brand-new account, because it says where to go and
+ *  look the person up. */
+export function providerFromClaims(payload: Record<string, unknown>): string {
+  const meta = payload['app_metadata'] as Record<string, unknown> | undefined;
+  const v = meta?.['provider'];
+  return typeof v === 'string' ? v.trim().slice(0, 32) : '';
 }
 
 export function displayNameFromClaims(payload: Record<string, unknown>): string {
@@ -212,6 +227,8 @@ export const requireSupabaseJwt: MiddlewareHandler = async (c, next) => {
     }
     const av = avatarFromClaims(payload as Record<string, unknown>);
     if (av) c.set('userAvatar', av);
+    const prov = providerFromClaims(payload as Record<string, unknown>);
+    if (prov) c.set('userProvider', prov);
   } catch {
     return c.json({ error: 'invalid token' }, 401);
   }

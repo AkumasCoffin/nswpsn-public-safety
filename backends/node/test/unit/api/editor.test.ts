@@ -44,6 +44,16 @@ vi.mock('../../../src/services/orphanCleanup.js', async (orig) => {
   };
 });
 
+// Capture what would be posted to the staff Discord channel. These payloads
+// leave our control the moment they are sent, so what is IN them is worth
+// asserting on directly.
+const notified: Array<Record<string, unknown>> = [];
+vi.mock('../../../src/services/staffNotify.js', () => ({
+  notifyStaff: (_pool: unknown, input: Record<string, unknown>) => {
+    notified.push(input);
+  },
+}));
+
 const { editorRouter } = await import('../../../src/api/editor.js');
 const roles = await import('../../../src/services/auth/roles.js');
 const orphan = await import('../../../src/services/orphanCleanup.js');
@@ -65,6 +75,7 @@ function makeApp(opts: { authed?: boolean } = {}) {
 
 beforeEach(() => {
   calls.length = 0;
+  notified.length = 0;
   resultQueue = [];
   getPoolReturn = 'pool';
   fakePool.query.mockClear();
@@ -496,6 +507,23 @@ describe('POST /api/editor-requests/:id/approve', () => {
       const notes = updateCall?.params?.[1] as string;
       expect(notes).toContain('Temp password: Changeme-');
       expect(notes).toContain('Supabase account created');
+      const tempPassword = (body['temp_password'] as string);
+
+      // ...and the staff notification does NOT. Discord history is searchable
+      // and outside our control, so the notification says a password was
+      // issued and leaves the password on the request. Asserted over the whole
+      // serialised payload rather than one field, because the leak happened by
+      // a field picking up `notes` wholesale — any future field that does the
+      // same fails here.
+      const notice = notified.find((n) => n['event'] === 'resolved');
+      expect(notice).toBeDefined();
+      expect(JSON.stringify(notice)).not.toContain(tempPassword);
+      expect(JSON.stringify(notice)).not.toContain('Changeme-');
+      const noticeFields = notice!['fields'] as Array<{ name: string; value: unknown }>;
+      expect(noticeFields.find((f) => f.name === 'Temp password')?.value)
+        .toBe('Issued — on the request in Staff');
+      expect(noticeFields.find((f) => f.name === 'Account')?.value)
+        .toBe('Supabase account created');
     } finally {
       fetchSpy.mockRestore();
       (cfgMod.config as { SUPABASE_URL?: string }).SUPABASE_URL = origUrl;

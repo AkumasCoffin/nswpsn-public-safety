@@ -200,15 +200,45 @@ profilesRouter.post('/api/profiles/sync', requireSupabaseJwt, async (c) => {
     );
     if ((granted.rowCount ?? 0) > 0) {
       invalidateUserRolesCache(uid);
-      // First time this account has ever been seen. Deliberately nameless:
-      // a new account's display name is taken straight off the Discord JWT,
-      // so it is usually the Discord handle.
+      // First time this account has ever been seen.
+      //
+      // This used to say "New account / Someone signed up" and nothing else,
+      // on the reasoning that the display name comes off the Discord JWT and
+      // so is usually the person's Discord handle. That made the alert
+      // useless: it announced that SOMETHING happened without saying enough
+      // to act on, and staff had to go and find the account anyway. The
+      // channel is private and already carries node names and applicant
+      // emails, so it carries this too.
+      //
+      // The count is the account's position in the queue — "#412" — which is
+      // what makes a run of signups readable as a run rather than as four
+      // identical messages. One extra count() per new account only.
+      let accountNo: string | null = null;
+      try {
+        const n = await pool.query<{ n: string }>(
+          `SELECT count(*)::text AS n FROM user_roles WHERE role = 'authed'`,
+        );
+        accountNo = n.rows[0]?.n ? `#${n.rows[0].n}` : null;
+      } catch {
+        /* a headcount is not worth failing the sync over */
+      }
+      const email = (c.get('userEmail') as string | undefined) || null;
+      const provider = (c.get('userProvider') as string | undefined) || null;
       notifyStaff(pool, {
         kind: 'new_user',
         event: 'new',
-        ref: '',
-        title: 'New account',
-        subtitle: 'Someone signed up',
+        // The account id, so a later edit can find this message and so the
+        // alert is traceable back to a row. It was empty before.
+        ref: uid,
+        title: jwtName || email || 'New account',
+        subtitle: null,
+        fields: [
+          { name: 'Name', value: jwtName },
+          { name: 'Email', value: email },
+          { name: 'Signed up with', value: provider },
+          { name: 'Account', value: accountNo },
+          { name: 'User ID', value: uid, inline: false },
+        ],
       });
     }
 

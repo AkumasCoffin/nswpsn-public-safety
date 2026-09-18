@@ -128,6 +128,20 @@ function normaliseRequest(row: EditorRequestRow): Record<string, unknown> {
  * rather than a type and a region that only told you a request existed.
  * The free-text answers go last and full-width; packFields truncates them.
  */
+/** `radio_feeder,editor` is what the column holds; it is not what a heading
+ *  should say. Unknown values pass through tidied rather than dropped, so a
+ *  new request type never shows up blank. */
+function prettyRequestType(raw: string | null | undefined): string {
+  const parts = String(raw || '').split(',').map((x) => x.trim()).filter(Boolean);
+  if (!parts.length) return 'Access request';
+  return parts
+    .map((t) => {
+      const words = t.replace(/[_-]+/g, ' ').trim();
+      return words.charAt(0).toUpperCase() + words.slice(1);
+    })
+    .join(' + ');
+}
+
 function signupFields(r: {
   email?: string | null;
   discordId?: string | null;
@@ -290,7 +304,7 @@ editorRouter.post('/api/editor-requests', async (c) => {
         kind: 'signup_request',
         event: 'new',
         ref: String(existingRow.id),
-        title: requestTypeStr || 'Access request',
+        title: prettyRequestType(requestTypeStr),
         subtitle: region ? `${region} · resubmitted` : 'resubmitted',
         fields: signupFields({
           email, discordId, website, about, region, background, backgroundDetails,
@@ -318,7 +332,7 @@ editorRouter.post('/api/editor-requests', async (c) => {
       kind: 'signup_request',
       event: 'new',
       ref: String(requestId ?? ''),
-      title: requestTypeStr || 'Access request',
+      title: prettyRequestType(requestTypeStr),
       subtitle: region || null,
       fields: signupFields({
         email, discordId, website, about, region, background, backgroundDetails,
@@ -562,20 +576,22 @@ editorRouter.post('/api/editor-requests/:id/approve', requireRole(canManageUsers
     // Note lists the roles that were actually approved — the implicit base
     // 'authed' grant is noise in an audit trail.
     const rolesStr = approvedRoles.join(',');
+    // What happened to the account, held separately from `notes` because
+    // `notes` also carries the generated temp password and is stored, while
+    // this line is safe to send to Discord. Keeping them as one string is how
+    // the password ended up in a staff channel.
+    const accountOutcome = rolesAssignedToLinked
+      ? `Roles assigned to linked account ${supabaseUserId}`
+      : supabaseAccountCreated
+        ? 'Supabase account created'
+        : supabaseError
+          ? `Supabase error: ${supabaseError}`
+          : (createAccount && !(config.SUPABASE_URL && config.SUPABASE_SERVICE_ROLE_KEY))
+            ? 'Supabase not configured'
+            : null;
     let notes = `Roles: ${rolesStr}`;
     if (tempPassword) notes += ` | Temp password: ${tempPassword}`;
-    if (rolesAssignedToLinked) {
-      notes += ` | Roles assigned to linked account ${supabaseUserId}`;
-    } else if (supabaseAccountCreated) {
-      notes += ' | Supabase account created';
-    } else if (supabaseError) {
-      notes += ` | Supabase error: ${supabaseError}`;
-    } else if (
-      createAccount &&
-      !(config.SUPABASE_URL && config.SUPABASE_SERVICE_ROLE_KEY)
-    ) {
-      notes += ' | Supabase not configured';
-    }
+    if (accountOutcome) notes += ` | ${accountOutcome}`;
 
     await pool.query(
       `UPDATE editor_requests
@@ -589,14 +605,18 @@ editorRouter.post('/api/editor-requests/:id/approve', requireRole(canManageUsers
       kind: 'signup_request',
       event: 'resolved',
       ref: String(requestId),
-      title: (req.request_type || 'Access request'),
+      title: prettyRequestType(req.request_type),
       status: 'approved',
       actor: (c.get('userName') as string | undefined) ?? null,
       fields: [
         { name: 'Applicant', value: req.email },
+        { name: 'Discord', value: req.discord_id },
         { name: 'Region', value: req.region },
         { name: 'Roles granted', value: roles.join(', ') },
-        { name: 'Notes', value: notes, inline: false },
+        // Whether one exists, never what it is. Discord history is searchable
+        // and outside our control; the password itself stays on the request.
+        { name: 'Temp password', value: tempPassword ? 'Issued — on the request in Staff' : null },
+        { name: 'Account', value: accountOutcome, inline: false },
       ],
     });
 
@@ -654,7 +674,7 @@ editorRouter.post('/api/editor-requests/:id/reject', requireRole(canManageUsers)
       kind: 'signup_request',
       event: 'resolved',
       ref: String(requestId),
-      title: (req.request_type || 'Access request'),
+      title: prettyRequestType(req.request_type),
       status: 'rejected',
       actor: (c.get('userName') as string | undefined) ?? null,
       fields: [
