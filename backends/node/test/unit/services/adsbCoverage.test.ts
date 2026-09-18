@@ -35,7 +35,14 @@ const {
  *  bucketing usually goes wrong. */
 const SITE = { lat: -33.8688, lon: 151.2093 };
 const NODE = 'node-cov-1';
-const T = Date.UTC(2026, 8, 17, 2, 0, 0);   // midday in Sydney
+/** Midday in Sydney, TODAY. Derived from the clock rather than written down:
+ *  the flush drops every day that is not the current one, so a hardcoded date
+ *  stops exercising the hydrate path the moment it goes stale — which it did,
+ *  silently, the day after it was written. */
+const T = Date.parse(
+  new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney' }).format(new Date())
+  + 'T02:00:00Z',
+);
 
 /** A point `km` away from SITE on `bearing`, by flat approximation — close
  *  enough at these distances to land in a known bucket. */
@@ -107,13 +114,51 @@ describe('mergeEnvelopes', () => {
   });
 });
 
+describe('a single bad fix must not become coverage', () => {
+  // A lone spike reached a hundred kilometres into airspace with no track
+  // anywhere near it, and nothing could ever lower it again: the envelope was
+  // a running maximum over SINGLE observations, kept forever. ADS-B supplies
+  // plenty of candidates — a CPR decode error puts an aircraft tens or
+  // hundreds of kilometres from where it actually is, once.
+  it('ignores a range seen only once', async () => {
+    foldCoverage(NODE, SITE.lat, SITE.lon, [at(0, 60), at(0, 60)], T);  // real
+    foldCoverage(NODE, SITE.lat, SITE.lon, [at(0, 400)], T);            // garbage
+    await flushAdsbCoverage();
+    const buckets = JSON.parse(queryMock.mock.calls.at(-1)![1][2] as string);
+    expect(buckets[0]).toBeGreaterThan(55);
+    expect(buckets[0]).toBeLessThan(65);
+  });
+
+  it('believes a range as soon as it is seen twice', async () => {
+    // Corroboration has to be cheap for real traffic: an aircraft in range
+    // reports every few seconds, so genuine reach is confirmed almost at once.
+    foldCoverage(NODE, SITE.lat, SITE.lon, [at(0, 60), at(0, 60)], T);
+    foldCoverage(NODE, SITE.lat, SITE.lon, [at(0, 210)], T);
+    foldCoverage(NODE, SITE.lat, SITE.lon, [at(0, 205)], T);
+    await flushAdsbCoverage();
+    const buckets = JSON.parse(queryMock.mock.calls.at(-1)![1][2] as string);
+    expect(buckets[0]).toBeGreaterThan(200);
+  });
+
+  it('keeps the runner-up, not the outlier, when both are new', async () => {
+    foldCoverage(NODE, SITE.lat, SITE.lon, [at(0, 300), at(0, 80), at(0, 75)], T);
+    await flushAdsbCoverage();
+    const buckets = JSON.parse(queryMock.mock.calls.at(-1)![1][2] as string);
+    expect(buckets[0]).toBeLessThan(100);
+  });
+});
+
 describe('folding an upload', () => {
   it('records the furthest aircraft on each bearing', async () => {
-    foldCoverage(NODE, SITE.lat, SITE.lon, [
-      at(0, 120),     // due north
-      at(90, 200),    // due east
-      at(90, 150),    // also east, but nearer — must not lower it
-    ], T);
+    // Twice, because one observation is no longer enough — see the
+    // outlier test below for why.
+    for (let i = 0; i < 2; i += 1) {
+      foldCoverage(NODE, SITE.lat, SITE.lon, [
+        at(0, 120),     // due north
+        at(90, 200),    // due east
+        at(90, 150),    // also east, but nearer — must not lower it
+      ], T);
+    }
     await flushAdsbCoverage();
     const buckets = JSON.parse(queryMock.mock.calls.at(-1)![1][2] as string);
     expect(buckets[0]).toBeGreaterThan(115);
@@ -141,6 +186,7 @@ describe('folding an upload', () => {
     // rows, or this is the per-position table it was designed not to be.
     for (let i = 0; i < 720; i += 1) {
       foldCoverage(NODE, SITE.lat, SITE.lon, [at(i % 360, 50 + (i % 100))], T);
+      foldCoverage(NODE, SITE.lat, SITE.lon, [at(i % 360, 50 + (i % 100))], T);
     }
     expect(await flushAdsbCoverage()).toBe(1);
     const inserts = queryMock.mock.calls.filter((c) => String(c[0]).includes('INSERT INTO'));
@@ -148,8 +194,8 @@ describe('folding an upload', () => {
   });
 
   it('keeps separate rows for separate nodes', async () => {
-    foldCoverage(NODE, SITE.lat, SITE.lon, [at(0, 100)], T);
-    foldCoverage('other-node', SITE.lat, SITE.lon, [at(0, 100)], T);
+    foldCoverage(NODE, SITE.lat, SITE.lon, [at(0, 100), at(0, 100)], T);
+    foldCoverage('other-node', SITE.lat, SITE.lon, [at(0, 100), at(0, 100)], T);
     expect(await flushAdsbCoverage()).toBe(2);
   });
 });
@@ -167,7 +213,7 @@ describe('hydration — surviving a restart', () => {
       return Promise.resolve({ rows: [] });
     });
 
-    foldCoverage(NODE, SITE.lat, SITE.lon, [at(90, 60)], T);   // only east, now
+    foldCoverage(NODE, SITE.lat, SITE.lon, [at(90, 60), at(90, 60)], T);   // only east, now
     await flushAdsbCoverage();
 
     const written = JSON.parse(queryMock.mock.calls.at(-1)![1][2] as string);
@@ -176,7 +222,7 @@ describe('hydration — surviving a restart', () => {
   });
 
   it('only hydrates once', async () => {
-    foldCoverage(NODE, SITE.lat, SITE.lon, [at(0, 100)], T);
+    foldCoverage(NODE, SITE.lat, SITE.lon, [at(0, 100), at(0, 100)], T);
     await flushAdsbCoverage();
     foldCoverage(NODE, SITE.lat, SITE.lon, [at(0, 120)], T);
     await flushAdsbCoverage();
@@ -185,10 +231,10 @@ describe('hydration — surviving a restart', () => {
   });
 
   it('keeps accumulating in memory across flushes', async () => {
-    foldCoverage(NODE, SITE.lat, SITE.lon, [at(0, 100)], T);
+    foldCoverage(NODE, SITE.lat, SITE.lon, [at(0, 100), at(0, 100)], T);
     await flushAdsbCoverage();
     // A later upload that hears nothing to the north must not erase the north.
-    foldCoverage(NODE, SITE.lat, SITE.lon, [at(90, 40)], T);
+    foldCoverage(NODE, SITE.lat, SITE.lon, [at(90, 40), at(90, 40)], T);
     await flushAdsbCoverage();
     const written = JSON.parse(queryMock.mock.calls.at(-1)![1][2] as string);
     expect(written[0]).toBeGreaterThan(95);
@@ -197,7 +243,7 @@ describe('hydration — surviving a restart', () => {
 
   it('retries rather than dropping the day when a write fails', async () => {
     queryMock.mockRejectedValue(new Error('connection reset'));
-    foldCoverage(NODE, SITE.lat, SITE.lon, [at(0, 100)], T);
+    foldCoverage(NODE, SITE.lat, SITE.lon, [at(0, 100), at(0, 100)], T);
     await expect(flushAdsbCoverage()).resolves.toBe(0);
 
     // The envelope is a running maximum, so a failed pass costs nothing.
@@ -208,7 +254,7 @@ describe('hydration — surviving a restart', () => {
 
   it('is a no-op without a database', async () => {
     poolAvailable = false;
-    foldCoverage(NODE, SITE.lat, SITE.lon, [at(0, 100)], T);
+    foldCoverage(NODE, SITE.lat, SITE.lon, [at(0, 100), at(0, 100)], T);
     expect(await flushAdsbCoverage()).toBe(0);
   });
 });
@@ -237,7 +283,7 @@ describe('reading it back', () => {
 
   it('folds in today’s unflushed picture', async () => {
     // Otherwise a freshly-started receiver shows an empty map for a minute.
-    foldCoverage(NODE, SITE.lat, SITE.lon, [at(0, 130)], T);
+    foldCoverage(NODE, SITE.lat, SITE.lon, [at(0, 130), at(0, 130)], T);
     const c = await adsbCoverageFor(NODE, 31, T);
     expect(c!.buckets[0]).toBeGreaterThan(125);
     expect(c!.recent[0]).toBeGreaterThan(125);
@@ -258,13 +304,13 @@ describe('reading it back', () => {
 
 describe('deleting a node', () => {
   it('forgets its in-flight envelope', async () => {
-    foldCoverage(NODE, SITE.lat, SITE.lon, [at(0, 100)], T);
+    foldCoverage(NODE, SITE.lat, SITE.lon, [at(0, 100), at(0, 100)], T);
     clearAdsbCoverage(NODE);
     expect(await flushAdsbCoverage()).toBe(0);
   });
 
   it('leaves other nodes alone', async () => {
-    foldCoverage(NODE, SITE.lat, SITE.lon, [at(0, 100)], T);
+    foldCoverage(NODE, SITE.lat, SITE.lon, [at(0, 100), at(0, 100)], T);
     foldCoverage('keep-me', SITE.lat, SITE.lon, [at(0, 100)], T);
     clearAdsbCoverage(NODE);
     expect(await flushAdsbCoverage()).toBe(1);

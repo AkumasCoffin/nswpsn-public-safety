@@ -70,7 +70,23 @@ export function mergeEnvelopes(into: Envelope, from: readonly (number | null)[])
 }
 
 interface Pending {
+  /** The CORROBORATED picture: what has been written, plus what this process
+   *  has seen twice. This is what gets stored and drawn. */
   envelope: Envelope;
+  /** Highest and second-highest single observation per bearing, this process,
+   *  today. Only the second-highest is ever promoted into `envelope`.
+   *
+   *  A running maximum over single observations is not robust, and ADS-B gives
+   *  it plenty to go wrong with: a CPR decode error puts an aircraft tens or
+   *  hundreds of kilometres from where it is, once. Taking the max meant one
+   *  such fix set that bearing's reach permanently, with nothing able to lower
+   *  it again — a lone spike over airspace the receiver has never heard.
+   *
+   *  Requiring a second observation costs almost nothing real: an aircraft in
+   *  range reports every few seconds, so genuine reach is corroborated within
+   *  moments of being achieved. A decode error is not. */
+  top1: Envelope;
+  top2: Envelope;
   /** False until the row already in Postgres has been merged in. A restart
    *  mid-day starts with an empty envelope, and writing that straight out
    *  would replace the morning's picture with the afternoon's. */
@@ -105,7 +121,12 @@ export function foldCoverage(
   const key = `${nodeId}|${sydneyDay(nowMs)}`;
   let cur = pending.get(key);
   if (!cur) {
-    cur = { envelope: emptyEnvelope(), hydrated: false };
+    cur = {
+      envelope: emptyEnvelope(),
+      top1: emptyEnvelope(),
+      top2: emptyEnvelope(),
+      hydrated: false,
+    };
     pending.set(key, cur);
   }
 
@@ -115,8 +136,16 @@ export function foldCoverage(
     const km = distanceKm(lat, lon, r.lat, r.lon);
     if (max === null || km > max) max = km;
     const i = bucketOf(bearingDeg(lat, lon, r.lat, r.lon));
-    const held = cur.envelope[i];
-    if (held === null || held === undefined || km > held) cur.envelope[i] = km;
+    // Keep the top two observations for this bearing; only the runner-up is
+    // ever believed. See Pending.top1 for why.
+    const t1 = cur.top1[i];
+    if (t1 === null || t1 === undefined || km > t1) {
+      cur.top2[i] = t1 ?? null;
+      cur.top1[i] = km;
+    } else {
+      const t2 = cur.top2[i];
+      if (t2 === null || t2 === undefined || km > t2) cur.top2[i] = km;
+    }
   }
   return max;
 }
@@ -158,6 +187,9 @@ export async function flushAdsbCoverage(): Promise<number> {
         if (Array.isArray(held)) mergeEnvelopes(cur.envelope, held as (number | null)[]);
         cur.hydrated = true;
       }
+      // Promote only what has been seen twice. An observation still sitting in
+      // top1 alone is uncorroborated and is not written.
+      mergeEnvelopes(cur.envelope, cur.top2);
       await pool.query(
         `INSERT INTO node_adsb_coverage (node_id, day, buckets)
          VALUES ($1, $2::date, $3::jsonb)
@@ -237,8 +269,12 @@ export async function adsbCoverageFor(
   // shows nothing for its first minute.
   const live = pending.get(`${nodeId}|${today}`);
   if (live) {
-    mergeEnvelopes(buckets, live.envelope);
-    mergeEnvelopes(recent, live.envelope);
+    // top2, not top1: the read applies the same corroboration the write does,
+    // so a bad fix cannot show for the minute before the next flush either.
+    for (const env of [live.envelope, live.top2]) {
+      mergeEnvelopes(buckets, env);
+      mergeEnvelopes(recent, env);
+    }
   }
 
   let maxKm: number | null = null;
