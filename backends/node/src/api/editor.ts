@@ -614,8 +614,11 @@ editorRouter.post('/api/editor-requests/:id/approve', requireRole(canManageUsers
         { name: 'Region', value: req.region },
         { name: 'Roles granted', value: roles.join(', ') },
         // Whether one exists, never what it is. Discord history is searchable
-        // and outside our control; the password itself stays on the request.
-        { name: 'Temp password', value: tempPassword ? 'Issued — on the request in Staff' : null },
+        // and outside our control; the password stays in editor_requests.notes.
+        // It is shown ONCE, in the approval dialog — the staff page does not
+        // render notes — so this line is a reminder to pass it on, not a
+        // pointer to somewhere it can be read back.
+        { name: 'Temp password', value: tempPassword ? 'Issued — shown once at approval' : null },
         { name: 'Account', value: accountOutcome, inline: false },
       ],
     });

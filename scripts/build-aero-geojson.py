@@ -22,6 +22,25 @@ mislabelled airspace class on an aviation map is worse than no label:
   navaid     type 2 is the only one on kHz — NDBs. 1 and 5 land exclusively on
     type     military fields (Amberley, Darwin, Nowra, Tindal), i.e. TACAN and
              VORTAC. 3 has no channel, 4 does: VOR and VOR/DME.
+  runway     length unit 0 is metres — Sydney 16R/34L comes out 3962, which is
+    length   its published length in metres.
+  traffic    YBBN carries [0] and openAIP shows it as VFR; YSSY carries [0, 1].
+    type     So 0 is VFR and 1 is IFR.
+  navaid     the only unit present is 2, so it cannot be cross-checked against
+    range    a second one, but the values (20-170, clustering on 50/90/100) are
+             a service volume in nautical miles; in kilometres they would be
+             implausibly short for a VOR.
+
+Airport frequency TYPE is not mapped at all, and deliberately. Each frequency
+carries its own `name` — "TOWER RWY 16L/34R", "CTAF", "BRISBANE CENTRE" — which
+is both more specific than any enum label and already written the way a pilot
+would say it. The type is used only to ORDER them, so that the handful shown on
+a busy field are the ones you would actually want: CTAF and tower before the
+fuel company's apron frequency.
+
+Runway SURFACE is dropped. mainComposite 0 is asphalt (Sydney), but 22 accounts
+for 2016 of 4240 runways and nothing in the data pins it down; a wrong surface
+under a real runway is the sort of error this file must not make.
 
 Airport `type` was left unlabelled at first because 3 and 9 both hold
 capital-city airports (Sydney is 3, Brisbane is 9). openAIP's own site supplied
@@ -63,6 +82,101 @@ ASP_TYPE = {
     26: 'Control area',
 }
 NAV_TYPE = {0: 'DME', 1: 'TACAN', 2: 'NDB', 3: 'VOR', 4: 'VOR/DME', 5: 'VORTAC'}
+TRAFFIC_TYPE = {0: 'VFR', 1: 'IFR'}
+
+# Which services matter on a crowded field, best first. Everything unlisted
+# sorts after these, in the order the source gives — area, met and fuel
+# frequencies, which are the ones worth losing to the cap.
+FREQ_RANK = {
+    4: 0,    # CTAF — the only frequency at most of these aerodromes
+    14: 1,   # tower
+    9: 2,    # ground
+    15: 3,   # ATIS / AWIS
+    24: 4,   # AWIS
+    0: 5,    # approach
+    6: 6,    # departure
+    5: 7,    # clearance delivery
+    13: 8,   # radar
+    3: 9,    # centre
+    20: 10,  # pilot-activated lighting
+}
+MAX_FREQS = 6
+
+# Long official names carry the field's own name and a runway list; on a map
+# label that is noise around the one token you are looking for.
+FREQ_TAGS = (
+    ('CTAF', 'CTAF'), ('TOWER', 'TWR'), ('GROUND', 'GND'), ('SMC', 'GND'),
+    ('GND', 'GND'), ('ATIS', 'ATIS'), ('AWIS', 'AWIS'), ('APP', 'APP'),
+    ('DEP', 'DEP'), ('CENTRE', 'CTR'), ('CENTER', 'CTR'), ('RADAR', 'RADAR'),
+    ('DELIVERY', 'DEL'), ('CLNC', 'DEL'), ('CLEARANCE', 'DEL'),
+    ('UNICOM', 'UNICOM'), ('INFORMATION', 'INFO'), ('PAL', 'PAL'),
+    ('RAMP', 'RAMP'), ('TRAFFIC', 'TRAFFIC'), ('RADIO', 'RADIO'),
+)
+
+
+def freq_tag(name):
+    """Shorten a frequency's name to the service it is."""
+    up = (name or '').upper()
+    for needle, tag in FREQ_TAGS:
+        if needle in up:
+            return tag
+    # Nothing recognised: first word, which is usually the operator's name.
+    first = up.split()
+    return first[0][:12] if first else ''
+
+
+def frequencies(raw):
+    """[tag, MHz] pairs, ranked, deduplicated, capped."""
+    rows = []
+    for i, f in enumerate(raw or []):
+        val = (f.get('value') or '').strip()
+        if not val:
+            continue
+        # Every airport frequency in the export is unit 2 (MHz); anything
+        # else would need its own label, so it is skipped not mislabelled.
+        if f.get('unit') != 2:
+            continue
+        rank = FREQ_RANK.get(f.get('type'), 50)
+        # A field's primary frequency comes first within its service.
+        rows.append((rank, 0 if f.get('primary') else 1, i,
+                     freq_tag(f.get('name')), val))
+    rows.sort()
+    out, seen = [], set()
+    for _, _, _, tag, val in rows:
+        key = (tag, val)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append([tag, val])
+        if len(out) >= MAX_FREQS:
+            break
+    return out
+
+
+def runways(raw):
+    """[designator, length-in-metres], longest first."""
+    rows = []
+    for r in raw or []:
+        d = (r.get('designator') or '').strip()
+        if not d:
+            continue
+        dim = ((r.get('dimension') or {}).get('length') or {})
+        ln = dim.get('value') if dim.get('unit') == 0 else None
+        rows.append((-(ln or 0), d, ln))
+    rows.sort()
+    out, seen = [], set()
+    for _, d, ln in rows:
+        # 16R and 34L are the two ends of one strip; the reciprocal adds
+        # nothing but length.
+        head = d[:2]
+        recip = str((int(head) + 17) % 36 + 1).zfill(2) if head.isdigit() else None
+        if recip and any(k.startswith(recip) for k in seen):
+            continue
+        seen.add(d)
+        out.append([d, ln] if ln else [d])
+        if len(out) >= 4:
+            break
+    return out
 APT_KIND = {
     0: 'Airport (civil/military)',
     1: 'Glider site',
@@ -211,6 +325,10 @@ def build(src):
                 'k': APT_KIND.get(p.get('type')),
                 'maj': 1 if p.get('type') in APT_MAJOR else 0,
                 'mil': 1 if p.get('type') in APT_MIL else 0,
+                'tt': [TRAFFIC_TYPE[t] for t in (p.get('trafficType') or [])
+                       if t in TRAFFIC_TYPE] or None,
+                'f': frequencies(p.get('frequencies')) or None,
+                'r': runways(p.get('runways')) or None,
                 'e': round(el) if isinstance(el, (int, float)) else None,
                 'pr': 1 if p.get('private') else 0,
                 'ppr': 1 if p.get('ppr') else 0,
@@ -222,6 +340,7 @@ def build(src):
     out = []
     for x in load('au_nav.geojson'):
         p = x['properties']
+        el = (p.get('elevation') or {}).get('value')
         f = p.get('frequency') or {}
         val, unit = f.get('value'), f.get('unit')
         out.append({
@@ -235,6 +354,9 @@ def build(src):
                 # unit 1 is kHz (NDBs), 2 is MHz.
                 'f': ('%s %s' % (val, 'kHz' if unit == 1 else 'MHz')) if val else None,
                 'ch': p.get('channel'),
+                # Service volume, in nautical miles — see the header.
+                'rng': (p.get('range') or {}).get('value'),
+                'e': round(el) if isinstance(el, (int, float)) else None,
             },
         })
     nav = write('au-navaids.geojson', out)

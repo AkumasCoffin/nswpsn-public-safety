@@ -2222,6 +2222,37 @@
     .leaflet-tooltip-left.ais-tooltip::before { border-left-color: rgba(15, 23, 42, 0.96) !important; }
     .leaflet-tooltip-right.ais-tooltip::before { border-right-color: rgba(15, 23, 42, 0.96) !important; }
 
+    /* Aeronautical layers over SATELLITE and TOPO imagery.
+     *
+     * The palette above is built for the dark basemap: pale rings and thin
+     * translucent boundaries, which read well on near-black tiles and
+     * disappear completely over bright, busy aerial photography. Leaflet
+     * writes its path colours as SVG presentation attributes, so a plain CSS
+     * rule outranks them and the layer can be re-skinned per basemap without
+     * rebuilding a single marker.
+     *
+     * Only the OUTLINE changes. The fill still carries what the thing is —
+     * amber for a military field, cyan for civil, violet for a navaid — so
+     * the dark ring reads as contrast rather than as a different category. */
+    .map-sat-mode .aero-pt,
+    .map-topo-mode .aero-pt {
+      stroke: #0b1220;
+      stroke-width: 2px;
+      stroke-opacity: 0.95;
+    }
+    .map-sat-mode .aero-line,
+    .map-topo-mode .aero-line {
+      stroke-opacity: 0.95;
+      stroke-width: 1.6px;
+    }
+    /* Airspace is drawn with class colours chosen against black. Over imagery
+       they wash out; a dark shadow under the line is what makes a pale-blue
+       boundary hold up over sand, cloud and water alike. */
+    .map-sat-mode .leaflet-overlay-pane .aero-line,
+    .map-topo-mode .leaflet-overlay-pane .aero-line {
+      filter: drop-shadow(0 0 1px rgba(2, 6, 23, 0.9));
+    }
+
     /* Aeronautical tooltips are two or three short lines of reference data.
        They ride the aircraft tooltip's shape and only soften the heading —
        an airspace name is not a callsign and should not shout like one. */
@@ -2232,6 +2263,14 @@
     }
     .leaflet-tooltip.aero-tooltip b { color: #f1f5f9 !important; font-weight: 600; }
     .leaflet-tooltip.aero-tooltip .aero-sub { color: #94a3b8 !important; }
+    /* Frequencies are the answer to the question that made someone hover a
+       navaid, so they stay bright and get a tabular face — a column of
+       decimals that does not line up is harder to read than one that does. */
+    .leaflet-tooltip.aero-tooltip .aero-freq {
+      color: #7dd3fc !important;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 0.01em;
+    }
 
     /* Touch devices: don't render the map-anchored tooltip at all — its fixed
        320/350px min-width covered most of a phone screen and often opened under
@@ -16143,7 +16182,7 @@ function initPagerHoursFromStorage() {
     // that already holds one of these keeps it forever, and a rebuild (new
     // fields, corrected labels) would never reach anyone who had looked once.
     // Bump it whenever scripts/build-aero-geojson.py is re-run.
-    const AERO_V = 2;
+    const AERO_V = 3;
     const AERO = {
       airspace: { on: false, url: `assets/geo/au-airspace.geojson?v=${AERO_V}`, layer: null, loading: false },
       airports: { on: false, url: `assets/geo/au-airports.geojson?v=${AERO_V}`, layer: null, loading: false },
@@ -16181,6 +16220,9 @@ function initPagerHoursFromStorage() {
         weight: restricted ? 1 : 0.8,
         opacity: restricted ? 0.6 : 0.45,
         fill: false,
+        // Styled further in CSS per basemap: these weights and opacities are
+        // tuned for the dark tiles and vanish over satellite imagery.
+        className: 'aero-line',
       };
     }
 
@@ -16210,20 +16252,37 @@ function initPagerHoursFromStorage() {
       const bits = ['<b>' + escapeHtml(p.n || 'Airport') + (codes ? ' · ' + codes : '') + '</b>'];
       const sub = _aeroSub([
         p.k ? escapeHtml(p.k) : '',
+        Array.isArray(p.tt) && p.tt.length ? p.tt.map(escapeHtml).join('/') : '',
         typeof p.e === 'number' ? p.e.toLocaleString() + ' ft' : '',
         p.pr ? 'Private' : '',
         p.ppr ? 'PPR' : '',
       ]);
       if (sub) bits.push(sub);
+      // The frequencies get their own line and are NOT muted — on an
+      // aeronautical layer they are most of the reason to point at a field.
+      if (Array.isArray(p.f) && p.f.length) {
+        bits.push('<span class="aero-freq">' + p.f
+          .map(([tag, mhz]) => escapeHtml(tag) + '&nbsp;' + escapeHtml(mhz))
+          .join(' · ') + '</span>');
+      }
+      if (Array.isArray(p.r) && p.r.length) {
+        bits.push(_aeroSub(['RWY ' + p.r
+          // No thousands separator: a runway is written 3962 m, not 3,962 m.
+          .map(([d, m]) => escapeHtml(d) + (m ? '\u2009' + m + 'm' : ''))
+          .join(' · ')]));
+      }
       return bits.join('<br>');
     }
 
     function _aeroNavaidLabel(p) {
       const bits = ['<b>' + escapeHtml((p.n || 'Navaid') + (p.id ? ' · ' + p.id : '')) + '</b>'];
+      // Same reasoning as the airport label: the frequency is the point.
+      const head = [p.t ? escapeHtml(p.t) : '', p.f ? escapeHtml(p.f) : '',
+        p.ch ? 'Ch ' + escapeHtml(String(p.ch)) : ''].filter(Boolean);
+      if (head.length) bits.push('<span class="aero-freq">' + head.join(' · ') + '</span>');
       const sub = _aeroSub([
-        p.t ? escapeHtml(p.t) : '',
-        p.f ? escapeHtml(p.f) : '',
-        p.ch ? 'Ch ' + escapeHtml(String(p.ch)) : '',
+        typeof p.rng === 'number' ? p.rng + ' NM' : '',
+        typeof p.e === 'number' ? p.e.toLocaleString() + ' ft' : '',
       ]);
       if (sub) bits.push(sub);
       return bits.join('<br>');
@@ -16253,6 +16312,7 @@ function initPagerHoursFromStorage() {
               opacity: major ? 0.9 : 0.65,
               fillColor: mil ? '#f59e0b' : '#0ea5e9',
               fillOpacity: major ? 0.9 : 0.5,
+              className: 'aero-pt',
             });
           },
           onEachFeature: (f, l) => l.bindTooltip(_aeroAirportLabel(f.properties || {}),
@@ -16263,6 +16323,7 @@ function initPagerHoursFromStorage() {
         pointToLayer: (f, latlng) => L.circleMarker(latlng, {
           radius: 3, color: '#c4b5fd', weight: 1,
           opacity: 0.8, fillColor: '#7c3aed', fillOpacity: 0.8,
+          className: 'aero-pt',
         }),
         onEachFeature: (f, l) => l.bindTooltip(_aeroNavaidLabel(f.properties || {}),
           { sticky: true, direction: 'top', className: 'ais-tooltip adsb-tooltip aero-tooltip' }),

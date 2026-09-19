@@ -521,7 +521,7 @@ describe('POST /api/editor-requests/:id/approve', () => {
       expect(JSON.stringify(notice)).not.toContain('Changeme-');
       const noticeFields = notice!['fields'] as Array<{ name: string; value: unknown }>;
       expect(noticeFields.find((f) => f.name === 'Temp password')?.value)
-        .toBe('Issued — on the request in Staff');
+        .toBe('Issued — shown once at approval');
       expect(noticeFields.find((f) => f.name === 'Account')?.value)
         .toBe('Supabase account created');
     } finally {

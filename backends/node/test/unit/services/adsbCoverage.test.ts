@@ -44,6 +44,14 @@ const T = Date.parse(
   + 'T02:00:00Z',
 );
 
+/** The Sydney day `back` days before T, as the `day` column holds it. Same
+ *  reason as T: "the last 24 hours" is measured against the clock, so a row
+ *  dated in the source stops being recent and the test stops testing. */
+function dayBefore(back: number): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney' })
+    .format(new Date(T - back * 86_400_000));
+}
+
 /** A point `km` away from SITE on `bearing`, by flat approximation — close
  *  enough at these distances to land in a known bucket. */
 function at(bearingDegrees: number, km: number) {
@@ -265,8 +273,8 @@ describe('reading it back', () => {
     const today = emptyEnvelope(); today[18] = 90; // today, only east
     queryMock.mockResolvedValue({
       rows: [
-        { day: '2026-09-10', buckets: old },
-        { day: '2026-09-17', buckets: today },
+        { day: dayBefore(7), buckets: old },
+        { day: dayBefore(0), buckets: today },
       ],
     });
 
