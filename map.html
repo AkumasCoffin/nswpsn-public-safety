@@ -2244,6 +2244,18 @@
     .leaflet-popup.aero-popup .aero-freq {
       color: #7dd3fc;
       font-variant-numeric: tabular-nums;
+      display: block;
+      margin-top: 2px;
+    }
+    /* One service per line with the tag in a fixed column, so six frequencies
+       read as a list you can run your eye down rather than a paragraph. */
+    .leaflet-popup.aero-popup .aero-freq-row { display: block; }
+    .leaflet-popup.aero-popup .aero-freq-tag {
+      display: inline-block;
+      min-width: 3.4em;
+      color: #94a3b8;
+      font-size: 0.92em;
+      letter-spacing: 0.03em;
     }
     .leaflet-popup.aero-popup a.leaflet-popup-close-button { color: #94a3b8; }
 
@@ -2256,15 +2268,9 @@
       border-color: rgba(148, 163, 184, 0.35) !important;
     }
     .leaflet-tooltip.aero-tooltip b { color: #f1f5f9 !important; font-weight: 600; }
-    .leaflet-tooltip.aero-tooltip .aero-sub { color: #94a3b8 !important; }
-    /* Frequencies are the answer to the question that made someone hover a
-       navaid, so they stay bright and get a tabular face — a column of
-       decimals that does not line up is harder to read than one that does. */
-    .leaflet-tooltip.aero-tooltip .aero-freq {
-      color: #7dd3fc !important;
-      font-variant-numeric: tabular-nums;
-      letter-spacing: 0.01em;
-    }
+    /* Nothing but a heading goes in here now — see _aeroHeading — so this is
+       a name-sized label, not a card. */
+    .leaflet-tooltip.aero-tooltip { white-space: nowrap !important; }
 
     /* Touch devices: don't render the map-anchored tooltip at all — its fixed
        320/350px min-width covered most of a phone screen and often opened under
@@ -16236,8 +16242,29 @@ function initPagerHoursFromStorage() {
       return kept.length ? '<span class="aero-sub">' + kept.join(' · ') + '</span>' : '';
     }
 
+    /* TWO levels of label, and the split is the point.
+     *
+     * The hover tooltip says only WHICH thing this is. It follows the cursor
+     * across a chart where boundaries and airfields sit on top of each other,
+     * so a tooltip that grows to four lines of frequencies covers the very
+     * airspace you are trying to read — and it cannot be selected, copied or
+     * kept still long enough to dial a number off anyway.
+     *
+     * The click popup carries everything. It is anchored, it stays put, and
+     * its text can be selected, which is what a frequency is actually for. */
+    function _aeroHeading(kind, p) {
+      if (kind === 'airspace') return '<b>' + escapeHtml(p.n || 'Airspace') + '</b>';
+      if (kind === 'navaids') {
+        return '<b>' + escapeHtml((p.n || 'Navaid') + (p.id ? ' · ' + p.id : '')) + '</b>';
+      }
+      // Codes belong with the name: an ICAO code identifies a field as much as
+      // its name does, and it is still identity, not detail.
+      const codes = [p.i, p.a].filter(Boolean).map(escapeHtml).join(' / ');
+      return '<b>' + escapeHtml(p.n || 'Airport') + (codes ? ' · ' + codes : '') + '</b>';
+    }
+
     function _aeroAirspaceLabel(p) {
-      const bits = ['<b>' + escapeHtml(p.n || 'Airspace') + '</b>'];
+      const bits = [_aeroHeading('airspace', p)];
       const sub = _aeroSub([
         p.c ? 'Class ' + escapeHtml(p.c) : '',
         p.t ? escapeHtml(p.t) : '',
@@ -16249,10 +16276,7 @@ function initPagerHoursFromStorage() {
     }
 
     function _aeroAirportLabel(p) {
-      // Codes on the heading line: an ICAO code identifies the field as much
-      // as its name does, and pairing them saves a line.
-      const codes = [p.i, p.a].filter(Boolean).map(escapeHtml).join(' / ');
-      const bits = ['<b>' + escapeHtml(p.n || 'Airport') + (codes ? ' · ' + codes : '') + '</b>'];
+      const bits = [_aeroHeading('airports', p)];
       const sub = _aeroSub([
         p.k ? escapeHtml(p.k) : '',
         Array.isArray(p.tt) && p.tt.length ? p.tt.map(escapeHtml).join('/') : '',
@@ -16261,12 +16285,16 @@ function initPagerHoursFromStorage() {
         p.ppr ? 'PPR' : '',
       ]);
       if (sub) bits.push(sub);
-      // The frequencies get their own line and are NOT muted — on an
-      // aeronautical layer they are most of the reason to point at a field.
+      // Frequencies get their own line and are NOT muted — in the popup they
+      // are most of the reason to have clicked. One per line rather than run
+      // together: six of them on one line is a wall, and the popup has the
+      // room a tooltip does not.
       if (Array.isArray(p.f) && p.f.length) {
         bits.push('<span class="aero-freq">' + p.f
-          .map(([tag, mhz]) => escapeHtml(tag) + '&nbsp;' + escapeHtml(mhz))
-          .join(' · ') + '</span>');
+          .map(([tag, mhz]) => '<span class="aero-freq-row">'
+            + '<span class="aero-freq-tag">' + escapeHtml(tag) + '</span>'
+            + escapeHtml(mhz) + '</span>')
+          .join('') + '</span>');
       }
       if (Array.isArray(p.r) && p.r.length) {
         bits.push(_aeroSub(['RWY ' + p.r
@@ -16278,9 +16306,9 @@ function initPagerHoursFromStorage() {
     }
 
     function _aeroNavaidLabel(p) {
-      const bits = ['<b>' + escapeHtml((p.n || 'Navaid') + (p.id ? ' · ' + p.id : '')) + '</b>'];
-      // Same reasoning as the airport label: the frequency is the point.
-      const head = [p.t ? escapeHtml(p.t) : '', p.f ? escapeHtml(p.f) : '',
+      const bits = [_aeroHeading('navaids', p)];
+      if (p.t) bits.push(_aeroSub([escapeHtml(p.t)]));
+      const head = [p.f ? escapeHtml(p.f) : '',
         p.ch ? 'Ch ' + escapeHtml(String(p.ch)) : ''].filter(Boolean);
       if (head.length) bits.push('<span class="aero-freq">' + head.join(' · ') + '</span>');
       const sub = _aeroSub([
@@ -16390,7 +16418,7 @@ function initPagerHoursFromStorage() {
      * Leaflet sets the tooltip's _source to whichever child raised the event
      * and passes it to a function content, so 3800 features need 3800 fewer
      * Tooltip objects than the obvious loop creates. */
-    const AERO_LABEL = {
+    const AERO_DETAIL = {
       airspace: (l) => _aeroAirspaceLabel((l.feature || {}).properties || {}),
       airports: (l) => _aeroAirportLabel((l.feature || {}).properties || {}),
       navaids: (l) => _aeroNavaidLabel((l.feature || {}).properties || {}),
@@ -16449,16 +16477,14 @@ function initPagerHoursFromStorage() {
           await new Promise((r) => setTimeout(r, 0));
         }
       }
-      const label = AERO_LABEL[kind];
-      group.bindTooltip(label, {
+      group.bindTooltip((l) => _aeroHeading(kind, (l.feature || {}).properties || {}), {
         sticky: true,
         direction: 'top',
         className: 'ais-tooltip adsb-tooltip aero-tooltip',
       });
-      // And a popup on click, because a tooltip you have to keep the cursor
-      // still for is not a way to read six frequencies — and on a touch screen
-      // there is no hover at all.
-      group.bindPopup(label, { className: 'aero-popup', maxWidth: 320, autoPan: true });
+      group.bindPopup(AERO_DETAIL[kind], {
+        className: 'aero-popup', maxWidth: 320, autoPan: true,
+      });
       // Otherwise the hover tooltip stays up behind the popup showing the same
       // three lines twice.
       group.on('popupopen', () => group.closeTooltip());
