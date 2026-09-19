@@ -1295,6 +1295,11 @@
     .adsb-dc-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
     .adsb-dc-name { font-size: 14px; font-weight: 700; flex: 1; min-width: 0;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* Aircraft names are callsigns and fit; "SYDNEY KINGSFORD SMITH" does not,
+       and an ellipsis on the one line that identifies the thing is the worst
+       place to save space. Chart features wrap instead. */
+    .adsb-dc-name.wrap { white-space: normal; overflow: visible;
+      text-overflow: clip; line-height: 1.25; }
     .adsb-dc-x { background: none; border: none; color: #94a3b8; cursor: pointer;
       font-size: 14px; padding: 2px 4px; line-height: 1; flex-shrink: 0; }
     .adsb-dc-x:hover { color: #f8fafc; }
@@ -15757,7 +15762,7 @@ function initPagerHoursFromStorage() {
       el.innerHTML = ''
         + '<div class="adsb-dc-head">'
         +   '<i class="fa-solid ' + chrome.icon + '" style="color:' + chrome.color + ';"></i>'
-        +   '<div class="adsb-dc-name" style="color:' + chrome.color + ';">' + escapeHtml(name) + '</div>'
+        +   '<div class="adsb-dc-name wrap" style="color:' + chrome.color + ';">' + escapeHtml(name) + '</div>'
         +   (sub ? '<span class="adsb-dc-badge" style="background:' + chrome.color + ';">' + escapeHtml(sub) + '</span>' : '')
         +   '<button class="adsb-dc-x" onclick="aeroUnpin()" title="Close">&times;</button>'
         + '</div>'
@@ -16504,7 +16509,11 @@ function initPagerHoursFromStorage() {
         const latlng = (typeof l.getLatLng === 'function') ? l.getLatLng() : e.latlng;
         aeroPin(kind, (l.feature || {}).properties || {}, latlng);
         group.closeTooltip();
-        L.DomEvent.stop(e);   // a map-background click clears the card
+        // Keep the click off the map, whose own handler clears selections and
+        // closes the other detail surfaces. The card itself closes on its ×,
+        // the same as the aircraft card it shares — a background click does
+        // not dismiss either.
+        L.DomEvent.stop(e);
       });
       return group;
     }
