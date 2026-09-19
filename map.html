@@ -2222,36 +2222,30 @@
     .leaflet-tooltip-left.ais-tooltip::before { border-left-color: rgba(15, 23, 42, 0.96) !important; }
     .leaflet-tooltip-right.ais-tooltip::before { border-right-color: rgba(15, 23, 42, 0.96) !important; }
 
-    /* Aeronautical layers over SATELLITE and TOPO imagery.
-     *
-     * The palette above is built for the dark basemap: pale rings and thin
-     * translucent boundaries, which read well on near-black tiles and
-     * disappear completely over bright, busy aerial photography. Leaflet
-     * writes its path colours as SVG presentation attributes, so a plain CSS
-     * rule outranks them and the layer can be re-skinned per basemap without
-     * rebuilding a single marker.
-     *
-     * Only the OUTLINE changes. The fill still carries what the thing is —
-     * amber for a military field, cyan for civil, violet for a navaid — so
-     * the dark ring reads as contrast rather than as a different category. */
-    .map-sat-mode .aero-pt,
-    .map-topo-mode .aero-pt {
-      stroke: #0b1220;
-      stroke-width: 2px;
-      stroke-opacity: 0.95;
+    /* The click popup carries the same content as the hover tooltip, so it
+       takes the same shape — just anchored, closeable, and selectable, which
+       is what makes a frequency worth clicking for. */
+    .leaflet-popup.aero-popup .leaflet-popup-content-wrapper {
+      background: rgba(15, 23, 42, 0.97);
+      color: #e2e8f0;
+      border: 1px solid rgba(148, 163, 184, 0.35);
+      border-radius: 8px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
     }
-    .map-sat-mode .aero-line,
-    .map-topo-mode .aero-line {
-      stroke-opacity: 0.95;
-      stroke-width: 1.6px;
+    .leaflet-popup.aero-popup .leaflet-popup-content {
+      margin: 9px 12px;
+      font-size: 0.78rem;
+      line-height: 1.5;
+      user-select: text;
     }
-    /* Airspace is drawn with class colours chosen against black. Over imagery
-       they wash out; a dark shadow under the line is what makes a pale-blue
-       boundary hold up over sand, cloud and water alike. */
-    .map-sat-mode .leaflet-overlay-pane .aero-line,
-    .map-topo-mode .leaflet-overlay-pane .aero-line {
-      filter: drop-shadow(0 0 1px rgba(2, 6, 23, 0.9));
+    .leaflet-popup.aero-popup .leaflet-popup-tip { background: rgba(15, 23, 42, 0.97); }
+    .leaflet-popup.aero-popup b { color: #f1f5f9; font-weight: 600; }
+    .leaflet-popup.aero-popup .aero-sub { color: #94a3b8; }
+    .leaflet-popup.aero-popup .aero-freq {
+      color: #7dd3fc;
+      font-variant-numeric: tabular-nums;
     }
+    .leaflet-popup.aero-popup a.leaflet-popup-close-button { color: #94a3b8; }
 
     /* Aeronautical tooltips are two or three short lines of reference data.
        They ride the aircraft tooltip's shape and only soften the heading —
@@ -3463,6 +3457,13 @@
     map.createPane('boundaryPane');
     map.getPane('boundaryPane').style.zIndex = 340;
 
+    // Aeronautical reference layers get their own pane at 335, under the w3w
+    // grid and far under the aircraft. They are the chart; nothing live should
+    // ever end up behind them, and a pane guarantees that without having to
+    // call bringToBack at the right moment.
+    map.createPane('aeroPane');
+    map.getPane('aeroPane').style.zIndex = 335;
+
     // Mobile detection for two-tap behavior on markers
     // Use pointer:coarse to detect if PRIMARY input is touch (finger) vs fine (mouse/trackpad)
     // This correctly excludes touch-enabled Windows laptops when a mouse is being used
@@ -3828,6 +3829,9 @@
         o.setAttribute('aria-pressed', o.classList.contains('active') ? 'true' : 'false');
       });
       _moveMapTypeGlider(type);
+      // The aeronautical layers are painted to a canvas, so a basemap change
+      // has to repaint them — there is no stylesheet to do it for us.
+      if (typeof aeroRestyle === 'function') aeroRestyle();
     }
 
     const userLayer = L.layerGroup().addTo(map);
@@ -16137,21 +16141,23 @@ function initPagerHoursFromStorage() {
         // Aeronautical reference layers. Off by default and fetched only when
         // first switched on: airspace alone is a couple of megabytes, and most
         // people looking at aircraft do not want the chart underneath them.
+        // Airspace is a couple of megabytes and a few thousand shapes, so the
+        // gap between the click and the map changing is real. Say so on the
+        // pill rather than leaving it looking like nothing happened.
+        const _aeroPill = (key, icon, label) => _ffPill(
+          AERO[key].on,
+          `<i class="fa-solid fa-${AERO[key].loading ? 'spinner fa-spin' : icon}"></i> ${label}`,
+          `toggleAero('${key}')`
+        );
         const aeroHtml = `
           <div class="ff-section-label">Aeronautical</div>
-          <div class="floating-filter-pills">${_ffPill(
-            AERO.airspace.on,
-            '<i class="fa-solid fa-draw-polygon"></i> Airspace',
-            "toggleAero('airspace')"
-          )}${_ffPill(
-            AERO.airports.on,
-            '<i class="fa-solid fa-tower-observation"></i> Airports',
-            "toggleAero('airports')"
-          )}${_ffPill(
-            AERO.navaids.on,
-            '<i class="fa-solid fa-tower-broadcast"></i> Navaids',
-            "toggleAero('navaids')"
-          )}</div>`;
+          <div class="floating-filter-pills">${
+            _aeroPill('airspace', 'draw-polygon', 'Airspace')
+          }${
+            _aeroPill('airports', 'tower-observation', 'Airports')
+          }${
+            _aeroPill('navaids', 'tower-broadcast', 'Navaids')
+          }</div>`;
 
         return `
           <h4><i class="fa-solid fa-plane" style="color:#c084fc;"></i> Aircraft</h4>
@@ -16220,9 +16226,6 @@ function initPagerHoursFromStorage() {
         weight: restricted ? 1 : 0.8,
         opacity: restricted ? 0.6 : 0.45,
         fill: false,
-        // Styled further in CSS per basemap: these weights and opacities are
-        // tuned for the dark tiles and vanish over satellite imagery.
-        className: 'aero-line',
       };
     }
 
@@ -16288,16 +16291,117 @@ function initPagerHoursFromStorage() {
       return bits.join('<br>');
     }
 
-    function _aeroBuild(kind, data) {
-      if (kind === 'airspace') {
-        return L.geoJSON(data, {
-          style: _aeroAirspaceStyle,
-          onEachFeature: (f, l) => l.bindTooltip(_aeroAirspaceLabel(f.properties || {}),
-            { sticky: true, direction: 'top', className: 'ais-tooltip adsb-tooltip aero-tooltip' }),
+    /* ONE canvas for all three layers, rather than ~3800 SVG paths.
+     *
+     * Airspace alone is 1911 polygons and there are another 1900 airfields;
+     * as SVG that is a DOM node each, re-projected on every zoom and pan, and
+     * switching the layer on locked the page up for seconds. Canvas draws them
+     * into a single element.
+     *
+     * `tolerance` is the other half of the fix. Most airfields are a 2.5px
+     * dot — accurate, and almost impossible to hit. The canvas renderer
+     * accepts a click within 8px of a shape, which makes them clickable
+     * without drawing them bigger than they are. SVG has no equivalent. */
+    /** True on the two bright basemaps. The aero palette is built against
+     *  near-black tiles — pale rings, thin translucent boundaries — and over
+     *  aerial photography it washes out completely.
+     *
+     *  This was a CSS rule keyed on the basemap class, which worked while the
+     *  layers were SVG: Leaflet writes path colours as presentation
+     *  attributes and CSS outranks them. Canvas paints from the options
+     *  object and never consults a stylesheet, so the restyle has to be a
+     *  setStyle call now. */
+    function aeroOnBrightBasemap() {
+      const el = document.getElementById('map');
+      return !!el && (el.classList.contains('map-sat-mode')
+        || el.classList.contains('map-topo-mode'));
+    }
+
+    /** Re-skin whatever aero layers are built for the current basemap.
+     *
+     *  Only the OUTLINE changes. The fill still carries what the thing is —
+     *  amber for a military field, cyan for civil, violet for a navaid — so
+     *  the dark ring reads as contrast and not as a different category. */
+    function aeroRestyle() {
+      const bright = aeroOnBrightBasemap();
+      for (const [kind, a] of Object.entries(AERO)) {
+        if (!a.layer) continue;
+        if (kind === 'airspace') {
+          a.layer.setStyle((f) => {
+            const base = _aeroAirspaceStyle(f);
+            if (!bright) return base;
+            return { ...base, opacity: Math.min(1, base.opacity + 0.45), weight: base.weight + 0.8 };
+          });
+        } else {
+          // setStyle on the group is blanket, so the dark case has to restate
+          // the per-feature colours rather than pass undefined — undefined
+          // would be written straight into the options and painted as such.
+          a.layer.eachLayer((l) => {
+            const q = (l.feature || {}).properties || {};
+            const mil = !!q.mil;
+            const major = !!q.maj;
+            const isNavaid = kind === 'navaids';
+            l.setStyle(bright
+              ? { color: '#0b1220', weight: 2, opacity: 0.95 }
+              : {
+                  color: isNavaid ? '#c4b5fd' : (mil ? '#fbbf24' : '#cbd5e1'),
+                  weight: isNavaid ? 1 : (major ? 1.4 : 0.9),
+                  opacity: isNavaid ? 0.8 : (major ? 0.9 : 0.65),
+                });
+          });
+        }
+      }
+    }
+
+    let _aeroRenderer = null;
+    function aeroRenderer() {
+      if (!_aeroRenderer) {
+        _aeroRenderer = L.canvas({ pane: 'aeroPane', padding: 0.4, tolerance: 8 });
+      }
+      return _aeroRenderer;
+    }
+
+    /** Airspace as boundary LINES rather than polygons.
+     *
+     * The fill was dropped so that hovering open airspace would not stack a
+     * tooltip from every sector overhead; with SVG that worked, because the
+     * browser only hit-tests painted area. The canvas renderer does its own
+     * hit-testing and asks a Polygon whether the cursor is INSIDE it, fill or
+     * no fill — which would bring the stacking straight back. Handing Leaflet
+     * lines instead makes "near the boundary" the literal test. */
+    function _aeroAsLines(data) {
+      const out = [];
+      for (const f of (data.features || [])) {
+        const g = f.geometry || {};
+        let lines = null;
+        if (g.type === 'Polygon') lines = g.coordinates;
+        else if (g.type === 'MultiPolygon') lines = g.coordinates.flat();
+        if (!lines) { out.push(f); continue; }
+        out.push({
+          type: 'Feature',
+          properties: f.properties,
+          geometry: { type: 'MultiLineString', coordinates: lines },
         });
       }
+      return { type: 'FeatureCollection', features: out };
+    }
+
+    /* Content is bound ONCE per layer, on the group, not once per feature.
+     * Leaflet sets the tooltip's _source to whichever child raised the event
+     * and passes it to a function content, so 3800 features need 3800 fewer
+     * Tooltip objects than the obvious loop creates. */
+    const AERO_LABEL = {
+      airspace: (l) => _aeroAirspaceLabel((l.feature || {}).properties || {}),
+      airports: (l) => _aeroAirportLabel((l.feature || {}).properties || {}),
+      navaids: (l) => _aeroNavaidLabel((l.feature || {}).properties || {}),
+    };
+
+    function _aeroOptions(kind) {
+      const r = aeroRenderer();
+      if (kind === 'airspace') return { renderer: r, style: _aeroAirspaceStyle };
       if (kind === 'airports') {
-        return L.geoJSON(data, {
+        return {
+          renderer: r,
           pointToLayer: (f, latlng) => {
             const p = f.properties || {};
             // Size says how big the field is, colour says who it belongs to.
@@ -16306,28 +16410,59 @@ function initPagerHoursFromStorage() {
             const major = !!p.maj;
             const mil = !!p.mil;
             return L.circleMarker(latlng, {
+              renderer: r,
               radius: major ? 4.5 : 2.5,
               color: mil ? '#fbbf24' : '#cbd5e1',
               weight: major ? 1.4 : 0.9,
               opacity: major ? 0.9 : 0.65,
               fillColor: mil ? '#f59e0b' : '#0ea5e9',
               fillOpacity: major ? 0.9 : 0.5,
-              className: 'aero-pt',
             });
           },
-          onEachFeature: (f, l) => l.bindTooltip(_aeroAirportLabel(f.properties || {}),
-            { sticky: true, direction: 'top', className: 'ais-tooltip adsb-tooltip aero-tooltip' }),
-        });
+        };
       }
-      return L.geoJSON(data, {
+      return {
+        renderer: r,
         pointToLayer: (f, latlng) => L.circleMarker(latlng, {
+          renderer: r,
           radius: 3, color: '#c4b5fd', weight: 1,
           opacity: 0.8, fillColor: '#7c3aed', fillOpacity: 0.8,
-          className: 'aero-pt',
         }),
-        onEachFeature: (f, l) => l.bindTooltip(_aeroNavaidLabel(f.properties || {}),
-          { sticky: true, direction: 'top', className: 'ais-tooltip adsb-tooltip aero-tooltip' }),
+      };
+    }
+
+    /* Built in slices with a yield between them. Even on canvas, turning 1911
+     * airspace features into Leaflet layers in one go blocks long enough to
+     * drop the live aircraft animation; 250 at a time keeps the frame budget
+     * and the map stays draggable while it fills in. */
+    const AERO_CHUNK = 250;
+    async function _aeroBuild(kind, data) {
+      const src = kind === 'airspace' ? _aeroAsLines(data) : data;
+      const features = src.features || [];
+      const group = L.geoJSON(null, _aeroOptions(kind));
+      for (let i = 0; i < features.length; i += AERO_CHUNK) {
+        group.addData({
+          type: 'FeatureCollection',
+          features: features.slice(i, i + AERO_CHUNK),
+        });
+        if (i + AERO_CHUNK < features.length) {
+          await new Promise((r) => setTimeout(r, 0));
+        }
+      }
+      const label = AERO_LABEL[kind];
+      group.bindTooltip(label, {
+        sticky: true,
+        direction: 'top',
+        className: 'ais-tooltip adsb-tooltip aero-tooltip',
       });
+      // And a popup on click, because a tooltip you have to keep the cursor
+      // still for is not a way to read six frequencies — and on a touch screen
+      // there is no hover at all.
+      group.bindPopup(label, { className: 'aero-popup', maxWidth: 320, autoPan: true });
+      // Otherwise the hover tooltip stays up behind the popup showing the same
+      // three lines twice.
+      group.on('popupopen', () => group.closeTooltip());
+      return group;
     }
 
     window.toggleAero = async function (kind) {
@@ -16346,10 +16481,11 @@ function initPagerHoursFromStorage() {
 
       if (!a.layer) {
         a.loading = true;
+        refreshActiveFilterPanel();   // the pill says "loading" while it does
         try {
           const res = await fetch(a.url, { cache: 'force-cache' });
           if (!res.ok) throw new Error('HTTP ' + res.status);
-          a.layer = _aeroBuild(kind, await res.json());
+          a.layer = await _aeroBuild(kind, await res.json());
         } catch (e) {
           console.warn('[aero] ' + kind + ' failed to load:', e);
           a.on = false;
@@ -16360,12 +16496,12 @@ function initPagerHoursFromStorage() {
         }
         a.loading = false;
       }
-      // Still wanted? The toggle may have been switched off during the fetch.
+      refreshActiveFilterPanel();   // drop the "loading" label
+      // Still wanted? The toggle may have been switched off during the fetch,
+      // which for airspace is several seconds of download and build.
       if (!a.on) return;
       a.layer.addTo(map);
-      // Under the live traffic. These are the chart, not the thing being read
-      // off it, and airspace fill over an aircraft hides what you came for.
-      a.layer.bringToBack();
+      aeroRestyle();                // a layer built while on satellite
     };
 
     // Ground-target visibility depends on zoom; re-diff when the zoom
