@@ -21,19 +21,25 @@
  * block — dashboard.html and staff.html key off it. See the
  * test suite for the exact assertions.
  *
- * Approval flow: when `create_account: true`, python POSTs to the
- * Supabase Auth Admin API to create an auth user with a temporary
- * password (`Changeme-XXXXXX`), then inserts the granted roles into
- * `user_roles` keyed by the returned Supabase user id. We mirror that
- * here. The 15s upstream timeout, response-body shape (`temp_password`,
- * `supabase_account_created`, `supabase_error`), and notes-column
- * format (`Roles: a,b | Temp password: ... | Supabase account created`)
- * are kept byte-compatible with python so the admin UI sees identical
- * behaviour from either backend.
+ * Approval flow. Approval NEVER creates an account and never issues a
+ * password. signup.html creates the Supabase account itself, with a password
+ * the person chooses, before the request is submitted; approval only decides
+ * which roles that account carries.
+ *
+ * That leaves two shapes. A request carrying a supabase_user_id has its roles
+ * written to user_roles immediately. A request without one was filed while
+ * email confirmation was still pending — real and common, not a broken signup
+ * — so the approval is recorded in `approved_roles` and claimed by verified
+ * email at that person's first signed-in page load (see profiles.ts).
+ *
+ * This replaced python's behaviour, which created a second Supabase account
+ * with a generated `Changeme-XXXXXX` password. That call fails outright for an
+ * email that already has an account, which since signup.html started creating
+ * them is every email; the roles were silently not granted, and the password
+ * went into the request notes and from there into a staff Discord channel.
  */
 import { Hono } from 'hono';
 import type { Pool } from 'pg';
-import { randomBytes } from 'node:crypto';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { config } from '../config.js';
@@ -383,24 +389,6 @@ async function fetchRequest(pool: Pool, requestId: number): Promise<EditorReques
   );
   return r.rows[0] ?? null;
 }
-
-// `Changeme-` + 6 chars from a CSPRNG over ascii_lowercase + digits. Uses
-// rejection sampling so there's no modulo bias (256 % 36 != 0): bytes in
-// the biased tail [252,256) are discarded and re-drawn, giving each of the
-// 36 chars equal probability. One-time temp password; user must rotate it.
-const TEMP_PASSWORD_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
-function generateTempPassword(): string {
-  const n = TEMP_PASSWORD_ALPHABET.length; // 36
-  const cutoff = 256 - (256 % n); // 252 — largest unbiased multiple of n
-  let suffix = '';
-  while (suffix.length < 6) {
-    const b = randomBytes(1)[0]!;
-    if (b >= cutoff) continue; // reject the biased tail, draw again
-    suffix += TEMP_PASSWORD_ALPHABET[b % n];
-  }
-  return `Changeme-${suffix}`;
-}
-
 editorRouter.post('/api/editor-requests/:id/approve', requireRole(canManageUsers), async (c) => {
   const requestIdRaw = c.req.param('id');
   if (!/^\d+$/.test(requestIdRaw)) {
@@ -430,8 +418,6 @@ editorRouter.post('/api/editor-requests/:id/approve', requireRole(canManageUsers
     // granted alongside so an approved user is complete even before their first
     // page load triggers /api/profiles/sync.
     const roles = [...new Set([...approvedRoles, 'authed'])];
-    const createAccount = data['create_account'] === true;
-
     // Staff can approve with the feature roles only — assigning staff / owner
     // during approval is owner-only. The UI hides those checkboxes for staff;
     // this enforces it server-side so a hand-crafted request can't escalate.
@@ -454,15 +440,13 @@ editorRouter.post('/api/editor-requests/:id/approve', requireRole(canManageUsers
       return c.json({ error: `Request is already ${req.status}` }, 400);
     }
 
-    let tempPassword: string | null = null;
-    let supabaseAccountCreated = false;
-    let supabaseError: string | null = null;
     let supabaseUserId: string | null = null;
     let rolesAssignedToLinked = false;
+    let pendingFirstSignIn = false;
 
-    // Request came from an already-signed-in account (e.g. Discord OAuth
-    // signup): assign the roles straight to that account. No new account,
-    // no temp password — approval just unlocks the existing login.
+    // Request came from an already-signed-in account (Discord OAuth, or an
+    // email signup whose confirmation had already landed): assign the roles
+    // straight to it. Approval unlocks an existing login; it never makes one.
     if (req.supabase_user_id) {
       supabaseUserId = req.supabase_user_id;
       if (roles.length > 0) {
@@ -488,116 +472,45 @@ editorRouter.post('/api/editor-requests/:id/approve', requireRole(canManageUsers
           );
         }
       }
-    } else if (createAccount) {
-      tempPassword = generateTempPassword();
-      if (config.SUPABASE_URL && config.SUPABASE_SERVICE_ROLE_KEY) {
-        try {
-          const createUrl = `${config.SUPABASE_URL}/auth/v1/admin/users`;
-          const res = await fetch(createUrl, {
-            method: 'POST',
-            headers: {
-              apikey: config.SUPABASE_SERVICE_ROLE_KEY,
-              Authorization: `Bearer ${config.SUPABASE_SERVICE_ROLE_KEY}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              email: req.email,
-              password: tempPassword,
-              email_confirm: true,
-              user_metadata: {
-                discord_id: req.discord_id,
-                approved_request_id: requestId,
-                roles,
-                // Admin-created accounts never went through the signup
-                // form's username field — default to the email local part
-                // so the account still shows a name on logs/admin.
-                username: req.email.split('@')[0] ?? req.email,
-                display_name: req.email.split('@')[0] ?? req.email,
-              },
-            }),
-            signal: AbortSignal.timeout(15_000),
-          });
-          if (res.status === 200 || res.status === 201) {
-            const body = (await res.json().catch(() => ({}))) as { id?: string };
-            supabaseUserId = body.id ?? null;
-            supabaseAccountCreated = true;
-            log.info(
-              { email: req.email, userId: supabaseUserId },
-              'Created Supabase account',
-            );
-            // Best-effort role insert. Mirrors python's nested try/except
-            // — a failure here doesn't roll back the account creation,
-            // it just logs and lets the admin assign roles manually via
-            // /api/users/<uid>/roles afterwards.
-            if (supabaseUserId && roles.length > 0) {
-              try {
-                for (const role of roles) {
-                  await pool.query(
-                    `INSERT INTO user_roles (user_id, role, granted_by, request_id)
-                     VALUES ($1, $2, 'system', $3)
-                     ON CONFLICT (user_id, role) DO NOTHING`,
-                    [supabaseUserId, role, requestId],
-                  );
-                }
-                invalidateUserRolesCache(supabaseUserId);
-                log.info({ userId: supabaseUserId, roles }, 'Assigned roles to user');
-              } catch (roleErr) {
-                log.warn(
-                  { err: (roleErr as Error).message },
-                  'Error inserting roles (non-fatal)',
-                );
-              }
-            }
-          } else {
-            const errText = await res.text().catch(() => '');
-            try {
-              const errBody = JSON.parse(errText) as { message?: string; msg?: string };
-              supabaseError =
-                errBody.message ?? errBody.msg ?? `Status ${res.status}`;
-            } catch {
-              supabaseError = `Status ${res.status}`;
-            }
-            log.error(
-              { status: res.status, supabaseError },
-              'Failed to create Supabase account',
-            );
-          }
-        } catch (err) {
-          supabaseError = (err as Error).message;
-          log.error(
-            { err: (err as Error).message },
-            'Error creating Supabase account',
-          );
-        }
-      }
+    } else {
+      // No linked account. This is NOT a missing signup — it is the ordinary
+      // shape of a request filed while email confirmation was still pending,
+      // when there was no session to link. The account already exists in
+      // Supabase with a password its owner chose.
+      //
+      // What used to happen here was a second Supabase account, created by us
+      // with a generated password that staff then had to pass on by hand. For
+      // an email that already had an account that call simply failed, so the
+      // roles were never granted and the note recorded the error. The grant is
+      // recorded on the request instead and claimed by verified email at the
+      // person's first signed-in page load.
+      pendingFirstSignIn = true;
+      log.info(
+        { requestId, email: req.email, roles },
+        'Approved an unlinked request — roles wait for first sign-in',
+      );
     }
 
     const reviewedAt = Math.floor(Date.now() / 1000);
     // Note lists the roles that were actually approved — the implicit base
     // 'authed' grant is noise in an audit trail.
     const rolesStr = approvedRoles.join(',');
-    // What happened to the account, held separately from `notes` because
-    // `notes` also carries the generated temp password and is stored, while
-    // this line is safe to send to Discord. Keeping them as one string is how
-    // the password ended up in a staff channel.
     const accountOutcome = rolesAssignedToLinked
       ? `Roles assigned to linked account ${supabaseUserId}`
-      : supabaseAccountCreated
-        ? 'Supabase account created'
-        : supabaseError
-          ? `Supabase error: ${supabaseError}`
-          : (createAccount && !(config.SUPABASE_URL && config.SUPABASE_SERVICE_ROLE_KEY))
-            ? 'Supabase not configured'
-            : null;
+      : pendingFirstSignIn
+        ? 'Awaiting first sign-in'
+        : null;
     let notes = `Roles: ${rolesStr}`;
-    if (tempPassword) notes += ` | Temp password: ${tempPassword}`;
     if (accountOutcome) notes += ` | ${accountOutcome}`;
 
+    // approved_roles is what the first-sign-in claim reads. Written for every
+    // approval, not just the unlinked ones, so the record of what an approval
+    // granted does not depend on which shape it took.
     await pool.query(
       `UPDATE editor_requests
-       SET status = 'approved', reviewed_at = $1, notes = $2
-       WHERE id = $3`,
-      [reviewedAt, notes, requestId],
+       SET status = 'approved', reviewed_at = $1, notes = $2, approved_roles = $3
+       WHERE id = $4`,
+      [reviewedAt, notes, roles.join(','), requestId],
     );
 
     log.info({ requestId, email: req.email, roles }, 'Approved editor request');
@@ -613,12 +526,6 @@ editorRouter.post('/api/editor-requests/:id/approve', requireRole(canManageUsers
         { name: 'Discord', value: req.discord_id },
         { name: 'Region', value: req.region },
         { name: 'Roles granted', value: roles.join(', ') },
-        // Whether one exists, never what it is. Discord history is searchable
-        // and outside our control; the password stays in editor_requests.notes.
-        // It is shown ONCE, in the approval dialog — the staff page does not
-        // render notes — so this line is a reminder to pass it on, not a
-        // pointer to somewhere it can be read back.
-        { name: 'Temp password', value: tempPassword ? 'Issued — shown once at approval' : null },
         { name: 'Account', value: accountOutcome, inline: false },
       ],
     });
@@ -630,11 +537,11 @@ editorRouter.post('/api/editor-requests/:id/approve', requireRole(canManageUsers
       // Report the roles that were APPROVED — the implicit base 'authed' grant
       // is an internal detail, not part of the approval decision.
       roles: approvedRoles,
-      supabase_account_created: supabaseAccountCreated,
       roles_assigned_to_linked_account: rolesAssignedToLinked,
+      // The roles are recorded and will apply the moment this person signs in;
+      // there is nothing for staff to send them.
+      pending_first_sign_in: pendingFirstSignIn,
     };
-    if (tempPassword) result['temp_password'] = tempPassword;
-    if (supabaseError) result['supabase_error'] = supabaseError;
     return c.json(result);
   } catch (err) {
     log.error({ err }, 'Error approving editor request');

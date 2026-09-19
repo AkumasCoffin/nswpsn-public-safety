@@ -181,6 +181,80 @@ profilesRouter.put('/api/profiles', requireSupabaseJwt, async (c) => {
 // even if they never open the profile editor. Both come from the verified JWT;
 // the display name only fills in when currently empty, so a user's own chosen
 // name is never overwritten.
+/**
+ * Grant the roles from an approved-but-unlinked request, matched on email.
+ *
+ * SECURITY. An email match is the whole authorisation here, so the address has
+ * to be one the provider confirmed — otherwise signing up as someone else's
+ * address would inherit whatever they were approved for. The JWT's own
+ * email_verified claim is the gate, and an absent claim does NOT pass: with
+ * confirmation switched on there is no session before confirmation and so no
+ * token to present, and if it were ever switched off this must fail closed.
+ *
+ * The request is linked in the same statement that claims it (supabase_user_id
+ * IS NULL in the WHERE, RETURNING to see what was taken), so two page loads
+ * racing on first sign-in cannot both grant.
+ *
+ * Best-effort throughout: this runs on a page load and must never be the
+ * reason one fails.
+ */
+async function claimApprovedRoles(
+  pool: Pool,
+  uid: string,
+  c: { get: (k: 'userEmail' | 'userEmailVerified') => unknown },
+): Promise<void> {
+  const email = (c.get('userEmail') as string | undefined)?.trim().toLowerCase();
+  if (!email || !email.includes('@')) return;
+  if (c.get('userEmailVerified') !== true) return;
+
+  try {
+    const claimed = await pool.query<{ id: number; approved_roles: string | null }>(
+      `UPDATE editor_requests
+          SET supabase_user_id = $1
+        WHERE status = 'approved'
+          AND supabase_user_id IS NULL
+          AND lower(email) = $2
+        RETURNING id, approved_roles`,
+      [uid, email],
+    );
+    if (claimed.rowCount === 0) return;
+
+    const roles = new Set<string>();
+    for (const row of claimed.rows) {
+      for (const r of String(row.approved_roles || '').split(',')) {
+        const v = r.trim();
+        if (v) roles.add(v);
+      }
+    }
+    // An approval with no recorded roles predates the column. Linking it is
+    // still right — it stops the login guard calling this an incomplete signup
+    // — but there is nothing to grant, and inventing something would be worse.
+    if (roles.size === 0) {
+      log.warn(
+        { uid, requests: claimed.rows.map((r) => r.id) },
+        'profiles: linked an approved request with no recorded roles',
+      );
+      return;
+    }
+
+    for (const role of roles) {
+      await pool.query(
+        `INSERT INTO user_roles (user_id, role, granted_by, request_id)
+         VALUES ($1, $2, 'sync', $3)
+         ON CONFLICT (user_id, role) DO NOTHING`,
+        [uid, role, claimed.rows[0]!.id],
+      );
+    }
+    invalidateUserRolesCache(uid);
+    log.info(
+      { uid, roles: [...roles], requests: claimed.rows.map((r) => r.id) },
+      'profiles: granted roles approved before this account was linked',
+    );
+  } catch (err) {
+    log.warn({ err: (err as Error).message, uid }, 'profiles: role claim failed');
+  }
+}
+
 profilesRouter.post('/api/profiles/sync', requireSupabaseJwt, async (c) => {
   const pool = await getPool();
   if (!pool) return c.json(DB_UNAVAILABLE, 503);
@@ -241,6 +315,15 @@ profilesRouter.post('/api/profiles/sync', requireSupabaseJwt, async (c) => {
         ],
       });
     }
+
+    // Roles approved before this account could be linked to its request.
+    //
+    // A request submitted while email confirmation was still pending has no
+    // session to link, so it reaches the queue identified by email alone.
+    // Staff approve it, the person confirms and signs in — and until this ran,
+    // nothing connected the two: the approval sat on a row nobody read and the
+    // account carried 'authed' and nothing else.
+    await claimApprovedRoles(pool, uid, c);
 
     if (!discordAvatar && !jwtName) return c.json({ success: true, skipped: 'nothing to sync' });
     await pool.query(

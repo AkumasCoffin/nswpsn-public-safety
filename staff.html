@@ -4313,13 +4313,20 @@
         <div id="privileged-roles-section" style="border-top: 1px solid var(--border-subtle); margin: 0.6rem 0 0; padding-top: 0.5rem;"></div>
       </div>
       
-      <div id="create-account-section" style="margin-bottom: 1.5rem; padding: 1rem; background: rgba(34, 197, 94, 0.1); border: 1px solid rgba(34, 197, 94, 0.3); border-radius: 8px;">
-        <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; color: var(--text-primary);">
-          <input type="checkbox" id="create-account-toggle" checked style="width: 18px; height: 18px; accent-color: var(--success);">
-          <span style="font-weight: 600;">Create Supabase Login Account</span>
-        </label>
+      <!-- No "create account" option: the account already exists. signup.html
+           makes it, with a password its owner chooses, before the request is
+           ever submitted. A request with no linked account was filed while
+           email confirmation was still pending — approving it records the
+           roles, and they apply the moment that person signs in. -->
+      <div id="pending-signin-section" style="display: none; margin-bottom: 1.5rem; padding: 1rem; background: rgba(234, 179, 8, 0.1); border: 1px solid rgba(234, 179, 8, 0.3); border-radius: 8px;">
+        <div style="display: flex; align-items: center; gap: 0.5rem; color: var(--text-primary); font-weight: 600;">
+          <i class="fas fa-hourglass-half" style="color: var(--warning);"></i> Not signed in yet
+        </div>
         <p style="color: var(--text-soft); font-size: 0.8rem; margin: 0.5rem 0 0 1.6rem;">
-          Creates a login account so the user can access the editor. Uncheck if they only need non-login roles.
+          This request was submitted before its email was confirmed, so it isn't
+          tied to an account yet. Approving records the roles and they apply
+          automatically the first time this person signs in — there's nothing to
+          send them.
         </p>
       </div>
       <div id="linked-account-section" style="display: none; margin-bottom: 1.5rem; padding: 1rem; background: rgba(88, 101, 242, 0.1); border: 1px solid rgba(88, 101, 242, 0.35); border-radius: 8px;">
@@ -4409,15 +4416,6 @@
         <label>Email</label>
         <div class="value" id="approved-email">-</div>
       </div>
-      <div class="credential-box" id="password-box">
-        <label>Temporary Password</label>
-        <div class="value">
-          <span id="approved-password">-</span>
-          <button class="copy-btn" onclick="copyPassword(event)">
-            <i class="fas fa-copy"></i> Copy
-          </button>
-        </div>
-      </div>
       <div class="credential-box">
         <label>Discord ID</label>
         <div class="value" id="approved-discord">-</div>
@@ -4426,10 +4424,6 @@
         <label>Assigned Roles</label>
         <div class="value" id="approved-roles" style="font-family: inherit; font-size: 0.95rem;">-</div>
       </div>
-      <p id="dm-reminder" style="color: var(--warning); font-size: 0.85rem; margin-top: 1rem;">
-        <i class="fas fa-exclamation-triangle"></i> 
-        Remember to DM the user on Discord with their credentials!
-      </p>
       <div style="margin-top: 1.5rem;">
         <button class="btn btn-secondary" onclick="closeApproveModal()" style="width: 100%;">
           Close
@@ -15938,11 +15932,8 @@
       const lTitle = document.getElementById('linked-account-title');
       if (lIcon) lIcon.className = viaDiscord ? 'fab fa-discord' : 'fas fa-envelope';
       if (lTitle) lTitle.textContent = viaDiscord ? 'Linked Discord account' : 'Linked email account';
-      document.getElementById('create-account-section').style.display = isLinked ? 'none' : 'block';
+      document.getElementById('pending-signin-section').style.display = isLinked ? 'none' : 'block';
       document.getElementById('linked-account-section').style.display = isLinked ? 'block' : 'none';
-
-      // Default to create account if map editor is requested
-      document.getElementById('create-account-toggle').checked = !isLinked && (req.request_type || []).includes('editor');
       
       document.getElementById('approve-confirm-modal').style.display = 'flex';
     }
@@ -15962,7 +15953,6 @@
       const roles = [];
       roles.push(...collectRoles('approve-roles-box', 'privileged-roles-section'));
       
-      const createAccount = document.getElementById('create-account-toggle').checked;
 
       if (roles.length === 0) {
         showToast('Select at least one role before approving.', 'warn');
@@ -15980,7 +15970,6 @@
           },
           body: JSON.stringify({
             roles: roles,
-            create_account: createAccount
           })
         });
         
@@ -16004,47 +15993,21 @@
         // Contains <i> icon markup (labels escaped above) — innerHTML, not text.
         document.getElementById('approved-roles').innerHTML = rolesText || 'None';
         
-        // Handle password display
-        const passwordBox = document.getElementById('password-box');
-        const dmReminder = document.getElementById('dm-reminder');
-        if (data.temp_password) {
-          passwordBox.style.display = 'block';
-          document.getElementById('approved-password').textContent = data.temp_password;
-          dmReminder.style.display = 'block';
-        } else {
-          passwordBox.style.display = 'none';
-          dmReminder.style.display = 'none';
-        }
-        
-        // Update status box based on result
+        // Two outcomes now, and neither of them needs staff to pass anything
+        // on: the roles are either live already or recorded and waiting.
         const statusBox = document.getElementById('approve-status-box');
-        if (data.roles_assigned_to_linked_account) {
-          statusBox.style.background = 'rgba(88, 101, 242, 0.15)';
-          statusBox.style.border = '1px solid rgba(88, 101, 242, 0.4)';
-          statusBox.style.color = '#a5b4fc';
-          statusBox.innerHTML = '<i class="fab fa-discord"></i> Roles assigned to the user\'s linked account — they can use them on next page load.';
-        } else if (data.supabase_account_created) {
-          statusBox.style.background = 'rgba(34, 197, 94, 0.15)';
-          statusBox.style.border = '1px solid rgba(34, 197, 94, 0.4)';
-          statusBox.style.color = '#22c55e';
-          statusBox.innerHTML = '<i class="fas fa-check-circle"></i> Supabase account created! User can log in immediately.';
-        } else if (data.supabase_error) {
-          statusBox.style.background = 'rgba(239, 68, 68, 0.15)';
-          statusBox.style.border = '1px solid rgba(239, 68, 68, 0.4)';
-          statusBox.style.color = '#ef4444';
-          statusBox.innerHTML = `<i class="fas fa-exclamation-circle"></i> Account creation failed: ${escapeHtml(data.supabase_error)}`;
-        } else if (!createAccount) {
-          statusBox.style.background = 'rgba(100, 116, 139, 0.15)';
-          statusBox.style.border = '1px solid rgba(100, 116, 139, 0.4)';
-          statusBox.style.color = '#94a3b8';
-          statusBox.innerHTML = '<i class="fas fa-info-circle"></i> Roles assigned (no login account created).';
-        } else {
+        if (data.pending_first_sign_in) {
           statusBox.style.background = 'rgba(234, 179, 8, 0.15)';
           statusBox.style.border = '1px solid rgba(234, 179, 8, 0.4)';
           statusBox.style.color = '#eab308';
-          statusBox.innerHTML = '<i class="fas fa-info-circle"></i> Supabase not configured. Create the account manually.';
+          statusBox.innerHTML = '<i class="fas fa-hourglass-half"></i> Roles recorded. They apply automatically the first time this person signs in.';
+        } else {
+          statusBox.style.background = 'rgba(88, 101, 242, 0.15)';
+          statusBox.style.border = '1px solid rgba(88, 101, 242, 0.4)';
+          statusBox.style.color = '#a5b4fc';
+          statusBox.innerHTML = '<i class="fas fa-check-circle"></i> Roles assigned to their account — live on their next page load.';
         }
-        
+
         document.getElementById('approve-modal').style.display = 'flex';
 
         // Refresh list
@@ -16280,35 +16243,6 @@
       document.getElementById('details-modal').style.display = 'none';
     }
     
-    function copyPassword(evt) {
-      if (!currentApproval) return;
-
-      const btn = (evt && evt.target && evt.target.closest)
-        ? evt.target.closest('.copy-btn')
-        : document.querySelector('#password-box .copy-btn');
-      if (!btn) return;
-      const originalHtml = btn.innerHTML;
-
-      // navigator.clipboard is undefined on insecure (non-HTTPS) contexts —
-      // accessing .writeText would throw before the .catch could handle it.
-      if (!navigator.clipboard) {
-        btn.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Copy unavailable';
-        setTimeout(() => { btn.innerHTML = originalHtml; }, 2000);
-        return;
-      }
-
-      navigator.clipboard.writeText(currentApproval.temp_password).then(() => {
-        btn.innerHTML = '<i class="fas fa-check"></i> Copied!';
-        setTimeout(() => {
-          btn.innerHTML = originalHtml;
-        }, 2000);
-      }).catch(() => {
-        btn.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Copy failed';
-        setTimeout(() => {
-          btn.innerHTML = originalHtml;
-        }, 2000);
-      });
-    }
     
     async function refreshRequests() {
       document.getElementById('requests-container').innerHTML = `

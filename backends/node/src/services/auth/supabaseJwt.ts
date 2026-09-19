@@ -41,6 +41,9 @@ declare module 'hono' {
     /** Identity provider the account authenticated through ('discord',
      *  'google', 'email'), from app_metadata. */
     userProvider?: string;
+    /** Whether the provider says the email claim is confirmed. Absent when
+     *  the JWT does not say either way — treat that as "not proven". */
+    userEmailVerified?: boolean;
   }
 }
 
@@ -143,6 +146,8 @@ export const optionalSupabaseJwt: MiddlewareHandler = async (c, next) => {
       if (av) c.set('userAvatar', av);
       const prov = providerFromClaims(payload as Record<string, unknown>);
       if (prov) c.set('userProvider', prov);
+      const ev = emailVerifiedFromClaims(payload as Record<string, unknown>);
+      if (ev !== undefined) c.set('userEmailVerified', ev);
     }
   } catch (err) {
     // Verification failed — log at debug because clients legitimately
@@ -174,6 +179,19 @@ export function avatarFromClaims(payload: Record<string, unknown>): string {
  *  'email'. Supabase puts it in app_metadata; it is the single most useful
  *  thing to know about a brand-new account, because it says where to go and
  *  look the person up. */
+/** Whether the email claim has been confirmed, as the JWT reports it.
+ *  Returns undefined when nothing in the token says, which callers must treat
+ *  as unproven rather than as true — anything that grants access on an email
+ *  match is trusting this. */
+export function emailVerifiedFromClaims(payload: Record<string, unknown>): boolean | undefined {
+  for (const bag of ['user_metadata', 'app_metadata']) {
+    const meta = payload[bag] as Record<string, unknown> | undefined;
+    const v = meta?.['email_verified'];
+    if (typeof v === 'boolean') return v;
+  }
+  return undefined;
+}
+
 export function providerFromClaims(payload: Record<string, unknown>): string {
   const meta = payload['app_metadata'] as Record<string, unknown> | undefined;
   const v = meta?.['provider'];
@@ -229,6 +247,8 @@ export const requireSupabaseJwt: MiddlewareHandler = async (c, next) => {
     if (av) c.set('userAvatar', av);
     const prov = providerFromClaims(payload as Record<string, unknown>);
     if (prov) c.set('userProvider', prov);
+    const ev = emailVerifiedFromClaims(payload as Record<string, unknown>);
+    if (ev !== undefined) c.set('userEmailVerified', ev);
   } catch {
     return c.json({ error: 'invalid token' }, 401);
   }

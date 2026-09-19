@@ -412,8 +412,7 @@ describe('POST /api/editor-requests/:id/approve', () => {
       expect(res.status).toBe(200);
       const body = (await res.json()) as Record<string, unknown>;
       expect(body['roles_assigned_to_linked_account']).toBe(true);
-      expect(body['supabase_account_created']).toBe(false);
-      expect(body['temp_password']).toBeUndefined();
+      expect(body['pending_first_sign_in']).toBe(false);
       // No Supabase admin API call was made.
       expect(fetchSpy).not.toHaveBeenCalled();
       // Roles inserted for the linked user id.
@@ -430,183 +429,68 @@ describe('POST /api/editor-requests/:id/approve', () => {
     }
   });
 
-  it('creates a Supabase account, inserts roles, and surfaces temp password when create_account is true', async () => {
-    process.env['SUPABASE_URL'] = 'https://test.supabase.co';
-    process.env['SUPABASE_SERVICE_ROLE_KEY'] = 'srv-test-key';
-    // Re-evaluate config since the editor module reads it at module
-    // import time. Vitest hoists vi.mock, but config is a const. The
-    // safest path: stub global.fetch so the route's fetch call hits
-    // our handler, and rely on the already-imported config snapshot.
-    // The two env vars above feed the next config reload but for this
-    // test we additionally patch the config object directly via the
-    // dynamic import.
-    const cfgMod = await import('../../../src/config.js');
-    const origUrl = cfgMod.config.SUPABASE_URL;
-    const origKey = cfgMod.config.SUPABASE_SERVICE_ROLE_KEY;
-    (cfgMod.config as { SUPABASE_URL: string }).SUPABASE_URL =
-      'https://test.supabase.co';
-    (cfgMod.config as { SUPABASE_SERVICE_ROLE_KEY: string }).SUPABASE_SERVICE_ROLE_KEY =
-      'srv-test-key';
-
-    const fetchSpy = vi
-      .spyOn(global, 'fetch')
-      .mockResolvedValue(
-        new Response(JSON.stringify({ id: 'uuid-of-new-user' }), {
-          status: 201,
-          headers: { 'Content-Type': 'application/json' },
-        }),
-      );
-
+  it('records the roles and waits when the request has no account yet', async () => {
+    // A request filed while email confirmation was still pending. There used
+    // to be a second Supabase account created here, with a password we
+    // generated and staff had to pass on by hand — which for an email that
+    // already had an account simply failed, granting nothing.
+    const fetchSpy = vi.spyOn(global, 'fetch');
     try {
-      // 4 queries: SELECT request, INSERT role x2, UPDATE editor_requests
       resultQueue = [
-        { rows: [{ id: 1, email: 'a@b.com', discord_id: 'd99', status: 'pending' }] },
-        { rows: [] }, // INSERT role 1
-        { rows: [] }, // INSERT role 2
+        { rows: [{ id: 1, email: 'a@b.com', discord_id: 'd', status: 'pending', supabase_user_id: null }] },
         { rows: [] }, // UPDATE editor_requests
       ];
       const app = makeApp();
       const res = await app.request('/api/editor-requests/1/approve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          roles: ['map:editor', 'feeder:pager'],
-          create_account: true,
-        }),
-      });
-      expect(res.status).toBe(200);
-      const body = (await res.json()) as Record<string, unknown>;
-      expect(body['supabase_account_created']).toBe(true);
-      expect(body['supabase_error']).toBeUndefined();
-      expect(typeof body['temp_password']).toBe('string');
-      expect((body['temp_password'] as string).startsWith('Changeme-')).toBe(true);
-
-      // Supabase admin endpoint was called with email; the dead
-      // force_password_change flag is no longer sent (no first-login-change flow).
-      expect(fetchSpy).toHaveBeenCalledOnce();
-      const [url, init] = fetchSpy.mock.calls[0]!;
-      expect(String(url)).toBe('https://test.supabase.co/auth/v1/admin/users');
-      const sentBody = JSON.parse(String((init as RequestInit).body));
-      expect(sentBody.email).toBe('a@b.com');
-      expect(sentBody.email_confirm).toBe(true);
-      expect(sentBody.user_metadata.discord_id).toBe('d99');
-      expect(sentBody.user_metadata.force_password_change).toBeUndefined();
-
-      // Two role INSERTs landed against the new Supabase user id.
-      expect(calls[1]?.sql).toContain('INSERT INTO user_roles');
-      expect(calls[1]?.params?.[0]).toBe('uuid-of-new-user');
-      expect(calls[1]?.params?.[1]).toBe('map:editor');
-      expect(calls[2]?.params?.[1]).toBe('feeder:pager');
-      // Base role granted alongside the approved ones.
-      expect(calls.map((c2) => c2.params?.[1])).toContain('authed');
-
-      // Notes string captures the temp password and the success line.
-      // Find by content, not index — the implicit 'authed' grant adds an insert.
-      const updateCall = calls.find((c2) => c2.sql.includes("status = 'approved'"));
-      expect(updateCall?.sql).toContain("status = 'approved'");
-      const notes = updateCall?.params?.[1] as string;
-      expect(notes).toContain('Temp password: Changeme-');
-      expect(notes).toContain('Supabase account created');
-      const tempPassword = (body['temp_password'] as string);
-
-      // ...and the staff notification does NOT. Discord history is searchable
-      // and outside our control, so the notification says a password was
-      // issued and leaves the password on the request. Asserted over the whole
-      // serialised payload rather than one field, because the leak happened by
-      // a field picking up `notes` wholesale — any future field that does the
-      // same fails here.
-      const notice = notified.find((n) => n['event'] === 'resolved');
-      expect(notice).toBeDefined();
-      expect(JSON.stringify(notice)).not.toContain(tempPassword);
-      expect(JSON.stringify(notice)).not.toContain('Changeme-');
-      const noticeFields = notice!['fields'] as Array<{ name: string; value: unknown }>;
-      expect(noticeFields.find((f) => f.name === 'Temp password')?.value)
-        .toBe('Issued — shown once at approval');
-      expect(noticeFields.find((f) => f.name === 'Account')?.value)
-        .toBe('Supabase account created');
-    } finally {
-      fetchSpy.mockRestore();
-      (cfgMod.config as { SUPABASE_URL?: string }).SUPABASE_URL = origUrl;
-      (cfgMod.config as { SUPABASE_SERVICE_ROLE_KEY?: string }).SUPABASE_SERVICE_ROLE_KEY =
-        origKey;
-    }
-  });
-
-  it('returns supabase_error and skips role insertion when Supabase rejects creation', async () => {
-    const cfgMod = await import('../../../src/config.js');
-    const origUrl = cfgMod.config.SUPABASE_URL;
-    const origKey = cfgMod.config.SUPABASE_SERVICE_ROLE_KEY;
-    (cfgMod.config as { SUPABASE_URL: string }).SUPABASE_URL =
-      'https://test.supabase.co';
-    (cfgMod.config as { SUPABASE_SERVICE_ROLE_KEY: string }).SUPABASE_SERVICE_ROLE_KEY =
-      'srv-test-key';
-
-    const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ message: 'email_exists' }), {
-        status: 422,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    );
-    try {
-      resultQueue = [
-        { rows: [{ id: 1, email: 'a@b.com', discord_id: 'd99', status: 'pending' }] },
-        { rows: [] }, // UPDATE only — role inserts must be skipped
-      ];
-      const app = makeApp();
-      const res = await app.request('/api/editor-requests/1/approve', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        // create_account is gone from the contract; sending it changes nothing.
         body: JSON.stringify({ roles: ['map:editor'], create_account: true }),
       });
       expect(res.status).toBe(200);
       const body = (await res.json()) as Record<string, unknown>;
-      expect(body['supabase_account_created']).toBe(false);
-      expect(body['supabase_error']).toBe('email_exists');
-      expect(typeof body['temp_password']).toBe('string'); // generated even on failure (matches python)
+      expect(body['pending_first_sign_in']).toBe(true);
+      expect(body['roles_assigned_to_linked_account']).toBe(false);
 
-      // Only 2 DB calls: SELECT request, UPDATE editor_requests. No role inserts.
-      expect(calls).toHaveLength(2);
-      expect(calls[1]?.sql).toContain("status = 'approved'");
-      expect(calls[1]?.params?.[1]).toContain('Supabase error: email_exists');
-    } finally {
-      fetchSpy.mockRestore();
-      (cfgMod.config as { SUPABASE_URL?: string }).SUPABASE_URL = origUrl;
-      (cfgMod.config as { SUPABASE_SERVICE_ROLE_KEY?: string }).SUPABASE_SERVICE_ROLE_KEY =
-        origKey;
-    }
-  });
-
-  it('annotates notes with "Supabase not configured" when create_account=true and env unset', async () => {
-    const cfgMod = await import('../../../src/config.js');
-    const origUrl = cfgMod.config.SUPABASE_URL;
-    const origKey = cfgMod.config.SUPABASE_SERVICE_ROLE_KEY;
-    (cfgMod.config as { SUPABASE_URL?: string }).SUPABASE_URL = undefined;
-    (cfgMod.config as { SUPABASE_SERVICE_ROLE_KEY?: string }).SUPABASE_SERVICE_ROLE_KEY =
-      undefined;
-
-    const fetchSpy = vi.spyOn(global, 'fetch');
-    try {
-      resultQueue = [
-        { rows: [{ id: 1, email: 'a@b.com', discord_id: 'd', status: 'pending' }] },
-        { rows: [] },
-      ];
-      const app = makeApp();
-      const res = await app.request('/api/editor-requests/1/approve', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roles: ['map:editor'], create_account: true }),
-      });
-      expect(res.status).toBe(200);
-      const body = (await res.json()) as Record<string, unknown>;
-      expect(body['supabase_account_created']).toBe(false);
-      expect(typeof body['temp_password']).toBe('string');
+      // Nothing was created anywhere: no Supabase admin call, no role rows
+      // against an account that does not exist yet.
       expect(fetchSpy).not.toHaveBeenCalled();
-      expect(calls[1]?.params?.[1]).toContain('Supabase not configured');
+      expect(calls.filter((c2) => c2.sql.includes('INSERT INTO user_roles'))).toHaveLength(0);
+
+      // The grant is recorded on the request, which is what the first
+      // signed-in page load reads to apply it.
+      const updateCall = calls.find((c2) => c2.sql.includes("status = 'approved'"));
+      expect(updateCall?.sql).toContain('approved_roles');
+      expect(String(updateCall?.params?.[2])).toContain('map:editor');
+      expect(String(updateCall?.params?.[2])).toContain('authed');
+      expect(updateCall?.params?.[1]).toContain('Awaiting first sign-in');
     } finally {
       fetchSpy.mockRestore();
-      (cfgMod.config as { SUPABASE_URL?: string }).SUPABASE_URL = origUrl;
-      (cfgMod.config as { SUPABASE_SERVICE_ROLE_KEY?: string }).SUPABASE_SERVICE_ROLE_KEY =
-        origKey;
+    }
+  });
+
+  it('never issues a password, on either path', async () => {
+    // The guard for the whole reason this branch was removed. Asserted over
+    // every string the route emits — the response, the stored note and the
+    // staff notification — because the leak happened by one of them picking up
+    // a value it had no business carrying.
+    for (const linked of [null, 'linked-uid-1']) {
+      calls.length = 0;
+      notified.length = 0;
+      resultQueue = [
+        { rows: [{ id: 1, email: 'a@b.com', discord_id: 'd', status: 'pending', supabase_user_id: linked }] },
+        { rows: [] }, { rows: [] }, { rows: [] },
+      ];
+      const res = await makeApp().request('/api/editor-requests/1/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roles: ['map:editor'] }),
+      });
+      expect(res.status).toBe(200);
+      const everything = JSON.stringify([await res.json(), calls, notified]);
+      expect(everything).not.toContain('Changeme-');
+      expect(everything.toLowerCase()).not.toContain('temp password');
+      expect(everything.toLowerCase()).not.toContain('temp_password');
     }
   });
 });
