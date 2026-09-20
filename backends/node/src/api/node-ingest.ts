@@ -684,6 +684,32 @@ const BLOCKED_CAPCODES = new Set(
     .filter(Boolean),
 );
 
+/**
+ * A page whose whole body is a time of day — `0018`, `2342`, `2111`.
+ *
+ * FRNSW transmitters send these as a clock tick, once every few minutes, and
+ * they arrived in volume the moment the FRNSW capcodes were added: they were
+ * half of every window of the feed. There is no incident in them, no capcode
+ * to address them to, and nothing downstream can do anything with one.
+ *
+ * Matched by SHAPE rather than by capcode, because the capcode carrying them
+ * is an implementation detail of whichever transmitter is ticking and a new
+ * one would start the noise again. Requiring a valid HH:MM — hours under 24,
+ * minutes under 60 — is what keeps a genuine four-digit body (a turnout
+ * number, a brigade code) out of the filter; `9999` is not a time and is not
+ * dropped.
+ *
+ * Deliberately NOT checked against the message's own timestamp. The tick runs
+ * a minute or two behind what stamps it (21:37 carrying `2136`), and a clock
+ * comparison would be a second thing to get wrong for no gain: a bare time of
+ * day is content-free whether or not it agrees with the clock.
+ */
+const PAGER_TIME_CODE_RE = /^([01]\d|2[0-3])[0-5]\d$/;
+
+export function isPagerTimeCode(message: string): boolean {
+  return PAGER_TIME_CODE_RE.test((message || '').trim());
+}
+
 // Per-node rate limit: at most 120 messages/min. Real paging is a few/min;
 // this bounds a compromised node's flood into Pagermon + the DB.
 const pagerRateOk = makeNodeRateLimiter(120, 60_000);
@@ -828,6 +854,15 @@ nodeIngestRouter.post('/api/node-ingest/pager-upload', async (c) => {
     hub.recordPagerMessage(node.id, { ...view, filtered: 'blocked capcode' });
     log.info(`pager relay: BLOCKED capcode ${parsed.address} (buffered as filtered, not forwarded) node=${node.id.slice(0, 8)}`);
     return c.json({ ok: true, dropped: 'blocked capcode' });
+  }
+
+  // 5a-ii. Clock ticks — a body that is nothing but a time of day. Same
+  //        treatment as a blocked capcode: not forwarded, still buffered as
+  //        filtered so the drawer shows what a node is dropping.
+  if (isPagerTimeCode(parsed.message)) {
+    hub.recordPagerMessage(node.id, { ...view, filtered: 'time code' });
+    log.info(`pager relay: TIME CODE ${parsed.address} "${parsed.message}" (buffered as filtered, not forwarded) node=${node.id.slice(0, 8)}`);
+    return c.json({ ok: true, dropped: 'time code' });
   }
 
   // 5b. Buffer the decoded message for the staff drawer BEFORE the feed gate, so
