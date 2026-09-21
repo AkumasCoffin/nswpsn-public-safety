@@ -11,6 +11,7 @@ import {
   nodeAdsbTraces,
   adsbNodeSourceId,
   _resetAdsbNodeStore,
+  _adsbTraceSizeForTests,
 } from '../../../src/services/nodes/adsbNodeStore.js';
 import { normalizeNodeUpload } from '../../../src/sources/adsb.js';
 
@@ -269,5 +270,60 @@ describe('adsb traces', () => {
     feed([{ hex: '333ccc', lat: -33.2, lon: 151.2 }]);
     expect(nodeAdsbTraces(NODE, 60).traces).toHaveLength(1);
     expect(nodeAdsbTraces('some-other-node', 60).traces).toHaveLength(0);
+  });
+});
+
+describe('memory tracks the window, not the caps', () => {
+  // A receiver nobody is looking at is the common case, and it was the one
+  // that kept the most: the prune ran only from the two READ paths, so with
+  // nothing reading, points never aged out and a node sat at its CAPS —
+  // 4000 aircraft x 720 points x three arrays — instead of at its 8-hour
+  // window. Several such nodes is hundreds of megabytes of live heap held for
+  // no reason on a process with a ~2GB ceiling.
+  beforeEach(() => {
+    _resetAdsbNodeStore();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('ages points out without anything reading the node', () => {
+    vi.setSystemTime(new Date('2026-09-21T00:00:00Z'));
+    feed([{ hex: 'aaa111', lat: -33.86, lon: 151.20 }]);
+
+    // Nine hours later, past the 8-hour window. Move it far enough each time
+    // that the distance rule keeps the point.
+    for (let i = 1; i <= 9; i += 1) {
+      vi.setSystemTime(new Date(`2026-09-21T0${i}:00:00Z`));
+      feed([{ hex: 'aaa111', lat: -33.86 + i * 0.05, lon: 151.20 }]);
+    }
+
+    // Measured WITHOUT reading through a public accessor. Both of those
+    // prune on the way out, so a test that went through one would pass
+    // whether or not the write path prunes — which is the regression.
+    const held = _adsbTraceSizeForTests(NODE);
+    // Ten feeds an hour apart; only those inside the eight-hour window may
+    // still be held. Before the fix all ten were, for ever.
+    expect(held.points).toBeLessThanOrEqual(9);
+    expect(held.aircraft).toBe(1);
+  });
+
+  it('drops an aircraft that has not been heard for a window', () => {
+    vi.setSystemTime(new Date('2026-09-21T00:00:00Z'));
+    feed([{ hex: 'bbb222', lat: -33.86, lon: 151.20 }]);
+    expect(nodeAdsbTraces(NODE, 540).traces.length).toBe(1);
+
+    // A different aircraft keeps the node's write path alive; the first one is
+    // never heard again and must not be held for ever.
+    for (let i = 1; i <= 9; i += 1) {
+      vi.setSystemTime(new Date(`2026-09-21T0${i}:00:00Z`));
+      feed([{ hex: 'ccc333', lat: -34.00 + i * 0.05, lon: 151.50 }]);
+    }
+    // Again without reading through a pruning accessor.
+    expect(_adsbTraceSizeForTests(NODE).aircraft).toBe(1);
+    const hexes = nodeAdsbTraces(NODE, 540).traces.map((t) => t.hex);
+    expect(hexes).not.toContain('bbb222');
+    expect(hexes).toContain('ccc333');
   });
 });

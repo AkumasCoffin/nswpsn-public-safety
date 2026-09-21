@@ -225,6 +225,8 @@ export function recordNodeAdsbReception(
   const nowMs = Date.now();
   if (range !== null) observedRangeKm.set(nodeId, { range, atMs: nowMs });
   recordTraces(nodeId, records, nowMs);
+  // Keep memory inside the window even when nothing is reading this node.
+  maybePruneTraces(nodeId, nowMs);
 }
 
 /**
@@ -447,6 +449,29 @@ function evictOldestTrace(byHex: Map<string, Trace>): void {
   if (oldestHex) byHex.delete(oldestHex);
 }
 
+/**
+ * When each node's traces were last pruned.
+ *
+ * The prune used to run only from the two READ paths, which meant a node's
+ * memory was bounded by the CAPS rather than by the window: nobody looking at
+ * a receiver's tracks meant nothing ever aged out, and it sat at 4000 aircraft
+ * x 720 points x three arrays until something read it. A receiver nobody
+ * watches is the common case, and it is the one that kept the most.
+ *
+ * Pruning from the write path fixes that, but the write path runs about once a
+ * second per node and the prune walks every aircraft it holds — so it is rate
+ * limited. A minute of slack on an eight-hour window costs nothing.
+ */
+const lastPruneMs = new Map<string, number>();
+const PRUNE_INTERVAL_MS = 60_000;
+
+function maybePruneTraces(nodeId: string, nowMs: number): void {
+  const last = lastPruneMs.get(nodeId) ?? 0;
+  if (nowMs - last < PRUNE_INTERVAL_MS) return;
+  lastPruneMs.set(nodeId, nowMs);
+  pruneTraces(nodeId, nowMs);
+}
+
 /** Drop points and aircraft that have aged out of the window. */
 function pruneTraces(nodeId: string, nowMs: number): void {
   const byHex = traces.get(nodeId);
@@ -463,7 +488,10 @@ function pruneTraces(nodeId: string, nowMs: number): void {
     }
     if (tr.lat.length === 0) byHex.delete(hex);
   }
-  if (byHex.size === 0) traces.delete(nodeId);
+  if (byHex.size === 0) {
+    traces.delete(nodeId);
+    lastPruneMs.delete(nodeId);
+  }
 }
 
 export interface NodeTrace {
@@ -707,11 +735,28 @@ export function nodeAdsbFeedCount(): number {
 }
 
 /** Test seam — drops all in-memory state. */
+/**
+ * In-memory trace size for a node, WITHOUT pruning first.
+ *
+ * Test seam, and it has to bypass the prune to be worth anything: both public
+ * readers prune on the way out, so a test that measures through one cannot
+ * tell a store that prunes on write from a store that prunes only when read —
+ * which is the exact regression this exists to catch.
+ */
+export function _adsbTraceSizeForTests(nodeId: string): { aircraft: number; points: number } {
+  const byHex = traces.get(nodeId);
+  if (!byHex) return { aircraft: 0, points: 0 };
+  let points = 0;
+  for (const tr of byHex.values()) points += tr.t.length;
+  return { aircraft: byHex.size, points };
+}
+
 export function _resetAdsbNodeStore(): void {
   snapshots.clear();
   observedRangeKm.clear();
   pending.clear();
   traces.clear();
+  lastPruneMs.clear();
   authFailures.length = 0;
 }
 
