@@ -1,0 +1,47 @@
+-- Talkgroup-led index on the radio detail table.
+--
+-- The Data tab's Talkgroups list stopped loading past a 24h window once an
+-- agency filter was applied. Measured on production, 1.26M rows in the 7-day
+-- window:
+--
+--   7d, no agency filter   ->    829 ms  (Parallel Index Scan, idx_nre_rollup_time)
+--   7d + agency=Ambulance  ->  >30 s, killed by statement_timeout
+--
+-- The only difference between those two is `talkgroup = ANY($n::int[])`, and
+-- nothing could serve it. Of the three indexes that mention talkgroup, two
+-- lead with a column this query does not constrain:
+--
+--   idx_nre_sys_tg_time  (system, talkgroup, received_at)   -- system unset
+--   idx_nre_node_time    (node_id, talkgroup, received_at)  -- node unset
+--   idx_nre_rollup_time  (received_at) WHERE <call predicate>
+--
+-- so the planner takes the time index and tests all 1.26M rows in the window
+-- against the agency's id array. The sibling endpoint does not have this
+-- problem: Radios filters `source_unit = ANY(...)` and migration 043 gave it
+-- idx_nre_unit_time (source_unit, received_at), a leading column. This is the
+-- index that was missing from the other side of the same pattern.
+--
+-- Partial on the same call predicate as idx_nre_rollup_time, since every
+-- reader of this table for talkgroup purposes carries it.
+--
+-- INCLUDE (system, wacn) so the list's COUNT query — which groups by
+-- (wacn, system, talkgroup) — can stay index-only rather than visiting the
+-- heap for two integers. The page query still reads the heap for
+-- logical_call_id and encrypted, but only for rows the filter kept, which is a
+-- small fraction of the window. Carrying those two here as well was considered
+-- and rejected: it roughly doubles the index to help a query that is already
+-- inside budget once the scan is narrowed.
+--
+-- NOT built CONCURRENTLY, deliberately. That would avoid the write lock, but
+-- there is nothing to avoid it for: migrations run at index.ts:114, long
+-- before serve() binds the port at :233, and this backend is the only writer
+-- to node_radio_events — so during the build the table has no concurrent
+-- writes. Against that, CONCURRENTLY cannot run in a transaction (this would
+-- be the repo's first `-- noTransaction` migration, an unexercised path) and a
+-- build that fails part-way leaves an INVALID index that `IF NOT EXISTS` then
+-- skips on every later boot while the planner refuses to use it. A few tens of
+-- seconds added to one boot is the cheaper risk.
+CREATE INDEX IF NOT EXISTS idx_nre_tg_time_calls
+  ON node_radio_events (talkgroup, received_at)
+  INCLUDE (system, wacn)
+  WHERE event_type LIKE 'CALL_GROUP%' OR event_type LIKE 'CALL_PATCH_GROUP%';
