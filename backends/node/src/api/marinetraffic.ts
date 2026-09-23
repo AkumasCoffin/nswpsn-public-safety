@@ -93,11 +93,22 @@ const UPSTREAM_URLS = [
 ];
 
 // Background refresh cadence — gap between the end of one batch and the
-// start of the next. Active mode kicks in when a user request has hit
-// the endpoint within ACTIVE_WINDOW_MS.
+// start of the next, while someone is actually watching ships.
 const REFRESH_ACTIVE_MS = 60_000;
-const REFRESH_IDLE_MS = 120_000;
+// With no viewer inside ACTIVE_WINDOW_MS the loop fetches NOTHING — it just
+// wakes to check for one. "Idle" used to mean a 120s gap instead of a 60s
+// one, and that near-idled the whole box: every one of the 40 tiles loads
+// the full MarineTraffic SPA — a WebGL map, software-rendered through
+// SwiftShader because this host has no GPU — so a batch is ~3 minutes of
+// heavy rendering, and running it around the clock for a layer nobody had
+// open averaged ~12 of the box's 16 cores (18,610 CPU-minutes over 26h,
+// measured). Ships move slowly; a viewer returning to a stale cache gets a
+// kicked refresh (see the route) and fresh data within one batch.
+const IDLE_CHECK_MS = 60_000;
 const ACTIVE_WINDOW_MS = 5 * 60_000;
+// A returning viewer whose cache is older than this kicks a refresh rather
+// than waiting for the loop's next tick to notice them.
+const STALE_KICK_MS = 3 * 60_000;
 // Initial delay before the first background refresh — gives the browser
 // worker time to launch chromium and complete its prewarm fetch.
 const REFRESH_INITIAL_DELAY_MS = 30_000;
@@ -232,18 +243,34 @@ async function fetchAllTiles(): Promise<unknown | null> {
   return mergeUpstream(payloads);
 }
 
-// Background refresh loop. Each tick fetches all tiles, replaces the
-// cache, then reschedules itself based on whether a user has hit the
-// endpoint recently. Runs forever; errors are swallowed so a single
-// failed batch doesn't stop the loop.
+// Background refresh loop. While a viewer is active each tick fetches all
+// tiles and replaces the cache; with no viewer it fetches nothing and just
+// wakes to check again (see IDLE_CHECK_MS for why that distinction carries
+// twelve CPU cores). Runs forever; errors are swallowed so a single failed
+// batch doesn't stop the loop.
+let idleLogged = false;
 async function backgroundRefresh(): Promise<void> {
   refreshTimer = null;
+  // Decided once per tick: a viewer arriving mid-batch is picked up by the
+  // next tick, which the active cadence keeps a minute away.
+  const idle = Date.now() - lastUserHitMs >= ACTIVE_WINDOW_MS;
   try {
-    if (!marinetrafficBrowser.isReady()) {
+    if (idle) {
+      // Logged on the transition, not per tick — an idle night is one line,
+      // not four hundred.
+      if (!idleLogged) {
+        idleLogged = true;
+        log.info('marinetraffic: no viewers — tile refresh parked');
+      }
+    } else if (!marinetrafficBrowser.isReady()) {
       log.debug('marinetraffic: skipping refresh — browser not ready');
     } else if (inFlight) {
       log.debug('marinetraffic: skipping refresh — fetch already in flight');
     } else {
+      if (idleLogged) {
+        idleLogged = false;
+        log.info('marinetraffic: viewer returned — tile refresh resumed');
+      }
       inFlight = fetchAllTiles().finally(() => {
         inFlight = null;
       });
@@ -256,9 +283,7 @@ async function backgroundRefresh(): Promise<void> {
   } catch (err) {
     log.warn({ err }, 'marinetraffic: background refresh failed');
   } finally {
-    const sinceHit = Date.now() - lastUserHitMs;
-    const next = sinceHit < ACTIVE_WINDOW_MS ? REFRESH_ACTIVE_MS : REFRESH_IDLE_MS;
-    refreshTimer = setTimeout(backgroundRefresh, next);
+    refreshTimer = setTimeout(backgroundRefresh, idle ? IDLE_CHECK_MS : REFRESH_ACTIVE_MS);
     refreshTimer.unref?.();
   }
 }
@@ -272,10 +297,26 @@ refreshTimer.unref?.();
 marinetrafficRouter.get('/api/marinetraffic/vessels', async (c) => {
   lastUserHitMs = Date.now();
 
-  // Always serve whatever's in the cache — the background loop keeps it
-  // fresh, and stale data beats blocking the request for ~2 min on a
-  // batch refetch.
+  // Always serve whatever's in the cache — stale data beats blocking the
+  // request for ~3 min on a batch refetch. But a viewer returning after an
+  // idle stretch is looking at however old the last active period left it,
+  // so a stale cache kicks a refresh in the background; the layer's own
+  // polling picks the fresh picture up within a batch.
   if (cache) {
+    if (
+      Date.now() - cache.fetchedAt > STALE_KICK_MS &&
+      !inFlight &&
+      marinetrafficBrowser.isReady()
+    ) {
+      inFlight = fetchAllTiles().finally(() => {
+        inFlight = null;
+      });
+      void inFlight
+        .then((data) => {
+          if (data != null) cache = { data, fetchedAt: Date.now() };
+        })
+        .catch(() => { /* fetchAllTiles logs its own failures */ });
+    }
     return c.json(cache.data);
   }
 
@@ -298,15 +339,18 @@ marinetrafficRouter.get('/api/marinetraffic/vessels', async (c) => {
       inFlight = null;
     });
   }
-  const data = await inFlight;
-  if (data == null) {
-    return c.json(
-      { error: 'every upstream tile failed (see api-node logs)', vessels: [] },
-      502,
-    );
-  }
-  cache = { data, fetchedAt: Date.now() };
-  return c.json(data);
+  // Don't hold the request for the ~3 minutes a full batch takes — that
+  // used to be rare (cold start lost a race with the boot-time batch) but
+  // with the idle stop it is every first viewer after a quiet spell. Let
+  // the batch run and give this response what the batch has NOT yet
+  // filled: nothing, plus a flag the client is free to ignore. The layer
+  // polls; the next poll serves from cache.
+  void inFlight
+    .then((data) => {
+      if (data != null) cache = { data, fetchedAt: Date.now() };
+    })
+    .catch(() => { /* fetchAllTiles logs its own failures */ });
+  return c.json({ type: 1, data: { rows: [], areaShips: 0 }, warming: true });
 });
 
 // GET /api/marinetraffic/vessel/:id
