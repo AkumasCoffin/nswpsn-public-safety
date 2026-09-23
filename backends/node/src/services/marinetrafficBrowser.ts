@@ -8,11 +8,21 @@
  * solves the Cloudflare challenge and seeds session cookies which the JSON
  * endpoint requires.
  *
- * This worker keeps a headless Chromium tab parked on the AIS map page
- * (centred on Sydney by default — the URL only sets initial centre, the
- * data fetches accept arbitrary tile coords) and exposes a `fetchJson`
- * method that runs `fetch(url, { credentials: 'include' })` inside the
- * page so the request carries the established cookies.
+ * This worker keeps a headless Chromium alive with the session cookies and
+ * exposes `fetchJson`, which per call navigates the tab to a landing URL at
+ * the tile's own centre (warming the viewport MT gates data tiles on) and
+ * then to the data URL itself, so the request carries the cookies and a
+ * document Sec-Fetch-Dest.
+ *
+ * BETWEEN calls the tab is parked on about:blank, and that is a hard rule.
+ * It used to be left on whatever it last showed — the AIS map after init and
+ * every session refresh, the vessel-detail SPA after a detail fetch. Both are
+ * WebGL pages, and this box has no GPU: Chromium renders them through
+ * SwiftShader on the CPU, every frame, for as long as the page is showing.
+ * Measured on production before the change: the browser's GPU process had
+ * accumulated 18,610 CPU-minutes over 26 hours — an average of ~12 of the
+ * box's 16 cores, continuously, rendering a map nobody could see. Cookies
+ * live on the context, not the page, so parking loses nothing.
  *
  * Disable kill switch: `MARINETRAFFIC_DISABLED=true` skips the launch.
  *
@@ -216,10 +226,13 @@ class MarinetrafficBrowser {
           'marinetraffic: data prewarm failed (will retry on first fetch)',
         );
       }
-      // 3. Return to the map page so subsequent fetch()s have a sensible Referer.
+      // 3. Park. This step used to return to the map page "so subsequent
+      //    fetch()s have a sensible Referer", which stopped being true when
+      //    fetchJson started navigating to a per-tile landing URL itself —
+      //    all the goto left behind was a live WebGL map, software-rendered
+      //    around the clock (the file header has the measurement).
       try {
-        await page.goto(MAP_LANDING_URL, { timeout: 30000, waitUntil: 'domcontentloaded' });
-        await page.waitForTimeout(1500);
+        await page.goto('about:blank', { timeout: 5000 });
       } catch { /* best-effort */ }
       const cookies = await context.cookies('https://www.marinetraffic.com');
       const hasClearance = cookies.some((c) => c.name === 'cf_clearance');
@@ -248,6 +261,22 @@ class MarinetrafficBrowser {
       () => void this.refreshSession().catch(() => { /* never let a refresh rejection become unhandled */ }),
       SESSION_REFRESH_INTERVAL_MS,
     );
+  }
+
+  /**
+   * Park the tab on about:blank. See the file header for why this is not
+   * optional: any MT page left showing renders WebGL through SwiftShader on
+   * the CPU until the next navigation. Best-effort — a failed park leaves
+   * the old page up, which costs CPU but breaks nothing, and the next call
+   * navigates away regardless.
+   */
+  private async parkPage(): Promise<void> {
+    try {
+      const page = this.page as {
+        goto: (url: string, opts: { timeout: number }) => Promise<unknown>;
+      } | null;
+      if (page) await page.goto('about:blank', { timeout: 5000 });
+    } catch { /* see above */ }
   }
 
   /** Poll the context cookies until cf_clearance shows up or the timeout hits. */
@@ -347,7 +376,12 @@ class MarinetrafficBrowser {
             continue;
           }
           try {
-            return JSON.parse(text);
+            const parsed = JSON.parse(text) as unknown;
+            // Parked on success too — the success path otherwise leaves the
+            // tab on the data URL, which is cheap (Chromium's JSON viewer),
+            // but one rule with no exceptions is the one that stays true.
+            await this.parkPage();
+            return parsed;
           } catch (err) {
             lastWarn = {
               url,
@@ -366,6 +400,7 @@ class MarinetrafficBrowser {
       if (lastWarn) {
         log.warn(lastWarn, 'marinetraffic browser navigation: failed both attempts');
       }
+      await this.parkPage();
       return null;
     });
   }
@@ -571,6 +606,9 @@ class MarinetrafficBrowser {
         return null;
       } finally {
         page.off('response', onResponse);
+        // The vessel-detail page is the SPA too — same WebGL, same SwiftShader
+        // burn if it were left showing.
+        await this.parkPage();
       }
     });
   }
@@ -689,6 +727,8 @@ class MarinetrafficBrowser {
           'marinetraffic gallery scrape: navigation threw',
         );
         return null;
+      } finally {
+        await this.parkPage();
       }
     });
   }
@@ -837,6 +877,11 @@ class MarinetrafficBrowser {
           { err: (err as Error).message },
           'marinetraffic: session refresh failed',
         );
+      } finally {
+        // The refresh's only product is cookies, and they are on the context.
+        // Leaving the map up here meant 30 minutes of software WebGL per
+        // refresh, on a timer, forever.
+        await this.parkPage();
       }
     });
   }
