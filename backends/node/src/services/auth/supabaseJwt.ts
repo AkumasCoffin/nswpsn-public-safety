@@ -44,10 +44,6 @@ declare module 'hono' {
     /** Whether the provider says the email claim is confirmed. Absent when
      *  the JWT does not say either way — treat that as "not proven". */
     userEmailVerified?: boolean;
-    /** 'member' when the account was created through the signup page's
-     *  plain "just an account" flow (stamped into user_metadata at signUp).
-     *  This is what lets a deliberate account survive the orphan rules. */
-    userSignupIntent?: string;
   }
 }
 
@@ -148,8 +144,6 @@ export const optionalSupabaseJwt: MiddlewareHandler = async (c, next) => {
       }
       const av = avatarFromClaims(payload as Record<string, unknown>);
       if (av) c.set('userAvatar', av);
-      const intent = signupIntentFromClaims(payload as Record<string, unknown>);
-      if (intent) c.set('userSignupIntent', intent);
       const prov = providerFromClaims(payload as Record<string, unknown>);
       if (prov) c.set('userProvider', prov);
       const ev = emailVerifiedFromClaims(payload as Record<string, unknown>);
@@ -196,16 +190,6 @@ export function emailVerifiedFromClaims(payload: Record<string, unknown>): boole
     if (typeof v === 'boolean') return v;
   }
   return undefined;
-}
-
-/** The signup page stamps user_metadata.signup_intent = 'member' on a plain
- *  "just an account" email signup. It is the only signal that survives the
- *  email-confirmation gap: there is no session at signup time to call an
- *  endpoint with, but the metadata rides every later JWT. */
-export function signupIntentFromClaims(payload: Record<string, unknown>): string {
-  const meta = payload['user_metadata'] as Record<string, unknown> | undefined;
-  const v = meta?.['signup_intent'];
-  return typeof v === 'string' ? v.trim().slice(0, 32) : '';
 }
 
 export function providerFromClaims(payload: Record<string, unknown>): string {
@@ -261,9 +245,7 @@ export const requireSupabaseJwt: MiddlewareHandler = async (c, next) => {
     }
     const av = avatarFromClaims(payload as Record<string, unknown>);
     if (av) c.set('userAvatar', av);
-    const intent = signupIntentFromClaims(payload as Record<string, unknown>);
-      if (intent) c.set('userSignupIntent', intent);
-      const prov = providerFromClaims(payload as Record<string, unknown>);
+    const prov = providerFromClaims(payload as Record<string, unknown>);
     if (prov) c.set('userProvider', prov);
     const ev = emailVerifiedFromClaims(payload as Record<string, unknown>);
     if (ev !== undefined) c.set('userEmailVerified', ev);

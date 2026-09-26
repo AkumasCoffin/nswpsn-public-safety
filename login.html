@@ -528,27 +528,6 @@
     </div>
   </div>
 
-  <!-- Sign-up-first modal: shown when someone uses "Continue with Discord" on
-       this login page WITHOUT ever having signed up. Their empty account is
-       discarded server-side; they must go through the signup form instead. -->
-  <div id="signup-first-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="signup-first-title" hidden>
-    <div class="modal-card">
-      <div class="modal-icon"><i class="fas fa-user-plus"></i></div>
-      <h2 id="signup-first-title" class="modal-title">Sign up first</h2>
-      <p class="modal-body">
-        There's no access request on this account yet. Please sign up to request
-        access — that's what puts you in the approval queue.
-      </p>
-      <a href="signup" class="btn" style="margin-bottom: 0.75rem;">
-        <i class="fas fa-user-plus"></i>
-        Go to sign up
-      </a>
-      <button type="button" class="btn btn-outline" onclick="document.getElementById('signup-first-modal').hidden = true;">
-        Close
-      </button>
-    </div>
-  </div>
-
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="config.js"></script>
   <script>
@@ -603,17 +582,12 @@
         const d = await r.json();
         if (d.has_access) return 'map';
         if (d.is_team_member) return 'staff';
-        // A deliberate plain-user account (authed granted through the signup
-        // flow). No contributor roles by design — the map is their landing,
-        // and sending them "back" to a signup they completed reads as broken.
-        if (d.has_account === true) return 'map';
-        // No roles at all → a new/incomplete signup (e.g. someone who used
-        // "Continue with Discord" without an existing account). Send them to the
-        // signup form to finish — a request is only created when they submit it,
-        // so this is the only way they end up in the approval queue.
-        // 'authed' is the base role EVERY account carries — it doesn't mean the
-        // signup completed, so exclude it when asking "has no roles".
-        if (Array.isArray(d.roles) && d.roles.filter(r => r !== 'authed').length === 0) return 'signup';
+        // No contributor roles: an ordinary USER account. Public signups
+        // exist now — anyone may hold an account with no application behind
+        // it — so the map is their landing. (This page used to treat the
+        // no-roles shape as an incomplete signup and steer it back to the
+        // form; that predates public accounts, and its server-side twin was
+        // deleting real users. Members are accounts WITH roles.)
         return 'map';
       } catch (e) {
         return 'map';
@@ -629,10 +603,10 @@
       // endpoint was observed being called twice in the same second.
       if (_redirectRan) return;
       _redirectRan = true;
-      // Sync BEFORE the orphan check. Sync is what links a request filed
-      // by email before the account existed (and applies roles approved in
-      // the meantime) — without this ordering, a legitimate applicant's
-      // first sign-in still looked like "no roles, no request" here.
+      // Sync before routing: it links a request filed by email before the
+      // account existed and applies any roles approved in the meantime, so
+      // the role landing below sees the account's real state on the very
+      // first sign-in.
       try {
         const { data: sess } = await sb.auth.getSession();
         const token = sess && sess.session && sess.session.access_token;
@@ -641,73 +615,9 @@
             method: 'POST', headers: { 'Authorization': 'Bearer ' + token },
           });
         }
-      } catch (e) { /* best-effort — the guard below still requires an explicit has_request:false */ }
+      } catch (e) { /* best-effort — routing below falls back to the public map */ }
       const urlParams = new URLSearchParams(window.location.search);
       const explicit = safeRedirect(urlParams.get('redirect'), '');
-      // Orphan guard: Discord OAuth from this login page mints an account even
-      // for someone who's never signed up. If they have NO roles AND NO editor
-      // request, they don't really have an account here — sign them back out and
-      // send them to the signup form (the empty account is cleaned up server-
-      // side). Runs before any explicit ?redirect so an orphan can't be pushed
-      // onto a protected page.
-      try {
-        const r = await fetch(`${API_BASE_URL}/api/check-editor/${userId}`);
-        if (r.ok) {
-          const d = await r.json();
-          const noRoles = Array.isArray(d.roles) ? d.roles.filter(r => r !== 'authed').length === 0 : (!d.has_access && !d.is_team_member);
-          // Require an EXPLICIT has_request:false — during a deploy window the
-          // frontend can be live before the backend adds this field, and an
-          // `undefined` here would wrongly sign out a pending (no-roles-yet) user.
-          // has_account === true is a deliberate plain-user account: authed
-          // was granted through the signup flow, not minted by this sign-in.
-          // Structurally it looks exactly like an orphan (no other roles, no
-          // editor request — by design), which is how the guard came to be
-          // deleting real members' accounts.
-          if (noRoles && d.has_request === false && d.has_account !== true) {
-            // Was this a signup-FORM Discord flow? Those stash the completed
-            // form under this key BEFORE the OAuth redirect and auto-submit it
-            // on signup.html — they must NEVER be discarded. A bare login-page
-            // "Continue with Discord" for a brand-new user has NO stash: the
-            // OAuth already minted an empty orphan account, so discard it
-            // server-side and steer them to the signup form.
-            const PENDING_DISCORD_KEY = 'nswpsn:pendingDiscordSignup';
-            const cameFromSignupForm = localStorage.getItem(PENDING_DISCORD_KEY) !== null;
-            if (!cameFromSignupForm) {
-              try {
-                const { data: sess } = await sb.auth.getSession();
-                const token = sess && sess.session && sess.session.access_token;
-                if (token) {
-                  const resp = await fetch(`${API_BASE_URL}/api/account/discard-incomplete`, {
-                    method: 'POST',
-                    headers: { 'Authorization': 'Bearer ' + token },
-                  });
-                  if (resp.ok) {
-                    const body = await resp.json();
-                    if (body && body.deleted === true) {
-                      // Account removed. Do NOT auto-redirect — bouncing them
-                      // back through OAuth would just recreate the account.
-                      // Show the "sign up first" modal and let them click
-                      // through so a real signup goes via the form.
-                      try { await sb.auth.signOut(); } catch (e) { /* ignore */ }
-                      const modal = document.getElementById('signup-first-modal');
-                      if (modal) modal.hidden = false;
-                      return;
-                    }
-                    // deleted:false → they actually have a request; fall through
-                    // to the normal signup routing below.
-                  }
-                }
-              } catch (e) { /* network error — fall through to the safe redirect */ }
-            }
-            // Signup-form user (stash present) OR the account wasn't discarded:
-            // keep the original behaviour — sign out and send them to finish
-            // signing up.
-            try { await sb.auth.signOut(); } catch (e) { /* ignore */ }
-            window.location.href = 'signup?welcome=1';
-            return;
-          }
-        }
-      } catch (e) { /* fall through to normal routing */ }
       window.location.href = explicit || await roleLandingPage(userId);
     }
 

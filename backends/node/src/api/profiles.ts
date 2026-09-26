@@ -270,59 +270,6 @@ async function claimApprovedRoles(
   }
 }
 
-/**
- * Mark the caller's account as a deliberate plain-user signup.
- *
- * The signup page's "just an account" flow calls this on completion. For an
- * email signup the same fact travels as user_metadata.signup_intent (set at
- * signUp, because there is no session yet to call this with); the Discord
- * variant has a session the moment OAuth returns, and this is its channel.
- *
- * The marker is user_roles.granted_by = 'signup' on the base authed row —
- * the difference between "someone made this account" and "someone signed in
- * and an account happened". accountIsIncomplete keeps the first kind; before
- * the distinction existed, the login page's orphan guard deleted them.
- */
-profilesRouter.post('/api/profiles/complete-signup', requireSupabaseJwt, async (c) => {
-  const pool = await getPool();
-  if (!pool) return c.json(DB_UNAVAILABLE, 503);
-  const uid = c.get('userId') as string;
-  try {
-    const r = await pool.query(
-      `INSERT INTO user_roles (user_id, role, granted_by)
-       VALUES ($1, 'authed', 'signup')
-       ON CONFLICT (user_id, role) DO UPDATE SET granted_by = 'signup'
-         WHERE user_roles.granted_by = 'sync'
-       RETURNING (xmax = 0) AS inserted`,
-      [uid],
-    );
-    invalidateUserRolesCache(uid);
-    if (r.rows[0]?.inserted === true) {
-      // A brand-new account completing signup here never went through sync's
-      // first-grant branch, so this is where its staff notification lives.
-      notifyStaff(pool, {
-        kind: 'new_user',
-        event: 'new',
-        ref: uid,
-        title: (c.get('userName') as string | undefined)
-          || (c.get('userEmail') as string | undefined) || 'New account',
-        subtitle: null,
-        fields: [
-          { name: 'Name', value: c.get('userName') },
-          { name: 'Email', value: c.get('userEmail') },
-          { name: 'Signed up with', value: c.get('userProvider') },
-          { name: 'Kind', value: 'Member (account only)' },
-          { name: 'User ID', value: uid, inline: false },
-        ],
-      });
-    }
-    return c.json({ success: true });
-  } catch (err) {
-    log.error({ err, uid }, 'profiles: complete-signup failed');
-    return c.json({ error: 'failed to complete signup' }, 500);
-  }
-});
-
 profilesRouter.post('/api/profiles/sync', requireSupabaseJwt, async (c) => {
   const pool = await getPool();
   if (!pool) return c.json(DB_UNAVAILABLE, 503);
@@ -334,28 +281,14 @@ profilesRouter.post('/api/profiles/sync', requireSupabaseJwt, async (c) => {
     // 059). This runs on every logged-in page load, so it's how existing and
     // brand-new accounts alike acquire it. It's also what separates the staff
     // "Users" tab (authed only) from "Members" (authed + a real role).
-    // granted_by carries MEANING here: 'signup' marks an account somebody
-    // deliberately created (the plain "just an account" flow), 'sync' one
-    // that merely signed in. The orphan rules keep the first and may remove
-    // the second — before this distinction existed they were identical, and
-    // the login page's orphan guard was deleting real members' accounts.
-    // The intent claim rides user_metadata, so it survives the email-confirm
-    // gap where no session exists to call an endpoint with; the upgrade arm
-    // repairs an account whose first sign-in raced ahead of this deploy.
-    const isMember = c.get('userSignupIntent') === 'member';
     const granted = await pool.query(
       `INSERT INTO user_roles (user_id, role, granted_by)
-       VALUES ($1, 'authed', $2)
-       ON CONFLICT (user_id, role) DO UPDATE SET granted_by = 'signup'
-         WHERE $2 = 'signup' AND user_roles.granted_by = 'sync'
-       RETURNING (xmax = 0) AS inserted`,
-      [uid, isMember ? 'signup' : 'sync'],
+       VALUES ($1, 'authed', 'sync')
+       ON CONFLICT (user_id, role) DO NOTHING`,
+      [uid],
     );
-    const newAccount = granted.rows[0]?.inserted === true;
-    if (newAccount || (granted.rowCount ?? 0) > 0) {
+    if ((granted.rowCount ?? 0) > 0) {
       invalidateUserRolesCache(uid);
-    }
-    if (newAccount) {
       // First time this account has ever been seen.
       //
       // This used to say "New account / Someone signed up" and nothing else,
