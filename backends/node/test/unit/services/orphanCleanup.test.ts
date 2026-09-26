@@ -84,3 +84,40 @@ describe('authed base role must not count as "has a role"', () => {
     expect(seen[0]).toContain("role <> 'authed'");
   });
 });
+
+/**
+ * The deliberate-account marker. A plain "just an account" member holds ONLY
+ * the base authed role and NO editor request — by design — which made them
+ * structurally identical to a login-page OAuth orphan. The login guard was
+ * deleting real members' accounts on their next sign-in. granted_by='signup'
+ * is what now tells the two apart, so the rule that reads it is pinned here
+ * the same way the authed exclusion above is.
+ */
+describe("authed granted_by='signup' means a real account", () => {
+  it('accountIsIncomplete keeps a marked member', async () => {
+    const pool = {
+      query: async (sql: string) => {
+        if (sql.includes('user_roles')) {
+          // The widened predicate must MATCH the marker row.
+          expect(sql).toContain("granted_by = 'signup'");
+          return { rowCount: 1, rows: [{}] };
+        }
+        throw new Error('must short-circuit on the role query');
+      },
+    };
+    const { accountIsIncomplete } = await import('../../../src/services/orphanCleanup.js');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const out = await accountIsIncomplete(pool as any, 'member-1', 'm@b.com');
+    expect(out).toBe(false); // marked member — keep
+  });
+
+  it('still removes the unmarked authed-only orphan', async () => {
+    const pool = {
+      query: async () => ({ rowCount: 0, rows: [] }),
+    };
+    const { accountIsIncomplete } = await import('../../../src/services/orphanCleanup.js');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const out = await accountIsIncomplete(pool as any, 'orphan-1', 'o@b.com');
+    expect(out).toBe(true);
+  });
+});

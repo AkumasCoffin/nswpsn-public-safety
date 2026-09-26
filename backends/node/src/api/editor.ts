@@ -703,6 +703,17 @@ editorRouter.get('/api/check-editor/:userId', async (c) => {
       [userId],
     );
     const hasRequest = (reqRes.rowCount ?? 0) > 0;
+    // Whether this is a deliberate plain-user account — authed granted through
+    // the signup flow rather than minted by a sign-in. The login guard treats
+    // these as real accounts (they are), where before this field existed it
+    // could only see "no roles, no request" and discarded them.
+    const memberRes = await pool.query(
+      `SELECT 1 FROM user_roles
+        WHERE user_id = $1 AND role = 'authed' AND granted_by = 'signup'
+        LIMIT 1`,
+      [userId],
+    );
+    const hasAccount = (memberRes.rowCount ?? 0) > 0;
     const isDataFeeder = userRoles.includes('feeder:agency_data');
     const isWireContributor = userRoles.includes('wire:contributor');
     const isWireManager = userRoles.includes('wire:manager');
@@ -710,6 +721,7 @@ editorRouter.get('/api/check-editor/:userId', async (c) => {
     // existing frontend consumer keeps working across the rename.
     return c.json({
       user_id: userId,
+      has_account: hasAccount,
       has_access: hasAccess,
       is_owner: isOwner,
       is_team_member: isStaff,

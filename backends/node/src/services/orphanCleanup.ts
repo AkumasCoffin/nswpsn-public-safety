@@ -163,13 +163,20 @@ export async function accountIsIncomplete(
   email: string | null,
 ): Promise<boolean> {
   // 'authed' is the base role EVERY account carries (migration 059) — it does
-  // NOT mean the signup completed, so it must be excluded here or no account
-  // would ever look incomplete again.
+  // NOT mean the signup completed, so it is excluded here... UNLESS it was
+  // granted_by = 'signup', which is the deliberate plain-user marker (see
+  // /api/profiles/complete-signup). Without that exception a member account —
+  // authed only, no editor request, by design — was structurally identical to
+  // an OAuth drive-by, and the login page's orphan guard deleted real
+  // members' accounts on their next sign-in.
   const roleRes = await pool.query(
-    "SELECT 1 FROM user_roles WHERE user_id = $1 AND role <> 'authed' LIMIT 1",
+    `SELECT 1 FROM user_roles
+      WHERE user_id = $1
+        AND (role <> 'authed' OR granted_by = 'signup')
+      LIMIT 1`,
     [userId],
   );
-  if ((roleRes.rowCount ?? 0) > 0) return false; // approved user — keep
+  if ((roleRes.rowCount ?? 0) > 0) return false; // approved user or member — keep
 
   const normEmail = (email ?? '').trim().toLowerCase();
   const reqRes = await pool.query(
@@ -188,9 +195,11 @@ export async function findOrphanSignups(pool: Pool, respectRaceGuard = true): Pr
   const users = await listAllSupabaseUsers();
   if (!users.length) return [];
 
-  // Exclude the base 'authed' role — see accountIsIncomplete().
+  // Exclude the base 'authed' role EXCEPT the deliberate-signup marker —
+  // the same rule, for the same reason, as accountIsIncomplete().
   const roleRows = await pool.query<{ user_id: string }>(
-    "SELECT DISTINCT user_id FROM user_roles WHERE role <> 'authed'",
+    `SELECT DISTINCT user_id FROM user_roles
+      WHERE role <> 'authed' OR granted_by = 'signup'`,
   );
   const roleIds = new Set(roleRows.rows.map((r) => r.user_id));
 

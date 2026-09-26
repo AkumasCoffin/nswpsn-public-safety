@@ -208,19 +208,26 @@ async function claimApprovedRoles(
   if (c.get('userEmailVerified') !== true) return;
 
   try {
-    const claimed = await pool.query<{ id: number; approved_roles: string | null }>(
+    // PENDING requests link too, not only approved ones. A request filed
+    // while email confirmation was pending is identified by email alone, and
+    // until it is linked, check-editor's has_request reports false — which
+    // read to the login page as "never signed up" and got real applicants
+    // bounced back to the signup form. Linking grants nothing; it just ties
+    // the request to the account that now provably owns the address.
+    const claimed = await pool.query<{ id: number; status: string; approved_roles: string | null }>(
       `UPDATE editor_requests
           SET supabase_user_id = $1
-        WHERE status = 'approved'
+        WHERE status IN ('pending', 'approved')
           AND supabase_user_id IS NULL
           AND lower(email) = $2
-        RETURNING id, approved_roles`,
+        RETURNING id, status, approved_roles`,
       [uid, email],
     );
     if (claimed.rowCount === 0) return;
 
     const roles = new Set<string>();
     for (const row of claimed.rows) {
+      if (row.status !== 'approved') continue;
       for (const r of String(row.approved_roles || '').split(',')) {
         const v = r.trim();
         if (v) roles.add(v);
@@ -230,10 +237,18 @@ async function claimApprovedRoles(
     // still right — it stops the login guard calling this an incomplete signup
     // — but there is nothing to grant, and inventing something would be worse.
     if (roles.size === 0) {
-      log.warn(
-        { uid, requests: claimed.rows.map((r) => r.id) },
-        'profiles: linked an approved request with no recorded roles',
-      );
+      const approved = claimed.rows.filter((r) => r.status === 'approved');
+      if (approved.length > 0) {
+        log.warn(
+          { uid, requests: approved.map((r) => r.id) },
+          'profiles: linked an approved request with no recorded roles',
+        );
+      } else {
+        log.info(
+          { uid, requests: claimed.rows.map((r) => r.id) },
+          'profiles: linked pending request(s) to their account',
+        );
+      }
       return;
     }
 
@@ -255,6 +270,59 @@ async function claimApprovedRoles(
   }
 }
 
+/**
+ * Mark the caller's account as a deliberate plain-user signup.
+ *
+ * The signup page's "just an account" flow calls this on completion. For an
+ * email signup the same fact travels as user_metadata.signup_intent (set at
+ * signUp, because there is no session yet to call this with); the Discord
+ * variant has a session the moment OAuth returns, and this is its channel.
+ *
+ * The marker is user_roles.granted_by = 'signup' on the base authed row —
+ * the difference between "someone made this account" and "someone signed in
+ * and an account happened". accountIsIncomplete keeps the first kind; before
+ * the distinction existed, the login page's orphan guard deleted them.
+ */
+profilesRouter.post('/api/profiles/complete-signup', requireSupabaseJwt, async (c) => {
+  const pool = await getPool();
+  if (!pool) return c.json(DB_UNAVAILABLE, 503);
+  const uid = c.get('userId') as string;
+  try {
+    const r = await pool.query(
+      `INSERT INTO user_roles (user_id, role, granted_by)
+       VALUES ($1, 'authed', 'signup')
+       ON CONFLICT (user_id, role) DO UPDATE SET granted_by = 'signup'
+         WHERE user_roles.granted_by = 'sync'
+       RETURNING (xmax = 0) AS inserted`,
+      [uid],
+    );
+    invalidateUserRolesCache(uid);
+    if (r.rows[0]?.inserted === true) {
+      // A brand-new account completing signup here never went through sync's
+      // first-grant branch, so this is where its staff notification lives.
+      notifyStaff(pool, {
+        kind: 'new_user',
+        event: 'new',
+        ref: uid,
+        title: (c.get('userName') as string | undefined)
+          || (c.get('userEmail') as string | undefined) || 'New account',
+        subtitle: null,
+        fields: [
+          { name: 'Name', value: c.get('userName') },
+          { name: 'Email', value: c.get('userEmail') },
+          { name: 'Signed up with', value: c.get('userProvider') },
+          { name: 'Kind', value: 'Member (account only)' },
+          { name: 'User ID', value: uid, inline: false },
+        ],
+      });
+    }
+    return c.json({ success: true });
+  } catch (err) {
+    log.error({ err, uid }, 'profiles: complete-signup failed');
+    return c.json({ error: 'failed to complete signup' }, 500);
+  }
+});
+
 profilesRouter.post('/api/profiles/sync', requireSupabaseJwt, async (c) => {
   const pool = await getPool();
   if (!pool) return c.json(DB_UNAVAILABLE, 503);
@@ -266,14 +334,28 @@ profilesRouter.post('/api/profiles/sync', requireSupabaseJwt, async (c) => {
     // 059). This runs on every logged-in page load, so it's how existing and
     // brand-new accounts alike acquire it. It's also what separates the staff
     // "Users" tab (authed only) from "Members" (authed + a real role).
+    // granted_by carries MEANING here: 'signup' marks an account somebody
+    // deliberately created (the plain "just an account" flow), 'sync' one
+    // that merely signed in. The orphan rules keep the first and may remove
+    // the second — before this distinction existed they were identical, and
+    // the login page's orphan guard was deleting real members' accounts.
+    // The intent claim rides user_metadata, so it survives the email-confirm
+    // gap where no session exists to call an endpoint with; the upgrade arm
+    // repairs an account whose first sign-in raced ahead of this deploy.
+    const isMember = c.get('userSignupIntent') === 'member';
     const granted = await pool.query(
       `INSERT INTO user_roles (user_id, role, granted_by)
-       VALUES ($1, 'authed', 'sync')
-       ON CONFLICT (user_id, role) DO NOTHING`,
-      [uid],
+       VALUES ($1, 'authed', $2)
+       ON CONFLICT (user_id, role) DO UPDATE SET granted_by = 'signup'
+         WHERE $2 = 'signup' AND user_roles.granted_by = 'sync'
+       RETURNING (xmax = 0) AS inserted`,
+      [uid, isMember ? 'signup' : 'sync'],
     );
-    if ((granted.rowCount ?? 0) > 0) {
+    const newAccount = granted.rows[0]?.inserted === true;
+    if (newAccount || (granted.rowCount ?? 0) > 0) {
       invalidateUserRolesCache(uid);
+    }
+    if (newAccount) {
       // First time this account has ever been seen.
       //
       // This used to say "New account / Someone signed up" and nothing else,

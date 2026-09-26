@@ -1452,7 +1452,11 @@
         messageEl.textContent = '';
         const { data: suData, error: suError } = await sb.auth.signUp({
           email, password: pw,
-          options: { data: { username, display_name: username } },
+          // signup_intent is the deliberate-account marker for the
+          // email-confirmation gap: there is no session yet to call
+          // /api/profiles/complete-signup with, but metadata rides every
+          // later JWT and the first sync reads it (see profiles.ts).
+          options: { data: { username, display_name: username, signup_intent: 'member' } },
         });
         if (suError) {
           const already = /already|registered|exists/i.test(suError.message || '');
@@ -1482,6 +1486,14 @@
       try {
         const jwt = session?.access_token;
         if (!jwt) return;
+        // complete-signup marks the account as a DELIBERATE plain-user signup
+        // (user_roles.granted_by = 'signup'). Without the marker this account
+        // is structurally identical to a login-page OAuth orphan, and the
+        // login page's orphan guard deletes those — it was deleting members.
+        await fetch(`${API_BASE_URL}/api/profiles/complete-signup`, {
+          method: 'POST', headers: { Authorization: 'Bearer ' + jwt },
+        });
+        // Then the ordinary sync for avatar + display name.
         await fetch(`${API_BASE_URL}/api/profiles/sync`, {
           method: 'POST', headers: { Authorization: 'Bearer ' + jwt },
         });

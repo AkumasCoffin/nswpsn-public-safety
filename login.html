@@ -603,6 +603,10 @@
         const d = await r.json();
         if (d.has_access) return 'map';
         if (d.is_team_member) return 'staff';
+        // A deliberate plain-user account (authed granted through the signup
+        // flow). No contributor roles by design — the map is their landing,
+        // and sending them "back" to a signup they completed reads as broken.
+        if (d.has_account === true) return 'map';
         // No roles at all → a new/incomplete signup (e.g. someone who used
         // "Continue with Discord" without an existing account). Send them to the
         // signup form to finish — a request is only created when they submit it,
@@ -618,7 +622,26 @@
 
     // Route a signed-in user off the login page: honor an explicit
     // ?redirect= if valid; otherwise land them by role.
+    let _redirectRan = false;
     async function redirectSignedIn(userId) {
+      // checkSession and the auth-state listener can both get here for one
+      // sign-in; the second pass duplicated every check below — the discard
+      // endpoint was observed being called twice in the same second.
+      if (_redirectRan) return;
+      _redirectRan = true;
+      // Sync BEFORE the orphan check. Sync is what links a request filed
+      // by email before the account existed (and applies roles approved in
+      // the meantime) — without this ordering, a legitimate applicant's
+      // first sign-in still looked like "no roles, no request" here.
+      try {
+        const { data: sess } = await sb.auth.getSession();
+        const token = sess && sess.session && sess.session.access_token;
+        if (token) {
+          await fetch(`${API_BASE_URL}/api/profiles/sync`, {
+            method: 'POST', headers: { 'Authorization': 'Bearer ' + token },
+          });
+        }
+      } catch (e) { /* best-effort — the guard below still requires an explicit has_request:false */ }
       const urlParams = new URLSearchParams(window.location.search);
       const explicit = safeRedirect(urlParams.get('redirect'), '');
       // Orphan guard: Discord OAuth from this login page mints an account even
@@ -635,7 +658,12 @@
           // Require an EXPLICIT has_request:false — during a deploy window the
           // frontend can be live before the backend adds this field, and an
           // `undefined` here would wrongly sign out a pending (no-roles-yet) user.
-          if (noRoles && d.has_request === false) {
+          // has_account === true is a deliberate plain-user account: authed
+          // was granted through the signup flow, not minted by this sign-in.
+          // Structurally it looks exactly like an orphan (no other roles, no
+          // editor request — by design), which is how the guard came to be
+          // deleting real members' accounts.
+          if (noRoles && d.has_request === false && d.has_account !== true) {
             // Was this a signup-FORM Discord flow? Those stash the completed
             // form under this key BEFORE the OAuth redirect and auto-submit it
             // on signup.html — they must NEVER be discarded. A bare login-page
