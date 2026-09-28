@@ -16,6 +16,7 @@ import { invalidateUserRolesCache } from '../services/auth/roles.js';
 import { avatarUrl, createImageUploadUrl, r2Configured, readR2ObjectBytes, deleteR2Object } from '../services/wire.js';
 import { tagsFor } from '../services/userTags.js';
 import { notifyStaff } from '../services/staffNotify.js';
+import { notify } from '../services/wireComments.js';
 
 export const profilesRouter = new Hono();
 
@@ -265,6 +266,17 @@ async function claimApprovedRoles(
       { uid, roles: [...roles], requests: claimed.rows.map((r) => r.id) },
       'profiles: granted roles approved before this account was linked',
     );
+    // The approval notification for the request-before-account case: the
+    // roles only became real THIS moment, so this is when the person is told.
+    // (The linked case notifies from the approve handler instead.)
+    const display = [...roles].filter((r) => r !== 'authed');
+    await notify(pool, {
+      userId: uid,
+      type: 'account.approved',
+      title: 'Your access request was approved',
+      body: display.length ? `Roles granted: ${display.join(', ')}` : null,
+      link: '/',
+    });
   } catch (err) {
     log.warn({ err: (err as Error).message, uid }, 'profiles: role claim failed');
   }

@@ -410,6 +410,16 @@ describe('POST /api/editor-requests/:id/approve', () => {
       // Notes record the linked assignment.
       const updateCall = calls.find((c2) => c2.sql.includes("status = 'approved'"));
       expect(updateCall?.params?.[1]).toContain('linked account linked-uid-1');
+
+      // And the APPLICANT is told. The staff channel already hears about
+      // approvals; the person being approved did not, and an approval nobody
+      // can see is indistinguishable from being ignored.
+      const userNotify = calls.find((c2) => c2.sql.includes('INSERT INTO notifications'));
+      expect(userNotify).toBeDefined();
+      expect(userNotify?.params?.[0]).toBe('linked-uid-1');
+      expect(String(userNotify?.params?.[2])).toContain('approved');
+      // Feeder roles were granted, so the link lands on the feeder page.
+      expect(userNotify?.params?.[4]).toBe('/feeder');
     } finally {
       fetchSpy.mockRestore();
     }

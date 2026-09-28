@@ -44,6 +44,7 @@ import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { config } from '../config.js';
 import { notifyStaff } from '../services/staffNotify.js';
+import { notify } from '../services/wireComments.js';
 import {
   getUserRoles,
   canonicalRoles,
@@ -133,6 +134,15 @@ function normaliseRequest(row: EditorRequestRow): Record<string, unknown> {
  * rather than a type and a region that only told you a request existed.
  * The free-text answers go last and full-width; packFields truncates them.
  */
+/** Where an approval should point its recipient. First match wins — a
+ *  feeder of any kind cares about the feeder page more than the map. */
+function roleHomePage(roles: readonly string[]): string {
+  if (roles.some((r) => r.startsWith('feeder:'))) return '/feeder';
+  if (roles.some((r) => r.startsWith('wire:'))) return '/wire';
+  if (roles.some((r) => r.startsWith('map:'))) return '/map';
+  return '/';
+}
+
 /** `radio_feeder,editor` is what the column holds; it is not what a heading
  *  should say. Unknown values pass through tidied rather than dropped, so a
  *  new request type never shows up blank. */
@@ -464,6 +474,18 @@ editorRouter.post('/api/editor-requests/:id/approve', requireRole(canManageUsers
             { userId: supabaseUserId, roles },
             'Assigned roles to linked account',
           );
+          // Tell the PERSON. The staff channel already hears about this, but
+          // until now nothing told the applicant — the old flow ended with a
+          // "remember to DM them" reminder to staff, and when that went, no
+          // automated message replaced it. Approval they can't see is
+          // indistinguishable from being ignored.
+          notify(pool, {
+            userId: supabaseUserId,
+            type: 'account.approved',
+            title: 'Your access request was approved',
+            body: `Roles granted: ${approvedRoles.join(', ')}`,
+            link: roleHomePage(approvedRoles),
+          }).catch(() => { /* notify never throws, but keep the promise handled */ });
         } catch (roleErr) {
           log.warn(
             { err: (roleErr as Error).message },
@@ -579,6 +601,15 @@ editorRouter.post('/api/editor-requests/:id/reject', requireRole(canManageUsers)
     );
 
     log.info({ requestId, email: req.email }, 'Rejected editor request');
+    if (req.supabase_user_id) {
+      notify(pool, {
+        userId: req.supabase_user_id,
+        type: 'account.rejected',
+        title: 'Update on your access request',
+        body: reason ? `Your request was declined: ${reason}` : 'Your request was declined.',
+        link: '/signup',
+      }).catch(() => { /* best-effort */ });
+    }
     notifyStaff(pool, {
       kind: 'signup_request',
       event: 'resolved',
