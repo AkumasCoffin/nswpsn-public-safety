@@ -15637,10 +15637,22 @@
         bgBox.style.display = 'none';
       }
 
-      // Set checkbox states based on current roles
-      const userRoles = (user.roles || []).map(r => r.role);
+      // Checkbox states come from the SERVER, fetched now — the cached list
+      // row can be minutes old, and a stale "no roles" here leads straight to
+      // a redundant manual re-grant (which, being an atomic replace, then
+      // rewrites who granted them and when). The cached row is only the
+      // fallback if the fetch fails.
       renderRoleCheckboxes('edit-roles-box', 'edit-role-', 'edit-privileged-roles-section');
-      applyRoleChecks(userRoles, 'edit-roles-box', 'edit-privileged-roles-section');
+      const cachedRoles = (user.roles || []).map(r => r.role);
+      applyRoleChecks(cachedRoles, 'edit-roles-box', 'edit-privileged-roles-section');
+      fetch(`${API_BASE_URL}/api/check-editor/${encodeURIComponent(userId)}`)
+        .then(r => r.ok ? r.json() : null)
+        .then(d => {
+          // Bail if the modal moved on to a different user meanwhile.
+          if (!d || !Array.isArray(d.roles) || currentEditUserId !== userId) return;
+          applyRoleChecks(d.roles, 'edit-roles-box', 'edit-privileged-roles-section');
+        })
+        .catch(() => { /* cached fallback already applied */ });
 
       // Team members can only manage the feature roles — hide the
       // privileged section for them (the checkboxes keep the user's
@@ -15979,8 +15991,12 @@
 
         document.getElementById('approve-modal').style.display = 'flex';
 
-        // Refresh list
-        await loadRequests();
+        // Refresh BOTH lists. Approval grants roles, and the Users tab kept
+        // showing its pre-approval snapshot — which is how an owner came to
+        // re-grant roles the approve had already assigned: the stale list
+        // showed the person roleless, and the roles modal (fed from the same
+        // array) pre-ticked nothing.
+        await Promise.all([loadRequests(), loadUsers()]);
 
       } catch (error) {
         showToast(`Approval failed: ${error.message}`, 'error');
