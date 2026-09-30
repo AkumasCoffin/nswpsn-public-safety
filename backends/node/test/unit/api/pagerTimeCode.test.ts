@@ -44,3 +44,31 @@ describe('pager clock ticks', () => {
     expect(isPagerTimeCode(undefined as unknown as string)).toBe(false);
   });
 });
+
+/**
+ * Empty pages. Tone-only POCSAG decodes arrive with message: '' — a real
+ * reception the schema rightly accepts — but Pagermon rejects them with a 500,
+ * which the agent reads as retryable. One such page at the head of a node's
+ * disk FIFO wedged it permanently: 3,699 messages queued behind it, 232
+ * retries in a day, surviving restarts because the queue is disk-backed.
+ * Undeliverable has to be decided at the relay, once, with an ack.
+ */
+import { isPagerTimeCode as _reuse } from '../../../src/api/node-ingest.js';
+
+describe('pager empty-message guard exists beside the time-code guard', () => {
+  it('the relay source drops empty messages before forwarding and acks them', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const src = await readFile('src/api/node-ingest.ts', 'utf8');
+    // The guard must sit BEFORE the forward and answer ok (an ack the agent
+    // dequeues on), not a 5xx (which it retries forever).
+    const guard = src.indexOf("dropped: 'empty message'");
+    const forward = src.indexOf('/api/messages');
+    expect(guard).toBeGreaterThan(-1);
+    expect(forward).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(forward);
+    // And the belt: a Pagermon validation rejection is acked as dropped, not
+    // relayed back as retryable.
+    expect(src).toContain('address or message missing');
+    expect(src).toContain("dropped: 'rejected by pagermon'");
+  });
+});

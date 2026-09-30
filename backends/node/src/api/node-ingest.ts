@@ -856,7 +856,21 @@ nodeIngestRouter.post('/api/node-ingest/pager-upload', async (c) => {
     return c.json({ ok: true, dropped: 'blocked capcode' });
   }
 
-  // 5a-ii. Clock ticks — a body that is nothing but a time of day. Same
+  // 5a-ii. Empty pages (tone-only POCSAG). The schema accepts message: '' —
+  //        a tone page is a real reception — but Pagermon rejects it with
+  //        500 "address or message missing", and a 500 reads to the agent as
+  //        retryable, so ONE such page at the head of a node's disk queue
+  //        blocked it permanently: the agent retried it every ~65s while
+  //        thousands of real messages piled up behind it (found at 3,699
+  //        deep, 232 retries in a day). Undeliverable is decided HERE, once,
+  //        with an ack, so the queue moves.
+  if (!parsed.message.trim()) {
+    hub.recordPagerMessage(node.id, { ...view, filtered: 'empty message' });
+    log.info(`pager relay: EMPTY message ${parsed.address} (buffered as filtered, not forwarded) node=${node.id.slice(0, 8)}`);
+    return c.json({ ok: true, dropped: 'empty message' });
+  }
+
+  // 5a-iii. Clock ticks — a body that is nothing but a time of day. Same
   //        treatment as a blocked capcode: not forwarded, still buffered as
   //        filtered so the drawer shows what a node is dropping.
   if (isPagerTimeCode(parsed.message)) {
@@ -934,6 +948,17 @@ nodeIngestRouter.post('/api/node-ingest/pager-upload', async (c) => {
   }
 
   const snippet = (await resp.text().catch(() => '')).slice(0, 200);
+  // Pagermon signals VALIDATION failures as 500, the same status as a genuine
+  // server fault — but "address or message missing" can never succeed on
+  // retry, and answering 502 makes the agent retry it forever, wedging the
+  // whole FIFO behind one bad message. Ack it as dropped instead; the guard
+  // above should catch these before the forward, so this is the belt for
+  // whatever trims differently on Pagermon's side.
+  if (/address or message missing/i.test(snippet)) {
+    hub.recordPagerMessage(node.id, { ...view, filtered: 'rejected by pagermon' });
+    log.warn(`pager relay: PERMANENT upstream rejection, acking as dropped node=${node.id.slice(0, 8)} ${snippet}`);
+    return c.json({ ok: true, dropped: 'rejected by pagermon' });
+  }
   log.warn(`pager relay: upstream ${resp.status} node=${node.id.slice(0, 8)} ${snippet}`);
   return c.json({ error: 'upstream rejected', status: resp.status }, 502);
 });
