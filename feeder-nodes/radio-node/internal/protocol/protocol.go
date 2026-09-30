@@ -51,6 +51,9 @@ type Hello struct {
 	AppliedConfigVersion string `json:"appliedConfigVersion"`
 	// Kind is the node type this agent runs as (radio/pager/adsb).
 	Kind string `json:"kind"`
+	// LocalIP is the machine's LAN address (display only — lets the owner
+	// and staff find the box on its network). Empty when undeterminable.
+	LocalIP string `json:"localIp,omitempty"`
 }
 
 // Status is the periodic heartbeat describing the agent's live state.

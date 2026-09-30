@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"runtime"
@@ -264,6 +265,7 @@ func (c *Client) sendHello(conn *websocket.Conn) error {
 		Hostname:             hostname,
 		AppliedConfigVersion: c.getAppliedVersion(),
 		Kind:                 c.cfg.Kind,
+		LocalIP:              localIP(),
 	}
 	return c.writeType(conn, protocol.TypeHello, h, "")
 }
@@ -769,4 +771,21 @@ func jitter(d time.Duration) time.Duration {
 	}
 	frac := float64(uint16(b[0])<<8|uint16(b[1])) / 65535.0
 	return d + time.Duration(float64(d)*0.25*frac)
+}
+
+// localIP is the LAN address this machine would route out through — found by
+// opening a UDP "connection" (no packet is ever sent; UDP dial just resolves
+// the local endpoint) and reading its local address. Display only: the
+// backend stores it so owners and staff can find the box on its own network.
+// Empty on any error; a node with no route simply reports nothing.
+func localIP() string {
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+	if a, ok := conn.LocalAddr().(*net.UDPAddr); ok && a.IP != nil {
+		return a.IP.String()
+	}
+	return ""
 }

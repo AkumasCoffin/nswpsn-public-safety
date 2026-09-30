@@ -283,6 +283,7 @@ async function handleAgentMessage(
         os: h.os ?? null,
         arch: h.arch ?? null,
         hostname: h.hostname ?? null,
+        localIp: typeof h.localIp === 'string' ? h.localIp.trim() || null : null,
       };
       const node = await refreshNodeOnHello(ctx.nodeId, meta);
       // The agent declares its kind; warn (don't reject) on a mismatch with the

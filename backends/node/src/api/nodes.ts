@@ -94,6 +94,7 @@ function toApi(node: NodeRow, usernames?: Map<string, string>) {
     rdioVersion: node.rdio_version,
     os: node.os,
     arch: node.arch,
+    localIp: node.local_ip,
     lastSeenAt: node.last_seen_at,
     notes: node.notes,
     createdAt: node.created_at,

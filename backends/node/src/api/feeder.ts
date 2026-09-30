@@ -166,6 +166,7 @@ function feederNodeView(n: NodeRow) {
     agentVersion: n.agent_version,
     sdrtrunkVersion: n.sdrtrunk_version,
     rdioVersion: n.rdio_version,
+    localIp: n.local_ip,
     sdrUp,
     decoding: !!decoding,
     uploading: callsLast10m > 0,

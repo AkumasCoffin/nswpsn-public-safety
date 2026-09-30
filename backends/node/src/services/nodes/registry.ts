@@ -94,6 +94,9 @@ export interface NodeRow {
   // Coarse locality (ABS LGA name, same vocabulary as the boundaries table).
   // Pager nodes only; display/attribution, not validated against the DB.
   lga: string | null;
+  // LAN address self-reported by the agent on hello (display only). Kept in
+  // the row so the last known address survives the node going offline.
+  local_ip: string | null;
 }
 
 export interface HelloMeta {
@@ -103,11 +106,12 @@ export interface HelloMeta {
   os?: string | null;
   arch?: string | null;
   hostname?: string | null;
+  localIp?: string | null;
 }
 
 const NODE_COLS = `id, kind, user_id, install_id, name, enabled, feed_enabled, config_override,
   config_version, agent_version, sdrtrunk_version, rdio_version, os, arch,
-  last_seen_at, notes, created_at, token_prefix, lat, lon, zone, state, lga`;
+  last_seen_at, notes, created_at, token_prefix, lat, lon, zone, state, lga, local_ip`;
 
 /** Max distinct installs (nodes) one contributor may register. `install_id` is
  *  an attacker-chosen header, so without a cap a single token could create
@@ -280,6 +284,7 @@ export async function refreshNodeOnHello(nodeId: string, meta: HelloMeta): Promi
        rdio_version     = COALESCE($4, rdio_version),
        os               = COALESCE($5, os),
        arch             = COALESCE($6, arch),
+       local_ip         = COALESCE($7, local_ip),
        last_seen_at     = now()
      WHERE id = $1
      RETURNING ${NODE_COLS}`,
@@ -290,6 +295,8 @@ export async function refreshNodeOnHello(nodeId: string, meta: HelloMeta): Promi
       clampMeta(meta.rdioVersion, 40),
       clampMeta(meta.os, 40),
       clampMeta(meta.arch, 20),
+      // 45 chars fits a full IPv6 address; anything longer is not an IP.
+      clampMeta(meta.localIp, 45),
     ],
   );
   return res.rows[0] ?? null;

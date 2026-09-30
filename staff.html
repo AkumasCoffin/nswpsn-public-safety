@@ -402,6 +402,7 @@
       opacity: 0.55; font-size: 0.7rem;
     }
     .nd-meta-pin { font-size: 0.68rem; color: #7dd3fc; }
+    .nd-meta-ip { font-family: ui-monospace, monospace; font-size: 0.7rem; opacity: 0.7; }
     .nd-meta-warn { color: #fbbf24; }
     /* Uptime sits on its own line above the identifiers: it is a health
        figure, not metadata, and burying it among owner and install ids read
@@ -10113,6 +10114,7 @@
           <div class="dev-card-secondary">
             <span title="${escapeHtml(userId)}">${owner}</span>
             <span class="nd-meta-place">${placeHtml}</span>
+            ${node.localIp ? `<span class="nd-meta-ip" title="LAN address, self-reported by the agent">${escapeHtml(node.localIp)}</span>` : ''}
             <span class="nd-meta-install" title="Install id ${escapeHtml(String(installId) || 'not yet bound')}">${installShort}</span>
           </div>
         </div>`;
@@ -13055,12 +13057,16 @@
         ? _ndStatus : (n.status || null);
       // Pager and ADS-B nodes run no SDR-Trunk or rdio — show only the agent
       // version rather than two permanent em dashes.
+      // The LAN address rides the version row on every kind: it is the same
+      // "reference about this box" register, and it is what staff need when
+      // a node has to be found on its own network.
+      const ipVer = n.localIp ? _nodeVer('ip', n.localIp) : '';
       if (['pager', 'adsb'].includes(n.kind || 'radio')) {
-        el.innerHTML = _nodeVer('agent', agent);
+        el.innerHTML = _nodeVer('agent', agent) + ipVer;
         return;
       }
       el.innerHTML =
-        _nodeVer('agent', agent) + _nodeVer('sdrtrunk', sdrtrunk) + _nodeVer('rdio', rdio)
+        _nodeVer('agent', agent) + _nodeVer('sdrtrunk', sdrtrunk) + _nodeVer('rdio', rdio) + ipVer
         + _ndHealthHtml('radio', rst, !!(rst && rst.components && rst.components.sdrtrunk === 'running'));
     }
 

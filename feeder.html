@@ -338,9 +338,8 @@
     .node-loc .nl-item { display: inline-flex; align-items: center; gap: 0.3rem; }
     .node-loc .nl-item i { opacity: 0.7; }
     .node-loc .nl-warn { color: #fbbf24; }
-    .node-loc .nl-key code { background: rgba(255,255,255,0.06); border: 1px solid var(--border-subtle); border-radius: 4px; padding: 0.02rem 0.32rem; font-size: 0.7rem; color: var(--text-soft); }
+    .node-loc .nl-key code, .node-loc .nl-ip code { background: rgba(255,255,255,0.06); border: 1px solid var(--border-subtle); border-radius: 4px; padding: 0.02rem 0.32rem; font-size: 0.7rem; color: var(--text-soft); }
     /* Recent-messages modal (owner view of decoded pager pages). */
-    .msg-modal { max-width: 700px; }
     .msg-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
     .msg-head h3 { margin: 0; }
     .msg-sub { font-size: 0.75rem; color: var(--text-soft); margin: 0.35rem 0 0.7rem; }
@@ -449,7 +448,53 @@
       display: inline-flex; align-items: center; gap: 0.3rem;
     }
     .mini-btn:hover { color: var(--text-primary); border-color: var(--accent-border, #38bdf8); }
-    .mini-btn.danger:hover { color: #fca5a5; border-color: rgba(239,68,68,0.5); }
+    /* Delete is ALWAYS red — hover-only colour made it look like any other
+       button until the cursor was already on it, which defeats the point of
+       a danger style. */
+    .mini-btn.danger { color:#f87171; border-color:rgba(239,68,68,0.4); background:rgba(239,68,68,0.10); }
+    .mini-btn.danger:hover { color:#fecaca; border-color:rgba(239,68,68,0.6); background:rgba(239,68,68,0.2); }
+
+    /* ---- The one-button node card + its modal ---- */
+    .node-row-btn { cursor: pointer; transition: border-color 0.15s ease, transform 0.15s ease; }
+    .node-row-btn:hover { border-color: var(--accent-border, rgba(56,189,248,0.35)); transform: translateY(-1px); }
+    .node-row-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .nr-open { align-self: center; color: var(--text-soft); font-size: 0.8rem; flex-shrink: 0; }
+
+    /* Wider than .fs-modal (940): the body hosts the same content plus a
+       header bar of actions. Same specificity trick as .modal.fs-modal so
+       source order cannot demote it. */
+    .modal.node-modal { max-width: 1040px; padding: 0; }
+    /* Sticky glassy header (the page .header precedent) — the modal itself
+       is the scroll container, so the bar pins to its top edge. */
+    .nm-head {
+      position: sticky; top: 0; z-index: 5;
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 0.8rem; flex-wrap: wrap;
+      padding: 1rem 1.4rem;
+      background: rgba(6,10,21,0.82);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--border-subtle);
+      border-radius: 12px 12px 0 0;
+    }
+    .nm-id { display: flex; align-items: flex-start; gap: 0.6rem; min-width: 0; }
+    .nm-id .node-dot { margin-top: 0.4rem; }
+    .nm-id-text { min-width: 0; }
+    .nm-ip code { background:rgba(255,255,255,0.06); border:1px solid var(--border-subtle); border-radius:4px; padding:0.02rem 0.32rem; font-size:0.7rem; }
+    .nm-actions { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+    /* Two clusters with a dividing rule between them: routine actions live
+       apart from destructive ones, so a thumb aiming at Download never lands
+       on Delete. */
+    .nm-group { display: flex; gap: 0.35rem; flex-wrap: wrap; }
+    .nm-group + .nm-group { border-left: 1px solid var(--border-subtle); padding-left: 0.6rem; }
+    .nm-close { font-size: 1rem; line-height: 1; padding: 0.32rem 0.6rem; }
+    .nm-body { padding: 1.1rem 1.4rem 1.4rem; }
+    /* Anything that must stack above the open node modal (the location
+       picker and the install modal). Base overlay is z-index 1000. */
+    .modal-overlay.overlay-top { z-index: 1100; }
+    @media (max-width: 640px) {
+      .modal.node-modal { max-width: none; width: 100%; min-height: 100%; border-radius: 0; }
+      .nm-head { position: static; border-radius: 0; }
+    }
     /* One-time token modal */
     .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex;
       align-items: center; justify-content: center; z-index: 1000; padding: 1rem;
@@ -1082,43 +1127,15 @@
         ? `<span class="nl-item"><i class="fas fa-location-dot"></i> ${isAdsb ? 'antenna pinned' : 'exact pin'}</span>`
         : (isAdsb ? `<span class="nl-item nl-warn"><i class="fas fa-location-dot"></i> no antenna pin — range unavailable</span>` : '');
       const keyItem = node.tokenPrefix ? `<span class="nl-item nl-key">key <code>${escapeHtml(node.tokenPrefix)}…</code></span>` : '';
-      const _dlBtn = {
-        windows: `<button class="mini-btn" title="Download Windows installer" onclick="downloadInstaller('windows','${node.id}',this)"><i class="fab fa-windows"></i> Windows</button>`,
-        linux: `<button class="mini-btn" title="Download Linux installer" onclick="downloadInstaller('linux','${node.id}',this)"><i class="fab fa-linux"></i> Linux</button>`,
-      };
-      const dl = agentCfg ? agentCfg.platforms.map((p) => _dlBtn[p]).join('\n           ') : '';
-      // Owners can view their pager node's recent decoded pages (rolling).
-      const msgsBtn = isPager
-        ? `<button class="mini-btn" title="Show recent decoded pages" onclick="showNodeMessages('${node.id}')"><i class="fas fa-envelope"></i> Messages</button>`
-        : '';
-      // Radio nodes: a light activity/stats view (calls, receptions, top
-      // talkgroup/unit/site + recent calls) for their own node. ADS-B nodes get
-      // their own renderer rather than a branch inside that one — the two
-      // payloads share nothing beyond the word "activity".
-      // Restart (a full bounce, not a switch) for ADS-B owners: the common
-      // self-service fix for a crash-looping decoder or a wedged agent,
-      // without needing staff. Turning a node OFF stays a staff decision.
-      const decoderBtn = (isAdsb && online)
-        ? `<button class="mini-btn" title="Restart the agent and its decoder. The node drops offline for ~15 seconds while it relaunches." onclick="restartNode('${node.id}', this)"><i class="fas fa-rotate"></i> Restart node</button>`
-        : '';
-      const statsBtn = isRadio
-        ? `<button class="mini-btn" title="Show this node's activity & stats" onclick="showNodeStats('${node.id}')"><i class="fas fa-chart-line"></i> Activity</button>`
-        : isAdsb
-        ? `<button class="mini-btn" title="Show this receiver's performance & coverage" onclick="showAdsbStats('${node.id}')"><i class="fas fa-chart-line"></i> Activity</button>`
-        : '';
-      const actions = `
-        <div class="node-actions">
-          ${statsBtn}
-          ${msgsBtn}
-          ${decoderBtn}
-          ${dl}
-          <button class="mini-btn" title="Set region / exact pin" onclick="openLocationPicker('${node.id}')"><i class="fas fa-location-dot"></i> ${areaLabel ? 'Location' : 'Set region'}</button>
-          <button class="mini-btn" title="Re-issue key (invalidates the old installer)" onclick="rotateNode('${node.id}',this)"><i class="fas fa-key"></i></button>
-          <button class="mini-btn danger" title="Delete node (cuts it off)" onclick="deleteFeederNode('${node.id}',this)"><i class="fas fa-trash"></i></button>
-        </div>`;
-
+      // The node's own LAN address, straight from the agent — so an owner can
+      // find the box on their network without logging into their router.
+      const ipItem = node.localIp ? `<span class="nl-item nl-ip" title="Local network address of this node"><i class="fas fa-network-wired"></i> <code>${escapeHtml(node.localIp)}</code></span>` : '';
+      // The whole card is one button that opens the node modal — every
+      // action that used to crowd the row lives in the modal's header now.
       return `
-        <div class="node-row">
+        <div class="node-row node-row-btn" role="button" tabindex="0" title="Open this node"
+             onclick="openNodeModal('${node.id}')"
+             onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openNodeModal('${node.id}')}">
           <span class="node-dot ${updating ? 'updating' : (online ? 'online' : '')}" title="${statusText}"></span>
           <div class="node-meta">
             <div class="node-head">
@@ -1126,50 +1143,184 @@
               ${agentHtml}
             </div>
             <div class="node-sub"><span class="${statusCls}">${statusText}</span> · last seen ${escapeHtml(lastSeen)}${uptimeHtml}</div>
-            <div class="node-loc">${regionItem}${pinItem}${keyItem}</div>
+            <div class="node-loc">${regionItem}${pinItem}${keyItem}${ipItem}</div>
             <div class="node-chips">${chips}</div>
             ${statHtml}
-            ${actions}
           </div>
+          <i class="fas fa-chevron-right nr-open" aria-hidden="true"></i>
         </div>`;
     }
 
     // Owner view of a pager node's recent decoded pages (the rolling buffer the
     // backend keeps, same data staff see in the drawer). Polls every 5s while open.
     let _msgPoll = null;
-    async function showNodeMessages(nodeId) {
-      closeNodeMessages();
+    let _msgNodeId = null;
+    async function loadNodeMessages() {
+      const nodeId = _msgNodeId;
+      if (!nodeId) return;
+      try {
+        const jwt = await getToken();
+        const res = await fetch(`${API_BASE_URL}/api/feeder/nodes/${nodeId}/messages`, {
+          headers: { 'Authorization': 'Bearer ' + jwt },
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (document.getElementById('node-modal')) _renderNodeMessages(data.messages || []);
+      } catch (e) {
+        const sub = document.getElementById('msg-sub');
+        if (sub) sub.textContent = 'Could not load messages — try again shortly.';
+      }
+    }
+    // ===== The node modal: one big surface per node ======================
+    // The card is the button; this is what it opens. Header = identity +
+    // the actions that used to crowd the card, in two clusters (routine |
+    // destructive) so a thumb aiming at Download never lands on Delete.
+    // Body = the kind's own detail view, verbatim: the old Activity /
+    // Messages / Receiver modals' markup and loaders, now under one roof
+    // with ONE teardown.
+    let _nmNodeId = null;
+    let _nmEsc = null;
+
+    function _nmHeadStatus(node) {
+      const online = !!node.online;
+      const updating = !!node.updating;
+      const statusText = updating ? 'Updating…' : (online ? 'Online' : 'Offline');
+      const statusCls = updating ? 'st-upd' : (online ? 'st-on' : 'st-off');
+      return `<span class="${statusCls}">${statusText}</span> · last seen ${escapeHtml(fmtLastSeen(node.lastSeenAt))}`;
+    }
+
+    function openNodeModal(nodeId) {
+      closeNodeModal();
+      const node = (_feederNodes || []).find(n => n.id === nodeId);
+      if (!node) return;
+      _nmNodeId = nodeId;
+      const kind = node.kind || 'radio';
+      const isRadio = kind === 'radio';
+      const isPager = kind === 'pager';
+      const isAdsb = kind === 'adsb';
+      const agentCfg = _kindAgent[kind];
+      const online = !!node.online;
+
+      // Header actions. Routine cluster first, destructive cluster set apart
+      // (see .nm-group CSS) — the divider is the misclick insurance.
+      const dl = agentCfg ? agentCfg.platforms.map((pf) =>
+        `<button class="mini-btn" title="Download ${pf === 'windows' ? 'Windows' : 'Linux'} installer" onclick="downloadInstaller('${pf}','${node.id}',this)"><i class="fab fa-${pf === 'windows' ? 'windows' : 'linux'}"></i> ${pf === 'windows' ? 'Windows' : 'Linux'}</button>`).join('') : '';
+      const restart = (isAdsb && online)
+        ? `<button class="mini-btn" title="Restart the agent and its decoder. The node drops offline for ~15 seconds while it relaunches." onclick="restartNode('${node.id}', this)"><i class="fas fa-rotate"></i> Restart</button>`
+        : '';
+      // Always "Location" for adsb — it has no region, only the pin, and the
+      // old "Set region" label promised a field the kind does not have.
+      const areaLabel = isPager ? [node.state, node.lga].filter(Boolean).join(' · ') : node.zone;
+      const locLabel = isAdsb ? 'Location' : (areaLabel ? 'Location' : 'Set region');
+      const loc = `<button class="mini-btn" title="Set region / exact pin" onclick="openLocationPicker('${node.id}')"><i class="fas fa-location-dot"></i> ${locLabel}</button>`;
+
+      // Body: the kind's own view, ids preserved so every existing renderer
+      // ( _renderNodeStats / _renderNodeMessages / _renderAdsb* ) is untouched.
+      const winBtns = (prefix, setter) => ['24h', '7d', '30d'].map((w) =>
+        `<button class="fs-win${w === '24h' ? ' active' : ''}" data-kind="${prefix}" data-w="${w}" onclick="${setter}('${w}')">${w === '24h' ? '24h' : (w === '7d' ? '7 days' : '30 days')}</button>`).join('');
+      let body;
+      if (isPager) {
+        body = `
+          <div class="msg-sub" id="msg-sub">loading…</div>
+          <div id="msg-list" class="msg-list"></div>`;
+      } else if (isAdsb) {
+        body = `
+          <div class="fs-wins">${winBtns('adsb', 'setAdsbWindow')}</div>
+          <div id="adsb-body"><div class="loading" style="padding:2rem;"><i class="fas fa-spinner"></i></div></div>
+          <div class="fs-act-h">Coverage</div>
+          <div id="adsb-polar"><div class="ab-note">Loading coverage…</div></div>
+          <div class="fs-act-h">Tracks — last 8 hours
+            <button type="button" class="ab-cov-btn" id="adsb-cov-btn"
+                    onclick="abToggleCoverage()"
+                    title="Draw the coverage envelope over the map">Show coverage</button>
+          </div>
+          <div class="ab-map" id="adsb-map"></div>
+          <div class="ab-note" id="adsb-map-note">Loading tracks…</div>`;
+      } else {
+        body = `
+          <div class="fs-wins">${winBtns('stats', 'setStatsWindow')}</div>
+          <div id="stats-body"><div class="loading" style="padding:2rem;"><i class="fas fa-spinner"></i></div></div>`;
+      }
+
       const overlay = document.createElement('div');
-      overlay.id = 'msg-modal';
+      overlay.id = 'node-modal';
       overlay.className = 'modal-overlay';
       overlay.innerHTML = `
-        <div class="modal msg-modal">
-          <div class="msg-head">
-            <h3><i class="fas fa-envelope-open-text"></i> Recent messages</h3>
-            <button class="mini-btn" onclick="closeNodeMessages()">Close</button>
+        <div class="modal fs-modal node-modal">
+          <div class="nm-head">
+            <div class="nm-id">
+              <span class="node-dot ${node.updating ? 'updating' : (online ? 'online' : '')}" id="nm-dot"></span>
+              <div class="nm-id-text">
+                <div class="node-name">${escapeHtml(node.name || 'Unnamed node')} <span class="node-kind">${escapeHtml(_kindLabel[kind] || kind)}</span>${node.agentVersion ? ` <span class="node-ver">agent ${escapeHtml(node.agentVersion)}</span>` : ''}</div>
+                <div class="node-sub" id="nm-sub">${_nmHeadStatus(node)}</div>
+                ${node.localIp ? `<div class="node-sub nm-ip" id="nm-ip" title="Local network address of this node"><i class="fas fa-network-wired"></i> <code>${escapeHtml(node.localIp)}</code></div>` : '<div class="node-sub nm-ip" id="nm-ip" hidden></div>'}
+              </div>
+            </div>
+            <div class="nm-actions">
+              <div class="nm-group">${restart}${dl}${loc}</div>
+              <div class="nm-group nm-danger">
+                <button class="mini-btn" title="Re-issue key (invalidates the old installer)" onclick="rotateNode('${node.id}',this)"><i class="fas fa-key"></i> Re-issue key</button>
+                <button class="mini-btn danger" title="Delete node (cuts it off)" onclick="deleteFeederNode('${node.id}',this)"><i class="fas fa-trash"></i> Delete</button>
+              </div>
+              <button class="mini-btn nm-close" title="Close" onclick="closeNodeModal()">&times;</button>
+            </div>
           </div>
-          <div class="msg-sub" id="msg-sub">loading…</div>
-          <div id="msg-list" class="msg-list"></div>
+          <div class="nm-body">${body}</div>
         </div>`;
-      overlay.addEventListener('click', (e) => { if (e.target === overlay) closeNodeMessages(); });
-      document.body.appendChild(overlay);
-      const load = async () => {
-        try {
-          const jwt = await getToken();
-          const res = await fetch(`${API_BASE_URL}/api/feeder/nodes/${nodeId}/messages`, {
-            headers: { 'Authorization': 'Bearer ' + jwt },
-          });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          const data = await res.json();
-          if (document.getElementById('msg-modal')) _renderNodeMessages(data.messages || []);
-        } catch (e) {
-          const sub = document.getElementById('msg-sub');
-          if (sub) sub.textContent = 'Could not load messages — try again shortly.';
-        }
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) closeNodeModal(); });
+      // Escape closes this modal ONLY when it is the topmost overlay — the
+      // location picker / install modal / confirm dialogs stack above it.
+      _nmEsc = (e) => {
+        if (e.key !== 'Escape') return;
+        const overlays = document.querySelectorAll('.modal-overlay');
+        if (overlays.length && overlays[overlays.length - 1].id === 'node-modal') closeNodeModal();
       };
-      await load();
-      _msgPoll = setInterval(load, 5000);
+      document.addEventListener('keydown', _nmEsc);
+      document.body.appendChild(overlay);
+
+      // Start the kind's own loader + poller — the same cadences the three
+      // standalone modals used.
+      if (isPager) {
+        _msgNodeId = nodeId;
+        loadNodeMessages();
+        _msgPoll = setInterval(loadNodeMessages, 5000);
+      } else if (isAdsb) {
+        _abNodeId = nodeId;
+        _abWindow = '24h';
+        loadAdsbStats().then(() => {
+          // Only after the overlay is in the DOM and sized, or Leaflet
+          // measures a zero-height container and renders a blank tile grid.
+          loadAdsbCoverage();
+        });
+        _abPoll = setInterval(loadAdsbStats, 15000);
+      } else {
+        _statsNodeId = nodeId;
+        _statsWindow = '24h';
+        loadNodeStats();
+        _statsPoll = setInterval(loadNodeStats, 15000);
+      }
     }
+    window.openNodeModal = openNodeModal;
+
+    /** ONE teardown for everything the modal can have started. */
+    function closeNodeModal() {
+      if (_msgPoll) { clearInterval(_msgPoll); _msgPoll = null; }
+      if (_statsPoll) { clearInterval(_statsPoll); _statsPoll = null; }
+      if (_abPoll) { clearInterval(_abPoll); _abPoll = null; }
+      _msgNodeId = null; _statsNodeId = null; _abNodeId = null; _nmNodeId = null;
+      // Tear the map down explicitly: removing its container via innerHTML
+      // leaves Leaflet's listeners and tile requests alive.
+      if (_abLayer) { _abLayer.remove(); _abLayer = null; }
+      if (_abMap) { _abMap.remove(); _abMap = null; }
+      // Coverage toggle state used to leak across opens — reset it all.
+      _abCoverageOn = false;
+      if (_abCoverageLayer) { try { _abCoverageLayer.remove(); } catch (e) { /* map already gone */ } _abCoverageLayer = null; }
+      _abCoverageGeom = null;
+      if (_nmEsc) { document.removeEventListener('keydown', _nmEsc); _nmEsc = null; }
+      const m = document.getElementById('node-modal'); if (m) m.remove();
+    }
+    window.closeNodeModal = closeNodeModal;
+
     function _renderNodeMessages(msgs) {
       const list = document.getElementById('msg-list');
       const sub = document.getElementById('msg-sub');
@@ -1194,11 +1345,6 @@
         </div>`;
       }).join('');
     }
-    function closeNodeMessages() {
-      if (_msgPoll) { clearInterval(_msgPoll); _msgPoll = null; }
-      const m = document.getElementById('msg-modal'); if (m) m.remove();
-    }
-
     // --- Per-node activity & stats (radio nodes) -----------------------------
     // A LIGHT owner-facing summary of what this node is hearing: calls,
     // receptions, top talkgroup / unit / site, and a short recent-call feed.
@@ -1210,32 +1356,10 @@
       const n = (_feederNodes || []).find(x => x.id === nodeId);
       return n ? (n.name || 'node') : 'node';
     }
-    async function showNodeStats(nodeId) {
-      closeNodeStats();
-      _statsNodeId = nodeId;
-      _statsWindow = '24h';
-      const overlay = document.createElement('div');
-      overlay.id = 'stats-modal';
-      overlay.className = 'modal-overlay';
-      const winBtn = (w, lbl) => `<button class="fs-win${w === _statsWindow ? ' active' : ''}" data-w="${w}" onclick="setStatsWindow('${w}')">${lbl}</button>`;
-      overlay.innerHTML = `
-        <div class="modal msg-modal fs-modal">
-          <div class="msg-head">
-            <h3><i class="fas fa-chart-line"></i> ${escapeHtml(_statsName(nodeId))} · activity</h3>
-            <button class="mini-btn" onclick="closeNodeStats()">Close</button>
-          </div>
-          <div class="fs-wins">${winBtn('24h', '24h')}${winBtn('7d', '7 days')}${winBtn('30d', '30 days')}</div>
-          <div id="stats-body"><div class="loading" style="padding:2rem;"><i class="fas fa-spinner"></i></div></div>
-        </div>`;
-      overlay.addEventListener('click', (e) => { if (e.target === overlay) closeNodeStats(); });
-      document.body.appendChild(overlay);
-      await loadNodeStats();
-      _statsPoll = setInterval(loadNodeStats, 15000);
-    }
     function setStatsWindow(w) {
       if (w === _statsWindow) return;
       _statsWindow = w;
-      document.querySelectorAll('#stats-modal .fs-win').forEach(b => b.classList.toggle('active', b.dataset.w === w));
+      document.querySelectorAll('#node-modal .fs-win[data-kind="stats"]').forEach(b => b.classList.toggle('active', b.dataset.w === w));
       loadNodeStats();
     }
     async function loadNodeStats() {
@@ -1248,7 +1372,7 @@
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        if (document.getElementById('stats-modal')) _renderNodeStats(data);
+        if (document.getElementById('node-modal')) _renderNodeStats(data);
       } catch (e) {
         const body = document.getElementById('stats-body');
         if (body) body.innerHTML = `<div class="msg-empty">Couldn't load activity — try again shortly.</div>`;
@@ -1327,12 +1451,6 @@
         <div class="fs-act-h">Recent calls</div>
         ${act}`;
     }
-    function closeNodeStats() {
-      if (_statsPoll) { clearInterval(_statsPoll); _statsPoll = null; }
-      _statsNodeId = null;
-      const m = document.getElementById('stats-modal'); if (m) m.remove();
-    }
-
     // ---- ADS-B receiver activity ----------------------------------------
     //
     // The owner's view of their own receiver, served by the same backend code
@@ -1512,45 +1630,10 @@
       return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
 
-    async function showAdsbStats(nodeId) {
-      closeAdsbStats();
-      _abNodeId = nodeId;
-      _abWindow = '24h';
-      const overlay = document.createElement('div');
-      overlay.id = 'adsb-modal';
-      overlay.className = 'modal-overlay';
-      const winBtn = (w, lbl) => `<button class="fs-win${w === _abWindow ? ' active' : ''}" data-w="${w}" onclick="setAdsbWindow('${w}')">${lbl}</button>`;
-      overlay.innerHTML = `
-        <div class="modal msg-modal fs-modal">
-          <div class="msg-head">
-            <h3><i class="fas fa-plane"></i> ${escapeHtml(_statsName(nodeId))} · receiver</h3>
-            <button class="mini-btn" onclick="closeAdsbStats()">Close</button>
-          </div>
-          <div class="fs-wins">${winBtn('24h', '24h')}${winBtn('7d', '7 days')}${winBtn('30d', '30 days')}</div>
-          <div id="adsb-body"><div class="loading" style="padding:2rem;"><i class="fas fa-spinner"></i></div></div>
-          <div class="fs-act-h">Coverage</div>
-          <div id="adsb-polar"><div class="ab-note">Loading coverage…</div></div>
-          <div class="fs-act-h">Tracks — last 8 hours
-            <button type="button" class="ab-cov-btn" id="adsb-cov-btn"
-                    onclick="abToggleCoverage()"
-                    title="Draw the coverage envelope over the map">Show coverage</button>
-          </div>
-          <div class="ab-map" id="adsb-map"></div>
-          <div class="ab-note" id="adsb-map-note">Loading tracks…</div>
-        </div>`;
-      overlay.addEventListener('click', (e) => { if (e.target === overlay) closeAdsbStats(); });
-      document.body.appendChild(overlay);
-      await loadAdsbStats();
-      // Only after the overlay is in the DOM and sized, or Leaflet measures a
-      // zero-height container and renders a blank tile grid.
-      loadAdsbCoverage();
-      _abPoll = setInterval(loadAdsbStats, 15000);
-    }
-
     function setAdsbWindow(w) {
       if (w === _abWindow) return;
       _abWindow = w;
-      document.querySelectorAll('#adsb-modal .fs-win').forEach(b => b.classList.toggle('active', b.dataset.w === w));
+      document.querySelectorAll('#node-modal .fs-win[data-kind="adsb"]').forEach(b => b.classList.toggle('active', b.dataset.w === w));
       loadAdsbStats();
     }
 
@@ -1564,7 +1647,7 @@
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        if (document.getElementById('adsb-modal') && _abNodeId === nodeId) _renderAdsbStats(data);
+        if (document.getElementById('node-modal') && _abNodeId === nodeId) _renderAdsbStats(data);
       } catch (e) {
         const body = document.getElementById('adsb-body');
         if (body) body.innerHTML = `<div class="msg-empty">Couldn't load this receiver — try again shortly.</div>`;
@@ -1905,16 +1988,6 @@
       return `<div class="ab-polar-wrap">${svg}<div class="ab-polar-legend">${legend}</div></div>`;
     }
 
-    function closeAdsbStats() {
-      if (_abPoll) { clearInterval(_abPoll); _abPoll = null; }
-      _abNodeId = null;
-      // Tear the map down explicitly: removing its container via innerHTML
-      // leaves Leaflet's listeners and tile requests alive.
-      if (_abLayer) { _abLayer.remove(); _abLayer = null; }
-      if (_abMap) { _abMap.remove(); _abMap = null; }
-      const m = document.getElementById('adsb-modal'); if (m) m.remove();
-    }
-
     // Create a node. A coarse area is REQUIRED (radio: RFS zone; pager: State +
     // LGA), so we collect it (plus an optional exact pin) in the picker FIRST —
     // the node is created on Save (see saveLocation), not before, so cancelling
@@ -1999,6 +2072,7 @@
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         delete _nodeTokens[nodeId];
         showToast('Node deleted.', 'success');
+        closeNodeModal();
         await refreshNodes();
       } catch (e) {
         showToast('Could not delete node.', 'error');
@@ -2033,7 +2107,7 @@
         : `<p>Download the installer and run it — your node's key is already baked in, nothing to copy.</p>`;
       const el = document.createElement('div');
       el.id = 'token-modal';
-      el.className = 'modal-overlay';
+      el.className = 'modal-overlay overlay-top';
       el.innerHTML = `
         <div class="modal">
           <h3><i class="fas fa-circle-check"></i> ${escapeHtml(node.name || 'Node')} ready</h3>
@@ -2081,7 +2155,7 @@
       }
       const overlay = document.createElement('div');
       overlay.id = 'loc-modal';
-      overlay.className = 'modal-overlay';
+      overlay.className = 'modal-overlay overlay-top';
       overlay.innerHTML = `
         <div class="modal loc-modal">
           <h3><i class="fas fa-location-dot"></i> Node location</h3>
@@ -2405,6 +2479,25 @@
                <i class="fas fa-satellite-dish"></i>
                <p>No nodes yet — add one above to get its installer.</p>
              </div>`;
+        // Keep an open node modal's HEADER live without ever touching its
+        // body (pollers, Leaflet, or a button mid-spinner). Deleted node →
+        // close; otherwise only the dot / status line / IP update.
+        if (_nmNodeId && document.getElementById('node-modal')) {
+          const cur = nodes.find(n => n.id === _nmNodeId);
+          if (!cur) {
+            closeNodeModal();
+          } else {
+            const dot = document.getElementById('nm-dot');
+            if (dot) dot.className = 'node-dot ' + (cur.updating ? 'updating' : (cur.online ? 'online' : ''));
+            const sub = document.getElementById('nm-sub');
+            if (sub) sub.innerHTML = _nmHeadStatus(cur);
+            const ip = document.getElementById('nm-ip');
+            if (ip && cur.localIp) {
+              ip.hidden = false;
+              ip.innerHTML = `<i class="fas fa-network-wired"></i> <code>${escapeHtml(cur.localIp)}</code>`;
+            }
+          }
+        }
       } catch (e) { /* keep last render on transient errors */ }
     }
 

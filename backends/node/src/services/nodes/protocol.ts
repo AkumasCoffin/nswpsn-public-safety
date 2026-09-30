@@ -22,6 +22,9 @@ export interface HelloData {
   os?: string;
   arch?: string;
   hostname?: string;
+  /** The agent's LAN address (the interface it would route out through).
+   *  Self-reported; display only, never used for routing or auth. */
+  localIp?: string;
   appliedConfigVersion?: string | null;
   // Node type the agent believes it is (radio/pager/adsb); compared to node.kind.
   kind?: string;
