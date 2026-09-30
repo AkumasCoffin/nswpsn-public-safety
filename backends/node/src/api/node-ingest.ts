@@ -675,14 +675,40 @@ nodeIngestRouter.post('/api/node-ingest/site-snapshots', async (c) => {
 // hostile/buggy node can't stream a giant body into RAM.
 const MAX_PAGER_BYTES = 64 * 1024;
 
-// Capcodes to drop entirely (non-message data/encoded transmitters). Parsed once
-// from PAGER_BLOCKED_CAPCODES. Dropped before forward + drawer buffer.
+// Capcodes to drop entirely (non-message data/encoded transmitters), the
+// union of built-in defaults and the PAGER_BLOCKED_CAPCODES env. Defaults
+// exist because these are properties of the NSW networks this deployment
+// listens to, not of any one install:
+//   1850000 — FRNSW network idle/keepalive, one page every ~65s around the
+//             clock, empty body. The empty-body guard below also drops it;
+//             blocking the capcode keeps it out even if the payload varies.
+const DEFAULT_BLOCKED_CAPCODES = ['1850000'];
 const BLOCKED_CAPCODES = new Set(
-  (config.PAGER_BLOCKED_CAPCODES || '')
-    .split(',')
+  [
+    ...DEFAULT_BLOCKED_CAPCODES,
+    ...(config.PAGER_BLOCKED_CAPCODES || '').split(','),
+  ]
     .map((s) => s.trim())
     .filter(Boolean),
 );
+
+/**
+ * Why a decoded page is noise rather than a message, or null when it is real.
+ *
+ * 'empty' — tone-only pages (a valid reception, but bodyless; Pagermon
+ * rejects them outright, and one at the head of a node's disk queue wedged it
+ * for days — see the relay guards). 'too short' — POCSAG bit-error garbage:
+ * corrupted decodes land on random capcodes with one- or two-character
+ * bodies ("r", "lj", ";", "=m", all live examples). No genuine page on these
+ * networks is two characters; the shortest real traffic (a clock tick) is
+ * four digits and has its own filter.
+ */
+export function pagerNoiseReason(message: string): 'empty' | 'too short' | null {
+  const t = (message || '').trim();
+  if (t.length === 0) return 'empty';
+  if (t.length <= 2) return 'too short';
+  return null;
+}
 
 /**
  * A page whose whole body is a time of day — `0018`, `2342`, `2111`.
@@ -856,18 +882,16 @@ nodeIngestRouter.post('/api/node-ingest/pager-upload', async (c) => {
     return c.json({ ok: true, dropped: 'blocked capcode' });
   }
 
-  // 5a-ii. Empty pages (tone-only POCSAG). The schema accepts message: '' —
-  //        a tone page is a real reception — but Pagermon rejects it with
-  //        500 "address or message missing", and a 500 reads to the agent as
-  //        retryable, so ONE such page at the head of a node's disk queue
-  //        blocked it permanently: the agent retried it every ~65s while
-  //        thousands of real messages piled up behind it (found at 3,699
-  //        deep, 232 retries in a day). Undeliverable is decided HERE, once,
-  //        with an ack, so the queue moves.
-  if (!parsed.message.trim()) {
-    hub.recordPagerMessage(node.id, { ...view, filtered: 'empty message' });
-    log.info(`pager relay: EMPTY message ${parsed.address} (buffered as filtered, not forwarded) node=${node.id.slice(0, 8)}`);
-    return c.json({ ok: true, dropped: 'empty message' });
+  // 5a-ii. Noise bodies — empty (tone-only pages, which Pagermon rejects
+  //        with a 500 that wedged a node's disk queue for days) and bit-error
+  //        garbage (one/two-character bodies on random capcodes). Both are
+  //        decided HERE, once, with an ack, so the agent's queue moves; both
+  //        stay visible dimmed in the staff drawer.
+  const noise = pagerNoiseReason(parsed.message);
+  if (noise) {
+    hub.recordPagerMessage(node.id, { ...view, filtered: noise === 'empty' ? 'empty message' : 'noise' });
+    log.info(`pager relay: ${noise.toUpperCase()} body ${parsed.address} (buffered as filtered, not forwarded) node=${node.id.slice(0, 8)}`);
+    return c.json({ ok: true, dropped: noise === 'empty' ? 'empty message' : 'noise' });
   }
 
   // 5a-iii. Clock ticks — a body that is nothing but a time of day. Same

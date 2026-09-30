@@ -53,7 +53,32 @@ describe('pager clock ticks', () => {
  * retries in a day, surviving restarts because the queue is disk-backed.
  * Undeliverable has to be decided at the relay, once, with an ack.
  */
-import { isPagerTimeCode as _reuse } from '../../../src/api/node-ingest.js';
+import { isPagerTimeCode as _reuse, pagerNoiseReason } from '../../../src/api/node-ingest.js';
+
+/**
+ * Bit-error garbage and tone-only pages. Live examples drove the thresholds:
+ * "r", "lj", ";", "=m" all arrived on random capcodes with no alias — POCSAG
+ * decode corruption, not traffic — and tone-only pages arrive with an empty
+ * body. Nothing real on these networks is two characters: the shortest real
+ * traffic (a clock tick like "2111") is four digits and has its own filter.
+ */
+describe('pagerNoiseReason', () => {
+  it('flags empty and whitespace bodies', () => {
+    expect(pagerNoiseReason('')).toBe('empty');
+    expect(pagerNoiseReason('   ')).toBe('empty');
+    expect(pagerNoiseReason(undefined as unknown as string)).toBe('empty');
+  });
+  it('flags one- and two-character garbage (live examples)', () => {
+    for (const g of ['r', 'lj', ';', '=m', ' ;', 'x ']) {
+      expect(pagerNoiseReason(g)).toBe('too short');
+    }
+  });
+  it('keeps everything three characters and up', () => {
+    expect(pagerNoiseReason('SES')).toBeNull();
+    expect(pagerNoiseReason('2111')).toBeNull();  // the time-code filter owns these
+    expect(pagerNoiseReason('FRINC TYPE: BUSH FIRE TURNOUT: 464 INC: 185421-20092026')).toBeNull();
+  });
+});
 
 describe('pager empty-message guard exists beside the time-code guard', () => {
   it('the relay source drops empty messages before forwarding and acks them', async () => {
@@ -61,7 +86,7 @@ describe('pager empty-message guard exists beside the time-code guard', () => {
     const src = await readFile('src/api/node-ingest.ts', 'utf8');
     // The guard must sit BEFORE the forward and answer ok (an ack the agent
     // dequeues on), not a 5xx (which it retries forever).
-    const guard = src.indexOf("dropped: 'empty message'");
+    const guard = src.indexOf('pagerNoiseReason(parsed.message)');
     const forward = src.indexOf('/api/messages');
     expect(guard).toBeGreaterThan(-1);
     expect(forward).toBeGreaterThan(-1);
