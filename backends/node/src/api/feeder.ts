@@ -887,28 +887,31 @@ async function ownedNodeById(
 // Returns the new token ONCE; the old one stops working.
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
-// POST /api/feeder/nodes/:id/restart-decoder — owner self-service, ADS-B only.
+// POST /api/feeder/nodes/:id/restart — owner self-service, ADS-B only.
 //
-// A bounce, not a switch: stopping a node outright is a STAFF decision (the
-// drawer's Capture toggle, which rides nodes.enabled → captureEnabled — the
-// owner explicitly does not get that lever), but an owner watching their own
-// receiver crash-loop should not need staff to kick it. The component is
-// fixed server-side; the owner supplies nothing but the node id, which must
-// be theirs.
+// A full bounce, not a switch: stopping a node outright is a STAFF decision
+// (the drawer's Capture toggle, which rides nodes.enabled → captureEnabled —
+// the owner explicitly does not get that lever), but an owner watching their
+// own receiver misbehave should not need staff to kick it. rebootAgent
+// restarts BOTH the agent and its decoder: the agent exits cleanly, the
+// service manager relaunches it, and the boot path kills any orphaned
+// dump1090 (KillStale), re-measures ppm and starts the decoder fresh — which
+// covers everything a component-only restart covers plus a wedged agent
+// itself. The owner supplies nothing but the node id, which must be theirs.
 // ---------------------------------------------------------------------------
-feederRouter.post('/api/feeder/nodes/:id/restart-decoder', async (c) => {
+feederRouter.post('/api/feeder/nodes/:id/restart', async (c) => {
   const node = await ownedNode(c);
   if (!node) return c.json({ error: 'not your node' }, 404);
   if (node.kind !== 'adsb') return c.json({ error: 'not an adsb node' }, 400);
   if (!hub.isOnline(node.id)) return c.json({ error: 'node is offline' }, 409);
   try {
-    const result = await hub.sendCmd(node.id, 'restartComponent', { name: 'dump1090' });
-    log.info({ id: node.id, ok: result.ok }, 'owner restarted adsb decoder');
+    const result = await hub.sendCmd(node.id, 'rebootAgent', {});
+    log.info({ id: node.id, ok: result.ok }, 'owner restarted adsb node agent');
     if (!result.ok) return c.json({ error: result.message || 'restart failed' }, 502);
     return c.json({ ok: true });
   } catch (err) {
-    log.error({ err, id: node.id }, 'Error restarting decoder');
-    return c.json({ error: 'Failed to restart decoder' }, 500);
+    log.error({ err, id: node.id }, 'Error restarting node');
+    return c.json({ error: 'Failed to restart node' }, 500);
   }
 });
 
