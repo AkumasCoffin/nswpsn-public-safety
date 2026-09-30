@@ -96,4 +96,21 @@ describe('pager empty-message guard exists beside the time-code guard', () => {
     expect(src).toContain('address or message missing');
     expect(src).toContain("dropped: 'rejected by pagermon'");
   });
+
+  it('a rate-limited pager message is deferred with 429, never ack-dropped', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const src = await readFile('src/api/node-ingest.ts', 'utf8');
+    // The agent dequeues on ANY 2xx, so an ack under rate limiting is
+    // deletion — which is how a backlog drain shredded the real pages the
+    // queue had kept through a multi-day wedge. Both pager limiters answer
+    // 429; the one remaining ack-drop is the adsb route, where a stale
+    // position genuinely isn't worth retrying.
+    expect(src.match(/dropped: 'rate limit'/g) || []).toHaveLength(1);
+    expect(src).toContain('pagerRxRateOk');
+    expect(src).toContain('pagerForwardRateOk');
+    // Cheap local decisions must not charge the forward budget: the noise
+    // guard runs before the forward limiter.
+    expect(src.indexOf('pagerNoiseReason(parsed.message)'))
+      .toBeLessThan(src.indexOf('pagerForwardRateOk(node.id)'));
+  });
 });

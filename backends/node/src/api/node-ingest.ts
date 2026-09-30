@@ -736,9 +736,26 @@ export function isPagerTimeCode(message: string): boolean {
   return PAGER_TIME_CODE_RE.test((message || '').trim());
 }
 
-// Per-node rate limit: at most 120 messages/min. Real paging is a few/min;
-// this bounds a compromised node's flood into Pagermon + the DB.
-const pagerRateOk = makeNodeRateLimiter(120, 60_000);
+// Two rate limits, because one was conflating two different things and the
+// conflation lost real traffic. A node draining a large disk backlog (seen at
+// 3,699 after a poison-message wedge) bursts far past any live paging rate;
+// the old single 120/min limiter both CHARGED the cheap paths (blocked
+// capcodes, noise — local acks that never touch Pagermon) and answered the
+// excess with an ACK-AND-DROP, which the agent dequeues on. So the drain
+// burned its whole budget on junk in ~20 seconds and then every message —
+// including the real pages the queue had faithfully kept through the outage —
+// was deleted with a 200.
+//
+//   - rx limiter: generous (30/s) — protects the DB event capture from a
+//     genuinely hostile flood while letting a backlog drain run hot.
+//   - forward limiter: 120/min — protects central Pagermon, checked only for
+//     messages that actually reach the forward.
+//
+// BOTH answer 429, never an ack: the agent advances its queue on any 2xx, so
+// an ack here is deletion. 429 keeps the item and it retries — same rule the
+// activity ingest documents at its own limiter.
+const pagerRxRateOk = makeNodeRateLimiter(1800, 60_000);
+const pagerForwardRateOk = makeNodeRateLimiter(120, 60_000);
 
 const PagerMsgSchema = z.object({
   // POCSAG capcode / address (digits). Kept as a string — Pagermon treats it as text.
@@ -798,12 +815,11 @@ nodeIngestRouter.post('/api/node-ingest/pager-upload', async (c) => {
     return c.json({ error: `pagermon ingest not configured for state ${nodeRow?.state ?? 'NSW'}` }, 503);
   }
 
-  // 3b. Per-node rate limit — a compromised node with feed on could otherwise
-  //     flood central Pagermon + the DB. Generous vs. real paging (a few/min);
-  //     excess is ack'd + dropped so the agent's queue still drains.
-  if (!pagerRateOk(node.id)) {
-    log.warn(`pager relay: RATE-LIMITED (dropped) node=${node.id.slice(0, 8)}`);
-    return c.json({ ok: true, dropped: 'rate limit' });
+  // 3b. Reception rate limit — see the limiter comments: 429 so the agent
+  //     KEEPS the message and retries; an ack here would delete it.
+  if (!pagerRxRateOk(node.id)) {
+    log.warn(`pager relay: RATE-LIMITED rx node=${node.id.slice(0, 8)}`);
+    return c.json({ ok: false, error: 'rate limit' }, 429);
   }
 
   // 4. Size guard — require Content-Length and cap it (same rationale as the
@@ -917,6 +933,14 @@ nodeIngestRouter.post('/api/node-ingest/pager-upload', async (c) => {
     }
     log.info(`pager relay: FEED OFF, not forwarded addr=${parsed.address} node=${node.id.slice(0, 8)}`);
     return c.json({ ok: true, fed: false });
+  }
+
+  // 6b. Forward rate limit — charged only by messages that got this far, so
+  //     a backlog full of blocked-capcode junk drains at the rx limiter's
+  //     pace without starving the real pages of forward budget.
+  if (!pagerForwardRateOk(node.id)) {
+    log.warn(`pager relay: RATE-LIMITED forward node=${node.id.slice(0, 8)}`);
+    return c.json({ ok: false, error: 'rate limit' }, 429);
   }
 
   // 7. Forward to central Pagermon. Its ingest API is POST /api/messages with
@@ -1125,6 +1149,10 @@ nodeIngestRouter.post('/api/node-ingest/adsb-upload', async (c) => {
     return c.json({ error: 'not an adsb node' }, 403);
   }
 
+  // Ack-and-drop is CORRECT here, unlike the pager route (which answers 429 so
+  // nothing is lost): a position snapshot is superseded by the next one within
+  // a second, and the agent expires anything older than 90s anyway — making it
+  // retry a stale position would preserve nothing worth having.
   if (!adsbRateOk(r.nodeId)) {
     log.warn(`adsb ingest: RATE-LIMITED (dropped) node=${r.nodeId.slice(0, 8)}`);
     return c.json({ ok: true, dropped: 'rate limit' });
