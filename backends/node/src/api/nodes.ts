@@ -251,10 +251,16 @@ nodesRouter.put('/api/nodes/auto-update', requireRole(canManageNodes), async (c)
 nodesRouter.post('/api/nodes/update-all', requireRole(canManageNodes), async (c) => {
   try {
     const nodes = await listNodes();
-    // Only nodes that are both enabled AND have a live agent connection can be
-    // told to update. Manual updates ALWAYS trigger, ignoring the auto-update
-    // flag (that flag only gates the agent's own automatic passes).
-    const online = nodes.filter((n) => n.enabled && hub.isOnline(n.id));
+    // Any node with a live agent connection can be told to update. Manual
+    // updates ALWAYS trigger, ignoring the auto-update flag (that flag only
+    // gates the agent's own automatic passes).
+    //
+    // Deliberately NOT filtered on n.enabled: that flag means CAPTURE off —
+    // the decoder is paused, the agent is connected and updatable. The old
+    // filter predates that meaning and silently froze paused nodes out of
+    // updates ("Update triggered on 4 of 4" with five agents online — the
+    // fifth had capture off and was never even counted).
+    const online = nodes.filter((n) => hub.isOnline(n.id));
     let triggered = 0;
     await Promise.all(
       online.map(async (n) => {
