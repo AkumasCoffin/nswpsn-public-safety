@@ -14,6 +14,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"context"
 	"errors"
 	"fmt"
@@ -341,7 +342,7 @@ func runAgent(ctx context.Context, configPath string) error {
 			errCh <- fmt.Errorf("relay listener: %w", lerr)
 		}
 	}()
-	go q.RunSender(ctx, sender.send)
+	go q.RunSender(ctx, pagerBatchMax, sender.sendBatch)
 	go ws.Run(ctx)
 
 	log.Printf("nodeagent-pager running")
@@ -376,6 +377,108 @@ func newSender(cfg *agentcfg.Config) *sender {
 			Timeout: 60 * time.Second,
 		},
 	}
+}
+
+// pagerBatchMax mirrors the backend's PAGER_BATCH_MAX. One batch costs one
+// HTTP round trip instead of one per message, which is what makes a post-
+// outage backlog drain in seconds-per-thousand rather than minutes.
+const pagerBatchMax = 25
+
+// sendBatch delivers up to pagerBatchMax queued messages in one POST and
+// returns one SendResult per item, by index.
+//
+// A single item goes over the ORIGINAL single-message wire shape, so the
+// steady state (and any backend that predates batching) behaves exactly as
+// agent 0.1.19 did. Batches use { "messages": [...] } and the backend answers
+// 200 with per-item results; a backend that doesn't know that shape answers
+// 400, and the batch falls back to sending its items one at a time.
+func (s *sender) sendBatch(items []queue.Item) []queue.SendResult {
+	if len(items) == 1 {
+		return []queue.SendResult{s.send(items[0].ContentType, items[0].Body)}
+	}
+
+	// Splice the stored bodies directly: each is the complete JSON object this
+	// agent wrote at enqueue time, so the batch is valid JSON by construction.
+	var buf bytes.Buffer
+	buf.WriteString(`{"messages":[`)
+	for i, it := range items {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		buf.Write(it.Body)
+	}
+	buf.WriteString(`]}`)
+
+	req, err := http.NewRequest(http.MethodPost, s.url, bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		log.Printf("sender: build batch request failed: %v", err)
+		return allResults(len(items), queue.SendRetry)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Node-Token", s.token)
+	req.Header.Set("X-Node-Install", s.installID)
+	req.Header.Set("User-Agent", version.UserAgent())
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		log.Printf("sender: batch POST failed (will retry): %v", err)
+		return allResults(len(items), queue.SendRetry)
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}()
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		// fall through to the per-item results below
+	case http.StatusBadRequest, http.StatusRequestEntityTooLarge:
+		// A backend without batch support (or a cap mismatch) — deliver this
+		// batch the old way rather than stalling on it.
+		log.Printf("sender: batch rejected with %d — falling back to single sends", resp.StatusCode)
+		out := make([]queue.SendResult, len(items))
+		for i, it := range items {
+			out[i] = s.send(it.ContentType, it.Body)
+		}
+		return out
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
+		log.Printf("sender: dropping batch (server returned %d — retry is futile)", resp.StatusCode)
+		return allResults(len(items), queue.SendDrop)
+	default:
+		log.Printf("sender: batch got %d (will retry)", resp.StatusCode)
+		return allResults(len(items), queue.SendRetry)
+	}
+
+	var body struct {
+		Results []struct {
+			OK bool `json:"ok"`
+		} `json:"results"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&body); err != nil || len(body.Results) != len(items) {
+		// An unreadable or mismatched answer after a 200: the server may have
+		// processed some or all of it, but guessing which would either lose
+		// messages or invent them. Retry everything — Pagermon tolerates a
+		// duplicate far better than the network tolerates a loss.
+		log.Printf("sender: batch answer unreadable (err=%v, results=%d/%d) — retrying all", err, len(body.Results), len(items))
+		return allResults(len(items), queue.SendRetry)
+	}
+	out := make([]queue.SendResult, len(items))
+	for i, r := range body.Results {
+		if r.OK {
+			out[i] = queue.SendOK
+		} else {
+			out[i] = queue.SendRetry
+		}
+	}
+	return out
+}
+
+func allResults(n int, r queue.SendResult) []queue.SendResult {
+	out := make([]queue.SendResult, n)
+	for i := range out {
+		out[i] = r
+	}
+	return out
 }
 
 // send forwards one buffered message and maps the HTTP status to a SendResult:

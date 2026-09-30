@@ -236,19 +236,57 @@ func (q *Queue) remove(name string) {
 	_ = os.Remove(filepath.Join(q.dir, name))
 }
 
-// RunSender drains the queue in FIFO order until ctx is cancelled. It repeatedly
-// takes the oldest item and calls send(): on SendOK/SendDrop the item is deleted
-// and it continues immediately; on SendRetry it sleeps with exponential backoff
-// (+jitter) and retries the same item. When the queue is empty it polls briefly.
-func (q *Queue) RunSender(ctx context.Context, send func(contentType string, body []byte) SendResult) {
+// Item is one queued upload, read back for sending.
+type Item struct {
+	Name        string
+	ContentType string
+	Body        []byte
+}
+
+// batch reads up to max items in FIFO order, dropping unreadable ones on the
+// way (a corrupt file must not wedge the queue — same rule the single-item
+// loop always had).
+func (q *Queue) batch(max int) []Item {
+	items := make([]Item, 0, max)
+	for _, f := range q.sortedFiles() {
+		if len(items) >= max {
+			break
+		}
+		contentType, body, err := q.readItem(f.name)
+		if err != nil {
+			log.Printf("queue: dropping unreadable item %q: %v", f.name, err)
+			q.remove(f.name)
+			continue
+		}
+		items = append(items, Item{Name: f.name, ContentType: contentType, Body: body})
+	}
+	return items
+}
+
+// RunSender drains the queue in FIFO order until ctx is cancelled, up to
+// maxBatch items per send() call. send returns one SendResult PER ITEM, by
+// index: OK and Drop delete the item, Retry keeps it for the next pass.
+//
+// Batching exists for the backlog case: a queue that built up through an
+// outage (seen at 3,699 items) used to drain one HTTP round trip per message.
+// The steady state is batches of one and behaves exactly as the old
+// single-item loop did.
+//
+// A short result slice marks the unanswered tail as Retry — losing an answer
+// must never delete a message (the same ack-means-delete rule the backend's
+// rate limiters follow).
+func (q *Queue) RunSender(ctx context.Context, maxBatch int, send func(items []Item) []SendResult) {
+	if maxBatch < 1 {
+		maxBatch = 1
+	}
 	backoff := backoffInitial
 	for {
 		if ctx.Err() != nil {
 			return
 		}
 
-		name := q.oldest()
-		if name == "" {
+		items := q.batch(maxBatch)
+		if len(items) == 0 {
 			// Empty — wait a bit before polling again.
 			if !sleepCtx(ctx, 500*time.Millisecond) {
 				return
@@ -257,25 +295,27 @@ func (q *Queue) RunSender(ctx context.Context, send func(contentType string, bod
 			continue
 		}
 
-		contentType, body, err := q.readItem(name)
-		if err != nil {
-			// Corrupt/unreadable item — drop it so we don't wedge the queue.
-			log.Printf("queue: dropping unreadable item %q: %v", name, err)
-			q.remove(name)
-			continue
+		results := send(items)
+		retries := 0
+		for i, it := range items {
+			res := SendRetry
+			if i < len(results) {
+				res = results[i]
+			}
+			switch res {
+			case SendOK:
+				q.remove(it.Name)
+			case SendDrop:
+				log.Printf("queue: dropping item %q (permanent send failure)", it.Name)
+				q.remove(it.Name)
+			case SendRetry:
+				retries++
+			}
 		}
 
-		switch send(contentType, body) {
-		case SendOK:
-			q.remove(name)
-			backoff = backoffInitial
-		case SendDrop:
-			log.Printf("queue: dropping item %q (permanent send failure)", name)
-			q.remove(name)
-			backoff = backoffInitial
-		case SendRetry:
+		if retries > 0 {
 			d := jitter(backoff)
-			log.Printf("queue: retryable send failure for %q, backing off %s (depth=%d)", name, d.Round(time.Millisecond), q.Depth())
+			log.Printf("queue: %d/%d items retryable, backing off %s (depth=%d)", retries, len(items), d.Round(time.Millisecond), q.Depth())
 			if !sleepCtx(ctx, d) {
 				return
 			}
@@ -283,6 +323,8 @@ func (q *Queue) RunSender(ctx context.Context, send func(contentType string, bod
 			if backoff > backoffMax {
 				backoff = backoffMax
 			}
+		} else {
+			backoff = backoffInitial
 		}
 	}
 }

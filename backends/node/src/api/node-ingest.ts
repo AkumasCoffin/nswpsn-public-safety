@@ -671,9 +671,14 @@ nodeIngestRouter.post('/api/node-ingest/site-snapshots', async (c) => {
 // model as call-upload. Body is JSON (messages are tiny), NOT multipart.
 // ---------------------------------------------------------------------------
 
-// A pager message is small — a few hundred bytes. Cap hard well below that so a
-// hostile/buggy node can't stream a giant body into RAM.
-const MAX_PAGER_BYTES = 64 * 1024;
+// A pager message is small — a few hundred bytes — and a batch carries at
+// most PAGER_BATCH_MAX of them, each zod-capped at 4000 chars of text. 256KB
+// bounds the worst legitimate batch with headroom while still keeping a
+// hostile/buggy node from streaming a giant body into RAM.
+const MAX_PAGER_BYTES = 256 * 1024;
+// Batch ceiling. Chosen against the rx limiter (1800/min): one batch is a
+// second of budget, so a drain stays smooth rather than gulping the minute.
+const PAGER_BATCH_MAX = 25;
 
 // Capcodes to drop entirely (non-message data/encoded transmitters), the
 // union of built-in defaults and the PAGER_BLOCKED_CAPCODES env. Defaults
@@ -772,6 +777,153 @@ const PagerMsgSchema = z.object({
   freqMhz: z.number().optional(),
 });
 
+/** What happened to ONE pager message, decided by the shared pipeline.
+ *  'acked' covers everything the agent should DELETE from its queue —
+ *  forwarded, feed-off, or filtered/permanently-rejected (dropped names why).
+ *  'retry' covers everything it should KEEP — rate limits, relay/upstream
+ *  faults — because an ack under failure is deletion (the rule the rate-limit
+ *  fix established; see the limiter comments above). */
+type PagerRelayOutcome =
+  | { acked: true; fed?: false; dropped?: string }
+  | { acked: false; why: 'rate limit' | 'relay failed' | 'upstream'; status?: number };
+
+async function relayOnePagerMessage(
+  node: { id: string; feed_enabled: boolean },
+  nodeRow: { name?: string | null; state?: string | null } | null,
+  ingest: { url: string; apiKey: string },
+  parsed: z.infer<typeof PagerMsgSchema>,
+): Promise<PagerRelayOutcome> {
+  // Reception rate limit — charged per MESSAGE, batch or not, so a batch is
+  // not a way around it.
+  if (!pagerRxRateOk(node.id)) {
+    log.warn(`pager relay: RATE-LIMITED rx node=${node.id.slice(0, 8)}`);
+    return { acked: false, why: 'rate limit' };
+  }
+
+  const rawMessage = parsed.message;
+  parsed.message = sanitizePagerText(parsed.message);
+  if (/<[A-Za-z]{2,3}>|[\u0000-\u001f\u007f]/.test(parsed.message)) {
+    log.warn(
+      `pager msg not fully cleaned: raw=${JSON.stringify(rawMessage)} clean=${JSON.stringify(parsed.message)}`,
+    );
+  }
+
+  log.info(`pager rx node=${node.id.slice(0, 8)} addr=${parsed.address} src=${parsed.source} freq=${parsed.freqMhz ?? '?'}`);
+
+  try {
+    const tsMs = parsed.timestamp ? new Date(parsed.timestamp).getTime() : NaN;
+    await recordPagerEvent({
+      nodeId: node.id,
+      receivedAt: Number.isFinite(tsMs) ? new Date(tsMs) : new Date(),
+      capcode: parsed.address,
+      function: safeInt(parsed.function),
+      freqMhz: typeof parsed.freqMhz === 'number' ? parsed.freqMhz : null,
+      message: parsed.message,
+    });
+  } catch (err) {
+    log.warn({ err, node: node.id.slice(0, 8) }, 'pager relay: event capture failed');
+  }
+
+  const view = {
+    address: parsed.address,
+    message: parsed.message,
+    source: parsed.source,
+    freqMhz: typeof parsed.freqMhz === 'number' ? parsed.freqMhz : null,
+    at: Date.now(),
+  };
+
+  if (BLOCKED_CAPCODES.has(parsed.address)) {
+    hub.recordPagerMessage(node.id, { ...view, filtered: 'blocked capcode' });
+    log.info(`pager relay: BLOCKED capcode ${parsed.address} (buffered as filtered, not forwarded) node=${node.id.slice(0, 8)}`);
+    return { acked: true, dropped: 'blocked capcode' };
+  }
+
+  const noise = pagerNoiseReason(parsed.message);
+  if (noise) {
+    const reason = noise === 'empty' ? 'empty message' : 'noise';
+    hub.recordPagerMessage(node.id, { ...view, filtered: reason });
+    log.info(`pager relay: ${noise.toUpperCase()} body ${parsed.address} (buffered as filtered, not forwarded) node=${node.id.slice(0, 8)}`);
+    return { acked: true, dropped: reason };
+  }
+
+  if (isPagerTimeCode(parsed.message)) {
+    hub.recordPagerMessage(node.id, { ...view, filtered: 'time code' });
+    log.info(`pager relay: TIME CODE ${parsed.address} "${parsed.message}" (buffered as filtered, not forwarded) node=${node.id.slice(0, 8)}`);
+    return { acked: true, dropped: 'time code' };
+  }
+
+  hub.recordPagerMessage(node.id, view);
+
+  if (!node.feed_enabled) {
+    try {
+      await bumpNodeCallStat(node.id, 0);
+    } catch (err) {
+      log.warn({ err, node: node.id.slice(0, 8) }, 'pager relay: stat bump failed (feed off)');
+    }
+    log.info(`pager relay: FEED OFF, not forwarded addr=${parsed.address} node=${node.id.slice(0, 8)}`);
+    return { acked: true, fed: false };
+  }
+
+  if (!pagerForwardRateOk(node.id)) {
+    log.warn(`pager relay: RATE-LIMITED forward node=${node.id.slice(0, 8)}`);
+    return { acked: false, why: 'rate limit' };
+  }
+
+  const source = nodeRow?.name || parsed.source;
+  const datetime = normalisePagerDatetime(parsed.timestamp);
+  const body = new URLSearchParams({
+    address: parsed.address,
+    message: parsed.message,
+    datetime,
+    source,
+    apikey: ingest.apiKey,
+  });
+  const target = `${ingest.url.replace(/\/$/, '')}/api/messages`;
+  let resp: Response;
+  const relayStartedAt = Date.now();
+  try {
+    resp = await fetch(target, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Authorization: ingest.apiKey,
+      },
+      body,
+      signal: AbortSignal.timeout(config.RELAY_TIMEOUT_MS),
+    });
+  } catch (err) {
+    log.warn(
+      {
+        cause: describeRelayError(err),
+        ms: Date.now() - relayStartedAt,
+        node: node.id.slice(0, 8),
+      },
+      'pager relay: fetch failed',
+    );
+    return { acked: false, why: 'relay failed' };
+  }
+
+  if (resp.ok) {
+    hub.recordUpload(node.id);
+    try {
+      await bumpNodeCallStat(node.id, 0);
+    } catch (err) {
+      log.warn({ err, node: node.id.slice(0, 8) }, 'pager relay: stat bump failed');
+    }
+    log.info(`pager relay ok node=${node.id.slice(0, 8)} addr=${parsed.address} src=${source}`);
+    return { acked: true };
+  }
+
+  const snippet = (await resp.text().catch(() => '')).slice(0, 200);
+  if (/address or message missing/i.test(snippet)) {
+    hub.recordPagerMessage(node.id, { ...view, filtered: 'rejected by pagermon' });
+    log.warn(`pager relay: PERMANENT upstream rejection, acking as dropped node=${node.id.slice(0, 8)} ${snippet}`);
+    return { acked: true, dropped: 'rejected by pagermon' };
+  }
+  log.warn(`pager relay: upstream ${resp.status} node=${node.id.slice(0, 8)} ${snippet}`);
+  return { acked: false, why: 'upstream', status: resp.status };
+}
+
 nodeIngestRouter.post('/api/node-ingest/pager-upload', async (c) => {
   // 1-2. Node credentials + per-node token resolve (role gated), TOFU install
   //      match — identical to call-upload. Auth comes FIRST: the forward
@@ -810,17 +962,13 @@ nodeIngestRouter.post('/api/node-ingest/pager-upload', async (c) => {
   //    never cross-feed another state's server — and the agent's queue holds
   //    the messages until it's configured.
   const nodeRow = await getNode(node.id).catch(() => null);
-  const ingest = await getPagerIngest(nodeRow?.state);
-  if (!ingest.url || !ingest.apiKey) {
+  const ingestRaw = await getPagerIngest(nodeRow?.state);
+  if (!ingestRaw.url || !ingestRaw.apiKey) {
     return c.json({ error: `pagermon ingest not configured for state ${nodeRow?.state ?? 'NSW'}` }, 503);
   }
-
-  // 3b. Reception rate limit — see the limiter comments: 429 so the agent
-  //     KEEPS the message and retries; an ack here would delete it.
-  if (!pagerRxRateOk(node.id)) {
-    log.warn(`pager relay: RATE-LIMITED rx node=${node.id.slice(0, 8)}`);
-    return c.json({ ok: false, error: 'rate limit' }, 429);
-  }
+  // Narrowed re-binding: the guard above proves both non-null, but that
+  // doesn't survive into the pipeline call's parameter type on its own.
+  const ingest = { url: ingestRaw.url, apiKey: ingestRaw.apiKey };
 
   // 4. Size guard — require Content-Length and cap it (same rationale as the
   //    radio route: closes the chunked-body bypass).
@@ -833,182 +981,62 @@ nodeIngestRouter.post('/api/node-ingest/pager-upload', async (c) => {
     return c.json({ error: 'message too large' }, 413);
   }
 
-  // 5. Parse + validate the JSON message.
-  let parsed: z.infer<typeof PagerMsgSchema>;
+  // 5. Parse. Two body shapes share one pipeline:
+  //    - the original single message object (agents <= 0.1.19), whose
+  //      response semantics are preserved EXACTLY — deployed agents map
+  //      those status codes to keep/delete decisions on their disk queue;
+  //    - { messages: [...] } (agents >= 0.1.20), answered 200 with per-item
+  //      results so a backlog drains in round trips of PAGER_BATCH_MAX
+  //      instead of one.
+  let raw: unknown;
   try {
-    parsed = PagerMsgSchema.parse(await c.req.json());
+    raw = await c.req.json();
   } catch {
     return c.json({ error: 'bad body' }, 400);
   }
 
-  // 5·5. Sanitize the decoded text server-side too (defense in depth). The node
-  //      agent already strips POCSAG framing artifacts (control bytes + their
-  //      "EOT"/"NUL" text mnemonics), but doing it here as well keeps pages clean
-  //      even when a node is still on an older agent that didn't — so it flows to
-  //      both the drawer buffer and Pagermon clean, without waiting for updates.
-  const rawMessage = parsed.message;
-  parsed.message = sanitizePagerText(parsed.message);
-  // Invariant check: after cleaning, no bracketed mnemonic or control byte should
-  // remain. If one does, the cleaner missed a form — log it escaped (JSON.stringify
-  // renders control bytes as \u00XX and shows any brackets) so it's visible.
-  // Should stay silent now; grep the backend log for "pager msg not fully cleaned".
-  if (/<[A-Za-z]{2,3}>|[\u0000-\u001f\u007f]/.test(parsed.message)) {
-    log.warn(
-      `pager msg not fully cleaned: raw=${JSON.stringify(rawMessage)} clean=${JSON.stringify(parsed.message)}`,
-    );
-  }
+  const batch = (raw && typeof raw === 'object' && Array.isArray((raw as Record<string, unknown>)['messages']))
+    ? ((raw as Record<string, unknown>)['messages'] as unknown[])
+    : null;
 
-  // Trace EVERY received message (capcode + source only, never content) so a
-  // missing page can be traced to where it dropped: reception (never logged),
-  // blocklist, feed-off, or forwarded. Grep the backend log for "pager rx".
-  log.info(`pager rx node=${node.id.slice(0, 8)} addr=${parsed.address} src=${parsed.source} freq=${parsed.freqMhz ?? '?'}`);
-
-  // 5·6. Per-event capture (migration 043) — record every reception (even
-  //      blocked capcodes / feed-off) BEFORE the gates below, so the Data
-  //      tab reflects what nodes actually hear. Fire-safe: recordPagerEvent
-  //      swallows its own errors; belt-and-braces catch here too.
-  try {
-    const tsMs = parsed.timestamp ? new Date(parsed.timestamp).getTime() : NaN;
-    await recordPagerEvent({
-      nodeId: node.id,
-      receivedAt: Number.isFinite(tsMs) ? new Date(tsMs) : new Date(),
-      capcode: parsed.address,
-      function: safeInt(parsed.function),
-      freqMhz: typeof parsed.freqMhz === 'number' ? parsed.freqMhz : null,
-      message: parsed.message,
-    });
-  } catch (err) {
-    log.warn({ err, node: node.id.slice(0, 8) }, 'pager relay: event capture failed');
-  }
-
-  const view = {
-    address: parsed.address,
-    message: parsed.message,
-    source: parsed.source,
-    freqMhz: typeof parsed.freqMhz === 'number' ? parsed.freqMhz : null,
-    at: Date.now(),
-  };
-
-  // 5a. Blocked capcodes (non-message data transmitters) are NOT forwarded to
-  //     Pagermon, but we STILL buffer them tagged as filtered so staff can see
-  //     what's being dropped in the drawer (useful when debugging a node).
-  if (BLOCKED_CAPCODES.has(parsed.address)) {
-    hub.recordPagerMessage(node.id, { ...view, filtered: 'blocked capcode' });
-    log.info(`pager relay: BLOCKED capcode ${parsed.address} (buffered as filtered, not forwarded) node=${node.id.slice(0, 8)}`);
-    return c.json({ ok: true, dropped: 'blocked capcode' });
-  }
-
-  // 5a-ii. Noise bodies — empty (tone-only pages, which Pagermon rejects
-  //        with a 500 that wedged a node's disk queue for days) and bit-error
-  //        garbage (one/two-character bodies on random capcodes). Both are
-  //        decided HERE, once, with an ack, so the agent's queue moves; both
-  //        stay visible dimmed in the staff drawer.
-  const noise = pagerNoiseReason(parsed.message);
-  if (noise) {
-    hub.recordPagerMessage(node.id, { ...view, filtered: noise === 'empty' ? 'empty message' : 'noise' });
-    log.info(`pager relay: ${noise.toUpperCase()} body ${parsed.address} (buffered as filtered, not forwarded) node=${node.id.slice(0, 8)}`);
-    return c.json({ ok: true, dropped: noise === 'empty' ? 'empty message' : 'noise' });
-  }
-
-  // 5a-iii. Clock ticks — a body that is nothing but a time of day. Same
-  //        treatment as a blocked capcode: not forwarded, still buffered as
-  //        filtered so the drawer shows what a node is dropping.
-  if (isPagerTimeCode(parsed.message)) {
-    hub.recordPagerMessage(node.id, { ...view, filtered: 'time code' });
-    log.info(`pager relay: TIME CODE ${parsed.address} "${parsed.message}" (buffered as filtered, not forwarded) node=${node.id.slice(0, 8)}`);
-    return c.json({ ok: true, dropped: 'time code' });
-  }
-
-  // 5b. Buffer the decoded message for the staff drawer BEFORE the feed gate, so
-  //     reception is visible even when the feed is off.
-  hub.recordPagerMessage(node.id, view);
-
-  // 6. Feed gate — accept + COUNT but don't forward when the feed is off (so
-  //    reception still shows in the node's stats), ack so the queue drains.
-  if (!node.feed_enabled) {
-    try {
-      await bumpNodeCallStat(node.id, 0);
-    } catch (err) {
-      log.warn({ err, node: node.id.slice(0, 8) }, 'pager relay: stat bump failed (feed off)');
+  if (batch) {
+    if (batch.length === 0 || batch.length > PAGER_BATCH_MAX) {
+      return c.json({ error: `batch must hold 1..${PAGER_BATCH_MAX} messages` }, 400);
     }
-    log.info(`pager relay: FEED OFF, not forwarded addr=${parsed.address} node=${node.id.slice(0, 8)}`);
-    return c.json({ ok: true, fed: false });
-  }
-
-  // 6b. Forward rate limit — charged only by messages that got this far, so
-  //     a backlog full of blocked-capcode junk drains at the rx limiter's
-  //     pace without starving the real pages of forward budget.
-  if (!pagerForwardRateOk(node.id)) {
-    log.warn(`pager relay: RATE-LIMITED forward node=${node.id.slice(0, 8)}`);
-    return c.json({ ok: false, error: 'rate limit' }, 429);
-  }
-
-  // 7. Forward to central Pagermon. Its ingest API is POST /api/messages with
-  //    address/message/datetime/source. We send the apikey both as the
-  //    Authorization header (Pagermon 1.x) and an `apikey` field (older) for
-  //    compatibility. The `source` is the NODE'S NAME (authoritative, from the
-  //    row read in step 3) so each page in Pagermon is attributable to the node
-  //    that heard it — falling back to the agent-reported label if the row
-  //    couldn't be read.
-  const source = nodeRow?.name || parsed.source;
-  const datetime = normalisePagerDatetime(parsed.timestamp);
-  const body = new URLSearchParams({
-    address: parsed.address,
-    message: parsed.message,
-    datetime,
-    source,
-    apikey: ingest.apiKey,
-  });
-  const target = `${ingest.url.replace(/\/$/, '')}/api/messages`;
-  let resp: Response;
-  const relayStartedAt = Date.now();
-  try {
-    resp = await fetch(target, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Authorization: ingest.apiKey,
-      },
-      body,
-      signal: AbortSignal.timeout(config.RELAY_TIMEOUT_MS),
-    });
-  } catch (err) {
-    log.warn(
-      {
-        cause: describeRelayError(err),
-        ms: Date.now() - relayStartedAt,
-        node: node.id.slice(0, 8),
-      },
-      'pager relay: fetch failed',
-    );
-    return c.json({ error: 'relay failed' }, 502);
-  }
-
-  if (resp.ok) {
-    hub.recordUpload(node.id);
-    try {
-      await bumpNodeCallStat(node.id, 0);
-    } catch (err) {
-      log.warn({ err, node: node.id.slice(0, 8) }, 'pager relay: stat bump failed');
+    const results: Array<Record<string, unknown>> = [];
+    for (const item of batch) {
+      const parsed = PagerMsgSchema.safeParse(item);
+      if (!parsed.success) {
+        // Malformed forever — the agent can't repair it, so an ack (delete)
+        // is the only answer that doesn't wedge the queue.
+        log.warn(`pager relay: bad batch item acked as dropped node=${node.id.slice(0, 8)}`);
+        results.push({ ok: true, dropped: 'bad message' });
+        continue;
+      }
+      const out = await relayOnePagerMessage(node, nodeRow, ingest, parsed.data);
+      results.push(out.acked
+        ? { ok: true, ...(out.fed === false ? { fed: false } : {}), ...(out.dropped ? { dropped: out.dropped } : {}) }
+        : { ok: false, retry: true });
     }
-    log.info(`pager relay ok node=${node.id.slice(0, 8)} addr=${parsed.address} src=${source}`);
+    return c.json({ ok: true, results });
+  }
+
+  let parsed: z.infer<typeof PagerMsgSchema>;
+  try {
+    parsed = PagerMsgSchema.parse(raw);
+  } catch {
+    return c.json({ error: 'bad body' }, 400);
+  }
+
+  const out = await relayOnePagerMessage(node, nodeRow, ingest, parsed);
+  if (out.acked) {
+    if (out.fed === false) return c.json({ ok: true, fed: false });
+    if (out.dropped) return c.json({ ok: true, dropped: out.dropped });
     return c.json({ ok: true });
   }
-
-  const snippet = (await resp.text().catch(() => '')).slice(0, 200);
-  // Pagermon signals VALIDATION failures as 500, the same status as a genuine
-  // server fault — but "address or message missing" can never succeed on
-  // retry, and answering 502 makes the agent retry it forever, wedging the
-  // whole FIFO behind one bad message. Ack it as dropped instead; the guard
-  // above should catch these before the forward, so this is the belt for
-  // whatever trims differently on Pagermon's side.
-  if (/address or message missing/i.test(snippet)) {
-    hub.recordPagerMessage(node.id, { ...view, filtered: 'rejected by pagermon' });
-    log.warn(`pager relay: PERMANENT upstream rejection, acking as dropped node=${node.id.slice(0, 8)} ${snippet}`);
-    return c.json({ ok: true, dropped: 'rejected by pagermon' });
-  }
-  log.warn(`pager relay: upstream ${resp.status} node=${node.id.slice(0, 8)} ${snippet}`);
-  return c.json({ error: 'upstream rejected', status: resp.status }, 502);
+  if (out.why === 'rate limit') return c.json({ ok: false, error: 'rate limit' }, 429);
+  if (out.why === 'upstream') return c.json({ error: 'upstream rejected', status: out.status }, 502);
+  return c.json({ error: 'relay failed' }, 502);
 });
 
 /** multimon-ng renders unprintable POCSAG control codes as BRACKETED mnemonics —
