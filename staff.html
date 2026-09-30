@@ -9851,22 +9851,16 @@
     // Per-node readiness chips: CPU calibration + JMBE voice codec. A node won't
     // start decoding (and produce audio) until both are ready, so surface it.
     // Returns '' when the node hasn't reported (older build / no status yet).
-    /* One health row for EVERY kind — the per-kind answer to "can the decode
-     * pipeline actually produce output", which the activity chip doesn't say:
-     * radio = codec readiness, pager = how many readers are alive, adsb = the
-     * decode rate. Radio used to be the only kind with this row, so pager and
-     * adsb cards had a hole where it sits; and a radio card with no readiness
-     * data dropped the row entirely, so cards never lined up. This always
-     * returns a row. */
-    function _ndHealthHtml(kind, st, sdrUp, readersUp, online) {
+    /* Health row — the per-kind answer to "can the decode pipeline actually
+     * produce output" where the activity chip doesn't already say it:
+     * radio = codec readiness, adsb = the decode rate. Pager gets NO health
+     * row on purpose: its "decoding" signal IS readers-up, and the activity
+     * chip already names which readers ("Decoding RFS + FR"), so a reader
+     * count here restated the chip next to it. */
+    function _ndHealthHtml(kind, st, sdrUp) {
+      if (kind === 'pager') return '';
       if (!st) {
         return '<div class="node-ready-row nd-health"><span class="nd-ready unknown">no status yet</span></div>';
-      }
-      if (kind === 'pager') {
-        // Readers alive right now. bad only when the node is online to answer
-        // for itself — an offline node's reader count is just unknown.
-        const state = readersUp > 0 ? 'ok' : (online ? 'bad' : 'unknown');
-        return `<div class="node-ready-row nd-health"><span class="nd-ready ${state}">Readers ${readersUp} up</span></div>`;
       }
       if (kind === 'adsb') {
         // Messages, not aircraft: a receiver under a quiet sky is healthy at 0,
@@ -10103,12 +10097,12 @@
           <div class="nd-vers">${[
             ['agent', node.agentVersion],
             ...((isPager || isAdsb) ? [] : [['sdrtrunk', node.sdrtrunkVersion], ['rdio', node.rdioVersion]]),
-            // os/arch on every kind — already in the API, and it stops the
-            // pager/adsb version line being a single lonely value.
+            // os on every kind — already in the API, and it stops the
+            // pager/adsb version line being a single lonely value. arch was
+            // here too and was cut on review: nobody triages a node by amd64.
             ...(node.os ? [['os', node.os]] : []),
-            ...(node.arch ? [['arch', node.arch]] : []),
           ].map(([k, v]) => `<span><span class="k">${k}</span> ${escapeHtml(v == null ? '—' : String(v))}</span>`).join('')}</div>
-          ${_ndHealthHtml(kind, st, sdrUp, readersUp, online)}
+          ${_ndHealthHtml(kind, st, sdrUp)}
           ${_ndActivityHtml(online, sdrUp, decoding, feedEnabled, uploading, kind, updating, node.pagerDecoding, decoderState)}
           ${_ndAlertsHtml(kind, st, pinned, place)}
           <div class="dev-card-secondary nd-uptime-row">${uptimeHtml}</div>
@@ -13063,7 +13057,7 @@
       }
       el.innerHTML =
         _nodeVer('agent', agent) + _nodeVer('sdrtrunk', sdrtrunk) + _nodeVer('rdio', rdio)
-        + _ndHealthHtml('radio', rst, !!(rst && rst.components && rst.components.sdrtrunk === 'running'), 0, true);
+        + _ndHealthHtml('radio', rst, !!(rst && rst.components && rst.components.sdrtrunk === 'running'));
     }
 
     let _ndTunerSelSig = null;
