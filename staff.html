@@ -9968,6 +9968,10 @@
       let dec;
       if (updating) dec = chip('updating', '<i class="fas fa-arrows-rotate"></i> Updating');
       else if (!online) dec = chip('unknown', 'Offline');
+      // Deliberately paused (capture off — the supervisor reports the
+      // component as disabled) is a state someone CHOSE, not a fault: grey,
+      // not red, or every paused receiver reads as broken.
+      else if (/disab/i.test(String(decoderState || ''))) dec = chip('unknown', 'Capture off');
       else if (!sdrUp) dec = chip('bad', _ndDecoderDown(kind, decoderState));
       else if (decoding) {
         // Pager: name which frequencies are decoding (RFS / FR / both) so staff

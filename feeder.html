@@ -1095,6 +1095,12 @@
       // talkgroup/unit/site + recent calls) for their own node. ADS-B nodes get
       // their own renderer rather than a branch inside that one — the two
       // payloads share nothing beyond the word "activity".
+      // Restart (a bounce, not a switch) for ADS-B owners: the common
+      // self-service fix for a crash-looping or wedged decoder, without
+      // needing staff. Turning a node OFF stays a staff decision.
+      const decoderBtn = (isAdsb && online)
+        ? `<button class="mini-btn" title="Stop and restart the decoder (dump1090). Takes a few seconds; the agent stays connected." onclick="restartNodeDecoder('${node.id}', this)"><i class="fas fa-rotate"></i> Restart decoder</button>`
+        : '';
       const statsBtn = isRadio
         ? `<button class="mini-btn" title="Show this node's activity & stats" onclick="showNodeStats('${node.id}')"><i class="fas fa-chart-line"></i> Activity</button>`
         : isAdsb
@@ -1104,6 +1110,7 @@
         <div class="node-actions">
           ${statsBtn}
           ${msgsBtn}
+          ${decoderBtn}
           ${dl}
           <button class="mini-btn" title="Set region / exact pin" onclick="openLocationPicker('${node.id}')"><i class="fas fa-location-dot"></i> ${areaLabel ? 'Location' : 'Set region'}</button>
           <button class="mini-btn" title="Re-issue key (invalidates the old installer)" onclick="rotateNode('${node.id}',this)"><i class="fas fa-key"></i></button>
@@ -1952,6 +1959,29 @@
       } catch (e) {
         showToast('Could not re-issue key.', 'error');
       } finally { btn.disabled = false; btn.innerHTML = original; }
+    }
+
+    // Bounce the decoder on the owner's own node. No confirm dialog — it is
+    // a restart, the button says so, and the cost of a misclick is a few
+    // seconds of gap in coverage.
+    async function restartNodeDecoder(nodeId, btn) {
+      const original = btn.innerHTML; btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+      try {
+        const jwt = await getToken();
+        const r = await fetch(`${API_BASE_URL}/api/feeder/nodes/${nodeId}/restart-decoder`, {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + jwt },
+        });
+        if (!r.ok) {
+          const d = await r.json().catch(() => ({}));
+          throw new Error(d.error || 'restart failed');
+        }
+        showToast('Decoder restarting — back in a few seconds.', 'success');
+      } catch (e) {
+        showToast('Could not restart the decoder: ' + (e.message || 'error'), 'error');
+      } finally {
+        btn.disabled = false; btn.innerHTML = original;
+      }
     }
 
     async function deleteFeederNode(nodeId, btn) {
