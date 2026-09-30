@@ -1292,6 +1292,21 @@
     /* Frequencies in the detail card: bright and tabular, because a column of
        decimals that does not line up is harder to read than one that does. */
     .adsb-dc-freq { color: #7dd3fc; font-variant-numeric: tabular-nums; }
+    /* Monitored repeaters breathe. The ring animates (cheap: box-shadow on a
+       28px element), matching the "recent" pulses used elsewhere on the map. */
+    .rpt-pulse { animation: rptPulse 1.6s ease-in-out infinite; }
+    @keyframes rptPulse {
+      0%, 100% { box-shadow: 0 2px 8px rgba(20,184,166,0.5), 0 0 0 0 rgba(74,222,128,0.65); }
+      50%      { box-shadow: 0 2px 8px rgba(20,184,166,0.5), 0 0 0 9px rgba(74,222,128,0); }
+    }
+    .rpt-live-chip { color: #4ade80; font-weight: 700; }
+    .rpt-freqs { max-height: 140px; overflow-y: auto; font-size: 11px; line-height: 1.5; }
+    .rpt-cl-dot {
+      position: absolute; top: -2px; right: -2px;
+      width: 10px; height: 10px; border-radius: 50%;
+      background: #4ade80; border: 2px solid #0b1220;
+      animation: rptPulse 1.6s ease-in-out infinite;
+    }
     .adsb-dc-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
     .adsb-dc-name { font-size: 14px; font-weight: 700; flex: 1; min-width: 0;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1881,43 +1896,6 @@
     .beach-detail-popup .leaflet-popup-close-button:hover {
       color: #fff !important;
     }
-    /* Repeater (NSWPSN site) popup — same dark theme as beach popups, teal accents,
-       and a scrollable inner area so the frequency list can be scrolled. */
-    .repeater-popup .leaflet-popup-content-wrapper {
-      background: rgba(15, 23, 42, 0.97) !important;
-      border: 1px solid rgba(20, 184, 166, 0.45) !important;
-      border-radius: 12px !important;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.55), 0 0 18px rgba(20, 184, 166, 0.18) !important;
-      color: #e2e8f0 !important;
-    }
-    .repeater-popup .leaflet-popup-content {
-      margin: 10px 12px !important;
-      max-height: 420px;
-      overflow-y: auto;
-      scrollbar-width: thin;
-      scrollbar-color: rgba(20,184,166,0.45) transparent;
-    }
-    .repeater-popup .leaflet-popup-content::-webkit-scrollbar { width: 6px; }
-    .repeater-popup .leaflet-popup-content::-webkit-scrollbar-track { background: transparent; }
-    .repeater-popup .leaflet-popup-content::-webkit-scrollbar-thumb {
-      background: rgba(20,184,166,0.45);
-      border-radius: 3px;
-    }
-    .repeater-popup .leaflet-popup-content::-webkit-scrollbar-thumb:hover {
-      background: rgba(20,184,166,0.7);
-    }
-    .repeater-popup .leaflet-popup-tip {
-      background: rgba(15, 23, 42, 0.97) !important;
-      border: 1px solid rgba(20, 184, 166, 0.45) !important;
-    }
-    .repeater-popup .leaflet-popup-close-button {
-      color: #5eead4 !important;
-      font-size: 18px !important;
-    }
-    .repeater-popup .leaflet-popup-close-button:hover {
-      color: #fff !important;
-    }
-
     /* Pager / Incident Overview Tooltip – balanced width */
     .leaflet-tooltip {
       white-space: normal !important;
@@ -2255,9 +2233,6 @@
        takes effect the instant the pill flips, with no marker churn through
        _rebuildAdsb's diff. Scoped to .adsb-tooltip so vessels keep theirs. */
     body.adsb-labels-on .leaflet-tooltip.adsb-tooltip { display: none !important; }
-    /* Repeaters use a Leaflet popup (.repeater-popup); on touch hide the anchored
-       popup — its content is mirrored into the bottom card instead. */
-    body.is-touch .repeater-popup { display: none !important; }
 
     #mobile-tip-card {
       position: fixed; left: 10px; right: 10px; bottom: 10px; z-index: 1200;
@@ -3641,19 +3616,6 @@
       }, 0);
     });
 
-    // Repeaters (and any .repeater-popup) use a Leaflet POPUP, not a tooltip.
-    // On touch the anchored popup is hidden (CSS) and mirrored into the same
-    // bottom card so it matches the tooltip treatment.
-    map.on('popupopen', (e) => {
-      if (!isMobile) return;
-      const popup = e.popup;
-      if (!popup || !popup.options || popup.options.className !== 'repeater-popup') return;
-      const layer = popup._source;
-      showMobileTipCard(typeof popup.getContent === 'function' ? popup.getContent() : '');
-      if (layer && typeof layer.getLatLng === 'function') {
-        requestAnimationFrame(() => panMarkerAboveCard(layer));
-      }
-    });
     document.getElementById('map').classList.add('map-dark-mode');
     L.control.zoom({ position: 'topright' }).addTo(map);
 
@@ -4243,8 +4205,12 @@
         const count = cluster.getChildCount();
         const size = count >= 100 ? 36 : count >= 10 ? 30 : 26;
         const fontSize = count >= 100 ? 11 : 12;
+        // A cluster hides its children, so it carries the one fact worth
+        // surfacing at that zoom: is anything inside it being monitored.
+        const anyLive = cluster.getAllChildMarkers().some((m) => m.options && m.options.rptMonitored);
+        const dot = anyLive ? '<span class="rpt-cl-dot"></span>' : '';
         return L.divIcon({
-          html: '<div style="width:' + size + 'px;height:' + size + 'px;background:#14b8a6;border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 0 10px rgba(20,184,166,0.55);border:2px solid rgba(255,255,255,0.55);"><span style="font-size:' + fontSize + 'px;font-weight:700;color:#fff;">' + count + '</span></div>',
+          html: '<div style="position:relative;width:' + size + 'px;height:' + size + 'px;background:#14b8a6;border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 0 10px rgba(20,184,166,0.55);border:2px solid rgba(255,255,255,0.55);"><span style="font-size:' + fontSize + 'px;font-weight:700;color:#fff;">' + count + '</span>' + dot + '</div>',
           className: '',
           iconSize: L.point(size, size),
           iconAnchor: L.point(size / 2, size / 2)
@@ -5129,8 +5095,8 @@
       }
       if (target === 'nswpsn') {
         const enabled = map.hasLayer(nswpsnLayer);
-        if (enabled) addFilterButton('nswpsn');
-        else removeFilterButton('nswpsn');
+        if (enabled) { addFilterButton('nswpsn'); _rptStartPoll(); }
+        else { removeFilterButton('nswpsn'); _rptStopPoll(); }
         // While Repeaters is on, the map search also accepts a frequency.
         const _si = document.getElementById('address-search');
         if (_si) _si.placeholder = enabled
@@ -8516,6 +8482,9 @@ function initPagerHoursFromStorage() {
           resultsBox.style.display = 'none';
           searchInput.value = '';
           map.setView([m.lat, m.lng], 14);
+          // Open the tower's card too — landing on a marker with no
+          // explanation of which one matched made the result feel broken.
+          aeroPin('repeater', { site: m.site, keys: _rptParseGrnIds(m.site['GRN Site ID #']) }, L.latLng(m.lat, m.lng));
         };
         resultsBox.appendChild(div);
       }
@@ -15662,6 +15631,8 @@ function initPagerHoursFromStorage() {
       airspace: { icon: 'fa-draw-polygon', color: '#7dd3fc' },
       airports: { icon: 'fa-tower-observation', color: '#0ea5e9' },
       navaids: { icon: 'fa-tower-broadcast', color: '#a78bfa' },
+      // Teal keeps repeaters distinct from navaids, which share the glyph.
+      repeater: { icon: 'fa-tower-broadcast', color: '#14b8a6' },
     };
 
     window.aeroUnpin = function () {
@@ -15677,9 +15648,9 @@ function initPagerHoursFromStorage() {
     window.aeroCopyPinned = function () {
       if (!_aeroPinned) return;
       const q = _aeroPinned.props || {};
-      // The code, not the name: an ICAO or a navaid ident is what gets typed
-      // into something else.
-      const txt = q.i || q.id || q.n || '';
+      // The code, not the name: an ICAO, navaid ident or GRN site id is what
+      // gets typed into something else.
+      const txt = (_aeroPinned.kind === 'repeater' ? (q.keys && q.keys[0]) : (q.i || q.id || q.n)) || '';
       if (!txt) return;
       try {
         navigator.clipboard.writeText(txt);
@@ -15712,6 +15683,64 @@ function initPagerHoursFromStorage() {
       let name = q.n || 'Unknown';
       let sub = '';
       const rows = [];
+
+      if (kind === 'repeater') {
+        // q = { site: <raw GRN record>, keys: ["004-083", ...] } from the
+        // marker click. Monitoring first: it is the live fact on a card of
+        // otherwise-static reference data.
+        const site = q.site || {};
+        const info = _rptInfoFor(q.keys || []);
+        name = site.NAME || 'NSW PSN site';
+        sub = (q.keys && q.keys[0]) || '';
+        if (info) {
+          const seen = info.lastSeen ? new Date(info.lastSeen) : null;
+          const ago = seen && !Number.isNaN(seen.getTime())
+            ? Math.max(0, Math.round((Date.now() - seen.getTime()) / 1000)) + 's ago' : '';
+          rows.push(row('Monitoring',
+            '<span class="rpt-live-chip">● ' + info.nodes + ' node' + (info.nodes === 1 ? '' : 's')
+            + (ago ? ' · confirmed ' + escapeHtml(ago) : '') + '</span>'));
+        } else {
+          rows.push(row('Monitoring', '<span class="aero-sub">not currently monitored</span>'));
+        }
+        rows.push(row('Site ID', site.SITE_ID ? escapeHtml(String(site.SITE_ID)) : null, 'mono'));
+        rows.push(row('GRN #', site['GRN Site ID #'] ? escapeHtml(String(site['GRN Site ID #'])) : null, 'mono'));
+        rows.push(row('Previous #', site['Previous Site ID #'] ? escapeHtml(String(site['Previous Site ID #'])) : null, 'mono'));
+        rows.push(row('System', site['SYSTEM NAME'] ? escapeHtml(String(site['SYSTEM NAME'])) : null));
+        rows.push(row('System #', site['System #'] ? escapeHtml(String(site['System #'])) : null));
+        rows.push(row('Zone', site['Zone Assignment'] ? escapeHtml(String(site['Zone Assignment'])) : null));
+        rows.push(row('NAC', site['NAC Code'] && site['NAC Code'] !== 'Unknown' ? escapeHtml(String(site['NAC Code'])) : null, 'mono'));
+        rows.push(row('Control', site['Control Channel']
+          ? '<span class="adsb-dc-freq">' + escapeHtml(String(site['Control Channel'])) + '</span>' : null));
+        rows.push(row('Alt CC', site['Alt Control Channel'] && site['Alt Control Channel'] !== 'See below'
+          ? '<span class="adsb-dc-freq">' + escapeHtml(String(site['Alt Control Channel'])) + '</span>' : null));
+        rows.push(row('Postcode', site.POSTCODE ? escapeHtml(String(site.POSTCODE)) : null));
+        rows.push(row('Updated', site['Last Update'] ? escapeHtml(String(site['Last Update'])) : null));
+        const noteHtml = site.Notes
+          ? '<div class="adsb-dc-est"><i class="fa-solid fa-circle-info"></i> ' + escapeHtml(String(site.Notes)) + '</div>'
+          : '';
+        const freqs = Array.isArray(site.Frequencies) ? site.Frequencies : [];
+        const freqHtml = freqs.length
+          ? '<div class="adsb-dc-note">' + freqs.length + ' channel' + (freqs.length === 1 ? '' : 's') + '</div>'
+            + '<div class="rpt-freqs">' + freqs.map((f) => '<div class="adsb-dc-freq">' + escapeHtml(String(f)) + '</div>').join('') + '</div>'
+          : '';
+        const acts = '<div class="adsb-dc-acts">'
+          + '<button class="adsb-dc-btn" onclick="aeroCentreOnPinned()"><i class="fa-solid fa-location-crosshairs"></i> Centre</button>'
+          + (sub ? '<button class="adsb-dc-btn" onclick="aeroCopyPinned()"><i class="fa-solid fa-copy"></i> Copy</button>' : '')
+          + '</div>';
+        el.classList.add('open');
+        el.innerHTML = ''
+          + '<div class="adsb-dc-head">'
+          +   '<i class="fa-solid ' + chrome.icon + '" style="color:' + chrome.color + ';"></i>'
+          +   '<div class="adsb-dc-name wrap" style="color:' + chrome.color + ';">' + escapeHtml(name) + '</div>'
+          +   (sub ? '<span class="adsb-dc-badge" style="background:' + chrome.color + ';">' + escapeHtml(sub) + '</span>' : '')
+          +   '<button class="adsb-dc-x" onclick="aeroUnpin()" title="Close">&times;</button>'
+          + '</div>'
+          + noteHtml
+          + '<div class="adsb-dc-rows">' + rows.join('') + '</div>'
+          + freqHtml
+          + acts;
+        return;
+      }
 
       if (kind === 'airports') {
         sub = [q.i, q.a].filter(Boolean).join(' / ');
@@ -18317,6 +18346,83 @@ function initPagerHoursFromStorage() {
       return 'p25';
     }
 
+    /* ---- Live "Monitoring" state for repeater sites ----
+     *
+     * /api/radio/monitored-sites lists the P25 sites the feeder fleet is
+     * receiving RIGHT NOW (node site snapshots fresher than five minutes —
+     * the agents re-report every ~60s regardless of traffic, so this is a
+     * live lock, not a traffic echo). Keys are the GRN's own zero-padded
+     * form ("004-083"), which is what the dataset's "GRN Site ID #" carries.
+     */
+    let _rptMarkers = [];             // [{ marker, site, keys }]
+    let _rptMonitored = new Map();    // "004-083" -> { name, nac, nodes, lastSeen }
+    let _rptPoll = null;
+
+    /** Every GRN id in a "GRN Site ID #" value. Compound entries are real —
+     *  "001-031 & 001-049 (Hidden Host)" — so split on '&', drop the
+     *  parenthetical notes, keep only well-formed ddd-ddd. "Previous Site
+     *  ID #" is deliberately NOT parsed: a reassigned id would light up the
+     *  wrong tower. */
+    function _rptParseGrnIds(raw) {
+      if (!raw) return [];
+      return String(raw)
+        .replace(/\([^)]*\)/g, ' ')
+        .split(/[&,]/)
+        .map((x) => x.trim())
+        .filter((x) => /^\d{3}-\d{3}$/.test(x));
+    }
+
+    function _rptInfoFor(keys) {
+      for (const k of keys) {
+        const hit = _rptMonitored.get(k);
+        if (hit) return hit;
+      }
+      return null;
+    }
+
+    // Two icons, same tower: the live one carries the pulsing ring. Swapped
+    // via marker.setIcon(), which works while clustered (it applies whenever
+    // the marker next renders) — unlike class-toggling a DOM element that
+    // does not exist inside a cluster.
+    const _rptIconHtml = (live) =>
+      '<div class="' + (live ? 'rpt-pulse' : '') + '" style="background:linear-gradient(135deg,#14b8a6,#0d9488);width:28px;height:28px;border-radius:50%;border:3px solid #fff;box-shadow:0 2px 8px rgba(20,184,166,0.5),0 0 12px rgba(20,184,166,0.25);display:flex;align-items:center;justify-content:center;font-size:13px;color:#fff;"><i class="fa-solid fa-tower-broadcast"></i></div>';
+    const _rptIcon = L.divIcon({ className: 'custom-pin', html: _rptIconHtml(false), iconSize: [28, 28], iconAnchor: [14, 14] });
+    const _rptIconLive = L.divIcon({ className: 'custom-pin', html: _rptIconHtml(true), iconSize: [28, 28], iconAnchor: [14, 14] });
+
+    function _rptApplyMonitored() {
+      let changed = false;
+      for (const e of _rptMarkers) {
+        const live = !!_rptInfoFor(e.keys);
+        if (live !== !!e.marker.options.rptMonitored) {
+          e.marker.options.rptMonitored = live;
+          e.marker.setIcon(live ? _rptIconLive : _rptIcon);
+          changed = true;
+        }
+      }
+      // Clusters cache their icons; ask for a redraw so the green dot on a
+      // bubble with monitored children tracks reality.
+      if (changed && typeof nswpsnLayer.refreshClusters === 'function') nswpsnLayer.refreshClusters();
+    }
+
+    async function _rptLoadMonitored() {
+      try {
+        const res = await apiFetch(`${PROXY_BASE}/api/radio/monitored-sites`);
+        if (!res.ok) return; // keep the last known picture on a blip
+        const data = await res.json();
+        _rptMonitored = new Map((data.sites || []).map((x) => [x.key, x]));
+        _rptApplyMonitored();
+      } catch (e) { /* transient — the 60s tick retries */ }
+    }
+
+    function _rptStartPoll() {
+      if (_rptPoll) return;
+      _rptLoadMonitored();
+      _rptPoll = setInterval(_rptLoadMonitored, 60_000);
+    }
+    function _rptStopPoll() {
+      if (_rptPoll) { clearInterval(_rptPoll); _rptPoll = null; }
+    }
+
     async function loadNswpsnData() {
       try {
         const res = await fetch('data/nswpsn/NSW%20GRN%20Version%201.json', { cache: 'force-cache' });
@@ -18332,106 +18438,68 @@ function initPagerHoursFromStorage() {
     function _rebuildNswpsn() {
       try {
         nswpsnLayer.clearLayers();
-        const icon = L.divIcon({
-          className: 'custom-pin',
-          html: '<div style="background:linear-gradient(135deg,#14b8a6,#0d9488);width:28px;height:28px;border-radius:50%;border:3px solid #fff;box-shadow:0 2px 8px rgba(20,184,166,0.5),0 0 12px rgba(20,184,166,0.25);display:flex;align-items:center;justify-content:center;font-size:13px;color:#fff;"><i class="fa-solid fa-tower-broadcast"></i></div>',
-          iconSize: [28, 28],
-          iconAnchor: [14, 14]
-        });
+        _rptMarkers = [];
         let added = 0;
-        _nswpsnSites.forEach((s) => {
-          const sub = nswpsnSiteSubtype(s);
+        _nswpsnSites.forEach((site) => {
+          const sub = nswpsnSiteSubtype(site);
           if (!nswpsnFilter[sub]) return;
-          const lat = parseFloat(s.Latitude);
-          const lng = parseFloat(s.Longitude);
+          const lat = parseFloat(site.Latitude);
+          const lng = parseFloat(site.Longitude);
           if (!isFinite(lat) || !isFinite(lng)) return;
-
-          const name = s.NAME || 'NSW PSN site';
-          const freqs = Array.isArray(s.Frequencies) ? s.Frequencies : [];
-
-          // Section helper — mirrors the beach-tooltip section styling.
-          function section(title, body, accent) {
-            if (!body) return '';
-            const a = accent || '#14b8a6';
-            const bg = 'rgba(20,184,166,0.08)';
-            return '<div style="padding:6px 8px;background:' + bg + ';border-radius:6px;margin-bottom:8px;">' +
-              '<div style="color:' + a + ';font-weight:700;font-size:10px;letter-spacing:0.5px;margin-bottom:4px;">' + title + '</div>' +
-              body +
-            '</div>';
-          }
-          // Two-column row with muted label + value.
-          function row(label, value) {
-            if (!value || value === 'See below') return '';
-            return '<div style="display:flex;gap:6px;font-size:12px;line-height:1.4;color:#e2e8f0;">' +
-              '<span style="color:#94a3b8;min-width:84px;">' + escapeHtml(label) + '</span>' +
-              '<span style="font-weight:600;">' + escapeHtml(String(value)) + '</span>' +
-            '</div>';
-          }
-
-          // === Identification ===
-          const idBody = [
-            row('Site ID', s.SITE_ID),
-            row('GRN Site #', s['GRN Site ID #']),
-            row('Previous #', s['Previous Site ID #']),
-            row('System #', s['System #']),
-            row('NAC', s['NAC Code']),
-            row('Postcode', s.POSTCODE)
-          ].join('');
-
-          // === Zone / Control ===
-          const ctlBody = [
-            row('Zone', s['Zone Assignment']),
-            row('Control', s['Control Channel']),
-            row('Alt CC', s['Alt Control Channel'])
-          ].join('');
-
-          // === Frequencies ===
-          let freqBody = '';
-          if (freqs.length) {
-            freqBody =
-              '<div style="font-size:11px;color:#94a3b8;margin-bottom:4px;">' + freqs.length + ' channel' + (freqs.length === 1 ? '' : 's') + '</div>' +
-              '<div style="max-height:140px;overflow-y:auto;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:1.45;color:#cbd5e1;">' +
-                freqs.map((f) => '<div>' + escapeHtml(String(f)) + '</div>').join('') +
-              '</div>';
-          }
-
-          // Notes (orange-tinted advisory section)
-          let notesBlock = '';
-          if (s.Notes) {
-            notesBlock =
-              '<div style="padding:6px 8px;background:rgba(249,115,22,0.08);border-radius:6px;margin-bottom:8px;">' +
-                '<div style="color:#fdba74;font-weight:700;font-size:10px;letter-spacing:0.5px;margin-bottom:4px;">⚠ NOTES</div>' +
-                '<div style="font-size:11.5px;color:#fed7aa;line-height:1.45;">' + escapeHtml(String(s.Notes)) + '</div>' +
-              '</div>';
-          }
-
-          // Header — name + GRN-site / repeater pill (mirrors Beachwatch pill)
-          let html =
-            '<div style="max-width:360px;font-family:system-ui,sans-serif;color:#e2e8f0;">' +
-              '<div style="font-size:15px;font-weight:700;color:#14b8a6;margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
-                '<i class="fa-solid fa-tower-broadcast"></i> ' + escapeHtml(name) +
-                ' <span style="background:#14b8a6;color:#fff;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:700;">Repeater</span>' +
-                (s['Last Update'] ? ' <span style="color:#94a3b8;font-size:10px;font-weight:500;">Updated ' + escapeHtml(String(s['Last Update'])) + '</span>' : '') +
-              '</div>' +
-              section('🛰 IDENTIFICATION', idBody) +
-              section('📡 ZONE / CONTROL', ctlBody) +
-              notesBlock +
-              section('🎚 FREQUENCIES', freqBody) +
-            '</div>';
-
-          const marker = L.marker([lat, lng], { icon }).bindPopup(html, {
-            className: 'repeater-popup',
-            maxWidth: 380,
-            autoPan: true,
-            closeOnClick: false
+          const keys = _rptParseGrnIds(site['GRN Site ID #']);
+          const live = !!_rptInfoFor(keys);
+          const marker = L.marker([lat, lng], {
+            icon: live ? _rptIconLive : _rptIcon,
+            rptMonitored: live,
+          });
+          // Hover: a compact overview. Content is a FUNCTION so the
+          // monitoring line is evaluated at hover time, not at build time.
+          marker.bindTooltip(() => _rptTooltip(site, keys), {
+            sticky: true,
+            direction: 'top',
+            opacity: 0.97,
+            className: 'ais-tooltip adsb-tooltip',
+          });
+          // Click: the shared detail card (the aircraft card), not a popup —
+          // a popup anchored to the tower covers the towers around it, and
+          // the frequency list wants selectable, scrollable room.
+          marker.on('click', (e) => {
+            aeroPin('repeater', { site, keys }, marker.getLatLng());
+            marker.closeTooltip();
+            L.DomEvent.stop(e);
           });
           nswpsnLayer.addLayer(marker);
+          _rptMarkers.push({ marker, site, keys });
           added++;
         });
+        _rptApplyMonitored();
         if (typeof refreshActiveFilterPanel === 'function') refreshActiveFilterPanel();
       } catch (e) {
         console.warn('[nswpsn] rebuild failed:', e);
       }
+    }
+
+    /** The hover overview: everything you'd triage a tower by, one glance. */
+    function _rptTooltip(site, keys) {
+      const freqs = Array.isArray(site.Frequencies) ? site.Frequencies : [];
+      const info = _rptInfoFor(keys);
+      const bits = ['<b>' + escapeHtml(site.NAME || 'NSW PSN site') + '</b>'];
+      const idLine = [
+        freqs.length ? freqs.length + ' ch' : '',
+        site.SITE_ID ? 'Site ' + escapeHtml(String(site.SITE_ID)) : '',
+        site['GRN Site ID #'] ? escapeHtml(String(site['GRN Site ID #'])) : '',
+        site['NAC Code'] && site['NAC Code'] !== 'Unknown' ? 'NAC ' + escapeHtml(String(site['NAC Code']).replace(/\s+/g, '')) : '',
+      ].filter(Boolean).join(' · ');
+      if (idLine) bits.push('<span class="aero-sub">' + idLine + '</span>');
+      const cc = [
+        site['Control Channel'] ? 'CC ' + escapeHtml(String(site['Control Channel'])) : '',
+        site['Alt Control Channel'] && site['Alt Control Channel'] !== 'See below' ? 'Alt ' + escapeHtml(String(site['Alt Control Channel'])) : '',
+      ].filter(Boolean).join(' · ');
+      if (cc) bits.push('<span class="adsb-dc-freq">' + cc + '</span>');
+      if (info) {
+        bits.push('<span class="rpt-live-chip">● Monitoring</span>');
+      }
+      return bits.join('<br>');
     }
 
     async function loadFirmsHotspots() {

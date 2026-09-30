@@ -23,6 +23,7 @@ import { weatherRouter } from './api/weather.js';
 import { pagerRouter } from './api/pager.js';
 import { firmsRouter } from './api/firms.js';
 import { adsbRouter } from './api/adsb.js';
+import { radioPublicRouter } from './api/radio-public.js';
 // Power sources + heartbeat + stats (W4).
 import { endeavourRouter } from './api/endeavour.js';
 import { ausgridRouter } from './api/ausgrid.js';
@@ -253,6 +254,7 @@ export function createApp() {
     '/api/news/sources',
     '/api/stats/summary',
     '/api/stats/history',
+    '/api/radio/monitored-sites',
     '/api/centralwatch/cameras',
     '/api/centralwatch/sites',
     '/api/aviation/cameras',
@@ -371,6 +373,7 @@ export function createApp() {
   app.route('/', pagerRouter);
   app.route('/', firmsRouter);
   app.route('/', adsbRouter);
+  app.route('/', radioPublicRouter);
   // Power + heartbeat + stats
   app.route('/', endeavourRouter);
   app.route('/', ausgridRouter);
