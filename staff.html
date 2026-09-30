@@ -381,9 +381,12 @@
       padding: 1.3rem 1.35rem 1.1rem;
       display: flex; flex-direction: column;
     }
-    /* Push the metadata line to the bottom so cards of differing chip counts
-       still line their footers up. */
-    #nodes-grid .dev-card > .dev-card-secondary:last-child { margin-top: auto; }
+    /* Push the uptime row (and the meta footer after it) to the bottom so
+       cards of differing chip counts still line their footers up. Pinned on
+       the uptime row, NOT :last-child — the old :last-child rule grabbed the
+       anomaly row instead whenever one rendered, so it was exactly the
+       unhealthy cards whose footers drifted out of line. */
+    #nodes-grid .dev-card > .nd-uptime-row { margin-top: auto; }
 
     /* Versions read as reference, not status: one quiet line rather than a row
        of bright chips competing with the ones that mean something. */
@@ -590,14 +593,6 @@
       white-space: nowrap;
     }
     /* Version badge row on a node card. */
-    .node-versions { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.35rem 0 0.6rem; }
-    .node-ver {
-      display: inline-flex; align-items: baseline; gap: 0.3rem;
-      padding: 0.16rem 0.45rem; border-radius: 5px;
-      background: var(--accent-soft); color: #7dd3fc;
-      font-size: 0.7rem; white-space: nowrap;
-    }
-    .node-ver .k { color: var(--text-soft); text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.62rem; }
     .node-ready-row { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0 0 0.6rem; }
     .nd-ready {
       display: inline-flex; align-items: center; gap: 0.25rem;
@@ -608,6 +603,12 @@
     .nd-ready.bad { background: rgba(239,68,68,0.15); color: #f87171; }
     .nd-ready.unknown { background: var(--accent-soft); color: var(--text-soft); }
     .nd-ready.updating { background: rgba(168,85,247,0.18); color: #c084fc; }
+    /* Amber tier. This class was already being emitted (the Calibrating… chip)
+       with no rule behind it, so that chip rendered as bare unstyled text. */
+    .nd-ready.warn { background: rgba(234,179,8,0.15); color: #fbbf24; }
+    /* Anomaly counters re-render every poll; tabular digits stop the chips
+       changing width when a number ticks over. */
+    .node-ready-row.nd-alerts .nd-ready { font-variant-numeric: tabular-nums; }
     @keyframes nodePulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
     /* Transcription card. Reuses .nd-ready for the state chips so a whisper
        backend and a feeder node read the same way at a glance. */
@@ -3126,7 +3127,7 @@
              same card plus the throughput and latency charts. A second copy
              here was the same fetch drawn twice, above a page about nodes. -->
         <div id="nodes-grid">
-          <div class="loading" style="grid-column: 1 / -1;">
+          <div class="loading">
             <i class="fas fa-spinner"></i>
           </div>
         </div>
@@ -4021,7 +4022,7 @@
         <div class="node-drawer-title">
           <div class="node-drawer-name" id="nd-name">Node</div>
           <div class="node-drawer-sub" id="nd-conn">connecting…</div>
-          <div class="node-versions" id="nd-versions" style="margin:0.3rem 0 0;"></div>
+          <div class="nd-vers" id="nd-versions" style="margin:0.3rem 0 0;"></div>
         </div>
         <button class="modal-close" onclick="closeNodeDrawer()" title="Close">&times;</button>
       </div>
@@ -9840,7 +9841,7 @@
       } catch (e) {
         console.error('Error loading nodes:', e);
         if (grid) grid.innerHTML = `
-          <div class="empty-state" style="grid-column: 1 / -1;">
+          <div class="empty-state">
             <i class="fas fa-exclamation-triangle"></i>
             <p>Failed to load feeder nodes: ${escapeHtml(e.message)}</p>
           </div>`;
@@ -9850,8 +9851,29 @@
     // Per-node readiness chips: CPU calibration + JMBE voice codec. A node won't
     // start decoding (and produce audio) until both are ready, so surface it.
     // Returns '' when the node hasn't reported (older build / no status yet).
-    function _ndReadinessHtml(st, sdrUp) {
-      if (!st || (st.calibrated == null && st.jmbeInstalled == null)) return '';
+    /* One health row for EVERY kind — the per-kind answer to "can the decode
+     * pipeline actually produce output", which the activity chip doesn't say:
+     * radio = codec readiness, pager = how many readers are alive, adsb = the
+     * decode rate. Radio used to be the only kind with this row, so pager and
+     * adsb cards had a hole where it sits; and a radio card with no readiness
+     * data dropped the row entirely, so cards never lined up. This always
+     * returns a row. */
+    function _ndHealthHtml(kind, st, sdrUp, readersUp, online) {
+      if (!st) {
+        return '<div class="node-ready-row nd-health"><span class="nd-ready unknown">no status yet</span></div>';
+      }
+      if (kind === 'pager') {
+        // Readers alive right now. bad only when the node is online to answer
+        // for itself — an offline node's reader count is just unknown.
+        const state = readersUp > 0 ? 'ok' : (online ? 'bad' : 'unknown');
+        return `<div class="node-ready-row nd-health"><span class="nd-ready ${state}">Readers ${readersUp} up</span></div>`;
+      }
+      if (kind === 'adsb') {
+        // Messages, not aircraft: a receiver under a quiet sky is healthy at 0,
+        // so 0 is unknown-grey rather than red.
+        const rate = Number(st.adsbMsgRate || 0);
+        return `<div class="node-ready-row nd-health"><span class="nd-ready ${rate > 0 ? 'ok' : 'unknown'}" title="Mode-S messages decoded per second — messages, not aircraft; a quiet sky is still healthy.">~${escapeHtml(String(rate))} msg/s</span></div>`;
+      }
       const chip = (label, v) => {
         const state = v === true ? 'ok' : (v === false ? 'bad' : 'unknown');
         const mark = v === true ? '✓' : (v === false ? '✗' : '—');
@@ -9867,8 +9889,56 @@
       const calChip = calibrating
         ? `<span class="nd-ready warn" title="One-time CPU calibration is running. Measured at 4+ minutes on a fresh node — do NOT restart SDR-Trunk, that starts it over. It restarts itself once when done."><i class="fas fa-spinner fa-spin" style="margin-right:0.3rem"></i>Calibrating…</span>`
         : chip('Calibrated', st.calibrated);
-      return `<div class="node-ready-row" title="Node must be calibrated and have the JMBE codec before it decodes voice">`
+      return `<div class="node-ready-row nd-health" title="Node must be calibrated and have the JMBE codec before it decodes voice">`
         + calChip + chip('JMBE', st.jmbeInstalled) + `</div>`;
+    }
+
+    /* Anomaly chips — rendered ONLY when something is abnormal, so a healthy
+     * card stays quiet. Each number's meaning rides in its tooltip, because
+     * "queue 3647" and "expired 6" were bare footer text nobody could read:
+     *   queued  — the agent's on-disk upload backlog RIGHT NOW (a gauge).
+     *   expired — uploads discarded for age since the agent started (a
+     *             counter; radio >5min, adsb >90s; pager never expires).
+     *   dropped — uploads never even written to disk (radio only; disk fault).
+     * Thresholds: any sustained queue on radio/adsb is abnormal (their queues
+     * age-expire, so depth should hover near zero); pager queues legitimately
+     * buffer through an outage, so its tiers sit at 10% / 50% of the agent's
+     * 5000-file cap. Below the warn tier no chip renders — stricter than the
+     * old `queue > 0`, deliberately: "queue 2" taught people to ignore it. */
+    const ND_QUEUE_WARN = { radio: 10, pager: 500, adsb: 10 };
+    const ND_QUEUE_BAD = { radio: 100, pager: 2500, adsb: 100 };
+    function _ndAlertsHtml(kind, st, pinned, place) {
+      const chips = [];
+      const chip = (state, label, title) =>
+        chips.push(`<span class="nd-ready ${state}" title="${escapeHtml(title)}">${label}</span>`);
+      if (st) {
+        const q = Number(st.queueDepth || 0);
+        if (q >= (ND_QUEUE_WARN[kind] ?? 10)) {
+          chip(q >= (ND_QUEUE_BAD[kind] ?? 100) ? 'bad' : 'warn',
+            `${q.toLocaleString()} queued`,
+            'Uploads waiting on this node\u2019s disk right now \u2014 a live gauge, not a total.'
+              + (kind === 'pager' ? ' The pager queue caps at ~5000 files / 2 GiB.' : ''));
+        }
+        // warn, not bad: cumulative since agent start, so once non-zero it
+        // never clears until a restart — permanent red would cry wolf.
+        if (st.uploadsExpired) {
+          chip('warn', `${Number(st.uploadsExpired).toLocaleString()} expired`,
+            'Uploads discarded for age since the agent last started (radio: >5 min old; ADS-B: >90 s). A counter, not a live rate \u2014 it does not mean uploads are failing now.');
+        }
+        if (st.uploadsDropped) {
+          chip('bad', `${Number(st.uploadsDropped).toLocaleString()} dropped`,
+            'Calls handed to the agent that were never written to disk since it started \u2014 they are gone (rdio does not retry). Usually a disk fault.');
+        }
+        if (st.errors) {
+          chip('bad', `${Number(st.errors).toLocaleString()} errors`, 'Errors reported by the agent since start.');
+        }
+      }
+      if (kind === 'adsb' && !pinned) {
+        chip('warn', 'no antenna pin', 'Receiver range can\u2019t be measured without the exact antenna location \u2014 set a pin in the node drawer.');
+      } else if (!place && !pinned) {
+        chip('warn', 'no region', 'No location recorded for this node \u2014 set it in the node drawer.');
+      }
+      return chips.length ? `<div class="node-ready-row nd-alerts">${chips.join('')}</div>` : '';
     }
 
     // Live activity chips: is the node DECODING (radio: SDR-Trunk following the
@@ -9918,7 +9988,7 @@
     }
 
     function _nodeVer(label, v) {
-      return `<span class="node-ver"><span class="k">${escapeHtml(label)}</span>${escapeHtml(v == null ? '—' : v)}</span>`;
+      return `<span><span class="k">${escapeHtml(label)}</span> ${escapeHtml(v == null ? '—' : v)}</span>`;
     }
 
     function _nodeCard(node) {
@@ -9930,7 +10000,6 @@
       const userShort = userId ? escapeHtml(userId.slice(0, 8)) + '…' : '—';
       const installId = node.installId || node.install_id || '';
       const installShort = installId ? escapeHtml(String(installId).slice(0, 8)) + '…' : '—';
-      const enabled = node.enabled !== false; // default to enabled unless explicitly false
       const feedEnabled = node.feedEnabled === true; // forwarding on; off by default
       const st = node.status || null;
       const kind = node.kind || 'radio';
@@ -9975,34 +10044,6 @@
         ? Number(node.messagesLast10m || 0) > 0
         : !!(st && st.uploadsPerMin != null && st.uploadsPerMin > 0);
 
-      // Optional status metrics — render a small secondary row when present.
-      const statusBits = [];
-      if (st) {
-        // Only show the upload queue when there's an actual backlog — "queue 0"
-        // (the normal state) is noise.
-        if (st.queueDepth) statusBits.push({ label: 'queue', value: st.queueDepth });
-        // Calls rdio handed the agent that were never persisted — they are gone
-        // (rdio does not retry a downstream). Shown only when non-zero, and
-        // flagged, because queue depth stays 0 for them: a node shedding every
-        // call otherwise looks completely healthy here.
-        if (st.uploadsDropped) {
-          statusBits.push({ label: 'dropped', value: st.uploadsDropped, bad: true });
-        }
-        // Persisted but never delivered inside the queue's age bound — the backend
-        // or the link was down too long. Kept separate from 'dropped' so a disk
-        // fault and an outage are told apart without reading logs.
-        if (st.uploadsExpired) {
-          statusBits.push({ label: 'expired', value: st.uploadsExpired, bad: true });
-        }
-        if (st.callsPerMin != null) statusBits.push({ label: 'calls/min', value: st.callsPerMin });
-        if (st.uploadsPerMin != null) statusBits.push({ label: 'uploads/min', value: st.uploadsPerMin });
-        if (st.errors != null) statusBits.push({ label: 'errors', value: st.errors });
-      }
-      const statusRow = statusBits.length
-        ? `<div class="dev-card-secondary">${statusBits
-            .map(b => `<span${b.bad ? ' style="color:var(--danger);"' : ''}>${escapeHtml(b.label)} <strong>${escapeHtml(b.value)}</strong></span>`).join('')}</div>`
-        : '';
-
       // Uptime: the share of the last week the node was reporting, and how long
       // the current run has lasted. Both, because neither answers the other —
       // 99% with a four-minute run is a node that keeps dropping, and 80% with
@@ -10030,18 +10071,22 @@
       // same way: a place if there is one, and whether the exact pin is set.
       // A receiver with no pin is called out, because range cannot be measured
       // without one — that is a fault, not a blank field.
-      const place = isPager ? [node.state, node.lga].filter(Boolean).join(' · ') : node.zone;
+      // adsb included: its `zone` is always null server-side, so an ADS-B card
+      // used to degenerate to a bare "pinned" even with a full state · lga on
+      // record. Missing-location warnings now live on the alerts row, so the
+      // footer only ever states facts.
+      const place = (isPager || isAdsb)
+        ? [node.state, node.lga].filter(Boolean).join(' · ')
+        : node.zone;
       const pinned = typeof node.lat === 'number' && typeof node.lon === 'number';
       let placeHtml;
-      if (isAdsb && !pinned) {
-        placeHtml = '<span class="nd-meta-warn">no antenna pin</span>';
-      } else if (place) {
+      if (place) {
         placeHtml = `<strong>${escapeHtml(place)}</strong>`
           + (pinned ? ' <i class="fas fa-location-dot nd-meta-pin" title="Exact pin set"></i>' : '');
       } else if (pinned) {
         placeHtml = '<i class="fas fa-location-dot nd-meta-pin"></i> pinned';
       } else {
-        placeHtml = '<span class="nd-meta-warn">no region</span>';
+        placeHtml = '—';
       }
 
       // The whole card is a button that opens the details drawer — all controls
@@ -10058,16 +10103,20 @@
           <div class="nd-vers">${[
             ['agent', node.agentVersion],
             ...((isPager || isAdsb) ? [] : [['sdrtrunk', node.sdrtrunkVersion], ['rdio', node.rdioVersion]]),
+            // os/arch on every kind — already in the API, and it stops the
+            // pager/adsb version line being a single lonely value.
+            ...(node.os ? [['os', node.os]] : []),
+            ...(node.arch ? [['arch', node.arch]] : []),
           ].map(([k, v]) => `<span><span class="k">${k}</span> ${escapeHtml(v == null ? '—' : String(v))}</span>`).join('')}</div>
-          ${(isPager || isAdsb) ? '' : _ndReadinessHtml(st, sdrUp)}
+          ${_ndHealthHtml(kind, st, sdrUp, readersUp, online)}
           ${_ndActivityHtml(online, sdrUp, decoding, feedEnabled, uploading, kind, updating, node.pagerDecoding, decoderState)}
+          ${_ndAlertsHtml(kind, st, pinned, place)}
           <div class="dev-card-secondary nd-uptime-row">${uptimeHtml}</div>
           <div class="dev-card-secondary">
             <span title="${escapeHtml(userId)}">${owner}</span>
             <span class="nd-meta-place">${placeHtml}</span>
             <span class="nd-meta-install" title="Install id ${escapeHtml(String(installId) || 'not yet bound')}">${installShort}</span>
           </div>
-          ${statusRow}
         </div>`;
     }
 
@@ -10076,7 +10125,7 @@
       if (!grid) return;
       if (!allNodes.length) {
         grid.innerHTML = `
-          <div class="empty-state" style="grid-column: 1 / -1;">
+          <div class="empty-state">
             <i class="fas fa-satellite-dish"></i>
             <p>No feeder nodes yet. Contributors appear here automatically when their node connects.</p>
           </div>`;
@@ -10089,7 +10138,7 @@
       const feederNodes = allNodes.filter(n => (n.kind || 'radio') !== 'scanner');
       if (!feederNodes.length) {
         grid.innerHTML = `
-          <div class="empty-state" style="grid-column: 1 / -1;">
+          <div class="empty-state">
             <i class="fas fa-satellite-dish"></i>
             <p>No feeder nodes yet. Contributors appear here automatically when their node connects.</p>
           </div>`;
@@ -13014,7 +13063,7 @@
       }
       el.innerHTML =
         _nodeVer('agent', agent) + _nodeVer('sdrtrunk', sdrtrunk) + _nodeVer('rdio', rdio)
-        + _ndReadinessHtml(rst, !!(rst && rst.components && rst.components.sdrtrunk === 'running'));
+        + _ndHealthHtml('radio', rst, !!(rst && rst.components && rst.components.sdrtrunk === 'running'), 0, true);
     }
 
     let _ndTunerSelSig = null;
