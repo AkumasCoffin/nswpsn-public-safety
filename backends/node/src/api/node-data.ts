@@ -4676,6 +4676,94 @@ nodeDataRouter.get('/api/node-data/live', requireRole(canViewNodeData), async (c
   }
 });
 
+/** Millisecond length of the site-decode range intervals ('1 hour' etc.). */
+function intervalMs(interval: string): number {
+  const m = /^(\d+)\s+(hour|hours|day|days)$/.exec(interval);
+  if (!m) return 24 * 3600_000;
+  const n = Number(m[1]);
+  return m[2]!.startsWith('hour') ? n * 3600_000 : n * 86400_000;
+}
+
+/**
+ * Intervals within [startMs, nowMs] during which the automatic channel
+ * manager held a channel backing this site (auto-stopped, or mid-probe),
+ * reconstructed from node_chanmgr_log: 'stopped'/'recovered' open a hold,
+ * 'probePass'/'released' close it, 'probeFail' confirms one that may have
+ * begun before the log window (opened at the window start when unpaired).
+ * Merged across nodes/channels and clamped to the window. Best-effort: the
+ * log keeps ~50 rows per node, so a very busy manager can out-run a 7-day
+ * window — missing holds degrade to "red" shading, never to false data.
+ */
+async function siteChanMgrHolds(
+  pool: Pool,
+  system: number,
+  rfss: number,
+  site: number,
+  nodeId: string | null,
+  startMs: number,
+  nowMs: number,
+): Promise<Array<{ from: string; to: string }>> {
+  try {
+    const chanParams: unknown[] = [system, rfss, site];
+    let chanWhere = 'system_id = $1 AND rfss = $2 AND site_id = $3 AND channel_name IS NOT NULL';
+    if (nodeId !== null) {
+      chanParams.push(nodeId);
+      chanWhere += ` AND node_id = $${chanParams.length}`;
+    }
+    const chans = await pool.query<{ node_id: string; channel_name: string }>(
+      `SELECT DISTINCT node_id, channel_name FROM node_site_snapshots WHERE ${chanWhere}`,
+      chanParams,
+    );
+    if (chans.rows.length === 0) return [];
+    const nodes = [...new Set(chans.rows.map((x) => x.node_id))];
+    const names = [...new Set(chans.rows.map((x) => x.channel_name.trim()))];
+    const pairKey = new Set(chans.rows.map((x) => `${x.node_id}\u0000${x.channel_name.trim()}`));
+
+    const ev = await pool.query<{ node_id: string; at_ms: string; channel: string; kind: string }>(
+      `SELECT node_id, at_ms, channel, kind FROM node_chanmgr_log
+        WHERE node_id = ANY($1::text[]) AND channel = ANY($2::text[]) AND at_ms >= $3
+        ORDER BY at_ms ASC`,
+      [nodes, names, startMs - 86400_000], // a day of lookback catches holds opened before the window
+    );
+
+    const open = new Map<string, number>();
+    const raw: Array<{ from: number; to: number }> = [];
+    for (const e of ev.rows) {
+      const key = `${e.node_id}\u0000${e.channel.trim()}`;
+      if (!pairKey.has(key)) continue; // same name on an unrelated node
+      const at = Number(e.at_ms);
+      if (e.kind === 'stopped' || e.kind === 'recovered') {
+        if (!open.has(key)) open.set(key, at);
+      } else if (e.kind === 'probeFail') {
+        if (!open.has(key)) open.set(key, Math.max(startMs, at - 20 * 60_000));
+      } else if (e.kind === 'probePass' || e.kind === 'released') {
+        const from = open.get(key);
+        if (from !== undefined) {
+          raw.push({ from, to: at });
+          open.delete(key);
+        }
+      }
+    }
+    for (const from of open.values()) raw.push({ from, to: nowMs });
+
+    // Clamp + merge.
+    const clamped = raw
+      .map((h) => ({ from: Math.max(h.from, startMs), to: Math.min(h.to, nowMs) }))
+      .filter((h) => h.to > h.from)
+      .sort((x, y) => x.from - y.from);
+    const merged: typeof clamped = [];
+    for (const h of clamped) {
+      const last = merged[merged.length - 1];
+      if (last && h.from <= last.to) last.to = Math.max(last.to, h.to);
+      else merged.push({ ...h });
+    }
+    return merged.map((h) => ({ from: new Date(h.from).toISOString(), to: new Date(h.to).toISOString() }));
+  } catch (err) {
+    log.warn({ err }, 'site-decode holds lookup failed');
+    return [];
+  }
+}
+
 // ---------------------------------------------------------------------------
 // GET /api/node-data/site-decode?system=&rfss=&site=[&window=&node=]
 //
@@ -4972,20 +5060,42 @@ nodeDataRouter.get('/api/node-data/site-decode', requireRole(canViewNodeData), a
       params,
     );
 
+    // Gap-fill to CONTINUOUS buckets. The chart draws a category axis, so a
+    // bucket that simply isn't there collapses to one invisible step — a
+    // three-hour outage looked like a single tick. With every bucket present
+    // (null where nothing was heard) the axis is time-proportional and the
+    // chart can shade the silence.
+    const bucketMs = bucketMinutes * 60_000;
+    const nowMs = Date.now();
+    const startMs = Math.floor((nowMs - intervalMs(interval)) / bucketMs) * bucketMs;
+    const byBucket = new Map<number, (typeof r.rows)[number]>();
+    for (const x of r.rows) byBucket.set(new Date(x.bucket).getTime(), x);
+    const points: Array<Record<string, unknown>> = [];
+    for (let t = startMs; t <= nowMs; t += bucketMs) {
+      const x = byBucket.get(t);
+      points.push({
+        at: new Date(t).toISOString(),
+        decodePct: x && x.decode_pct !== null ? Number(x.decode_pct) : null,
+        decodeMin: x && x.decode_min !== null ? Number(x.decode_min) : null,
+        signalDbfs: x && x.signal_dbfs !== null ? Number(x.signal_dbfs) : null,
+        invalidFrames: x && x.invalid_frames !== null ? Number(x.invalid_frames) : null,
+        samples: x ? num(x.samples) : 0,
+      });
+    }
+
+    // Intervals the automatic channel manager held this site's channel(s)
+    // (auto-stopped / probing), from the persisted audit log — the chart
+    // shades these yellow, and silence NOT explained by them red.
+    const holds = await siteChanMgrHolds(pool, system, rfss, site, nodeId, startMs, nowMs);
+
     return c.json({
       range,
       bucketMinutes,
       /** Retention ceiling, so the UI can label/limit its own range picker
        *  instead of hard-coding a number that has to track the pruner. */
       maxRangeDays: 7,
-      points: r.rows.map((x) => ({
-        at: iso(x.bucket),
-        decodePct: x.decode_pct !== null ? Number(x.decode_pct) : null,
-        decodeMin: x.decode_min !== null ? Number(x.decode_min) : null,
-        signalDbfs: x.signal_dbfs !== null ? Number(x.signal_dbfs) : null,
-        invalidFrames: x.invalid_frames !== null ? Number(x.invalid_frames) : null,
-        samples: num(x.samples),
-      })),
+      points,
+      holds,
     });
   } catch (err) {
     log.error({ err }, '/api/node-data/site-decode error');

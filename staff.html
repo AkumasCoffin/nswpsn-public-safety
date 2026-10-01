@@ -4223,7 +4223,7 @@
             </div>
             <div class="nd-panel-b flush"><div class="nd-table-scroll" id="nd-cfg-channels"></div></div>
             <div class="nd-cfg-actions">
-              <label class="nd-am-toggle" title="Automatic channel management for this node: a trunked channel decoding below 40% for 10 continuous minutes — or below 20% for 5 — is stopped, then retested every 20 minutes and restored when it recovers. Analog channels and channels without a decode metric are never touched.">
+              <label class="nd-am-toggle" title="Automatic channel management for this node: a trunked channel decoding below 50% for 10 continuous minutes — or below 20% for 5 — is stopped, then retested every 20 minutes and restored when it recovers. Analog channels and channels without a decode metric are never touched.">
                 <input type="checkbox" id="nd-cfg-automanage" checked> Auto channel management
               </label>
               <button class="btn btn-secondary btn-sm" onclick="_ndCfgAddChannel()"><i class="fas fa-plus"></i> Add channel</button>
@@ -7736,6 +7736,49 @@
         if (_nd2DecodeChart) { _nd2DecodeChart.destroy(); _nd2DecodeChart = null; }
         if (!hasData) return;
 
+        // Shade the silence. Yellow = the channel manager held the channel
+        // (auto-stopped / probing); red = nothing heard and the manager wasn't
+        // holding it (channel stopped by hand, node down). Bands live in
+        // bucket-index space because the axis is a category axis.
+        const ptMs = pts.map(p => new Date(p.at).getTime());
+        const bucketMs = (d.bucketMinutes || 1) * 60000;
+        const inHold = (t) => (d.holds || []).some(h =>
+          t + bucketMs > new Date(h.from).getTime() && t < new Date(h.to).getTime());
+        const empty = pts.map((p, i) => p.decodePct == null && p.signalDbfs == null);
+        // Leading silence is unknowable (the site may simply not have existed
+        // in this window yet) — only shade from the first heard bucket on.
+        const firstData = empty.indexOf(false);
+        const bands = [];
+        let run = null;
+        for (let i = 0; i < pts.length; i++) {
+          const kind = (firstData >= 0 && i > firstData && empty[i])
+            ? (inHold(ptMs[i]) ? 'auto' : 'off') : null;
+          if (kind && run && run.kind === kind && run.to === i - 1) { run.to = i; continue; }
+          if (run) bands.push(run);
+          run = kind ? { kind, from: i, to: i } : null;
+        }
+        if (run) bands.push(run);
+        const bandPlugin = {
+          id: 'nd2DecodeBands',
+          beforeDatasetsDraw(chart) {
+            if (!bands.length) return;
+            const { ctx, chartArea, scales } = chart;
+            if (!chartArea || !scales.x) return;
+            ctx.save();
+            for (const b of bands) {
+              const half = (scales.x.getPixelForValue(1) - scales.x.getPixelForValue(0)) / 2 || 2;
+              const x0 = Math.max(chartArea.left, scales.x.getPixelForValue(b.from) - half);
+              const x1 = Math.min(chartArea.right, scales.x.getPixelForValue(b.to) + half);
+              ctx.fillStyle = b.kind === 'auto' ? 'rgba(234,179,8,0.14)' : 'rgba(239,68,68,0.12)';
+              ctx.fillRect(x0, chartArea.top, Math.max(1, x1 - x0), chartArea.bottom - chartArea.top);
+            }
+            ctx.restore();
+          },
+        };
+        if (noteEl && bands.length) {
+          noteEl.textContent += ' · yellow = auto-stopped · red = not decoding';
+        }
+
         // Category axis with pre-formatted labels — Chart.js has no date
         // adapter loaded here, and a time-scale axis throws mid-render.
         const labels = pts.map(p => {
@@ -7747,6 +7790,7 @@
         });
         _nd2DecodeChart = new Chart(canvas, {
           type: 'line',
+          plugins: [bandPlugin],
           data: {
             labels,
             datasets: [
@@ -12396,7 +12440,7 @@
       let stateTitle = '';
       if (mgrStopped) {
         const next = mgrRow.nextProbeAtMs ? new Date(mgrRow.nextProbeAtMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null;
-        const why = mgrRow.reason || 'decode below 40% for 10 min / 20% for 5 min';
+        const why = mgrRow.reason || 'decode below 50% for 10 min / 20% for 5 min';
         stateTitle = `Stopped automatically — ${why}. Retested every 20 min${next ? ' (next ~' + next + ')' : ''}.`;
       } else if (mgrProbing) {
         stateTitle = 'Auto-management is retesting this channel (start → lock → decode check, about a minute).';
@@ -13156,7 +13200,7 @@
         const detailBody = _ndDecoderFieldsHtml(i, decoder, c.decoderConfig || {});
         return `<tr id="nd-ch-row-${i}">
           <td><span class="nd-ch-en"><input type="checkbox" id="nd-ch-${i}-auto" title="Auto-start this channel when the node comes up" ${c.autoStart !== false ? 'checked' : ''}></span></td>
-          <td><span class="nd-ch-en"><input type="checkbox" id="nd-ch-${i}-am" title="Let auto-management stop this channel when it decodes below 40% for 10 min or below 20% for 5 min (and retest it every 20 min)" ${c.autoManage !== false ? 'checked' : ''}></span></td>
+          <td><span class="nd-ch-en"><input type="checkbox" id="nd-ch-${i}-am" title="Let auto-management stop this channel when it decodes below 50% for 10 min or below 20% for 5 min (and retest it every 20 min)" ${c.autoManage !== false ? 'checked' : ''}></span></td>
           <td class="nd-ch-w-name"><input type="text" id="nd-ch-${i}-name" placeholder="Channel name" value="${escapeHtml(c.name || '')}"></td>
           <td class="nd-ch-w-sys"><input type="text" id="nd-ch-${i}-sys" placeholder="System" value="${escapeHtml(c.system || '')}"></td>
           <td class="nd-ch-w-sys"><input type="text" id="nd-ch-${i}-site" placeholder="Site" value="${escapeHtml(c.site || '')}"></td>

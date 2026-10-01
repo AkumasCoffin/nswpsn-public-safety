@@ -277,7 +277,7 @@ func TestSlowTierStillFiresWithoutSevere(t *testing.T) {
 		t.Fatalf("want the 10-minute rule to fire, got %v", f.calls)
 	}
 	e := m.entries["A"]
-	if e == nil || !strings.Contains(e.reason, "below 40%") {
+	if e == nil || !strings.Contains(e.reason, "below 50%") {
 		t.Fatalf("want a below-40%% reason, got %+v", e)
 	}
 }

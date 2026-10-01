@@ -1,5 +1,5 @@
 // Package chanmgr is the automatic channel manager: a channel whose decode
-// health sits below 40% for 10 continuous minutes is stopped (it is burning a
+// health sits below 50% for 10 continuous minutes is stopped (it is burning a
 // tuner for nothing), then retested every 20 minutes — started, given time to
 // lock and for the quality metric to mean something, and restored only once it
 // decodes properly again.
@@ -45,13 +45,13 @@ const (
 	intervalJitter = 2 * time.Second
 
 	// lowThresholdPct: decode health below this is "not working".
-	lowThresholdPct = 40.0
+	lowThresholdPct = 50.0
 	// lowDwell: how long a channel must stay below threshold before it is
 	// stopped. Every measured sample at/above threshold resets the clock.
 	lowDwell = 10 * time.Minute
 	// severeThresholdPct/severeDwell: the fast tier. Below 20% the channel is
 	// not marginal, it is dead air — no need to wait out the full 10 minutes.
-	// Its clock runs alongside the 40% one: a sample in [20,40) resets only
+	// Its clock runs alongside the 50% one: a sample in [20,50) resets only
 	// the severe clock, a sample at/above 40 resets both.
 	severeThresholdPct = 20.0
 	severeDwell        = 5 * time.Minute
@@ -143,7 +143,7 @@ const (
 
 type entry struct {
 	state        chanState
-	lowSince     time.Time // lowWatch: first measured sample below 40% of the streak
+	lowSince     time.Time // lowWatch: first measured sample below 50% of the streak
 	severeSince  time.Time // lowWatch: first measured sample below 20% of the current severe streak (zero = none)
 	stoppedAt    time.Time // autoStopped: when we stopped it
 	lastProbeAt  time.Time // autoStopped: last probe (or the stop itself)
@@ -425,7 +425,7 @@ func (m *Manager) detect(live map[string]sdrctl.Channel, pol Policy, now time.Ti
 			continue
 		}
 		// The severe clock only runs while samples stay below 20%: a reading
-		// in [20,40) ends the severe streak but leaves the 40% streak running.
+		// in [20,50) ends the severe streak but leaves the 50% streak running.
 		if pct >= severeThresholdPct {
 			e.severeSince = time.Time{}
 		} else if e.severeSince.IsZero() {
