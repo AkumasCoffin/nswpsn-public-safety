@@ -6,25 +6,25 @@
   <script defer src="https://analytics.forcequit.xyz/recorder.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Become an Editor | AusAware</title>
+  <title>Sign up | AusAware</title>
   
   <!-- Open Graph / Facebook -->
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://nswpsn.forcequit.xyz/signup">
-  <meta property="og:title" content="Become a Forcequit Editor">
+  <meta property="og:title" content="Sign up for AusAware">
   <meta property="og:site_name" content="AusAware">
-  <meta property="og:description" content="Request editor access to contribute to AusAware - real-time emergency services mapping for Australia.">
+  <meta property="og:description" content="Create a free AusAware account, or apply to contribute — map editing, feeder nodes, and The Wire.">
   <meta property="og:image" content="https://nswpsn.forcequit.xyz/assets/AusAware_filled_background.jpg">
   
   <!-- Twitter -->
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/signup">
-  <meta name="twitter:title" content="Become a Forcequit Editor">
-  <meta name="twitter:description" content="Request editor access to contribute to AusAware - real-time emergency services mapping for Australia.">
+  <meta name="twitter:title" content="Sign up for AusAware">
+  <meta name="twitter:description" content="Create a free AusAware account, or apply to contribute — map editing, feeder nodes, and The Wire.">
   <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/AusAware_filled_background.jpg">
   
   <!-- Standard Meta -->
-  <meta name="description" content="Request editor access to contribute to AusAware - real-time emergency services mapping for Australia.">
+  <meta name="description" content="Create a free AusAware account, or apply to contribute — map editing, feeder nodes, and The Wire.">
   <meta name="theme-color" content="#f97316">
   
   <link rel="canonical" href="https://nswpsn.forcequit.xyz/signup">
@@ -356,7 +356,7 @@
     <div class="header">
       <div class="logo">
         <img src="./assets/ausaware-icon-192.png" alt="AusAware">
-        <div class="logo-text">Forcequit <span>Editor</span></div>
+        <div class="logo-text">Aus<span>Aware</span></div>
       </div>
       <p class="subtitle">AusAware</p>
     </div>
@@ -416,20 +416,29 @@
             <i class="fab fa-discord"></i>
             Sign up with Discord
           </button>
-          <p style="color:#64748b; font-size:0.78rem; margin-top:0.5rem; text-align:center;">
+          <p id="discord-method-note" style="color:#64748b; font-size:0.78rem; margin-top:0.5rem; text-align:center;">
             Fill out the form first — you'll link Discord when you submit, and no account is created until then.
           </p>
           <button type="button" id="email-signup-btn" onclick="chooseEmailSignup()" style="width:100%; margin-top:0.9rem; padding:0.9rem 1.5rem; background:rgba(255,255,255,0.07); color:var(--text-primary); border:1px solid var(--border-subtle); border-radius:8px; font-weight:700; font-size:0.95rem; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:0.5rem; font-family:inherit; transition:background 0.2s;">
             <i class="fas fa-envelope"></i>
             Sign up with Email
           </button>
-          <p style="color:#64748b; font-size:0.78rem; margin-top:0.5rem; text-align:center;">
+          <p id="email-method-note" style="color:#64748b; font-size:0.78rem; margin-top:0.5rem; text-align:center;">
             You'll choose a display name and password as part of the form.
           </p>
         </div>
         <div id="discord-linked-box" style="display:none; margin-bottom:1.5rem; background:rgba(88,101,242,0.12); border:1px solid rgba(88,101,242,0.4); border-radius:8px; padding:0.85rem 1rem; font-size:0.85rem; color:#c7d2fe;">
           <i class="fab fa-discord" style="margin-right:0.4rem;"></i>
           Signed in as <strong id="discord-linked-name"></strong> — this request will be linked to your account.
+        </div>
+        <div id="already-signed-in-box" style="display:none; margin-bottom:1.5rem; background:rgba(34,197,94,0.1); border:1px solid rgba(34,197,94,0.35); border-radius:8px; padding:0.85rem 1rem; font-size:0.85rem; color:#bbf7d0;">
+          <i class="fas fa-circle-check" style="margin-right:0.4rem; color:#4ade80;"></i>
+          You're already signed in — your account is ready to use.
+          <div style="margin-top:0.6rem;">
+            <a href="/" style="color:#86efac;">Go to the site</a> ·
+            <a href="contact" style="color:#86efac;">Contact &amp; Support</a> ·
+            <a href="#" onclick="backToAccountType(); return false;" style="color:#86efac;">Apply to contribute instead</a>
+          </div>
         </div>
 
         <form id="signup-form" style="display: none;" onsubmit="submitRequest(event); return false;">
@@ -791,6 +800,38 @@
           ? 'Choose how you would like to create your account.'
           : "First, choose how you'd like to create your account — then fill out the request form.";
       }
+      // The two method captions must match the path: a plain User has no form,
+      // so the Discord button goes STRAIGHT to Discord — saying "fill out the
+      // form first" there was flatly wrong. Contributors keep the deferred-link
+      // wording, because for them it is true.
+      const dNote = document.getElementById('discord-method-note');
+      if (dNote) {
+        dNote.textContent = isUser
+          ? 'Opens Discord to authorise — your account is created right away.'
+          : "Fill out the form first — you'll link Discord when you submit, and no account is created until then.";
+      }
+      const eNote = document.getElementById('email-method-note');
+      if (eNote) {
+        eNote.textContent = isUser
+          ? 'Pick a username and password — ready in seconds.'
+          : "You'll choose a display name and password as part of the form.";
+      }
+      // Already signed in: a plain User has nothing to create, and a
+      // contributor goes straight to the request form — the method chooser is
+      // only for visitors who still need an account.
+      if (_session) {
+        document.getElementById('signup-method-chooser').style.display = 'none';
+        if (isUser) {
+          document.getElementById('already-signed-in-box').style.display = 'block';
+          const t2 = document.getElementById('signup-card-title');
+          if (t2) t2.textContent = "You're all set";
+          const d2 = document.getElementById('signup-card-desc');
+          if (d2) d2.textContent = 'This account can already open tickets, comment, and use the site.';
+          return;
+        }
+        revealSignedInForm();
+        return;
+      }
       // Contributor-only form sections are hidden for the plain User path.
       // Their `required` fields must also be DISABLED: a hidden-but-required
       // control blocks form submission and can't be focused to show the
@@ -802,6 +843,7 @@
     function backToAccountType() {
       document.getElementById('signup-method-chooser').style.display = 'none';
       document.getElementById('signup-form').style.display = 'none';
+      document.getElementById('already-signed-in-box').style.display = 'none';
       document.getElementById('account-type-chooser').style.display = 'block';
       const infoBox = document.getElementById('contributor-info-box');
       if (infoBox) infoBox.style.display = 'none';
@@ -875,6 +917,10 @@
     // Set when a PLAIN USER signup hands off to Discord OAuth — on return we
     // just grant 'authed' and finish (there's no request form to replay).
     const PLAIN_USER_KEY = 'nswpsn:pendingPlainUserSignup';
+    // The restored/established Supabase session (null = signed out). Drives the
+    // signed-in branches of the chooser so the page never shows account-creation
+    // steps to someone who already has an account.
+    let _session = null;
 
     // Step-1 chooser → Discord path: reveal the form WITHOUT signing in. The
     // Discord account is created only when the user submits (see submitRequest),
@@ -1154,18 +1200,40 @@
       if (nameEl) {
         nameEl.textContent = meta.full_name || meta.name || meta.user_name || user.email || 'your account';
       }
-      // Signed in (Discord return or existing session): skip the method
-      // chooser and open the request form directly — account fields and
-      // the back-to-chooser link don't apply.
+      _session = session;
+
+      // Reveal the request form ONLY when the contributor path is active —
+      // chosen via ?as=, a click, or a pending Discord-return stash. This used
+      // to fire unconditionally, which rendered the account-type chooser AND
+      // the full request form stacked on one page for any signed-in visitor.
+      let pendingStash = false;
+      try { pendingStash = !!localStorage.getItem(PENDING_DISCORD_KEY) || !!localStorage.getItem(PLAIN_USER_KEY); } catch (e) {}
+      if (_accountType === 'contributor' || pendingStash) {
+        revealSignedInForm();
+      } else if (_accountType === 'user') {
+        // e.g. ?as=user while already signed in: nothing to create.
+        document.getElementById('signup-method-chooser').style.display = 'none';
+        document.getElementById('already-signed-in-box').style.display = 'block';
+        const t2 = document.getElementById('signup-card-title');
+        if (t2) t2.textContent = "You're all set";
+      }
+
+      // If the user completed the form before the Discord redirect, submit it now.
+      maybeSubmitPendingDiscordSignup(session);
+    }
+
+    /** Signed-in reveal of the contributor request form: no method chooser, no
+     *  password/email fields, linked-account box on show. */
+    function revealSignedInForm() {
       document.getElementById('signup-method-chooser').style.display = 'none';
       document.getElementById('discord-linked-box').style.display = 'block';
       document.getElementById('signup-form').style.display = 'block';
       document.getElementById('choose-method-back').style.display = 'none';
       // Already signed in — no password to create.
       document.getElementById('password-group').style.display = 'none';
-
-      // If the user completed the form before the Discord redirect, submit it now.
-      maybeSubmitPendingDiscordSignup(session);
+      const eg = document.getElementById('email-group');
+      if (eg) eg.style.display = 'none';
+      syncHiddenFieldValidation();
     }
 
     // Prepare the form for a signed-in user, whether the session is restored on
