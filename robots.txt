@@ -64,6 +64,7 @@ Disallow: /change-password
 Disallow: /dashboard
 Disallow: /map-editor
 Disallow: /staff
+Disallow: /contact
 # Internal data + backend artefacts.
 Disallow: /backends/
 Disallow: /data/
@@ -83,6 +84,7 @@ Disallow: /change-password
 Disallow: /dashboard
 Disallow: /map-editor
 Disallow: /staff
+Disallow: /contact
 # Internal data + backend artefacts.
 Disallow: /backends/
 Disallow: /data/

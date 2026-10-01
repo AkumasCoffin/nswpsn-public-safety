@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script defer src="https://analytics.forcequit.xyz/script.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
+  <script defer src="https://analytics.forcequit.xyz/recorder.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
+  <meta charset="UTF-8" />
+  <title>AusAware – Contact</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0" />
+  <meta name="theme-color" content="#0f172a">
+  <!-- Personal support threads live here — keep it out of search. -->
+  <meta name="robots" content="noindex">
+
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="./assets/ausaware-icon-192.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="./assets/ausaware-icon-180.png">
+  <link rel="manifest" href="./site.webmanifest">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <script src="auth-common.js"></script>
+
+  <style>
+    /* Ticket status chips + the conversation thread. Everything else is
+       styles.css house classes. */
+    .tk-status { display:inline-block; font-size:0.68rem; font-weight:600; text-transform:uppercase;
+      letter-spacing:0.05em; border-radius:999px; padding:0.15rem 0.6rem; }
+    .tk-status.open { background:rgba(249,115,22,0.15); color:#fdba74; }
+    .tk-status.awaiting_user { background:rgba(56,189,248,0.15); color:#7dd3fc; }
+    .tk-status.closed { background:rgba(148,163,184,0.15); color:#94a3b8; }
+    .tk-row { display:flex; align-items:center; gap:0.8rem; padding:0.75rem 0.9rem; border:1px solid var(--border-subtle);
+      border-radius:10px; margin-bottom:0.6rem; cursor:pointer; transition:border-color 0.15s, background 0.15s; }
+    .tk-row:hover { border-color:var(--accent); background:rgba(249,115,22,0.05); }
+    .tk-row-main { flex:1; min-width:0; }
+    .tk-row-subject { font-weight:600; color:var(--text-main); font-size:0.92rem;
+      overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .tk-row-meta { font-size:0.72rem; color:var(--text-soft); margin-top:0.15rem; }
+    .tk-msg { max-width:85%; border-radius:12px; padding:0.65rem 0.85rem; margin-bottom:0.65rem; font-size:0.88rem; line-height:1.5; }
+    .tk-msg.user { background:rgba(249,115,22,0.12); border:1px solid rgba(249,115,22,0.25); margin-left:auto; }
+    .tk-msg.staff { background:rgba(56,189,248,0.1); border:1px solid rgba(56,189,248,0.25); margin-right:auto; }
+    .tk-msg-head { font-size:0.7rem; color:var(--text-soft); margin-bottom:0.25rem; }
+    .tk-msg-head strong { color:var(--text-muted); }
+    .tk-banner { border-radius:8px; padding:0.7rem 1rem; margin-bottom:1rem; font-size:0.85rem; }
+    .tk-banner.err { background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.4); color:#fca5a5; }
+    .tk-banner.ok { background:rgba(34,197,94,0.12); border:1px solid rgba(34,197,94,0.4); color:#86efac; }
+    .tk-banner.info { background:rgba(56,189,248,0.12); border:1px solid rgba(56,189,248,0.4); color:#bae6fd; }
+  </style>
+</head>
+<body>
+
+  <div class="mobile-header">
+    <div class="mobile-logo">Forcequit <span>Contact</span></div>
+    <button class="mobile-menu-btn" onclick="toggleSidebar()">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+    </button>
+  </div>
+
+  <div class="menu-overlay" onclick="toggleSidebar()"></div>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo"><img src="./assets/ausaware-icon-192.png" alt="" class="sidebar-logo-mark"><span class="sidebar-logo-text">Aus<span>Aware</span></span></div>
+    <div class="sidebar-byline">by Forcequit</div>
+    <div class="sidebar-subtitle">Live emergency awareness for Australia — incidents, radio and public safety data.</div>
+
+    <div class="sidebar-section-label">Sections</div>
+    <nav class="sidebar-nav">
+      <a href="/">Home / Overview</a>
+      <a href="live" style="color: #fca5a5;">Live Data / Scanner</a>
+      <a href="map">Incident Map</a>
+      <a href="logs">Incident Logs</a>
+      <a href="links">Useful Links</a>
+      <a href="data-sources">Data Sources</a>
+      <a class="active" href="about">About &amp; Contact</a>
+    </nav>
+
+    <div id="agencies-nav-mount"></div>
+
+    <div class="sidebar-section-label">Listen Live</div>
+    <div class="sidebar-highlight">
+      <div class="sidebar-highlight-title">Direct Feeds</div>
+      <div>Radio &amp; pager scanners hosted by Forcequit</div>
+      <div style="margin-top:0.45rem;">
+        <a class="listen-btn-wide" href="feeds">
+          Direct Feeds
+        </a>
+      </div>
+    </div>
+    <div style="margin-top:0.45rem;">
+      <a class="discord-btn-wide" href="https://discord.forcequit.xyz" target="_blank" rel="noopener noreferrer">
+        Support Discord
+      </a>
+    </div>
+    <div style="margin-top:0.3rem;">
+      <a class="discord-btn-wide" href="dashboard" target="_blank" rel="noopener noreferrer">
+        Discord Bot
+      </a>
+    </div>
+    <div class="sidebar-footer">AusAware · Run by Forcequit</div>
+  </aside>
+
+  <main class="main">
+    <header class="main-header">
+      <div class="breadcrumb">Contact</div>
+      <h1>📨 Contact &amp; Support</h1>
+      <p>Open a support ticket and we'll get back to you — replies land here and in your notifications.</p>
+    </header>
+
+    <section class="card-grid">
+
+      <!-- Signed out: tickets need an account -->
+      <article class="card card-wide" id="tk-signed-out" style="display:none;">
+        <div class="card-header">
+          <div class="card-title">Opening a ticket requires an account</div>
+          <div class="card-tag">Sign in</div>
+        </div>
+        <div class="card-body">
+          <p>
+            Support tickets are tied to your account so we can reply to you and you can follow the
+            conversation. Creating a user account is free and instant — no application needed.
+          </p>
+          <p style="margin-top:0.8rem;">
+            <a class="btn btn-primary" href="signup?as=user&amp;reason=contact">Create an account</a>
+            <a class="btn btn-secondary" href="login?redirect=/contact" style="margin-left:0.5rem;">Sign in</a>
+          </p>
+          <p style="margin-top:1rem; color:var(--text-soft); font-size:0.8rem;">
+            Locked out of your account? Email <a href="mailto:contact@forcequit.xyz">contact@forcequit.xyz</a>.
+          </p>
+        </div>
+      </article>
+
+      <!-- Signed in: new ticket + your tickets -->
+      <article class="card card-wide" id="tk-new-card" style="display:none;">
+        <div class="card-header">
+          <div class="card-title">Open a ticket</div>
+          <div class="card-tag">New</div>
+        </div>
+        <div class="card-body">
+          <div id="tk-new-banner"></div>
+          <div class="form-group">
+            <label class="form-label" for="tk-subject">Subject</label>
+            <input class="form-input" id="tk-subject" maxlength="140" placeholder="What's this about?">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="tk-category">Category</label>
+            <select class="form-select" id="tk-category"></select>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="tk-body">Message</label>
+            <textarea class="form-textarea" id="tk-body" maxlength="5000" placeholder="Tell us what's going on — the more detail the better."></textarea>
+          </div>
+          <button class="btn btn-primary" id="tk-submit" onclick="tkCreate()">Open ticket</button>
+        </div>
+      </article>
+
+      <article class="card card-wide" id="tk-list-card" style="display:none;">
+        <div class="card-header">
+          <div class="card-title">Your tickets</div>
+          <div class="card-tag" id="tk-list-tag">Tickets</div>
+        </div>
+        <div class="card-body">
+          <div id="tk-list"></div>
+        </div>
+      </article>
+
+      <!-- Thread view (replaces the list when a ticket is open) -->
+      <article class="card card-wide" id="tk-thread-card" style="display:none;">
+        <div class="card-header">
+          <div class="card-title" id="tk-thread-title">Ticket</div>
+          <div class="card-tag"><a href="#" onclick="tkBack(); return false;" style="color:inherit; text-decoration:none;">← All tickets</a></div>
+        </div>
+        <div class="card-body">
+          <div id="tk-thread-meta" style="margin-bottom:0.9rem;"></div>
+          <div id="tk-thread"></div>
+          <div id="tk-reply-banner"></div>
+          <div id="tk-reply-box" style="margin-top:1rem;">
+            <div class="form-group">
+              <label class="form-label" for="tk-reply">Reply</label>
+              <textarea class="form-textarea" id="tk-reply" maxlength="5000" placeholder="Write a reply…"></textarea>
+            </div>
+            <button class="btn btn-primary" id="tk-reply-btn" onclick="tkReply()">Send reply</button>
+            <span id="tk-reopen-note" style="display:none; margin-left:0.7rem; color:var(--text-soft); font-size:0.78rem;">
+              This ticket is closed — replying will reopen it.
+            </span>
+          </div>
+        </div>
+      </article>
+
+    </section>
+
+    <div class="main-footer-note">
+      Contact &amp; Support · <a href="about">About</a> · <a href="privacy">Privacy Policy</a> · <a href="terms">Terms &amp; Conditions</a>
+    </div>
+  </main>
+
+  <script src="idle-guard.js"></script>
+  <script>
+    function toggleSidebar() {
+      const sidebar = document.getElementById('sidebar');
+      const overlay = document.querySelector('.menu-overlay');
+      sidebar.classList.toggle('open');
+      overlay.classList.toggle('active');
+    }
+
+    // ======== TICKETS ========
+    const API_BASE = (typeof API_BASE_URL !== 'undefined') ? API_BASE_URL : 'https://api.forcequit.xyz';
+
+    const TK_CATEGORIES = {
+      general: 'General question',
+      account: 'Account help',
+      data_correction: 'Data correction',
+      feeder_node: 'Feeder node help',
+      bug: 'Bug report',
+      other: 'Other',
+    };
+    const TK_STATUS = {
+      open: 'Open',
+      awaiting_user: 'Awaiting your reply',
+      closed: 'Closed',
+    };
+
+    let tkTickets = [];
+    let tkCurrent = null; // the open ticket id
+
+    const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+    async function tkHeaders() {
+      const { data } = await sb.auth.getSession();
+      const t = data.session?.access_token;
+      return t ? { 'Authorization': 'Bearer ' + t, 'Content-Type': 'application/json' } : null;
+    }
+
+    function tkBanner(elId, kind, text) {
+      const el = document.getElementById(elId);
+      if (el) el.innerHTML = text ? `<div class="tk-banner ${kind}">${esc(text)}</div>` : '';
+    }
+
+    function tkAgo(iso) {
+      const ms = Date.now() - new Date(iso).getTime();
+      if (!isFinite(ms) || ms < 0) return '';
+      const m = Math.floor(ms / 60000);
+      if (m < 1) return 'just now';
+      if (m < 60) return m + 'm ago';
+      const h = Math.floor(m / 60);
+      if (h < 24) return h + 'h ago';
+      return Math.floor(h / 24) + 'd ago';
+    }
+
+    function tkRenderList() {
+      const el = document.getElementById('tk-list');
+      if (!el) return;
+      if (!tkTickets.length) {
+        el.innerHTML = '<p style="color:var(--text-soft);">No tickets yet — open one above and it will show here.</p>';
+        return;
+      }
+      el.innerHTML = tkTickets.map((t) => `
+        <div class="tk-row" onclick="tkOpen(${Number(t.id)})">
+          <div class="tk-row-main">
+            <div class="tk-row-subject">${esc(t.subject)}</div>
+            <div class="tk-row-meta">#${Number(t.id)} · ${esc(TK_CATEGORIES[t.category] || t.category)} · ${esc(tkAgo(t.lastMessageAt || t.updatedAt))}${t.createdByStaff ? ' · opened by staff' : ''}</div>
+          </div>
+          <span class="tk-status ${esc(t.status)}">${esc(TK_STATUS[t.status] || t.status)}</span>
+        </div>`).join('');
+      const tag = document.getElementById('tk-list-tag');
+      if (tag) tag.textContent = tkTickets.length + (tkTickets.length === 1 ? ' ticket' : ' tickets');
+    }
+
+    async function tkLoadList() {
+      const headers = await tkHeaders();
+      if (!headers) return;
+      try {
+        const res = await fetch(`${API_BASE}/api/tickets`, { headers });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const j = await res.json();
+        tkTickets = Array.isArray(j.tickets) ? j.tickets : [];
+        tkRenderList();
+      } catch (e) {
+        const el = document.getElementById('tk-list');
+        if (el) el.innerHTML = '<p style="color:#fca5a5;">Could not load your tickets — try refreshing.</p>';
+      }
+    }
+
+    async function tkOpen(id) {
+      const headers = await tkHeaders();
+      if (!headers) return;
+      tkBanner('tk-reply-banner', '', '');
+      try {
+        const res = await fetch(`${API_BASE}/api/tickets/${id}`, { headers });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const j = await res.json();
+        tkCurrent = id;
+        const t = j.ticket;
+        document.getElementById('tk-thread-title').textContent = `#${t.id} · ${t.subject}`;
+        document.getElementById('tk-thread-meta').innerHTML =
+          `<span class="tk-status ${esc(t.status)}">${esc(TK_STATUS[t.status] || t.status)}</span>` +
+          ` <span style="color:var(--text-soft); font-size:0.78rem; margin-left:0.5rem;">${esc(TK_CATEGORIES[t.category] || t.category)}${t.closedByName ? ' · closed by ' + esc(t.closedByName) : ''}</span>`;
+        document.getElementById('tk-thread').innerHTML = (j.messages || []).map((m) => `
+          <div class="tk-msg ${m.isStaff ? 'staff' : 'user'}">
+            <div class="tk-msg-head"><strong>${esc(m.authorName)}</strong>${m.isStaff ? ' · staff' : ''} · ${esc(tkAgo(m.createdAt))}</div>
+            <div>${esc(m.body).replace(/\n/g, '<br>')}</div>
+          </div>`).join('');
+        document.getElementById('tk-reopen-note').style.display = t.status === 'closed' ? '' : 'none';
+        document.getElementById('tk-list-card').style.display = 'none';
+        document.getElementById('tk-new-card').style.display = 'none';
+        document.getElementById('tk-thread-card').style.display = '';
+      } catch (e) {
+        tkBanner('tk-new-banner', 'err', 'Could not open that ticket.');
+      }
+    }
+
+    function tkBack() {
+      tkCurrent = null;
+      document.getElementById('tk-thread-card').style.display = 'none';
+      document.getElementById('tk-new-card').style.display = '';
+      document.getElementById('tk-list-card').style.display = '';
+      tkLoadList();
+      // Drop the deep-link param so refresh lands on the list.
+      if (location.search.includes('t=')) history.replaceState(null, '', 'contact');
+    }
+
+    async function tkCreate() {
+      const subject = document.getElementById('tk-subject').value.trim();
+      const category = document.getElementById('tk-category').value;
+      const body = document.getElementById('tk-body').value.trim();
+      if (subject.length < 3) { tkBanner('tk-new-banner', 'err', 'Subject needs at least 3 characters.'); return; }
+      if (!body) { tkBanner('tk-new-banner', 'err', 'Write a message first.'); return; }
+      const headers = await tkHeaders();
+      if (!headers) return;
+      const btn = document.getElementById('tk-submit');
+      btn.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE}/api/tickets`, {
+          method: 'POST', headers, body: JSON.stringify({ subject, category, body }),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(j.error || ('HTTP ' + res.status));
+        document.getElementById('tk-subject').value = '';
+        document.getElementById('tk-body').value = '';
+        tkBanner('tk-new-banner', 'ok', 'Ticket opened — we\'ll get back to you.');
+        await tkLoadList();
+        tkOpen(j.ticket.id);
+      } catch (e) {
+        tkBanner('tk-new-banner', 'err', e.message || 'Could not open the ticket.');
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function tkReply() {
+      if (tkCurrent == null) return;
+      const body = document.getElementById('tk-reply').value.trim();
+      if (!body) { tkBanner('tk-reply-banner', 'err', 'Write a reply first.'); return; }
+      const headers = await tkHeaders();
+      if (!headers) return;
+      const btn = document.getElementById('tk-reply-btn');
+      btn.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE}/api/tickets/${tkCurrent}/reply`, {
+          method: 'POST', headers, body: JSON.stringify({ body }),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(j.error || ('HTTP ' + res.status));
+        document.getElementById('tk-reply').value = '';
+        tkOpen(tkCurrent); // re-render the thread with the new message + status
+      } catch (e) {
+        tkBanner('tk-reply-banner', 'err', e.message || 'Could not send the reply.');
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function tkBoot() {
+      // Category options.
+      const sel = document.getElementById('tk-category');
+      sel.innerHTML = Object.entries(TK_CATEGORIES)
+        .map(([v, label]) => `<option value="${v}">${esc(label)}</option>`).join('');
+
+      const { data } = await sb.auth.getSession();
+      if (!data.session) {
+        document.getElementById('tk-signed-out').style.display = '';
+        return;
+      }
+      document.getElementById('tk-new-card').style.display = '';
+      document.getElementById('tk-list-card').style.display = '';
+      await tkLoadList();
+      // Deep link from a notification: /contact?t=<id>
+      const t = Number(new URLSearchParams(location.search).get('t'));
+      if (Number.isInteger(t) && t > 0) tkOpen(t);
+    }
+
+    tkBoot();
+
+    // ======== HEARTBEAT SYSTEM ========
+    const PROXY_BASE = 'https://api.forcequit.xyz';
+    let heartbeatTimer = null;
+
+    const PAGE_ID = localStorage.getItem('nswpsn_session_id') || (() => {
+      const id = 'session-' + (crypto.randomUUID ? crypto.randomUUID() :
+        'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+          const r = Math.random() * 16 | 0;
+          return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+        }));
+      localStorage.setItem('nswpsn_session_id', id);
+      return id;
+    })();
+    const PAGE_TYPE = 'contact';
+    const IS_DATA_PAGE = false;
+
+    async function sendHeartbeat(action = 'ping') {
+      try {
+        await fetch(`${PROXY_BASE}/api/heartbeat?action=${action}&page_id=${PAGE_ID}&page_type=${PAGE_TYPE}&data_page=${IS_DATA_PAGE}`);
+      } catch (e) {}
+    }
+
+    sendHeartbeat('open');
+
+    function startHeartbeat() {
+      if (heartbeatTimer) return;
+      heartbeatTimer = setInterval(() => sendHeartbeat('ping'), 60000);
+    }
+
+    function stopHeartbeat() {
+      if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+    }
+
+    startHeartbeat();
+
+    if (window.idleGuard) {
+      idleGuard.onChange((isIdle) => {
+        if (isIdle) { stopHeartbeat(); sendHeartbeat('close'); }
+        else { sendHeartbeat('open'); startHeartbeat(); }
+      });
+    }
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) { stopHeartbeat(); }
+      else if (!(window.idleGuard && idleGuard.isIdle())) { sendHeartbeat('ping'); startHeartbeat(); }
+    });
+  </script>
+<script src="analytics.js"></script>
+<script src="agencies.js"></script>
+</body>
+</html>

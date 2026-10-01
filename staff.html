@@ -869,6 +869,20 @@
     .nd-state.probing::before { animation: nd-pulse 1.1s ease-in-out infinite; }
     .nd-am-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-soft); cursor: pointer; user-select: none; }
     .nd-mgr-badge { display: inline-block; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; border: 1px solid; border-radius: 4px; padding: 0 5px; opacity: 0.9; }
+    /* Tickets tab */
+    .tk-pill.active { background: rgba(249,115,22,0.18); border-color: rgba(249,115,22,0.5); color: #fdba74; }
+    .tk-srow { display:flex; align-items:center; gap:0.8rem; padding:0.7rem 0.9rem; border:1px solid var(--border-subtle); border-radius:10px; margin-bottom:0.55rem; cursor:pointer; }
+    .tk-srow:hover { border-color: var(--accent, #f97316); }
+    .tk-schip { display:inline-block; font-size:0.66rem; font-weight:600; text-transform:uppercase; letter-spacing:0.04em; border-radius:999px; padding:0.14rem 0.55rem; }
+    .tk-schip.open { background:rgba(249,115,22,0.15); color:#fdba74; }
+    .tk-schip.awaiting_user { background:rgba(56,189,248,0.15); color:#7dd3fc; }
+    .tk-schip.closed { background:rgba(148,163,184,0.15); color:#94a3b8; }
+    .tk-smsg { max-width:85%; border-radius:12px; padding:0.6rem 0.8rem; margin-bottom:0.6rem; font-size:0.86rem; line-height:1.5; }
+    .tk-smsg.staff { background:rgba(56,189,248,0.1); border:1px solid rgba(56,189,248,0.25); margin-left:auto; }
+    .tk-smsg.user { background:rgba(249,115,22,0.1); border:1px solid rgba(249,115,22,0.22); margin-right:auto; }
+    .tk-smsg-head { font-size:0.68rem; color:var(--text-soft); margin-bottom:0.2rem; }
+    .tk-urow { display:flex; gap:0.6rem; align-items:center; padding:0.45rem 0.6rem; border:1px solid var(--border-subtle); border-radius:8px; margin-bottom:0.35rem; cursor:pointer; font-size:0.82rem; }
+    .tk-urow:hover { border-color: var(--accent, #f97316); }
     .nd-am-toggle input { accent-color: #38bdf8; }
     .nd-state.call::before,
     .nd-state.control::before { animation: nd-pulse 1.1s ease-in-out infinite; }
@@ -2905,6 +2919,70 @@
         <button class="tab-btn" data-tab="nodes" onclick="switchTab('nodes')">
           <i class="fas fa-satellite-dish"></i> Nodes
         </button>
+        <button class="tab-btn" data-tab="tickets" id="tickets-tab-btn" onclick="switchTab('tickets')">
+          <i class="fas fa-ticket"></i> Tickets
+          <span class="badge" id="tickets-badge" style="display:none;">0</span>
+        </button>
+      </div>
+
+      <!-- Tickets tab (contact tickets — owner + support role) -->
+      <div id="tickets-tab" class="tab-content">
+        <div style="display:flex; align-items:center; gap:0.6rem; flex-wrap:wrap; margin-bottom:1rem;">
+          <div id="tk-filters" style="display:flex; gap:0.4rem; flex-wrap:wrap;">
+            <button class="btn btn-secondary btn-sm tk-pill active" data-tkfilter="open" onclick="_tkSetFilter('open')">Needs reply <span id="tk-count-open" class="dd-count" style="display:none;"></span></button>
+            <button class="btn btn-secondary btn-sm tk-pill" data-tkfilter="awaiting_user" onclick="_tkSetFilter('awaiting_user')">Waiting on user</button>
+            <button class="btn btn-secondary btn-sm tk-pill" data-tkfilter="closed" onclick="_tkSetFilter('closed')">Closed</button>
+            <button class="btn btn-secondary btn-sm tk-pill" data-tkfilter="all" onclick="_tkSetFilter('all')">All</button>
+          </div>
+          <span style="flex:1;"></span>
+          <button class="btn btn-primary btn-sm" onclick="_tkNewOpen()"><i class="fas fa-plus"></i> New ticket</button>
+        </div>
+        <div id="tk-staff-list"></div>
+        <div id="tk-staff-detail" style="display:none;">
+          <div style="display:flex; align-items:center; gap:0.7rem; margin-bottom:0.8rem; flex-wrap:wrap;">
+            <button class="btn btn-secondary btn-sm" onclick="_tkBackToList()"><i class="fas fa-arrow-left"></i> All tickets</button>
+            <div id="tk-detail-title" style="font-weight:600; flex:1; min-width:200px;"></div>
+            <button class="btn btn-secondary btn-sm" id="tk-reopen-btn" style="display:none;" onclick="_tkReopen()"><i class="fas fa-rotate-left"></i> Reopen</button>
+            <button class="btn btn-danger btn-sm" id="tk-close-btn" onclick="_tkCloseTicket()"><i class="fas fa-check"></i> Close ticket</button>
+          </div>
+          <div id="tk-detail-meta" style="margin-bottom:0.8rem; font-size:0.8rem; color:var(--text-soft);"></div>
+          <div id="tk-detail-thread"></div>
+          <div style="margin-top:1rem;">
+            <textarea id="tk-staff-reply" maxlength="5000" placeholder="Reply to the user…" style="width:100%; box-sizing:border-box; min-height:90px; background:rgba(2,6,23,0.5); border:1px solid var(--border-subtle); border-radius:8px; color:var(--text-main); padding:0.6rem; font-family:inherit; font-size:0.88rem; resize:vertical;"></textarea>
+            <div style="margin-top:0.5rem; display:flex; align-items:center; gap:0.7rem;">
+              <button class="btn btn-primary btn-sm" id="tk-staff-reply-btn" onclick="_tkStaffReply()"><i class="fas fa-paper-plane"></i> Send reply</button>
+              <span id="tk-detail-note" style="color:var(--text-soft); font-size:0.78rem;"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- New-ticket modal: staff opens a ticket AT a user -->
+        <div id="tk-new-modal" style="display:none; position:fixed; inset:0; z-index:1300; background:rgba(2,6,23,0.7); align-items:center; justify-content:center;">
+          <div style="background:var(--bg-elevated, #10131b); border:1px solid var(--border-subtle, rgba(148,163,184,0.35)); border-radius:12px; width:min(560px, 92vw); max-height:88vh; overflow-y:auto; padding:1.2rem;">
+            <div style="display:flex; align-items:center; margin-bottom:0.9rem;">
+              <div style="font-weight:600; flex:1;"><i class="fas fa-ticket"></i> New ticket</div>
+              <button class="btn btn-secondary btn-sm" onclick="_tkNewClose()">&times;</button>
+            </div>
+            <div style="font-size:0.78rem; color:var(--text-soft); margin-bottom:0.8rem;">
+              Opens a ticket at a user — it appears on their Contact page, they get a notification,
+              and the ball starts in their court.
+            </div>
+            <label style="display:block; font-size:0.72rem; color:var(--text-soft); text-transform:uppercase; margin-bottom:0.3rem;">User</label>
+            <input id="tk-new-user-q" placeholder="Search by name or email…" oninput="_tkUserSearchDebounced()" style="width:100%; box-sizing:border-box; background:rgba(2,6,23,0.5); border:1px solid var(--border-subtle); border-radius:8px; color:var(--text-main); padding:0.55rem; font-family:inherit; font-size:0.85rem;">
+            <div id="tk-new-user-results" style="margin-top:0.4rem;"></div>
+            <div id="tk-new-user-picked" style="margin:0.5rem 0 0.9rem; font-size:0.82rem;"></div>
+            <label style="display:block; font-size:0.72rem; color:var(--text-soft); text-transform:uppercase; margin-bottom:0.3rem;">Subject</label>
+            <input id="tk-new-subject" maxlength="140" style="width:100%; box-sizing:border-box; background:rgba(2,6,23,0.5); border:1px solid var(--border-subtle); border-radius:8px; color:var(--text-main); padding:0.55rem; font-family:inherit; font-size:0.85rem; margin-bottom:0.8rem;">
+            <label style="display:block; font-size:0.72rem; color:var(--text-soft); text-transform:uppercase; margin-bottom:0.3rem;">Category</label>
+            <select id="tk-new-category" style="width:100%; box-sizing:border-box; background:rgba(2,6,23,0.5); border:1px solid var(--border-subtle); border-radius:8px; color:var(--text-main); padding:0.55rem; font-family:inherit; font-size:0.85rem; margin-bottom:0.8rem;"></select>
+            <label style="display:block; font-size:0.72rem; color:var(--text-soft); text-transform:uppercase; margin-bottom:0.3rem;">Message</label>
+            <textarea id="tk-new-body" maxlength="5000" style="width:100%; box-sizing:border-box; min-height:110px; background:rgba(2,6,23,0.5); border:1px solid var(--border-subtle); border-radius:8px; color:var(--text-main); padding:0.55rem; font-family:inherit; font-size:0.85rem; resize:vertical;"></textarea>
+            <div style="margin-top:0.9rem; text-align:right;">
+              <button class="btn btn-secondary btn-sm" onclick="_tkNewClose()">Cancel</button>
+              <button class="btn btn-primary btn-sm" id="tk-new-submit" onclick="_tkCreateAtUser()" style="margin-left:0.4rem;">Open ticket</button>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- Requests Tab (kind chosen from the integrated Requests dropdown in the
@@ -4707,6 +4785,13 @@
       }
       if (tab === 'nodes' && allNodes.length === 0) {
         loadNodes();
+      }
+
+      if (tab === 'tickets') {
+        loadTickets();
+        startTicketsPolling();
+      } else {
+        stopTicketsPolling();
       }
 
       // Dev tab: start polling /api/status when entered, stop when left.
@@ -14529,6 +14614,8 @@
         // Backends that predate the Data tab return a `tabs` block without
         // `data` — mirror the Nodes visibility until the server catches up.
         if (tabs.data === undefined) tabs.data = !!tabs.nodes;
+        // Backends that predate the Tickets tab: owner only.
+        if (tabs.tickets === undefined) tabs.tickets = !!result.is_owner;
         // Nodes-tab write access. Newer backends return can_manage_nodes; older
         // ones (that only ever gated nodes on owner|dev) didn't — fall back to
         // owner|dev so existing staff keep full control during a partial deploy.
@@ -14551,6 +14638,7 @@
 
         // Apply UI restrictions based on permissions
         applyPermissionRestrictions();
+        if (tabs.tickets) _tkRefreshBadge();
         
       } catch (error) {
         console.error('Error checking admin status:', error);
@@ -14589,6 +14677,8 @@
         if (tabs.users) openAuthView(view === 'members' ? 'members' : 'users');
       } else if (view === 'nodes') {
         if (tabs.nodes) switchTab('nodes');
+      } else if (view === 'tickets') {
+        if (tabs.tickets) switchTab('tickets');
       }
     }
     
@@ -14603,6 +14693,8 @@
       const devBtn = document.querySelector('[data-tab="dev"]');
       const datBtn = document.querySelector('[data-tab="data"]');
       const nodBtn = document.querySelector('[data-tab="nodes"]');
+      const tkBtn = document.querySelector('[data-tab="tickets"]');
+      if (tkBtn) tkBtn.style.display = tabs.tickets ? '' : 'none';
       if (reqBtn) reqBtn.style.display = tabs.requests ? '' : 'none';
       if (usrBtn) usrBtn.style.display = tabs.users    ? '' : 'none';
       if (devBtn) devBtn.style.display = tabs.dev      ? '' : 'none';
@@ -14618,6 +14710,7 @@
       // dev-only user would open the page on the (now-hidden) Requests
       // tab and stare at an empty container.
       const defaultTab = tabs.requests ? 'requests' :
+                         tabs.tickets  ? 'tickets' :
                          tabs.users    ? 'users' :
                          tabs.dev      ? 'dev' :
                          tabs.data     ? 'data' :
@@ -14696,12 +14789,251 @@
     // ---- Discord notifications ---------------------------------------
     // One channel per kind. Saves on change; the server validates that each
     // id is a snowflake and stores it in app_settings (not an env file).
+    // === Tickets tab (contact tickets: owner + support) ===
+    const TK_CATEGORIES = {
+      general: 'General question', account: 'Account help', data_correction: 'Data correction',
+      feeder_node: 'Feeder node help', bug: 'Bug report', other: 'Other',
+    };
+    const TK_STATUS_STAFF = { open: 'Needs reply', awaiting_user: 'Waiting on user', closed: 'Closed' };
+    let _tkFilter = 'open';
+    let _tkTickets = [];
+    let _tkOpenId = null;
+    let _tkTimer = null;
+    let _tkPicked = null; // {id, username, email} chosen in the new-ticket modal
+    let _tkSearchT = null;
+
+    async function _tkApi(path, opts) {
+      const res = await fetch(`${API_BASE_URL}${path}`, {
+        ...(opts || {}),
+        headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json', ...((opts || {}).headers || {}) },
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j.error || ('HTTP ' + res.status));
+      return j;
+    }
+
+    function startTicketsPolling() {
+      if (_tkTimer) return;
+      _tkTimer = setInterval(() => { if (_tkOpenId == null) loadTickets(); }, 30000);
+    }
+    function stopTicketsPolling() {
+      if (_tkTimer) { clearInterval(_tkTimer); _tkTimer = null; }
+    }
+
+    function _tkSetFilter(f) {
+      _tkFilter = f;
+      document.querySelectorAll('#tk-filters .tk-pill').forEach((b) => b.classList.toggle('active', b.dataset.tkfilter === f));
+      loadTickets();
+    }
+
+    function _tkAgo(iso) {
+      const ms = Date.now() - new Date(iso).getTime();
+      if (!isFinite(ms) || ms < 0) return '';
+      const m = Math.floor(ms / 60000);
+      if (m < 1) return 'just now';
+      if (m < 60) return m + 'm ago';
+      const h = Math.floor(m / 60);
+      return h < 24 ? h + 'h ago' : Math.floor(h / 24) + 'd ago';
+    }
+
+    function _tkBadge(counts) {
+      const el = document.getElementById('tickets-badge');
+      if (!el) return;
+      const n = counts && counts.open ? counts.open : 0;
+      el.textContent = n;
+      el.style.display = n > 0 ? '' : 'none';
+      const fc = document.getElementById('tk-count-open');
+      if (fc) { fc.textContent = n; fc.style.display = n > 0 ? '' : 'none'; }
+    }
+
+    async function _tkRefreshBadge() {
+      try {
+        const j = await _tkApi('/api/staff/tickets?status=open');
+        _tkBadge(j.counts);
+      } catch (e) { /* badge is best-effort */ }
+    }
+
+    async function loadTickets() {
+      const el = document.getElementById('tk-staff-list');
+      if (!el) return;
+      try {
+        const j = await _tkApi(`/api/staff/tickets?status=${encodeURIComponent(_tkFilter)}`);
+        _tkTickets = j.tickets || [];
+        _tkBadge(j.counts);
+        if (!_tkTickets.length) {
+          el.innerHTML = '<div style="color:var(--text-soft); padding:1rem;">Nothing here.</div>';
+          return;
+        }
+        el.innerHTML = _tkTickets.map((t) => `
+          <div class="tk-srow" onclick="_tkOpenTicket(${Number(t.id)})">
+            <div style="flex:1; min-width:0;">
+              <div style="font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(t.subject)}</div>
+              <div style="font-size:0.72rem; color:var(--text-soft); margin-top:0.15rem;">
+                #${Number(t.id)} · ${escapeHtml(t.userName || t.userId || '')} · ${escapeHtml(TK_CATEGORIES[t.category] || t.category)} · ${escapeHtml(_tkAgo(t.lastMessageAt || t.updatedAt))}${t.createdByStaff ? ' · staff-opened' : ''} · ${Number(t.messageCount || 0)} msg
+              </div>
+            </div>
+            <span class="tk-schip ${escapeHtml(t.status)}">${escapeHtml(TK_STATUS_STAFF[t.status] || t.status)}</span>
+          </div>`).join('');
+      } catch (e) {
+        el.innerHTML = `<div style="color:#f87171; padding:1rem;">Could not load tickets: ${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    async function _tkOpenTicket(id) {
+      try {
+        const j = await _tkApi(`/api/tickets/${id}`);
+        _tkOpenId = id;
+        const t = j.ticket;
+        document.getElementById('tk-detail-title').textContent = `#${t.id} · ${t.subject}`;
+        document.getElementById('tk-detail-meta').innerHTML =
+          `<span class="tk-schip ${escapeHtml(t.status)}">${escapeHtml(TK_STATUS_STAFF[t.status] || t.status)}</span>` +
+          ` ${escapeHtml(t.userName || t.userId || '')} · ${escapeHtml(TK_CATEGORIES[t.category] || t.category)}` +
+          (t.closedByName ? ` · closed by ${escapeHtml(t.closedByName)}` : '');
+        document.getElementById('tk-detail-thread').innerHTML = (j.messages || []).map((m) => `
+          <div class="tk-smsg ${m.isStaff ? 'staff' : 'user'}">
+            <div class="tk-smsg-head"><strong>${escapeHtml(m.authorName)}</strong>${m.isStaff ? ' · staff' : ''} · ${escapeHtml(_tkAgo(m.createdAt))}</div>
+            <div>${escapeHtml(m.body).replace(/\n/g, '<br>')}</div>
+          </div>`).join('');
+        document.getElementById('tk-close-btn').style.display = t.status === 'closed' ? 'none' : '';
+        document.getElementById('tk-reopen-btn').style.display = t.status === 'closed' ? '' : 'none';
+        document.getElementById('tk-detail-note').textContent =
+          t.status === 'closed' ? 'Replying reopens the ticket (status: waiting on user).' : '';
+        document.getElementById('tk-staff-list').style.display = 'none';
+        document.getElementById('tk-staff-detail').style.display = '';
+      } catch (e) {
+        showToast('Could not open ticket: ' + e.message, 'error');
+      }
+    }
+
+    function _tkBackToList() {
+      _tkOpenId = null;
+      document.getElementById('tk-staff-detail').style.display = 'none';
+      document.getElementById('tk-staff-list').style.display = '';
+      loadTickets();
+    }
+
+    async function _tkStaffReply() {
+      if (_tkOpenId == null) return;
+      const ta = document.getElementById('tk-staff-reply');
+      const body = ta.value.trim();
+      if (!body) { showToast('Write a reply first.', 'warn'); return; }
+      const btn = document.getElementById('tk-staff-reply-btn');
+      btn.disabled = true;
+      try {
+        await _tkApi(`/api/staff/tickets/${_tkOpenId}/reply`, { method: 'POST', body: JSON.stringify({ body }) });
+        ta.value = '';
+        _tkOpenTicket(_tkOpenId);
+        _tkRefreshBadge();
+      } catch (e) {
+        showToast('Reply failed: ' + e.message, 'error');
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function _tkCloseTicket() {
+      if (_tkOpenId == null) return;
+      const ok = (typeof uiConfirm === 'function')
+        ? await uiConfirm({ title: 'Close ticket', message: 'Close this ticket? The user is notified and can reopen it by replying.', confirmText: 'Close ticket' })
+        : confirm('Close this ticket?');
+      if (!ok) return;
+      try {
+        await _tkApi(`/api/staff/tickets/${_tkOpenId}/close`, { method: 'POST' });
+        showToast('Ticket closed.', 'success');
+        _tkOpenTicket(_tkOpenId);
+        _tkRefreshBadge();
+      } catch (e) {
+        showToast('Close failed: ' + e.message, 'error');
+      }
+    }
+
+    async function _tkReopen() {
+      if (_tkOpenId == null) return;
+      try {
+        await _tkApi(`/api/staff/tickets/${_tkOpenId}/reopen`, { method: 'POST' });
+        showToast('Ticket reopened.', 'success');
+        _tkOpenTicket(_tkOpenId);
+        _tkRefreshBadge();
+      } catch (e) {
+        showToast('Reopen failed: ' + e.message, 'error');
+      }
+    }
+
+    // --- staff-initiated ticket (New ticket modal) ---
+    function _tkNewOpen() {
+      _tkPicked = null;
+      document.getElementById('tk-new-user-q').value = '';
+      document.getElementById('tk-new-user-results').innerHTML = '';
+      document.getElementById('tk-new-user-picked').innerHTML = '';
+      document.getElementById('tk-new-subject').value = '';
+      document.getElementById('tk-new-body').value = '';
+      const sel = document.getElementById('tk-new-category');
+      sel.innerHTML = Object.entries(TK_CATEGORIES).map(([v, l]) => `<option value="${v}">${escapeHtml(l)}</option>`).join('');
+      document.getElementById('tk-new-modal').style.display = 'flex';
+    }
+    function _tkNewClose() { document.getElementById('tk-new-modal').style.display = 'none'; }
+
+    function _tkUserSearchDebounced() {
+      if (_tkSearchT) clearTimeout(_tkSearchT);
+      _tkSearchT = setTimeout(_tkUserSearch, 300);
+    }
+    async function _tkUserSearch() {
+      const q = document.getElementById('tk-new-user-q').value.trim();
+      const out = document.getElementById('tk-new-user-results');
+      if (q.length < 2) { out.innerHTML = ''; return; }
+      try {
+        const j = await _tkApi(`/api/staff/tickets/user-search?q=${encodeURIComponent(q)}`);
+        const users = j.users || [];
+        out.innerHTML = users.length
+          ? users.map((u, i) => `<div class="tk-urow" onclick="_tkPickUser(${i})"><i class="fas fa-user" style="color:var(--text-soft);"></i> <strong>${escapeHtml(u.username)}</strong> <span style="color:var(--text-soft);">${escapeHtml(u.email)}</span></div>`).join('')
+          : '<div style="color:var(--text-soft); font-size:0.8rem; padding:0.3rem;">No matches.</div>';
+        _tkSearchResults = users;
+      } catch (e) {
+        out.innerHTML = `<div style="color:#f87171; font-size:0.8rem;">${escapeHtml(e.message)}</div>`;
+      }
+    }
+    let _tkSearchResults = [];
+    function _tkPickUser(i) {
+      _tkPicked = _tkSearchResults[i] || null;
+      if (!_tkPicked) return;
+      document.getElementById('tk-new-user-results').innerHTML = '';
+      document.getElementById('tk-new-user-q').value = '';
+      document.getElementById('tk-new-user-picked').innerHTML =
+        `<i class="fas fa-circle-check" style="color:#4ade80;"></i> ${escapeHtml(_tkPicked.username)} <span style="color:var(--text-soft);">${escapeHtml(_tkPicked.email)}</span>`;
+    }
+
+    async function _tkCreateAtUser() {
+      if (!_tkPicked) { showToast('Pick a user first.', 'warn'); return; }
+      const subject = document.getElementById('tk-new-subject').value.trim();
+      const category = document.getElementById('tk-new-category').value;
+      const body = document.getElementById('tk-new-body').value.trim();
+      if (subject.length < 3) { showToast('Subject needs at least 3 characters.', 'warn'); return; }
+      if (!body) { showToast('Write a message first.', 'warn'); return; }
+      const btn = document.getElementById('tk-new-submit');
+      btn.disabled = true;
+      try {
+        const j = await _tkApi('/api/staff/tickets', {
+          method: 'POST',
+          body: JSON.stringify({ user_id: _tkPicked.id, subject, category, body }),
+        });
+        _tkNewClose();
+        showToast('Ticket opened — the user has been notified.', 'success');
+        await loadTickets();
+        _tkOpenTicket(j.ticket.id);
+      } catch (e) {
+        showToast('Could not open the ticket: ' + e.message, 'error');
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
     const DN_KINDS = [
       ['signup_request', 'Signup requests', 'New access requests, and their approval or rejection.'],
       ['wire_approval', 'Wire approvals', 'Posts entering the approval queue, and the decision.'],
       ['wire_takedown', 'Wire takedowns', 'Takedown notices filed, upheld or rejected.'],
       ['new_user', 'New accounts', 'Someone creates an account. No name is sent \u2014 just the signal.'],
       ['new_node', 'New feeder nodes', 'A contributor creates a radio or pager node.'],
+      ['ticket', 'Contact tickets', 'New tickets and user replies; closing a ticket edits the message in place.'],
     ];
     let _dnState = { guild_id: null, channels: {}, guilds: [], channelList: [], delivery: {} };
 
@@ -15390,6 +15722,7 @@
       'feeder:manager':     { icon: 'fa-solid fa-screwdriver-wrench', label: 'Feeder · Manager', group: 'Feeder' },
       'map:editor':         { icon: 'fa-solid fa-pen-to-square',  label: 'Map · Editor',       group: 'Map' },
       'map:manager':        { icon: 'fa-solid fa-map-location-dot', label: 'Map · Manager',    group: 'Map' },
+      'support':            { icon: 'fa-solid fa-headset',        label: 'Support',      group: 'Site' },
       // Legacy names (pre-migration rows) — shown so nothing renders as raw text.
       'team_member':        { icon: 'fa-solid fa-user-shield',    label: 'Staff (legacy)',     group: 'Site' },
       'media_feeder':       { icon: 'fa-solid fa-camera',         label: 'Wire · Contributor (legacy)', group: 'The Wire' },
@@ -15433,6 +15766,7 @@
     // Managers are NOT privileged — any staff may assign them; only owner/staff
     // are gated behind can_assign_privileged_roles.
     const ASSIGNABLE_ROLE_GROUPS = [
+      { group: 'Site',     roles: ['support'] },
       { group: 'The Wire', roles: ['wire:contributor', 'wire:manager'] },
       { group: 'Feeder',   roles: ['feeder:radio', 'feeder:pager', 'feeder:adsb', 'feeder:agency_data', 'feeder:monitor', 'feeder:manager'] },
       { group: 'Map',      roles: ['map:editor', 'map:manager'] },
@@ -15452,6 +15786,7 @@
       'map:manager': 'Map editor oversight',
       'staff': 'Approve signups + manage users/roles',
       'owner': 'Full admin access',
+      'support': 'Handle contact tickets (staff Tickets tab only)',
     };
     /** Render grouped role checkboxes into a container. idPrefix keeps the
      *  approval + edit-roles modals independent. */

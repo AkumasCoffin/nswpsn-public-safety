@@ -1215,6 +1215,22 @@
       }
     })();
 
+    // Sent here from the contact page — opening a support ticket requires an
+    // account. Someone who already has one shouldn't see a signup form at all:
+    // bounce them straight back to the contact page once the session resolves.
+    if (new URLSearchParams(location.search).get('reason') === 'contact') {
+      sb.auth.getSession().then(({ data }) => {
+        if (data.session) { location.replace('contact'); return; }
+        const fc = document.getElementById('form-container');
+        if (fc) {
+          const b = document.createElement('div');
+          b.style.cssText = 'background:rgba(56,189,248,0.12); border:1px solid rgba(56,189,248,0.4); border-radius:8px; padding:0.75rem 1rem; margin-bottom:1rem; color:#bae6fd; font-size:0.9rem;';
+          b.textContent = 'Opening a support ticket requires an account — sign up below, then head back to the Contact page.';
+          fc.insertBefore(b, fc.firstChild);
+        }
+      });
+    }
+
     // Sent here from the login page's orphan guard (tried to log in without an
     // account) — explain they need to sign up.
     if (new URLSearchParams(location.search).get('welcome') === '1') {
