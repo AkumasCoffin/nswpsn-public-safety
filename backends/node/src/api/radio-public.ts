@@ -10,19 +10,23 @@
  * GET /api/radio/monitored-sites
  *
  * Which P25 sites the fleet is receiving RIGHT NOW, for the map's repeater
- * layer to badge. "Right now" is defined by node_site_snapshots.received_at:
- * every radio agent re-upserts its snapshot per (node, system, rfss, site)
- * about once a minute REGARDLESS of traffic, so freshness there is a live
- * lock — unlike call events, which go quiet whenever the network does. The
- * five-minute window is ~3 poll intervals: one missed poll doesn't flicker
- * the badge, a stopped node clears it within minutes.
+ * layer to badge. "Right now" is vce's OWN clock — site_last_seen_ms, when
+ * the decoder last actually heard the site — inside a five-minute window
+ * (~3 report intervals: one missed poll doesn't flicker the badge, a stopped
+ * channel clears within minutes).
  *
- * Two predicates are load-bearing (both borrowed from /api/node-data/system):
- * nothing ever prunes node_site_snapshots, so WITHOUT the freshness filter
- * every site a node ever saw would read as monitored forever; and
- * channel_name IS NOT NULL keeps it to sites a node actually has a channel
- * for, excluding the many neighbour sites SDR-Trunk merely learns about from
- * control broadcasts.
+ * THREE predicates are load-bearing. received_at freshness and
+ * channel_name IS NOT NULL come from /api/node-data/system (nothing ever
+ * prunes this table, and neighbour sites SDR-Trunk merely learns about from
+ * control broadcasts carry no channel). The site_last_seen_ms window is this
+ * endpoint's own, found the hard way: the agent re-reports EVERY site it has
+ * observed on every poll, so a site whose channel was STOPPED still got a
+ * fresh received_at each minute and badged as monitored (observed live: a
+ * stopped channel "confirmed 77s ago", and six-hour-old observations from a
+ * second node re-reported fresh forever). site_last_seen_ms freezes the
+ * moment decoding stops, so IT carries the liveness; received_at stays as
+ * the belt, because vce's clock is the node's clock and a node with a wrong
+ * clock must not pin sites to the map on timestamps nobody here minted.
  *
  * The response carries site identity only — rfss/site (and the zero-padded
  * "004-083" form the public GRN dataset uses), the decoded site name, NAC,
@@ -77,11 +81,13 @@ radioPublicRouter.get('/api/radio/monitored-sites', async (c) => {
     }>(
       `SELECT rfss, site_id,
               MAX(nac) AS nac,
-              (ARRAY_AGG(channel_name ORDER BY received_at DESC))[1] AS name,
+              (ARRAY_AGG(channel_name ORDER BY site_last_seen_ms DESC))[1] AS name,
               COUNT(DISTINCT node_id) AS nodes,
-              MAX(received_at) AS last_seen
+              to_timestamp(MAX(site_last_seen_ms) / 1000.0) AS last_seen
          FROM node_site_snapshots
         WHERE received_at >= now() - ($1 || ' seconds')::interval
+          AND site_last_seen_ms IS NOT NULL
+          AND to_timestamp(site_last_seen_ms / 1000.0) >= now() - ($1 || ' seconds')::interval
           AND channel_name IS NOT NULL
           AND rfss >= 0 AND site_id >= 0
         GROUP BY rfss, site_id
