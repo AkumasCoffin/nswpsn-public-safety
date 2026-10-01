@@ -43,6 +43,7 @@ import {
   type NodePatch,
 } from '../services/nodes/registry.js';
 import { hub } from '../services/nodes/hub.js';
+import { listChanMgrLog } from '../services/nodes/chanmgrLog.js';
 import { nodeUptimeMany } from '../services/nodes/nodeUptime.js';
 import { liveCallWindow } from '../services/nodeCallWindow.js';
 import { isAgentCommandAction } from '../services/nodes/protocol.js';
@@ -287,6 +288,23 @@ nodesRouter.get('/api/nodes/:id', requireRole(canViewNodeData), async (c) => {
   } catch (err) {
     log.error({ err, id }, 'Error fetching node');
     return c.json({ error: 'Failed to fetch node' }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/nodes/:id/chanmgr-log — the automatic channel manager's audit log
+// (auto-stops, each retest with its verdict, restores). Last 50, newest first;
+// persisted server-side so it survives agent restarts and offline nodes.
+// ---------------------------------------------------------------------------
+nodesRouter.get('/api/nodes/:id/chanmgr-log', requireRole(canViewNodeData), async (c) => {
+  const id = c.req.param('id');
+  try {
+    const node = await getNode(id);
+    if (!node) return c.json({ error: 'node not found' }, 404);
+    return c.json({ entries: await listChanMgrLog(id) });
+  } catch (err) {
+    log.error({ err, id }, 'Error fetching chanmgr log');
+    return c.json({ error: 'Failed to fetch log' }, 500);
   }
 });
 

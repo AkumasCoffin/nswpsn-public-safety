@@ -152,6 +152,53 @@ func TestDwellFiresAtTenMinutesSuppressBeforeStop(t *testing.T) {
 	if row["state"] != "autoStopped" {
 		t.Fatalf("want autoStopped, got %v", row["state"])
 	}
+	logs := snap["log"].([]logEntry)
+	if len(logs) != 1 || logs[0].Kind != "stopped" || logs[0].Channel != "RFS Illawarra" {
+		t.Fatalf("want one 'stopped' log entry, got %+v", logs)
+	}
+}
+
+func TestLogRingCapsAtFifty(t *testing.T) {
+	f := newFake()
+	m := f.manager()
+	for i := 0; i < logCap+20; i++ {
+		m.logEvent(fmt.Sprintf("C%d", i), "stopped", "x")
+	}
+	logs := m.Snapshot().(map[string]any)["log"].([]logEntry)
+	if len(logs) != logCap {
+		t.Fatalf("want %d entries, got %d", logCap, len(logs))
+	}
+	// Newest survive: the first 20 must have been shed.
+	if logs[0].Channel != "C20" || logs[logCap-1].Channel != fmt.Sprintf("C%d", logCap+19) {
+		t.Fatalf("ring kept the wrong end: first=%s last=%s", logs[0].Channel, logs[logCap-1].Channel)
+	}
+}
+
+func TestProbeOutcomesAreLogged(t *testing.T) {
+	f := newFake()
+	c := f.add(1, "A", fptr(5))
+	m := f.manager()
+	f.seedPast(m)
+	runDwell(m, f, lowDwell+time.Minute)
+
+	f.onFetch = func(f *fake) {
+		if c.Processing {
+			c.State = "CONTROL"
+			c.Control = true
+			c.SyncPercent = fptr(88)
+		}
+	}
+	f.now = f.now.Add(probeInterval + actionQuiesce)
+	m.Tick(context.Background())
+
+	logs := m.Snapshot().(map[string]any)["log"].([]logEntry)
+	kinds := make([]string, len(logs))
+	for i, e := range logs {
+		kinds[i] = e.Kind
+	}
+	if len(logs) != 2 || kinds[0] != "stopped" || kinds[1] != "probePass" {
+		t.Fatalf("want [stopped probePass], got %v", kinds)
+	}
 }
 
 func TestHealthySampleResetsDwell(t *testing.T) {

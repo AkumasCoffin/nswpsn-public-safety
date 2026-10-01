@@ -868,6 +868,7 @@
     .nd-state.probing{ background: rgba(192, 132, 252, 0.16); color: #c084fc; border: 1px solid rgba(192, 132, 252, 0.3); }
     .nd-state.probing::before { animation: nd-pulse 1.1s ease-in-out infinite; }
     .nd-am-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-soft); cursor: pointer; user-select: none; }
+    .nd-mgr-badge { display: inline-block; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; border: 1px solid; border-radius: 4px; padding: 0 5px; opacity: 0.9; }
     .nd-am-toggle input { accent-color: #38bdf8; }
     .nd-state.call::before,
     .nd-state.control::before { animation: nd-pulse 1.1s ease-in-out infinite; }
@@ -4160,6 +4161,18 @@
               </div>
               <div class="nd-panel-b"><div class="nd-events" id="nd-events"></div></div>
             </div>
+          </div>
+
+          <!-- Automatic channel management audit log (radio only): every
+               auto-stop, every retest with its verdict, every restore.
+               Served from the backend, so it survives agent restarts. -->
+          <div class="nd-panel nd-radio-only">
+            <div class="nd-panel-h">
+              <i class="fas fa-wand-magic-sparkles"></i> Auto-management log
+              <span class="nd-h-spacer"></span>
+              <span class="nd-sub" style="text-transform:none; letter-spacing:0; font-weight:400;">newest first · last 50</span>
+            </div>
+            <div class="nd-panel-b"><div class="nd-events" id="nd-mgr-log"></div></div>
           </div>
         </div>
       </div>
@@ -10425,6 +10438,7 @@
     let _ndAuthed = false;
     let _ndStatus = null;          // last status object we saw (null = none yet)
     let _ndChanMgr = null;         // status.channelManager (auto channel management state)
+    let _ndMgrLog = [];            // auto-management audit log (fetched + live-merged), newest first
     let _ndPrevMgr = {};           // previous channelManager.channels, for transition log lines
     let _ndTuners = [];
     let _ndTunersSig = null;        // signature of the current tuner SET (serial+type list); full-rebuild only when this changes
@@ -10494,7 +10508,7 @@
       _ndNodeId = nodeId;
       _ndAuthed = false;
       _ndStatus = null;
-      _ndChanMgr = null; _ndPrevMgr = {};
+      _ndChanMgr = null; _ndPrevMgr = {}; _ndMgrLog = [];
       _ndTuners = []; _ndChannels = []; _ndCalls = []; _ndEvents = []; _ndPagerMsgs = [];
       _ndTunersSig = null;
       _ndReadersSig = null;
@@ -10528,6 +10542,7 @@
       _ndUpdateSpectrumToggle(); // reset the Start/Stop button (drawer HTML is reused)
       _ndRenderAll();
       _ndCfgFetch(); // pull current config_override for the tuner-persist + channel editor
+      _ndMgrLogFetch(); // auto-management audit log (radio only)
 
       // Supabase access token — same source as authHeader().
       let token = null;
@@ -10628,6 +10643,7 @@
         st.events.forEach(_ndIngestEvent);
       }
       _ndChanMgr = st.channelManager || null;
+      if (_ndChanMgr && _ndMgrLogMerge(_ndChanMgr.log)) _ndRenderMgrLog();
       _ndDiffChanMgr();        // auto-stop / probe / restore transitions -> log
       _ndDiffChannels();       // detect control-lock / call start-end transitions -> log
       _ndDiffCalls();          // track client-side elapsed clocks for active calls
@@ -12500,6 +12516,74 @@
         if (_ndCallStart[k] == null) _ndCallStart[k] = Date.now();
       });
       Object.keys(_ndCallStart).forEach(k => { if (!seen.has(k)) delete _ndCallStart[k]; });
+    }
+
+    // ---- Auto-management audit log (radio) ----
+    // The agent ships its last 50 decisions on every status frame and the
+    // backend persists them; the panel merges both sources by (atMs, channel,
+    // kind) so it is complete after an agent restart AND live while watching.
+    function _ndMgrLogMerge(entries) {
+      if (!Array.isArray(entries) || !entries.length) return false;
+      const seen = new Set(_ndMgrLog.map(e => e.atMs + '|' + e.channel + '|' + e.kind));
+      let added = false;
+      entries.forEach(e => {
+        if (!e || e.atMs == null || !e.kind) return;
+        const k = e.atMs + '|' + e.channel + '|' + e.kind;
+        if (seen.has(k)) return;
+        seen.add(k);
+        _ndMgrLog.push(e);
+        added = true;
+      });
+      if (added) {
+        _ndMgrLog.sort((a, b) => b.atMs - a.atMs);
+        if (_ndMgrLog.length > 50) _ndMgrLog.length = 50;
+      }
+      return added;
+    }
+
+    async function _ndMgrLogFetch() {
+      if (((_ndNode && _ndNode.kind) || 'radio') !== 'radio') return;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/${_ndNodeId}/chanmgr-log`, {
+          headers: { 'Authorization': await authHeader() }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          _ndMgrLogMerge(data.entries || []);
+        }
+      } catch (e) { /* panel just stays on live data */ }
+      _ndRenderMgrLog();
+    }
+
+    const _ND_MGR_KINDS = {
+      stopped:   { label: 'Stopped',     color: '#fb923c' },
+      probePass: { label: 'Test passed', color: '#4ade80' },
+      probeFail: { label: 'Test failed', color: '#f87171' },
+      released:  { label: 'Released',    color: '#7dd3fc' },
+      recovered: { label: 'Resumed',     color: '#94a3b8' },
+    };
+
+    function _ndRenderMgrLog() {
+      const el = document.getElementById('nd-mgr-log');
+      if (!el) return;
+      if (!_ndMgrLog.length) {
+        el.innerHTML = `<div class="nd-empty" style="border:none;background:none;">Nothing yet — auto-stops, retests and restores will appear here.</div>`;
+        return;
+      }
+      const today = new Date().toDateString();
+      el.innerHTML = _ndMgrLog.map(e => {
+        const at = new Date(e.atMs);
+        const bad = Number.isNaN(at.getTime());
+        const time = bad ? '—'
+          : (at.toDateString() === today
+              ? at.toLocaleTimeString()
+              : at.toLocaleDateString([], { day: 'numeric', month: 'short' }) + ' ' + at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+        const k = _ND_MGR_KINDS[e.kind] || { label: e.kind, color: 'var(--text-soft)' };
+        return `<div class="nd-event-row nd-log-row">
+          <span class="nd-ev-time">${escapeHtml(time)}</span>
+          <span class="nd-ev-type"><span class="nd-mgr-badge" style="color:${k.color}; border-color:${k.color};">${escapeHtml(k.label)}</span> <strong>${escapeHtml(e.channel || '')}</strong> · ${escapeHtml(e.text || '')}</span>
+        </div>`;
+      }).join('');
     }
 
     function _ndRenderEvents() {

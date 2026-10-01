@@ -29,6 +29,7 @@ package chanmgr
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -75,7 +76,22 @@ const (
 	// means something is systemically wrong (an antenna fault reads exactly
 	// like six bad channels) — stop deciding and say so, rather than fight.
 	maxStopsPerHour = 6
+
+	// logCap: how many decisions the manager remembers. The ring rides every
+	// status frame (the backend persists it), so staff always see the recent
+	// history even if nobody was watching when it happened.
+	logCap = 50
 )
+
+// logEntry is one manager decision for the audit ring: an auto-stop, a probe
+// with its verdict, a restore, or a release back to the operator.
+type logEntry struct {
+	AtMs    int64  `json:"atMs"`
+	Channel string `json:"channel"`
+	// Kind: "stopped" | "probePass" | "probeFail" | "released" | "recovered"
+	Kind string `json:"kind"`
+	Text string `json:"text"`
+}
 
 // lockedStates mirrors vce's isLockedState: any of these means the channel
 // has acquired its control channel (or is actively working).
@@ -137,6 +153,7 @@ type Manager struct {
 	mu      sync.Mutex
 	entries map[string]*entry
 	probing string // name of the channel currently mid-probe ("" = none)
+	logs    []logEntry
 
 	startedAt    time.Time
 	lastActionAt time.Time
@@ -237,6 +254,7 @@ func (m *Manager) Tick(ctx context.Context) {
 					log.Printf("chanmgr: disable: unsuppress [%s] failed: %v", name, err)
 				} else {
 					log.Printf("chanmgr: disabled — released [%s]; self-heal will restart it", name)
+					m.logEvent(name, "released", "auto-management disabled — channel handed back")
 				}
 			}
 		}
@@ -262,6 +280,7 @@ func (m *Manager) Tick(ctx context.Context) {
 					lastProbePct: -1, reason: "recovered after agent restart (was auto-stopped)",
 				}
 				log.Printf("chanmgr: [%s] was auto-stopped before the agent restarted — resuming its probe schedule", name)
+				m.logEventLocked(name, "recovered", "agent restarted; channel was auto-stopped — probe schedule resumes")
 			}
 		}
 		m.mu.Unlock()
@@ -294,6 +313,22 @@ func (m *Manager) Tick(ctx context.Context) {
 	m.maybeProbe(ctx, live, now)
 }
 
+// logEvent appends one decision to the audit ring (newest last, capped).
+// Caller must NOT hold m.mu.
+func (m *Manager) logEvent(channel, kind, text string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.logEventLocked(channel, kind, text)
+}
+
+// logEventLocked is logEvent for callers already holding m.mu.
+func (m *Manager) logEventLocked(channel, kind, text string) {
+	m.logs = append(m.logs, logEntry{AtMs: m.now().UnixMilli(), Channel: channel, Kind: kind, Text: text})
+	if len(m.logs) > logCap {
+		m.logs = m.logs[len(m.logs)-logCap:]
+	}
+}
+
 // reconcile folds external reality into our state: channels that vanished,
 // were restarted by a config push, or were started by an operator.
 func (m *Manager) reconcile(live map[string]sdrctl.Channel, pol Policy) {
@@ -316,6 +351,7 @@ func (m *Manager) reconcile(live map[string]sdrctl.Channel, pol Policy) {
 			// A config import/reload cleared suppression and restarted it.
 			// The world reset — watch it fresh.
 			log.Printf("chanmgr: [%s] restarted externally (config reload) — watching it fresh", name)
+			m.logEventLocked(name, "released", "restarted by a config reload — watching it fresh")
 			delete(m.entries, name)
 		case ch.Processing && suppressed:
 			// An operator pressed Start while we had it suppressed. The
@@ -326,6 +362,7 @@ func (m *Manager) reconcile(live map[string]sdrctl.Channel, pol Policy) {
 				continue
 			}
 			log.Printf("chanmgr: [%s] started by operator — released from auto-management until it misbehaves again", name)
+			m.logEventLocked(name, "released", "started by operator — released until it misbehaves again")
 			delete(m.entries, name)
 		case !suppressed:
 			// Stopped AND unsuppressed (e.g. our stop landed but the suppress
@@ -403,6 +440,7 @@ func (m *Manager) detect(live map[string]sdrctl.Channel, pol Policy, now time.Ti
 		}
 		low := now.Sub(e.lowSince).Round(time.Second)
 		log.Printf("chanmgr: AUTO-STOPPED [%s] — decode %.0f%% below %.0f%% for %s; retesting every %s", name, pct, lowThresholdPct, low, probeInterval)
+		m.logEventLocked(name, "stopped", fmt.Sprintf("auto-stopped — decode %.0f%% below %.0f%% for %s", pct, lowThresholdPct, low))
 		*e = entry{
 			state: stAutoStopped, stoppedAt: now, lastProbeAt: now, lastProbePct: -1,
 			reason: "decode below 40% for 10 minutes",
@@ -475,6 +513,7 @@ func (m *Manager) probe(ctx context.Context, name string, id int) {
 		// Typically "No Tuner Available" — another channel took the freed
 		// bandwidth. Not a verdict about RF; try again next interval.
 		log.Printf("chanmgr: probe [%s]: start failed: %v — retrying in %s", name, probeInterval, err)
+		m.logEvent(name, "probeFail", "test could not start ("+err.Error()+") — retry in 20 min")
 		finish(-1, false, "probe could not start: "+err.Error())
 		return
 	}
@@ -500,6 +539,7 @@ func (m *Manager) probe(ctx context.Context, name string, id int) {
 	if !locked {
 		m.stopAfterProbe(name)
 		log.Printf("chanmgr: probe [%s] FAILED — no lock within %s; next retry in %s", name, lockWait, probeInterval)
+		m.logEvent(name, "probeFail", fmt.Sprintf("test failed — no lock within %s; retry in 20 min", lockWait))
 		finish(-1, false, "probe failed: no lock")
 		return
 	}
@@ -529,20 +569,24 @@ func (m *Manager) probe(ctx context.Context, name string, id int) {
 	if best >= lowThresholdPct {
 		if err := m.opts.Unsuppress(id); err != nil {
 			log.Printf("chanmgr: probe [%s] passed (%.0f%%) but unsuppress failed: %v — leaving running, retry clears it", name, best, err)
+			m.logEvent(name, "probeFail", fmt.Sprintf("test passed (%.0f%%) but release failed — retrying", best))
 			finish(best, false, "restored but unsuppress failed")
 			return
 		}
 		log.Printf("chanmgr: probe [%s] PASSED — decode %.0f%%; channel restored", name, best)
+		m.logEvent(name, "probePass", fmt.Sprintf("test passed — decode %.0f%%; channel restored", best))
 		finish(best, true, "")
 		return
 	}
 	m.stopAfterProbe(name)
 	if best < 0 {
 		log.Printf("chanmgr: probe [%s] FAILED — locked but decode never measured; next retry in %s", name, probeInterval)
+		m.logEvent(name, "probeFail", "test failed — locked but decode never measured; retry in 20 min")
 		finish(-1, false, "probe failed: decode unmeasured")
 		return
 	}
 	log.Printf("chanmgr: probe [%s] FAILED — decode %.0f%% still below %.0f%%; next retry in %s", name, best, lowThresholdPct, probeInterval)
+	m.logEvent(name, "probeFail", fmt.Sprintf("test failed — decode %.0f%% still below %.0f%%; retry in 20 min", best, lowThresholdPct))
 	finish(best, false, "probe failed: still below 40%")
 }
 
@@ -611,10 +655,13 @@ func (m *Manager) Snapshot() any {
 		}
 		channels[name] = row
 	}
+	logs := make([]logEntry, len(m.logs))
+	copy(logs, m.logs)
 	return map[string]any{
 		"enabled":   !m.lastPolicy.Disabled,
 		"supported": m.lastSupported,
 		"channels":  channels,
+		"log":       logs,
 	}
 }
 

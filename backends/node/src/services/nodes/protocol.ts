@@ -53,6 +53,8 @@ export interface StatusData {
   events?: unknown[];
   // Node readiness (null on older node builds).
   calibrated?: boolean | null;
+  /** Automatic channel manager state + its 50-entry decision ring (radio). */
+  channelManager?: unknown;
   jmbeInstalled?: boolean | null;
   // Pager nodes: the SDR's supported tuner-gain steps (dB) for the staff gain
   // dropdown. Relayed to staff verbatim.

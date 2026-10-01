@@ -38,6 +38,7 @@ import {
 import { buildConfigPayload } from '../services/nodes/configMerge.js';
 import { shapeNodeLive } from '../services/nodeLive.js';
 import { liveCallWindow } from '../services/nodeCallWindow.js';
+import { ingestChanMgrLog } from '../services/nodes/chanmgrLog.js';
 
 // The hub is pure connection plumbing and must not import config/DB itself, so
 // the Live row shaper is handed to it from here (module load = route setup).
@@ -327,6 +328,10 @@ async function handleAgentMessage(
       // Synchronous by design — no await may separate these two.
       liveCallWindow.observe(ctx.nodeId, st, Date.now());
       hub.recordStatus(ctx.nodeId, st);
+      // Persist the channel manager's decision ring (fire-and-forget): the
+      // agent repeats it every frame, the ingest high-water mark makes the
+      // no-news case free.
+      void ingestChanMgrLog(ctx.nodeId, st.channelManager);
       void touchNodeSeen(ctx.nodeId);
       markNodeSeen(ctx.nodeId);
       return;
