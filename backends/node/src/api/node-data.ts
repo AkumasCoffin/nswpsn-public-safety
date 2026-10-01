@@ -731,6 +731,35 @@ function overviewStore(key: string, body: Record<string, unknown>): void {
   _overviewCache.set(key, { at: Date.now(), body });
 }
 
+/**
+ * One in-flight build per cache key. The node-scoped `all` window has no
+ * rollup to read (node_radio_hourly_rx carries no node_id), so it falls back
+ * to the detail scan — on a busy node that is ~3.7M call rows and a DISTINCT
+ * that spills to disk, which has run past the statement timeout. Nothing here
+ * makes that scan cheaper, but it stops N staff tabs from each starting their
+ * own copy of it while one is already running.
+ */
+const _overviewInFlight = new Map<string, Promise<Record<string, unknown>>>();
+function overviewBegin(key: string): {
+  waiter?: Promise<Record<string, unknown>>;
+  settle?: (body: Record<string, unknown>) => void;
+  fail?: (err: unknown) => void;
+} {
+  const existing = _overviewInFlight.get(key);
+  if (existing) return { waiter: existing };
+  let resolve!: (b: Record<string, unknown>) => void;
+  let reject!: (e: unknown) => void;
+  const p = new Promise<Record<string, unknown>>((res, rej) => { resolve = res; reject = rej; });
+  // Nobody may ever await this one; mark it handled so a failed build can't
+  // surface as an unhandled rejection.
+  p.catch(() => undefined);
+  _overviewInFlight.set(key, p);
+  return {
+    settle: (body) => { _overviewInFlight.delete(key); resolve(body); },
+    fail: (err) => { _overviewInFlight.delete(key); reject(err); },
+  };
+}
+
 /** The eight tile figures, however they were sourced. */
 export interface RadioTotals {
   received: number;
@@ -1072,6 +1101,8 @@ nodeDataRouter.get(
   '/api/node-data/overview',
   requireRole(canViewNodeData),
   async (c) => {
+    // Hoisted so the catch can release the in-flight entry.
+    let share: ReturnType<typeof overviewBegin> | null = null;
     try {
       const pool = await getPool();
       if (!pool) return c.json({ error: 'database unavailable' }, 503);
@@ -1096,6 +1127,11 @@ nodeDataRouter.get(
       }`;
       const cached = overviewCached(cacheKey);
       if (cached) return c.json(cached);
+
+      // A build for this exact key may already be running — join it rather
+      // than starting a second 30-second scan alongside it.
+      share = overviewBegin(cacheKey);
+      if (share.waiter) return c.json(await share.waiter);
 
       // This endpoint could not be explained from outside either: the 500 that
       // prompted this said only that SOMETHING in a nine-query Promise.all hit
@@ -1634,8 +1670,10 @@ nodeDataRouter.get(
       // which query it was.
       pt.done();
       overviewStore(cacheKey, body);
+      share.settle?.(body);
       return c.json(body);
     } catch (err) {
+      share?.fail?.(err);
       log.error({ err }, '/api/node-data/overview error');
       return c.json({ error: 'failed to load overview' }, 500);
     }

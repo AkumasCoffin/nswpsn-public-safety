@@ -7744,20 +7744,35 @@
         const bucketMs = (d.bucketMinutes || 1) * 60000;
         const inHold = (t) => (d.holds || []).some(h =>
           t + bucketMs > new Date(h.from).getTime() && t < new Date(h.to).getTime());
-        const empty = pts.map((p, i) => p.decodePct == null && p.signalDbfs == null);
+        const empty = pts.map(p => p.decodePct == null && p.signalDbfs == null);
         // Leading silence is unknowable (the site may simply not have existed
         // in this window yet) — only shade from the first heard bucket on.
         const firstData = empty.indexOf(false);
+
+        // Bands live in FRACTIONAL bucket-index space. Yellow comes straight
+        // from the hold timestamps, so an auto-stop renders at its true extent
+        // whatever the range — keying it off empty buckets meant a short stop
+        // vanished whenever it fit inside one coarse bucket, which is why 1h
+        // showed several stops and 6h showed one.
+        const t0 = ptMs.length ? ptMs[0] : 0;
+        const toIdx = (t) => (t - t0) / bucketMs;
+        const lastIdx = pts.length - 1;
         const bands = [];
+        for (const h of (d.holds || [])) {
+          const from = Math.max(0, toIdx(new Date(h.from).getTime()));
+          const to = Math.min(lastIdx + 1, toIdx(new Date(h.to).getTime()));
+          if (to > from) bands.push({ kind: 'auto', from, to });
+        }
+        // Red is the silence the manager does NOT explain. Still bucket-grained
+        // (absence of samples is all we know), and skipped where a hold already
+        // covers it.
         let run = null;
         for (let i = 0; i < pts.length; i++) {
-          const kind = (firstData >= 0 && i > firstData && empty[i])
-            ? (inHold(ptMs[i]) ? 'auto' : 'off') : null;
-          if (kind && run && run.kind === kind && run.to === i - 1) { run.to = i; continue; }
-          if (run) bands.push(run);
-          run = kind ? { kind, from: i, to: i } : null;
+          const dead = firstData >= 0 && i > firstData && empty[i] && !inHold(ptMs[i]);
+          if (dead && run) { run.to = i + 1; continue; }
+          if (dead) { run = { kind: 'off', from: i, to: i + 1 }; bands.push(run); continue; }
+          run = null;
         }
-        if (run) bands.push(run);
         const bandPlugin = {
           id: 'nd2DecodeBands',
           beforeDatasetsDraw(chart) {
@@ -7765,12 +7780,16 @@
             const { ctx, chartArea, scales } = chart;
             if (!chartArea || !scales.x) return;
             ctx.save();
+            // Category scales only know whole indices; interpolate so a band
+            // that starts mid-bucket starts mid-bucket on screen too.
+            const step = (scales.x.getPixelForValue(1) - scales.x.getPixelForValue(0)) || 2;
+            const px = (f) => scales.x.getPixelForValue(0) + (f - 0.5) * step;
             for (const b of bands) {
-              const half = (scales.x.getPixelForValue(1) - scales.x.getPixelForValue(0)) / 2 || 2;
-              const x0 = Math.max(chartArea.left, scales.x.getPixelForValue(b.from) - half);
-              const x1 = Math.min(chartArea.right, scales.x.getPixelForValue(b.to) + half);
-              ctx.fillStyle = b.kind === 'auto' ? 'rgba(234,179,8,0.14)' : 'rgba(239,68,68,0.12)';
-              ctx.fillRect(x0, chartArea.top, Math.max(1, x1 - x0), chartArea.bottom - chartArea.top);
+              const x0 = Math.max(chartArea.left, px(b.from));
+              const x1 = Math.min(chartArea.right, px(b.to));
+              if (x1 <= chartArea.left || x0 >= chartArea.right) continue;
+              ctx.fillStyle = b.kind === 'auto' ? 'rgba(234,179,8,0.16)' : 'rgba(239,68,68,0.12)';
+              ctx.fillRect(x0, chartArea.top, Math.max(1.5, x1 - x0), chartArea.bottom - chartArea.top);
             }
             ctx.restore();
           },
