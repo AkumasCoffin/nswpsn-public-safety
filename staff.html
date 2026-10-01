@@ -14980,7 +14980,7 @@
     async function _tkCloseTicket() {
       if (_tkOpenId == null) return;
       const ok = (typeof uiConfirm === 'function')
-        ? await uiConfirm({ title: 'Close ticket', message: 'Close this ticket? The user is notified and can reopen it by replying.', confirmText: 'Close ticket' })
+        ? await uiConfirm('Close this ticket? The user is notified and can reopen it by replying.', { title: 'Close ticket', okText: 'Close ticket' })
         : confirm('Close this ticket?');
       if (!ok) return;
       try {
