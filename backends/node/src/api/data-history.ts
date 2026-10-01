@@ -571,6 +571,7 @@ interface FormattedRecord {
   title: string | null;
   category: string | null;
   subcategory: string | null;
+  state: string | null;
   status: string | null;
   severity: string | null;
   data: Record<string, unknown>;
@@ -671,6 +672,9 @@ function formatRecord(r: ArchiveQueryRow, includeData: boolean): FormattedRecord
     ]),
     category: r.category,
     subcategory: r.subcategory,
+    // The SQL selects state and normaliseRow carries it, but it was never
+    // emitted — so the Logs list's state pill never rendered.
+    state: r.state ?? null,
     status: pickStr(data, 'status'),
     severity: pickStr(data, 'severity'),
     data: includeData ? data : {},

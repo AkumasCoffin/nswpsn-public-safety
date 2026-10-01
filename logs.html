@@ -2083,9 +2083,9 @@
       
       let html = '';
       currentPageResults.forEach((item, idx) => {
-        const icon = getSourceIcon(item.source, item.subcategory);
-        const sourceName = formatSourceName(item.source);
         const data = item.data || {};
+        const icon = getSourceIcon(item.source, data.fireType || item.subcategory);
+        const sourceName = formatSourceName(item.source);
         // Title fallback chain. The backend's formatted `title` only
         // gets populated for sources whose archiveItems extractor sets
         // data.title (currently just pager). For waze_* / traffic_* /
@@ -2598,7 +2598,7 @@
       
       // Show basic details first
       let detailsHtml = buildIncidentDetails(item);
-      detailsHtml += '<div id="incident-history-section" class="lg-mt16"><div style="color:#64748b; font-size:11px;">Loading history...</div></div>';
+      detailsHtml += '<div id="incident-history-section" class="lg-mt16"><div style="color:#a1a5b6; font-size:11px;">Loading history...</div></div>';
       detailsHtml += '<div id="linked-incidents-section" class="lg-mt16"></div>';
       document.getElementById('map-details').innerHTML = detailsHtml;
       
@@ -2610,7 +2610,7 @@
             if (address) {
               el.innerHTML = escapeHtml(address);
             } else {
-              el.innerHTML = '<span style="color:#64748b; font-style:italic;">Address not available</span>';
+              el.innerHTML = '<span style="color:#a1a5b6; font-style:italic;">Address not available</span>';
             }
           }
         });
@@ -2773,7 +2773,7 @@
             
             html += `<div class="lg-update" style="--c:${borderColor}">
               <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
-                <span class="lg-meta-10"><i class="far fa-clock" style="margin-right:3px;"></i>${escapeHtml(timeStr)}</span>
+                <span class="lg-meta-10"><i class="far fa-clock" style="margin-right:3px;"></i>${escapeHtml(lgUpdateTime(snapshot, timeStr))}</span>
               </div>
               <div class="lg-chips spaced">`;
             
@@ -2802,7 +2802,10 @@
             html += `</div>`;
             
             if (updated) {
-              html += `<div style="color:#94a3b8; font-size:10px; margin-top:4px;"><i class="fas fa-sync-alt"></i>RFS Updated: ${escapeHtml(updated)}</div>`;
+              // Name the agency that actually published the update — this card
+              // is shared by all nine fire sources, not just RFS.
+              const who = (publishingAgency(item, snapData) || {}).label || formatSourceName(item.source);
+              html += `<div style="color:#94a3b8; font-size:10px; margin-top:4px;"><i class="fas fa-sync-alt" style="margin-right:3px;"></i>${escapeHtml(who)} updated: ${escapeHtml(updated)}</div>`;
             }
             
             html += `</div>`;
@@ -2885,7 +2888,7 @@
             else if (item.source.includes('bom')) sourceColor = '#3b82f6';
             
             html += `<div class="lg-update" style="--c:${sourceColor}">
-              <div style="color:#64748b; font-size:10px; margin-bottom:4px;"><i class="far fa-clock" style="margin-right:3px;"></i>${escapeHtml(timeStr)}</div>
+              <div class="lg-meta-10" style="margin-bottom:4px;"><i class="far fa-clock" style="margin-right:3px;"></i>${escapeHtml(lgUpdateTime(snapshot, timeStr))}</div>
               <div class="lg-chips">`;
             
             if (status) {
@@ -3112,7 +3115,7 @@
                 const title = incident.title || incData.LOCATION || 'Unknown';
                 const status = incData.STATUS || incident.status || '';
                 const alertLevel = incData.ALERT_LEVEL || incident.severity || '';
-                const sourceIcon = getSourceIcon(incident.source);
+                const sourceIcon = getSourceIcon(incident.source, (incData && incData.fireType) || incident.subcategory);
                 const sourceName = formatSourceName(incident.source);
                 const timestamp = incident.fetched_at_iso ? new Date(incident.fetched_at_iso).toLocaleString() : '';
                 
@@ -3590,7 +3593,7 @@
       let html = '<div class="lg-detail-root">';
       
       // Header with source icon and badge
-      const sourceIcon = getSourceIcon(source);
+      const sourceIcon = getSourceIcon(source, (data && data.fireType) || item.subcategory);
       const sourceName = formatSourceName(source);
       
       // Determine badge based on source. Only RFS surfaces a status badge
@@ -3647,6 +3650,57 @@
             <div class="lg-kv-v" style="--c:#4ade80">${escapeHtml(incidentId || 'N/A')}</div>
           </div>
         </div>`;
+      } else if (FIRE_LOG_SOURCES.has(source) && source !== 'rfs') {
+        // The eight newer fire feeds used to fall into the generic branch,
+        // which labelled their (usually empty) alertLevel "Category" and threw
+        // away everything else in the blob. Tiles first — warning level only
+        // when the feed actually publishes one — then the detail rows the list
+        // card already trusts.
+        const fStatus = data.status || item.status || '';
+        const fAlert = data.alertLevel || item.severity || '';
+        const fType = data.fireType || (item.subcategory ? formatSubcategory(item.subcategory) : '');
+        html += `<div class="lg-kv">`;
+        if (fAlert) {
+          const ac = getAlertLevelColor(fAlert);
+          html += `<div class="lg-kv-box" style="--c:${ac}">
+            <div class="lg-kv-k">Warning level</div>
+            <div class="lg-kv-v" style="--c:${ac}">${escapeHtml(fAlert)}</div>
+          </div>`;
+        }
+        if (fStatus) {
+          const sc = getStatusColor(fStatus);
+          html += `<div class="lg-kv-box" style="--c:${sc}">
+            <div class="lg-kv-k">Status</div>
+            <div class="lg-kv-v" style="--c:${sc}">${escapeHtml(fStatus)}</div>
+          </div>`;
+        }
+        if (fType && fType !== fStatus) {
+          const ti = window.FireVocab ? FireVocab.typeIconHtml(fType, { size: '11px', style: 'margin-right:4px;' }) : '';
+          html += `<div class="lg-kv-box" style="--c:#fb923c">
+            <div class="lg-kv-k">Type</div>
+            <div class="lg-kv-v" style="--c:#fb923c">${ti}${escapeHtml(window.FireVocab ? FireVocab.canonType(fType) || fType : fType)}</div>
+          </div>`;
+        }
+        html += `</div>`;
+
+        const fire = [];
+        const agency = publishingAgency(item, data);
+        if (agency) fire.push(['Agency', agency.label]);
+        if (data.size) fire.push(['Size', data.size]);
+        if (data.councilArea) fire.push(['Council area', data.councilArea]);
+        if (data.updated) fire.push(['Updated', data.updated]);
+        if (fire.length) {
+          html += `<div class="lg-grid2 lg-mb8">` + fire.map(([k, v]) =>
+            `<div><div class="lg-kv-k">${escapeHtml(k)}</div><div class="lg-t11">${escapeHtml(String(v))}</div></div>`
+          ).join('') + `</div>`;
+        }
+        const warnText = data.warningText || data.text || '';
+        if (warnText) {
+          html += `<div class="lg-mb8">
+            <div class="lg-kv-k" style="--c:#f59e0b"><i class="fas fa-bullhorn" style="margin-right:4px;"></i>Message</div>
+            <div class="lg-t11" style="line-height:1.5;">${escapeHtml(String(warnText).slice(0, 600))}</div>
+          </div>`;
+        }
       } else {
         // Source-specific colored category/type display
         const sourceColors = getSourceColors(source);
@@ -3912,10 +3966,10 @@
         }
       }
       
-      // Timing
-      if (item.fetched_at_iso || item.source_timestamp) {
+      // Timing — reported (the source's own clock) + when we last fetched it.
+      if (item.source_timestamp || item.fetched_at_iso) {
         html += `<div style="border-top:1px solid rgba(148,163,184,0.2); padding-top:8px; margin-top:4px;">
-          <div style="color:#64748b; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;"><i class="far fa-clock" style="margin-right:4px;"></i>Timing</div>`;
+          <div class="lg-kv-k" style="margin-bottom:4px;"><i class="far fa-clock" style="margin-right:4px;"></i>Timing</div>`;
         if (item.source_timestamp) {
           let reportedStr = item.source_timestamp;
           try {
@@ -3930,7 +3984,12 @@
               }
             }
           } catch (e) {}
-          html += `<div style="color:#4ade80; font-size:10px;">Reported: ${escapeHtml(reportedStr)}</div>`;
+          html += `<div style="color:#4ade80; font-size:11px;">Reported: ${escapeHtml(reportedStr)}</div>`;
+        }
+        if (item.fetched_at_iso) {
+          try {
+            html += `<div class="lg-meta-10" style="margin-top:2px;">Last checked: ${escapeHtml(new Date(item.fetched_at_iso).toLocaleString())}</div>`;
+          } catch (e) {}
         }
         html += `</div>`;
       }
@@ -3938,7 +3997,7 @@
       // Source ID (for debugging/reference)
       if (item.source_id) {
         html += `<div class="lg-dash-sep">
-          <div style="color:#475569; font-size:8px; font-family:monospace;">ID: ${escapeHtml(item.source_id)}</div>
+          <div class="lg-mono">ID: ${escapeHtml(item.source_id)}</div>
         </div>`;
       }
       
@@ -3947,6 +4006,15 @@
     }
     
     function getSourceIcon(source, subcategory) {
+      // Fire feeds: the icon says WHAT is burning/happening, from the shared
+      // type vocabulary (fire-vocab.js) both pages draw on — it has no
+      // unmatched case, so no fire source ever falls to the blank circle.
+      // QLD/VIC rows carry an empty category and put the type in subcategory.
+      if (FIRE_LOG_SOURCES.has(source) && window.FireVocab) {
+        const colors = getSourceColors(source);
+        return FireVocab.typeIconHtml(subcategory || '', { style: `color:${colors.primary}` });
+      }
+
       // For waze_hazard, use subcategory-specific icons
       if (source === 'waze_hazard' && subcategory) {
         const sub = subcategory.toUpperCase();
@@ -4083,6 +4151,18 @@
      * Bushfires NT, and Victoria's carries CFA, DEECA, SES, EMV and its
      * triple-zero dispatcher — plus the Bureau and Geoscience Australia.
      */
+    // "2h ago · 2/10 4:48 am" — the relative part is what you scan a
+    // timeline by; the absolute part settles disputes.
+    function lgUpdateTime(snapshot, fallback) {
+      const t = snapshot && snapshot.fetched_at;
+      if (!t) return fallback;
+      const rel = formatRelativeTime(t);
+      const d = new Date(t * 1000);
+      const abs = `${d.getDate()}/${d.getMonth() + 1} ` +
+        d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      return rel ? `${rel} · ${abs}` : fallback;
+    }
+
     function publishingAgency(item, data) {
       switch (item.source) {
         case 'rfs': return AGENCY_BADGES['RFS'];
