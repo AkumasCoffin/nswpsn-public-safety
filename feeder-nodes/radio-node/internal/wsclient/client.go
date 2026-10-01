@@ -25,6 +25,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/agentcfg"
+	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/chanmgr"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/configapply"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/protocol"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/rdioctl"
@@ -129,6 +130,13 @@ type Client struct {
 	verMu          sync.Mutex // guards appliedVersion
 	appliedVersion string     // config version last successfully applied (persisted)
 
+	// Automatic channel management: the manager's policy (derived from the
+	// latest parsed configPush, seeded from the persisted applied config at
+	// startup) and its status-frame snapshot provider.
+	chanPolMu sync.Mutex
+	chanPol   chanmgr.Policy
+	chanSnap  func() any
+
 	writeMu sync.Mutex // serializes all conn writes (gorilla forbids concurrent writers)
 	conn    *websocket.Conn
 }
@@ -154,6 +162,15 @@ func New(cfg *agentcfg.Config, sup *supervise.Supervisor, q depthProvider, contr
 		"rdio":     update.InstalledVersion("rdio", cfg.DataDir),
 	}
 	c.loadAppliedVersion()
+	// Seed the channel-management policy from the persisted applied config, so
+	// the manager honours a per-node disable / per-channel opt-outs from the
+	// very first tick after a restart — not only after the next configPush.
+	if raw, err := os.ReadFile(cfg.AppliedConfigPath()); err == nil {
+		var payload configapply.ConfigPayload
+		if jerr := json.Unmarshal(raw, &payload); jerr == nil {
+			c.setChanPolicy(payload)
+		}
+	}
 	// Each spectrum binary frame is relayed verbatim up the node WS.
 	c.spec = sdrctl.NewSpectrumConn(controlPort, controlToken, func(b []byte) {
 		if err := c.SendBinary(b); err != nil {
@@ -167,6 +184,44 @@ func New(cfg *agentcfg.Config, sup *supervise.Supervisor, q depthProvider, contr
 // frame. Separate from New because the relay listener and the WS client are
 // constructed independently in main.
 func (c *Client) SetDropProvider(d dropProvider) { c.drops = d }
+
+// SetChanMgrSnapshot supplies the channel manager's status-frame snapshot.
+func (c *Client) SetChanMgrSnapshot(fn func() any) { c.chanSnap = fn }
+
+// setChanPolicy derives the channel manager's policy from a parsed configPush.
+func (c *Client) setChanPolicy(p configapply.ConfigPayload) {
+	pol := chanmgr.Policy{}
+	if p.ChannelManagement != nil && p.ChannelManagement.Enabled != nil && !*p.ChannelManagement.Enabled {
+		pol.Disabled = true
+	}
+	for _, ch := range p.Channels {
+		if ch.AutoManage != nil && !*ch.AutoManage {
+			if pol.OptedOut == nil {
+				pol.OptedOut = map[string]bool{}
+			}
+			pol.OptedOut[strings.TrimSpace(ch.Name)] = true
+		}
+	}
+	c.chanPolMu.Lock()
+	c.chanPol = pol
+	c.chanPolMu.Unlock()
+}
+
+// ChanPolicy returns the channel manager's current policy.
+func (c *Client) ChanPolicy() chanmgr.Policy {
+	c.chanPolMu.Lock()
+	defer c.chanPolMu.Unlock()
+	return c.chanPol
+}
+
+// LastApplyAt reports when the last config apply finished. It takes applyMu,
+// so it BLOCKS while an apply is in flight — which pauses the channel manager
+// for exactly the window it must not act in anyway.
+func (c *Client) LastApplyAt() time.Time {
+	c.applyMu.Lock()
+	defer c.applyMu.Unlock()
+	return c.lastApplyAt
+}
 
 // SendBinary writes a binary frame up the node WS under the shared write mutex.
 func (c *Client) SendBinary(b []byte) error {
@@ -514,6 +569,9 @@ func (c *Client) sendStatus(conn *websocket.Conn) error {
 		Calibrated:    calibrated,
 		JmbeInstalled: jmbeInstalled,
 	}
+	if c.chanSnap != nil {
+		st.ChannelManager = c.chanSnap()
+	}
 	return c.writeType(conn, protocol.TypeStatus, st, "")
 }
 
@@ -684,6 +742,11 @@ func (c *Client) applyConfigPayload(data []byte) {
 		})
 		return
 	}
+
+	// The channel-management policy reflects operator intent the moment the
+	// push parses — even if the apply then fails, the manager should follow
+	// the operator's latest word (it reconciles against live state anyway).
+	c.setChanPolicy(payload)
 
 	{
 		c.applyMu.Lock()

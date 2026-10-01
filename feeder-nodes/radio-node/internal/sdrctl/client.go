@@ -98,6 +98,12 @@ type Channel struct {
 	// channel with a fresh snapshot.
 	SyncPercent *float64 `json:"syncPercent"`
 	SignalDbfs  *float64 `json:"signalDbfs"`
+	// AutoStart/Suppressed arrived with the self-heal suppression API
+	// (runtime 0.7.16). POINTERS on purpose: nil means the runtime predates
+	// the API, which the channel manager treats as "do not manage anything" —
+	// a stop against an old runtime would just be undone by its self-heal.
+	AutoStart  *bool `json:"autoStart"`
+	Suppressed *bool `json:"suppressed"`
 }
 
 // ActiveCall mirrors one element of the "activeCalls" array of GET /channels.
@@ -310,6 +316,19 @@ func (c *Client) StartChannel(id int) error {
 // StopChannel POSTs /channels/{id}/stop.
 func (c *Client) StopChannel(id int) error {
 	return c.post(fmt.Sprintf("/channels/%d/stop", id), nil)
+}
+
+// SuppressChannel POSTs /channels/{id}/suppress: the runtime's 30s self-heal
+// sweep will leave this channel stopped (tracked by NAME, runtime-only,
+// cleared on any config import/reload). Always call BEFORE StopChannel.
+func (c *Client) SuppressChannel(id int) error {
+	return c.post(fmt.Sprintf("/channels/%d/suppress", id), nil)
+}
+
+// UnsuppressChannel POSTs /channels/{id}/unsuppress, handing the channel back
+// to the runtime's self-heal.
+func (c *Client) UnsuppressChannel(id int) error {
+	return c.post(fmt.Sprintf("/channels/%d/unsuppress", id), nil)
 }
 
 // ReloadPlaylist POSTs /playlist/reload. Kept by sdrtrunk-vce as an alias of

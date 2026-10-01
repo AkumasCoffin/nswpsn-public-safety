@@ -60,6 +60,9 @@ type ChannelPlan struct {
 	// vce config builder emits the matching decodeConfiguration and fills
 	// SDR-Trunk defaults for any unset field.
 	DecoderConfig *DecoderConfig `json:"decoderConfig"`
+	// AutoManage opts this channel out of automatic channel management when
+	// explicitly false. nil = managed (the default is on).
+	AutoManage *bool `json:"autoManage"`
 }
 
 // DecoderConfig is a loose superset of every decoder's settings (see the
@@ -189,6 +192,15 @@ type ConfigPayload struct {
 	// falsely disable capture/feed.
 	CaptureEnabled *bool `json:"captureEnabled"`
 	FeedEnabled    *bool `json:"feedEnabled"`
+	// ChannelManagement is the automatic channel manager's per-node policy.
+	// nil (older payloads / never configured) = enabled, same pointer logic
+	// as capture/feed above.
+	ChannelManagement *ChannelManagement `json:"channelManagement"`
+}
+
+// ChannelManagement is the per-node automatic channel management policy.
+type ChannelManagement struct {
+	Enabled *bool `json:"enabled"` // nil = on
 }
 
 // captureOn reports whether capture (decoding) is enabled. nil = on.

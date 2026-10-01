@@ -1041,6 +1041,9 @@
         let out = '';
         if (!node.sdrUp) out += chip('warn', 'Receiver down');
         else if (node.decoding) out += chip('ok', 'Decoding');
+        // Auto-management has channels stopped for signal quality: not a
+        // fault, and not a mystery "Idle" either.
+        else if (node.autoStopped > 0) out += chip('', 'Standby (signal quality)');
         else out += chip('', 'Idle');
         if (node.feedEnabled === false) out += chip('off', 'Feed off');
         else if (node.uploading) out += chip('ok', 'Uploading');

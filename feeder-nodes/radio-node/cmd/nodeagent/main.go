@@ -37,6 +37,7 @@ import (
 
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/activityship"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/agentcfg"
+	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/chanmgr"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/configapply"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/queue"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/rdioctl"
@@ -401,6 +402,25 @@ func runAgent(ctx context.Context, configPath string) error {
 			InstallID: cfg.InstallID,
 		})
 		go siteShipper.Run(ctx)
+
+		// Automatic channel management (radio kind only): stop a control
+		// channel that decodes below 40% for 10 continuous minutes, retest it
+		// every 20 minutes, restore it when it recovers. Idles by itself when
+		// the sdrtrunk runtime predates the suppression API.
+		mgr := chanmgr.New(chanmgr.Options{
+			Fetch: func() ([]sdrctl.Channel, error) {
+				chs, _, err := sdr.Channels()
+				return chs, err
+			},
+			Start:       sdr.StartChannel,
+			Stop:        sdr.StopChannel,
+			Suppress:    sdr.SuppressChannel,
+			Unsuppress:  sdr.UnsuppressChannel,
+			LastApplyAt: ws.LastApplyAt,
+			Policy:      ws.ChanPolicy,
+		})
+		ws.SetChanMgrSnapshot(mgr.Snapshot)
+		go mgr.Run(ctx)
 	}
 
 	// Launch the long-lived goroutines.

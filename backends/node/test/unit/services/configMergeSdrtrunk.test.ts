@@ -120,3 +120,37 @@ describe('buildConfigPayload (radio) uses the imported sdrtrunk config', () => {
     expect(p.streamTargets.some((t) => t.systemId === 2)).toBe(true);
   });
 });
+
+describe('buildConfigPayload channelManagement plumbing', () => {
+  const empty = () => globalWith({ aliasLists: [], aliases: [], streams: [] });
+
+  it('omits channelManagement when never configured, so legacy hashes hold', async () => {
+    const p = await buildConfigPayload(radioNode(), empty());
+    expect('channelManagement' in p).toBe(false);
+  });
+
+  it('carries the per-node disable and per-channel opt-out to the agent', async () => {
+    const node = radioNode({
+      config_override: {
+        channelManagement: { enabled: false },
+        channels: [
+          { name: 'GRN Site', frequency: 420_000_000, decoder: 'p25p1', autoManage: false },
+        ],
+      } as NodeRow['config_override'],
+    });
+    const p = await buildConfigPayload(node, empty());
+    expect(p.channelManagement).toEqual({ enabled: false });
+    expect(p.channels[0]!.autoManage).toBe(false);
+  });
+
+  it('setting channelManagement changes the config version (and absent does not)', async () => {
+    const a = await buildConfigPayload(radioNode(), empty());
+    const b = await buildConfigPayload(radioNode(), empty());
+    expect(a.configVersion).toBe(b.configVersion);
+    const c = await buildConfigPayload(
+      radioNode({ config_override: { channelManagement: { enabled: false } } as NodeRow['config_override'] }),
+      empty(),
+    );
+    expect(c.configVersion).not.toBe(a.configVersion);
+  });
+});

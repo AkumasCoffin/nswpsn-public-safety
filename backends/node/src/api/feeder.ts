@@ -142,6 +142,15 @@ function feederNodeView(n: NodeRow) {
             ['CONTROL', 'CALL', 'ACTIVE', 'DATA'].includes(String(ch.state ?? '').toUpperCase())
           );
         });
+  // Automatic channel management: channels it has stopped read as "not
+  // decoding", which to an owner looks like an unexplained Idle. Surface the
+  // count so the card can say "standby (signal quality)" instead.
+  const mgr = (st as { channelManager?: { channels?: Record<string, { state?: string }> } } | null)
+    ?.channelManager;
+  const autoStopped = mgr?.channels
+    ? Object.values(mgr.channels).filter((c) => c?.state === 'autoStopped' || c?.state === 'probing').length
+    : 0;
+
   return {
     id: n.id,
     kind: n.kind,
@@ -169,6 +178,8 @@ function feederNodeView(n: NodeRow) {
     localIp: n.local_ip,
     sdrUp,
     decoding: !!decoding,
+    /** Channels automatic management currently holds stopped (incl. mid-probe). */
+    autoStopped,
     uploading: callsLast10m > 0,
     callsLast10m,
     // Pager alias for callsLast10m (messages relayed to Pagermon in 10 min) +

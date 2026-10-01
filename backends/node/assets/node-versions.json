@@ -1,7 +1,7 @@
 {
-  "_comment": "Node self-update + component manifest. Everything is served as static files off the site webroot (NODE_DOWNLOADS_BASE, default https://nswpsn.forcequit.xyz/downloads). Deploy builds the agent binaries there; the SDR-Trunk runtime (from the feature/node-control branch) and the rdio binary are placed there once. Fill in the sha256 hex once the artifacts exist (leave empty to disable that entry — the agent treats empty sha256 as 'no update' and skips). The agent checks this on start, every 6h, and on cmd{action:'update'}: downloads to .pending, sha256-verifies, swaps the component dir / self-replaces via a detached helper, restarts.",
+  "_comment": "Node self-update + component manifest. Everything is served as static files off the site webroot (NODE_DOWNLOADS_BASE, default https://nswpsn.forcequit.xyz/downloads). Deploy builds the agent binaries there; the SDR-Trunk runtime (from the feature/node-control branch) and the rdio binary are placed there once. Fill in the sha256 hex once the artifacts exist (leave empty to disable that entry \u2014 the agent treats empty sha256 as 'no update' and skips). The agent checks this on start, every 6h, and on cmd{action:'update'}: downloads to .pending, sha256-verifies, swaps the component dir / self-replaces via a detached helper, restarts.",
   "agent": {
-    "version": "0.2.27",
+    "version": "0.2.28",
     "urls": {
       "windows-amd64": "https://nswpsn.forcequit.xyz/downloads/nodeagent-windows-amd64.exe",
       "linux-amd64": "https://nswpsn.forcequit.xyz/downloads/nodeagent-linux-amd64",
@@ -39,18 +39,18 @@
   },
   "sdrtrunk": {
     "_comment": "0.7.x = the sdrtrunk-vce node-runtime line (feature/node-control branch of sdrtrunk-vce). The manifest version is deliberately independent of vce's own 0.6.2-alpha-N version string: the agent's 3-part numeric compare ignores pre-release suffixes, so 0.6.2-alpha-9 would LOSE to the old fork's 0.6.10 and never install. After rebuilding the node-runtime release (build-node-runtime workflow), bump this version and refresh the sha256 values from the published .sha256 assets.",
-    "version": "0.7.15",
+    "version": "0.7.16",
     "urls": {
       "windows-amd64": "https://github.com/AkumasCoffin/sdrtrunk-vce/releases/download/node-runtime/sdrtrunk-windows-amd64.zip",
       "linux-amd64": "https://github.com/AkumasCoffin/sdrtrunk-vce/releases/download/node-runtime/sdrtrunk-linux-amd64.zip"
     },
     "sha256": {
-      "windows-amd64": "4105b06e49f87bf5dacaf853bad01e417ded4b23d96b29981e39575d0ff6bc9e",
-      "linux-amd64": "2c8fb8c3f54cb619f1578236c345c07b568d4c389280dbed864bd43ea936d305"
+      "windows-amd64": "d346309aa001d1a6586c108fa32b05edfbfed01cab18c25beca01a2b77873ec8",
+      "linux-amd64": "1391690f0456c51e78c4fab9b0c30c5dfe3dad121ca8d77cb24ff17470058803"
     }
   },
   "rdio": {
-    "_comment": "The operator's OWN fork (AkumasCoffin/rdio-scanner), not upstream — nodes must run the same rdio the central instance does, because that is where talkgroup PATCHES live (rdioScannerPatches, added after 6.13.1) and the backend reads them from central to group patched calls. The agent's 3-part numeric compare ignores the -beta.N suffix, so 6.14.1-beta.7 reads as 6.14.1 and wins over 6.13.1.",
+    "_comment": "The operator's OWN fork (AkumasCoffin/rdio-scanner), not upstream \u2014 nodes must run the same rdio the central instance does, because that is where talkgroup PATCHES live (rdioScannerPatches, added after 6.13.1) and the backend reads them from central to group patched calls. The agent's 3-part numeric compare ignores the -beta.N suffix, so 6.14.1-beta.7 reads as 6.14.1 and wins over 6.13.1.",
     "version": "6.14.1-beta.7",
     "urls": {
       "windows-amd64": "https://github.com/AkumasCoffin/rdio-scanner/releases/download/v6.14.1-beta.7/rdio-scanner-windows-amd64-v6.14.1-beta.7.exe",

@@ -122,6 +122,11 @@ export const ChannelSchema = z
     // Decoder-specific settings; the agent renders the matching
     // <decode_configuration> from these (SDR-Trunk defaults fill omitted fields).
     decoderConfig: DecoderConfigSchema.optional(),
+    // Opt this channel out of automatic channel management (the agent's
+    // low-decode stop/retest loop). Absent = managed; only ever meaningful on
+    // trunked control channels - analog channels have no decode metric and the
+    // agent never touches them regardless.
+    autoManage: z.boolean().optional(),
   })
   .strict();
 export type Channel = z.infer<typeof ChannelSchema>;
@@ -185,6 +190,15 @@ export const ConfigOverrideSchema = z
         gain: z.number().optional(),
         ppm: z.number().optional(),
         type: z.string().max(40).optional(),
+      })
+      .strict()
+      .optional(),
+    // Automatic channel management (agent-side low-decode stop/retest loop).
+    // Absent = ON: the whole object is omitted until staff touch the toggle, so
+    // existing configs keep their hash and nothing re-applies fleet-wide.
+    channelManagement: z
+      .object({
+        enabled: z.boolean().optional(),
       })
       .strict()
       .optional(),

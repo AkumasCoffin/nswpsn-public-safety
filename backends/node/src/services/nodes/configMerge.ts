@@ -76,6 +76,8 @@ export interface ChannelPlan {
   /** Decoder-specific settings; the agent fills SDR-Trunk defaults for omitted
    *  fields when rendering this channel's <decode_configuration>. */
   decoderConfig?: DecoderConfig;
+  /** Opt-out from automatic channel management; absent = managed. */
+  autoManage?: boolean;
 }
 
 /** Per-SDR tuner settings, keyed by serial ("*" = apply to all SDRs). */
@@ -160,6 +162,10 @@ export interface ConfigPayload {
   pager?: PagerConfig;
   /** Present only for ADS-B nodes — tuner overrides + antenna position. */
   adsb?: AdsbConfig;
+  /** Automatic channel management policy. Omitted entirely while the operator
+   *  has never touched the toggle (absent = enabled on the agent), so legacy
+   *  configs hash identically and don't re-apply on deploy. */
+  channelManagement?: { enabled?: boolean };
 }
 
 // Fixed pager plans (decided with the operator), one per Australian state —
@@ -535,7 +541,7 @@ export async function buildConfigPayload(
   // captureEnabled/feedEnabled are per-node and part of the hashed payload, so a
   // Node-on/off or Feed-on/off toggle changes configVersion and the agent
   // re-applies (stops/starts capture; enables/disables the rdio downstream).
-  const payloadNoVersion = {
+  const payloadNoVersion: Omit<ConfigPayload, 'configVersion'> = {
     channels,
     tuners,
     aliases,
@@ -544,6 +550,10 @@ export async function buildConfigPayload(
     captureEnabled: node.enabled,
     feedEnabled: node.feed_enabled,
   };
+  // Only when the operator has actually set it - absent must hash like before.
+  if (override.channelManagement !== undefined) {
+    payloadNoVersion.channelManagement = override.channelManagement;
+  }
   const configVersion = sha256Hex(JSON.stringify(canonicalize(payloadNoVersion)));
 
   return { configVersion, ...payloadNoVersion };

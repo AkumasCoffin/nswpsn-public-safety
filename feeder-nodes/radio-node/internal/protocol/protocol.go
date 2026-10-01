@@ -83,6 +83,11 @@ type Status struct {
 	// builds): CPU calibration done, and the JMBE voice codec installed.
 	Calibrated    *bool `json:"calibrated"`
 	JmbeInstalled *bool `json:"jmbeInstalled"`
+	// ChannelManager is the automatic channel manager's state, keyed by
+	// channel name (a sidecar rather than annotations on Channels, which is
+	// vce's JSON forwarded verbatim). Absent on non-radio kinds and older
+	// agents.
+	ChannelManager any `json:"channelManager,omitempty"`
 }
 
 // HelloAck is the server's response to Hello.
