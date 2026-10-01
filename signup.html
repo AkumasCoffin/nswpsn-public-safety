@@ -804,22 +804,13 @@
           ? 'Choose how you would like to create your account.'
           : "First, choose how you'd like to create your account — then fill out the request form.";
       }
-      // The two method captions must match the path: a plain User has no form,
-      // so the Discord button goes STRAIGHT to Discord — saying "fill out the
-      // form first" there was flatly wrong. Contributors keep the deferred-link
-      // wording, because for them it is true.
+      // The method captions are contributor-path copy (the deferred Discord
+      // link is only true there). The User path needs no captions at all —
+      // two buttons explain themselves — so they are hidden outright.
       const dNote = document.getElementById('discord-method-note');
-      if (dNote) {
-        dNote.textContent = isUser
-          ? 'Opens Discord to authorise — your account is created right away.'
-          : "Fill out the form first — you'll link Discord when you submit, and no account is created until then.";
-      }
+      if (dNote) dNote.style.display = isUser ? 'none' : '';
       const eNote = document.getElementById('email-method-note');
-      if (eNote) {
-        eNote.textContent = isUser
-          ? 'Pick a username and password — ready in seconds.'
-          : "You'll choose a display name and password as part of the form.";
-      }
+      if (eNote) eNote.style.display = isUser ? 'none' : '';
       // Already signed in: a plain User has nothing to create, and a
       // contributor goes straight to the request form — the method chooser is
       // only for visitors who still need an account.
