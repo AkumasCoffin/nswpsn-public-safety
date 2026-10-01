@@ -42,6 +42,7 @@ import { z } from 'zod';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { requireRole, isOwner } from '../services/auth/roles.js';
+import { hub } from '../services/nodes/hub.js';
 
 export const radioPublicRouter = new Hono();
 
@@ -56,6 +57,30 @@ interface MonitoredSite {
   nac: number | null;
   nodes: number;
   lastSeen: string | null;
+}
+
+/**
+ * Channels the automatic channel manager currently holds on a node — stopped
+ * for low decode, or mid-probe — by trimmed channel name. A probe runs the
+ * channel for about a minute every twenty, which advances vce's site clock;
+ * without this filter every FAILED test lit the map's "monitored" badge for
+ * the next five minutes (observed live: Clarence Peak "confirmed 302s ago"
+ * while its channel sat auto-stopped). An offline node has no live status and
+ * returns the empty set — its site clock froze anyway.
+ */
+function managerHeldChannels(nodeId: string): Set<string> {
+  const held = new Set<string>();
+  const status = hub.liveStatus(nodeId).status as {
+    channelManager?: { channels?: Record<string, { state?: string } | undefined> };
+  } | null;
+  const chans = status?.channelManager?.channels;
+  if (!chans) return held;
+  for (const [name, row] of Object.entries(chans)) {
+    if (row && (row.state === 'autoStopped' || row.state === 'probing')) {
+      held.add(name.trim());
+    }
+  }
+  return held;
 }
 
 /** GRN publishes site ids as zero-padded "rfss-site" ("004-083"). */
@@ -77,37 +102,67 @@ radioPublicRouter.get('/api/radio/monitored-sites', async (c) => {
   const pool = await getPool();
   if (!pool) return c.json({ error: 'database unavailable' }, 503);
   try {
-    // DISTINCT ON inner query so the NAME is the newest node's view of the
-    // site rather than an arbitrary aggregate; the outer group folds the
-    // per-node rows into one site with a node count.
+    // Per-node rows rather than a SQL GROUP BY: each contribution has to be
+    // checked against that node's live channel-manager state (held channels
+    // don't count as monitoring), and that state lives in process memory.
     const r = await pool.query<{
-      rfss: number; site_id: number; nac: number | null;
-      name: string | null; nodes: string; last_seen: Date;
+      node_id: string; rfss: number; site_id: number; nac: number | null;
+      channel_name: string | null; site_last_seen_ms: string;
     }>(
-      `SELECT rfss, site_id,
-              MAX(nac) AS nac,
-              (ARRAY_AGG(channel_name ORDER BY site_last_seen_ms DESC))[1] AS name,
-              COUNT(DISTINCT node_id) AS nodes,
-              to_timestamp(MAX(site_last_seen_ms) / 1000.0) AS last_seen
+      `SELECT node_id, rfss, site_id, nac, channel_name, site_last_seen_ms
          FROM node_site_snapshots
         WHERE received_at >= now() - ($1 || ' seconds')::interval
           AND site_last_seen_ms IS NOT NULL
           AND to_timestamp(site_last_seen_ms / 1000.0) >= now() - ($1 || ' seconds')::interval
           AND channel_name IS NOT NULL
           AND rfss >= 0 AND site_id >= 0
-        GROUP BY rfss, site_id
         ORDER BY rfss, site_id`,
       [String(MONITORED_WINDOW_SECONDS)],
     );
-    const sites: MonitoredSite[] = r.rows.map((row) => ({
-      rfss: row.rfss,
-      site: row.site_id,
-      key: grnKey(row.rfss, row.site_id),
-      name: row.name,
-      nac: row.nac,
-      nodes: Number(row.nodes),
-      lastSeen: row.last_seen ? row.last_seen.toISOString() : null,
-    }));
+
+    const heldByNode = new Map<string, Set<string>>();
+    const bySite = new Map<string, {
+      rfss: number; site: number; nac: number | null;
+      name: string | null; nameMs: number; nodes: Set<string>; lastMs: number;
+    }>();
+    for (const row of r.rows) {
+      let held = heldByNode.get(row.node_id);
+      if (!held) {
+        held = managerHeldChannels(row.node_id);
+        heldByNode.set(row.node_id, held);
+      }
+      // A probe's one-minute test run advances the site clock but is not
+      // monitoring; neither is a channel sitting auto-stopped between tests.
+      if (held.has((row.channel_name ?? '').trim())) continue;
+
+      const key = `${row.rfss}:${row.site_id}`;
+      const ms = Number(row.site_last_seen_ms);
+      let agg = bySite.get(key);
+      if (!agg) {
+        agg = {
+          rfss: row.rfss, site: row.site_id, nac: row.nac,
+          name: row.channel_name, nameMs: ms, nodes: new Set(), lastMs: ms,
+        };
+        bySite.set(key, agg);
+      }
+      agg.nodes.add(row.node_id);
+      if (row.nac !== null && (agg.nac === null || row.nac > agg.nac)) agg.nac = row.nac;
+      // The site NAME is the freshest node's view of it, as before.
+      if (ms > agg.nameMs) { agg.nameMs = ms; agg.name = row.channel_name; }
+      if (ms > agg.lastMs) agg.lastMs = ms;
+    }
+
+    const sites: MonitoredSite[] = [...bySite.values()]
+      .sort((a, b) => a.rfss - b.rfss || a.site - b.site)
+      .map((agg) => ({
+        rfss: agg.rfss,
+        site: agg.site,
+        key: grnKey(agg.rfss, agg.site),
+        name: agg.name,
+        nac: agg.nac,
+        nodes: agg.nodes.size,
+        lastSeen: Number.isFinite(agg.lastMs) ? new Date(agg.lastMs).toISOString() : null,
+      }));
     const body = {
       generatedAt: new Date(now).toISOString(),
       windowSeconds: MONITORED_WINDOW_SECONDS,
