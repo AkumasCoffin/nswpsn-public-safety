@@ -9985,11 +9985,18 @@
       return looping ? 'SDR-Trunk crash-looping' : 'SDR-Trunk down';
     }
 
-    function _ndActivityHtml(online, sdrUp, decoding, feedEnabled, uploading, kind, updating, decodedLabels, decoderState) {
+    // Update-stage labels, mirroring what the agent is actually doing.
+    function _ndUpdStageLabel(st) {
+      if (st === 'checking') return 'Checking for update';
+      if (st === 'fetching') return 'Fetching update';
+      return 'Installing & restarting';
+    }
+
+    function _ndActivityHtml(online, sdrUp, decoding, feedEnabled, uploading, kind, updating, decodedLabels, decoderState, updStage) {
       const chip = (state, label) => `<span class="nd-ready ${state}">${label}</span>`;
       const isPager = kind === 'pager';
       let dec;
-      if (updating) dec = chip('updating', '<i class="fas fa-arrows-rotate"></i> Updating');
+      if (updating) dec = chip('updating', '<i class="fas fa-arrows-rotate"></i> ' + _ndUpdStageLabel(updStage));
       else if (!online) dec = chip('unknown', 'Offline');
       // Deliberately paused (capture off — the supervisor reports the
       // component as disabled) is a state someone CHOSE, not a fault: grey,
@@ -10016,6 +10023,7 @@
       const id = node.id;
       const online = !!node.online;
       const updating = !!node.updating;
+      const updStage = node.updateStage || null;
       const name = node.name || 'Unnamed node';
       const userId = node.userId || '';
       const userShort = userId ? escapeHtml(userId.slice(0, 8)) + '…' : '—';
@@ -10117,7 +10125,7 @@
              onclick="openNodeDrawer('${jsArg(id)}')"
              onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openNodeDrawer('${jsArg(id)}')}">
           <div class="dev-card-head" style="padding-right: 0;">
-            <span class="node-dot ${updating ? 'updating' : (online ? 'online' : '')}" title="${updating ? 'Updating…' : (online ? 'Online' : 'Offline')}"></span>
+            <span class="node-dot ${updating ? 'updating' : (online ? 'online' : '')}" title="${updating ? _ndUpdStageLabel(updStage) : (online ? 'Online' : 'Offline')}"></span>
             <div class="dev-card-name">${escapeHtml(name)}</div>
             <i class="fas fa-chevron-right nd-card-open" aria-hidden="true"></i>
           </div>
@@ -10130,7 +10138,7 @@
             ...(node.os ? [['os', node.os]] : []),
           ].map(([k, v]) => `<span><span class="k">${k}</span> ${escapeHtml(v == null ? '—' : String(v))}</span>`).join('')}</div>
           ${_ndHealthHtml(kind, st, sdrUp)}
-          ${_ndActivityHtml(online, sdrUp, decoding, feedEnabled, uploading, kind, updating, node.pagerDecoding, decoderState)}
+          ${_ndActivityHtml(online, sdrUp, decoding, feedEnabled, uploading, kind, updating, node.pagerDecoding, decoderState, updStage)}
           ${_ndAlertsHtml(kind, st, pinned, place)}
           <div class="dev-card-secondary nd-uptime-row">${uptimeHtml}</div>
           <div class="dev-card-secondary">

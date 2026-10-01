@@ -1131,9 +1131,29 @@ func (c *Client) runUpdateCheck(reason string) (string, bool) {
 
 	hadError := false
 
+	// Update-stage events: the fleet page renders these as "Checking for
+	// update" / "Fetching update" / "Installing & restarting", and the final
+	// "done" clears the badge so a quiet periodic check doesn't linger.
+	// Best-effort — a dropped frame only costs display fidelity.
+	stage := ""
+	setStage := func(st string, detail map[string]any) {
+		if stage == st {
+			return
+		}
+		stage = st
+		if detail == nil {
+			detail = map[string]any{}
+		}
+		detail["kind"] = "updating"
+		detail["stage"] = st
+		_ = c.sendMessage(protocol.TypeEvent, detail)
+	}
+	setStage("checking", map[string]any{"reason": reason})
+
 	m, err := update.FetchManifest(c.cfg.ServerURL, c.cfg.NodeToken)
 	if err != nil {
 		log.Printf("wsclient: update(%s): manifest fetch failed: %v", reason, err)
+		setStage("done", nil)
 		return "update check failed: " + err.Error(), false
 	}
 
@@ -1145,6 +1165,7 @@ func (c *Client) runUpdateCheck(reason string) (string, bool) {
 	manual := reason == "cmd"
 	if !manual && m.AutoUpdate != nil && !*m.AutoUpdate {
 		log.Printf("wsclient: update(%s): auto-update paused by server; skipping", reason)
+		setStage("done", nil)
 		return "auto-update paused by server; skipping", true
 	}
 
@@ -1159,6 +1180,11 @@ func (c *Client) runUpdateCheck(reason string) (string, bool) {
 		{"sdrtrunk", m.SDRTrunk},
 		{"rdio", m.Rdio},
 	} {
+		if update.NeedsInstall(ce.name, ce.spec, c.cfg.DataDir) {
+			// A long download is about to start (the sdrtrunk runtime runs to
+			// hundreds of MB) — say so before it begins, not after.
+			setStage("fetching", map[string]any{"component": ce.name, "version": strings.TrimSpace(ce.spec.Version)})
+		}
 		inst, cerr := update.EnsureComponent(ce.name, ce.spec, c.cfg.DataDir)
 		switch {
 		case cerr != nil:
@@ -1186,6 +1212,9 @@ func (c *Client) runUpdateCheck(reason string) (string, bool) {
 	}
 
 	// Agent self-update.
+	if update.NeedsAgentUpdate(m.Agent) {
+		setStage("fetching", map[string]any{"component": "agent", "version": strings.TrimSpace(m.Agent.Version)})
+	}
 	pending, newVer, serr := update.StageAgentUpdate(m.Agent, c.cfg.DataDir)
 	switch {
 	case errors.Is(serr, update.ErrNothingToDo):
@@ -1197,6 +1226,7 @@ func (c *Client) runUpdateCheck(reason string) (string, bool) {
 	default:
 		log.Printf("wsclient: update(%s): staged agent v%s; swapping + restarting", reason, newVer)
 		parts = append(parts, "agent: updating to v"+newVer+", restarting")
+		setStage("installing", map[string]any{"component": "agent", "version": newVer})
 		// Swap on a short delay so any pending cmd ack flushes before this
 		// process re-execs / exits. Guard with a one-shot CAS: two updates within
 		// the delay window must not each spawn a SwapAndRestart (the second helper's
@@ -1222,6 +1252,7 @@ func (c *Client) runUpdateCheck(reason string) (string, bool) {
 	// manager (systemd/kardianos — how real nodes run) os.Exit(0) triggers a
 	// relaunch; the same mechanism rebootAgent uses.
 	if componentChanged {
+		setStage("installing", nil)
 		if c.swapScheduled.CompareAndSwap(false, true) {
 			log.Printf("wsclient: update(%s): restarting agent to launch updated component(s)", reason)
 			go func() {
@@ -1231,6 +1262,12 @@ func (c *Client) runUpdateCheck(reason string) (string, bool) {
 		} else {
 			log.Printf("wsclient: update(%s): restart already scheduled (agent self-update); component will run after it", reason)
 		}
+	}
+
+	// Nothing is restarting: clear the badge. (When an install IS pending the
+	// restart/reconnect path retires the badge instead.)
+	if stage != "installing" {
+		setStage("done", nil)
 	}
 
 	summary := strings.Join(parts, "; ")

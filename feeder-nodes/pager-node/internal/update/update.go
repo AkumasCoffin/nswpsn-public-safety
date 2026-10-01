@@ -199,6 +199,15 @@ func downloadVerified(url, sha256hex, destPath string) error {
 // the advertised version is not newer than the running one, so callers can skip
 // silently. The caller performs the actual swap (via SwapAndRestart) AFTER
 // acknowledging, since a running exe cannot replace itself.
+// NeedsAgentUpdate reports whether StageAgentUpdate would actually download a
+// new agent build (a usable artifact advertising a strictly newer version).
+// Used to announce the "fetching" update stage before the download starts.
+func NeedsAgentUpdate(spec ComponentSpec) bool {
+	_, _, ok := spec.artifact()
+	ver := strings.TrimSpace(spec.Version)
+	return ok && ver != "" && versionNewer(ver, version.Version)
+}
+
 func StageAgentUpdate(spec ComponentSpec, dataDir string) (pendingPath, newVersion string, err error) {
 	url, sha, ok := spec.artifact()
 	newVersion = strings.TrimSpace(spec.Version)

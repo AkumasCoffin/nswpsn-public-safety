@@ -211,6 +211,7 @@ function feederNodeView(n: NodeRow) {
     // Self-update in progress — the feeder card shows "updating" (not offline)
     // across the agent's swap/re-exec disconnect.
     updating: hub.isUpdating(n.id),
+    updateStage: hub.updatingStage(n.id),
     // Pager: which frequency readers are decoding right now (RFS / FRNSW / both),
     // so the owner can see coverage on their own card.
     pagerDecoding: isPager ? hub.pagerDecoding(n.id) : null,

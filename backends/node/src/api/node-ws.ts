@@ -337,10 +337,22 @@ async function handleAgentMessage(
       return;
     }
     case 'event': {
-      // An agent about to self-update signals it here so the node shows
-      // "updating" (not "offline") across the swap + re-exec disconnect.
+      // Update-stage reports: agents announce checking -> fetching ->
+      // installing as an update progresses (and "done" when a check ends
+      // quiet), so the fleet page can say what is actually happening instead
+      // of flashing "offline" / "decoder down". Older agents send no stage,
+      // only the pre-swap signal — treat that as installing.
       if ((data as { kind?: string } | undefined)?.kind === 'updating') {
-        hub.markUpdating(ctx.nodeId);
+        const stage = String((data as { stage?: string }).stage ?? 'installing');
+        if (stage === 'done') {
+          hub.clearUpdating(ctx.nodeId);
+        } else {
+          // Windows are stage-sized: a check is seconds, a component fetch
+          // can be minutes (the sdrtrunk runtime is hundreds of MB), an
+          // install spans the restart + decoder relaunch.
+          const ms = stage === 'checking' ? 30_000 : stage === 'fetching' ? 600_000 : 180_000;
+          hub.markUpdating(ctx.nodeId, stage, ms);
+        }
       }
       hub.relayEvent(ctx.nodeId, data);
       return;

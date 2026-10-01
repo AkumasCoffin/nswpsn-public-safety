@@ -548,9 +548,22 @@ func (c *Client) runUpdateCheck(reason string) (string, bool) {
 	c.updateMu.Lock()
 	defer c.updateMu.Unlock()
 
+	// Update-stage events for the fleet page ("Checking for update" /
+	// "Fetching update" / "Installing & restarting"); "done" clears the badge.
+	sendStage := func(st string, detail map[string]any) {
+		if detail == nil {
+			detail = map[string]any{}
+		}
+		detail["kind"] = "updating"
+		detail["stage"] = st
+		_ = c.sendMessage(protocol.TypeEvent, detail)
+	}
+	sendStage("checking", map[string]any{"reason": reason})
+
 	m, err := update.FetchManifest(c.cfg.ServerURL, c.cfg.NodeToken)
 	if err != nil {
 		log.Printf("wsclient: update(%s): manifest fetch failed: %v", reason, err)
+		sendStage("done", nil)
 		return "update check failed: " + err.Error(), false
 	}
 
@@ -560,16 +573,22 @@ func (c *Client) runUpdateCheck(reason string) (string, bool) {
 	manual := reason == "cmd"
 	if !manual && m.AutoUpdate != nil && !*m.AutoUpdate {
 		log.Printf("wsclient: update(%s): auto-update paused by server; skipping", reason)
+		sendStage("done", nil)
 		return "auto-update paused by server; skipping", true
 	}
 
+	if update.NeedsAgentUpdate(m.Agent) {
+		sendStage("fetching", map[string]any{"component": "agent", "version": m.Agent.Version})
+	}
 	pending, newVer, serr := update.StageAgentUpdate(m.Agent, c.cfg.DataDir)
 	switch {
 	case errors.Is(serr, update.ErrNothingToDo):
 		log.Printf("wsclient: update(%s): agent: no update available", reason)
+		sendStage("done", nil)
 		return "agent: no update available", true
 	case serr != nil:
 		log.Printf("wsclient: update(%s): stage agent: %v", reason, serr)
+		sendStage("done", nil)
 		return "agent: update error", false
 	default:
 		log.Printf("wsclient: update(%s): staged agent v%s; swapping + restarting", reason, newVer)
@@ -579,8 +598,8 @@ func (c *Client) runUpdateCheck(reason string) (string, bool) {
 		// move-into-place would spin forever on an already-consumed pending file).
 		if c.swapScheduled.CompareAndSwap(false, true) {
 			// Tell the backend we're about to swap + re-exec so the node shows
-			// "updating" (not "offline") across the disconnect. Best-effort.
-			_ = c.sendMessage(protocol.TypeEvent, map[string]any{"kind": "updating", "version": newVer})
+			// "Installing & restarting" (not "offline") across the disconnect.
+			sendStage("installing", map[string]any{"component": "agent", "version": newVer})
 			go func() {
 				time.Sleep(1 * time.Second)
 				if swerr := update.SwapAndRestart(pending); swerr != nil {

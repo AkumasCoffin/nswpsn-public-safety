@@ -1007,7 +1007,10 @@
       if (!agentCfg) {
         chips = chip('', 'agent coming soon');
       } else if (updating) {
-        chips = chipHtml('updating', '<i class="fas fa-arrows-rotate"></i> Updating');
+        chips = chipHtml('updating', '<i class="fas fa-arrows-rotate"></i> ' + (
+          node.updateStage === 'checking' ? 'Checking for update'
+          : node.updateStage === 'fetching' ? 'Fetching update'
+          : 'Installing &amp; restarting'));
       } else if (!online) {
         chips = chip('off', 'Offline');
       } else if (isAdsb) {

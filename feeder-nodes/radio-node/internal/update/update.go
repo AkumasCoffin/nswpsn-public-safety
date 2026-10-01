@@ -511,6 +511,28 @@ func writeZipEntry(f *zip.File, target string, mode os.FileMode) error {
 // the advertised version is not newer than the running one, so callers can skip
 // silently. The caller performs the actual swap (via SwapAndRestart) AFTER
 // acknowledging, since a running exe cannot replace itself.
+// NeedsAgentUpdate reports whether StageAgentUpdate would actually download a
+// new agent build (a usable artifact advertising a strictly newer version).
+// Used to announce the "fetching" update stage before the download starts.
+func NeedsAgentUpdate(spec ComponentSpec) bool {
+	_, _, ok := spec.artifact()
+	ver := strings.TrimSpace(spec.Version)
+	return ok && ver != "" && versionNewer(ver, version.Version)
+}
+
+// NeedsInstall reports whether EnsureComponent would actually download and
+// install this component (a usable artifact advertising a version that is not
+// already installed and resolvable on disk). Used to announce the "fetching"
+// update stage before a long component download starts.
+func NeedsInstall(name string, spec ComponentSpec, dataDir string) bool {
+	_, _, ok := spec.artifact()
+	ver := strings.TrimSpace(spec.Version)
+	if !ok || ver == "" {
+		return false
+	}
+	return !(readCurrentVersion(dataDir, name) == ver && resolveInstalled(name, dataDir) != nil)
+}
+
 func StageAgentUpdate(spec ComponentSpec, dataDir string) (pendingPath, newVersion string, err error) {
 	url, sha, ok := spec.artifact()
 	newVersion = strings.TrimSpace(spec.Version)

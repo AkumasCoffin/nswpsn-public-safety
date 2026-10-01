@@ -122,6 +122,8 @@ function toApi(node: NodeRow, usernames?: Map<string, string>) {
     // Self-update in progress (agent swapping/re-execing) — shown as "updating"
     // instead of offline during the brief disconnect.
     updating: hub.isUpdating(node.id),
+    /** Which phase: 'checking' | 'fetching' | 'installing' (null = not updating). */
+    updateStage: hub.updatingStage(node.id),
     // Pager: reader labels currently decoding (e.g. ['NSWRFS','FRNSW']).
     pagerDecoding: node.kind === 'pager' ? hub.pagerDecoding(node.id) : null,
     // ADS-B tuner overrides (persisted); null when unset. gain 'auto' means

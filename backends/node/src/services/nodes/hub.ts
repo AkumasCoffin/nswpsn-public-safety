@@ -90,23 +90,34 @@ class NodeHub {
   // it's about to swap+re-exec; while set (and until it reconnects) the node is
   // reported as UPDATING rather than offline, so the brief disconnect during an
   // update doesn't flash as "offline".
-  private updatingUntil = new Map<string, number>();
+  private updatingUntil = new Map<string, { until: number; stage: string }>();
 
-  /** Mark a node as updating for the next `ms` (agent about to swap+re-exec). */
-  markUpdating(nodeId: string, ms = 120_000): void {
-    this.updatingUntil.set(nodeId, Date.now() + ms);
-    log.info({ nodeId }, 'node self-update in progress (marked updating)');
+  /** Mark a node's update stage ('checking' | 'fetching' | 'installing') for
+   *  the next `ms`. Later stages overwrite earlier ones. */
+  markUpdating(nodeId: string, stage = 'installing', ms = 120_000): void {
+    this.updatingUntil.set(nodeId, { until: Date.now() + ms, stage });
+    log.info({ nodeId, stage }, 'node update stage');
   }
 
-  /** Whether a node is mid self-update (signalled + within the window). */
-  isUpdating(nodeId: string): boolean {
+  /** Clear the update marker (the agent reported the check finished quiet). */
+  clearUpdating(nodeId: string): void {
+    this.updatingUntil.delete(nodeId);
+  }
+
+  /** The node's current update stage, or null when no update is in flight. */
+  updatingStage(nodeId: string): string | null {
     const t = this.updatingUntil.get(nodeId);
-    if (t == null) return false;
-    if (Date.now() >= t) {
+    if (t == null) return null;
+    if (Date.now() >= t.until) {
       this.updatingUntil.delete(nodeId);
-      return false;
+      return null;
     }
-    return true;
+    return t.stage;
+  }
+
+  /** Whether a node is mid-update (signalled + within the window). */
+  isUpdating(nodeId: string): boolean {
+    return this.updatingStage(nodeId) != null;
   }
 
   /** For a PAGER node, the reader labels currently decoding (e.g. ['NSWRFS','FRNSW']),
@@ -190,9 +201,12 @@ class NodeHub {
       lastStatusAt: null,
       connectedAt: Date.now(),
     });
-    // A fresh connection means any in-flight self-update finished (the agent
-    // re-execed and reconnected), so clear the updating marker.
-    this.updatingUntil.delete(nodeId);
+    // A fresh connection means the restart part of an update finished — but
+    // after a COMPONENT update the decoder it launches is still starting, so
+    // give the badge a short grace instead of clearing it outright ("Installing
+    // & restarting" for ~90s more reads truer than an instant "SDR-Trunk down").
+    const upd = this.updatingUntil.get(nodeId);
+    if (upd) upd.until = Math.min(upd.until, Date.now() + 90_000);
     log.info({ nodeId, installId }, 'node agent connected');
     this.broadcastToStaff(nodeId, 'nodePresence', { nodeId, online: true });
     this.syncLiveWatchTo(nodeId);
