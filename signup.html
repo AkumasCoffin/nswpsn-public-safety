@@ -778,7 +778,11 @@
     // 'contributor' → the existing request + approval flow.
     // Public signup NEVER grants a role: a User account gets only the base
     // 'authed' role (server-side, via POST /api/profiles/sync on first load).
-    let _accountType = 'contributor';
+    // '' until the visitor picks an account type. The old default of
+    // 'contributor' (from when this page was contributor-only) made every
+    // signed-in visitor look mid-application, which rendered the request form
+    // underneath the still-unanswered account-type chooser.
+    let _accountType = '';
     function chooseAccountType(type) {
       _accountType = type;
       const isUser = type === 'user';
