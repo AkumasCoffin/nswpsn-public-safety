@@ -35,8 +35,13 @@
  * (/api/adsb/receivers is the precedent).
  */
 import { Hono } from 'hono';
+import { readFileSync, statSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { z } from 'zod';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
+import { requireRole, isOwner } from '../services/auth/roles.js';
 
 export const radioPublicRouter = new Hono();
 
@@ -123,3 +128,147 @@ radioPublicRouter.get('/api/radio/monitored-sites', async (c) => {
 export function _resetRadioPublicCache(): void {
   _cache = null;
 }
+
+// ---------------------------------------------------------------------------
+// GRN repeater sites — the dataset behind the map's repeater layer.
+//
+// Lived as a static JSON file until the owner needed to CORRECT it (missing
+// and outdated fields in the community compilation). Now Postgres-backed:
+// seeded once from the file when the table is empty, then the DB is
+// authoritative. Reads are public (same tier as monitored-sites); writes are
+// OWNER ONLY — this is reference data the whole map trusts.
+// ---------------------------------------------------------------------------
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const GRN_SEED_REL = 'data/nswpsn/NSW GRN Version 1.json';
+function grnSeedPath(): string | null {
+  for (const c of [
+    path.resolve(HERE, '../../../..', GRN_SEED_REL), // dist/api|src/api → repo root
+    path.resolve(process.cwd(), '../..', GRN_SEED_REL), // cwd = backends/node
+    path.resolve(process.cwd(), GRN_SEED_REL), // cwd = repo root
+  ]) {
+    try {
+      if (statSync(c).isFile()) return c;
+    } catch { /* keep looking */ }
+  }
+  return null;
+}
+
+/** One-time import of the JSON seed when grn_sites is empty. Boot-time, like
+ *  seedAgencyDataIfEmpty — a failure logs and leaves the endpoint serving an
+ *  empty list rather than blocking startup. */
+export async function seedGrnSitesIfEmpty(): Promise<void> {
+  const pool = await getPool();
+  if (!pool) return;
+  try {
+    const n = await pool.query<{ n: string }>('SELECT COUNT(*)::text AS n FROM grn_sites');
+    if (Number(n.rows[0]?.n ?? 0) > 0) return;
+    const file = grnSeedPath();
+    if (!file) {
+      log.warn({ rel: GRN_SEED_REL }, 'grn seed file not found — repeater editing starts empty');
+      return;
+    }
+    const raw = JSON.parse(readFileSync(file, 'utf8')) as unknown[];
+    if (!Array.isArray(raw) || raw.length === 0) return;
+    // Multi-row inserts in chunks; order preserved so ids follow the file.
+    const CHUNK = 200;
+    for (let i = 0; i < raw.length; i += CHUNK) {
+      const slice = raw.slice(i, i + CHUNK);
+      const values = slice.map((_, j) => `($${j + 1}::jsonb)`).join(',');
+      await pool.query(
+        `INSERT INTO grn_sites (data) VALUES ${values}`,
+        slice.map((x) => JSON.stringify(x)),
+      );
+    }
+    log.info({ count: raw.length, file }, 'grn_sites seeded from file');
+  } catch (err) {
+    log.warn({ err }, 'grn_sites seed failed');
+  }
+}
+
+let _grnCache: { at: number; body: Record<string, unknown> } | null = null;
+
+radioPublicRouter.get('/api/radio/grn-sites', async (c) => {
+  const now = Date.now();
+  if (_grnCache && now - _grnCache.at < CACHE_TTL_MS) return c.json(_grnCache.body);
+  const pool = await getPool();
+  if (!pool) return c.json({ error: 'database unavailable' }, 503);
+  try {
+    const r = await pool.query<{ id: number; data: Record<string, unknown> }>(
+      'SELECT id, data FROM grn_sites ORDER BY id',
+    );
+    const body = { sites: r.rows.map((row) => ({ id: row.id, ...row.data })) };
+    _grnCache = { at: now, body };
+    return c.json(body);
+  } catch (err) {
+    log.warn({ err }, 'grn-sites read failed');
+    if (_grnCache) return c.json(_grnCache.body);
+    return c.json({ error: 'query failed' }, 500);
+  }
+});
+
+// The editable surface IS the dataset's own vocabulary — every key the file
+// uses, nothing else. A new field means adding it here deliberately, not
+// whatever a request happens to carry.
+const GrnSitePatchSchema = z.object({
+  'NAME': z.string().trim().min(1).max(200).optional(),
+  'Latitude': z.number().min(-90).max(90).optional(),
+  'Longitude': z.number().min(-180).max(180).optional(),
+  'SITE_ID': z.string().trim().max(40).optional(),
+  'GRN Site ID #': z.string().trim().max(120).optional(),
+  'Previous Site ID #': z.string().trim().max(120).optional(),
+  'SYSTEM NAME': z.string().trim().max(120).optional(),
+  'System #': z.string().trim().max(60).optional(),
+  'Zone Assignment': z.string().trim().max(60).optional(),
+  'NAC Code': z.string().trim().max(20).optional(),
+  'Control Channel': z.string().trim().max(60).optional(),
+  'Alt Control Channel': z.string().trim().max(60).optional(),
+  'POSTCODE': z.string().trim().max(10).optional(),
+  'FAV NAME & QK#': z.string().trim().max(120).optional(),
+  'Notes': z.string().trim().max(500).optional(),
+  'Frequencies': z.array(z.string().trim().min(1).max(40)).max(64).optional(),
+}).strict();
+
+radioPublicRouter.patch('/api/radio/grn-sites/:id', requireRole(isOwner), async (c) => {
+  const idRaw = c.req.param('id');
+  if (!/^\d+$/.test(idRaw)) return c.json({ error: 'invalid id' }, 400);
+  const parsed = GrnSitePatchSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) {
+    return c.json({ error: 'invalid fields', detail: parsed.error.issues.map((i) => i.path.join('.')).slice(0, 5) }, 400);
+  }
+  if (Object.keys(parsed.data).length === 0) return c.json({ error: 'nothing to update' }, 400);
+  const pool = await getPool();
+  if (!pool) return c.json({ error: 'database unavailable' }, 503);
+  try {
+    // Merge into the stored object; an empty string clears a field (the
+    // dataset's own convention is simply absent keys, so store that).
+    const patch: Record<string, unknown> = {};
+    const clears: string[] = [];
+    for (const [k, v] of Object.entries(parsed.data)) {
+      if (typeof v === 'string' && v === '') clears.push(k);
+      else patch[k] = v;
+    }
+    // Every edit stamps the dataset's own "Last Update" field (DD/MM/YYYY,
+    // Sydney) — the card renders it, and it is how readers judge staleness.
+    const sydney = new Intl.DateTimeFormat('en-AU', {
+      timeZone: 'Australia/Sydney', day: '2-digit', month: '2-digit', year: 'numeric',
+    }).format(new Date());
+    patch['Last Update'] = sydney;
+    const r = await pool.query<{ id: number; data: Record<string, unknown> }>(
+      `UPDATE grn_sites
+          SET data = (data || $2::jsonb) - $3::text[],
+              updated_at = now(),
+              updated_by = $4
+        WHERE id = $1
+        RETURNING id, data`,
+      [Number(idRaw), JSON.stringify(patch), clears, c.get('userId') ?? null],
+    );
+    if (r.rowCount === 0) return c.json({ error: 'site not found' }, 404);
+    _grnCache = null; // the next GET serves the edit
+    log.info({ id: idRaw, by: c.get('userId'), fields: Object.keys(parsed.data) }, 'grn site edited');
+    return c.json({ ok: true, site: { id: r.rows[0]!.id, ...r.rows[0]!.data } });
+  } catch (err) {
+    log.error({ err, id: idRaw }, 'grn site edit failed');
+    return c.json({ error: 'update failed' }, 500);
+  }
+});

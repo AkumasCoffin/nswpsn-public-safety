@@ -46,6 +46,7 @@ import {
 } from './services/llm.js';
 import { ensureSessionTables } from './services/dashboardSession.js';
 import { seedAgencyDataIfEmpty } from './services/agencyData.js';
+import { seedGrnSitesIfEmpty } from './api/radio-public.js';
 import { closeBotDbPool } from './services/botDb.js';
 import { centralwatchBrowser } from './services/centralwatchBrowser.js';
 import { marinetrafficBrowser } from './services/marinetrafficBrowser.js';
@@ -200,6 +201,7 @@ async function preflight(): Promise<void> {
   // thereafter.
   try {
     await seedAgencyDataIfEmpty();
+    await seedGrnSitesIfEmpty();
   } catch (err) {
     log.warn({ err }, 'agency data seed failed (non-fatal)');
   }

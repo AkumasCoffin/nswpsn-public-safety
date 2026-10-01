@@ -255,6 +255,7 @@ export function createApp() {
     '/api/stats/summary',
     '/api/stats/history',
     '/api/radio/monitored-sites',
+    '/api/radio/grn-sites',
     '/api/centralwatch/cameras',
     '/api/centralwatch/sites',
     '/api/aviation/cameras',

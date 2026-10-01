@@ -1322,6 +1322,17 @@
     }
     .rpt-live-chip { color: #4ade80; font-weight: 700; }
     .rpt-freqs { max-height: 140px; overflow-y: auto; font-size: 11px; line-height: 1.5; }
+    /* Owner edit form inside the detail card. */
+    .rpt-edit-in, .rpt-edit-ta {
+      width: 100%; box-sizing: border-box;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid var(--border-subtle, rgba(148,163,184,0.25));
+      border-radius: 5px; color: #e2e8f0;
+      font-size: 11.5px; padding: 3px 6px;
+    }
+    .rpt-edit-ta { font-family: ui-monospace, monospace; resize: vertical; }
+    .rpt-edit-in:focus, .rpt-edit-ta:focus { outline: 1px solid #14b8a6; }
+    .rpt-edit-rows { row-gap: 4px; }
     .rpt-cl-dot {
       position: absolute; top: -3px; right: -3px;
       width: 12px; height: 12px; border-radius: 50%;
@@ -15744,9 +15755,14 @@ function initPagerHoursFromStorage() {
           ? '<div class="adsb-dc-note">' + freqs.length + ' channel' + (freqs.length === 1 ? '' : 's') + '</div>'
             + '<div class="rpt-freqs">' + freqs.map((f) => '<div class="adsb-dc-freq">' + escapeHtml(String(f)) + '</div>').join('') + '</div>'
           : '';
+        // Edit renders only once ownership is confirmed; the first repeater
+        // card a session opens kicks the (cached) check, and the card re-renders
+        // with the button if it comes back true.
+        if (_rptCanEdit === null) _rptResolveCanEdit();
         const acts = '<div class="adsb-dc-acts">'
           + '<button class="adsb-dc-btn" onclick="aeroCentreOnPinned()"><i class="fa-solid fa-location-crosshairs"></i> Centre</button>'
           + (sub ? '<button class="adsb-dc-btn" onclick="aeroCopyPinned()"><i class="fa-solid fa-copy"></i> Copy</button>' : '')
+          + (_rptCanEdit === true ? '<button class="adsb-dc-btn" onclick="rptEditPinned()"><i class="fa-solid fa-pen"></i> Edit</button>' : '')
           + '</div>';
         el.classList.add('open');
         el.innerHTML = ''
@@ -18450,16 +18466,160 @@ function initPagerHoursFromStorage() {
     }
 
     async function loadNswpsnData() {
+      // The DB-backed copy is authoritative — it carries the owner's
+      // corrections and per-site ids the editor needs. The static file stays
+      // as the fallback so the layer survives a backend that predates the
+      // endpoint (or an outage): view-only, but never empty.
+      try {
+        const res = await apiFetch(`${PROXY_BASE}/api/radio/grn-sites`);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        if (!Array.isArray(data.sites) || !data.sites.length) throw new Error('empty');
+        _nswpsnSites = data.sites;
+        _rebuildNswpsn();
+        console.log('[nswpsn] loaded', _nswpsnSites.length, 'sites (db)');
+        return;
+      } catch (e) {
+        console.warn('[nswpsn] db load failed, falling back to file:', e);
+      }
       try {
         const res = await fetch('data/nswpsn/NSW%20GRN%20Version%201.json', { cache: 'force-cache' });
         if (!res.ok) throw new Error('HTTP ' + res.status);
         _nswpsnSites = await res.json();
         _rebuildNswpsn();
-        console.log('[nswpsn] loaded', _nswpsnSites.length, 'sites');
+        console.log('[nswpsn] loaded', _nswpsnSites.length, 'sites (file fallback)');
       } catch (e) {
         console.warn('[nswpsn] failed to load:', e);
       }
     }
+
+    // ---- Owner edit mode for GRN site records ----
+    // The dataset is a community compilation with gaps; the owner corrects it
+    // in place from the site's own detail card. Strictly owner-gated — the
+    // button never renders for anyone else, and the backend enforces it
+    // regardless of what the button does.
+    let _rptCanEdit = null; // null = not yet asked
+    async function _rptResolveCanEdit() {
+      if (_rptCanEdit !== null) return _rptCanEdit;
+      _rptCanEdit = false;
+      try {
+        if (window.sb) {
+          const { data } = await sb.auth.getSession();
+          const uid = data && data.session && data.session.user && data.session.user.id;
+          if (uid) {
+            const r = await apiFetch(`${PROXY_BASE}/api/check-editor/${uid}`);
+            if (r.ok) {
+              const d = await r.json();
+              _rptCanEdit = d.is_owner === true;
+            }
+          }
+        }
+      } catch (e) { /* stays false */ }
+      // The card may already be open on a repeater — give it its Edit button.
+      if (_rptCanEdit && typeof adsbRenderDetailCard === 'function') adsbRenderDetailCard();
+      return _rptCanEdit;
+    }
+
+    /** Swap the pinned repeater's card to an edit form. */
+    window.rptEditPinned = function () {
+      if (!_aeroPinned || _aeroPinned.kind !== 'repeater' || !_rptCanEdit) return;
+      const site = _aeroPinned.props.site || {};
+      if (site.id == null) { showToast('This record has no id — reload the map.', 'error'); return; }
+      const el = document.getElementById('adsb-detail-card');
+      if (!el) return;
+      const f = (label, key, value, type) => ''
+        + '<div class="adsb-dc-k" style="align-self:center;">' + escapeHtml(label) + '</div>'
+        + '<div class="adsb-dc-v"><input class="rpt-edit-in" data-key="' + escapeHtml(key) + '" type="' + (type || 'text') + '"'
+        + (type === 'number' ? ' step="any"' : '')
+        + ' value="' + escapeHtml(value == null ? '' : String(value)) + '"></div>';
+      const freqs = Array.isArray(site.Frequencies) ? site.Frequencies.join('\n') : '';
+      el.classList.add('open');
+      el.innerHTML = ''
+        + '<div class="adsb-dc-head">'
+        +   '<i class="fa-solid fa-pen" style="color:#14b8a6;"></i>'
+        +   '<div class="adsb-dc-name wrap" style="color:#14b8a6;">Edit site</div>'
+        +   '<button class="adsb-dc-x" onclick="adsbRenderDetailCard()" title="Cancel">&times;</button>'
+        + '</div>'
+        + '<div class="adsb-dc-rows rpt-edit-rows">'
+        +   f('Name', 'NAME', site.NAME)
+        +   f('Lat', 'Latitude', site.Latitude, 'number')
+        +   f('Lon', 'Longitude', site.Longitude, 'number')
+        +   f('Site ID', 'SITE_ID', site.SITE_ID)
+        +   f('GRN #', 'GRN Site ID #', site['GRN Site ID #'])
+        +   f('Previous #', 'Previous Site ID #', site['Previous Site ID #'])
+        +   f('System', 'SYSTEM NAME', site['SYSTEM NAME'])
+        +   f('System #', 'System #', site['System #'])
+        +   f('Zone', 'Zone Assignment', site['Zone Assignment'])
+        +   f('NAC', 'NAC Code', site['NAC Code'])
+        +   f('Control', 'Control Channel', site['Control Channel'])
+        +   f('Alt CC', 'Alt Control Channel', site['Alt Control Channel'])
+        +   f('Postcode', 'POSTCODE', site.POSTCODE)
+        +   f('Fav/QK', 'FAV NAME & QK#', site['FAV NAME & QK#'])
+        + '</div>'
+        + '<div class="adsb-dc-note" style="margin-top:6px;">Notes</div>'
+        + '<textarea class="rpt-edit-ta" id="rpt-edit-notes" rows="2">' + escapeHtml(site.Notes || '') + '</textarea>'
+        + '<div class="adsb-dc-note" style="margin-top:6px;">Frequencies — one per line</div>'
+        + '<textarea class="rpt-edit-ta" id="rpt-edit-freqs" rows="6">' + escapeHtml(freqs) + '</textarea>'
+        + '<div class="adsb-dc-acts">'
+        +   '<button class="adsb-dc-btn" onclick="rptSaveEdit(this)"><i class="fa-solid fa-floppy-disk"></i> Save</button>'
+        +   '<button class="adsb-dc-btn" onclick="adsbRenderDetailCard()">Cancel</button>'
+        + '</div>';
+    };
+
+    window.rptSaveEdit = async function (btn) {
+      if (!_aeroPinned || _aeroPinned.kind !== 'repeater') return;
+      const site = _aeroPinned.props.site || {};
+      const el = document.getElementById('adsb-detail-card');
+      if (!el || site.id == null) return;
+      const body = {};
+      el.querySelectorAll('.rpt-edit-in').forEach((inp) => {
+        const key = inp.dataset.key;
+        const raw = inp.value.trim();
+        if (inp.type === 'number') {
+          if (raw !== '' && isFinite(parseFloat(raw))) body[key] = parseFloat(raw);
+        } else {
+          const prev = site[key] == null ? '' : String(site[key]);
+          if (raw !== prev) body[key] = raw; // '' clears the field server-side
+        }
+      });
+      const notes = document.getElementById('rpt-edit-notes');
+      if (notes && notes.value.trim() !== String(site.Notes || '')) body['Notes'] = notes.value.trim();
+      const fta = document.getElementById('rpt-edit-freqs');
+      if (fta) {
+        const list = fta.value.split('\n').map((x) => x.trim()).filter(Boolean);
+        const prev = Array.isArray(site.Frequencies) ? site.Frequencies : [];
+        if (JSON.stringify(list) !== JSON.stringify(prev)) body['Frequencies'] = list;
+      }
+      if (!Object.keys(body).length) { adsbRenderDetailCard(); return; }
+      btn.disabled = true;
+      btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving';
+      try {
+        // The person's JWT, not the site API key: the backend owner-gates this
+        // on the caller's own verified identity.
+        const { data } = await sb.auth.getSession();
+        const jwt = data && data.session && data.session.access_token;
+        if (!jwt) throw new Error('not signed in');
+        const r = await fetch(`${PROXY_BASE}/api/radio/grn-sites/${site.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + jwt },
+          body: JSON.stringify(body),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || 'save failed');
+        // Swap the updated record in everywhere it lives: the master list, the
+        // pinned card, and the marker registry (keys may have changed).
+        const idx = _nswpsnSites.findIndex((x) => x.id === site.id);
+        if (idx >= 0) _nswpsnSites[idx] = d.site;
+        _aeroPinned.props = { site: d.site, keys: _rptParseGrnIds(d.site['GRN Site ID #']) };
+        _rebuildNswpsn();
+        adsbRenderDetailCard();
+        showToast('Site updated.', 'success');
+      } catch (e) {
+        showToast('Could not save: ' + (e.message || 'error'), 'error');
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save';
+      }
+    };
 
     function _rebuildNswpsn() {
       try {
