@@ -1293,9 +1293,10 @@
        decimals that does not line up is harder to read than one that does. */
     .adsb-dc-freq { color: #7dd3fc; font-variant-numeric: tabular-nums; }
     /* Monitored repeaters are GREEN (state = colour, same as every other
-       layer) and emit a radar ping: two staggered rings expanding to ~3x the
-       pin and fading. transform/opacity only — compositor-cheap even with
-       dozens of live towers. */
+       layer) and emit a radar ping. Ring reach is deliberately modest —
+       ~1.6x the pin: the first cut went to ~3x and at state-wide zoom the
+       rings were bigger than the suburbs between the towers. The green pin
+       carries the state; the ping only has to say "live", not shout it. */
     .rpt-ping {
       position: absolute; inset: -3px;
       border-radius: 50%;
@@ -1306,9 +1307,9 @@
     }
     .rpt-ping-2 { animation-delay: 1.1s; }
     @keyframes rptPing {
-      0%   { transform: scale(1);   opacity: 0.9; }
-      70%  { transform: scale(2.6); opacity: 0;   }
-      100% { transform: scale(2.6); opacity: 0;   }
+      0%   { transform: scale(1);   opacity: 0.8; }
+      70%  { transform: scale(1.6); opacity: 0;   }
+      100% { transform: scale(1.6); opacity: 0;   }
     }
     .rpt-live-chip { color: #4ade80; font-weight: 700; }
     .rpt-freqs { max-height: 140px; overflow-y: auto; font-size: 11px; line-height: 1.5; }
