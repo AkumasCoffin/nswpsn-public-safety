@@ -2145,6 +2145,10 @@
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
       gap: 1rem;
+      /* Same breathing room below as .nd2-chart-card / .nd2-detail-gap — the
+         grid spaces its own cards but sat flush against whatever followed
+         (the site view's node table, the system view's panels). */
+      margin-bottom: 1.75rem;
       align-items: start;
     }
     .nd2-top-grid .nd-table td { font-size: 0.74rem; }
