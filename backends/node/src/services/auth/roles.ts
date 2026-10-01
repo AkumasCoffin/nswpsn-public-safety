@@ -93,6 +93,9 @@ export const KNOWN_ROLES: ReadonlySet<string> = new Set([
   'wire:manager',
   'map:editor',
   'map:manager',
+  // Contact tickets: handles the support inbox (staff Tickets tab only —
+  // deliberately NOT privileged, so owner|staff can grant it like managers).
+  'support',
 ]);
 
 /** True if `role` (after canonicalisation) is assignable. */
@@ -198,6 +201,15 @@ export async function hasRole(userId: string, roleNames: readonly string[]): Pro
 
 export async function isOwner(userId: string): Promise<boolean> {
   return hasRole(userId, ['owner']);
+}
+
+/**
+ * Owner OR support — gates the contact-ticket queue (staff Tickets tab + the
+ * /api/staff/tickets endpoints). The staff role deliberately does NOT get this
+ * by default: the user's spec is "Owner & Support".
+ */
+export async function canHandleTickets(userId: string): Promise<boolean> {
+  return hasRole(userId, ['owner', 'support']);
 }
 
 /**

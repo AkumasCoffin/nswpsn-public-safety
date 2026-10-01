@@ -43,7 +43,8 @@ export type StaffNotifyKind =
   | 'wire_approval'
   | 'wire_takedown'
   | 'new_user'
-  | 'new_node';
+  | 'new_node'
+  | 'ticket';
 
 /** app_settings keys. One channel per kind, plus the guild they live in. */
 export const NOTIFY_GUILD_KEY = 'discord_notify_guild_id';
@@ -53,6 +54,8 @@ export const NOTIFY_CHANNEL_KEYS: Record<StaffNotifyKind, string> = {
   wire_takedown: 'discord_notify_channel_wire_takedown',
   new_user: 'discord_notify_channel_new_user',
   new_node: 'discord_notify_channel_new_node',
+  // Contact tickets get their OWN channel, distinct from signups/nodes.
+  ticket: 'discord_notify_channel_ticket',
 };
 
 /** Which staff view each kind deep-links to. */
@@ -62,6 +65,7 @@ const STAFF_VIEW: Record<StaffNotifyKind, string> = {
   wire_takedown: 'takedowns',
   new_user: 'users',
   new_node: 'nodes',
+  ticket: 'tickets',
 };
 
 function publicBase(): string {

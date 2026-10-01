@@ -27,6 +27,7 @@ const {
   hasRole,
   isOwner,
   canManageUsers,
+  canHandleTickets,
   canAssignPrivilegedRoles,
   isPrivilegedRole,
   requireRole,
@@ -129,6 +130,25 @@ describe('hasRole / isOwner / canManageUsers / canAssignPrivilegedRoles', () => 
     _resetRolesCacheForTests();
     resultQueue = [{ rows: [{ role: 'map:editor' }] }];
     expect(await canManageUsers('me')).toBe(false);
+  });
+
+  it('canHandleTickets is owner|support — NOT staff', async () => {
+    resultQueue = [{ rows: [{ role: 'owner' }] }];
+    expect(await canHandleTickets('ow')).toBe(true);
+    _resetRolesCacheForTests();
+    resultQueue = [{ rows: [{ role: 'support' }] }];
+    expect(await canHandleTickets('sup')).toBe(true);
+    _resetRolesCacheForTests();
+    resultQueue = [{ rows: [{ role: 'staff' }] }];
+    expect(await canHandleTickets('st')).toBe(false);
+    _resetRolesCacheForTests();
+    resultQueue = [{ rows: [{ role: 'authed' }] }];
+    expect(await canHandleTickets('us')).toBe(false);
+  });
+
+  it('support is a known, assignable, non-privileged role', () => {
+    expect(isKnownRole('support')).toBe(true);
+    expect(isPrivilegedRole('support')).toBe(false);
   });
 
   it('canAssignPrivilegedRoles is owner-only (staff can NOT)', async () => {

@@ -137,6 +137,7 @@ function normaliseRequest(row: EditorRequestRow): Record<string, unknown> {
 /** Where an approval should point its recipient. First match wins — a
  *  feeder of any kind cares about the feeder page more than the map. */
 function roleHomePage(roles: readonly string[]): string {
+  if (roles.includes('support')) return '/staff?view=tickets';
   if (roles.some((r) => r.startsWith('feeder:'))) return '/feeder';
   if (roles.some((r) => r.startsWith('wire:'))) return '/wire';
   if (roles.some((r) => r.startsWith('map:'))) return '/map';
@@ -733,10 +734,12 @@ editorRouter.get('/api/check-admin/:userId', async (c) => {
     const isFeederManager = userRoles.includes('feeder:manager');
     const isWireManager = userRoles.includes('wire:manager');
     const isMapManager = userRoles.includes('map:manager');
+    const isSupport = userRoles.includes('support');
     // feeder:monitor is view-only: it can load the staff page (is_admin) purely
     // to reach the read-only Data + Nodes tabs. Managers likewise get in to
     // reach their own area's screens.
-    let isAdmin = isOwner || isStaff || isNodeMonitor || isFeederManager || isWireManager || isMapManager;
+    // support gets in purely to reach the Tickets tab.
+    let isAdmin = isOwner || isStaff || isNodeMonitor || isFeederManager || isWireManager || isMapManager || isSupport;
 
     // First-run lockout-prevention: if no owner exists anywhere, grant
     // owner to the requesting user. Mirrors python at 13941-13955.
@@ -782,6 +785,7 @@ editorRouter.get('/api/check-admin/:userId', async (c) => {
       can_edit_agency_data: canEditAgencyData,
       // Wire moderation queue (Requests → Wire approvals/takedowns).
       can_moderate_wire: isOwner || isStaff || isWireManager,
+      is_support: isSupport,
       tabs: {
         requests: canViewRequests,
         users: canViewUsers,
@@ -789,6 +793,8 @@ editorRouter.get('/api/check-admin/:userId', async (c) => {
         nodes: canViewNodeData,
         data: canViewNodeData,
         data_changes: canReviewAgencyData,
+        // Contact tickets: owner + the support role, nobody else by default.
+        tickets: isOwner || isSupport,
       },
       roles: rawRoles,
     });

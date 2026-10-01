@@ -559,7 +559,7 @@ describe('GET /api/check-admin/:userId', () => {
     expect(body['is_owner']).toBe(true);
     expect(body['can_manage_users']).toBe(true);
     expect(body['can_assign_privileged_roles']).toBe(true);
-    expect(body['tabs']).toEqual({ requests: true, users: true, dev: true, nodes: true, data: true, data_changes: true });
+    expect(body['tabs']).toEqual({ requests: true, users: true, dev: true, nodes: true, data: true, data_changes: true, tickets: true });
   });
 
   it('team_member sees requests + users but NOT dev', async () => {
@@ -568,7 +568,7 @@ describe('GET /api/check-admin/:userId', () => {
     const res = await app.request('/api/check-admin/u-tm');
     const body = (await res.json()) as Record<string, unknown>;
     expect(body['can_assign_privileged_roles']).toBe(false);
-    expect(body['tabs']).toEqual({ requests: true, users: true, dev: false, nodes: false, data: false, data_changes: true });
+    expect(body['tabs']).toEqual({ requests: true, users: true, dev: false, nodes: false, data: false, data_changes: true, tickets: false });
   });
 
   it('feeder:manager sees node/data tabs but not users (dev role removed)', async () => {
@@ -576,9 +576,20 @@ describe('GET /api/check-admin/:userId', () => {
     const app = makeApp();
     const res = await app.request('/api/check-admin/u-fm');
     const body = (await res.json()) as Record<string, unknown>;
-    expect(body['tabs']).toEqual({ requests: true, users: false, dev: false, nodes: true, data: true, data_changes: true });
+    expect(body['tabs']).toEqual({ requests: true, users: false, dev: false, nodes: true, data: true, data_changes: true, tickets: false });
     expect(body['is_dev']).toBe(false);
     expect(body['can_manage_nodes']).toBe(true);
+  });
+
+  it('support-only gets in, sees ONLY the tickets tab', async () => {
+    resultQueue = [{ rows: [{ role: 'support' }] }];
+    const app = makeApp();
+    const res = await app.request('/api/check-admin/u-sup');
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body['is_admin']).toBe(true);
+    expect(body['is_support']).toBe(true);
+    expect(body['is_owner']).toBe(false);
+    expect(body['tabs']).toEqual({ requests: false, users: false, dev: false, nodes: false, data: false, data_changes: false, tickets: true });
   });
 
   it('grants first-time owner when no owners exist anywhere', async () => {
