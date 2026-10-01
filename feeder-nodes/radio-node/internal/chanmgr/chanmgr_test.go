@@ -232,8 +232,8 @@ func TestSevereDwellFiresAtFiveMinutes(t *testing.T) {
 		t.Fatalf("want suppress then stop at ~5m, got %v", f.calls)
 	}
 	e := m.entries["A"]
-	if e == nil || e.state != stAutoStopped || !strings.Contains(e.reason, "below 30%") {
-		t.Fatalf("want a below-30%% reason, got %+v", e)
+	if e == nil || e.state != stAutoStopped || !strings.Contains(e.reason, "below 40%") {
+		t.Fatalf("want a below-40%% reason, got %+v", e)
 	}
 }
 
@@ -277,8 +277,8 @@ func TestSlowTierStillFiresWithoutSevere(t *testing.T) {
 		t.Fatalf("want the 10-minute rule to fire, got %v", f.calls)
 	}
 	e := m.entries["A"]
-	if e == nil || !strings.Contains(e.reason, "below 50%") {
-		t.Fatalf("want a below-40%% reason, got %+v", e)
+	if e == nil || !strings.Contains(e.reason, "below 60%") {
+		t.Fatalf("want a below-60%% reason, got %+v", e)
 	}
 }
 
@@ -489,6 +489,55 @@ func TestProbeFailKeepsStopped(t *testing.T) {
 	e := m.entries["A"]
 	if e == nil || e.state != stAutoStopped || e.lastProbePct != 22 {
 		t.Fatalf("bad post-probe state: %+v", e)
+	}
+}
+
+func TestFirstProbeIsEarlyThenSlows(t *testing.T) {
+	f := newFake()
+	c := f.add(1, "A", fptr(10))
+	m := f.manager()
+	f.seedPast(m)
+	runDwell(m, f, severeDwell+time.Minute) // auto-stopped
+	f.calls = nil
+
+	// Never locks, so every probe fails and the channel stays stopped.
+	f.onFetch = func(f *fake) {
+		if c.Processing {
+			c.State = "IDLE"
+			c.Control = false
+		}
+	}
+
+	// Measured from the stop itself, not from wherever the dwell loop left
+	// the clock: not yet due a minute short of the delay...
+	stoppedAt := m.entries["A"].lastProbeAt
+	f.now = stoppedAt.Add(firstProbeDelay - time.Minute)
+	m.Tick(context.Background())
+	if len(f.calls) != 0 {
+		t.Fatalf("probed before the first-probe delay: %v", f.calls)
+	}
+	// ...due once it elapses.
+	f.now = stoppedAt.Add(firstProbeDelay + time.Second)
+	m.Tick(context.Background())
+	if len(f.calls) == 0 {
+		t.Fatalf("first probe did not run at %s", firstProbeDelay)
+	}
+	if m.entries["A"].probes != 1 {
+		t.Fatalf("probe not counted: %+v", m.entries["A"])
+	}
+
+	// The second probe waits the full interval, not the short delay.
+	f.calls = nil
+	firstProbeAt := m.entries["A"].lastProbeAt
+	f.now = firstProbeAt.Add(firstProbeDelay + time.Minute)
+	m.Tick(context.Background())
+	if len(f.calls) != 0 {
+		t.Fatalf("second probe ran on the first-probe delay: %v", f.calls)
+	}
+	f.now = firstProbeAt.Add(probeInterval + time.Second)
+	m.Tick(context.Background())
+	if len(f.calls) == 0 {
+		t.Fatalf("second probe did not run after %s", probeInterval)
 	}
 }
 

@@ -45,18 +45,23 @@ const (
 	intervalJitter = 2 * time.Second
 
 	// lowThresholdPct: decode health below this is "not working".
-	lowThresholdPct = 50.0
+	lowThresholdPct = 60.0
 	// lowDwell: how long a channel must stay below threshold before it is
 	// stopped. Every measured sample at/above threshold resets the clock.
 	lowDwell = 10 * time.Minute
-	// severeThresholdPct/severeDwell: the fast tier. Below 30% the channel is
+	// severeThresholdPct/severeDwell: the fast tier. Below 40% the channel is
 	// not marginal, it is dead air — no need to wait out the full 10 minutes.
-	// Its clock runs alongside the 50% one: a sample in [30,50) resets only
-	// the severe clock, a sample at/above 40 resets both.
-	severeThresholdPct = 30.0
+	// Its clock runs alongside the 60% one: a sample in [40,60) resets only
+	// the severe clock, a sample at/above 60 resets both.
+	severeThresholdPct = 40.0
 	severeDwell        = 5 * time.Minute
-	// probeInterval: how long a stopped channel rests between retests.
-	probeInterval = 30 * time.Minute
+	// firstProbeDelay/probeInterval: the FIRST retest comes quickly — a channel
+	// stopped by a passing problem (a brief interference spike, a neighbouring
+	// start perturbing the dongle) should not sit dead for half an hour on that
+	// evidence. Once one retest has already failed, the problem looks durable
+	// and the slower cadence applies.
+	firstProbeDelay = 10 * time.Minute
+	probeInterval   = 30 * time.Minute
 
 	// lockWait: a restarted control channel reaches CONTROL within a few
 	// seconds when the signal is usable; no lock by now = probe failed.
@@ -147,6 +152,7 @@ type entry struct {
 	severeSince  time.Time // lowWatch: first measured sample below 30% of the current severe streak (zero = none)
 	stoppedAt    time.Time // autoStopped: when we stopped it
 	lastProbeAt  time.Time // autoStopped: last probe (or the stop itself)
+	probes       int       // autoStopped: retests run so far (0 = none yet → firstProbeDelay)
 	lastProbePct float64   // autoStopped: last probe's verdict; -1 = none / no lock
 	reason       string
 }
@@ -195,8 +201,8 @@ func New(opts Options) *Manager {
 // Run ticks until ctx is cancelled.
 func (m *Manager) Run(ctx context.Context) {
 	m.startedAt = m.now()
-	log.Printf("chanmgr: automatic channel management running (stop below %.0f%% for %s or below %.0f%% for %s, retest every %s)",
-		lowThresholdPct, lowDwell, severeThresholdPct, severeDwell, probeInterval)
+	log.Printf("chanmgr: automatic channel management running (stop below %.0f%% for %s or below %.0f%% for %s, first retest after %s then every %s)",
+		lowThresholdPct, lowDwell, severeThresholdPct, severeDwell, firstProbeDelay, probeInterval)
 	for {
 		select {
 		case <-ctx.Done():
@@ -283,7 +289,10 @@ func (m *Manager) Tick(ctx context.Context) {
 		for name, ch := range live {
 			if ch.Suppressed != nil && *ch.Suppressed && !ch.Processing {
 				m.entries[name] = &entry{
-					state: stAutoStopped, stoppedAt: now, lastProbeAt: now,
+					// probes=1: this channel was already stopped before the
+					// restart, so it has earned the slower cadence, not a
+					// fresh fast first probe.
+					state: stAutoStopped, stoppedAt: now, lastProbeAt: now, probes: 1,
 					lastProbePct: -1, reason: "recovered after agent restart (was auto-stopped)",
 				}
 				log.Printf("chanmgr: [%s] was auto-stopped before the agent restarted — resuming its probe schedule", name)
@@ -318,6 +327,15 @@ func (m *Manager) Tick(ctx context.Context) {
 
 	m.detect(live, pol, now)
 	m.maybeProbe(ctx, live, now)
+}
+
+// probeDue is how long this channel waits before its next retest: the short
+// delay until the first one has run, the normal interval after that.
+func (e *entry) probeDue() time.Duration {
+	if e.probes == 0 {
+		return firstProbeDelay
+	}
+	return probeInterval
 }
 
 // logEvent appends one decision to the audit ring (newest last, capped).
@@ -483,7 +501,7 @@ func (m *Manager) maybeProbe(ctx context.Context, live map[string]sdrctl.Channel
 	var name string
 	var oldest time.Time
 	for n, e := range m.entries {
-		if e.state != stAutoStopped || now.Sub(e.lastProbeAt) < probeInterval {
+		if e.state != stAutoStopped || now.Sub(e.lastProbeAt) < e.probeDue() {
 			continue
 		}
 		if name == "" || e.lastProbeAt.Before(oldest) {
@@ -529,6 +547,7 @@ func (m *Manager) probe(ctx context.Context, name string, id int) {
 			return
 		}
 		e.lastProbeAt = now
+		e.probes++
 		e.lastProbePct = verdictPct
 		e.reason = detail
 	}
@@ -672,7 +691,7 @@ func (m *Manager) Snapshot() any {
 		case stAutoStopped:
 			row["sinceMs"] = e.stoppedAt.UnixMilli()
 			row["lastProbeAtMs"] = e.lastProbeAt.UnixMilli()
-			row["nextProbeAtMs"] = e.lastProbeAt.Add(probeInterval).UnixMilli()
+			row["nextProbeAtMs"] = e.lastProbeAt.Add(e.probeDue()).UnixMilli()
 			if e.lastProbePct >= 0 {
 				row["lastProbePct"] = e.lastProbePct
 			}

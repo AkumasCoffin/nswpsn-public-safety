@@ -4223,7 +4223,7 @@
             </div>
             <div class="nd-panel-b flush"><div class="nd-table-scroll" id="nd-cfg-channels"></div></div>
             <div class="nd-cfg-actions">
-              <label class="nd-am-toggle" title="Automatic channel management for this node: a trunked channel decoding below 50% for 10 continuous minutes — or below 30% for 5 — is stopped, then retested every 30 minutes and restored when it recovers. Analog channels and channels without a decode metric are never touched.">
+              <label class="nd-am-toggle" title="Automatic channel management for this node: a trunked channel decoding below 60% for 10 continuous minutes — or below 40% for 5 — is stopped, then retested after 10 minutes and every 30 minutes thereafter, and restored when it recovers. Analog channels and channels without a decode metric are never touched.">
                 <input type="checkbox" id="nd-cfg-automanage" checked> Auto channel management
               </label>
               <button class="btn btn-secondary btn-sm" onclick="_ndCfgAddChannel()"><i class="fas fa-plus"></i> Add channel</button>
@@ -12459,8 +12459,8 @@
       let stateTitle = '';
       if (mgrStopped) {
         const next = mgrRow.nextProbeAtMs ? new Date(mgrRow.nextProbeAtMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null;
-        const why = mgrRow.reason || 'decode below 50% for 10 min / 30% for 5 min';
-        stateTitle = `Stopped automatically — ${why}. Retested every 30 min${next ? ' (next ~' + next + ')' : ''}.`;
+        const why = mgrRow.reason || 'decode below 60% for 10 min / 40% for 5 min';
+        stateTitle = `Stopped automatically — ${why}. Retested after 10 min, then every 30${next ? ' (next ~' + next + ')' : ''}.`;
       } else if (mgrProbing) {
         stateTitle = 'Auto-management is retesting this channel (start → lock → decode check, about a minute).';
       }
@@ -13219,7 +13219,7 @@
         const detailBody = _ndDecoderFieldsHtml(i, decoder, c.decoderConfig || {});
         return `<tr id="nd-ch-row-${i}">
           <td><span class="nd-ch-en"><input type="checkbox" id="nd-ch-${i}-auto" title="Auto-start this channel when the node comes up" ${c.autoStart !== false ? 'checked' : ''}></span></td>
-          <td><span class="nd-ch-en"><input type="checkbox" id="nd-ch-${i}-am" title="Let auto-management stop this channel when it decodes below 50% for 10 min or below 30% for 5 min (and retest it every 30 min)" ${c.autoManage !== false ? 'checked' : ''}></span></td>
+          <td><span class="nd-ch-en"><input type="checkbox" id="nd-ch-${i}-am" title="Let auto-management stop this channel when it decodes below 60% for 10 min or below 40% for 5 min (first retest after 10 min, then every 30)" ${c.autoManage !== false ? 'checked' : ''}></span></td>
           <td class="nd-ch-w-name"><input type="text" id="nd-ch-${i}-name" placeholder="Channel name" value="${escapeHtml(c.name || '')}"></td>
           <td class="nd-ch-w-sys"><input type="text" id="nd-ch-${i}-sys" placeholder="System" value="${escapeHtml(c.system || '')}"></td>
           <td class="nd-ch-w-sys"><input type="text" id="nd-ch-${i}-site" placeholder="Site" value="${escapeHtml(c.site || '')}"></td>
@@ -13235,7 +13235,7 @@
       if (amEl) amEl.checked = !(_ndConfig.channelManagement && _ndConfig.channelManagement.enabled === false);
       el.innerHTML = `<table class="nd-ch-table">
         <thead><tr>
-          <th title="Auto-start this channel when the node comes up">Auto-start</th><th title="Automatic channel management: stop below 50% for 10 min or below 30% for 5 min, retest every 30 min">Auto-manage</th><th>Name</th><th>System</th><th>Site</th><th>Decoder</th><th title="The trunked control-channel frequency this channel decodes">Control Freq (MHz)</th><th>SDR</th><th>State</th><th></th>
+          <th title="Auto-start this channel when the node comes up">Auto-start</th><th title="Automatic channel management: stop below 60% for 10 min or below 40% for 5 min; first retest after 10 min, then every 30">Auto-manage</th><th>Name</th><th>System</th><th>Site</th><th>Decoder</th><th title="The trunked control-channel frequency this channel decodes">Control Freq (MHz)</th><th>SDR</th><th>State</th><th></th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
