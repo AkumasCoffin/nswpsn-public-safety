@@ -951,6 +951,33 @@ feederRouter.post('/api/feeder/nodes/:id/rotate-token', async (c) => {
 // the staff Data page's full drill-downs. Owner-scoped (radio_contributor), NOT
 // gated on any staff/team role.
 // ---------------------------------------------------------------------------
+/**
+ * One in-flight stats build per (node, window), shared by every caller.
+ *
+ * The owner page polls this every 15s while a build can take longer than
+ * that, so a slow build used to have a second identical build stacked on top
+ * of it — two 30-second scans of the same rows, each making the other slower
+ * (observed on prod: two requests a second apart, both 500ing at the
+ * statement timeout). Callers that arrive mid-build now await the SAME
+ * promise. Deliberately NOT a result cache: this is live data, and the entry
+ * is dropped the moment the build settles.
+ */
+const _statsInFlight = new Map<string, Promise<unknown>>();
+function feederStatsShared(
+  pool: NonNullable<Awaited<ReturnType<typeof getPool>>>,
+  nodeId: string,
+  window: Parameters<typeof feederRadioStats>[2],
+): Promise<unknown> {
+  const key = `${nodeId}:${window}`;
+  const running = _statsInFlight.get(key);
+  if (running) return running;
+  const p = feederRadioStats(pool, nodeId, window).finally(() => {
+    _statsInFlight.delete(key);
+  });
+  _statsInFlight.set(key, p);
+  return p;
+}
+
 feederRouter.get('/api/feeder/nodes/:id/stats', async (c) => {
   const node = await ownedNode(c);
   if (!node) return c.json({ error: 'not your node' }, 404);
@@ -963,7 +990,7 @@ feederRouter.get('/api/feeder/nodes/:id/stats', async (c) => {
     const url = new URL(c.req.url);
     const wRaw = (url.searchParams.get('window') ?? '24h').toLowerCase();
     const window = (['24h', '7d', '30d'] as const).find((w) => w === wRaw) ?? '24h';
-    const stats = await feederRadioStats(pool, node.id, window);
+    const stats = await feederStatsShared(pool, node.id, window);
     return c.json(stats);
   } catch (err) {
     log.error({ err, id: node.id }, 'Error building feeder node stats');

@@ -1368,7 +1368,20 @@
       document.querySelectorAll('#node-modal .fs-win[data-kind="stats"]').forEach(b => b.classList.toggle('active', b.dataset.w === w));
       loadNodeStats();
     }
+    // One stats request at a time: the poll is 15s but a build can take
+    // longer, and stacking them only made each slower.
+    let _statsBusy = false;
     async function loadNodeStats() {
+      if (_statsBusy) return;
+      _statsBusy = true;
+      try {
+        await _loadNodeStatsOnce();
+      } finally {
+        _statsBusy = false;
+      }
+    }
+
+    async function _loadNodeStatsOnce() {
       const nodeId = _statsNodeId;
       if (!nodeId) return;
       try {
