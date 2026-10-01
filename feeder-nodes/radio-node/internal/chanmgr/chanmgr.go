@@ -31,6 +31,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -62,6 +63,18 @@ const (
 	// and the slower cadence applies.
 	firstProbeDelay = 10 * time.Minute
 	probeInterval   = 30 * time.Minute
+
+	// recoverSamples: how many CONSECUTIVE measured samples must sit at or
+	// above a threshold before the channel is credited with recovering past
+	// it. A bad channel routinely throws a lone good reading — observed on a
+	// site that decoded badly for eight hours and spiked often enough that a
+	// single-sample reset meant it was never stopped at all. At the 15s poll
+	// this is a minute of sustained evidence.
+	recoverSamples = 4
+	// probeMinSamples: a verdict needs this many measured readings. Fewer
+	// than this and the probe reports "never measured" rather than ruling on
+	// one or two numbers.
+	probeMinSamples = 3
 
 	// lockWait: a restarted control channel reaches CONTROL within a few
 	// seconds when the signal is usable; no lock by now = probe failed.
@@ -148,8 +161,10 @@ const (
 
 type entry struct {
 	state        chanState
-	lowSince     time.Time // lowWatch: first measured sample below 50% of the streak
-	severeSince  time.Time // lowWatch: first measured sample below 30% of the current severe streak (zero = none)
+	lowSince     time.Time // lowWatch: first measured sample below the low threshold, this streak
+	severeSince  time.Time // lowWatch: first measured sample below the severe threshold, this streak (zero = none)
+	goodLow      int       // consecutive measured samples at/above the low threshold
+	goodSevere   int       // consecutive measured samples at/above the severe threshold
 	stoppedAt    time.Time // autoStopped: when we stopped it
 	lastProbeAt  time.Time // autoStopped: last probe (or the stop itself)
 	probes       int       // autoStopped: retests run so far (0 = none yet → firstProbeDelay)
@@ -329,6 +344,17 @@ func (m *Manager) Tick(ctx context.Context) {
 	m.maybeProbe(ctx, live, now)
 }
 
+// goodLowReset clears the low-threshold recovery run when a sample falls back
+// below it. Safe on a nil entry (the first bad sample of a new streak).
+func (e *entry) goodLowReset(pct float64) {
+	if e == nil {
+		return
+	}
+	if pct < lowThresholdPct {
+		e.goodLow = 0
+	}
+}
+
 // probeDue is how long this channel waits before its next retest: the short
 // delay until the first one has run, the normal interval after that.
 func (e *entry) probeDue() time.Duration {
@@ -428,11 +454,19 @@ func (m *Manager) detect(live map[string]sdrctl.Channel, pol Policy, now time.Ti
 		pct := *ch.SyncPercent
 
 		if pct >= lowThresholdPct {
-			if e != nil {
+			if e == nil {
+				continue // healthy and untracked: nothing to do
+			}
+			// Healthy — but only a SUSTAINED run of healthy samples clears the
+			// watch. One spike inside a long bad patch proves nothing.
+			e.goodLow++
+			e.goodSevere++
+			if e.goodLow >= recoverSamples {
 				delete(m.entries, name)
 			}
 			continue
 		}
+		e.goodLowReset(pct)
 
 		if e == nil {
 			e = &entry{state: stLowWatch, lowSince: now}
@@ -442,12 +476,19 @@ func (m *Manager) detect(live map[string]sdrctl.Channel, pol Policy, now time.Ti
 			m.entries[name] = e
 			continue
 		}
-		// The severe clock only runs while samples stay below 30%: a reading
-		// in [30,50) ends the severe streak but leaves the 50% streak running.
+		// The severe clock runs while samples stay below the severe threshold.
+		// A reading in [severe, low) ends that streak — again only once it is
+		// sustained — while the low streak keeps running underneath.
 		if pct >= severeThresholdPct {
-			e.severeSince = time.Time{}
-		} else if e.severeSince.IsZero() {
-			e.severeSince = now
+			e.goodSevere++
+			if e.goodSevere >= recoverSamples {
+				e.severeSince = time.Time{}
+			}
+		} else {
+			e.goodSevere = 0
+			if e.severeSince.IsZero() {
+				e.severeSince = now
+			}
 		}
 
 		var rule string // which rule completed, for the log/reason
@@ -589,8 +630,11 @@ func (m *Manager) probe(ctx context.Context, name string, id int) {
 
 	// Phase 2: verdict. syncPercent is a 30s rolling window not cleared on
 	// start, so only samples old enough to have outgrown the acquisition
-	// period count; take the best of them.
-	best := -1.0
+	// period count. The verdict is the MEDIAN of those, not the best of them:
+	// a channel that is mostly dead but spikes occasionally used to pass on
+	// its single best reading and get restored, only to be stopped again on
+	// the next dwell. The median asks what the channel is usually doing.
+	var samples []float64
 	for m.now().Sub(started) < probeWindow && ctx.Err() == nil {
 		m.sleep(ctx, 2*time.Second)
 		age := m.now().Sub(started)
@@ -601,13 +645,14 @@ func (m *Manager) probe(ctx context.Context, name string, id int) {
 		if !ok {
 			break
 		}
-		if ch.SyncPercent != nil && *ch.SyncPercent > 0 && *ch.SyncPercent > best {
-			best = *ch.SyncPercent
+		if ch.SyncPercent != nil && *ch.SyncPercent > 0 {
+			samples = append(samples, *ch.SyncPercent)
 		}
 	}
 	if ctx.Err() != nil {
 		return
 	}
+	best := medianPct(samples)
 
 	if best >= lowThresholdPct {
 		if err := m.opts.Unsuppress(id); err != nil {
@@ -616,8 +661,8 @@ func (m *Manager) probe(ctx context.Context, name string, id int) {
 			finish(best, false, "restored but unsuppress failed")
 			return
 		}
-		log.Printf("chanmgr: probe [%s] PASSED — decode %.0f%%; channel restored", name, best)
-		m.logEvent(name, "probePass", fmt.Sprintf("test passed — decode %.0f%%; channel restored", best))
+		log.Printf("chanmgr: probe [%s] PASSED — median decode %.0f%%; channel restored", name, best)
+		m.logEvent(name, "probePass", fmt.Sprintf("test passed — median decode %.0f%%; channel restored", best))
 		finish(best, true, "")
 		return
 	}
@@ -628,9 +673,25 @@ func (m *Manager) probe(ctx context.Context, name string, id int) {
 		finish(-1, false, "probe failed: decode unmeasured")
 		return
 	}
-	log.Printf("chanmgr: probe [%s] FAILED — decode %.0f%% still below %.0f%%; next retry in %s", name, best, lowThresholdPct, probeInterval)
-	m.logEvent(name, "probeFail", fmt.Sprintf("test failed — decode %.0f%% still below %.0f%%; retry in %s", best, lowThresholdPct, probeInterval))
+	log.Printf("chanmgr: probe [%s] FAILED — median decode %.0f%% still below %.0f%%; next retry in %s", name, best, lowThresholdPct, probeInterval)
+	m.logEvent(name, "probeFail", fmt.Sprintf("test failed — median decode %.0f%% still below %.0f%%; retry in %s", best, lowThresholdPct, probeInterval))
 	finish(best, false, "probe failed: still below 40%")
+}
+
+// medianPct is the middle of the measured probe samples, or -1 when there were
+// too few to rule on. Sorting a copy: the caller's slice order is not meaningful
+// but the samples themselves are, and a surprise in-place sort is a bad habit.
+func medianPct(in []float64) float64 {
+	if len(in) < probeMinSamples {
+		return -1
+	}
+	v := append([]float64(nil), in...)
+	sort.Float64s(v)
+	mid := len(v) / 2
+	if len(v)%2 == 1 {
+		return v[mid]
+	}
+	return (v[mid-1] + v[mid]) / 2
 }
 
 // stopAfterProbe re-stops the probe channel by its CURRENT id (the start may

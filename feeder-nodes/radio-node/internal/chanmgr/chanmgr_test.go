@@ -208,12 +208,44 @@ func TestHealthySampleResetsDwell(t *testing.T) {
 	f.seedPast(m)
 
 	runDwell(m, f, lowDwell-time.Minute)
-	c.SyncPercent = fptr(80) // one good sample
-	m.Tick(context.Background())
-	c.SyncPercent = fptr(40) // low again — the clock must restart
+	// Sustained recovery, not a single reading: recoverSamples good samples
+	// in a row clear the watch.
+	c.SyncPercent = fptr(80)
+	for i := 0; i < recoverSamples; i++ {
+		m.Tick(context.Background())
+		f.now = f.now.Add(pollInterval)
+	}
+	c.SyncPercent = fptr(40) // low again — the clock must start over
 	runDwell(m, f, lowDwell-time.Minute)
 	if len(f.calls) != 0 {
-		t.Fatalf("dwell did not reset on a healthy sample: %v", f.calls)
+		t.Fatalf("dwell did not reset after sustained recovery: %v", f.calls)
+	}
+}
+
+func TestLoneSpikeDoesNotResetDwell(t *testing.T) {
+	// The reported failure: a channel decodes badly for hours but throws the
+	// occasional good reading, and a single-sample reset meant it was never
+	// stopped. One spike per minute must not hold the dwell open.
+	f := newFake()
+	c := f.add(1, "A", fptr(45)) // low tier, not severe
+	m := f.manager()
+	f.seedPast(m)
+
+	end := f.now.Add(lowDwell + time.Minute)
+	spike := 0
+	for f.now.Before(end) {
+		// One good sample every four ticks (a minute at the 15s poll).
+		spike++
+		if spike%4 == 0 {
+			c.SyncPercent = fptr(95)
+		} else {
+			c.SyncPercent = fptr(45)
+		}
+		m.Tick(context.Background())
+		f.now = f.now.Add(pollInterval)
+	}
+	if len(f.calls) < 2 || f.calls[1] != "stop:A" {
+		t.Fatalf("a spiking channel was never stopped: %v", f.calls)
 	}
 }
 
@@ -247,12 +279,15 @@ func TestMidBandSampleResetsOnlySevereClock(t *testing.T) {
 	f.seedPast(m)
 
 	runDwell(m, f, 4*time.Minute)
-	c.SyncPercent = fptr(40) // low, but not severe
-	m.Tick(context.Background())
+	c.SyncPercent = fptr(45) // low, but not severe — sustained, so it counts
+	for i := 0; i < recoverSamples; i++ {
+		m.Tick(context.Background())
+		f.now = f.now.Add(pollInterval)
+	}
 	c.SyncPercent = fptr(10)
 	runDwell(m, f, severeDwell-time.Minute)
 	if len(f.calls) != 0 {
-		t.Fatalf("severe clock did not reset on a 40%% sample: %v", f.calls)
+		t.Fatalf("severe clock did not reset after sustained mid-band samples: %v", f.calls)
 	}
 	runDwell(m, f, 2*time.Minute) // severe restart completes its 5 minutes
 	if len(f.calls) < 2 || f.calls[1] != "stop:A" {
@@ -462,6 +497,59 @@ func TestProbePassRestores(t *testing.T) {
 	}
 	if len(m.entries) != 0 {
 		t.Fatalf("restored channel still tracked: %+v", m.entries)
+	}
+}
+
+func TestProbeSpikeDoesNotRestore(t *testing.T) {
+	// A mostly-dead channel that spikes during the test used to pass on its
+	// single best reading and get restored, then be stopped again on the next
+	// dwell. The verdict is the median now, so the spike loses.
+	f := newFake()
+	c := f.add(1, "A", fptr(5))
+	m := f.manager()
+	f.seedPast(m)
+	runDwell(m, f, severeDwell+time.Minute)
+	f.calls = nil
+
+	n := 0
+	f.onFetch = func(f *fake) {
+		if !c.Processing {
+			return
+		}
+		c.State = "CONTROL"
+		c.Control = true
+		n++
+		if n%7 == 0 {
+			c.SyncPercent = fptr(95) // the occasional spike
+		} else {
+			c.SyncPercent = fptr(12) // what it is actually doing
+		}
+	}
+	f.now = f.now.Add(probeInterval + actionQuiesce)
+	m.Tick(context.Background())
+
+	if len(f.calls) < 2 || f.calls[len(f.calls)-1] != "stop:A" {
+		t.Fatalf("spiky probe was not re-stopped: %v", f.calls)
+	}
+	for _, call := range f.calls {
+		if call == "unsuppress:A" {
+			t.Fatalf("spiky probe falsely restored the channel: %v", f.calls)
+		}
+	}
+	if e := m.entries["A"]; e == nil || e.state != stAutoStopped {
+		t.Fatalf("want it still auto-stopped, got %+v", e)
+	}
+}
+
+func TestMedianPct(t *testing.T) {
+	if got := medianPct([]float64{10, 95, 12}); got != 12 {
+		t.Fatalf("median of a spike should be the middle value, got %v", got)
+	}
+	if got := medianPct([]float64{80, 90}); got != -1 {
+		t.Fatalf("too few samples must not rule, got %v", got)
+	}
+	if got := medianPct([]float64{70, 80, 90, 100}); got != 85 {
+		t.Fatalf("even-count median wrong: %v", got)
 	}
 }
 
