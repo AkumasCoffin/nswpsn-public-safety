@@ -142,6 +142,33 @@ describe('user routes', () => {
     expect(res.status).toBe(404);
   });
 
+  it('a LOCKED ticket (closed >72h) refuses user replies with 409', async () => {
+    const old = new Date(Date.now() - 73 * 3600 * 1000).toISOString();
+    resultQueue = [
+      { rows: [TICKET({ status: 'closed', closed_at: old, closed_by_name: 'Owner' })] },
+    ];
+    const res = await makeApp().request('/api/tickets/7/reply', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ body: 'too late' }),
+    });
+    expect(res.status).toBe(409);
+    expect(discord).toHaveLength(0);
+  });
+
+  it('a freshly closed ticket (<72h) still reopens on reply', async () => {
+    const recent = new Date(Date.now() - 1 * 3600 * 1000).toISOString();
+    resultQueue = [
+      { rows: [TICKET({ status: 'closed', closed_at: recent })] },
+      { rows: [] }, { rows: [] },
+    ];
+    const res = await makeApp().request('/api/tickets/7/reply', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ body: 'quick follow-up' }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ status: 'open', reopened: true });
+  });
+
   it('a user reply reopens a closed ticket to OPEN and alerts Discord', async () => {
     resultQueue = [
       { rows: [TICKET({ status: 'closed', closed_by: 'o', closed_by_name: 'Owner' })] },

@@ -14932,7 +14932,8 @@
         document.getElementById('tk-detail-meta').innerHTML =
           `<span class="tk-schip ${escapeHtml(t.status)}">${escapeHtml(TK_STATUS_STAFF[t.status] || t.status)}</span>` +
           ` ${escapeHtml(t.userName || t.userId || '')} · ${escapeHtml(TK_CATEGORIES[t.category] || t.category)}` +
-          (t.closedByName ? ` · closed by ${escapeHtml(t.closedByName)}` : '');
+          (t.closedByName ? ` · closed by ${escapeHtml(t.closedByName)}` : '') +
+          (t.locked ? ' · <span style="color:#fbbf24;">locked</span>' : '');
         document.getElementById('tk-detail-thread').innerHTML = (j.messages || []).map((m) => `
           <div class="tk-smsg ${m.isStaff ? 'staff' : 'user'}">
             <div class="tk-smsg-head">${_tkAvatar(m)}<a href="profile?u=${encodeURIComponent(m.authorId || '')}" target="_blank" rel="noopener" style="color:inherit; text-decoration:none;"><strong>${escapeHtml(m.authorName)}</strong></a>${m.isStaff ? ' · staff' : ''} · ${escapeHtml(_tkAgo(m.createdAt))}</div>
@@ -14941,7 +14942,11 @@
         document.getElementById('tk-close-btn').style.display = t.status === 'closed' ? 'none' : '';
         document.getElementById('tk-reopen-btn').style.display = t.status === 'closed' ? '' : 'none';
         document.getElementById('tk-detail-note').textContent =
-          t.status === 'closed' ? 'Replying reopens the ticket (status: waiting on user).' : '';
+          t.status === 'closed'
+            ? (t.locked
+                ? 'Locked for the user (closed over 72h ago) — your reply still reopens it.'
+                : 'Replying reopens the ticket (status: waiting on user).')
+            : '';
         document.getElementById('tk-staff-list').style.display = 'none';
         document.getElementById('tk-staff-detail').style.display = '';
         try { document.getElementById('tk-staff-reply').value = localStorage.getItem(_tkReplyDraftKey(id)) || ''; } catch (e) {}

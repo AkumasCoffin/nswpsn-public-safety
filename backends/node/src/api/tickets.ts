@@ -52,6 +52,16 @@ const SUBJECT_MAX = 140;
 const BODY_MAX = 5000;
 /** A user may have at most this many non-closed tickets — spam belt. */
 const MAX_OPEN_PER_USER = 5;
+/** A ticket closed this long with no reply LOCKS: the user can no longer
+ *  reopen it by replying and must open a new ticket. Purely derived from
+ *  closed_at — no scheduler flips anything. Staff reply/reopen still work. */
+const LOCK_AFTER_MS = 72 * 60 * 60 * 1000;
+
+function isLocked(t: TicketRow): boolean {
+  if (t.status !== 'closed' || !t.closed_at) return false;
+  const closedAt = new Date(t.closed_at).getTime();
+  return Number.isFinite(closedAt) && Date.now() - closedAt > LOCK_AFTER_MS;
+}
 
 interface TicketRow {
   id: number;
@@ -102,6 +112,7 @@ function mapTicket(t: TicketRow, nameOverlay?: Map<string, string>) {
     category: t.category,
     status: t.status,
     createdByStaff: t.created_by_staff,
+    locked: isLocked(t),
     closedByName: t.closed_by_name,
     closedAt: t.closed_at,
     lastMessageAt: t.last_message_at,
@@ -302,6 +313,9 @@ ticketsRouter.post('/api/tickets/:id/reply', requireSupabaseJwt, async (c) => {
   try {
     const ticket = await fetchTicket(pool, id);
     if (!ticket || ticket.user_id !== userId) return c.json({ error: 'ticket not found' }, 404);
+    if (isLocked(ticket)) {
+      return c.json({ error: 'this ticket is locked — it was closed more than 72 hours ago. Please open a new ticket.' }, 409);
+    }
 
     const reopened = ticket.status === 'closed';
     await addMessage(pool, id, { id: userId, name: userName, isStaff: false }, body, 'open');

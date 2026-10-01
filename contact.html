@@ -185,6 +185,10 @@
           <div id="tk-thread-meta" style="margin-bottom:0.9rem;"></div>
           <div id="tk-thread"></div>
           <div id="tk-reply-banner"></div>
+          <div id="tk-locked-note" style="display:none; margin-top:1rem;" class="tk-banner info">
+            This ticket is locked — it was closed more than 72 hours ago.
+            Need more help? <a href="#" onclick="tkBack(); return false;" style="color:inherit;">Open a new ticket</a>.
+          </div>
           <div id="tk-reply-box" style="margin-top:1rem;">
             <div class="form-group">
               <label class="form-label" for="tk-reply">Reply</label>
@@ -375,8 +379,13 @@
             <div class="tk-msg-head">${tkAvatar(m)}<a href="profile?u=${encodeURIComponent(m.authorId || '')}" style="color:inherit; text-decoration:none;"><strong>${esc(m.authorName)}</strong></a>${m.isStaff ? ' · staff' : ''} · ${esc(tkAgo(m.createdAt))}</div>
             <div class="tk-md">${tkMd(m.body)}</div>
           </div>`).join('');
-        document.getElementById('tk-reopen-note').style.display = t.status === 'closed' ? '' : 'none';
-        tkRestoreReplyDraft(id);
+        // Locked (closed >72h with no reply): the reply box goes away — a new
+        // ticket is the path forward. Freshly closed keeps the reopen note.
+        const replyBox = document.getElementById('tk-reply-box');
+        replyBox.style.display = t.locked ? 'none' : '';
+        document.getElementById('tk-locked-note').style.display = t.locked ? '' : 'none';
+        document.getElementById('tk-reopen-note').style.display = (!t.locked && t.status === 'closed') ? '' : 'none';
+        if (!t.locked) tkRestoreReplyDraft(id);
         document.getElementById('tk-list-card').style.display = 'none';
         document.getElementById('tk-new-card').style.display = 'none';
         document.getElementById('tk-thread-card').style.display = '';
