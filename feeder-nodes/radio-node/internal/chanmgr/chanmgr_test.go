@@ -217,6 +217,71 @@ func TestHealthySampleResetsDwell(t *testing.T) {
 	}
 }
 
+func TestSevereDwellFiresAtFiveMinutes(t *testing.T) {
+	f := newFake()
+	f.add(1, "A", fptr(10)) // dead air: severe tier
+	m := f.manager()
+	f.seedPast(m)
+
+	runDwell(m, f, severeDwell-time.Minute)
+	if len(f.calls) != 0 {
+		t.Fatalf("severe rule fired before its 5-minute dwell: %v", f.calls)
+	}
+	runDwell(m, f, 2*time.Minute)
+	if len(f.calls) < 2 || f.calls[0] != "suppress:A" || f.calls[1] != "stop:A" {
+		t.Fatalf("want suppress then stop at ~5m, got %v", f.calls)
+	}
+	e := m.entries["A"]
+	if e == nil || e.state != stAutoStopped || !strings.Contains(e.reason, "below 20%") {
+		t.Fatalf("want a below-20%% reason, got %+v", e)
+	}
+}
+
+func TestMidBandSampleResetsOnlySevereClock(t *testing.T) {
+	// 4 minutes of dead air, one 25% sample, dead air again: the severe clock
+	// restarts (no stop at the 5-minute mark of the ORIGINAL streak) but the
+	// 40% clock keeps running from the very first low sample.
+	f := newFake()
+	c := f.add(1, "A", fptr(10))
+	m := f.manager()
+	f.seedPast(m)
+
+	runDwell(m, f, 4*time.Minute)
+	c.SyncPercent = fptr(25) // low, but not severe
+	m.Tick(context.Background())
+	c.SyncPercent = fptr(10)
+	runDwell(m, f, severeDwell-time.Minute)
+	if len(f.calls) != 0 {
+		t.Fatalf("severe clock did not reset on a 25%% sample: %v", f.calls)
+	}
+	runDwell(m, f, 2*time.Minute) // severe restart completes its 5 minutes
+	if len(f.calls) < 2 || f.calls[1] != "stop:A" {
+		t.Fatalf("want the restarted severe streak to fire, got %v", f.calls)
+	}
+}
+
+func TestSlowTierStillFiresWithoutSevere(t *testing.T) {
+	// 25% the whole time: never severe, so the stop lands on the 10-minute
+	// rule — and not a tick before.
+	f := newFake()
+	f.add(1, "A", fptr(25))
+	m := f.manager()
+	f.seedPast(m)
+
+	runDwell(m, f, lowDwell-time.Minute)
+	if len(f.calls) != 0 {
+		t.Fatalf("25%% fired early: %v", f.calls)
+	}
+	runDwell(m, f, 2*time.Minute)
+	if len(f.calls) < 2 || f.calls[1] != "stop:A" {
+		t.Fatalf("want the 10-minute rule to fire, got %v", f.calls)
+	}
+	e := m.entries["A"]
+	if e == nil || !strings.Contains(e.reason, "below 40%") {
+		t.Fatalf("want a below-40%% reason, got %+v", e)
+	}
+}
+
 func TestUnmeasuredNeverFires(t *testing.T) {
 	f := newFake()
 	f.add(1, "NilChan", nil)      // no monitor at all
@@ -301,9 +366,10 @@ func TestQuiesceBlocksDetection(t *testing.T) {
 		t.Fatalf("watched during startup quiesce")
 	}
 
-	// Apply quiesce: an apply mid-dwell clears the streak.
+	// Apply quiesce: an apply mid-dwell clears the streak. 25% keeps this on
+	// the slow tier only (the 20%/5m severe rule must not engage here).
 	f2 := newFake()
-	f2.add(1, "A", fptr(5))
+	f2.add(1, "A", fptr(25))
 	m2 := f2.manager()
 	f2.seedPast(m2)
 	runDwell(m2, f2, lowDwell-time.Minute)

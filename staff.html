@@ -4129,7 +4129,7 @@
             </div>
             <div class="nd-panel-b flush"><div class="nd-table-scroll" id="nd-cfg-channels"></div></div>
             <div class="nd-cfg-actions">
-              <label class="nd-am-toggle" title="Automatic channel management for this node: a trunked channel decoding below 40% for 10 continuous minutes is stopped, then retested every 20 minutes and restored when it recovers. Analog channels and channels without a decode metric are never touched.">
+              <label class="nd-am-toggle" title="Automatic channel management for this node: a trunked channel decoding below 40% for 10 continuous minutes — or below 20% for 5 — is stopped, then retested every 20 minutes and restored when it recovers. Analog channels and channels without a decode metric are never touched.">
                 <input type="checkbox" id="nd-cfg-automanage" checked> Auto channel management
               </label>
               <button class="btn btn-secondary btn-sm" onclick="_ndCfgAddChannel()"><i class="fas fa-plus"></i> Add channel</button>
@@ -10439,7 +10439,6 @@
     let _ndStatus = null;          // last status object we saw (null = none yet)
     let _ndChanMgr = null;         // status.channelManager (auto channel management state)
     let _ndMgrLog = [];            // auto-management audit log (fetched + live-merged), newest first
-    let _ndPrevMgr = {};           // previous channelManager.channels, for transition log lines
     let _ndTuners = [];
     let _ndTunersSig = null;        // signature of the current tuner SET (serial+type list); full-rebuild only when this changes
     let _ndChannels = [];
@@ -10508,7 +10507,7 @@
       _ndNodeId = nodeId;
       _ndAuthed = false;
       _ndStatus = null;
-      _ndChanMgr = null; _ndPrevMgr = {}; _ndMgrLog = [];
+      _ndChanMgr = null; _ndMgrLog = [];
       _ndTuners = []; _ndChannels = []; _ndCalls = []; _ndEvents = []; _ndPagerMsgs = [];
       _ndTunersSig = null;
       _ndReadersSig = null;
@@ -10643,8 +10642,10 @@
         st.events.forEach(_ndIngestEvent);
       }
       _ndChanMgr = st.channelManager || null;
+      // Auto-management decisions render ONLY in their own panel (fed by the
+      // agent's ring + the persisted backend log) — not mirrored into the
+      // live event log, which is for radio activity.
       if (_ndChanMgr && _ndMgrLogMerge(_ndChanMgr.log)) _ndRenderMgrLog();
-      _ndDiffChanMgr();        // auto-stop / probe / restore transitions -> log
       _ndDiffChannels();       // detect control-lock / call start-end transitions -> log
       _ndDiffCalls();          // track client-side elapsed clocks for active calls
       // Tuner table: only FULL-rebuild when the set of SDRs changes (new/removed
@@ -12286,7 +12287,8 @@
       let stateTitle = '';
       if (mgrStopped) {
         const next = mgrRow.nextProbeAtMs ? new Date(mgrRow.nextProbeAtMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null;
-        stateTitle = `Stopped automatically — decode below 40% for 10 min. Retested every 20 min${next ? ' (next ~' + next + ')' : ''}.`;
+        const why = mgrRow.reason || 'decode below 40% for 10 min / 20% for 5 min';
+        stateTitle = `Stopped automatically — ${why}. Retested every 20 min${next ? ' (next ~' + next + ')' : ''}.`;
       } else if (mgrProbing) {
         stateTitle = 'Auto-management is retesting this channel (start → lock → decode check, about a minute).';
       }
@@ -12417,36 +12419,6 @@
         ft
       });
       if (_ndLog.length > 200) _ndLog.shift();
-    }
-
-    // Log the automatic channel manager's decisions as they ride in on the
-    // status frame: auto-stop, probe verdicts, and restores.
-    function _ndDiffChanMgr() {
-      const cur = (_ndChanMgr && _ndChanMgr.channels) || {};
-      const fmtPct = (v) => (v != null && isFinite(v)) ? Math.round(Number(v)) + '%' : null;
-      Object.keys(cur).forEach((name) => {
-        const row = cur[name] || {};
-        const prev = _ndPrevMgr[name] || null;
-        const pstate = prev ? prev.state : null;
-        if (row.state === 'autoStopped' && pstate !== 'autoStopped') {
-          if (pstate === 'probing') {
-            const pct = fmtPct(row.lastProbePct);
-            _ndLogPush('traffic', `Auto-manage · probe failed on ${name}${pct ? ' (' + pct + ')' : ''} — retry in 20 min`, Date.now());
-          } else {
-            _ndLogPush('traffic', `Auto-manage · stopped ${name} — decode below 40% for 10 min`, Date.now());
-          }
-        } else if (row.state === 'probing' && pstate !== 'probing') {
-          _ndLogPush('control', `Auto-manage · probing ${name}…`, Date.now());
-        }
-      });
-      Object.keys(_ndPrevMgr).forEach((name) => {
-        if (cur[name]) return;
-        const pstate = _ndPrevMgr[name].state;
-        if (pstate === 'autoStopped' || pstate === 'probing') {
-          _ndLogPush('control', `Auto-manage · ${name} restored`, Date.now());
-        }
-      });
-      _ndPrevMgr = cur;
     }
 
     // Looks up the manager row for a LIVE channel (keys are trimmed names).
@@ -13075,7 +13047,7 @@
         const detailBody = _ndDecoderFieldsHtml(i, decoder, c.decoderConfig || {});
         return `<tr id="nd-ch-row-${i}">
           <td><span class="nd-ch-en"><input type="checkbox" id="nd-ch-${i}-auto" title="Auto-start this channel when the node comes up" ${c.autoStart !== false ? 'checked' : ''}></span></td>
-          <td><span class="nd-ch-en"><input type="checkbox" id="nd-ch-${i}-am" title="Let auto-management stop this channel when it decodes below 40% for 10 min (and retest it every 20 min)" ${c.autoManage !== false ? 'checked' : ''}></span></td>
+          <td><span class="nd-ch-en"><input type="checkbox" id="nd-ch-${i}-am" title="Let auto-management stop this channel when it decodes below 40% for 10 min or below 20% for 5 min (and retest it every 20 min)" ${c.autoManage !== false ? 'checked' : ''}></span></td>
           <td class="nd-ch-w-name"><input type="text" id="nd-ch-${i}-name" placeholder="Channel name" value="${escapeHtml(c.name || '')}"></td>
           <td class="nd-ch-w-sys"><input type="text" id="nd-ch-${i}-sys" placeholder="System" value="${escapeHtml(c.system || '')}"></td>
           <td class="nd-ch-w-sys"><input type="text" id="nd-ch-${i}-site" placeholder="Site" value="${escapeHtml(c.site || '')}"></td>

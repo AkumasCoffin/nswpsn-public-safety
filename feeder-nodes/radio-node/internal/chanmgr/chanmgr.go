@@ -49,6 +49,12 @@ const (
 	// lowDwell: how long a channel must stay below threshold before it is
 	// stopped. Every measured sample at/above threshold resets the clock.
 	lowDwell = 10 * time.Minute
+	// severeThresholdPct/severeDwell: the fast tier. Below 20% the channel is
+	// not marginal, it is dead air — no need to wait out the full 10 minutes.
+	// Its clock runs alongside the 40% one: a sample in [20,40) resets only
+	// the severe clock, a sample at/above 40 resets both.
+	severeThresholdPct = 20.0
+	severeDwell        = 5 * time.Minute
 	// probeInterval: how long a stopped channel rests between retests.
 	probeInterval = 20 * time.Minute
 
@@ -137,7 +143,8 @@ const (
 
 type entry struct {
 	state        chanState
-	lowSince     time.Time // lowWatch: first measured-low sample of the streak
+	lowSince     time.Time // lowWatch: first measured sample below 40% of the streak
+	severeSince  time.Time // lowWatch: first measured sample below 20% of the current severe streak (zero = none)
 	stoppedAt    time.Time // autoStopped: when we stopped it
 	lastProbeAt  time.Time // autoStopped: last probe (or the stop itself)
 	lastProbePct float64   // autoStopped: last probe's verdict; -1 = none / no lock
@@ -188,8 +195,8 @@ func New(opts Options) *Manager {
 // Run ticks until ctx is cancelled.
 func (m *Manager) Run(ctx context.Context) {
 	m.startedAt = m.now()
-	log.Printf("chanmgr: automatic channel management running (stop below %.0f%% decode for %s, retest every %s)",
-		lowThresholdPct, lowDwell, probeInterval)
+	log.Printf("chanmgr: automatic channel management running (stop below %.0f%% for %s or below %.0f%% for %s, retest every %s)",
+		lowThresholdPct, lowDwell, severeThresholdPct, severeDwell, probeInterval)
 	for {
 		select {
 		case <-ctx.Done():
@@ -410,10 +417,28 @@ func (m *Manager) detect(live map[string]sdrctl.Channel, pol Policy, now time.Ti
 		}
 
 		if e == nil {
-			m.entries[name] = &entry{state: stLowWatch, lowSince: now}
+			e = &entry{state: stLowWatch, lowSince: now}
+			if pct < severeThresholdPct {
+				e.severeSince = now
+			}
+			m.entries[name] = e
 			continue
 		}
-		if now.Sub(e.lowSince) < lowDwell {
+		// The severe clock only runs while samples stay below 20%: a reading
+		// in [20,40) ends the severe streak but leaves the 40% streak running.
+		if pct >= severeThresholdPct {
+			e.severeSince = time.Time{}
+		} else if e.severeSince.IsZero() {
+			e.severeSince = now
+		}
+
+		var rule string // which rule completed, for the log/reason
+		switch {
+		case !e.severeSince.IsZero() && now.Sub(e.severeSince) >= severeDwell:
+			rule = fmt.Sprintf("below %.0f%% for %s", severeThresholdPct, now.Sub(e.severeSince).Round(time.Second))
+		case now.Sub(e.lowSince) >= lowDwell:
+			rule = fmt.Sprintf("below %.0f%% for %s", lowThresholdPct, now.Sub(e.lowSince).Round(time.Second))
+		default:
 			continue
 		}
 
@@ -438,12 +463,11 @@ func (m *Manager) detect(live map[string]sdrctl.Channel, pol Policy, now time.Ti
 			}
 			continue
 		}
-		low := now.Sub(e.lowSince).Round(time.Second)
-		log.Printf("chanmgr: AUTO-STOPPED [%s] — decode %.0f%% below %.0f%% for %s; retesting every %s", name, pct, lowThresholdPct, low, probeInterval)
-		m.logEventLocked(name, "stopped", fmt.Sprintf("auto-stopped — decode %.0f%% below %.0f%% for %s", pct, lowThresholdPct, low))
+		log.Printf("chanmgr: AUTO-STOPPED [%s] — decode %.0f%%, %s; retesting every %s", name, pct, rule, probeInterval)
+		m.logEventLocked(name, "stopped", fmt.Sprintf("auto-stopped — decode %.0f%%, %s", pct, rule))
 		*e = entry{
 			state: stAutoStopped, stoppedAt: now, lastProbeAt: now, lastProbePct: -1,
-			reason: "decode below 40% for 10 minutes",
+			reason: "decode " + rule,
 		}
 		m.lastActionAt = now
 		m.stopTimes = append(m.stopTimes, now)
