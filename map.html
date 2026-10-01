@@ -1300,16 +1300,25 @@
     .rpt-ping {
       position: absolute; inset: -3px;
       border-radius: 50%;
-      border: 2px solid #4ade80;
+      border: 3px solid #4ade80;
       opacity: 0;
       animation: rptPing 2.2s cubic-bezier(0.2, 0.6, 0.4, 1) infinite;
       pointer-events: none;
     }
     .rpt-ping-2 { animation-delay: 1.1s; }
     @keyframes rptPing {
-      0%   { transform: scale(1);   opacity: 0.8; }
-      70%  { transform: scale(1.6); opacity: 0;   }
-      100% { transform: scale(1.6); opacity: 0;   }
+      0%   { transform: scale(1);   opacity: 1; }
+      70%  { transform: scale(2);   opacity: 0; }
+      100% { transform: scale(2);   opacity: 0; }
+    }
+    /* The pin itself throbs too. The ring's visibility depends on zoom — too
+       big state-wide, too subtle street-level — but a pin that changes SIZE
+       reads at every zoom, because the eye keys on motion of the shape it is
+       already looking at. Gentle (12%) so it says alive, not alarmed. */
+    .rpt-live-pin { animation: rptThrob 2.2s ease-in-out infinite; }
+    @keyframes rptThrob {
+      0%, 100% { transform: scale(1); }
+      50%      { transform: scale(1.12); }
     }
     .rpt-live-chip { color: #4ade80; font-weight: 700; }
     .rpt-freqs { max-height: 140px; overflow-y: auto; font-size: 11px; line-height: 1.5; }
@@ -18401,7 +18410,7 @@ function initPagerHoursFromStorage() {
     // and a radar ping expands off it. The first pulse attempt only breathed
     // the shadow of a still-teal pin, which disappeared at any zoom.
     const _rptIconHtml = (live) => live
-      ? '<div style="position:relative;background:linear-gradient(135deg,#22c55e,#15803d);width:28px;height:28px;border-radius:50%;border:3px solid #fff;box-shadow:0 2px 8px rgba(34,197,94,0.6);display:flex;align-items:center;justify-content:center;font-size:13px;color:#fff;"><span class="rpt-ping"></span><span class="rpt-ping rpt-ping-2"></span><i class="fa-solid fa-tower-broadcast" style="position:relative;z-index:1;"></i></div>'
+      ? '<div class="rpt-live-pin" style="position:relative;background:linear-gradient(135deg,#22c55e,#15803d);width:28px;height:28px;border-radius:50%;border:3px solid #fff;box-shadow:0 2px 8px rgba(34,197,94,0.6);display:flex;align-items:center;justify-content:center;font-size:13px;color:#fff;"><span class="rpt-ping"></span><span class="rpt-ping rpt-ping-2"></span><i class="fa-solid fa-tower-broadcast" style="position:relative;z-index:1;"></i></div>'
       : '<div style="background:linear-gradient(135deg,#14b8a6,#0d9488);width:28px;height:28px;border-radius:50%;border:3px solid #fff;box-shadow:0 2px 8px rgba(20,184,166,0.5),0 0 12px rgba(20,184,166,0.25);display:flex;align-items:center;justify-content:center;font-size:13px;color:#fff;"><i class="fa-solid fa-tower-broadcast"></i></div>';
     const _rptIcon = L.divIcon({ className: 'custom-pin', html: _rptIconHtml(false), iconSize: [28, 28], iconAnchor: [14, 14] });
     const _rptIconLive = L.divIcon({ className: 'custom-pin', html: _rptIconHtml(true), iconSize: [28, 28], iconAnchor: [14, 14] });
