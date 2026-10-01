@@ -31,7 +31,7 @@ import { log } from '../lib/log.js';
 import { config } from '../config.js';
 import { requireSupabaseJwt } from '../services/auth/supabaseJwt.js';
 import { requireRole, canHandleTickets } from '../services/auth/roles.js';
-import { notify, displayNameMap } from '../services/wireComments.js';
+import { notify, displayNameMap, avatarMap } from '../services/wireComments.js';
 import { notifyStaff } from '../services/staffNotify.js';
 import { getUsername } from './users.js';
 
@@ -127,11 +127,15 @@ async function fetchMessages(pool: Pool, ticketId: number) {
     'SELECT id, author_id, author_name, is_staff, body, created_at FROM support_ticket_messages WHERE ticket_id = $1 ORDER BY created_at, id',
     [ticketId],
   );
-  // Current-name overlay: write-time author_name snapshots go stale.
-  const names = await displayNameMap(pool, r.rows.map((m) => m.author_id));
+  // Current-name overlay: write-time author_name snapshots go stale. The
+  // author id + avatar let the thread link each name to its public profile.
+  const ids = r.rows.map((m) => m.author_id);
+  const [names, avatars] = await Promise.all([displayNameMap(pool, ids), avatarMap(pool, ids)]);
   return r.rows.map((m) => ({
     id: m.id,
+    authorId: m.author_id,
     authorName: names.get(m.author_id) ?? m.author_name ?? 'User',
+    avatar: avatars.get(m.author_id) ?? null,
     isStaff: m.is_staff,
     body: m.body,
     createdAt: m.created_at,

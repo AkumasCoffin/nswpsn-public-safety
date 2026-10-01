@@ -2948,7 +2948,7 @@
           <div id="tk-detail-meta" style="margin-bottom:0.8rem; font-size:0.8rem; color:var(--text-soft);"></div>
           <div id="tk-detail-thread"></div>
           <div style="margin-top:1rem;">
-            <textarea id="tk-staff-reply" maxlength="5000" placeholder="Reply to the user…" style="width:100%; box-sizing:border-box; min-height:90px; background:rgba(2,6,23,0.5); border:1px solid var(--border-subtle); border-radius:8px; color:var(--text-main); padding:0.6rem; font-family:inherit; font-size:0.88rem; resize:vertical;"></textarea>
+            <textarea id="tk-staff-reply" maxlength="5000" oninput="_tkSaveReplyDraft()" placeholder="Reply to the user…" style="width:100%; box-sizing:border-box; min-height:90px; background:rgba(2,6,23,0.5); border:1px solid var(--border-subtle); border-radius:8px; color:var(--text-main); padding:0.6rem; font-family:inherit; font-size:0.88rem; resize:vertical;"></textarea>
             <div style="margin-top:0.5rem; display:flex; align-items:center; gap:0.7rem;">
               <button class="btn btn-primary btn-sm" id="tk-staff-reply-btn" onclick="_tkStaffReply()"><i class="fas fa-paper-plane"></i> Send reply</button>
               <span id="tk-detail-note" style="color:var(--text-soft); font-size:0.78rem;"></span>
@@ -14836,6 +14836,24 @@
       return h < 24 ? h + 'h ago' : Math.floor(h / 24) + 'd ago';
     }
 
+    function _tkAvatar(m) {
+      const wrap = 'width:18px; height:18px; border-radius:50%; vertical-align:-5px; margin-right:0.3rem;';
+      if (m.avatar) return `<img src="${escapeHtml(m.avatar)}" alt="" style="${wrap} object-fit:cover;">`;
+      const ch = String(m.authorName || '?').trim().charAt(0).toUpperCase() || '?';
+      return `<span style="${wrap} display:inline-flex; align-items:center; justify-content:center; background:rgba(148,163,184,0.2); color:var(--text-soft); font-size:0.58rem; font-weight:700;">${escapeHtml(ch)}</span>`;
+    }
+
+    // Reply drafts survive a refresh (browser-local, best-effort, cleared on send).
+    const _tkReplyDraftKey = (id) => 'tks_draft_reply_' + id;
+    function _tkSaveReplyDraft() {
+      if (_tkOpenId == null) return;
+      try {
+        const v = document.getElementById('tk-staff-reply').value;
+        if (v.trim()) localStorage.setItem(_tkReplyDraftKey(_tkOpenId), v);
+        else localStorage.removeItem(_tkReplyDraftKey(_tkOpenId));
+      } catch (e) {}
+    }
+
     function _tkBadge(counts) {
       const el = document.getElementById('tickets-badge');
       if (!el) return;
@@ -14891,7 +14909,7 @@
           (t.closedByName ? ` · closed by ${escapeHtml(t.closedByName)}` : '');
         document.getElementById('tk-detail-thread').innerHTML = (j.messages || []).map((m) => `
           <div class="tk-smsg ${m.isStaff ? 'staff' : 'user'}">
-            <div class="tk-smsg-head"><strong>${escapeHtml(m.authorName)}</strong>${m.isStaff ? ' · staff' : ''} · ${escapeHtml(_tkAgo(m.createdAt))}</div>
+            <div class="tk-smsg-head">${_tkAvatar(m)}<a href="profile?u=${encodeURIComponent(m.authorId || '')}" target="_blank" rel="noopener" style="color:inherit; text-decoration:none;"><strong>${escapeHtml(m.authorName)}</strong></a>${m.isStaff ? ' · staff' : ''} · ${escapeHtml(_tkAgo(m.createdAt))}</div>
             <div>${escapeHtml(m.body).replace(/\n/g, '<br>')}</div>
           </div>`).join('');
         document.getElementById('tk-close-btn').style.display = t.status === 'closed' ? 'none' : '';
@@ -14900,6 +14918,7 @@
           t.status === 'closed' ? 'Replying reopens the ticket (status: waiting on user).' : '';
         document.getElementById('tk-staff-list').style.display = 'none';
         document.getElementById('tk-staff-detail').style.display = '';
+        try { document.getElementById('tk-staff-reply').value = localStorage.getItem(_tkReplyDraftKey(id)) || ''; } catch (e) {}
       } catch (e) {
         showToast('Could not open ticket: ' + e.message, 'error');
       }
@@ -14922,6 +14941,7 @@
       try {
         await _tkApi(`/api/staff/tickets/${_tkOpenId}/reply`, { method: 'POST', body: JSON.stringify({ body }) });
         ta.value = '';
+        try { localStorage.removeItem(_tkReplyDraftKey(_tkOpenId)); } catch (e) {}
         _tkOpenTicket(_tkOpenId);
         _tkRefreshBadge();
       } catch (e) {

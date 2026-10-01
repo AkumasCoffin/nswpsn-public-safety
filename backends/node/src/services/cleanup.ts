@@ -327,6 +327,25 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
         );
       }
 
+      // 2c-ter. Closed support tickets are kept 31 days, then purged outright
+      // (their messages cascade via the FK). Open / awaiting tickets are never
+      // touched — only a staff close starts the clock, and a user reply before
+      // the purge reopens the ticket and clears closed_at.
+      try {
+        const r = await client.query(
+          `DELETE FROM support_tickets
+            WHERE status = 'closed' AND closed_at < NOW() - INTERVAL '31 days'`,
+        );
+        if ((r.rowCount ?? 0) > 0) {
+          log.info({ rows: r.rowCount }, 'cleanup: purged closed support tickets');
+        }
+      } catch (err) {
+        log.warn(
+          { err: (err as Error).message },
+          'cleanup: support-ticket purge failed',
+        );
+      }
+
       // 2c-bis. Prune persisted aircraft tracks (migration 103). Plain
       // DELETE rather than a partition drop: one row per aircraft per hour is
       // ~20-25k rows/day, so a whole retention window is under a million and

@@ -244,6 +244,56 @@
       return Math.floor(h / 24) + 'd ago';
     }
 
+    // Small round avatar beside the author name; falls back to an initial.
+    function tkAvatar(m) {
+      const wrap = 'width:20px; height:20px; border-radius:50%; vertical-align:-6px; margin-right:0.35rem;';
+      if (m.avatar) return `<img src="${esc(m.avatar)}" alt="" style="${wrap} object-fit:cover;">`;
+      const ch = String(m.authorName || '?').trim().charAt(0).toUpperCase() || '?';
+      return `<span style="${wrap} display:inline-flex; align-items:center; justify-content:center; background:rgba(148,163,184,0.2); color:var(--text-muted); font-size:0.62rem; font-weight:700;">${esc(ch)}</span>`;
+    }
+
+    // ---- Draft autosave ----
+    // A long report should survive a refresh or an accidental navigation.
+    // Browser-local only (per device), best-effort: storage can be blocked, so
+    // every touch is wrapped. Cleared the moment a submit succeeds.
+    const TK_DRAFT_NEW = 'tk_draft_new';
+    const tkReplyDraftKey = (id) => 'tk_draft_reply_' + id;
+
+    function tkSaveNewDraft() {
+      try {
+        const d = {
+          s: document.getElementById('tk-subject').value,
+          c: document.getElementById('tk-category').value,
+          b: document.getElementById('tk-body').value,
+        };
+        if (!d.s && !d.b) localStorage.removeItem(TK_DRAFT_NEW);
+        else localStorage.setItem(TK_DRAFT_NEW, JSON.stringify(d));
+      } catch (e) {}
+    }
+    function tkRestoreNewDraft() {
+      try {
+        const d = JSON.parse(localStorage.getItem(TK_DRAFT_NEW) || 'null');
+        if (!d) return;
+        if (d.s) document.getElementById('tk-subject').value = d.s;
+        if (d.c && TK_CATEGORIES[d.c]) document.getElementById('tk-category').value = d.c;
+        if (d.b) document.getElementById('tk-body').value = d.b;
+      } catch (e) {}
+    }
+    function tkClearNewDraft() { try { localStorage.removeItem(TK_DRAFT_NEW); } catch (e) {} }
+
+    function tkSaveReplyDraft() {
+      if (tkCurrent == null) return;
+      try {
+        const v = document.getElementById('tk-reply').value;
+        if (v.trim()) localStorage.setItem(tkReplyDraftKey(tkCurrent), v);
+        else localStorage.removeItem(tkReplyDraftKey(tkCurrent));
+      } catch (e) {}
+    }
+    function tkRestoreReplyDraft(id) {
+      try { document.getElementById('tk-reply').value = localStorage.getItem(tkReplyDraftKey(id)) || ''; } catch (e) {}
+    }
+    function tkClearReplyDraft(id) { try { localStorage.removeItem(tkReplyDraftKey(id)); } catch (e) {} }
+
     function tkRenderList() {
       const el = document.getElementById('tk-list');
       if (!el) return;
@@ -294,10 +344,11 @@
           ` <span style="color:var(--text-soft); font-size:0.78rem; margin-left:0.5rem;">${esc(TK_CATEGORIES[t.category] || t.category)}${t.closedByName ? ' · closed by ' + esc(t.closedByName) : ''}</span>`;
         document.getElementById('tk-thread').innerHTML = (j.messages || []).map((m) => `
           <div class="tk-msg ${m.isStaff ? 'staff' : 'user'}">
-            <div class="tk-msg-head"><strong>${esc(m.authorName)}</strong>${m.isStaff ? ' · staff' : ''} · ${esc(tkAgo(m.createdAt))}</div>
+            <div class="tk-msg-head">${tkAvatar(m)}<a href="profile?u=${encodeURIComponent(m.authorId || '')}" style="color:inherit; text-decoration:none;"><strong>${esc(m.authorName)}</strong></a>${m.isStaff ? ' · staff' : ''} · ${esc(tkAgo(m.createdAt))}</div>
             <div>${esc(m.body).replace(/\n/g, '<br>')}</div>
           </div>`).join('');
         document.getElementById('tk-reopen-note').style.display = t.status === 'closed' ? '' : 'none';
+        tkRestoreReplyDraft(id);
         document.getElementById('tk-list-card').style.display = 'none';
         document.getElementById('tk-new-card').style.display = 'none';
         document.getElementById('tk-thread-card').style.display = '';
@@ -334,6 +385,7 @@
         if (!res.ok) throw new Error(j.error || ('HTTP ' + res.status));
         document.getElementById('tk-subject').value = '';
         document.getElementById('tk-body').value = '';
+        tkClearNewDraft();
         tkBanner('tk-new-banner', 'ok', 'Ticket opened — we\'ll get back to you.');
         await tkLoadList();
         tkOpen(j.ticket.id);
@@ -359,6 +411,7 @@
         const j = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(j.error || ('HTTP ' + res.status));
         document.getElementById('tk-reply').value = '';
+        tkClearReplyDraft(tkCurrent);
         tkOpen(tkCurrent); // re-render the thread with the new message + status
       } catch (e) {
         tkBanner('tk-reply-banner', 'err', e.message || 'Could not send the reply.');
@@ -380,6 +433,11 @@
       }
       document.getElementById('tk-new-card').style.display = '';
       document.getElementById('tk-list-card').style.display = '';
+      tkRestoreNewDraft();
+      document.getElementById('tk-subject').addEventListener('input', tkSaveNewDraft);
+      document.getElementById('tk-category').addEventListener('change', tkSaveNewDraft);
+      document.getElementById('tk-body').addEventListener('input', tkSaveNewDraft);
+      document.getElementById('tk-reply').addEventListener('input', tkSaveReplyDraft);
       await tkLoadList();
       // Deep link from a notification: /contact?t=<id>
       const t = Number(new URLSearchParams(location.search).get('t'));
