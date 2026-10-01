@@ -134,7 +134,7 @@ func runDwell(m *Manager, f *fake, d time.Duration) {
 
 func TestDwellFiresAtTenMinutesSuppressBeforeStop(t *testing.T) {
 	f := newFake()
-	f.add(1, "RFS Illawarra", fptr(20))
+	f.add(1, "RFS Illawarra", fptr(40))
 	m := f.manager()
 	f.seedPast(m)
 
@@ -203,14 +203,14 @@ func TestProbeOutcomesAreLogged(t *testing.T) {
 
 func TestHealthySampleResetsDwell(t *testing.T) {
 	f := newFake()
-	c := f.add(1, "A", fptr(20))
+	c := f.add(1, "A", fptr(40))
 	m := f.manager()
 	f.seedPast(m)
 
 	runDwell(m, f, lowDwell-time.Minute)
 	c.SyncPercent = fptr(80) // one good sample
 	m.Tick(context.Background())
-	c.SyncPercent = fptr(20) // low again — the clock must restart
+	c.SyncPercent = fptr(40) // low again — the clock must restart
 	runDwell(m, f, lowDwell-time.Minute)
 	if len(f.calls) != 0 {
 		t.Fatalf("dwell did not reset on a healthy sample: %v", f.calls)
@@ -232,13 +232,13 @@ func TestSevereDwellFiresAtFiveMinutes(t *testing.T) {
 		t.Fatalf("want suppress then stop at ~5m, got %v", f.calls)
 	}
 	e := m.entries["A"]
-	if e == nil || e.state != stAutoStopped || !strings.Contains(e.reason, "below 20%") {
-		t.Fatalf("want a below-20%% reason, got %+v", e)
+	if e == nil || e.state != stAutoStopped || !strings.Contains(e.reason, "below 30%") {
+		t.Fatalf("want a below-30%% reason, got %+v", e)
 	}
 }
 
 func TestMidBandSampleResetsOnlySevereClock(t *testing.T) {
-	// 4 minutes of dead air, one 25% sample, dead air again: the severe clock
+	// 4 minutes of dead air, one 40% sample, dead air again: the severe clock
 	// restarts (no stop at the 5-minute mark of the ORIGINAL streak) but the
 	// 40% clock keeps running from the very first low sample.
 	f := newFake()
@@ -247,12 +247,12 @@ func TestMidBandSampleResetsOnlySevereClock(t *testing.T) {
 	f.seedPast(m)
 
 	runDwell(m, f, 4*time.Minute)
-	c.SyncPercent = fptr(25) // low, but not severe
+	c.SyncPercent = fptr(40) // low, but not severe
 	m.Tick(context.Background())
 	c.SyncPercent = fptr(10)
 	runDwell(m, f, severeDwell-time.Minute)
 	if len(f.calls) != 0 {
-		t.Fatalf("severe clock did not reset on a 25%% sample: %v", f.calls)
+		t.Fatalf("severe clock did not reset on a 40%% sample: %v", f.calls)
 	}
 	runDwell(m, f, 2*time.Minute) // severe restart completes its 5 minutes
 	if len(f.calls) < 2 || f.calls[1] != "stop:A" {
@@ -261,16 +261,16 @@ func TestMidBandSampleResetsOnlySevereClock(t *testing.T) {
 }
 
 func TestSlowTierStillFiresWithoutSevere(t *testing.T) {
-	// 25% the whole time: never severe, so the stop lands on the 10-minute
+	// 40% the whole time: never severe, so the stop lands on the 10-minute
 	// rule — and not a tick before.
 	f := newFake()
-	f.add(1, "A", fptr(25))
+	f.add(1, "A", fptr(40))
 	m := f.manager()
 	f.seedPast(m)
 
 	runDwell(m, f, lowDwell-time.Minute)
 	if len(f.calls) != 0 {
-		t.Fatalf("25%% fired early: %v", f.calls)
+		t.Fatalf("40%% fired early: %v", f.calls)
 	}
 	runDwell(m, f, 2*time.Minute)
 	if len(f.calls) < 2 || f.calls[1] != "stop:A" {
@@ -299,7 +299,7 @@ func TestUnmeasuredTailCannotFire(t *testing.T) {
 	// Low for 9 minutes, then the metric goes stale (nil): the streak may not
 	// fire off the stale tail.
 	f := newFake()
-	c := f.add(1, "A", fptr(20))
+	c := f.add(1, "A", fptr(40))
 	m := f.manager()
 	f.seedPast(m)
 
@@ -366,10 +366,10 @@ func TestQuiesceBlocksDetection(t *testing.T) {
 		t.Fatalf("watched during startup quiesce")
 	}
 
-	// Apply quiesce: an apply mid-dwell clears the streak. 25% keeps this on
-	// the slow tier only (the 20%/5m severe rule must not engage here).
+	// Apply quiesce: an apply mid-dwell clears the streak. 40% keeps this on
+	// the slow tier only (the 30%/5m severe rule must not engage here).
 	f2 := newFake()
-	f2.add(1, "A", fptr(25))
+	f2.add(1, "A", fptr(40))
 	m2 := f2.manager()
 	f2.seedPast(m2)
 	runDwell(m2, f2, lowDwell-time.Minute)

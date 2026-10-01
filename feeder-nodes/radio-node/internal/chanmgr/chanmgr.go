@@ -49,14 +49,14 @@ const (
 	// lowDwell: how long a channel must stay below threshold before it is
 	// stopped. Every measured sample at/above threshold resets the clock.
 	lowDwell = 10 * time.Minute
-	// severeThresholdPct/severeDwell: the fast tier. Below 20% the channel is
+	// severeThresholdPct/severeDwell: the fast tier. Below 30% the channel is
 	// not marginal, it is dead air — no need to wait out the full 10 minutes.
-	// Its clock runs alongside the 50% one: a sample in [20,50) resets only
+	// Its clock runs alongside the 50% one: a sample in [30,50) resets only
 	// the severe clock, a sample at/above 40 resets both.
-	severeThresholdPct = 20.0
+	severeThresholdPct = 30.0
 	severeDwell        = 5 * time.Minute
 	// probeInterval: how long a stopped channel rests between retests.
-	probeInterval = 20 * time.Minute
+	probeInterval = 30 * time.Minute
 
 	// lockWait: a restarted control channel reaches CONTROL within a few
 	// seconds when the signal is usable; no lock by now = probe failed.
@@ -144,7 +144,7 @@ const (
 type entry struct {
 	state        chanState
 	lowSince     time.Time // lowWatch: first measured sample below 50% of the streak
-	severeSince  time.Time // lowWatch: first measured sample below 20% of the current severe streak (zero = none)
+	severeSince  time.Time // lowWatch: first measured sample below 30% of the current severe streak (zero = none)
 	stoppedAt    time.Time // autoStopped: when we stopped it
 	lastProbeAt  time.Time // autoStopped: last probe (or the stop itself)
 	lastProbePct float64   // autoStopped: last probe's verdict; -1 = none / no lock
@@ -424,8 +424,8 @@ func (m *Manager) detect(live map[string]sdrctl.Channel, pol Policy, now time.Ti
 			m.entries[name] = e
 			continue
 		}
-		// The severe clock only runs while samples stay below 20%: a reading
-		// in [20,50) ends the severe streak but leaves the 50% streak running.
+		// The severe clock only runs while samples stay below 30%: a reading
+		// in [30,50) ends the severe streak but leaves the 50% streak running.
 		if pct >= severeThresholdPct {
 			e.severeSince = time.Time{}
 		} else if e.severeSince.IsZero() {
@@ -537,7 +537,7 @@ func (m *Manager) probe(ctx context.Context, name string, id int) {
 		// Typically "No Tuner Available" — another channel took the freed
 		// bandwidth. Not a verdict about RF; try again next interval.
 		log.Printf("chanmgr: probe [%s]: start failed: %v — retrying in %s", name, probeInterval, err)
-		m.logEvent(name, "probeFail", "test could not start ("+err.Error()+") — retry in 20 min")
+		m.logEvent(name, "probeFail", fmt.Sprintf("test could not start (%s) — retry in %s", err.Error(), probeInterval))
 		finish(-1, false, "probe could not start: "+err.Error())
 		return
 	}
@@ -563,7 +563,7 @@ func (m *Manager) probe(ctx context.Context, name string, id int) {
 	if !locked {
 		m.stopAfterProbe(name)
 		log.Printf("chanmgr: probe [%s] FAILED — no lock within %s; next retry in %s", name, lockWait, probeInterval)
-		m.logEvent(name, "probeFail", fmt.Sprintf("test failed — no lock within %s; retry in 20 min", lockWait))
+		m.logEvent(name, "probeFail", fmt.Sprintf("test failed — no lock within %s; retry in %s", lockWait, probeInterval))
 		finish(-1, false, "probe failed: no lock")
 		return
 	}
@@ -605,12 +605,12 @@ func (m *Manager) probe(ctx context.Context, name string, id int) {
 	m.stopAfterProbe(name)
 	if best < 0 {
 		log.Printf("chanmgr: probe [%s] FAILED — locked but decode never measured; next retry in %s", name, probeInterval)
-		m.logEvent(name, "probeFail", "test failed — locked but decode never measured; retry in 20 min")
+		m.logEvent(name, "probeFail", fmt.Sprintf("test failed — locked but decode never measured; retry in %s", probeInterval))
 		finish(-1, false, "probe failed: decode unmeasured")
 		return
 	}
 	log.Printf("chanmgr: probe [%s] FAILED — decode %.0f%% still below %.0f%%; next retry in %s", name, best, lowThresholdPct, probeInterval)
-	m.logEvent(name, "probeFail", fmt.Sprintf("test failed — decode %.0f%% still below %.0f%%; retry in 20 min", best, lowThresholdPct))
+	m.logEvent(name, "probeFail", fmt.Sprintf("test failed — decode %.0f%% still below %.0f%%; retry in %s", best, lowThresholdPct, probeInterval))
 	finish(best, false, "probe failed: still below 40%")
 }
 
