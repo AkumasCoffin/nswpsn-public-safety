@@ -446,20 +446,12 @@
         
         <div class="divider">
           <p class="divider-text">Don't have an account?</p>
-          <!-- Two paths, matching signup.html: a plain account (instant, no
-               roles) vs a contributor application (reviewed). -->
-          <a href="signup?as=user" class="btn btn-outline" data-umami-event="signup-user-click">
+          <!-- One door: the signup page's own account-type chooser splits the
+               plain-account and contributor paths. -->
+          <a href="signup" class="btn btn-outline" data-umami-event="signup-click">
             <i class="fas fa-user-plus"></i>
             Sign up
           </a>
-          <a href="signup?as=contributor" class="btn btn-outline" style="margin-top:0.6rem;" data-umami-event="signup-contributor-click">
-            <i class="fas fa-user-tag"></i>
-            Contributor sign up
-          </a>
-          <p style="color:#64748b; font-size:0.78rem; margin-top:0.6rem; text-align:center; line-height:1.5;">
-            A plain account lets you browse. Contributors post to The Wire, edit the
-            map or run a feeder node — reviewed by our team.
-          </p>
         </div>
       </div>
       
