@@ -16,6 +16,8 @@
   <link rel="apple-touch-icon" sizes="180x180" href="./assets/ausaware-icon-180.png">
   <link rel="manifest" href="./site.webmanifest">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js" integrity="sha384-948ahk4ZmxYVYOc+rxN1H2gM1EJ2Duhp7uHtZ4WSLkV4Vtx5MUqnV+l7u9B+jFv+" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="auth-common.js"></script>
 
@@ -43,6 +45,18 @@
     .tk-banner.err { background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.4); color:#fca5a5; }
     .tk-banner.ok { background:rgba(34,197,94,0.12); border:1px solid rgba(34,197,94,0.4); color:#86efac; }
     .tk-banner.info { background:rgba(56,189,248,0.12); border:1px solid rgba(56,189,248,0.4); color:#bae6fd; }
+    /* Rendered markdown inside message bubbles. */
+    .tk-md p { margin: 0 0 0.5rem; }
+    .tk-md p:last-child { margin-bottom: 0; }
+    .tk-md pre { background: rgba(2,6,23,0.6); border: 1px solid var(--border-subtle); border-radius: 6px; padding: 0.5rem 0.7rem; overflow-x: auto; font-size: 0.8rem; }
+    .tk-md code { background: rgba(2,6,23,0.5); border-radius: 4px; padding: 0.05rem 0.3rem; font-size: 0.82em; }
+    .tk-md pre code { background: none; padding: 0; }
+    .tk-md ul, .tk-md ol { margin: 0.3rem 0 0.5rem; padding-left: 1.3rem; }
+    .tk-md blockquote { margin: 0.3rem 0; padding-left: 0.7rem; border-left: 3px solid var(--border-subtle); color: var(--text-muted); }
+    .tk-md h1, .tk-md h2, .tk-md h3 { font-size: 1em; margin: 0.6rem 0 0.3rem; }
+    .tk-md a { color: var(--accent); }
+    .tk-md table { border-collapse: collapse; margin: 0.4rem 0; }
+    .tk-md th, .tk-md td { border: 1px solid var(--border-subtle); padding: 0.25rem 0.5rem; font-size: 0.8rem; }
   </style>
 </head>
 <body>
@@ -145,7 +159,7 @@
           </div>
           <div class="form-group">
             <label class="form-label" for="tk-body">Message</label>
-            <textarea class="form-textarea" id="tk-body" maxlength="5000" placeholder="Tell us what's going on — the more detail the better."></textarea>
+            <textarea class="form-textarea" id="tk-body" maxlength="5000" placeholder="Tell us what's going on — the more detail the better. Markdown supported."></textarea>
           </div>
           <button class="btn btn-primary" id="tk-submit" onclick="tkCreate()">Open ticket</button>
         </div>
@@ -174,7 +188,7 @@
           <div id="tk-reply-box" style="margin-top:1rem;">
             <div class="form-group">
               <label class="form-label" for="tk-reply">Reply</label>
-              <textarea class="form-textarea" id="tk-reply" maxlength="5000" placeholder="Write a reply…"></textarea>
+              <textarea class="form-textarea" id="tk-reply" maxlength="5000" placeholder="Write a reply… Markdown supported."></textarea>
             </div>
             <button class="btn btn-primary" id="tk-reply-btn" onclick="tkReply()">Send reply</button>
             <span id="tk-reopen-note" style="display:none; margin-left:0.7rem; color:var(--text-soft); font-size:0.78rem;">
@@ -221,6 +235,20 @@
     let tkCurrent = null; // the open ticket id
 
     const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+    // Markdown for message bodies — the Wire's pattern (marked + DOMPurify),
+    // tightened for tickets: images are stripped (a hotlinked image would let
+    // a sender collect readers' IPs; tickets are text-only by design), and a
+    // blocked CDN degrades to escaped text with line breaks, never to raw HTML.
+    function tkMd(body) {
+      try {
+        if (window.marked && window.DOMPurify) {
+          if (!tkMd._opts && marked.setOptions) { marked.setOptions({ gfm: true, breaks: true }); tkMd._opts = true; }
+          return DOMPurify.sanitize(marked.parse(String(body ?? '')), { FORBID_TAGS: ['img', 'picture', 'source'] });
+        }
+      } catch (e) { /* fall through to plain text */ }
+      return esc(body).replace(/\n/g, '<br>');
+    }
 
     async function tkHeaders() {
       const { data } = await sb.auth.getSession();
@@ -345,7 +373,7 @@
         document.getElementById('tk-thread').innerHTML = (j.messages || []).map((m) => `
           <div class="tk-msg ${m.isStaff ? 'staff' : 'user'}">
             <div class="tk-msg-head">${tkAvatar(m)}<a href="profile?u=${encodeURIComponent(m.authorId || '')}" style="color:inherit; text-decoration:none;"><strong>${esc(m.authorName)}</strong></a>${m.isStaff ? ' · staff' : ''} · ${esc(tkAgo(m.createdAt))}</div>
-            <div>${esc(m.body).replace(/\n/g, '<br>')}</div>
+            <div class="tk-md">${tkMd(m.body)}</div>
           </div>`).join('');
         document.getElementById('tk-reopen-note').style.display = t.status === 'closed' ? '' : 'none';
         tkRestoreReplyDraft(id);

@@ -36,6 +36,8 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js" integrity="sha384-948ahk4ZmxYVYOc+rxN1H2gM1EJ2Duhp7uHtZ4WSLkV4Vtx5MUqnV+l7u9B+jFv+" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
   <style>
     :root {
       --bg-dark: #060a15;
@@ -883,6 +885,16 @@
     .tk-smsg-head { font-size:0.68rem; color:var(--text-soft); margin-bottom:0.2rem; }
     .tk-urow { display:flex; gap:0.6rem; align-items:center; padding:0.45rem 0.6rem; border:1px solid var(--border-subtle); border-radius:8px; margin-bottom:0.35rem; cursor:pointer; font-size:0.82rem; }
     .tk-urow:hover { border-color: var(--accent, #f97316); }
+    .tk-md p { margin: 0 0 0.5rem; }
+    .tk-md p:last-child { margin-bottom: 0; }
+    .tk-md pre { background: rgba(2,6,23,0.6); border: 1px solid var(--border-subtle, rgba(148,163,184,0.35)); border-radius: 6px; padding: 0.5rem 0.7rem; overflow-x: auto; font-size: 0.78rem; }
+    .tk-md code { background: rgba(2,6,23,0.5); border-radius: 4px; padding: 0.05rem 0.3rem; font-size: 0.82em; }
+    .tk-md pre code { background: none; padding: 0; }
+    .tk-md ul, .tk-md ol { margin: 0.3rem 0 0.5rem; padding-left: 1.3rem; }
+    .tk-md blockquote { margin: 0.3rem 0; padding-left: 0.7rem; border-left: 3px solid var(--border-subtle, rgba(148,163,184,0.35)); color: var(--text-muted, #a1a5b6); }
+    .tk-md h1, .tk-md h2, .tk-md h3 { font-size: 1em; margin: 0.6rem 0 0.3rem; }
+    .tk-md table { border-collapse: collapse; margin: 0.4rem 0; }
+    .tk-md th, .tk-md td { border: 1px solid var(--border-subtle, rgba(148,163,184,0.35)); padding: 0.25rem 0.5rem; font-size: 0.78rem; }
     .nd-am-toggle input { accent-color: #38bdf8; }
     .nd-state.call::before,
     .nd-state.control::before { animation: nd-pulse 1.1s ease-in-out infinite; }
@@ -2948,7 +2960,7 @@
           <div id="tk-detail-meta" style="margin-bottom:0.8rem; font-size:0.8rem; color:var(--text-soft);"></div>
           <div id="tk-detail-thread"></div>
           <div style="margin-top:1rem;">
-            <textarea id="tk-staff-reply" maxlength="5000" oninput="_tkSaveReplyDraft()" placeholder="Reply to the user…" style="width:100%; box-sizing:border-box; min-height:90px; background:rgba(2,6,23,0.5); border:1px solid var(--border-subtle); border-radius:8px; color:var(--text-main); padding:0.6rem; font-family:inherit; font-size:0.88rem; resize:vertical;"></textarea>
+            <textarea id="tk-staff-reply" maxlength="5000" oninput="_tkSaveReplyDraft()" placeholder="Reply to the user… Markdown supported." style="width:100%; box-sizing:border-box; min-height:90px; background:rgba(2,6,23,0.5); border:1px solid var(--border-subtle); border-radius:8px; color:var(--text-main); padding:0.6rem; font-family:inherit; font-size:0.88rem; resize:vertical;"></textarea>
             <div style="margin-top:0.5rem; display:flex; align-items:center; gap:0.7rem;">
               <button class="btn btn-primary btn-sm" id="tk-staff-reply-btn" onclick="_tkStaffReply()"><i class="fas fa-paper-plane"></i> Send reply</button>
               <span id="tk-detail-note" style="color:var(--text-soft); font-size:0.78rem;"></span>
@@ -14802,6 +14814,20 @@
     let _tkPicked = null; // {id, username, email} chosen in the new-ticket modal
     let _tkSearchT = null;
 
+    // Markdown for message bodies — the Wire's pattern (marked + DOMPurify),
+    // tightened for tickets: images are stripped (a hotlinked image would let
+    // a sender collect readers' IPs; tickets are text-only by design), and a
+    // blocked CDN degrades to escaped text with line breaks, never to raw HTML.
+    function tkMd(body) {
+      try {
+        if (window.marked && window.DOMPurify) {
+          if (!tkMd._opts && marked.setOptions) { marked.setOptions({ gfm: true, breaks: true }); tkMd._opts = true; }
+          return DOMPurify.sanitize(marked.parse(String(body ?? '')), { FORBID_TAGS: ['img', 'picture', 'source'] });
+        }
+      } catch (e) { /* fall through to plain text */ }
+      return escapeHtml(body).replace(/\n/g, '<br>');
+    }
+
     async function _tkApi(path, opts) {
       const res = await fetch(`${API_BASE_URL}${path}`, {
         ...(opts || {}),
@@ -14910,7 +14936,7 @@
         document.getElementById('tk-detail-thread').innerHTML = (j.messages || []).map((m) => `
           <div class="tk-smsg ${m.isStaff ? 'staff' : 'user'}">
             <div class="tk-smsg-head">${_tkAvatar(m)}<a href="profile?u=${encodeURIComponent(m.authorId || '')}" target="_blank" rel="noopener" style="color:inherit; text-decoration:none;"><strong>${escapeHtml(m.authorName)}</strong></a>${m.isStaff ? ' · staff' : ''} · ${escapeHtml(_tkAgo(m.createdAt))}</div>
-            <div>${escapeHtml(m.body).replace(/\n/g, '<br>')}</div>
+            <div class="tk-md">${tkMd(m.body)}</div>
           </div>`).join('');
         document.getElementById('tk-close-btn').style.display = t.status === 'closed' ? 'none' : '';
         document.getElementById('tk-reopen-btn').style.display = t.status === 'closed' ? '' : 'none';
