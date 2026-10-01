@@ -23,11 +23,13 @@ STAFF_NOTIFY_KINDS = {
     'wire_takedown': ('Wire takedown', '\u2696\uFE0F', 0xEF4444),
     'new_user': ('New account', '\U0001F464', 0xA855F7),
     'new_node': ('New node', '\U0001F4E1', 0x22C55E),
+    'ticket': ('Contact ticket', '\U0001F3AB', 0xEAB308),
 }
 _STAFF_STATUS_COLOR = {
     'approved': 0x22C55E,
     'upheld': 0x22C55E,
     'rejected': 0x64748B,
+    'closed': 0x64748B,
 }
 
 
