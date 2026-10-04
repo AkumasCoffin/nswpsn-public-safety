@@ -346,6 +346,79 @@ func TestUnmeasuredTailCannotFire(t *testing.T) {
 	}
 }
 
+func TestNeverAcquiredIsStopped(t *testing.T) {
+	// The case that prompted this: a channel running on a frequency that is
+	// not there. It never locks, so it reports no decode figure, so the decode
+	// dwells below could never fire — it just sat IDLE holding a tuner.
+	f := newFake()
+	c := f.add(1, "Clarence Peak", nil)
+	c.State = "IDLE"
+	c.Control = false
+	m := f.manager()
+	f.seedPast(m)
+
+	// Well short of the dwell: nothing yet.
+	runDwell(m, f, noLockDwell-time.Minute)
+	if len(f.calls) != 0 {
+		t.Fatalf("acted before the no-lock dwell completed: %v", f.calls)
+	}
+
+	runDwell(m, f, 2*time.Minute)
+	if len(f.calls) != 2 || f.calls[0] != "suppress:Clarence Peak" || f.calls[1] != "stop:Clarence Peak" {
+		t.Fatalf("want suppress then stop, got %v", f.calls)
+	}
+	e := m.entries["Clarence Peak"]
+	if e == nil || e.state != stAutoStopped {
+		t.Fatalf("should be auto-stopped and on the retest schedule: %+v", e)
+	}
+	// It never produced a reading, so the log must not invent one.
+	logs := m.Snapshot().(map[string]any)["log"].([]logEntry)
+	if len(logs) != 1 || logs[0].Kind != "stopped" {
+		t.Fatalf("want one stop entry, got %+v", logs)
+	}
+	if !strings.Contains(logs[0].Text, "no lock") {
+		t.Fatalf("the reason should be the missing lock: %q", logs[0].Text)
+	}
+	if strings.Contains(logs[0].Text, "decode") {
+		t.Fatalf("a channel that never locked has no decode figure to report: %q", logs[0].Text)
+	}
+}
+
+func TestAcquiringLateClearsTheNoLockClock(t *testing.T) {
+	// A channel that takes its time but gets there is not a failure.
+	f := newFake()
+	c := f.add(1, "Slow Starter", nil)
+	c.State = "IDLE"
+	c.Control = false
+	m := f.manager()
+	f.seedPast(m)
+
+	runDwell(m, f, noLockDwell-time.Minute)
+	c.State = "CONTROL"
+	c.Control = true
+	c.SyncPercent = fptr(96)
+	runDwell(m, f, 2*noLockDwell)
+
+	if len(f.calls) != 0 {
+		t.Fatalf("stopped a channel that acquired: %v", f.calls)
+	}
+}
+
+func TestLockedButUnmeasuredKeepsItsExemption(t *testing.T) {
+	// The no-lock rule judges the LOCK, not the absence of a number. A channel
+	// that HAS acquired but reports nothing — no monitor, older runtime — must
+	// still never be touched.
+	f := newFake()
+	f.add(1, "NoMonitor", nil) // add() leaves it CONTROL + control=true
+	m := f.manager()
+	f.seedPast(m)
+
+	runDwell(m, f, 4*noLockDwell)
+	if len(f.calls) != 0 {
+		t.Fatalf("acted on a locked channel with no decode figure: %v", f.calls)
+	}
+}
+
 func TestIneligibleChannelsIgnored(t *testing.T) {
 	f := newFake()
 	conv := f.add(1, "Airband", fptr(10))

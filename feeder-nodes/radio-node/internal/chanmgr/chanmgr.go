@@ -56,6 +56,19 @@ const (
 	// the severe clock, a sample at/above 60 resets both.
 	severeThresholdPct = 40.0
 	severeDwell        = 5 * time.Minute
+	// noLockDwell: how long a running control channel may fail to acquire
+	// before it is stopped. A control channel locks within seconds when the
+	// signal is there, so minutes of nothing is not a slow start.
+	//
+	// This is a SEPARATE rule from the decode thresholds because it has to be:
+	// a channel that never locks reports no decode figure at all, and the
+	// figure is what the dwells below are measured on. Treating "no number" as
+	// "nothing to judge" is right for a channel whose runtime has no monitor —
+	// and exactly wrong for one that is sitting on a dead frequency burning a
+	// tuner, which is the case this covers. The distinction is the LOCK, not
+	// the absence of data.
+	noLockDwell = 5 * time.Minute
+
 	// firstProbeDelay/probeInterval: the FIRST retest comes quickly — a channel
 	// stopped by a passing problem (a brief interference spike, a neighbouring
 	// start perturbing the dongle) should not sit dead for half an hour on that
@@ -155,6 +168,7 @@ const (
 
 type entry struct {
 	state        chanState
+	noLockSince  time.Time // lowWatch: running but not acquired since this moment (zero = locked)
 	lowSince     time.Time // lowWatch: first measured sample below the low threshold, this streak
 	severeSince  time.Time // lowWatch: first measured sample below the severe threshold, this streak (zero = none)
 	goodLow      int       // consecutive measured samples at/above the low threshold
@@ -445,6 +459,31 @@ func (m *Manager) detect(live map[string]sdrctl.Channel, pol Policy, now time.Ti
 			continue
 		}
 
+		// NOT ACQUIRED. A trunked control channel locks within seconds of
+		// starting when the signal is there; one that has been running for
+		// minutes without acquiring is not being slow, it is on a frequency
+		// that is not there — and it reports no decode figure precisely
+		// because it is not decoding. Judged on the LOCK, so a channel that
+		// has acquired but reports nothing (no monitor, older runtime) keeps
+		// the exemption below untouched.
+		if !decodeprobe.Locked(ch.Control, ch.State) {
+			if e == nil {
+				e = &entry{state: stLowWatch}
+				m.entries[name] = e
+			}
+			if e.noLockSince.IsZero() {
+				e.noLockSince = now
+			}
+			if now.Sub(e.noLockSince) >= noLockDwell {
+				m.autoStop(name, ch, e, now, -1,
+					fmt.Sprintf("no lock for %s", now.Sub(e.noLockSince).Round(time.Second)))
+			}
+			continue
+		}
+		if e != nil {
+			e.noLockSince = time.Time{}
+		}
+
 		// Unmeasured (nil or 0): no judgement either way. The streak clock
 		// neither resets nor fires — only a measured sample moves anything.
 		if ch.SyncPercent == nil || *ch.SyncPercent <= 0 {
@@ -501,36 +540,50 @@ func (m *Manager) detect(live map[string]sdrctl.Channel, pol Policy, now time.Ti
 		}
 
 		// Dwell complete on a measured-low sample: stop the channel.
-		if !m.breakerAllows(now) {
-			if !m.breakerWarned {
-				m.breakerWarned = true
-				log.Printf("chanmgr: %d auto-stops inside an hour — circuit breaker open, no further stops (is the antenna/SDR itself failing?)", maxStopsPerHour)
-			}
-			continue
-		}
-		// Suppress BEFORE stop, so the self-heal sweep can't restart it in
-		// the gap between the two calls.
-		if err := m.opts.Suppress(ch.ID); err != nil {
-			log.Printf("chanmgr: suppress [%s] failed: %v — not stopping", name, err)
-			continue
-		}
-		if err := m.opts.Stop(ch.ID); err != nil {
-			log.Printf("chanmgr: stop [%s] failed: %v — releasing suppression", name, err)
-			if uerr := m.opts.Unsuppress(ch.ID); uerr != nil {
-				log.Printf("chanmgr: unsuppress [%s] after failed stop also failed: %v", name, uerr)
-			}
-			continue
-		}
-		log.Printf("chanmgr: AUTO-STOPPED [%s] — decode %.0f%%, %s; retesting every %s", name, pct, rule, probeInterval)
-		m.logEventLocked(name, "stopped", fmt.Sprintf("auto-stopped — decode %.0f%%, %s", pct, rule))
-		*e = entry{
-			state: stAutoStopped, stoppedAt: now, lastProbeAt: now, lastProbePct: -1,
-			reason: "decode " + rule,
-		}
-		m.lastActionAt = now
-		m.stopTimes = append(m.stopTimes, now)
-		m.breakerWarned = false
+		m.autoStop(name, ch, e, now, pct, rule)
 	}
+}
+
+// autoStop suppresses and stops one channel, and moves its entry into the
+// retest schedule. pct is the decode figure the decision was made on, or -1
+// when the channel never acquired and so never reported one. Caller holds
+// m.mu.
+func (m *Manager) autoStop(name string, ch sdrctl.Channel, e *entry, now time.Time, pct float64, rule string) {
+	if !m.breakerAllows(now) {
+		if !m.breakerWarned {
+			m.breakerWarned = true
+			log.Printf("chanmgr: %d auto-stops inside an hour — circuit breaker open, no further stops (is the antenna/SDR itself failing?)", maxStopsPerHour)
+		}
+		return
+	}
+	// Suppress BEFORE stop, so the self-heal sweep can't restart it in the gap
+	// between the two calls.
+	if err := m.opts.Suppress(ch.ID); err != nil {
+		log.Printf("chanmgr: suppress [%s] failed: %v — not stopping", name, err)
+		return
+	}
+	if err := m.opts.Stop(ch.ID); err != nil {
+		log.Printf("chanmgr: stop [%s] failed: %v — releasing suppression", name, err)
+		if uerr := m.opts.Unsuppress(ch.ID); uerr != nil {
+			log.Printf("chanmgr: unsuppress [%s] after failed stop also failed: %v", name, uerr)
+		}
+		return
+	}
+	// A channel that never acquired has no decode figure to report, and
+	// printing "decode 0%" for it would claim a measurement nobody took.
+	what := fmt.Sprintf("decode %.0f%%, %s", pct, rule)
+	if pct < 0 {
+		what = rule
+	}
+	log.Printf("chanmgr: AUTO-STOPPED [%s] — %s; retesting every %s", name, what, probeInterval)
+	m.logEventLocked(name, "stopped", "auto-stopped — "+what)
+	*e = entry{
+		state: stAutoStopped, stoppedAt: now, lastProbeAt: now, lastProbePct: -1,
+		reason: rule,
+	}
+	m.lastActionAt = now
+	m.stopTimes = append(m.stopTimes, now)
+	m.breakerWarned = false
 }
 
 // maybeProbe runs AT MOST ONE probe per tick, inline (blocking this tick is
