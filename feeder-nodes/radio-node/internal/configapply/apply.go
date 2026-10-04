@@ -359,14 +359,22 @@ func ImportOnBoot(payload ConfigPayload, d Deps) error {
 // ImportVceOnly imports the vce configuration for payload with `extra`
 // channels appended, and does nothing else: no rdio stage, no tuner pass, no
 // persistence of an applied config. It is the RF site survey's lever — first
-// to add its stopped test channels alongside the real ones, then (with extra
-// empty) to put the node's real configuration back.
+// to add its test channels and silence the node's own, then (with extra empty
+// and silenceOwn false) to put the node's real configuration back.
+//
+// silenceOwn forces the node's OWN channels to auto-start=false. A survey
+// needs the radio to itself: a tuner already sourcing the node's channels
+// cannot retune to a candidate's frequency, so leaving them up meant the test
+// channels competed for — and often lost — the tuner they needed, and every
+// reading taken was taken on a desensed dongle. The channels stay CONFIGURED
+// throughout; they are only stopped, and the restoring import brings them
+// back exactly as they were.
 //
 // Nothing is written to applied-config.json on purpose: if the agent dies
 // mid-survey, the next boot's ImportOnBoot restores the real configuration
 // from the file that was never touched, so a crash costs a restart, not a
 // node full of orphaned survey channels.
-func ImportVceOnly(payload ConfigPayload, extra []ChannelPlan, d Deps) error {
+func ImportVceOnly(payload ConfigPayload, extra []ChannelPlan, silenceOwn bool, d Deps) error {
 	sysIDs := systemIDsFrom(payload)
 	localKeys, err := keys.EnsureKeys(d.DataDir, sysIDs)
 	if err != nil {
@@ -376,7 +384,16 @@ func ImportVceOnly(payload ConfigPayload, extra []ChannelPlan, d Deps) error {
 	// effectiveChannels so a capture-off node stays capture-off during a
 	// survey: its own channels remain auto-start=false and only the survey's
 	// test channels — which the survey starts by hand — ever run.
-	p.Channels = append(append([]ChannelPlan{}, payload.effectiveChannels()...), extra...)
+	own := payload.effectiveChannels()
+	if silenceOwn {
+		quiet := make([]ChannelPlan, len(own))
+		for i, ch := range own {
+			ch.AutoStart = false
+			quiet[i] = ch
+		}
+		own = quiet
+	}
+	p.Channels = append(append([]ChannelPlan{}, own...), extra...)
 	state := buildVceConfig(p, localKeys, d.presetAliasListName())
 	body, err := json.Marshal(state)
 	if err != nil {

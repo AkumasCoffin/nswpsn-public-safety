@@ -104,6 +104,13 @@ type Channel struct {
 	// a stop against an old runtime would just be undone by its self-heal.
 	AutoStart  *bool `json:"autoStart"`
 	Suppressed *bool `json:"suppressed"`
+	// DecodingForMs is how long this channel has been decoding on this run,
+	// and SyncFrames how many frames back the SyncPercent figure. Both nil on
+	// a runtime that predates them — which is itself the signal that
+	// SyncPercent still carries the channel's acquisition period and has to be
+	// waited out rather than trusted. See internal/decodeprobe.
+	DecodingForMs *int64 `json:"decodingForMs"`
+	SyncFrames    *int64 `json:"syncFrames"`
 }
 
 // ActiveCall mirrors one element of the "activeCalls" array of GET /channels.

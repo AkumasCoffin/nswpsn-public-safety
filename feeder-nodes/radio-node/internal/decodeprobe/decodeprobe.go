@@ -11,9 +11,13 @@
 //   - A channel that has not reached a locked state within LockWait is not a
 //     weak signal, it is no signal. No decode number it reports afterwards
 //     would mean anything.
-//   - vce's syncPercent is a 30s ROLLING WINDOW that is NOT cleared when a
-//     channel starts, so the first half-minute of samples is dominated by
-//     acquisition losses. Only samples older than TrustAge count.
+//   - vce's syncPercent is a 30s ROLLING WINDOW. On a runtime that counts the
+//     acquisition period as failed decoding, the first half-minute of samples
+//     is dominated by it and only samples older than TrustAge mean anything.
+//     A runtime that reports decodingForMs does not have that problem — it
+//     excludes acquisition — so a sample is trusted as soon as the channel has
+//     been decoding for PostLockTrust, which is seconds rather than most of a
+//     minute. That difference is the bulk of what an RF site survey costs.
 //   - The verdict is the MEDIAN of the trusted samples, never the best one: a
 //     mostly-dead channel still throws occasional good readings, and judging
 //     it on its best moment is how a bad site gets kept.
@@ -41,9 +45,24 @@ const (
 	TrustAge = 35 * time.Second
 	// Window: total measurement time per batch, from start to verdict.
 	Window = 60 * time.Second
+	// PostLockTrust: how long a channel must have been DECODING before its
+	// figure is taken, on a runtime that reports that. Short on purpose: the
+	// number already excludes acquisition, so this is only asking for enough
+	// frames behind it to be steady.
+	PostLockTrust = 4 * time.Second
+	// MinFramesTrusted: and enough frames, for a channel whose traffic is slow
+	// enough that four seconds is only a handful of them.
+	MinFramesTrusted = 24
+
 	// MinSamples: fewer trusted readings than this and the answer is "never
 	// measured", not a ruling on one or two numbers.
 	MinSamples = 3
+	// EnoughSamples: once every channel in the batch has this many trusted
+	// readings the verdict will not change, so the rest of the window is time
+	// spent for nothing. At the sampling cadence this is reached around 15s
+	// after the trust age — and with a survey paying this per wave, those
+	// seconds are most of what a caller can actually get back.
+	EnoughSamples = 8
 
 	// lockPoll/samplePoll: fast polling while waiting for lock (the sooner a
 	// dead batch is known, the sooner it can be abandoned), slower once the
@@ -80,6 +99,26 @@ type Snapshot struct {
 	State       string
 	SyncPercent *float64
 	SignalDbfs  *float64
+	// DecodingForMs/SyncFrames: how long the channel has been decoding and how
+	// many frames are behind the figure. Nil on a runtime that does not report
+	// them, which is what selects the slow, wait-out-the-window path.
+	DecodingForMs *int64
+	SyncFrames    *int64
+}
+
+// trusted reports whether this reading can be taken at face value yet, and
+// whether the runtime was able to say so itself.
+func trusted(s Snapshot, age time.Duration) (ok bool, authoritative bool) {
+	if s.DecodingForMs == nil {
+		return age >= TrustAge, false
+	}
+	if *s.DecodingForMs < PostLockTrust.Milliseconds() {
+		return false, true
+	}
+	if s.SyncFrames != nil && *s.SyncFrames < MinFramesTrusted {
+		return false, true
+	}
+	return true, true
 }
 
 // Deps injects the clock, the sleep, and the live-channel read, so the whole
@@ -112,6 +151,9 @@ type state struct {
 	vanished bool
 	samples  []float64
 	signal   *float64
+	// fast: the runtime answered for itself how long this channel has been
+	// decoding, so the window does not have to be waited out.
+	fast bool
 }
 
 // Measure starts nothing and stops nothing: the caller has already started the
@@ -137,6 +179,7 @@ func Measure(ctx context.Context, names []string, d Deps) map[string]Result {
 		if age >= Window {
 			break
 		}
+		// Poll quickly until there is something to sample, then ease off.
 		poll := lockPoll
 		if age >= TrustAge {
 			poll = samplePoll
@@ -167,7 +210,11 @@ func Measure(ctx context.Context, names []string, d Deps) map[string]Result {
 			if s.locked {
 				anyLocked = true
 			}
-			if age >= TrustAge && snap.SyncPercent != nil && *snap.SyncPercent > 0 {
+			take, authoritative := trusted(snap, age)
+			if authoritative {
+				s.fast = true
+			}
+			if take && snap.SyncPercent != nil && *snap.SyncPercent > 0 {
 				s.samples = append(s.samples, *snap.SyncPercent)
 				if snap.SignalDbfs != nil {
 					v := *snap.SignalDbfs
@@ -180,6 +227,10 @@ func Measure(ctx context.Context, names []string, d Deps) map[string]Result {
 		}
 		if age >= LockWait && !anyLocked {
 			break // nothing here locks; no point waiting out the window
+		}
+		// Every channel that could answer has answered enough times.
+		if settled(names, st) {
+			break
 		}
 	}
 
@@ -199,6 +250,32 @@ func Measure(ctx context.Context, names []string, d Deps) map[string]Result {
 		out[n] = r
 	}
 	return out
+}
+
+// settled reports whether every channel still present has collected enough
+// trusted samples to rule on. A channel that never locked is not waited for —
+// it has already failed — and one that has vanished cannot answer at all.
+//
+// A runtime that reports its own decoding time needs far fewer samples to be
+// conclusive: each one already excludes acquisition, where on an older runtime
+// the spread across the window IS the measurement.
+func settled(names []string, st map[string]*state) bool {
+	answered := 0
+	for _, n := range names {
+		s := st[n]
+		if s.vanished || !s.locked {
+			continue
+		}
+		need := EnoughSamples
+		if s.fast {
+			need = MinSamples
+		}
+		if len(s.samples) < need {
+			return false
+		}
+		answered++
+	}
+	return answered > 0
 }
 
 // Median is the middle of the trusted samples, or -1 when there were too few

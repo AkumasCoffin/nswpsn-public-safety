@@ -23,6 +23,7 @@ type world struct {
 	// imports records each Import call's extra-channel names ("restore" for
 	// the real-config import).
 	imports  [][]string
+	silenced []bool
 	paused   []bool
 	reports  []Report
 	tuners   int
@@ -107,9 +108,18 @@ func (w *world) runner() *Runner {
 			c.Suppressed = bptr(true)
 			return nil
 		},
-		Import: func(extra []configapply.ChannelPlan) error {
+		Import: func(extra []configapply.ChannelPlan, silenceOwn bool) error {
 			if w.importErr != nil {
 				return w.importErr
+			}
+			w.silenced = append(w.silenced, silenceOwn)
+			// An import sets auto-start, it does not stop what is already
+			// running — the node needs its own backstop for that, which is
+			// what makes this worth modelling.
+			for _, c := range w.chans {
+				if !strings.HasPrefix(c.Name, channelPrefix) {
+					c.AutoStart = bptr(!silenceOwn)
+				}
 			}
 			names := make([]string, 0, len(extra))
 			// An import replaces the channel set: drop the old survey channels
@@ -465,21 +475,86 @@ func TestWaveWidthFollowsTunerCount(t *testing.T) {
 }
 
 func TestClusterPacksCloseFrequencies(t *testing.T) {
-	// Four frequencies inside 2 MHz: three share a dongle, the fourth spills
-	// into its own cluster (maxPerCluster), and a distant one never joins.
-	plan := buildMeasurements([]Candidate{
-		cand("A", 400.0), cand("B", 400.5), cand("C", 401.0),
-		cand("D", 401.5), cand("Far", 450.0),
-	})
+	// Frequencies close enough to share a dongle do, up to the per-tuner
+	// capacity; one beyond the span never joins however free the tuner is.
+	// Written against the constants, because what fits in a wave is exactly
+	// what decides how long a survey takes and it is expected to be tuned.
+	var close []Candidate
+	for i := 0; i <= maxPerCluster; i++ { // one more than fits
+		close = append(close, cand(fmt.Sprintf("C%d", i), 400.0+float64(i)*0.1))
+	}
+	plan := buildMeasurements(append(close, cand("Far", 450.0)))
 	waves := cluster(plan, 1)
+
 	if len(waves) != 3 {
-		t.Fatalf("want 3 clusters, got %d: %v", len(waves), waves)
+		t.Fatalf("want full cluster + spill + distant, got %d clusters", len(waves))
 	}
 	if len(waves[0]) != maxPerCluster {
-		t.Fatalf("first cluster should be full: %d", len(waves[0]))
+		t.Fatalf("first cluster should be full (%d), got %d", maxPerCluster, len(waves[0]))
+	}
+	if len(waves[1]) != 1 {
+		t.Fatalf("the overflow belongs in its own cluster: %d", len(waves[1]))
 	}
 	if len(waves[2]) != 1 || waves[2][0].cand.Name != "Far" {
 		t.Fatalf("a distant frequency must not share a tuner: %+v", waves[2])
+	}
+	// The span rule, independent of capacity: two sites a whole band apart.
+	spread := cluster(buildMeasurements([]Candidate{cand("Low", 400), cand("High", 403)}), 1)
+	if len(spread) != 2 {
+		t.Fatalf("frequencies %d Hz apart cannot share a tuner", clusterSpanHz)
+	}
+}
+
+func TestSurveyTakesTheRadioForItself(t *testing.T) {
+	// A tuner already sourcing the node's own channels cannot retune to a
+	// candidate, so the survey silences them — and because an import does not
+	// stop what is already running, it stops them itself.
+	w := newWorld()
+	own := &sdrctl.Channel{
+		ID: 1, Name: "Mount Boyce", Type: "STANDARD", Processing: true,
+		State: "CONTROL", Control: true, AutoStart: bptr(true), Suppressed: bptr(false),
+	}
+	w.chans[own.Name] = own
+	w.order = append(w.order, own.Name)
+	w.decode = decodesAt(nil, 80)
+
+	r := w.runner()
+	r.Run(context.Background(), Request{SurveyID: 20, Candidates: []Candidate{cand("A", 420)}})
+
+	// Silenced going in, restored coming out.
+	if len(w.silenced) != 2 || !w.silenced[0] || w.silenced[1] {
+		t.Fatalf("want silence-then-restore, got %v", w.silenced)
+	}
+	if !containsCall(w, "stop:Mount Boyce") {
+		t.Fatalf("the node's own channel was left running: %v", w.calls)
+	}
+	if own.Processing {
+		t.Fatal("the node's own channel should be stopped for the survey")
+	}
+}
+
+func TestSurveyLeavesItsOwnTestChannelsAlone(t *testing.T) {
+	// The backstop stops everything that is not the survey's. It must not
+	// mistake a test channel for one of the node's.
+	w := newWorld()
+	w.decode = decodesAt(nil, 90)
+	r := w.runner()
+	r.Run(context.Background(), Request{SurveyID: 21, Candidates: []Candidate{cand("A", 420)}})
+
+	// One start and one stop for the test channel: the measurement. If the
+	// backstop had stopped it too there would be more.
+	stops := 0
+	for _, c := range w.calls {
+		if c == "stop:"+channelPrefix+"A" {
+			stops++
+		}
+	}
+	if stops != 1 {
+		t.Fatalf("the test channel should be stopped once, by its own measurement: %v", w.calls)
+	}
+	got := byName(lastReport(t, w))
+	if g := got["A"]; g.Outcome != "measured" {
+		t.Fatalf("the measurement should still have happened: %+v", g)
 	}
 }
 
@@ -512,4 +587,14 @@ func TestMeasurementPlanSkipsJunk(t *testing.T) {
 	if len(plan) != 1 || plan[0].cand.Name != "Same" || plan[0].altHz != nil {
 		t.Fatalf("unexpected plan: %+v", plan)
 	}
+}
+
+// containsCall reports whether the survey made this exact control-server call.
+func containsCall(w *world, want string) bool {
+	for _, c := range w.calls {
+		if c == want {
+			return true
+		}
+	}
+	return false
 }

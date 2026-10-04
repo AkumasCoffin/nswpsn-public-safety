@@ -161,6 +161,139 @@ func TestFetchErrorsAreNotVerdicts(t *testing.T) {
 	}
 }
 
+func TestEnoughSamplesEndsTheWindowEarly(t *testing.T) {
+	// The whole cost of a survey is one window per wave, so once every
+	// channel has answered enough times there is nothing left to buy.
+	c := newClock()
+	c.live["A"] = Snapshot{Control: true, State: "CONTROL", SyncPercent: fptr(82)}
+	start := c.now
+	res := Measure(context.Background(), []string{"A"}, c.deps())["A"]
+	if res.Outcome != Measured || res.MedianPct != 82 {
+		t.Fatalf("verdict changed: %+v", res)
+	}
+	if res.Samples < MinSamples {
+		t.Fatalf("too few samples to rule on: %d", res.Samples)
+	}
+	took := c.now.Sub(start)
+	if took >= Window {
+		t.Fatalf("ran the full window despite having the answer: %s", took)
+	}
+	if took < TrustAge {
+		t.Fatalf("cut the acquisition period short: %s", took)
+	}
+}
+
+func TestSlowChannelStillGetsTheFullWindow(t *testing.T) {
+	// A channel reporting only now and then must not be cut off early just
+	// because a sibling has answered.
+	c := newClock()
+	c.live["Fast"] = Snapshot{Control: true, State: "CONTROL", SyncPercent: fptr(90)}
+	c.live["Slow"] = Snapshot{Control: true, State: "CONTROL"}
+	n := 0
+	c.onFetch = func(c *clock) {
+		n++
+		// The slow one reports a reading only every fourth look.
+		if n%4 == 0 {
+			c.live["Slow"] = Snapshot{Control: true, State: "CONTROL", SyncPercent: fptr(55)}
+		} else {
+			c.live["Slow"] = Snapshot{Control: true, State: "CONTROL"}
+		}
+	}
+	start := c.now
+	out := Measure(context.Background(), []string{"Fast", "Slow"}, c.deps())
+	if out["Fast"].MedianPct != 90 {
+		t.Fatalf("fast channel: %+v", out["Fast"])
+	}
+	if c.now.Sub(start) < Window-samplePoll {
+		t.Fatalf("gave up on the slow channel after %s", c.now.Sub(start))
+	}
+}
+
+func i64(v int64) *int64 { return &v }
+
+func TestRuntimeThatExcludesAcquisitionIsTrustedImmediately(t *testing.T) {
+	// The wait exists because an older runtime counts a channel's acquisition
+	// as failed decoding, so the figure only means something once those
+	// seconds have aged out of its 30s window. A runtime that reports how long
+	// the channel has actually been decoding has already excluded them.
+	c := newClock()
+	started := c.now
+	c.onFetch = func(c *clock) {
+		ms := c.now.Sub(started).Milliseconds()
+		c.live["A"] = Snapshot{
+			Control: true, State: "CONTROL", SyncPercent: fptr(84),
+			DecodingForMs: i64(ms), SyncFrames: i64(ms / 20),
+		}
+	}
+	res := Measure(context.Background(), []string{"A"}, c.deps())["A"]
+	if res.Outcome != Measured || res.MedianPct != 84 {
+		t.Fatalf("verdict wrong: %+v", res)
+	}
+	took := c.now.Sub(started)
+	if took >= TrustAge {
+		t.Fatalf("waited out the old window despite the runtime answering: %s", took)
+	}
+	if took < PostLockTrust {
+		t.Fatalf("took the figure before the channel had decoded for long enough: %s", took)
+	}
+}
+
+func TestFreshlyDecodingChannelIsNotSampledYet(t *testing.T) {
+	// Decoding, but only just: the figure has almost nothing behind it.
+	c := newClock()
+	started := c.now
+	c.onFetch = func(c *clock) {
+		// Pinned just under the threshold for the whole run.
+		c.live["A"] = Snapshot{
+			Control: true, State: "CONTROL", SyncPercent: fptr(99),
+			DecodingForMs: i64(PostLockTrust.Milliseconds() - 1), SyncFrames: i64(1000),
+		}
+	}
+	res := Measure(context.Background(), []string{"A"}, c.deps())["A"]
+	if res.Outcome != Unmeasured {
+		t.Fatalf("a figure with nothing behind it is not a measurement: %+v", res)
+	}
+	if c.now.Sub(started) < Window {
+		t.Fatalf("should have kept waiting for it to settle")
+	}
+}
+
+func TestTooFewFramesIsNotYetAMeasurement(t *testing.T) {
+	// Decoding long enough, but on traffic so slow that barely any frames
+	// back the number.
+	c := newClock()
+	c.onFetch = func(c *clock) {
+		c.live["A"] = Snapshot{
+			Control: true, State: "CONTROL", SyncPercent: fptr(70),
+			DecodingForMs: i64(30_000), SyncFrames: i64(MinFramesTrusted - 1),
+		}
+	}
+	if res := Measure(context.Background(), []string{"A"}, c.deps())["A"]; res.Outcome != Unmeasured {
+		t.Fatalf("want unmeasured, got %+v", res)
+	}
+}
+
+func TestOlderRuntimeStillWaitsOutItsWindow(t *testing.T) {
+	// No decodingForMs = the old contract, where early samples are acquisition
+	// losses and the only safe answer is to wait.
+	c := newClock()
+	started := c.now
+	c.onFetch = func(c *clock) {
+		pct := 5.0
+		if c.now.Sub(started) >= TrustAge {
+			pct = 88
+		}
+		c.live["A"] = Snapshot{Control: true, State: "CONTROL", SyncPercent: fptr(pct)}
+	}
+	res := Measure(context.Background(), []string{"A"}, c.deps())["A"]
+	if res.MedianPct != 88 {
+		t.Fatalf("acquisition leaked into the verdict: %+v", res)
+	}
+	if c.now.Sub(started) < TrustAge {
+		t.Fatalf("trusted an old runtime too early: %s", c.now.Sub(started))
+	}
+}
+
 func TestMedian(t *testing.T) {
 	if got := Median([]float64{10, 95, 12}); got != 12 {
 		t.Fatalf("median of a spike should be the middle value, got %v", got)

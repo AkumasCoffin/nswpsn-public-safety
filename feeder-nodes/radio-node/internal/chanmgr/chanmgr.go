@@ -662,6 +662,7 @@ func (m *Manager) probeDeps() decodeprobe.Deps {
 				out[strings.TrimSpace(ch.Name)] = decodeprobe.Snapshot{
 					Control: ch.Control, State: ch.State,
 					SyncPercent: ch.SyncPercent, SignalDbfs: ch.SignalDbfs,
+					DecodingForMs: ch.DecodingForMs, SyncFrames: ch.SyncFrames,
 				}
 			}
 			return out, nil

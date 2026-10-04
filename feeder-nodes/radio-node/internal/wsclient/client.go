@@ -220,11 +220,13 @@ func (c *Client) SetSurveySnapshot(fn func() any) { c.surveySnap = fn }
 func (c *Client) SurveyRunning() bool { return c.surveyRunning.Load() }
 
 // SurveyImport is the survey's config lever: re-import the node's real
-// configuration with `extra` test channels appended (nil = restore it as it
-// is). It takes applyMu, so a config push cannot interleave with an import,
-// and stamps lastApplyAt so the channel manager stays quiesced for its usual
-// window afterwards rather than judging a world that just changed.
-func (c *Client) SurveyImport(extra []configapply.ChannelPlan) error {
+// configuration with `extra` test channels appended, optionally with the
+// node's own channels silenced so the survey has the tuners to itself (nil +
+// false = restore the node exactly as it was). It takes applyMu, so a config
+// push cannot interleave with an import, and stamps lastApplyAt so the channel
+// manager stays quiesced for its usual window afterwards rather than judging a
+// world that just changed.
+func (c *Client) SurveyImport(extra []configapply.ChannelPlan, silenceOwn bool) error {
 	c.applyMu.Lock()
 	defer c.applyMu.Unlock()
 
@@ -244,7 +246,7 @@ func (c *Client) SurveyImport(extra []configapply.ChannelPlan) error {
 		return err
 	}
 
-	ierr := configapply.ImportVceOnly(payload, extra, configapply.Deps{
+	ierr := configapply.ImportVceOnly(payload, extra, silenceOwn, configapply.Deps{
 		DataDir:         c.cfg.DataDir,
 		PresetsDir:      c.cfg.PresetsDir,
 		SDRTrunkAppRoot: c.cfg.SDRTrunkAppRoot,

@@ -20,6 +20,12 @@
 //     deliberately deaf: no traffic pool, no control-channel learning, data
 //     calls ignored. A survey must not record audio or chase voice calls; it
 //     measures the control channel and nothing else.
+//   - The node's OWN channels are stopped for the duration. A tuner already
+//     sourcing a channel cannot retune to a candidate's frequency, so leaving
+//     them up meant the test channels competed for the tuner they needed and
+//     every reading was taken on a desensed dongle. They stay configured and
+//     come back with the restoring import; the node does not feed while a
+//     survey runs, which is the cost of measuring properly.
 //   - Candidates are tested in WAVES. Frequencies within one tuner's usable
 //     span can be decoded by a single dongle at once, so the candidates are
 //     greedy-clustered into groups inside clusterSpanHz (at most
@@ -67,10 +73,12 @@ const (
 	// tuner. A 2 MHz span fits comfortably inside the sample rate the node's
 	// dongles run at, with room at the edges where the channelizer rolls off.
 	clusterSpanHz = 2_000_000
-	// maxPerCluster: concurrent channels per tuner. Three P25 control channels
-	// is work a single dongle does routinely; more starts costing decode on
-	// all of them, which would bias the very measurement being taken.
-	maxPerCluster = 3
+	// maxPerCluster: concurrent channels per tuner. The whole cost of a survey
+	// is one measurement window per wave, so what fits in a wave decides how
+	// long the thing takes. With the node's own channels stopped the dongle is
+	// doing nothing else, and six P25 control channels inside one 2 MHz span
+	// is work it does comfortably — the node runs that many in normal service.
+	maxPerCluster = 6
 	// maxTuners bounds the concurrent-wave width regardless of how many
 	// dongles are plugged in — a survey is not a stress test.
 	maxTuners = 4
@@ -144,9 +152,10 @@ type Options struct {
 	// Start/Stop/Suppress act on a channel by its CURRENT id.
 	Start, Stop, Suppress func(id int) error
 	// Import replaces the node's vce configuration with the real one plus
-	// extra channels; extra empty means "restore the real configuration".
-	// The caller holds whatever apply lock the agent uses.
-	Import func(extra []configapply.ChannelPlan) error
+	// extra channels, optionally silencing the node's own channels so the
+	// survey has the tuners to itself. (nil, false) restores the node exactly
+	// as it was. The caller holds whatever apply lock the agent uses.
+	Import func(extra []configapply.ChannelPlan, silenceOwn bool) error
 	// Tuners reports how many SDRs this node has (wave width).
 	Tuners func() int
 	// Pause suspends/resumes the automatic channel manager.
@@ -242,7 +251,7 @@ func (r *Runner) Run(ctx context.Context, req Request) {
 		}
 		restored = true
 		r.setProgress(Progress{Running: true, SurveyID: req.SurveyID, Phase: "restoring", Total: len(plan)})
-		if err := r.opts.Import(nil); err != nil {
+		if err := r.opts.Import(nil, false); err != nil {
 			// Loud: the node is now running a configuration with survey
 			// channels in it until the next config push or restart.
 			log.Printf("sitesurvey: RESTORE FAILED after survey #%d: %v — the node still has survey channels configured; push its config to clear them", req.SurveyID, err)
@@ -256,16 +265,58 @@ func (r *Runner) Run(ctx context.Context, req Request) {
 	for i := range plan {
 		extra = append(extra, testChannel(plan[i].chanNam, plan[i].freqHz, i))
 	}
-	if err := r.opts.Import(extra); err != nil {
+	// silenceOwn: the node stops feeding here and starts again at the restore.
+	if err := r.opts.Import(extra, true); err != nil {
 		log.Printf("sitesurvey: survey #%d could not install its test channels: %v", req.SurveyID, err)
 		restore()
 		r.finish(ctx, req.SurveyID, nil, true, "could not install test channels: "+err.Error())
 		return
 	}
+	r.silenceOwnChannels(ctx)
 
 	aborted, note := r.measureAll(ctx, req.SurveyID, plan)
 	restore()
 	r.finish(ctx, req.SurveyID, plan, aborted, note)
+}
+
+// silenceOwnChannels stops anything running that is not ours.
+//
+// The import marks the node's own channels auto-start=false, but an import
+// does not reliably stop a channel that is ALREADY running — the same reason
+// configapply carries its own enforce-stopped backstop. A channel left running
+// holds a tuner the survey needs, so this is not cosmetic: it is the
+// difference between measuring a candidate and reporting it unmeasured.
+//
+// Bounded, and two clean passes end it early: channels stop asynchronously,
+// so one look is not enough to know the node is quiet.
+func (r *Runner) silenceOwnChannels(ctx context.Context) {
+	clean := 0
+	for attempt := 0; attempt < 12 && clean < 2 && ctx.Err() == nil; attempt++ {
+		chans, err := r.opts.Fetch()
+		if err != nil {
+			r.sleep(ctx, 500*time.Millisecond)
+			continue
+		}
+		stopped := false
+		for _, ch := range chans {
+			name := strings.TrimSpace(ch.Name)
+			if !ch.Processing || strings.HasPrefix(name, channelPrefix) {
+				continue
+			}
+			stopped = true
+			if err := r.opts.Stop(ch.ID); err != nil {
+				log.Printf("sitesurvey: could not stop [%s] for the survey: %v", name, err)
+			} else {
+				log.Printf("sitesurvey: stopped [%s] for the survey (restored when it finishes)", name)
+			}
+		}
+		if stopped {
+			clean = 0
+		} else {
+			clean++
+		}
+		r.sleep(ctx, 500*time.Millisecond)
+	}
 }
 
 // measureAll runs the waves and fills in each measurement's result. It returns
@@ -410,6 +461,7 @@ func (r *Runner) probeDeps() decodeprobe.Deps {
 				out[strings.TrimSpace(ch.Name)] = decodeprobe.Snapshot{
 					Control: ch.Control, State: ch.State,
 					SyncPercent: ch.SyncPercent, SignalDbfs: ch.SignalDbfs,
+					DecodingForMs: ch.DecodingForMs, SyncFrames: ch.SyncFrames,
 				}
 			}
 			return out, nil
