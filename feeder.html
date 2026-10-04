@@ -387,6 +387,16 @@
     .fs-li-empty { color: var(--text-soft); }
     .fs-act-h { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-soft); margin: 0.9rem 0 0.45rem; font-weight: 600; }
     .sv-meta { font-size: 0.75rem; color: var(--text-soft); margin-bottom: 0.5rem; }
+    /* A survey has the node's channels stopped; to an owner that looks like a
+       fault unless the page says otherwise. */
+    .nl-surveying { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.6rem;
+      font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #fbbf24;
+      border: 1px solid rgba(251, 191, 36, 0.5); border-radius: 999px; padding: 0.05rem 0.4rem; }
+    .nm-survey-note { display: flex; gap: 0.6rem; align-items: flex-start; margin: 0 0 0.9rem;
+      padding: 0.7rem 0.85rem; border-radius: 8px; font-size: 0.82rem; line-height: 1.45;
+      background: rgba(251, 191, 36, 0.09); border: 1px solid rgba(251, 191, 36, 0.4); color: #fde68a; }
+    .nm-survey-note i { margin-top: 0.15rem; color: #fbbf24; }
+    .nm-survey-note b { color: #fff; }
     .sv-row { display: grid; grid-template-columns: 1fr auto auto; gap: 0.5rem; align-items: center;
               padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--border-subtle); font-size: 0.82rem; }
     .sv-row:last-child { border-bottom: 0; }
@@ -1108,8 +1118,12 @@
       }
 
       const located = typeof node.lat === 'number' && typeof node.lon === 'number';
-      const statusText = updating ? 'Updating…' : (online ? 'Online' : 'Offline');
-      const statusCls = updating ? 'st-upd' : (online ? 'st-on' : 'st-off');
+      // A survey stops this node's channels while it measures the sites
+      // around it, so the card would otherwise say Online and show nothing
+      // being decoded — indistinguishable from something being wrong.
+      const surveying = node.surveying === true;
+      const statusText = surveying ? 'Surveying…' : (updating ? 'Updating…' : (online ? 'Online' : 'Offline'));
+      const statusCls = surveying ? 'st-upd' : (updating ? 'st-upd' : (online ? 'st-on' : 'st-off'));
       // Radio and pager nodes both locate by State + LGA (+ optional suburb).
       // RFS zone is retired, so a node saved before the change still shows its
       // stored zone until someone re-saves it. ADS-B nodes have no coarse area
@@ -1137,7 +1151,8 @@
           <span class="node-dot ${updating ? 'updating' : (online ? 'online' : '')}" title="${statusText}"></span>
           <div class="node-meta">
             <div class="node-head">
-              <div class="node-name">${escapeHtml(name)} <span class="node-kind">${escapeHtml(_kindLabel[kind] || kind)}</span></div>
+              <div class="node-name">${escapeHtml(name)} <span class="node-kind">${escapeHtml(_kindLabel[kind] || kind)}</span>${
+                surveying ? ` <span class="nl-surveying" title="A site survey is running: this node is measuring which radio sites it can hear. Its channels are stopped until it finishes, then start again by themselves."><i class="fas fa-magnifying-glass-location"></i> Surveying</span>` : ''}</div>
               ${agentHtml}
             </div>
             <div class="node-sub"><span class="${statusCls}">${statusText}</span> · last seen ${escapeHtml(lastSeen)}${uptimeHtml}</div>
@@ -1251,7 +1266,9 @@
               <span class="node-dot ${node.updating ? 'updating' : (online ? 'online' : '')}" id="nm-dot"></span>
               <div class="nm-id-text">
                 <div class="node-name">${escapeHtml(node.name || 'Unnamed node')} <span class="node-kind">${escapeHtml(_kindLabel[kind] || kind)}</span>${node.agentVersion ? ` <span class="node-ver">agent ${escapeHtml(node.agentVersion)}</span>` : ''}</div>
-                <div class="node-sub" id="nm-sub">${_nmHeadStatus(node)}</div>
+                <div class="node-sub" id="nm-sub">${node.surveying === true
+                  ? '<span class="st-upd">Surveying…</span> · channels stopped until it finishes'
+                  : _nmHeadStatus(node)}</div>
                 ${node.localIp ? `<div class="node-sub nm-ip" id="nm-ip" title="Local network address of this node"><i class="fas fa-network-wired"></i> <code>${escapeHtml(node.localIp)}</code></div>` : '<div class="node-sub nm-ip" id="nm-ip" hidden></div>'}
               </div>
             </div>
@@ -1264,7 +1281,14 @@
               <button class="mini-btn nm-close" title="Close" onclick="closeNodeModal()">&times;</button>
             </div>
           </div>
-          <div class="nm-body">${body}</div>
+          <div class="nm-body">${node.surveying === true ? `
+            <div class="nm-survey-note">
+              <i class="fas fa-magnifying-glass-location"></i>
+              <span><b>A site survey is running on this node.</b> We are measuring which radio sites it can
+                hear, so we know which ones it should be listening to. <b>It will not start decoding or
+                feeding again until the survey finishes</b> — usually a few minutes — and its channels then
+                come back by themselves. Nothing is wrong, and there is nothing you need to do.</span>
+            </div>` : ''}${body}</div>
         </div>`;
       overlay.addEventListener('click', (e) => { if (e.target === overlay) closeNodeModal(); });
       // Escape closes this modal ONLY when it is the topmost overlay — the

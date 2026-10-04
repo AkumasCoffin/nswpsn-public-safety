@@ -50,7 +50,7 @@ import { liveCallWindow } from '../services/nodeCallWindow.js';
 import { getZoneGroups, isValidZone } from '../services/nodes/rfsZones.js';
 import { AU_STATES } from '../lib/stateMask.js';
 import { pushConfigToNode } from '../services/nodes/configPush.js';
-import { listSurveys } from '../services/siteSurvey.js';
+import { listSurveys, runningSurveys } from '../services/siteSurvey.js';
 import { getPool } from '../db/pool.js';
 import { feederRadioStats } from './node-data.js';
 
@@ -94,7 +94,7 @@ export { roleForKind };
 
 /** The volunteer-facing view of one of their nodes (name/type/key-prefix +
  *  live activity). No secrets — only the token PREFIX, never the token/hash. */
-function feederNodeView(n: NodeRow) {
+function feederNodeView(n: NodeRow, surveying?: Map<string, number>) {
   const online = hub.isOnline(n.id);
   const live = hub.liveStatus(n.id);
   const st = live.status;
@@ -158,6 +158,10 @@ function feederNodeView(n: NodeRow) {
     installId: n.install_id,
     name: n.name,
     enabled: n.enabled,
+    // An RF site survey has this node's channels stopped while it measures
+    // the sites around it. Without this the owner sees a node that has simply
+    // stopped decoding, which looks exactly like a fault.
+    surveying: surveying?.has(n.id) ?? false,
     feedEnabled: n.feed_enabled,
     tokenPrefix: n.token_prefix,
     lat: n.lat,
@@ -227,7 +231,8 @@ feederRouter.get('/api/feeder/me', async (c) => {
   const userId = c.get('userId') as string;
   try {
     const rows = await listNodesForUser(userId);
-    const nodes = rows.map(feederNodeView);
+    const surveying = await runningSurveys();
+    const nodes = rows.map((row) => feederNodeView(row, surveying));
     // Uptime is read for every node in ONE query rather than per card: a feeder
     // with several nodes would otherwise pay a round trip each.
     const uptime = await nodeUptimeMany(rows.map((n) => n.id), '7d');
