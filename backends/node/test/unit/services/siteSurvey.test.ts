@@ -78,7 +78,7 @@ vi.mock('../../../src/services/grnCandidates.js', () => ({
   candidatesForNode: vi.fn(async () => fakeCandidates),
 }));
 
-const { startSurvey, maybeStartInstallSurvey, ingestSurveyResults, handleSurveyCommand, SURVEY_PASS_PCT } =
+const { startSurvey, maybeStartInstallSurvey, ingestSurveyResults, handleSurveyCommand, runningSurveys, SURVEY_PASS_PCT } =
   await import('../../../src/services/siteSurvey.js');
 
 const NODE = 'node-1';
@@ -320,5 +320,26 @@ describe('handleSurveyCommand — one path for both staff entry points', () => {
     expect(out).toMatchObject({ ok: false });
     const fail = executed.find((e) => e.sql.includes("SET status = 'failed'"));
     expect(fail?.params).toEqual([77, NODE, 'cancel could not reach the node']);
+  });
+});
+
+describe('runningSurveys — what the staff list shows a badge from', () => {
+  it('maps the nodes with an open survey to its id', async () => {
+    const rows = [{ id: 12, node_id: 'node-1' }, { id: 13, node_id: 'node-9' }];
+    const q = fakePool.query as unknown as { mockImplementationOnce: (f: () => unknown) => void };
+    q.mockImplementationOnce(async () => ({ rows, rowCount: rows.length }));
+    const out = await runningSurveys();
+    expect(out.get('node-1')).toBe(12);
+    expect(out.get('node-9')).toBe(13);
+    expect(out.has('node-nope')).toBe(false);
+  });
+
+  it('ignores a survey old enough to have timed out', async () => {
+    await runningSurveys();
+    const sql = executed[executed.length - 1]!.sql;
+    // The same staleness bound the lazy expiry uses, so the badge cannot
+    // outlive the survey it is reporting.
+    expect(sql).toContain("status = 'running'");
+    expect(sql).toContain('started_at >');
   });
 });

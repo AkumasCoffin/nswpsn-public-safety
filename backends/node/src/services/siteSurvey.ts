@@ -257,6 +257,33 @@ export async function handleSurveyCommand(
   return null;
 }
 
+/**
+ * The nodes with a survey running right now, as node id -> survey id.
+ *
+ * Read from the survey table rather than the agent's status frame: a node is
+ * mid-survey from the moment it is commanded, the staff list does not get
+ * status frames at all, and a page loaded between two heartbeats would
+ * otherwise show nothing out of the ordinary on a node that has its channel
+ * set replaced.
+ */
+export async function runningSurveys(): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  const pool = await getPool();
+  if (!pool) return out;
+  try {
+    const r = await pool.query<{ id: number; node_id: string }>(
+      `SELECT id, node_id FROM node_site_surveys
+        WHERE status = 'running'
+          AND started_at > now() - ($1 || ' milliseconds')::interval`,
+      [String(SURVEY_TIMEOUT_MS)],
+    );
+    for (const row of r.rows) out.set(row.node_id, row.id);
+  } catch (err) {
+    log.warn({ err }, 'runningSurveys failed');
+  }
+  return out;
+}
+
 /** Mark a running survey failed (agent refused/cancelled mid-flight). */
 export async function failSurvey(nodeId: string, surveyId: number, note: string): Promise<void> {
   const pool = await getPool();

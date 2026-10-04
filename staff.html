@@ -870,6 +870,21 @@
     .nd-state.probing{ background: rgba(192, 132, 252, 0.16); color: #c084fc; border: 1px solid rgba(192, 132, 252, 0.3); }
     .nd-state.probing::before { animation: nd-pulse 1.1s ease-in-out infinite; }
     .nd-am-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-soft); cursor: pointer; user-select: none; }
+    .nd-survey-banner[hidden] { display: none; }
+    .nd-survey-banner {
+      grid-column: 1 / -1; display: flex; gap: 10px; align-items: center;
+      background: rgba(251,191,36,0.10); border: 1px solid rgba(251,191,36,0.45);
+      border-radius: 8px; padding: 10px 12px; color: #fde68a; font-size: 13px;
+    }
+    .nd-survey-banner .nd-sb-spin { color: #fbbf24; }
+    .nd-survey-banner b { color: #fff; }
+    .nd-survey-banner .nd-sb-sub { color: var(--text-soft); }
+    .nd-survey-banner .nd-sb-act { margin-left: auto; }
+    .node-surveying {
+      display: inline-flex; align-items: center; gap: 4px; font-size: 10px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.05em; color: #fbbf24;
+      border: 1px solid rgba(251,191,36,0.5); border-radius: 999px; padding: 1px 6px;
+    }
     .nd-sp-overlay { position: fixed; inset: 0; background: rgba(2,6,23,0.72); z-index: 2400;
       display: flex; align-items: center; justify-content: center; padding: 1.5rem; }
     .nd-sp-box { background: var(--bg-elevated, #0f172a); border: 1px solid var(--border-subtle, #334155);
@@ -4251,6 +4266,8 @@
           </div>
 
           <!-- Channels (unified config + live manager) -->
+          <div class="nd-survey-banner nd-radio-only" id="nd-survey-banner" hidden></div>
+
           <div class="nd-panel nd-span-all nd-radio-only">
             <div class="nd-panel-h">
               <i class="fas fa-broadcast-tower"></i> Channels
@@ -4268,7 +4285,7 @@
                 <i class="fas fa-tower-broadcast"></i> Add GRN site
               </button>
               <button class="btn btn-secondary btn-sm nd-write" id="nd-survey-btn" onclick="_ndRunSurvey(this)"
-                title="Measure how well this node hears every GRN site in its council area (and neighbouring ones), then add the sites it hears well to its channel list. The node stops feeding while it tests.">
+                title="Measure how well this node hears every GRN site in its council area (and neighbouring ones), then add the sites it hears well to its channel list. It keeps feeding, but expect gaps while the test channels share its SDRs.">
                 <i class="fas fa-magnifying-glass-location"></i> Run site survey
               </button>
               <select id="nd-survey-rings" class="nd-survey-rings nd-write"
@@ -10352,7 +10369,9 @@
              onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openNodeDrawer('${jsArg(id)}')}">
           <div class="dev-card-head" style="padding-right: 0;">
             <span class="node-dot ${updating ? 'updating' : (online ? 'online' : '')}" title="${updating ? _ndUpdStageLabel(updStage) : (online ? 'Online' : 'Offline')}"></span>
-            <div class="dev-card-name">${escapeHtml(name)}</div>
+            <div class="dev-card-name">${escapeHtml(name)}${node.surveyingId != null
+              ? ` <span class="node-surveying" title="An RF site survey is running on this node: it is measuring nearby radio sites, and its channels share the SDRs with the test channels until it finishes."><i class="fas fa-magnifying-glass-location"></i> Surveying</span>`
+              : ''}</div>
             <i class="fas fa-chevron-right nd-card-open" aria-hidden="true"></i>
           </div>
           <div class="nd-vers">${[
@@ -10749,7 +10768,7 @@
       _ndAuthed = false;
       _ndStatus = null;
       _ndChanMgr = null; _ndMgrLog = [];
-      _ndSurveys = []; _ndSurveyLive = null;
+      _ndSurveys = []; _ndSurveyLive = null; _ndSurveyOpen = false;
       _ndSites = null; _ndSitesPending = null;
       _ndTuners = []; _ndChannels = []; _ndCalls = []; _ndEvents = []; _ndPagerMsgs = [];
       _ndTunersSig = null;
@@ -10786,6 +10805,7 @@
       _ndCfgFetch(); // pull current config_override for the tuner-persist + channel editor
       _ndMgrLogFetch(); // auto-management audit log (radio only)
       _ndSurveyFetch(); // RF site survey history (radio only)
+      _ndRenderSurveyBtn(); // banner up front if one is already running
       // Warm the GRN site list in the background: tagging the dataset against
       // the boundary layers is the slow part, and doing it while the drawer
       // opens means the picker is instant when staff reach for it.
@@ -10896,10 +10916,14 @@
       const svWas = !!(_ndSurveyLive && _ndSurveyLive.running);
       _ndSurveyLive = st.siteSurvey || null;
       const svNow = !!(_ndSurveyLive && _ndSurveyLive.running);
-      if (svWas !== svNow) {
+      // Repaint every frame while one is running: the banner carries the
+      // phase and the site being tested, which change constantly.
+      if (svWas !== svNow || svNow) {
+        if (svNow) _ndSurveyOpen = true;
         _ndRenderSurveyBtn();
-        // The run just ended: its results are on the backend now.
-        if (!svNow) setTimeout(_ndSurveyFetch, 1500);
+        // The run just ended: its results are on the backend now, and the
+        // refetch is what clears the open flag.
+        if (svWas && !svNow) setTimeout(_ndSurveyFetch, 1500);
       }
       if (svNow) _ndRenderSurveys();
       // Auto-management decisions render ONLY in their own panel (fed by the
@@ -13056,6 +13080,9 @@
     // much the point as the ones it heard well.
     let _ndSurveys = [];
     let _ndSurveyLive = null;
+    // The backend's view: a survey row is open for this node. True from the
+    // moment it is commanded, which is before the node reports any progress.
+    let _ndSurveyOpen = false;
 
     async function _ndSurveyFetch() {
       if (((_ndNode && _ndNode.kind) || 'radio') !== 'radio') return;
@@ -13066,6 +13093,7 @@
         if (res.ok) {
           const data = await res.json();
           _ndSurveys = Array.isArray(data.surveys) ? data.surveys : [];
+          _ndSurveyOpen = _ndSurveys.some(sv => sv && sv.status === 'running');
         }
       } catch (e) { /* panel shows whatever it already had */ }
       _ndRenderSurveys();
@@ -13084,7 +13112,9 @@
         `Test every GRN site in ${reach}, a few at a time?
 
 `
-        + `The node stops feeding while it runs — expect several minutes — and every site it hears above 65% is added to its channel list.`,
+        + `Expect several minutes. The node keeps feeding, but its channels restart as the survey starts and finishes, `
+        + `and the test channels share its SDRs while it runs — so expect gaps in what it hears. `
+        + `Every site it hears above 65% is added to its channel list.`,
         { title: 'Run a site survey?', okText: 'Run survey' },
       ).then(ok => {
         if (!ok) return;
@@ -13103,12 +13133,37 @@
 
     function _ndRenderSurveyBtn() {
       const btn = document.getElementById('nd-survey-btn');
-      if (!btn) return;
-      const running = !!(_ndSurveyLive && _ndSurveyLive.running);
-      btn.disabled = running;
-      btn.innerHTML = running
-        ? '<i class="fas fa-spinner fa-spin"></i> Surveying…'
-        : '<i class="fas fa-magnifying-glass-location"></i> Run site survey';
+      const running = _ndSurveyRunning();
+      if (btn) {
+        btn.disabled = running;
+        btn.innerHTML = running
+          ? '<i class="fas fa-spinner fa-spin"></i> Surveying…'
+          : '<i class="fas fa-magnifying-glass-location"></i> Run site survey';
+      }
+      // The banner at the top of the drawer is the actual indicator: a line
+      // inside a panel further down is not something you notice.
+      const ban = document.getElementById('nd-survey-banner');
+      if (!ban) return;
+      ban.hidden = !running;
+      if (!running) { ban.innerHTML = ''; return; }
+      const p = _ndSurveyLive || {};
+      const detail = p.running
+        ? `${escapeHtml(p.phase || 'testing')}${p.total ? ` · site ${p.done || 0} of ${p.total}` : ''}${p.current ? ` · ${escapeHtml(p.current)}` : ''}`
+        : 'starting — waiting for the node to pick it up';
+      ban.innerHTML = `
+        <i class="fas fa-spinner fa-spin nd-sb-spin"></i>
+        <span><b>Site survey running.</b> <span class="nd-sb-sub">${detail}. Its channels share the SDRs with the test channels, so expect gaps in what it hears until it finishes.</span></span>
+        <button class="btn btn-secondary btn-sm nd-write nd-sb-act" onclick="_ndCancelSurvey()">Cancel survey</button>`;
+    }
+
+    /** A survey is running if the backend says this node has one open, or the
+     *  agent is reporting progress. The backend knows from the moment it is
+     *  commanded, which is before the node's first progress frame. */
+    function _ndSurveyRunning() {
+      if (_ndSurveyLive && _ndSurveyLive.running) return true;
+      if (_ndSurveyOpen) return true;
+      const n = (allNodes || []).find(x => String(x.id) === String(_ndNodeId)) || _ndNode || {};
+      return n.surveyingId != null;
     }
 
     const _ND_SV_VERDICTS = {
@@ -13137,7 +13192,7 @@
         html += `<div class="nd-sv-run"><strong>Running now</strong> — ${escapeHtml(live.phase || 'testing')}`
               + (live.total ? ` ${live.done || 0}/${live.total}` : '')
               + (live.current ? ` · ${escapeHtml(live.current)}` : '')
-              + ` · the node is not feeding while this runs</div>`;
+              + ` · its channels share the SDRs with the test channels until it finishes</div>`;
       }
       if (!_ndSurveys.length && !live) {
         el.innerHTML = `<div class="nd-empty" style="border:none;background:none;">No survey has been run on this node yet.</div>`;

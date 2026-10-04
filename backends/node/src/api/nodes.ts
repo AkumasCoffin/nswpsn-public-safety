@@ -44,7 +44,7 @@ import {
 } from '../services/nodes/registry.js';
 import { hub } from '../services/nodes/hub.js';
 import { listChanMgrLog } from '../services/nodes/chanmgrLog.js';
-import { handleSurveyCommand, listSurveys } from '../services/siteSurvey.js';
+import { handleSurveyCommand, listSurveys, runningSurveys } from '../services/siteSurvey.js';
 import { allTaggedSites, lgaRingDepths } from '../services/grnCandidates.js';
 import { nodeUptimeMany } from '../services/nodes/nodeUptime.js';
 import { liveCallWindow } from '../services/nodeCallWindow.js';
@@ -79,9 +79,12 @@ export const nodesRouter = new Hono();
  * Map a DB NodeRow to a clean camelCase JSON shape, merging the live
  * hub status (online / last status frame / when it arrived) on top.
  */
-function toApi(node: NodeRow, usernames?: Map<string, string>) {
+function toApi(node: NodeRow, usernames?: Map<string, string>, surveying?: Map<string, number>) {
   const live = hub.liveStatus(node.id);
   return {
+    // The id of the RF site survey running on this node, or null. Its channel
+    // set is not its own while this is set.
+    surveyingId: surveying?.get(node.id) ?? null,
     id: node.id,
     kind: node.kind,
     userId: node.user_id,
@@ -153,14 +156,18 @@ const PatchSchema = z.object({
 // ---------------------------------------------------------------------------
 nodesRouter.get('/api/nodes', requireRole(canViewNodeData), async (c) => {
   try {
-    const [nodes, usernames] = await Promise.all([listNodes(), getUsernameMap()]);
+    const [nodes, usernames, surveying] = await Promise.all([
+      listNodes(),
+      getUsernameMap(),
+      runningSurveys(),
+    ]);
     // One query for the whole page rather than one per card.
     const uptime = await nodeUptimeMany(nodes.map((n) => n.id), '7d');
     return c.json({
       nodes: nodes.map((n) => {
         const u = uptime.get(n.id);
         return {
-          ...toApi(n, usernames),
+          ...toApi(n, usernames, surveying),
           uptimePct: u?.pct ?? null,
           uptimeRunMs: u?.currentRunMs ?? null,
           uptimeWindow: '7d',
