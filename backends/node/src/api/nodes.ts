@@ -106,6 +106,7 @@ function toApi(node: NodeRow, usernames?: Map<string, string>) {
     zone: node.zone,
     state: node.state,
     lga: node.lga,
+    suburb: node.suburb,
     online: live.online,
     status: live.status,
     lastStatusAt: live.lastStatusAt,
@@ -336,8 +337,11 @@ const StaffAreaLocationSchema = z.object({
   state: z.enum(AU_STATES as unknown as [string, ...string[]]),
   lga: z.string().trim().min(1).max(120),
   suburb: z.string().trim().max(120).optional(),
-  lat: z.number().min(-90).max(90).nullable(),
-  lon: z.number().min(-180).max(180).nullable(),
+  // The pin is OPTIONAL here on purpose: staff fixing a node's council area
+  // must not silently wipe the antenna position its owner set. Omit the keys
+  // and setNodeLocation leaves them alone; send null to clear them.
+  lat: z.number().min(-90).max(90).nullable().optional(),
+  lon: z.number().min(-180).max(180).nullable().optional(),
 });
 const StaffAdsbLocationSchema = z.object({
   lat: z.number().min(-90).max(90),
@@ -679,19 +683,19 @@ const CreateSchema = z
   .object({
     userId: z.string().min(1),
     kind: z.string().refine(isNodeKind, 'invalid node kind'),
-    // Radio nodes give the NSW RFS zone; pager nodes give state + lga (same
-    // per-kind rule as the owner-facing create in feeder.ts).
+    // Radio and pager nodes both give state + lga (+ optional suburb) — the
+    // same per-kind rule as the owner-facing create in feeder.ts. A radio
+    // node's LGA is what its RF site survey searches from, so a node created
+    // without one cannot be surveyed until someone sets it.
     zone: z.string().min(1).refine(isValidZone, 'unknown zone').optional(),
     state: z.enum(AU_STATES as unknown as [string, ...string[]]).optional(),
     lga: z.string().trim().min(1).max(120).optional(),
+    suburb: z.string().trim().max(120).optional(),
   })
   .superRefine((v, ctx) => {
-    if (v.kind === 'pager') {
-      if (!v.state) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['state'], message: 'state required for pager nodes' });
-      if (!v.lga) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['lga'], message: 'lga required for pager nodes' });
-    } else if (!v.zone) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['zone'], message: 'zone required' });
-    }
+    if (v.kind === 'adsb') return; // located by its pin alone
+    if (!v.state) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['state'], message: 'state required' });
+    if (!v.lga) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['lga'], message: 'lga required' });
   });
 nodesRouter.post('/api/nodes', requireRole(canManageNodes), async (c) => {
   try {
@@ -699,16 +703,19 @@ nodesRouter.post('/api/nodes', requireRole(canManageNodes), async (c) => {
     if (!parsed.success) {
       return c.json({ error: 'invalid body', details: parsed.error.issues }, 400);
     }
-    const { userId, kind, zone, state, lga } = parsed.data;
+    const { userId, kind, zone, state, lga, suburb } = parsed.data;
     if ((await countNodesForUser(userId)) >= MAX_NODES_PER_USER) {
       return c.json({ error: 'node limit reached for this user' }, 429);
     }
     const name = autoNodeName(kind, await getUsername(userId));
     const { token, tokenHash, tokenPrefix } = mintNodeToken();
     const node = await createNode(userId, name, kind, tokenHash, tokenPrefix, {
-      zone: kind === 'pager' ? null : zone ?? null,
-      state: kind === 'pager' ? state ?? null : 'NSW',
-      lga: kind === 'pager' ? lga ?? null : null,
+      // zone is legacy and radio-only: accepted so an older caller still
+      // works, never required, and never the thing anything reads first.
+      zone: kind === 'radio' ? zone ?? null : null,
+      state: state ?? null,
+      lga: lga ?? null,
+      suburb: suburb ?? null,
     });
     if (!node) return c.json({ error: 'registry unavailable' }, 503);
     c.header('Cache-Control', 'no-store');

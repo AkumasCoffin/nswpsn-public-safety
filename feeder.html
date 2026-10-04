@@ -386,6 +386,18 @@
     .fs-li-c { color: var(--accent); font-variant-numeric: tabular-nums; flex-shrink: 0; font-size: 0.75rem; }
     .fs-li-empty { color: var(--text-soft); }
     .fs-act-h { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-soft); margin: 0.9rem 0 0.45rem; font-weight: 600; }
+    .sv-meta { font-size: 0.75rem; color: var(--text-soft); margin-bottom: 0.5rem; }
+    .sv-row { display: grid; grid-template-columns: 1fr auto auto; gap: 0.5rem; align-items: center;
+              padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--border-subtle); font-size: 0.82rem; }
+    .sv-row:last-child { border-bottom: 0; }
+    .sv-site { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sv-freq { color: var(--text-soft); font-size: 0.72rem; }
+    .sv-pct { font-variant-numeric: tabular-nums; font-weight: 600; }
+    .sv-pass .sv-pct { color: #4ade80; }
+    .sv-fail .sv-pct { color: #fbbf24; }
+    .sv-none .sv-pct { color: var(--text-soft); font-weight: 500; }
+    .sv-added { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.05em;
+                color: #4ade80; border: 1px solid rgba(74,222,128,0.4); border-radius: 999px; padding: 0.05rem 0.4rem; }
     .fs-act { max-height: 40vh; overflow-y: auto; display: flex; flex-direction: column; gap: 0.2rem; }
     .fs-arow {
       display: grid; grid-template-columns: 4.5rem minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, 1.2fr) 2.5rem;
@@ -836,37 +848,15 @@
     const hasAgent = (kind) => !!_kindAgent[kind];
     const _loc = { map: null, marker: null, thenInstall: false, node: null, nodeId: null, createKind: null, pinPlaced: false };
 
-    // RFS zone list (grouped by Area Command) for the location picker dropdown.
-    let _zoneGroups = null;
-    async function loadZones() {
-      if (_zoneGroups) return _zoneGroups;
-      try {
-        const jwt = await getToken();
-        const res = await fetch(`${API_BASE_URL}/api/feeder/zones`, {
-          headers: jwt ? { 'Authorization': 'Bearer ' + jwt } : {},
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        const groups = Array.isArray(data.groups) ? data.groups : [];
-        // Only CACHE a non-empty list so a transient failure retries on the next
-        // open instead of sticking the picker with an empty dropdown.
-        if (groups.length) _zoneGroups = groups;
-        return groups;
-      } catch (e) { return []; }
-    }
-    function _zoneOptionsHtml(selected) {
-      let out = `<option value="" ${selected ? '' : 'selected'} disabled>Select your region…</option>`;
-      for (const g of (_zoneGroups || [])) {
-        out += `<optgroup label="${escapeHtml(g.areaCommand)}">`;
-        for (const z of (g.zones || [])) {
-          out += `<option value="${escapeHtml(z.name)}" ${z.name === selected ? 'selected' : ''}>${escapeHtml(z.name)}</option>`;
-        }
-        out += `</optgroup>`;
-      }
-      return out;
+    // One line describing a node's coarse area: suburb, council area and state
+    // as the owner set them, or the legacy RFS zone for a radio node saved
+    // before the location model changed.
+    function _areaLabel(node) {
+      const parts = [node.suburb, node.lga, node.state].filter(Boolean);
+      return parts.length ? parts.join(' · ') : (node.zone || '');
     }
 
-    // Australian states for PAGER node location (radio nodes use the RFS zone).
+    // Australian states for radio + pager node location.
     const AU_STATES = ['NSW', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'NT', 'ACT'];
     function _stateOptionsHtml(selected) {
       return `<option value="" ${selected ? '' : 'selected'} disabled>Select your state…</option>`
@@ -1120,10 +1110,12 @@
       const located = typeof node.lat === 'number' && typeof node.lon === 'number';
       const statusText = updating ? 'Updating…' : (online ? 'Online' : 'Offline');
       const statusCls = updating ? 'st-upd' : (online ? 'st-on' : 'st-off');
-      // Pager nodes locate by State + LGA; radio nodes by RFS zone. ADS-B nodes
-      // have no coarse area at all — the exact pin IS the location — so showing
-      // "no region set" would flag a field this kind does not have.
-      const areaLabel = isPager ? [node.state, node.lga].filter(Boolean).join(' · ') : node.zone;
+      // Radio and pager nodes both locate by State + LGA (+ optional suburb).
+      // RFS zone is retired, so a node saved before the change still shows its
+      // stored zone until someone re-saves it. ADS-B nodes have no coarse area
+      // at all — the exact pin IS the location — so showing "no region set"
+      // would flag a field this kind does not have.
+      const areaLabel = _areaLabel(node);
       const regionItem = isAdsb
         ? ''
         : areaLabel
@@ -1216,7 +1208,7 @@
         : '';
       // Always "Location" for adsb — it has no region, only the pin, and the
       // old "Set region" label promised a field the kind does not have.
-      const areaLabel = isPager ? [node.state, node.lga].filter(Boolean).join(' · ') : node.zone;
+      const areaLabel = _areaLabel(node);
       const locLabel = isAdsb ? 'Location' : (areaLabel ? 'Location' : 'Set region');
       const loc = `<button class="mini-btn" title="Set region / exact pin" onclick="openLocationPicker('${node.id}')"><i class="fas fa-location-dot"></i> ${locLabel}</button>`;
 
@@ -1245,7 +1237,8 @@
       } else {
         body = `
           <div class="fs-wins">${winBtns('stats', 'setStatsWindow')}</div>
-          <div id="stats-body"><div class="loading" style="padding:2rem;"><i class="fas fa-spinner"></i></div></div>`;
+          <div id="stats-body"><div class="loading" style="padding:2rem;"><i class="fas fa-spinner"></i></div></div>
+          <div id="survey-body"></div>`;
       }
 
       const overlay = document.createElement('div');
@@ -1304,6 +1297,9 @@
         _statsWindow = '24h';
         loadNodeStats();
         _statsPoll = setInterval(loadNodeStats, 15000);
+        // Site surveys change only when staff run one, so this is fetched once
+        // on open rather than polled.
+        loadNodeSurveys(nodeId);
       }
     }
     window.openNodeModal = openNodeModal;
@@ -1397,6 +1393,59 @@
         if (body) body.innerHTML = `<div class="msg-empty">Couldn't load activity — try again shortly.</div>`;
       }
     }
+    // The node's RF site survey history: which radio sites it was asked to
+    // listen for, how well it heard each one, and which ones were added to its
+    // channel list. Read-only here — surveys are run by staff.
+    async function loadNodeSurveys(nodeId) {
+      const body = document.getElementById('survey-body');
+      if (!body) return;
+      try {
+        const jwt = await getToken();
+        const res = await fetch(`${API_BASE_URL}/api/feeder/nodes/${nodeId}/site-surveys`, {
+          headers: { 'Authorization': 'Bearer ' + jwt },
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        _renderNodeSurveys(data.surveys || []);
+      } catch (e) {
+        // A node that has never been surveyed is the normal case, and so is an
+        // older backend that has no such endpoint: say nothing rather than
+        // showing the owner an error for a section they did not ask for.
+        body.innerHTML = '';
+      }
+    }
+
+    function _renderNodeSurveys(surveys) {
+      const body = document.getElementById('survey-body');
+      if (!body) return;
+      const latest = surveys[0];
+      if (!latest) { body.innerHTML = ''; return; }
+      const statusText = {
+        running: 'The test is running now.', done: 'The test finished.',
+        failed: 'The test did not finish.', timeout: 'The test timed out.',
+      }[latest.status] || '';
+      const rows = (latest.results || []).map(r => {
+        const cls = r.verdict === 'pass' ? 'sv-pass' : r.verdict === 'fail' ? 'sv-fail' : 'sv-none';
+        const pct = r.medianPct != null
+          ? `${Math.round(r.medianPct)}%`
+          : r.verdict === 'skipped' ? 'not listed'
+          : r.verdict === 'noLock' ? 'not heard'
+          : 'no reading';
+        const freq = r.freqHz ? `<span class="sv-freq">${(r.freqHz / 1e6).toFixed(4)} MHz</span>` : '';
+        return `<div class="sv-row ${cls}">
+          <span class="sv-site">${escapeHtml(r.siteName || '—')} ${freq}</span>
+          <span class="sv-pct">${pct}</span>
+          <span>${r.added ? '<span class="sv-added">added</span>' : ''}</span>
+        </div>`;
+      }).join('');
+      body.innerHTML = `
+        <div class="fs-act-h">Site survey</div>
+        <div class="sv-meta">We checked how well your node hears ${latest.candidates || 0} nearby radio site(s).
+          ${statusText}${latest.added ? ` ${latest.added} site(s) were added to its channel list.` : ''}
+          ${_statsTimeAgo(latest.startedAt) ? `Last run ${escapeHtml(_statsTimeAgo(latest.startedAt))}.` : ''}</div>
+        ${rows || '<div class="msg-empty">No sites were tested.</div>'}`;
+    }
+
     function _statsTimeAgo(iso) {
       if (!iso) return '';
       const d = new Date(iso);
@@ -2007,8 +2056,8 @@
       return `<div class="ab-polar-wrap">${svg}<div class="ab-polar-legend">${legend}</div></div>`;
     }
 
-    // Create a node. A coarse area is REQUIRED (radio: RFS zone; pager: State +
-    // LGA), so we collect it (plus an optional exact pin) in the picker FIRST —
+    // Create a node. A coarse area is REQUIRED (radio + pager: State + LGA),
+    // so we collect it (plus an optional exact pin) in the picker FIRST —
     // the node is created on Save (see saveLocation), not before, so cancelling
     // creates nothing. Then continue to the installer.
     async function addNode(btn) {
@@ -2140,7 +2189,9 @@
     }
 
     // Location picker. What is required differs by kind:
-    //   radio — NSW RFS zone, exact pin optional
+    //   radio — State + LGA (+ optional suburb). The LGA is what the RF site
+    //           survey searches from: it decides which GRN sites this node is
+    //           asked to listen for. Exact pin optional.
     //   pager — State + LGA (the state routes its Pagermon feed AND selects
     //           its frequency plan), exact pin optional
     //   adsb  — the exact pin IS the location, and is REQUIRED. Not a
@@ -2160,18 +2211,11 @@
       const node = _loc.node || {};
       const createMode = !!_loc.createKind;
       const hasPin = typeof node.lat === 'number' && typeof node.lon === 'number';
-      const curZone = node.zone || '';
       const kind = _loc.createKind || node.kind;
       const isPager = kind === 'pager';
       const isAdsb = kind === 'adsb';
-      if (!isPager && !isAdsb) {
-        const zones = await loadZones();
-        if (!zones.length) {
-          // No zones = can't pick one = can't create/save. Don't open a dead modal.
-          showToast('Could not load the region list. Check your connection and try again.', 'error');
-          return;
-        }
-      }
+      // Radio and pager share one area form now; only ADS-B is pin-only.
+      const usesArea = !isAdsb;
       const overlay = document.createElement('div');
       overlay.id = 'loc-modal';
       overlay.className = 'modal-overlay overlay-top';
@@ -2182,8 +2226,8 @@
             ? `Drop a pin on your <b>exact antenna position</b> — this one is required. Your receiver uses it to work out how far away each aircraft is, so its range and coverage figures are only as accurate as this pin. Street-level is what you want. The position is staff/owner only, never public.`
             : isPager
             ? `Every pager node needs its <b>state</b> and <b>council area (LGA)</b> — the state decides which Pagermon network it feeds and what frequencies it scans. Optionally drop an <b>exact antenna pin</b> for <b>coverage</b> estimates. The location is staff/owner only, never public.`
-            : `Every node needs a <b>region</b> (its NSW RFS area). Optionally drop an <b>exact antenna pin</b> — it improves <b>coverage</b> estimates and <b>channel tuning</b>. The pin and region are staff/owner only, never public.`}</p>
-          ${isAdsb ? `` : isPager ? `
+            : `Every radio node needs its <b>state</b> and <b>council area (LGA)</b> — that is where we look for the radio sites your node should listen to. Optionally drop an <b>exact antenna pin</b> — it improves <b>coverage</b> estimates. The location is staff/owner only, never public.`}</p>
+          ${!usesArea ? `` : `
           <label class="loc-field">
             <span>State <span style="color:#f87171">*</span></span>
             <select id="loc-state" onchange="_locOnStateChange()">${_stateOptionsHtml(node.state || '')}</select>
@@ -2195,10 +2239,10 @@
                 oninput="_lgaShow()" onfocus="_lgaShow()" onblur="_lgaHide()">
               <div id="loc-lga-dd" class="lga-dd"></div>
             </span>
-          </label>` : `
+          </label>
           <label class="loc-field">
-            <span>Region <span style="color:#f87171">*</span></span>
-            <select id="loc-zone">${_zoneOptionsHtml(curZone)}</select>
+            <span>Suburb <span style="opacity:0.6">(optional)</span></span>
+            <input id="loc-suburb" value="${escapeHtml(node.suburb || '')}" maxlength="120" autocomplete="off" placeholder="e.g. Katoomba">
           </label>`}
           ${isAdsb ? `
           <div class="loc-pin-required">
@@ -2224,7 +2268,7 @@
       else if (isAdsb) _locInitMap([-33.8688, 151.2093], false);
       // Pre-fill the LGA suggestions for the stored state (edit mode) and wire
       // the dropdown: pick on mousedown, which fires BEFORE the input's blur.
-      if (isPager) {
+      if (usesArea) {
         _locOnStateChange(true);
         const dd = document.getElementById('loc-lga-dd');
         if (dd) dd.addEventListener('mousedown', (e) => {
@@ -2293,26 +2337,21 @@
     }
 
     async function saveLocation(btn) {
-      // Per-kind area fields: pager = state + lga, radio = RFS zone, adsb = the
-      // exact pin and nothing else. `area` is spread into both the create body
-      // and putLocation.
+      // Per-kind area fields: radio + pager = state + lga (+ optional suburb),
+      // adsb = the exact pin and nothing else. `area` is spread into both the
+      // create body and putLocation.
       const kind = _loc.createKind || (_loc.node && _loc.node.kind);
-      const isPager = kind === 'pager';
       const isAdsb = kind === 'adsb';
       let area;
       if (isAdsb) {
         area = {};
-      } else if (isPager) {
+      } else {
         const state = document.getElementById('loc-state')?.value || '';
         const lga = (document.getElementById('loc-lga')?.value || '').trim();
+        const suburb = (document.getElementById('loc-suburb')?.value || '').trim();
         if (!state) { showToast('Please select your state.', 'error'); return; }
         if (!lga) { showToast('Please enter your council area (LGA).', 'error'); return; }
-        area = { state, lga };
-      } else {
-        const zoneSel = document.getElementById('loc-zone');
-        const zone = zoneSel ? zoneSel.value : '';
-        if (!zone) { showToast('Please select your region.', 'error'); return; }
-        area = { zone };
+        area = { state, lga, ...(suburb ? { suburb } : {}) };
       }
       const pinOn = document.getElementById('loc-pin-on');
       let lat = null, lon = null;
@@ -2378,18 +2417,11 @@
     // Remove just the exact pin, keeping the (required) coarse area.
     async function clearLocation(btn) {
       const n = _loc.node || {};
-      let area;
-      if (n.kind === 'pager') {
-        const state = document.getElementById('loc-state')?.value || n.state || '';
-        const lga = (document.getElementById('loc-lga')?.value || n.lga || '').trim();
-        if (!state || !lga) { showToast('Select your state and council area first.', 'error'); return; }
-        area = { state, lga };
-      } else {
-        const zoneSel = document.getElementById('loc-zone');
-        const zone = zoneSel ? zoneSel.value : (n.zone || '');
-        if (!zone) { showToast('Select a region first.', 'error'); return; }
-        area = { zone };
-      }
+      const state = document.getElementById('loc-state')?.value || n.state || '';
+      const lga = (document.getElementById('loc-lga')?.value || n.lga || '').trim();
+      const suburb = (document.getElementById('loc-suburb')?.value || n.suburb || '').trim();
+      if (!state || !lga) { showToast('Select your state and council area first.', 'error'); return; }
+      const area = { state, lga, ...(suburb ? { suburb } : {}) };
       btn.disabled = true;
       try {
         await putLocation(_loc.nodeId, { ...area, lat: null, lon: null });

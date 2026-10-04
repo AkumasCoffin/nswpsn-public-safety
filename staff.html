@@ -870,6 +870,17 @@
     .nd-state.probing{ background: rgba(192, 132, 252, 0.16); color: #c084fc; border: 1px solid rgba(192, 132, 252, 0.3); }
     .nd-state.probing::before { animation: nd-pulse 1.1s ease-in-out infinite; }
     .nd-am-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-soft); cursor: pointer; user-select: none; }
+    .nd-survey-rings {
+      background: rgba(0,0,0,0.25); border: 1px solid var(--border-subtle); border-radius: 6px;
+      color: var(--text-primary); font: inherit; font-size: 12px; padding: 4px 6px;
+    }
+    .nd-survey-rings option { background: #0f172a; color: #e2e8f0; }
+    .nd-sv-row { display: grid; grid-template-columns: 1fr auto auto auto; gap: 8px; align-items: center; }
+    .nd-sv-freq { color: var(--text-soft); font-size: 11px; }
+    .nd-sv-pct { font-variant-numeric: tabular-nums; font-weight: 600; min-width: 42px; text-align: right; }
+    .nd-sv-samples { color: var(--text-soft); font-size: 11px; min-width: 56px; text-align: right; }
+    .nd-sv-run { padding: 6px 2px; font-size: 12px; color: var(--text-soft); border-bottom: 1px solid var(--border-subtle); }
+    .nd-sv-run strong { color: var(--text-primary); }
     .nd-mgr-badge { display: inline-block; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; border: 1px solid; border-radius: 4px; padding: 0 5px; opacity: 0.9; }
     /* Tickets tab */
     .tk-pill.active { background: rgba(249,115,22,0.18); border-color: rgba(249,115,22,0.5); color: #fdba74; }
@@ -4227,6 +4238,17 @@
                 <input type="checkbox" id="nd-cfg-automanage" checked> Auto channel management
               </label>
               <button class="btn btn-secondary btn-sm" onclick="_ndCfgAddChannel()"><i class="fas fa-plus"></i> Add channel</button>
+              <button class="btn btn-secondary btn-sm nd-write" id="nd-survey-btn" onclick="_ndRunSurvey(this)"
+                title="Measure how well this node hears every GRN site in its council area (and neighbouring ones), then add the sites it hears well to its channel list. The node stops feeding while it tests.">
+                <i class="fas fa-magnifying-glass-location"></i> Run site survey
+              </button>
+              <select id="nd-survey-rings" class="nd-survey-rings nd-write"
+                title="How far out to look: just this node's council area, or that plus one, two or three rings of neighbouring areas.">
+                <option value="1" selected>This LGA + neighbours</option>
+                <option value="2">+ 2 rings</option>
+                <option value="3">+ 3 rings</option>
+                <option value="4">+ 4 rings</option>
+              </select>
               <button class="btn btn-secondary btn-sm" onclick="_ndCfgReload()" title="Discard unsaved edits and reload the saved config"><i class="fas fa-rotate"></i> Revert</button>
               <span class="nd-spacer"></span>
               <button class="btn btn-primary btn-sm" onclick="_ndCfgSave()" title="Save the config and sync it to the node — the agent re-renders the playlist, reloads it, and restarts channels so the change goes live"><i class="fas fa-floppy-disk"></i> Save &amp; sync</button>
@@ -4267,6 +4289,17 @@
               <span class="nd-sub" style="text-transform:none; letter-spacing:0; font-weight:400;">newest first · last 50</span>
             </div>
             <div class="nd-panel-b"><div class="nd-events" id="nd-mgr-log"></div></div>
+          </div>
+
+          <!-- RF site survey (radio only): what the node could actually hear,
+               site by site, including the ones it heard badly. -->
+          <div class="nd-panel nd-radio-only">
+            <div class="nd-panel-h">
+              <i class="fas fa-magnifying-glass-location"></i> Site survey
+              <span class="nd-h-spacer"></span>
+              <span class="nd-sub" id="nd-survey-sub" style="text-transform:none; letter-spacing:0; font-weight:400;"></span>
+            </div>
+            <div class="nd-panel-b"><div class="nd-events" id="nd-survey-log"></div></div>
           </div>
         </div>
       </div>
@@ -10480,23 +10513,30 @@
       if (!node) return;
       const hasPin = typeof node.lat === 'number' && typeof node.lon === 'number';
       const isPagerNode = node.kind === 'pager';
-      const areaLabel = isPagerNode ? [node.state, node.lga].filter(Boolean).join(' · ') : node.zone;
-      // Pager nodes: the area is editable right HERE — the one location surface.
-      // The state routes the node's Pagermon feed AND selects its frequency
-      // plan (re-pushed live on save). Radio stays read-only (owner-set zone).
+      const isAdsbNode = node.kind === 'adsb';
+      // Radio and pager nodes locate by state + council area (+ optional
+      // suburb); a radio node saved before that change still shows its old RFS
+      // zone until someone re-saves it.
+      const areaLabel = [node.suburb, node.lga, node.state].filter(Boolean).join(' · ') || node.zone;
+      // Editable right HERE — the one location surface staff need. For a pager
+      // the state routes its Pagermon feed and selects its frequency plan
+      // (re-pushed live on save); for a radio the council area is what the RF
+      // site survey searches from, so staff can fix it without waiting on the
+      // owner. ADS-B has no area at all, only the pin.
       const editStyle = 'background:rgba(255,255,255,0.05); color:var(--text-primary,#e2e8f0); border:1px solid var(--border-subtle,#334155); border-radius:6px; padding:0.25rem 0.4rem; font-size:0.8rem;';
-      const zoneLine = isPagerNode
+      const zoneLine = !isAdsbNode
         ? `<div class="loc-view-note" style="display:flex; gap:0.4rem; align-items:center; flex-wrap:wrap;">
             <i class="fas fa-map"></i> State / LGA:
             <select id="loc-edit-state" class="nd-write-input" onchange="_locEditStateChanged()" style="${editStyle}">
               ${['NSW','VIC','QLD','SA','WA','TAS','NT','ACT'].map(s => `<option value="${s}" ${s === (node.state || 'NSW') ? 'selected' : ''}>${s}</option>`).join('')}
             </select>
-            <span class="lga-combo" style="flex:1; min-width:15rem;">
+            <span class="lga-combo" style="flex:1; min-width:13rem;">
               <input id="loc-edit-lga" class="nd-write-input" value="${escapeHtml(node.lga || '')}" placeholder="Start typing the council area…" maxlength="120" autocomplete="off" style="${editStyle} width:100%; box-sizing:border-box;"
                 oninput="_staffLgaShow()" onfocus="_staffLgaShow()" onblur="_staffLgaHide()">
               <div id="loc-edit-lga-dd" class="lga-dd"></div>
             </span>
-            <button class="btn btn-secondary btn-sm nd-write" onclick="_savePagerNodeState('${jsArg(node.id)}', this)" title="Save state + LGA — re-pushes the node's frequency plan">Save</button>
+            <input id="loc-edit-suburb" class="nd-write-input" value="${escapeHtml(node.suburb || '')}" placeholder="Suburb (optional)" maxlength="120" autocomplete="off" style="${editStyle} width:11rem;">
+            <button class="btn btn-secondary btn-sm nd-write" onclick="_saveNodeArea('${jsArg(node.id)}', this)" title="${isPagerNode ? "Save the area — re-pushes the node's frequency plan" : 'Save the area — the site survey searches from the council area'}">Save</button>
           </div>`
         : (areaLabel
           ? `<div class="loc-view-note"><i class="fas fa-map"></i> Region: <b>${escapeHtml(areaLabel)}</b></div>`
@@ -10517,7 +10557,7 @@
           </div>`;
         overlay.addEventListener('click', (e) => { if (e.target === overlay) closeNodeLocation(); });
         document.body.appendChild(overlay);
-        if (isPagerNode) { _locEditLoadLgas(node.state || 'NSW'); _locEditWireDd(); }
+        if (!isAdsbNode) { _locEditLoadLgas(node.state || 'NSW'); _locEditWireDd(); }
         return;
       }
       const overlay = document.createElement('div');
@@ -10535,7 +10575,7 @@
         </div>`;
       overlay.addEventListener('click', (e) => { if (e.target === overlay) closeNodeLocation(); });
       document.body.appendChild(overlay);
-      if (isPagerNode) { _locEditLoadLgas(node.state || 'NSW'); _locEditWireDd(); }
+      if (!isAdsbNode) { _locEditLoadLgas(node.state || 'NSW'); _locEditWireDd(); }
       const c = [node.lat, node.lon];
       const dark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?key=cb1_29rl_1_764d57ded0436220d836abc9', { subdomains: 'abcd', maxZoom: 19, attribution: '© CartoDB' });
       const sat = L.tileLayer('https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', { subdomains: ['mt0', 'mt1', 'mt2', 'mt3'], maxZoom: 21, maxNativeZoom: 19, attribution: '© Google' });
@@ -10680,6 +10720,7 @@
       _ndAuthed = false;
       _ndStatus = null;
       _ndChanMgr = null; _ndMgrLog = [];
+      _ndSurveys = []; _ndSurveyLive = null;
       _ndTuners = []; _ndChannels = []; _ndCalls = []; _ndEvents = []; _ndPagerMsgs = [];
       _ndTunersSig = null;
       _ndReadersSig = null;
@@ -10714,6 +10755,7 @@
       _ndRenderAll();
       _ndCfgFetch(); // pull current config_override for the tuner-persist + channel editor
       _ndMgrLogFetch(); // auto-management audit log (radio only)
+      _ndSurveyFetch(); // RF site survey history (radio only)
 
       // Supabase access token — same source as authHeader().
       let token = null;
@@ -10814,6 +10856,18 @@
         st.events.forEach(_ndIngestEvent);
       }
       _ndChanMgr = st.channelManager || null;
+      // A running survey means this node is off the air on purpose. Show that
+      // the moment it starts rather than leaving staff to wonder why every
+      // channel went quiet.
+      const svWas = !!(_ndSurveyLive && _ndSurveyLive.running);
+      _ndSurveyLive = st.siteSurvey || null;
+      const svNow = !!(_ndSurveyLive && _ndSurveyLive.running);
+      if (svWas !== svNow) {
+        _ndRenderSurveyBtn();
+        // The run just ended: its results are on the backend now.
+        if (!svNow) setTimeout(_ndSurveyFetch, 1500);
+      }
+      if (svNow) _ndRenderSurveys();
       // Auto-management decisions render ONLY in their own panel (fed by the
       // agent's ring + the persisted backend log) — not mirrored into the
       // live event log, which is for radio activity.
@@ -11321,7 +11375,7 @@
       const feedEnabled = n.feedEnabled === true;
       const isPager = (n.kind || 'radio') === 'pager';
       const located = typeof n.lat === 'number';
-      const areaLabel = isPager ? [n.state, n.lga].filter(Boolean).join(' · ') : n.zone;
+      const areaLabel = [n.suburb, n.lga, n.state].filter(Boolean).join(' · ') || n.zone;
       const hasLoc = located || !!areaLabel;
       const locTitle = areaLabel
         ? `Region: ${escapeHtml(areaLabel)}${located ? ' · exact pin set' : ' · no exact pin'}`
@@ -11680,26 +11734,40 @@
     // Staff: move a pager node to another state (+ its LGA tag), from the
     // location modal. The state routes which Pagermon the node's pages feed
     // into AND selects its frequency plan, which is re-pushed live.
-    async function _savePagerNodeState(id, el) {
+    // Save a node's coarse area (radio + pager). The antenna pin is left
+    // alone — it belongs to whoever stood at the antenna, and this form never
+    // sends it, so a staff correction to the council area cannot wipe it.
+    async function _saveNodeArea(id, el) {
       const state = document.getElementById('loc-edit-state')?.value || '';
       const lga = (document.getElementById('loc-edit-lga')?.value || '').trim();
-      if (!state || !lga) { showToast('Both state and LGA are required.', 'error'); return; }
-      // The frequency plan (and so the reader labels) can change — stop any
-      // running audio monitor so it doesn't get stranded on a dead label.
-      if (_ndAudioLabel != null) _ndAudioStop();
+      const suburb = (document.getElementById('loc-edit-suburb')?.value || '').trim();
+      if (!state || !lga) { showToast('Both state and council area are required.', 'error'); return; }
+      const node = (allNodes || []).find(n => String(n.id) === String(id)) || {};
+      const isPagerNode = node.kind === 'pager';
+      // A pager's frequency plan (and so its reader labels) can change with the
+      // state — stop any running audio monitor so it isn't stranded on a dead
+      // label.
+      if (isPagerNode && _ndAudioLabel != null) _ndAudioStop();
       if (el) el.disabled = true;
       try {
-        const res = await fetch(`${API_BASE_URL}/api/nodes/${id}/state`, {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/${id}/location`, {
           method: 'PUT',
           headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json' },
-          body: JSON.stringify({ state, lga }),
+          body: JSON.stringify({ state, lga, suburb }),
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        showToast(`Node moved to ${state} — frequency plan re-pushed.`, 'success');
+        showToast(isPagerNode
+          ? `Node moved to ${state} — frequency plan re-pushed.`
+          : `Location saved — ${lga}, ${state}.`, 'success');
         closeNodeLocation();
         await loadNodes();
+        // The drawer's own copy drives the survey button's "has an LGA" check.
+        if (String(_ndNodeId) === String(id)) {
+          _ndNode = (allNodes || []).find(n => String(n.id) === String(id)) || _ndNode;
+          _ndRenderNodeControls();
+        }
       } catch (e) {
-        showToast(`Could not set state: ${e.message}`, 'error');
+        showToast(`Could not save the location: ${e.message}`, 'error');
       } finally {
         if (el) el.disabled = false;
       }
@@ -12728,6 +12796,130 @@
           <span class="nd-ev-type"><span class="nd-mgr-badge" style="color:${k.color}; border-color:${k.color};">${escapeHtml(k.label)}</span> <strong>${escapeHtml(e.channel || '')}</strong> · ${escapeHtml(e.text || '')}</span>
         </div>`;
       }).join('');
+    }
+
+    // ---- RF site survey (radio) ----
+    // Staff trigger it; the node measures every candidate GRN control channel
+    // and the backend records all of them — the sites it heard badly are as
+    // much the point as the ones it heard well.
+    let _ndSurveys = [];
+    let _ndSurveyLive = null;
+
+    async function _ndSurveyFetch() {
+      if (((_ndNode && _ndNode.kind) || 'radio') !== 'radio') return;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/${_ndNodeId}/site-surveys`, {
+          headers: { 'Authorization': await authHeader() }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          _ndSurveys = Array.isArray(data.surveys) ? data.surveys : [];
+        }
+      } catch (e) { /* panel shows whatever it already had */ }
+      _ndRenderSurveys();
+      _ndRenderSurveyBtn();
+    }
+
+    function _ndRunSurvey(btn) {
+      const node = _ndNode || {};
+      if (!node.lga) {
+        showToast('Set this node\'s council area first — the survey searches from it.', 'error');
+        return;
+      }
+      const rings = Number(document.getElementById('nd-survey-rings')?.value || 1);
+      const reach = rings === 1 ? 'its council area and the ones next to it' : `its council area and ${rings} rings of neighbours`;
+      uiConfirm(
+        `Test every GRN site in ${reach}, a few at a time?
+
+`
+        + `The node stops feeding while it runs — expect several minutes — and every site it hears above 65% is added to its channel list.`,
+        { title: 'Run a site survey?', okText: 'Run survey' },
+      ).then(ok => {
+        if (!ok) return;
+        _ndCmd('surveySites', { rings }, 'Site survey');
+        // The agent acks instantly and works in the background; the status
+        // frame carries the progress from here.
+        setTimeout(_ndSurveyFetch, 2000);
+      });
+    }
+
+    function _ndCancelSurvey() {
+      const id = _ndSurveyLive && _ndSurveyLive.surveyId;
+      _ndCmd('surveyCancel', { surveyId: id || 0 }, 'Cancel survey');
+      setTimeout(_ndSurveyFetch, 2000);
+    }
+
+    function _ndRenderSurveyBtn() {
+      const btn = document.getElementById('nd-survey-btn');
+      if (!btn) return;
+      const running = !!(_ndSurveyLive && _ndSurveyLive.running);
+      btn.disabled = running;
+      btn.innerHTML = running
+        ? '<i class="fas fa-spinner fa-spin"></i> Surveying…'
+        : '<i class="fas fa-magnifying-glass-location"></i> Run site survey';
+    }
+
+    const _ND_SV_VERDICTS = {
+      pass:       { label: 'Heard',      color: '#4ade80' },
+      fail:       { label: 'Too weak',   color: '#fb923c' },
+      noLock:     { label: 'Not heard',  color: '#f87171' },
+      unmeasured: { label: 'No reading', color: '#94a3b8' },
+      skipped:    { label: 'Skipped',    color: '#94a3b8' },
+    };
+
+    function _ndRenderSurveys() {
+      const el = document.getElementById('nd-survey-log');
+      const sub = document.getElementById('nd-survey-sub');
+      if (!el) return;
+
+      const live = _ndSurveyLive && _ndSurveyLive.running ? _ndSurveyLive : null;
+      if (sub) {
+        sub.innerHTML = live
+          ? `<span style="color:#fbbf24;">${escapeHtml(live.phase || 'testing')} ${live.total ? `· ${live.done || 0}/${live.total}` : ''}</span>
+             <button class="btn btn-secondary btn-sm nd-write" style="margin-left:8px;" onclick="_ndCancelSurvey()">Cancel</button>`
+          : (_ndSurveys.length ? 'newest first · last 10 runs' : '');
+      }
+
+      let html = '';
+      if (live) {
+        html += `<div class="nd-sv-run"><strong>Running now</strong> — ${escapeHtml(live.phase || 'testing')}`
+              + (live.total ? ` ${live.done || 0}/${live.total}` : '')
+              + (live.current ? ` · ${escapeHtml(live.current)}` : '')
+              + ` · the node is not feeding while this runs</div>`;
+      }
+      if (!_ndSurveys.length && !live) {
+        el.innerHTML = `<div class="nd-empty" style="border:none;background:none;">No survey has been run on this node yet.</div>`;
+        return;
+      }
+
+      html += _ndSurveys.map(sv => {
+        const when = sv.startedAt ? new Date(sv.startedAt) : null;
+        const whenTxt = when && !Number.isNaN(when.getTime())
+          ? when.toLocaleDateString([], { day: 'numeric', month: 'short' }) + ' ' + when.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : '—';
+        const head = `<div class="nd-sv-run"><strong>${escapeHtml(whenTxt)}</strong> · `
+          + `${sv.trigger === 'install' ? 'first install' : 'manual'} · ${sv.rings || 1} ring(s) · `
+          + `${sv.candidates || 0} tested · ${sv.added != null ? sv.added : 0} added`
+          + (sv.status !== 'done' ? ` · <span style="color:#fb923c;">${escapeHtml(sv.status)}</span>` : '')
+          + (sv.note ? ` · ${escapeHtml(sv.note)}` : '')
+          + `</div>`;
+        const rows = (sv.results || []).map(r => {
+          const v = _ND_SV_VERDICTS[r.verdict] || { label: r.verdict, color: 'var(--text-soft)' };
+          const pct = r.medianPct != null ? `${Math.round(r.medianPct)}%` : '—';
+          const freq = r.freqHz ? `<span class="nd-sv-freq">${(r.freqHz / 1e6).toFixed(4)} MHz</span>` : '';
+          const samples = r.samples ? `${r.samples} samples` : (r.note ? escapeHtml(r.note) : '');
+          return `<div class="nd-event-row nd-log-row nd-sv-row">
+            <span class="nd-ev-type"><span class="nd-mgr-badge" style="color:${v.color}; border-color:${v.color};">${escapeHtml(v.label)}</span>
+              <strong>${escapeHtml(r.siteName || '')}</strong> ${freq}</span>
+            <span class="nd-sv-pct" style="color:${v.color};">${pct}</span>
+            <span class="nd-sv-samples">${samples}</span>
+            <span>${r.added ? '<span class="nd-mgr-badge" style="color:#4ade80;border-color:#4ade80;">added</span>' : ''}</span>
+          </div>`;
+        }).join('');
+        return head + (rows || `<div class="nd-sv-run" style="color:var(--text-soft);">No results recorded.</div>`);
+      }).join('');
+
+      el.innerHTML = html;
     }
 
     function _ndRenderEvents() {
@@ -15152,6 +15344,7 @@
       ['new_user', 'New accounts', 'Someone creates an account. No name is sent \u2014 just the signal.'],
       ['new_node', 'New feeder nodes', 'A contributor creates a radio or pager node.'],
       ['ticket', 'Contact tickets', 'New tickets and user replies; closing a ticket edits the message in place.'],
+      ['siteSurvey', 'Site surveys', 'A radio node finishes measuring the sites around it — how well it heard each one, and which were added.'],
     ];
     let _dnState = { guild_id: null, channels: {}, guilds: [], channelList: [], delivery: {} };
 

@@ -165,6 +165,7 @@ function feederNodeView(n: NodeRow) {
     zone: n.zone,
     state: n.state,
     lga: n.lga,
+    suburb: n.suburb,
     online,
     lastSeenAt: n.last_seen_at,
     /** Filled in by the routes that read it; a view built from a row alone

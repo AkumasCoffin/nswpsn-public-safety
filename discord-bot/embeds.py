@@ -24,6 +24,7 @@ STAFF_NOTIFY_KINDS = {
     'new_user': ('New account', '\U0001F464', 0xA855F7),
     'new_node': ('New node', '\U0001F4E1', 0x22C55E),
     'ticket': ('Contact ticket', '\U0001F3AB', 0xEAB308),
+    'siteSurvey': ('Site survey', '\U0001F4E1', 0x7DD3FC),
 }
 _STAFF_STATUS_COLOR = {
     'approved': 0x22C55E,

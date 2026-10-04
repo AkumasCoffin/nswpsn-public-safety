@@ -154,11 +154,17 @@ describe('POST /api/nodes (per-kind location rule)', () => {
     const ok = await post('/api/nodes', { userId: 'u1', kind: 'pager', state: 'QLD', lga: 'Cairns' });
     expect(ok.status).toBe(200);
     const loc = vi.mocked(registry.createNode).mock.calls[0]?.[5];
-    expect(loc).toEqual({ zone: null, state: 'QLD', lga: 'Cairns' });
+    expect(loc).toEqual({ zone: null, state: 'QLD', lga: 'Cairns', suburb: null });
   });
 
-  it('radio create still requires the RFS zone and stays NSW', async () => {
-    const missing = await post('/api/nodes', { userId: 'u1', kind: 'radio' });
-    expect(missing.status).toBe(400);
+  it('radio create requires state + lga too — the survey searches from the LGA', async () => {
+    expect((await post('/api/nodes', { userId: 'u1', kind: 'radio' })).status).toBe(400);
+    expect((await post('/api/nodes', { userId: 'u1', kind: 'radio', state: 'NSW' })).status).toBe(400);
+    const ok = await post('/api/nodes', {
+      userId: 'u1', kind: 'radio', state: 'NSW', lga: 'Blue Mountains', suburb: 'Katoomba',
+    });
+    expect(ok.status).toBe(200);
+    const loc = vi.mocked(registry.createNode).mock.calls[0]?.[5];
+    expect(loc).toEqual({ zone: null, state: 'NSW', lga: 'Blue Mountains', suburb: 'Katoomba' });
   });
 });
