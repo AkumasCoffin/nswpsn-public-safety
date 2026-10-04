@@ -78,7 +78,7 @@ vi.mock('../../../src/services/grnCandidates.js', () => ({
   candidatesForNode: vi.fn(async () => fakeCandidates),
 }));
 
-const { startSurvey, maybeStartInstallSurvey, ingestSurveyResults, SURVEY_PASS_PCT } =
+const { startSurvey, maybeStartInstallSurvey, ingestSurveyResults, handleSurveyCommand, SURVEY_PASS_PCT } =
   await import('../../../src/services/siteSurvey.js');
 
 const NODE = 'node-1';
@@ -277,5 +277,48 @@ describe('maybeStartInstallSurvey — once-ever guards', () => {
     priorSurveyIds = [41];
     await maybeStartInstallSurvey(node());
     expect(sendCmd).not.toHaveBeenCalled();
+  });
+});
+
+describe('handleSurveyCommand — one path for both staff entry points', () => {
+  beforeEach(() => {
+    fakeCandidates = { candidates: [{ name: 'Good Hill', grnKey: null, mhz: 422.375, altMhz: null, lga: 'Alpha' }], skipped: [] };
+  });
+
+  it('ignores anything that is not a survey verb', async () => {
+    expect(await handleSurveyCommand(NODE, 'restartComponent', {}, 'staff-1')).toBeNull();
+  });
+
+  it('builds the candidate list server-side from the ring count', async () => {
+    const out = await handleSurveyCommand(NODE, 'surveySites', { rings: 3 }, 'staff-1');
+    expect(out).toMatchObject({ ok: true });
+    // The browser said how far to look; the sites came from the backend.
+    const ins = executed.find((e) => e.sql.includes('INSERT INTO node_site_surveys'));
+    expect(ins?.params[3]).toBe(3);
+    expect(sendCmd).toHaveBeenCalledWith(NODE, 'surveySites', {
+      surveyId: 77,
+      candidates: [{ name: 'Good Hill', grnKey: null, mhz: 422.375, altMhz: null }],
+    });
+  });
+
+  it('defaults to one ring when the caller sends junk', async () => {
+    await handleSurveyCommand(NODE, 'surveySites', { rings: 'lots' }, null);
+    const ins = executed.find((e) => e.sql.includes('INSERT INTO node_site_surveys'));
+    expect(ins?.params[3]).toBe(1);
+  });
+
+  it('cancelling leaves the survey running so the partial report can land', async () => {
+    const out = await handleSurveyCommand(NODE, 'surveyCancel', { surveyId: 77 }, 'staff-1');
+    expect(out).toMatchObject({ ok: true });
+    expect(sendCmd).toHaveBeenCalledWith(NODE, 'surveyCancel', { surveyId: 77 });
+    expect(executed.some((e) => e.sql.includes("SET status = 'failed'"))).toBe(false);
+  });
+
+  it('a cancel that cannot reach the node closes the survey itself', async () => {
+    sendCmd.mockResolvedValueOnce({ ok: false, message: 'node offline' } as never);
+    const out = await handleSurveyCommand(NODE, 'surveyCancel', { surveyId: 77 }, 'staff-1');
+    expect(out).toMatchObject({ ok: false });
+    const fail = executed.find((e) => e.sql.includes("SET status = 'failed'"));
+    expect(fail?.params).toEqual([77, NODE, 'cancel could not reach the node']);
   });
 });

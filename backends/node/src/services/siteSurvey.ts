@@ -219,6 +219,44 @@ export async function ingestSurveyResults(
   return { ok: true, added };
 }
 
+/**
+ * Handle a staff survey command from EITHER entry point — the REST
+ * /api/nodes/:id/cmd route or the staff WebSocket — and return the result to
+ * relay back, or null when the action is not a survey verb.
+ *
+ * It lives here rather than in a route because the candidate list is chosen
+ * SERVER-SIDE: the browser sends only how far to look, never which sites to
+ * tune. Both callers must behave identically, and the one that forwarded the
+ * browser's arguments straight to the agent sent it a survey with no
+ * candidates at all.
+ */
+export async function handleSurveyCommand(
+  nodeId: string,
+  action: string,
+  args: unknown,
+  requestedBy: string | null,
+): Promise<{ ok: boolean; message: string } | null> {
+  const a = (args ?? {}) as { rings?: unknown; surveyId?: unknown };
+  if (action === 'surveySites') {
+    const rings = Number(a.rings ?? 1);
+    const r = await startSurvey(nodeId, 'manual', requestedBy, Number.isFinite(rings) ? rings : 1);
+    return r.ok
+      ? { ok: true, message: `survey started (#${r.surveyId})` }
+      : { ok: false, message: r.error ?? 'could not start the survey' };
+  }
+  if (action === 'surveyCancel') {
+    const surveyId = Number(a.surveyId ?? 0);
+    const r = await hub.sendCmd(nodeId, action, args);
+    // Only close the survey here when the agent could NOT be told to stop.
+    // When it can, it restores the node and POSTs what it measured, and that
+    // report finishes the row — closing it now would make the ingest reject
+    // exactly the partial results staff cancelled in order to see.
+    if (!r.ok && surveyId > 0) await failSurvey(nodeId, surveyId, 'cancel could not reach the node');
+    return { ok: r.ok, message: r.message ?? (r.ok ? 'survey cancelling' : 'could not reach the node') };
+  }
+  return null;
+}
+
 /** Mark a running survey failed (agent refused/cancelled mid-flight). */
 export async function failSurvey(nodeId: string, surveyId: number, note: string): Promise<void> {
   const pool = await getPool();

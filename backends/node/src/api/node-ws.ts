@@ -39,7 +39,7 @@ import { buildConfigPayload } from '../services/nodes/configMerge.js';
 import { shapeNodeLive } from '../services/nodeLive.js';
 import { liveCallWindow } from '../services/nodeCallWindow.js';
 import { ingestChanMgrLog } from '../services/nodes/chanmgrLog.js';
-import { maybeStartInstallSurvey } from '../services/siteSurvey.js';
+import { maybeStartInstallSurvey, handleSurveyCommand } from '../services/siteSurvey.js';
 
 // The hub is pure connection plumbing and must not import config/DB itself, so
 // the Live row shaper is handed to it from here (module load = route setup).
@@ -496,6 +496,14 @@ async function handleStaffMessage(
         return;
       }
       log.info({ nodeId: d.nodeId, action: d.action, by: state.userId }, 'staff node command');
+      // Site surveys are built server-side (the browser says how far to look,
+      // never which frequencies to tune), so they go through the same handler
+      // the REST command route uses rather than being forwarded as-is.
+      const survey = await handleSurveyCommand(d.nodeId, d.action, d.args, state.userId ?? null);
+      if (survey) {
+        ws.send(envelope('cmdResult', { nodeId: d.nodeId, reqId: d.id, ...survey }));
+        return;
+      }
       const result = await hub.sendCmd(d.nodeId, d.action, d.args);
       ws.send(envelope('cmdResult', { nodeId: d.nodeId, reqId: d.id, ...result }));
       return;

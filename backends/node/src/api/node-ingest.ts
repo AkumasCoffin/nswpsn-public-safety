@@ -588,7 +588,10 @@ const SurveyResultSchema = z.object({
   outcome: z.enum(['measured', 'noLock', 'unmeasured']),
   medianPct: z.number().min(0).max(100).nullable().optional(),
   samples: z.number().int().min(0).max(1000).default(0),
-  signalDbfs: z.number().min(-200).max(0).nullable().optional(),
+  // Signal level is informational, not a verdict — accept whatever the
+  // receiver reports (a clipping front end can read at or above 0 dBFS)
+  // rather than rejecting a whole survey over one odd number.
+  signalDbfs: z.number().min(-200).max(50).nullable().optional(),
   isAlt: z.boolean().default(false),
 });
 const SurveyBodySchema = z.object({

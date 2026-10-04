@@ -44,7 +44,7 @@ import {
 } from '../services/nodes/registry.js';
 import { hub } from '../services/nodes/hub.js';
 import { listChanMgrLog } from '../services/nodes/chanmgrLog.js';
-import { startSurvey, failSurvey, listSurveys } from '../services/siteSurvey.js';
+import { handleSurveyCommand, listSurveys } from '../services/siteSurvey.js';
 import { nodeUptimeMany } from '../services/nodes/nodeUptime.js';
 import { liveCallWindow } from '../services/nodeCallWindow.js';
 import { isAgentCommandAction } from '../services/nodes/protocol.js';
@@ -582,21 +582,9 @@ nodesRouter.post('/api/nodes/:id/cmd', requireRole(canManageNodes), async (c) =>
       return c.json({ error: 'node offline' }, 409);
     }
     // Site surveys are orchestrated server-side: candidates come from the
-    // node's LGA neighbourhood here, never from the browser.
-    if (action === 'surveySites') {
-      const rings = Number((body.args as { rings?: unknown } | undefined)?.rings ?? 1);
-      const sr = await startSurvey(id, 'manual', (c.get('userId') as string | undefined) ?? null, rings);
-      return c.json(
-        sr.ok ? { ok: true, message: `survey started (#${sr.surveyId})` } : { ok: false, message: sr.error },
-        sr.ok ? 200 : 502,
-      );
-    }
-    if (action === 'surveyCancel') {
-      const surveyId = Number((body.args as { surveyId?: unknown } | undefined)?.surveyId ?? 0);
-      const r = await hub.sendCmd(id, action, body.args);
-      if (surveyId > 0) await failSurvey(id, surveyId, 'cancelled by staff');
-      return c.json(r, r.ok ? 200 : 502);
-    }
+    // node's LGA neighbourhood, never from the browser.
+    const sv = await handleSurveyCommand(id, action, body.args, (c.get('userId') as string | undefined) ?? null);
+    if (sv) return c.json(sv, sv.ok ? 200 : 502);
     const r = await hub.sendCmd(id, action, body.args);
     return c.json(r, r.ok ? 200 : 502);
   } catch (err) {
