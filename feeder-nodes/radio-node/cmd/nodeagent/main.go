@@ -401,6 +401,9 @@ func runAgent(ctx context.Context, configPath string) error {
 			ServerURL: cfg.ServerURL,
 			NodeToken: cfg.NodeToken,
 			InstallID: cfg.InstallID,
+			// A survey locks onto sites all over the council area; none of
+			// them is a site this node monitors.
+			Paused: ws.SurveyRunning,
 		})
 		go siteShipper.Run(ctx)
 

@@ -10,6 +10,32 @@ import (
 
 // TestTickShipsSitesWithAuthHeaders verifies a non-empty snapshot set is POSTed
 // as a bare JSON array carrying the node-ingest auth headers.
+func TestSiteSnapshotsAreNotShippedDuringASurvey(t *testing.T) {
+	// A survey locks onto sites across a whole council area. The control
+	// server reports every one as a site being received — they are candidates
+	// being measured, most of which will not be added.
+	fetched := 0
+	paused := true
+	s := New(Options{
+		Fetch: func() ([]json.RawMessage, error) {
+			fetched++
+			return []json.RawMessage{json.RawMessage(`{"site":1}`)}, nil
+		},
+		ServerURL: "http://127.0.0.1:1",
+		Paused:    func() bool { return paused },
+	})
+	s.tick(context.Background())
+	if fetched != 0 {
+		t.Fatalf("a paused shipper must not even read the control server, fetched %d", fetched)
+	}
+	// Nothing is lost: each poll is a full replace, so the next one is truth.
+	paused = false
+	s.tick(context.Background())
+	if fetched != 1 {
+		t.Fatalf("want shipping to resume, fetched %d", fetched)
+	}
+}
+
 func TestTickShipsSitesWithAuthHeaders(t *testing.T) {
 	sites := []json.RawMessage{
 		json.RawMessage(`{"systemId":1,"rfss":1,"siteId":3,"systemName":"NSWPSN"}`),

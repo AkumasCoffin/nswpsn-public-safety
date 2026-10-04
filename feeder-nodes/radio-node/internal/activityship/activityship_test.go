@@ -14,6 +14,42 @@ import (
 )
 
 // readCursor reads and parses the persisted cursor file.
+func TestSurveyChannelEventsAreNeverShipped(t *testing.T) {
+	// A survey's test channels decode a control channel, and a control channel
+	// announces every call on its site — calls this node is not monitoring and
+	// never heard the audio of. None of that is its reception.
+	name := func(v string) *string { return &v }
+	in := []sdrctl.ActivityEvent{
+		{ID: 1, ChannelName: name("Maclean")},
+		{ID: 2, ChannelName: name("SURVEY: Northern Rivers Comms. Site CANGAI EAST")},
+		{ID: 3, ChannelName: name("SURVEY: Elcom Hut Sheas Knob CLOUDS CREEK (alt)")},
+		{ID: 4, ChannelName: nil},
+		{ID: 5, ChannelName: name("  SURVEY: padded ")},
+		{ID: 6, ChannelName: name("Woombah")},
+	}
+	kept, dropped := dropSurveyEvents(in)
+	if dropped != 3 {
+		t.Fatalf("want 3 survey events dropped, got %d", dropped)
+	}
+	var ids []int64
+	for _, e := range kept {
+		ids = append(ids, e.ID)
+	}
+	if len(ids) != 3 || ids[0] != 1 || ids[1] != 4 || ids[2] != 6 {
+		t.Fatalf("kept the wrong events: %v", ids)
+	}
+}
+
+func TestOrdinaryBatchIsPassedThroughUntouched(t *testing.T) {
+	// Nothing to drop must cost nothing: the same slice goes back.
+	name := func(v string) *string { return &v }
+	in := []sdrctl.ActivityEvent{{ID: 1, ChannelName: name("Maclean")}, {ID: 2, ChannelName: nil}}
+	kept, dropped := dropSurveyEvents(in)
+	if dropped != 0 || len(kept) != 2 {
+		t.Fatalf("want an untouched batch, got %d dropped / %d kept", dropped, len(kept))
+	}
+}
+
 func readCursor(t *testing.T, dataDir string) cursorFile {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join(dataDir, "activity-cursor.json"))

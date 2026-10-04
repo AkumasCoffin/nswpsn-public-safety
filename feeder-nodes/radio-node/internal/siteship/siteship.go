@@ -58,6 +58,13 @@ type Options struct {
 	ServerURL string
 	NodeToken string
 	InstallID string
+	// Paused, when it returns true, skips the tick entirely. A site survey
+	// locks onto sites across a whole council area, and the control server
+	// reports every one of them as a site this node is receiving — which they
+	// are not, they are candidates being measured, most of which will not be
+	// added. Nothing is lost by skipping: each poll is a full-snapshot replace
+	// with no cursor, so the first poll after a survey reports the truth.
+	Paused func() bool
 }
 
 // Shipper is the site-snapshot shipping loop. Not safe for concurrent use;
@@ -97,6 +104,10 @@ func (s *Shipper) Run(ctx context.Context) {
 // ship them.
 func (s *Shipper) tick(ctx context.Context) {
 	if time.Now().Before(s.authUntil) {
+		return
+	}
+	if s.opts.Paused != nil && s.opts.Paused() {
+		s.postedOnce = false // say so again on the first ship after it ends
 		return
 	}
 	sites, err := s.opts.Fetch()

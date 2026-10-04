@@ -24,11 +24,13 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/sdrctl"
+	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/sitesurvey"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/version"
 )
 
@@ -189,6 +191,31 @@ func (s *Shipper) tick(ctx context.Context) {
 			return // nothing new
 		}
 
+		// A site survey configures a channel per candidate site. Those channels
+		// decode a control channel — that is the whole point — and a control
+		// channel announces every call on its site, so the activity log fills
+		// with calls from sites this node does not monitor and never heard the
+		// audio of. None of that is this node's reception. The cursor still
+		// advances past them: they are dropped, not deferred.
+		//
+		// Filtered here rather than by pausing the shipper, because vce's
+		// activity database keeps them either way and a pause would only post
+		// them late.
+		kept, dropped := dropSurveyEvents(events)
+		if dropped > 0 && len(kept) == 0 {
+			s.st.LastID = events[len(events)-1].ID
+			if err := s.persistState(); err != nil {
+				s.warnf("activity: cursor persist failed: %v", err)
+			}
+			if len(events) < fetchLimit {
+				return
+			}
+			continue
+		}
+		if dropped > 0 {
+			events = kept
+		}
+
 		if err := s.ship(ctx, events); err != nil {
 			if errors.Is(err, errAuth) {
 				s.authUntil = time.Now().Add(authCooldown)
@@ -219,6 +246,24 @@ func (s *Shipper) tick(ctx context.Context) {
 			return // drained
 		}
 	}
+}
+
+// dropSurveyEvents removes everything decoded on a site survey's test
+// channels, returning what is left and how many went.
+func dropSurveyEvents(events []sdrctl.ActivityEvent) ([]sdrctl.ActivityEvent, int) {
+	dropped := 0
+	kept := events[:0:0]
+	for _, ev := range events {
+		if ev.ChannelName != nil && strings.HasPrefix(strings.TrimSpace(*ev.ChannelName), sitesurvey.ChannelPrefix) {
+			dropped++
+			continue
+		}
+		kept = append(kept, ev)
+	}
+	if dropped == 0 {
+		return events, 0
+	}
+	return kept, dropped
 }
 
 // fetch pulls the next batch after the cursor.

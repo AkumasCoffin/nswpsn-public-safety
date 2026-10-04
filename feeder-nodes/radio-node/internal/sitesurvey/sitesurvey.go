@@ -67,10 +67,13 @@ import (
 )
 
 const (
-	// channelPrefix marks a survey's test channels. It is how the survey finds
-	// its own channels in the live list, and how anyone reading a node's
-	// channel list during a survey can tell what they are looking at.
-	channelPrefix = "SURVEY: "
+	// ChannelPrefix marks a survey's test channels. It is how the survey finds
+	// its own channels in the live list, how anyone reading a node's channel
+	// list during a survey can tell what they are looking at, and — exported
+	// for exactly this — how the shippers know not to forward anything a test
+	// channel produced.
+	ChannelPrefix = "SURVEY: "
+	channelPrefix = ChannelPrefix
 
 	// clusterSpanHz: how far apart two candidates may sit and still share a
 	// tuner. A 2 MHz span fits comfortably inside the sample rate the node's
