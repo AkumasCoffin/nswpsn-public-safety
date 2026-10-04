@@ -870,6 +870,29 @@
     .nd-state.probing{ background: rgba(192, 132, 252, 0.16); color: #c084fc; border: 1px solid rgba(192, 132, 252, 0.3); }
     .nd-state.probing::before { animation: nd-pulse 1.1s ease-in-out infinite; }
     .nd-am-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-soft); cursor: pointer; user-select: none; }
+    .nd-sp-overlay { position: fixed; inset: 0; background: rgba(2,6,23,0.72); z-index: 2400;
+      display: flex; align-items: center; justify-content: center; padding: 1.5rem; }
+    .nd-sp-box { background: var(--bg-elevated, #0f172a); border: 1px solid var(--border-subtle, #334155);
+      border-radius: 12px; width: min(760px, 100%); max-height: min(78vh, 760px); display: flex; flex-direction: column; }
+    .nd-sp-head { display: flex; gap: 10px; align-items: center; padding: 0.85rem 1rem; border-bottom: 1px solid var(--border-subtle, #334155); }
+    .nd-sp-head b { flex: 1; }
+    .nd-sp-search { width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--border-subtle, #334155);
+      border-radius: 8px; color: var(--text-primary, #e2e8f0); font: inherit; font-size: 13px; padding: 0.5rem 0.7rem; }
+    .nd-sp-searchwrap { padding: 0.7rem 1rem; border-bottom: 1px solid var(--border-subtle, #334155); }
+    .nd-sp-hint { font-size: 11px; color: var(--text-soft); margin-top: 6px; }
+    .nd-sp-list { overflow-y: auto; flex: 1; padding: 0.35rem 0.5rem; }
+    .nd-sp-row { display: grid; grid-template-columns: 20px 1fr auto auto; gap: 10px; align-items: center;
+      padding: 0.4rem 0.5rem; border-radius: 6px; cursor: pointer; font-size: 13px; }
+    .nd-sp-row:hover { background: rgba(125,211,252,0.08); }
+    .nd-sp-row.is-on { background: rgba(125,211,252,0.12); }
+    .nd-sp-row.is-dup, .nd-sp-row.is-bad { opacity: 0.55; cursor: not-allowed; }
+    .nd-sp-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .nd-sp-sub { color: var(--text-soft); font-size: 11px; }
+    .nd-sp-freq { font-variant-numeric: tabular-nums; color: #7dd3fc; font-size: 12px; }
+    .nd-sp-dist { color: var(--text-soft); font-size: 11px; min-width: 64px; text-align: right; }
+    .nd-sp-foot { display: flex; gap: 10px; align-items: center; padding: 0.75rem 1rem; border-top: 1px solid var(--border-subtle, #334155); }
+    .nd-sp-foot .nd-sp-count { flex: 1; font-size: 12px; color: var(--text-soft); }
+    .nd-ch-alt { font-size: 10px; color: #7dd3fc; border: 1px solid rgba(125,211,252,0.4); border-radius: 999px; padding: 0 5px; margin-left: 4px; }
     .nd-survey-rings {
       background: rgba(0,0,0,0.25); border: 1px solid var(--border-subtle); border-radius: 6px;
       color: var(--text-primary); font: inherit; font-size: 12px; padding: 4px 6px;
@@ -4238,6 +4261,10 @@
                 <input type="checkbox" id="nd-cfg-automanage" checked> Auto channel management
               </label>
               <button class="btn btn-secondary btn-sm" onclick="_ndCfgAddChannel()"><i class="fas fa-plus"></i> Add channel</button>
+              <button class="btn btn-secondary btn-sm nd-write" onclick="_ndSitePickerOpen()"
+                title="Pick GRN sites from the dataset — their control frequencies are filled in for you. Nearest first.">
+                <i class="fas fa-tower-broadcast"></i> Add GRN site
+              </button>
               <button class="btn btn-secondary btn-sm nd-write" id="nd-survey-btn" onclick="_ndRunSurvey(this)"
                 title="Measure how well this node hears every GRN site in its council area (and neighbouring ones), then add the sites it hears well to its channel list. The node stops feeding while it tests.">
                 <i class="fas fa-magnifying-glass-location"></i> Run site survey
@@ -12798,6 +12825,173 @@
       }).join('');
     }
 
+    // ---- GRN site picker ----
+    // Every GRN site is already in the dataset with its control frequency, so
+    // adding one as a channel should be a search-and-tick, not a transcription
+    // job. The frequencies come from the same server-side parse the site
+    // survey uses, so a hand-added site and a surveyed one agree.
+    let _ndSites = null;        // the fetched dataset (null = not loaded yet)
+    let _ndSitePicked = new Set();
+
+    async function _ndSitePickerOpen() {
+      if (_nodeWriteBlocked && _nodeWriteBlocked()) return;
+      if (!_ndConfig) { showToast('Config still loading…', 'warn'); return; }
+      _ndCfgReadDom(); // keep whatever is half-typed in the table
+      _ndSitePicked = new Set();
+
+      const overlay = document.createElement('div');
+      overlay.id = 'nd-site-picker';
+      overlay.className = 'nd-sp-overlay';
+      overlay.innerHTML = `
+        <div class="nd-sp-box">
+          <div class="nd-sp-head">
+            <b><i class="fas fa-tower-broadcast"></i> Add GRN sites</b>
+            <button class="btn btn-secondary btn-sm" onclick="_ndSitePickerClose()">Close</button>
+          </div>
+          <div class="nd-sp-searchwrap">
+            <input id="nd-sp-q" class="nd-sp-search" placeholder="Search by site name, council area or frequency…" autocomplete="off" oninput="_ndSitePickerRender()">
+            <div class="nd-sp-hint" id="nd-sp-hint">Loading the site list…</div>
+          </div>
+          <div class="nd-sp-list" id="nd-sp-list"></div>
+          <div class="nd-sp-foot">
+            <span class="nd-sp-count" id="nd-sp-count"></span>
+            <button class="btn btn-primary btn-sm" id="nd-sp-add" onclick="_ndSitePickerAdd()" disabled>Add selected</button>
+          </div>
+        </div>`;
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) _ndSitePickerClose(); });
+      document.body.appendChild(overlay);
+      setTimeout(() => document.getElementById('nd-sp-q')?.focus(), 30);
+
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/${_ndNodeId}/grn-sites`, {
+          headers: { 'Authorization': await authHeader() }
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        _ndSites = data;
+      } catch (e) {
+        const hint = document.getElementById('nd-sp-hint');
+        if (hint) hint.textContent = 'Could not load the site list — try again shortly.';
+        return;
+      }
+      _ndSitePickerRender();
+    }
+
+    function _ndSitePickerClose() {
+      const el = document.getElementById('nd-site-picker');
+      if (el) el.remove();
+    }
+
+    /** Sites already on this node, by frequency and by lower-cased name — the
+     *  same two keys the survey dedupes on, so neither path adds a double. */
+    function _ndConfiguredKeys() {
+      const freqs = new Set(), names = new Set();
+      for (const c of ((_ndConfig && _ndConfig.channels) || [])) {
+        if (c.frequency != null) freqs.add(Number(c.frequency));
+        if (c.name) names.add(String(c.name).trim().toLowerCase());
+      }
+      return { freqs, names };
+    }
+
+    function _ndSitePickerRender() {
+      const list = document.getElementById('nd-sp-list');
+      const hint = document.getElementById('nd-sp-hint');
+      if (!list || !_ndSites) return;
+      const q = (document.getElementById('nd-sp-q')?.value || '').trim().toLowerCase();
+      const { freqs, names } = _ndConfiguredKeys();
+
+      const matches = (_ndSites.sites || []).filter(s => {
+        if (!q) return true;
+        return (s.name || '').toLowerCase().includes(q)
+          || (s.lga || '').toLowerCase().includes(q)
+          || (s.system || '').toLowerCase().includes(q)
+          || (s.grnKey || '').toLowerCase().includes(q)
+          || (s.mhz != null && String(s.mhz).includes(q));
+      });
+
+      if (hint) {
+        hint.textContent = _ndSites.located
+          ? 'Nearest to this node first.'
+          : (_ndSites.nodeLga
+            ? `Sites in ${_ndSites.nodeLga} first, then neighbouring council areas. Set an antenna pin to sort by actual distance.`
+            : 'This node has no location set, so the list is not ranked. Set its council area to sort by nearest.');
+      }
+
+      // 200 is plenty to pick from; searching narrows it, and rendering all
+      // 600-odd rows on every keystroke is just slower.
+      const shown = matches.slice(0, 200);
+      list.innerHTML = shown.map(s => {
+        const hz = s.mhz != null ? Math.round(s.mhz * 1e6) : null;
+        const dup = hz != null && (freqs.has(hz) || names.has((s.name || '').trim().toLowerCase()));
+        const bad = s.mhz == null;
+        const on = _ndSitePicked.has(s.name);
+        const cls = bad ? 'is-bad' : dup ? 'is-dup' : on ? 'is-on' : '';
+        const sub = [s.lga, s.ring === 0 ? 'this council area' : (s.ring != null ? `${s.ring} area(s) away` : null)]
+          .filter(Boolean).join(' · ');
+        const right = bad ? `<span class="nd-sp-sub">${escapeHtml(s.note || 'no control channel')}</span>`
+          : dup ? `<span class="nd-sp-sub">already added</span>`
+          : `<span class="nd-sp-freq">${s.mhz.toFixed(4)} MHz${s.altMhz != null ? ` <span class="nd-ch-alt">+alt</span>` : ''}</span>`;
+        return `<div class="nd-sp-row ${cls}" ${(bad || dup) ? '' : `onclick="_ndSitePickerToggle('${jsArg(s.name)}')"`}>
+          <span>${(bad || dup) ? '' : `<input type="checkbox" ${on ? 'checked' : ''} onclick="event.preventDefault()">`}</span>
+          <span class="nd-sp-name">${escapeHtml(s.name)}${sub ? `<div class="nd-sp-sub">${escapeHtml(sub)}</div>` : ''}</span>
+          ${right}
+          <span class="nd-sp-dist">${s.km != null ? `${s.km} km` : ''}</span>
+        </div>`;
+      }).join('') || `<div class="nd-empty" style="border:none;background:none;">No site matches “${escapeHtml(q)}”.</div>`;
+
+      const count = document.getElementById('nd-sp-count');
+      if (count) {
+        count.textContent = `${_ndSitePicked.size} selected`
+          + (matches.length > shown.length ? ` · showing ${shown.length} of ${matches.length} — keep typing to narrow it` : '');
+      }
+      const add = document.getElementById('nd-sp-add');
+      if (add) {
+        add.disabled = _ndSitePicked.size === 0;
+        add.textContent = _ndSitePicked.size ? `Add ${_ndSitePicked.size} site(s)` : 'Add selected';
+      }
+    }
+
+    function _ndSitePickerToggle(name) {
+      if (_ndSitePicked.has(name)) _ndSitePicked.delete(name);
+      else _ndSitePicked.add(name);
+      _ndSitePickerRender();
+    }
+
+    // Add the ticked sites as channels, shaped exactly like the ones a survey
+    // adds: the primary control frequency, the alternate carried alongside it,
+    // and the site's own name for both channel and site.
+    function _ndSitePickerAdd() {
+      if (!_ndConfig) return;
+      if (!Array.isArray(_ndConfig.channels)) _ndConfig.channels = [];
+      const { freqs, names } = _ndConfiguredKeys();
+      let added = 0;
+      for (const s of ((_ndSites && _ndSites.sites) || [])) {
+        if (!_ndSitePicked.has(s.name) || s.mhz == null) continue;
+        const hz = Math.round(s.mhz * 1e6);
+        if (freqs.has(hz) || names.has(s.name.trim().toLowerCase())) continue;
+        const ch = {
+          name: s.name, frequency: hz, decoder: 'p25p1',
+          system: s.system || 'NSWPSN', site: s.name, autoStart: true,
+          order: _ndConfig.channels.length, sdr: '', decoderConfig: {},
+        };
+        // The alternate control channel rides along: SDR-Trunk locks one and
+        // falls back to the other, which is the whole point of listing both.
+        if (s.altMhz != null) {
+          const alt = Math.round(s.altMhz * 1e6);
+          if (alt !== hz) ch.frequencies = [alt];
+        }
+        _ndConfig.channels.push(ch);
+        freqs.add(hz);
+        names.add(s.name.trim().toLowerCase());
+        added++;
+      }
+      _ndSitePickerClose();
+      _ndCfgRender();
+      showToast(added
+        ? `${added} site(s) added — press Save & sync to send them to the node.`
+        : 'Nothing new to add.', added ? 'success' : 'warn');
+    }
+
     // ---- RF site survey (radio) ----
     // Staff trigger it; the node measures every candidate GRN control channel
     // and the backend records all of them — the sites it heard badly are as
@@ -13412,7 +13606,10 @@
         return `<tr id="nd-ch-row-${i}">
           <td><span class="nd-ch-en"><input type="checkbox" id="nd-ch-${i}-auto" title="Auto-start this channel when the node comes up" ${c.autoStart !== false ? 'checked' : ''}></span></td>
           <td><span class="nd-ch-en"><input type="checkbox" id="nd-ch-${i}-am" title="Let auto-management stop this channel when it decodes below 60% for 10 min or below 40% for 5 min (first retest after 10 min, then every 30)" ${c.autoManage !== false ? 'checked' : ''}></span></td>
-          <td class="nd-ch-w-name"><input type="text" id="nd-ch-${i}-name" placeholder="Channel name" value="${escapeHtml(c.name || '')}"></td>
+          <td class="nd-ch-w-name"><input type="text" id="nd-ch-${i}-name" placeholder="Channel name" value="${escapeHtml(c.name || '')}">${
+            Array.isArray(c.frequencies) && c.frequencies.length
+              ? `<span class="nd-ch-alt" title="Also tries ${c.frequencies.map(f => (f / 1e6).toFixed(4)).join(', ')} MHz as a control channel for this site">+${c.frequencies.length} alt</span>`
+              : ''}</td>
           <td class="nd-ch-w-sys"><input type="text" id="nd-ch-${i}-sys" placeholder="System" value="${escapeHtml(c.system || '')}"></td>
           <td class="nd-ch-w-sys"><input type="text" id="nd-ch-${i}-site" placeholder="Site" value="${escapeHtml(c.site || '')}"></td>
           <td><select id="nd-ch-${i}-dec" title="Decoder / protocol" onchange="_ndCfgDecoderChanged(${i})">${decOpts}</select></td>

@@ -56,13 +56,17 @@ interface GrnSiteRow {
 // site → LGA tagging (cached)
 // ---------------------------------------------------------------------------
 
-interface TaggedSite {
+export interface TaggedSite {
   name: string;
   grnKey: string | null;
   lga: string | null;
   mhz: number | null;
   altMhz: number | null;
   rawCc: string;
+  lat: number | null;
+  lon: number | null;
+  /** The dataset's own system name, for telling two same-named sites apart. */
+  system: string | null;
 }
 
 let _tagged: { at: number; sites: TaggedSite[] } | null = null;
@@ -93,6 +97,9 @@ async function taggedSites(): Promise<TaggedSite[]> {
       mhz: parseControlMhz(d['Control Channel']),
       altMhz: parseControlMhz(d['Alt Control Channel']),
       rawCc,
+      lat: Number.isFinite(lat) ? lat : null,
+      lon: Number.isFinite(lon) ? lon : null,
+      system: typeof d['SYSTEM NAME'] === 'string' ? (d['SYSTEM NAME'] as string) : null,
     });
   }
   _tagged = { at: Date.now(), sites };
@@ -160,18 +167,22 @@ export async function lgaAdjacency(state: string): Promise<Map<string, Set<strin
   return adj;
 }
 
-/** The node's LGA plus neighbours out to `rings` hops (BFS over adjacency). */
-export async function lgaNeighbourhood(state: string, lga: string, rings: number): Promise<Set<string>> {
+/**
+ * How many LGA borders away each area is from the node's own — 0 for its own
+ * LGA, 1 for a direct neighbour, and so on out to `rings`. Areas further than
+ * that (or unreachable, like an island council) are simply absent.
+ */
+export async function lgaRingDepths(state: string, lga: string, rings: number): Promise<Map<string, number>> {
   const adj = await lgaAdjacency(state);
-  const depth = Math.max(1, Math.min(4, Math.trunc(rings) || 1));
-  const seen = new Set<string>([lga]);
+  const maxDepth = Math.max(1, Math.min(4, Math.trunc(rings) || 1));
+  const depths = new Map<string, number>([[lga, 0]]);
   let frontier = [lga];
-  for (let hop = 0; hop < depth; hop++) {
+  for (let hop = 1; hop <= maxDepth; hop++) {
     const next: string[] = [];
     for (const name of frontier) {
       for (const n of adj.get(name) ?? []) {
-        if (!seen.has(n)) {
-          seen.add(n);
+        if (!depths.has(n)) {
+          depths.set(n, hop);
           next.push(n);
         }
       }
@@ -179,7 +190,17 @@ export async function lgaNeighbourhood(state: string, lga: string, rings: number
     frontier = next;
     if (frontier.length === 0) break;
   }
-  return seen;
+  return depths;
+}
+
+/** The node's LGA plus neighbours out to `rings` hops. */
+export async function lgaNeighbourhood(state: string, lga: string, rings: number): Promise<Set<string>> {
+  return new Set((await lgaRingDepths(state, lga, rings)).keys());
+}
+
+/** Every GRN site, tagged with its LGA and parsed control frequency. */
+export async function allTaggedSites(): Promise<TaggedSite[]> {
+  return taggedSites();
 }
 
 // ---------------------------------------------------------------------------

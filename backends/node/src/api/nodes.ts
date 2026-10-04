@@ -45,6 +45,7 @@ import {
 import { hub } from '../services/nodes/hub.js';
 import { listChanMgrLog } from '../services/nodes/chanmgrLog.js';
 import { handleSurveyCommand, listSurveys } from '../services/siteSurvey.js';
+import { allTaggedSites, lgaRingDepths } from '../services/grnCandidates.js';
 import { nodeUptimeMany } from '../services/nodes/nodeUptime.js';
 import { liveCallWindow } from '../services/nodeCallWindow.js';
 import { isAgentCommandAction } from '../services/nodes/protocol.js';
@@ -311,6 +312,68 @@ nodesRouter.get('/api/nodes/:id/chanmgr-log', requireRole(canViewNodeData), asyn
     return c.json({ error: 'Failed to fetch log' }, 500);
   }
 });
+
+// ---------------------------------------------------------------------------
+// GET /api/nodes/:id/grn-sites — the GRN dataset as channel candidates for
+// ONE node: every site with a usable control frequency, ranked by how near it
+// is (straight-line from the node's pin when it has one, otherwise by how many
+// council borders away the site sits). The parsing is the survey's own, so a
+// site added by hand here gets exactly the frequency a survey would have
+// tested. Sites whose control channel the dataset does not state are returned
+// too, flagged — staff can see they exist and why they cannot be added.
+// ---------------------------------------------------------------------------
+nodesRouter.get('/api/nodes/:id/grn-sites', requireRole(canViewNodeData), async (c) => {
+  const id = c.req.param('id');
+  try {
+    const node = await getNode(id);
+    if (!node) return c.json({ error: 'node not found' }, 404);
+    const sites = await allTaggedSites();
+    const depths = node.lga
+      ? await lgaRingDepths(node.state ?? 'NSW', node.lga, 4)
+      : new Map<string, number>();
+    const hasPin = typeof node.lat === 'number' && typeof node.lon === 'number';
+
+    const rows = sites.map((s) => ({
+      name: s.name,
+      grnKey: s.grnKey,
+      lga: s.lga,
+      system: s.system,
+      mhz: s.mhz,
+      altMhz: s.altMhz,
+      // Why a site cannot be added, in the dataset's own words.
+      note: s.mhz === null
+        ? (s.rawCc ? `control channel not usable: "${s.rawCc.slice(0, 60)}"` : 'no control channel listed')
+        : null,
+      km: hasPin && s.lat !== null && s.lon !== null
+        ? Math.round(haversineKm(node.lat as number, node.lon as number, s.lat, s.lon) * 10) / 10
+        : null,
+      ring: s.lga !== null && depths.has(s.lga) ? depths.get(s.lga)! : null,
+    }));
+
+    rows.sort((a, b) => {
+      if (a.km !== null && b.km !== null) return a.km - b.km;
+      if (a.km !== null) return -1;
+      if (b.km !== null) return 1;
+      return (a.ring ?? 99) - (b.ring ?? 99) || a.name.localeCompare(b.name);
+    });
+    return c.json({ sites: rows, nodeLga: node.lga, located: hasPin });
+  } catch (err) {
+    log.error({ err, id }, 'Error listing GRN sites for node');
+    return c.json({ error: 'Failed to list sites' }, 500);
+  }
+});
+
+/** Great-circle distance in km. Display-only ranking, so the spherical
+ *  approximation is ample. */
+function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+}
 
 // ---------------------------------------------------------------------------
 // GET /api/nodes/:id/site-surveys — the node's RF survey history: every run
