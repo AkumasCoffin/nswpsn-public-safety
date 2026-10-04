@@ -356,6 +356,38 @@ func ImportOnBoot(payload ConfigPayload, d Deps) error {
 	return nil
 }
 
+// ImportVceOnly imports the vce configuration for payload with `extra`
+// channels appended, and does nothing else: no rdio stage, no tuner pass, no
+// persistence of an applied config. It is the RF site survey's lever — first
+// to add its stopped test channels alongside the real ones, then (with extra
+// empty) to put the node's real configuration back.
+//
+// Nothing is written to applied-config.json on purpose: if the agent dies
+// mid-survey, the next boot's ImportOnBoot restores the real configuration
+// from the file that was never touched, so a crash costs a restart, not a
+// node full of orphaned survey channels.
+func ImportVceOnly(payload ConfigPayload, extra []ChannelPlan, d Deps) error {
+	sysIDs := systemIDsFrom(payload)
+	localKeys, err := keys.EnsureKeys(d.DataDir, sysIDs)
+	if err != nil {
+		return stageErr("keys", "ensure local api keys", err)
+	}
+	p := payload
+	// effectiveChannels so a capture-off node stays capture-off during a
+	// survey: its own channels remain auto-start=false and only the survey's
+	// test channels — which the survey starts by hand — ever run.
+	p.Channels = append(append([]ChannelPlan{}, payload.effectiveChannels()...), extra...)
+	state := buildVceConfig(p, localKeys, d.presetAliasListName())
+	body, err := json.Marshal(state)
+	if err != nil {
+		return stageErr("playlist", "encode vce config", err)
+	}
+	if err := d.importWithRetry(body); err != nil {
+		return stageErr("playlist", "import config", err)
+	}
+	return nil
+}
+
 // HasStage reports whether err (possibly an errors.Join of several) carries a
 // *StageError for the named stage. Lets the caller tell "the playlist stage
 // succeeded but rdio failed" apart from a playlist failure.

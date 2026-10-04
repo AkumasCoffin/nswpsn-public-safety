@@ -44,6 +44,7 @@ import (
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/relay"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/sdrctl"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/siteship"
+	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/sitesurvey"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/supervise"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/update"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/version"
@@ -407,20 +408,53 @@ func runAgent(ctx context.Context, configPath string) error {
 		// channel that decodes below 40% for 10 continuous minutes, retest it
 		// every 20 minutes, restore it when it recovers. Idles by itself when
 		// the sdrtrunk runtime predates the suppression API.
+		liveChannels := func() ([]sdrctl.Channel, error) {
+			chs, _, err := sdr.Channels()
+			return chs, err
+		}
 		mgr := chanmgr.New(chanmgr.Options{
-			Fetch: func() ([]sdrctl.Channel, error) {
-				chs, _, err := sdr.Channels()
-				return chs, err
-			},
+			Fetch:       liveChannels,
 			Start:       sdr.StartChannel,
 			Stop:        sdr.StopChannel,
 			Suppress:    sdr.SuppressChannel,
 			Unsuppress:  sdr.UnsuppressChannel,
 			LastApplyAt: ws.LastApplyAt,
 			Policy:      ws.ChanPolicy,
+			// A site survey owns the node's channel set while it runs; the
+			// manager must not reason about that world, let alone act on it.
+			Paused: ws.SurveyRunning,
 		})
 		ws.SetChanMgrSnapshot(mgr.Snapshot)
 		go mgr.Run(ctx)
+
+		// RF site survey (radio kind only): on command from the backend,
+		// measure decode on a list of candidate GRN control frequencies and
+		// report the raw numbers back. Staff-triggered, plus one automatic run
+		// at first install; the backend owns the pass threshold and the
+		// channel-list changes.
+		survey := sitesurvey.New(sitesurvey.Options{
+			Fetch:    liveChannels,
+			Start:    sdr.StartChannel,
+			Stop:     sdr.StopChannel,
+			Suppress: sdr.SuppressChannel,
+			Import:   ws.SurveyImport,
+			Tuners: func() int {
+				ts, err := sdr.Tuners()
+				if err != nil {
+					return 1
+				}
+				return len(ts)
+			},
+			Report: sitesurvey.Poster(cfg.ServerURL, cfg.NodeToken, cfg.InstallID),
+		})
+		ws.SetSurveyRunner(survey)
+		ws.SetSurveySnapshot(func() any {
+			p := survey.Snapshot()
+			if !p.Running {
+				return nil
+			}
+			return p
+		})
 	}
 
 	// Launch the long-lived goroutines.

@@ -30,6 +30,7 @@ import (
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/protocol"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/rdioctl"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/sdrctl"
+	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/sitesurvey"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/supervise"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/update"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/version"
@@ -54,6 +55,12 @@ const (
 
 	updateInitialDelay = 30 * time.Second // let the WS settle before the first update check
 	updateInterval     = 6 * time.Hour    // periodic update check cadence
+
+	// surveyMaxDuration is the agent-side ceiling on one RF site survey. The
+	// backend expires a survey it has not heard about in 45 minutes, so the
+	// agent must give up (and restore the node's real configuration) before
+	// that — a node left running survey channels is a node off the air.
+	surveyMaxDuration = 40 * time.Minute
 )
 
 // depthProvider is the subset of the queue the client needs.
@@ -137,6 +144,15 @@ type Client struct {
 	chanPol   chanmgr.Policy
 	chanSnap  func() any
 
+	// RF site survey: at most one at a time, cancellable by staff. The
+	// running flag is also what pauses the channel manager — a survey owns
+	// the node's channel set while it runs.
+	surveyRunning atomic.Bool
+	surveyMu      sync.Mutex
+	surveyCancel  context.CancelFunc
+	surveySnap    func() any
+	surveyRunner  surveyRunner
+
 	writeMu sync.Mutex // serializes all conn writes (gorilla forbids concurrent writers)
 	conn    *websocket.Conn
 }
@@ -187,6 +203,56 @@ func (c *Client) SetDropProvider(d dropProvider) { c.drops = d }
 
 // SetChanMgrSnapshot supplies the channel manager's status-frame snapshot.
 func (c *Client) SetChanMgrSnapshot(fn func() any) { c.chanSnap = fn }
+
+// surveyRunner is the slice of the site-survey runner the client drives.
+type surveyRunner interface {
+	Run(ctx context.Context, req sitesurvey.Request)
+}
+
+// SetSurveyRunner supplies the site-survey runner (radio nodes only).
+func (c *Client) SetSurveyRunner(r surveyRunner) { c.surveyRunner = r }
+
+// SetSurveySnapshot supplies the site survey's status-frame snapshot.
+func (c *Client) SetSurveySnapshot(fn func() any) { c.surveySnap = fn }
+
+// SurveyRunning reports whether a site survey currently owns the node's
+// channel set. The channel manager uses it as its pause signal.
+func (c *Client) SurveyRunning() bool { return c.surveyRunning.Load() }
+
+// SurveyImport is the survey's config lever: re-import the node's real
+// configuration with `extra` test channels appended (nil = restore it as it
+// is). It takes applyMu, so a config push cannot interleave with an import,
+// and stamps lastApplyAt so the channel manager stays quiesced for its usual
+// window afterwards rather than judging a world that just changed.
+func (c *Client) SurveyImport(extra []configapply.ChannelPlan) error {
+	c.applyMu.Lock()
+	defer c.applyMu.Unlock()
+
+	var payload configapply.ConfigPayload
+	raw, err := os.ReadFile(c.cfg.AppliedConfigPath())
+	switch {
+	case err == nil:
+		if jerr := json.Unmarshal(raw, &payload); jerr != nil {
+			return fmt.Errorf("last-applied config unreadable: %w", jerr)
+		}
+	case os.IsNotExist(err):
+		// A node that has never had a config applied — exactly the first-install
+		// case the automatic survey exists for. Its real configuration is empty,
+		// so an empty payload IS the truth to restore to.
+		log.Printf("wsclient: survey import with no applied config on disk; treating the node's real config as empty")
+	default:
+		return err
+	}
+
+	ierr := configapply.ImportVceOnly(payload, extra, configapply.Deps{
+		DataDir:         c.cfg.DataDir,
+		PresetsDir:      c.cfg.PresetsDir,
+		SDRTrunkAppRoot: c.cfg.SDRTrunkAppRoot,
+		SDR:             c.sdr,
+	})
+	c.lastApplyAt = time.Now()
+	return ierr
+}
 
 // setChanPolicy derives the channel manager's policy from a parsed configPush.
 func (c *Client) setChanPolicy(p configapply.ConfigPayload) {
@@ -571,6 +637,9 @@ func (c *Client) sendStatus(conn *websocket.Conn) error {
 	}
 	if c.chanSnap != nil {
 		st.ChannelManager = c.chanSnap()
+	}
+	if c.surveySnap != nil {
+		st.SiteSurvey = c.surveySnap()
 	}
 	return c.writeType(conn, protocol.TypeStatus, st, "")
 }
@@ -982,6 +1051,55 @@ func (c *Client) handleCmd(conn *websocket.Conn, env *protocol.Envelope) {
 			msg, ok := c.runUpdateCheck("cmd")
 			log.Printf("wsclient: manual update finished: ok=%v — %s", ok, msg)
 		}()
+
+	case "surveySites":
+		// ACK IMMEDIATELY, then survey in the background: a survey runs for
+		// minutes (one measurement window per wave of candidates), far beyond
+		// the staff command timeout. Progress rides the status frame and the
+		// results are POSTed to the backend when it finishes.
+		var req sitesurvey.Request
+		if err := json.Unmarshal(cmd.Args, &req); err != nil || len(req.Candidates) == 0 {
+			c.reply(conn, env.ID, protocol.TypeCmdResult, protocol.CmdResult{OK: false, Message: "no survey candidates"})
+			return
+		}
+		if c.surveyRunner == nil {
+			c.reply(conn, env.ID, protocol.TypeCmdResult, protocol.CmdResult{OK: false, Message: "site surveys are not available on this node"})
+			return
+		}
+		if !c.surveyRunning.CompareAndSwap(false, true) {
+			c.reply(conn, env.ID, protocol.TypeCmdResult, protocol.CmdResult{OK: false, Message: "a survey is already running"})
+			return
+		}
+		sctx, scancel := context.WithTimeout(context.Background(), surveyMaxDuration)
+		c.surveyMu.Lock()
+		c.surveyCancel = scancel
+		c.surveyMu.Unlock()
+		c.reply(conn, env.ID, protocol.TypeCmdResult, protocol.CmdResult{
+			OK: true, Message: fmt.Sprintf("survey started (%d sites)", len(req.Candidates)),
+		})
+		go func() {
+			defer func() {
+				scancel()
+				c.surveyMu.Lock()
+				c.surveyCancel = nil
+				c.surveyMu.Unlock()
+				c.surveyRunning.Store(false)
+			}()
+			c.surveyRunner.Run(sctx, req)
+		}()
+
+	case "surveyCancel":
+		c.surveyMu.Lock()
+		cancel := c.surveyCancel
+		c.surveyMu.Unlock()
+		if cancel == nil {
+			c.reply(conn, env.ID, protocol.TypeCmdResult, protocol.CmdResult{OK: false, Message: "no survey is running"})
+			return
+		}
+		// The runner restores the node's real configuration on its way out and
+		// reports whatever it had measured.
+		cancel()
+		c.reply(conn, env.ID, protocol.TypeCmdResult, protocol.CmdResult{OK: true, Message: "survey cancelling"})
 
 	case "pushConfig":
 		c.reply(conn, env.ID, protocol.TypeCmdResult, protocol.CmdResult{OK: false, Message: "not implemented in this build"})

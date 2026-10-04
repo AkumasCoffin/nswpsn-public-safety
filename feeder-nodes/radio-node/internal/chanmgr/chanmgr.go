@@ -31,11 +31,11 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/decodeprobe"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/sdrctl"
 )
 
@@ -71,20 +71,14 @@ const (
 	// single-sample reset meant it was never stopped at all. At the 15s poll
 	// this is a minute of sustained evidence.
 	recoverSamples = 4
-	// probeMinSamples: a verdict needs this many measured readings. Fewer
-	// than this and the probe reports "never measured" rather than ruling on
-	// one or two numbers.
-	probeMinSamples = 3
 
-	// lockWait: a restarted control channel reaches CONTROL within a few
-	// seconds when the signal is usable; no lock by now = probe failed.
-	lockWait = 15 * time.Second
-	// probeTrustAge/probeWindow: vce's syncPercent is a 30s rolling window
-	// that is NOT cleared on start, so early samples are dominated by
-	// acquisition losses. The verdict is the max measured sample seen between
-	// trust-age and window-end after the probe start.
-	probeTrustAge = 35 * time.Second
-	probeWindow   = 60 * time.Second
+	// The retest measurement itself lives in decodeprobe, shared with the RF
+	// site survey so both judge a frequency the same way. These aliases keep
+	// the manager's own prose (and its tests) reading in local terms.
+	lockWait        = decodeprobe.LockWait
+	probeTrustAge   = decodeprobe.TrustAge
+	probeWindow     = decodeprobe.Window
+	probeMinSamples = decodeprobe.MinSamples
 
 	// startupQuiesce/applyQuiesce: no judgements while the world is still
 	// settling — after the agent starts (boot config re-import restarts
@@ -117,12 +111,6 @@ type logEntry struct {
 	Text string `json:"text"`
 }
 
-// lockedStates mirrors vce's isLockedState: any of these means the channel
-// has acquired its control channel (or is actively working).
-var lockedStates = map[string]bool{
-	"CONTROL": true, "CALL": true, "ENCRYPTED": true, "DATA": true, "ACTIVE": true,
-}
-
 // Policy is the operator's say: the per-node kill switch and per-channel
 // opt-outs, both from the applied config. The zero value means "enabled,
 // nothing opted out" — absence of configuration is ON by design.
@@ -145,6 +133,12 @@ type Options struct {
 	LastApplyAt func() time.Time
 	// Policy returns the operator's current policy (from the applied config).
 	Policy func() Policy
+	// Paused, when it returns true, suspends the manager entirely for this
+	// tick: no reconcile, no detection, no probes. The RF site survey holds it
+	// while it has the node's channel set replaced with test channels — a
+	// world the manager must not reason about, let alone act on. nil = never
+	// paused.
+	Paused func() bool
 	// Now is the clock; nil = time.Now. Injected for tests.
 	Now func() time.Time
 	// Sleep waits for d or ctx; nil = real sleep. Injected for tests.
@@ -231,6 +225,11 @@ func (m *Manager) Run(ctx context.Context) {
 // Tick is one full pass: reconcile, detect, and possibly run one probe.
 // Exported for tests; Run is the only production caller.
 func (m *Manager) Tick(ctx context.Context) {
+	// Paused first, before anything is even read: during a site survey the
+	// live channel list is the survey's, not the operator's.
+	if m.opts.Paused != nil && m.opts.Paused() {
+		return
+	}
 	pol := m.opts.Policy()
 
 	chans, err := m.opts.Fetch()
@@ -602,57 +601,23 @@ func (m *Manager) probe(ctx context.Context, name string, id int) {
 		return
 	}
 	m.lastActionAt = m.now()
-	started := m.now()
 
-	// Phase 1: lock. CONTROL arrives within a few seconds on a usable signal.
-	locked := false
-	for m.now().Sub(started) < lockWait && ctx.Err() == nil {
-		m.sleep(ctx, time.Second)
-		ch, ok := m.find(name)
-		if !ok {
-			break
-		}
-		if ch.Control || lockedStates[ch.State] {
-			locked = true
-			break
-		}
-	}
+	// The measurement — wait for lock, discard the acquisition period, take
+	// the median of what is left — is decodeprobe's job, shared with the site
+	// survey. A batch of one: the manager probes strictly one channel at a
+	// time, node-wide.
+	res := decodeprobe.Measure(ctx, []string{name}, m.probeDeps())[name]
 	if ctx.Err() != nil {
 		return
 	}
-	if !locked {
+	if res.Outcome == decodeprobe.NoLock {
 		m.stopAfterProbe(name)
 		log.Printf("chanmgr: probe [%s] FAILED — no lock within %s; next retry in %s", name, lockWait, probeInterval)
 		m.logEvent(name, "probeFail", fmt.Sprintf("test failed — no lock within %s; retry in %s", lockWait, probeInterval))
 		finish(-1, false, "probe failed: no lock")
 		return
 	}
-
-	// Phase 2: verdict. syncPercent is a 30s rolling window not cleared on
-	// start, so only samples old enough to have outgrown the acquisition
-	// period count. The verdict is the MEDIAN of those, not the best of them:
-	// a channel that is mostly dead but spikes occasionally used to pass on
-	// its single best reading and get restored, only to be stopped again on
-	// the next dwell. The median asks what the channel is usually doing.
-	var samples []float64
-	for m.now().Sub(started) < probeWindow && ctx.Err() == nil {
-		m.sleep(ctx, 2*time.Second)
-		age := m.now().Sub(started)
-		if age < probeTrustAge {
-			continue
-		}
-		ch, ok := m.find(name)
-		if !ok {
-			break
-		}
-		if ch.SyncPercent != nil && *ch.SyncPercent > 0 {
-			samples = append(samples, *ch.SyncPercent)
-		}
-	}
-	if ctx.Err() != nil {
-		return
-	}
-	best := medianPct(samples)
+	best := res.MedianPct
 
 	if best >= lowThresholdPct {
 		if err := m.opts.Unsuppress(id); err != nil {
@@ -679,19 +644,29 @@ func (m *Manager) probe(ctx context.Context, name string, id int) {
 }
 
 // medianPct is the middle of the measured probe samples, or -1 when there were
-// too few to rule on. Sorting a copy: the caller's slice order is not meaningful
-// but the samples themselves are, and a surprise in-place sort is a bad habit.
-func medianPct(in []float64) float64 {
-	if len(in) < probeMinSamples {
-		return -1
+// too few to rule on.
+func medianPct(in []float64) float64 { return decodeprobe.Median(in) }
+
+// probeDeps wires decodeprobe to the manager's injected clock and fetch.
+func (m *Manager) probeDeps() decodeprobe.Deps {
+	return decodeprobe.Deps{
+		Now:   m.now,
+		Sleep: m.sleep,
+		Fetch: func() (map[string]decodeprobe.Snapshot, error) {
+			chans, err := m.opts.Fetch()
+			if err != nil {
+				return nil, err
+			}
+			out := make(map[string]decodeprobe.Snapshot, len(chans))
+			for _, ch := range chans {
+				out[strings.TrimSpace(ch.Name)] = decodeprobe.Snapshot{
+					Control: ch.Control, State: ch.State,
+					SyncPercent: ch.SyncPercent, SignalDbfs: ch.SignalDbfs,
+				}
+			}
+			return out, nil
+		},
 	}
-	v := append([]float64(nil), in...)
-	sort.Float64s(v)
-	mid := len(v) / 2
-	if len(v)%2 == 1 {
-		return v[mid]
-	}
-	return (v[mid-1] + v[mid]) / 2
 }
 
 // stopAfterProbe re-stops the probe channel by its CURRENT id (the start may
