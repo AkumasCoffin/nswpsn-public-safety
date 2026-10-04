@@ -93,6 +93,12 @@ const (
 	// well above the backend's pass bar so a near miss caused by desense is
 	// given its fair chance, not just an outright failure.
 	retestBelowPct = 75
+	// retestFloorPct: but only down to here. Sharing a dongle costs a site a
+	// few dB — it turns a strong site into a middling one, not into silence.
+	// A reading of nothing, or a channel that never locked at all, is a site
+	// that is not there, and retesting it alone buys a second measurement of
+	// the same absence at the price of a full window each.
+	retestFloorPct = 20
 
 	// settleAfterStart: let a freshly started channel be assigned a tuner
 	// before the measurement window begins counting.
@@ -140,13 +146,17 @@ type Report struct {
 	Results  []Result `json:"results"`
 }
 
-// LiveResult is one site's reading as the survey has it so far.
+// LiveResult is one site's reading as the survey has it so far — the same
+// figures the finished report carries, so the window reads identically
+// whether it is watching a run or reading one back.
 type LiveResult struct {
-	Site      string   `json:"site"`
-	FreqHz    int64    `json:"freqHz"`
-	Outcome   string   `json:"outcome"`
-	MedianPct *float64 `json:"medianPct"`
-	IsAlt     bool     `json:"isAlt"`
+	Site       string   `json:"site"`
+	FreqHz     int64    `json:"freqHz"`
+	Outcome    string   `json:"outcome"`
+	MedianPct  *float64 `json:"medianPct"`
+	Samples    int      `json:"samples"`
+	SignalDbfs *float64 `json:"signalDbfs"`
+	IsAlt      bool     `json:"isAlt"`
 }
 
 // Progress is the survey's live state for the status frame.
@@ -245,6 +255,10 @@ type measurement struct {
 	isAlt   bool
 	chanNam string
 	res     *decodeprobe.Result
+	// startFailed: the channel never got a tuner, so nothing was measured.
+	// That is the one "no reading" worth taking again — every other one is
+	// the site not being there.
+	startFailed bool
 }
 
 // Run executes the survey to completion and reports it. It always restores the
@@ -353,7 +367,10 @@ func liveResults(plan []*measurement) []LiveResult {
 		if m.res == nil {
 			continue
 		}
-		row := LiveResult{Site: m.cand.Name, FreqHz: m.freqHz, Outcome: string(m.res.Outcome), IsAlt: m.isAlt}
+		row := LiveResult{
+			Site: m.cand.Name, FreqHz: m.freqHz, Outcome: string(m.res.Outcome),
+			Samples: m.res.Samples, SignalDbfs: m.res.SignalDbfs, IsAlt: m.isAlt,
+		}
 		if m.res.Outcome == decodeprobe.Measured {
 			pct := m.res.MedianPct
 			row.MedianPct = &pct
@@ -397,7 +414,7 @@ func (r *Runner) measureAll(ctx context.Context, surveyID int64, plan []*measure
 				if ctx.Err() != nil {
 					return true, "cancelled"
 				}
-				if !needsRetest(m.res) {
+				if !needsRetest(m) {
 					continue
 				}
 				r.setProgress(Progress{
@@ -440,11 +457,13 @@ func (r *Runner) measureBatch(ctx context.Context, batch []*measurement) bool {
 		if err := r.opts.Suppress(id); err != nil {
 			log.Printf("sitesurvey: suppress %q failed: %v (continuing)", m.chanNam, err)
 		}
+		m.startFailed = false
 		if err := r.opts.Start(id); err != nil {
 			// Usually "No Tuner Available". Not a verdict about RF — report it
 			// as unmeasured rather than as a failed site.
 			log.Printf("sitesurvey: start %q failed: %v", m.chanNam, err)
 			m.res = &decodeprobe.Result{Outcome: decodeprobe.Unmeasured, MedianPct: -1}
+			m.startFailed = true
 			names = names[:len(names)-1]
 		}
 	}
@@ -704,18 +723,23 @@ func cluster(plan []*measurement, tuners int) [][]*measurement {
 	return waves
 }
 
-// needsRetest reports whether a batched result deserves a solo second look.
-func needsRetest(res *decodeprobe.Result) bool {
-	if res == nil {
+// needsRetest reports whether a measurement deserves a solo second look.
+//
+// Only two things qualify. A reading that sharing a dongle could plausibly
+// explain — a site heard poorly but heard — because desense costs a site a
+// few dB, turning a strong site middling rather than silent. And a channel
+// that never got a tuner, because that is not a measurement at all.
+//
+// Nothing else. A channel either locks and decodes or it sits idle, and
+// either way a second look buys the same answer at the price of a window.
+func needsRetest(m *measurement) bool {
+	if m.res == nil || m.startFailed {
 		return true
 	}
-	switch res.Outcome {
-	case decodeprobe.Measured:
-		return res.MedianPct < retestBelowPct
-	case decodeprobe.NoLock, decodeprobe.Unmeasured:
-		return true
+	if m.res.Outcome != decodeprobe.Measured {
+		return false
 	}
-	return false
+	return m.res.MedianPct >= retestFloorPct && m.res.MedianPct < retestBelowPct
 }
 
 // better picks the more favourable of a batched and a solo reading. Desense

@@ -13262,7 +13262,10 @@
           : (r.outcome === 'noLock' ? 'noLock' : 'unmeasured');
         rows.set(key(r.site, r.freqHz, r.isAlt), {
           site: r.site + (r.isAlt ? ' (alt)' : ''), freqHz: r.freqHz, verdict,
-          pct: r.medianPct, samples: null, signal: null, added: false, note: null, live: true,
+          pct: r.medianPct,
+          samples: Number.isFinite(r.samples) ? r.samples : null,
+          signal: Number.isFinite(r.signalDbfs) ? r.signalDbfs : null,
+          added: false, note: null, live: true,
         });
       }
       return [...rows.values()];
@@ -13360,9 +13363,8 @@
               <td class="r nd-svm-num">${r.freqHz ? (r.freqHz / 1e6).toFixed(4) : '—'}</td>
               <td class="r">${p == null
                 ? `<span class="nd-sv-note">${r.verdict === 'noLock' ? 'no signal' : 'no reading'}</span>`
-                : `<span class="nd-sync${cls}">${p}%</span>
-                   <span class="nd-sv-bar" style="margin-left:6px;"><i style="width:${p}%; background:${v.color}"></i></span>`}</td>
-              <td class="r nd-svm-num">${r.samples != null ? r.samples : (r.live ? '<span class="nd-svm-pending">live</span>' : '—')}</td>
+                : `<span class="nd-sync${cls}">${p}%</span>`}</td>
+              <td class="r nd-svm-num">${r.samples != null ? r.samples : '—'}</td>
               <td class="r nd-svm-num">${r.signal != null ? Math.round(r.signal) + ' dB' : '—'}</td>
               <td class="r">${r.added ? '<span class="nd-sv-added">added</span>' : ''}</td>
             </tr>`;
@@ -13395,7 +13397,7 @@
               ${tile(c.pass, 'Heard', `at or above ${_ndSurveyPassPct}%`, '#4ade80')}
               ${tile(c.fail, 'Heard, too weak', `below the ${_ndSurveyPassPct}% bar`, '#fb923c')}
               ${tile(c.noLock, 'Not heard', 'never locked on', '#f87171')}
-              ${tile(c.unmeasured, 'No reading', 'locked, nothing measurable', '#94a3b8')}
+              ${c.unmeasured ? tile(c.unmeasured, 'Not measured', 'no reading was taken', '#94a3b8') : ''}
               ${tile(c.added, 'Added', 'now in the channel list', c.added ? '#4ade80' : '#94a3b8')}
               ${tile(c.skipped, 'Not testable', 'no control channel listed', '#94a3b8')}
             </div>
@@ -13465,31 +13467,13 @@
     const _ND_SV_VERDICTS = {
       pass:       { label: 'Heard',      color: '#4ade80', rank: 0 },
       fail:       { label: 'Too weak',   color: '#fb923c', rank: 1 },
-      unmeasured: { label: 'No reading', color: '#94a3b8', rank: 2 },
+      unmeasured: { label: 'Not measured', color: '#94a3b8', rank: 2 },
       noLock:     { label: 'Not heard',  color: '#f87171', rank: 3 },
       skipped:    { label: 'Skipped',    color: '#94a3b8', rank: 4 },
     };
 
     function _ndSvVerdict(v) {
       return _ND_SV_VERDICTS[v] || { label: v || '—', color: 'var(--text-soft)', rank: 9 };
-    }
-
-    /** One tested site. The decode figure uses the channel table's colours so
-     *  a number means the same thing wherever it is read. */
-    function _ndSvRowHtml(r) {
-      const v = _ndSvVerdict(r.verdict);
-      const pct = r.medianPct == null ? null : Math.round(r.medianPct);
-      const cls = pct == null ? '' : (pct >= 85 ? ' good' : (pct >= _ndSurveyPassPct ? ' ok' : ' weak'));
-      const metric = pct == null
-        ? `<span class="nd-sv-note">${escapeHtml(r.verdict === 'noLock' ? 'no signal' : 'no reading')}</span>`
-        : `<span class="nd-sync${cls}" title="${r.samples || 0} samples">${pct}%</span>
-           <span class="nd-sv-bar" title="${pct}% decode"><i style="width:${pct}%; background:${v.color}"></i></span>`;
-      return `<div class="nd-sv-row">
-        <span><span class="nd-mgr-badge" style="color:${v.color}; border-color:${v.color};">${escapeHtml(v.label)}</span></span>
-        <span class="nd-sv-site" title="${escapeHtml(r.siteName || '')}">${escapeHtml(r.siteName || '—')}</span>
-        <span class="nd-sv-freq">${r.freqHz ? (r.freqHz / 1e6).toFixed(4) + ' MHz' : ''}</span>
-        <span class="nd-sv-metric">${metric}${r.added ? '<span class="nd-sv-added">added</span>' : ''}</span>
-      </div>`;
     }
 
     /** The sites that carry no usable control channel in the dataset. There
