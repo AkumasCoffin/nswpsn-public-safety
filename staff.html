@@ -13126,9 +13126,21 @@
     }
 
     function _ndCancelSurvey() {
-      const id = _ndSurveyLive && _ndSurveyLive.surveyId;
-      _ndCmd('surveyCancel', { surveyId: id || 0 }, 'Cancel survey');
-      setTimeout(_ndSurveyFetch, 2000);
+      // The live frame knows the id while the node is reporting progress; the
+      // fetched history knows it either way, which matters when the node has
+      // lost a survey the record still calls running. The backend resolves it
+      // for itself regardless — this is a hint, not the authority.
+      const open = (_ndSurveys || []).find(sv => sv && sv.status === 'running');
+      const id = (_ndSurveyLive && _ndSurveyLive.surveyId) || (open && open.id) || 0;
+      _ndCmd('surveyCancel', { surveyId: id }, 'Cancel survey');
+      // Clear the local view straight away: whichever way the backend resolves
+      // it, this node is not surveying once the command returns.
+      setTimeout(() => {
+        _ndSurveyLive = null;
+        _ndSurveyOpen = false;
+        _ndRenderSurveyBtn();
+        _ndSurveyFetch();
+      }, 1200);
     }
 
     function _ndRenderSurveyBtn() {

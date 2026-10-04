@@ -25,6 +25,10 @@ async function dispatch(sql: string, params: unknown[] = []): Promise<{ rows: un
   if (sql.includes("status = 'running' LIMIT 1")) {
     return { rows: runningSurveyIds.map((id) => ({ id })), rowCount: runningSurveyIds.length };
   }
+  // openSurveyFor: which survey this node has open right now.
+  if (sql.includes('ORDER BY started_at DESC LIMIT 1')) {
+    return { rows: runningSurveyIds.map((id) => ({ id })), rowCount: runningSurveyIds.length };
+  }
   if (sql.includes('FROM node_site_surveys WHERE node_id = $1 LIMIT 1')) {
     return { rows: priorSurveyIds.map((id) => ({ id })), rowCount: priorSurveyIds.length };
   }
@@ -78,7 +82,7 @@ vi.mock('../../../src/services/grnCandidates.js', () => ({
   candidatesForNode: vi.fn(async () => fakeCandidates),
 }));
 
-const { startSurvey, maybeStartInstallSurvey, ingestSurveyResults, handleSurveyCommand, runningSurveys, SURVEY_PASS_PCT } =
+const { startSurvey, maybeStartInstallSurvey, ingestSurveyResults, handleSurveyCommand, runningSurveys, noteSurveyStatus, SURVEY_PASS_PCT } =
   await import('../../../src/services/siteSurvey.js');
 
 const NODE = 'node-1';
@@ -308,18 +312,40 @@ describe('handleSurveyCommand — one path for both staff entry points', () => {
   });
 
   it('cancelling leaves the survey running so the partial report can land', async () => {
+    runningSurveyIds = [77];
     const out = await handleSurveyCommand(NODE, 'surveyCancel', { surveyId: 77 }, 'staff-1');
     expect(out).toMatchObject({ ok: true });
     expect(sendCmd).toHaveBeenCalledWith(NODE, 'surveyCancel', { surveyId: 77 });
     expect(executed.some((e) => e.sql.includes("SET status = 'failed'"))).toBe(false);
   });
 
-  it('a cancel that cannot reach the node closes the survey itself', async () => {
+  it('clears a record the node has lost, without being told which one', async () => {
+    // The exact case staff hit: the node restarted, so it is running no
+    // survey — and the browser cannot name one either, because an id only
+    // reaches it through the progress the node has stopped sending.
+    runningSurveyIds = [77];
+    sendCmd.mockResolvedValueOnce({ ok: false, message: 'no survey is running' } as never);
+    const out = await handleSurveyCommand(NODE, 'surveyCancel', {}, 'staff-1');
+    expect(out).toMatchObject({ ok: true });
+    expect(out!.message).toContain('cleared the stale record');
+    expect(sendCmd).toHaveBeenCalledWith(NODE, 'surveyCancel', { surveyId: 77 });
+    const fail = executed.find((e) => e.sql.includes("SET status = 'failed'"));
+    expect(fail?.params[0]).toBe(77);
+  });
+
+  it('an offline node still gets its record cleared', async () => {
+    runningSurveyIds = [77];
     sendCmd.mockResolvedValueOnce({ ok: false, message: 'node offline' } as never);
     const out = await handleSurveyCommand(NODE, 'surveyCancel', { surveyId: 77 }, 'staff-1');
-    expect(out).toMatchObject({ ok: false });
-    const fail = executed.find((e) => e.sql.includes("SET status = 'failed'"));
-    expect(fail?.params).toEqual([77, NODE, 'cancel could not reach the node']);
+    expect(out).toMatchObject({ ok: true });
+    expect(executed.some((e) => e.sql.includes("SET status = 'failed'"))).toBe(true);
+  });
+
+  it('says so plainly when there is nothing to cancel', async () => {
+    runningSurveyIds = [];
+    const out = await handleSurveyCommand(NODE, 'surveyCancel', {}, 'staff-1');
+    expect(out).toMatchObject({ ok: true, message: 'no survey is running on this node' });
+    expect(sendCmd).not.toHaveBeenCalled();
   });
 });
 
@@ -341,5 +367,33 @@ describe('runningSurveys — what the staff list shows a badge from', () => {
     // outlive the survey it is reporting.
     expect(sql).toContain("status = 'running'");
     expect(sql).toContain('started_at >');
+  });
+});
+
+describe('noteSurveyStatus — a record must not outlive the node running it', () => {
+  it('closes the record once the node has stopped claiming the survey', async () => {
+    await startSurvey(NODE, 'manual', 'staff-1');   // primes the open-survey set
+    executed = [];
+    noteSurveyStatus(NODE, false);
+    await new Promise((r) => setTimeout(r, 0));     // the close is fire-and-forget
+    const closed = executed.find((e) => e.sql.includes("note = 'the node stopped reporting it"));
+    expect(closed).toBeDefined();
+    // Only a record old enough that the node would certainly have reported it.
+    expect(closed!.sql).toContain('started_at <');
+  });
+
+  it('does nothing while the node is still reporting it', async () => {
+    await startSurvey(NODE, 'manual', 'staff-1');
+    executed = [];
+    noteSurveyStatus(NODE, true);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(executed).toHaveLength(0);
+  });
+
+  it('ignores a node this process never saw start one', async () => {
+    executed = [];
+    noteSurveyStatus('some-other-node', false);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(executed).toHaveLength(0);
   });
 });

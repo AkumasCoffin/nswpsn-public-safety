@@ -98,8 +98,59 @@ export async function startSurvey(
     );
     return { ok: false, error: res.message ?? 'agent refused the survey' };
   }
+  _openSurveys.add(nodeId);
   log.info({ nodeId, surveyId, trigger, rings, candidates: candidates.length, skipped: skipped.length }, 'site survey started');
   return { ok: true, surveyId };
+}
+
+/**
+ * Nodes this process believes have a survey open, so a status frame can be
+ * judged without a query. Empty after a restart, which simply falls back to
+ * the lazy timeout — it is a fast path, not a source of truth.
+ */
+const _openSurveys = new Set<string>();
+/**
+ * How long a node is allowed to report no survey before its record is treated
+ * as lost. Generous: a survey's first act is a config import, and the node
+ * reports progress from the moment it accepts the command, so this only has to
+ * outlast a slow import plus a heartbeat.
+ */
+const SURVEY_SILENCE_MS = 3 * 60_000;
+
+/**
+ * Called on every status frame from a radio node: `surveying` is whether the
+ * node says it is running one.
+ *
+ * A survey lives in the agent's memory only, so a node that restarts loses it
+ * silently and the record would sit open until the timeout — showing staff a
+ * survey running on a node that is plainly just decoding. The node not
+ * claiming one, well past the point where it would have, is the answer.
+ */
+export function noteSurveyStatus(nodeId: string, surveying: boolean): void {
+  if (surveying) {
+    _openSurveys.add(nodeId);
+    return;
+  }
+  if (!_openSurveys.has(nodeId)) return;
+  void (async () => {
+    try {
+      const pool = await getPool();
+      if (!pool) return;
+      const r = await pool.query(
+        `UPDATE node_site_surveys SET status = 'failed', finished_at = now(),
+                note = 'the node stopped reporting it — most likely it restarted'
+          WHERE node_id = $1 AND status = 'running'
+            AND started_at < now() - ($2 || ' milliseconds')::interval`,
+        [nodeId, String(SURVEY_SILENCE_MS)],
+      );
+      if ((r.rowCount ?? 0) > 0) {
+        _openSurveys.delete(nodeId);
+        log.info({ nodeId }, 'closed a survey record the node no longer reports');
+      }
+    } catch (err) {
+      log.warn({ err, nodeId }, 'noteSurveyStatus failed');
+    }
+  })();
 }
 
 /** First-install hook, called from the hello handler. All guards inside;
@@ -245,14 +296,29 @@ export async function handleSurveyCommand(
       : { ok: false, message: r.error ?? 'could not start the survey' };
   }
   if (action === 'surveyCancel') {
-    const surveyId = Number(a.surveyId ?? 0);
-    const r = await hub.sendCmd(nodeId, action, args);
-    // Only close the survey here when the agent could NOT be told to stop.
-    // When it can, it restores the node and POSTs what it measured, and that
-    // report finishes the row — closing it now would make the ingest reject
-    // exactly the partial results staff cancelled in order to see.
-    if (!r.ok && surveyId > 0) await failSurvey(nodeId, surveyId, 'cancel could not reach the node');
-    return { ok: r.ok, message: r.message ?? (r.ok ? 'survey cancelling' : 'could not reach the node') };
+    // Which survey is open is the BACKEND's own record, so look it up here
+    // rather than trusting the caller. The browser only learns a survey id
+    // from the node's progress reports — which is exactly what is missing
+    // when a node has lost a survey the record still calls running, so a
+    // caller-supplied id was unavailable in the one case that needs it most.
+    const hinted = Number(a.surveyId ?? 0);
+    const surveyId = (await openSurveyFor(nodeId)) ?? (hinted > 0 ? hinted : 0);
+    if (surveyId === 0) {
+      return { ok: true, message: 'no survey is running on this node' };
+    }
+    const r = await hub.sendCmd(nodeId, action, { surveyId });
+    if (r.ok) {
+      // The node is stopping: it restores itself and POSTs what it measured,
+      // and THAT report closes the record. Closing it here would make the
+      // ingest reject exactly the partial results staff cancelled to see.
+      return { ok: true, message: r.message ?? 'survey cancelling' };
+    }
+    // The node is not running this survey — it restarted, or never picked the
+    // command up, and its own state is in-process only. The record is stale,
+    // so clear it; the node has nothing to restore and nothing to report.
+    await failSurvey(nodeId, surveyId, r.message ?? 'the node was not running this survey');
+    log.info({ nodeId, surveyId, agent: r.message }, 'cleared a survey record the node had lost');
+    return { ok: true, message: 'the node was not running it — cleared the stale record' };
   }
   return null;
 }
@@ -266,6 +332,23 @@ export async function handleSurveyCommand(
  * otherwise show nothing out of the ordinary on a node that has its channel
  * set replaced.
  */
+export async function openSurveyFor(nodeId: string): Promise<number | null> {
+  const pool = await getPool();
+  if (!pool) return null;
+  try {
+    const r = await pool.query<{ id: number }>(
+      `SELECT id FROM node_site_surveys
+        WHERE node_id = $1 AND status = 'running'
+        ORDER BY started_at DESC LIMIT 1`,
+      [nodeId],
+    );
+    return r.rows[0]?.id ?? null;
+  } catch (err) {
+    log.warn({ err, nodeId }, 'openSurveyFor failed');
+    return null;
+  }
+}
+
 export async function runningSurveys(): Promise<Map<string, number>> {
   const out = new Map<string, number>();
   const pool = await getPool();

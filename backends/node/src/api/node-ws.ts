@@ -39,7 +39,7 @@ import { buildConfigPayload } from '../services/nodes/configMerge.js';
 import { shapeNodeLive } from '../services/nodeLive.js';
 import { liveCallWindow } from '../services/nodeCallWindow.js';
 import { ingestChanMgrLog } from '../services/nodes/chanmgrLog.js';
-import { maybeStartInstallSurvey, handleSurveyCommand } from '../services/siteSurvey.js';
+import { maybeStartInstallSurvey, handleSurveyCommand, noteSurveyStatus } from '../services/siteSurvey.js';
 
 // The hub is pure connection plumbing and must not import config/DB itself, so
 // the Live row shaper is handed to it from here (module load = route setup).
@@ -337,6 +337,9 @@ async function handleAgentMessage(
       // agent repeats it every frame, the ingest high-water mark makes the
       // no-news case free.
       void ingestChanMgrLog(ctx.nodeId, st.channelManager);
+      // A survey lives in the agent's memory: if it stops saying it has one,
+      // it has lost it (a restart), and the record must not outlive that.
+      noteSurveyStatus(ctx.nodeId, (st as { siteSurvey?: { running?: boolean } }).siteSurvey?.running === true);
       void touchNodeSeen(ctx.nodeId);
       markNodeSeen(ctx.nodeId);
       return;
