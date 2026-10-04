@@ -44,7 +44,7 @@ import {
 } from '../services/nodes/registry.js';
 import { hub } from '../services/nodes/hub.js';
 import { listChanMgrLog } from '../services/nodes/chanmgrLog.js';
-import { handleSurveyCommand, listSurveys, runningSurveys } from '../services/siteSurvey.js';
+import { handleSurveyCommand, listSurveys, runningSurveys, SURVEY_PASS_PCT } from '../services/siteSurvey.js';
 import { allTaggedSites, lgaRingDepths } from '../services/grnCandidates.js';
 import { nodeUptimeMany } from '../services/nodes/nodeUptime.js';
 import { liveCallWindow } from '../services/nodeCallWindow.js';
@@ -393,7 +393,7 @@ nodesRouter.get('/api/nodes/:id/site-surveys', requireRole(canViewNodeData), asy
   try {
     const node = await getNode(id);
     if (!node) return c.json({ error: 'node not found' }, 404);
-    return c.json({ surveys: await listSurveys(id) });
+    return c.json({ surveys: await listSurveys(id), passPct: SURVEY_PASS_PCT });
   } catch (err) {
     log.error({ err, id }, 'Error fetching site surveys');
     return c.json({ error: 'Failed to fetch surveys' }, 500);

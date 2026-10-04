@@ -1081,6 +1081,14 @@ func (c *Client) handleCmd(conn *websocket.Conn, env *protocol.Envelope) {
 		})
 		go func() {
 			defer func() {
+				// A panic in here would take the whole agent with it, and with
+				// it the node's feed — over a survey, which is the least
+				// important thing this process does. The deferred restore
+				// inside Run still unwinds, so the node's own channels come
+				// back either way; this just stops one from killing the rest.
+				if rec := recover(); rec != nil {
+					log.Printf("sitesurvey: survey panicked, node restored and survey abandoned: %v", rec)
+				}
 				scancel()
 				c.surveyMu.Lock()
 				c.surveyCancel = nil

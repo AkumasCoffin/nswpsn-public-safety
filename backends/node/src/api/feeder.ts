@@ -50,7 +50,7 @@ import { liveCallWindow } from '../services/nodeCallWindow.js';
 import { getZoneGroups, isValidZone } from '../services/nodes/rfsZones.js';
 import { AU_STATES } from '../lib/stateMask.js';
 import { pushConfigToNode } from '../services/nodes/configPush.js';
-import { listSurveys, runningSurveys } from '../services/siteSurvey.js';
+import { listSurveys, runningSurveys, SURVEY_PASS_PCT } from '../services/siteSurvey.js';
 import { getPool } from '../db/pool.js';
 import { feederRadioStats } from './node-data.js';
 
@@ -1172,7 +1172,7 @@ feederRouter.get('/api/feeder/nodes/:id/site-surveys', async (c) => {
   if (!node) return c.json({ error: 'not your node' }, 404);
   if (node.kind !== 'radio') return c.json({ error: 'surveys are radio-only' }, 400);
   try {
-    return c.json({ surveys: await listSurveys(node.id) });
+    return c.json({ surveys: await listSurveys(node.id), passPct: SURVEY_PASS_PCT });
   } catch (err) {
     log.error({ err, id: node.id }, 'Error fetching surveys (owner)');
     return c.json({ error: 'Failed to fetch surveys' }, 500);

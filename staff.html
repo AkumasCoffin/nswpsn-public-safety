@@ -13163,6 +13163,11 @@
     // much the point as the ones it heard well.
     let _ndSurveys = [];
     let _ndSurveyLive = null;
+    // The decode bar a survey adds a site at. The BACKEND applies it — this is
+    // only for classifying readings that have not reached it yet (a run still
+    // in flight) and for saying the number in prose, so it is taken from the
+    // same response the results come in rather than written down twice.
+    let _ndSurveyPassPct = 65;
     // The backend's view: a survey row is open for this node. True from the
     // moment it is commanded, which is before the node reports any progress.
     let _ndSurveyOpen = false;
@@ -13176,6 +13181,7 @@
         if (res.ok) {
           const data = await res.json();
           _ndSurveys = Array.isArray(data.surveys) ? data.surveys : [];
+          if (Number.isFinite(data.passPct)) _ndSurveyPassPct = data.passPct;
           _ndSurveyOpen = _ndSurveys.some(sv => sv && sv.status === 'running');
         }
       } catch (e) { /* panel shows whatever it already had */ }
@@ -13198,7 +13204,7 @@
         + `Its channels are stopped while it runs — a tuner already sourcing a channel cannot retune to a `
         + `candidate, so the survey needs the radio to itself. For a few minutes the node hears nothing and so `
         + `uploads nothing; the feed itself is left on, and the channels come back by themselves. `
-        + `Every site it hears above 65% is added to its channel list.`,
+        + `Every site it hears above ${_ndSurveyPassPct}% is added to its channel list.`,
         { title: 'Run a site survey?', okText: 'Run survey' },
       ).then(ok => {
         if (!ok) return;
@@ -13252,7 +13258,7 @@
       }
       for (const r of ((live && live.results) || [])) {
         const verdict = r.medianPct != null
-          ? (r.medianPct >= 65 ? 'pass' : 'fail')
+          ? (r.medianPct >= _ndSurveyPassPct ? 'pass' : 'fail')
           : (r.outcome === 'noLock' ? 'noLock' : 'unmeasured');
         rows.set(key(r.site, r.freqHz, r.isAlt), {
           site: r.site + (r.isAlt ? ' (alt)' : ''), freqHz: r.freqHz, verdict,
@@ -13347,7 +13353,7 @@
           <tbody>${rows.map(r => {
             const v = _ndSvVerdict(r.verdict);
             const p = r.pct == null ? null : Math.round(r.pct);
-            const cls = p == null ? '' : (p >= 85 ? ' good' : (p >= 65 ? ' ok' : ' weak'));
+            const cls = p == null ? '' : (p >= 85 ? ' good' : (p >= _ndSurveyPassPct ? ' ok' : ' weak'));
             return `<tr>
               <td><span class="nd-mgr-badge" style="color:${v.color}; border-color:${v.color};">${escapeHtml(v.label)}</span></td>
               <td class="site" title="${escapeHtml(r.site || '')}">${escapeHtml(r.site || '—')}</td>
@@ -13386,8 +13392,8 @@
           <div class="nd-svm-body">
             ${progress}
             <div class="nd-svm-tiles">
-              ${tile(c.pass, 'Heard', 'at or above 65%', '#4ade80')}
-              ${tile(c.fail, 'Heard, too weak', 'below the 65% bar', '#fb923c')}
+              ${tile(c.pass, 'Heard', `at or above ${_ndSurveyPassPct}%`, '#4ade80')}
+              ${tile(c.fail, 'Heard, too weak', `below the ${_ndSurveyPassPct}% bar`, '#fb923c')}
               ${tile(c.noLock, 'Not heard', 'never locked on', '#f87171')}
               ${tile(c.unmeasured, 'No reading', 'locked, nothing measurable', '#94a3b8')}
               ${tile(c.added, 'Added', 'now in the channel list', c.added ? '#4ade80' : '#94a3b8')}
@@ -13473,7 +13479,7 @@
     function _ndSvRowHtml(r) {
       const v = _ndSvVerdict(r.verdict);
       const pct = r.medianPct == null ? null : Math.round(r.medianPct);
-      const cls = pct == null ? '' : (pct >= 85 ? ' good' : (pct >= 65 ? ' ok' : ' weak'));
+      const cls = pct == null ? '' : (pct >= 85 ? ' good' : (pct >= _ndSurveyPassPct ? ' ok' : ' weak'));
       const metric = pct == null
         ? `<span class="nd-sv-note">${escapeHtml(r.verdict === 'noLock' ? 'no signal' : 'no reading')}</span>`
         : `<span class="nd-sync${cls}" title="${r.samples || 0} samples">${pct}%</span>

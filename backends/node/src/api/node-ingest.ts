@@ -583,8 +583,12 @@ const MAX_SURVEY_BYTES = 256 * 1024;
 const SurveyResultSchema = z.object({
   grnKey: z.string().max(120).nullable().optional(),
   siteName: z.string().min(1).max(120),
-  freqHz: z.number().int().positive(),
-  altFreqHz: z.number().int().positive().nullable().optional(),
+  // Bounded to the band the dataset itself is bounded to (parseControlMhz
+  // refuses anything outside 100-1000 MHz). A passing result is written into
+  // the node's channel list, so this is the one field a node reports that
+  // becomes configuration — it does not get to name an arbitrary frequency.
+  freqHz: z.number().int().min(100_000_000).max(1_000_000_000),
+  altFreqHz: z.number().int().min(100_000_000).max(1_000_000_000).nullable().optional(),
   outcome: z.enum(['measured', 'noLock', 'unmeasured']),
   medianPct: z.number().min(0).max(100).nullable().optional(),
   samples: z.number().int().min(0).max(1000).default(0),
