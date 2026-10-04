@@ -4361,7 +4361,7 @@
                 <i class="fas fa-tower-broadcast"></i> Add GRN site
               </button>
               <button class="btn btn-secondary btn-sm nd-write" id="nd-survey-btn" onclick="_ndRunSurvey(this)"
-                title="Measure how well this node hears every GRN site in its council area (and neighbouring ones), then add the sites it hears well to its channel list. Its own channels stop while it runs and come back after.">
+                title="Measure how well this node hears every GRN site in its council area (and neighbouring ones), then add the sites it hears well to its channel list. Its channels stop while it runs — it uploads nothing for those minutes, though the feed stays on — and come back after.">
                 <i class="fas fa-magnifying-glass-location"></i> Run site survey
               </button>
               <select id="nd-survey-rings" class="nd-survey-rings nd-write"
@@ -10455,7 +10455,7 @@
           <div class="dev-card-head" style="padding-right: 0;">
             <span class="node-dot ${updating ? 'updating' : (online ? 'online' : '')}" title="${updating ? _ndUpdStageLabel(updStage) : (online ? 'Online' : 'Offline')}"></span>
             <div class="dev-card-name">${escapeHtml(name)}${node.surveyingId != null
-              ? ` <span class="node-surveying" title="An RF site survey is running on this node: it is measuring nearby radio sites, and its own channels are stopped until it finishes."><i class="fas fa-magnifying-glass-location"></i> Surveying</span>`
+              ? ` <span class="node-surveying" title="An RF site survey is running on this node: it is measuring nearby radio sites. Its channels are stopped until it finishes, so it is uploading nothing — the feed itself is untouched."><i class="fas fa-magnifying-glass-location"></i> Surveying</span>`
               : ''}</div>
             <i class="fas fa-chevron-right nd-card-open" aria-hidden="true"></i>
           </div>
@@ -13197,9 +13197,10 @@
         `Test every GRN site in ${reach}, a few at a time?
 
 `
-        + `The node's own channels are stopped while it runs, so it is off the air for a few minutes — a tuner `
-        + `already sourcing a channel cannot retune to a candidate, so the survey needs the radio to itself. `
-        + `They come back automatically. Every site it hears above 65% is added to its channel list.`,
+        + `Its channels are stopped while it runs — a tuner already sourcing a channel cannot retune to a `
+        + `candidate, so the survey needs the radio to itself. For a few minutes the node hears nothing and so `
+        + `uploads nothing; the feed itself is left on, and the channels come back by themselves. `
+        + `Every site it hears above 65% is added to its channel list.`,
         { title: 'Run a site survey?', okText: 'Run survey' },
       ).then(ok => {
         if (!ok) return;
@@ -13423,7 +13424,7 @@
         : 'starting — waiting for the node to pick it up';
       ban.innerHTML = `
         <i class="fas fa-spinner fa-spin nd-sb-spin"></i>
-        <span><b>Site survey running.</b> <span class="nd-sb-sub">${detail}. The node's own channels are stopped and it is off the air until this finishes — they come back by themselves.</span></span>
+        <span><b>Site survey running.</b> <span class="nd-sb-sub">${detail}. Its channels are stopped until this finishes, so it is hearing nothing and uploading nothing — the feed is still on, and they come back by themselves.</span></span>
         <button class="btn btn-secondary btn-sm nd-write nd-sb-act" onclick="_ndCancelSurvey()">Cancel survey</button>`;
     }
 

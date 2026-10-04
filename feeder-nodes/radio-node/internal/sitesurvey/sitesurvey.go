@@ -24,8 +24,11 @@
 //     sourcing a channel cannot retune to a candidate's frequency, so leaving
 //     them up meant the test channels competed for the tuner they needed and
 //     every reading was taken on a desensed dongle. They stay configured and
-//     come back with the restoring import; the node does not feed while a
-//     survey runs, which is the cost of measuring properly.
+//     come back with the restoring import. Note what this does and does not
+//     touch: the feed is left exactly as it was — rdio keeps running, its
+//     downstream stays enabled, the relay stays up — and the node simply has
+//     nothing to upload while it is decoding nothing. Uploads resume the
+//     moment the channels come back.
 //   - Candidates are tested in WAVES. Frequencies within one tuner's usable
 //     span can be decoded by a single dongle at once, so the candidates are
 //     greedy-clustered into groups inside clusterSpanHz (at most
