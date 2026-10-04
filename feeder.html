@@ -1424,7 +1424,18 @@
         running: 'The test is running now.', done: 'The test finished.',
         failed: 'The test did not finish.', timeout: 'The test timed out.',
       }[latest.status] || '';
-      const rows = (latest.results || []).map(r => {
+      // An owner wants to know which sites their node hears, strongest first.
+      // Sites the dataset lists no control channel for were never testable and
+      // are not a result — they are counted in the summary, not listed.
+      const RANK = { pass: 0, fail: 1, unmeasured: 2, noLock: 3 };
+      const all = latest.results || [];
+      const notTestable = all.filter(r => r.verdict === 'skipped').length;
+      const rows = all
+        .filter(r => r.verdict !== 'skipped')
+        .sort((a, b) => (RANK[a.verdict] ?? 9) - (RANK[b.verdict] ?? 9)
+          || (b.medianPct ?? -1) - (a.medianPct ?? -1)
+          || String(a.siteName || '').localeCompare(String(b.siteName || '')))
+        .map(r => {
         const cls = r.verdict === 'pass' ? 'sv-pass' : r.verdict === 'fail' ? 'sv-fail' : 'sv-none';
         const pct = r.medianPct != null
           ? `${Math.round(r.medianPct)}%`
@@ -1442,6 +1453,7 @@
         <div class="fs-act-h">Site survey</div>
         <div class="sv-meta">We checked how well your node hears ${latest.candidates || 0} nearby radio site(s).
           ${statusText}${latest.added ? ` ${latest.added} site(s) were added to its channel list.` : ''}
+          ${notTestable ? ` ${notTestable} had no control channel listed and could not be tested.` : ''}
           ${_statsTimeAgo(latest.startedAt) ? `Last run ${escapeHtml(_statsTimeAgo(latest.startedAt))}.` : ''}</div>
         ${rows || '<div class="msg-empty">No sites were tested.</div>'}`;
     }
