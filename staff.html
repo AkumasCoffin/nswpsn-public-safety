@@ -983,12 +983,6 @@
     .nd-svm-table td.site { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .nd-svm-num { font-variant-numeric: tabular-nums; }
     .nd-svm-pending { color: var(--text-soft); font-style: italic; }
-    .nd-svm-runs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; align-items: center; }
-    .nd-svm-runs-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
-      color: var(--text-soft); font-weight: 600; margin-right: 2px; }
-    .nd-svm-run-pick { background: rgba(148, 163, 184, 0.10); border: 1px solid var(--border-subtle);
-      border-radius: 999px; padding: 3px 10px; font-size: 11px; color: var(--text-soft); cursor: pointer; }
-    .nd-svm-run-pick.on { color: var(--text-primary); border-color: #7dd3fc; background: rgba(125, 211, 252, 0.12); }
 
     /* The sites that could not be tested at all: counted, not listed. */
     .nd-sv-skip { margin: 4px 0 2px; }
@@ -13215,6 +13209,19 @@
       });
     }
 
+    /**
+     * Whether this node's agent publishes readings as it takes them. Older
+     * ones report only in the record they file at the end, which is a very
+     * different thing to watch: the window would sit empty for minutes with
+     * nothing to say why.
+     */
+    function _ndAgentPublishesReadings() {
+      const n = (allNodes || []).find(x => String(x.id) === String(_ndNodeId)) || _ndNode || {};
+      const parts = String(n.agentVersion || '').split('.').map(v => parseInt(v, 10) || 0);
+      const [maj, min, patch] = [parts[0] || 0, parts[1] || 0, parts[2] || 0];
+      return maj > 0 || min > 2 || (min === 2 && patch >= 38);
+    }
+
     /** When a run happened, in the drawer's usual short form. */
     function _ndSvWhen(sv) {
       const d = sv && sv.startedAt ? new Date(sv.startedAt) : null;
@@ -13268,9 +13275,9 @@
     }
 
     function _ndSurveyModalOpen(runId) {
-      // Which run was asked for; null means "the newest", which is also the
-      // running one when there is one.
-      _ndSvmRun = (runId != null && _ndSurveys[0] && _ndSurveys[0].id !== runId) ? runId : null;
+      // The run that was clicked. null only when something opens the window
+      // without naming one, which then means the newest.
+      _ndSvmRun = runId != null ? runId : null;
       if (document.getElementById('nd-survey-modal')) { _ndSurveyModalRender(); return; }
       const overlay = document.createElement('div');
       overlay.id = 'nd-survey-modal';
@@ -13297,12 +13304,13 @@
       const overlay = document.getElementById('nd-survey-modal');
       if (!overlay) return;
       const live = (_ndSurveyLive && _ndSurveyLive.running) ? _ndSurveyLive : null;
-      // The live run is always the newest record; an explicitly picked older
-      // run is shown on its own, with no live readings merged into it.
-      const sv = _ndSvmRun != null
-        ? (_ndSurveys || []).find(x => x.id === _ndSvmRun) || null
-        : (_ndSurveys || [])[0] || null;
-      const showLive = live && (_ndSvmRun == null || (sv && sv.id === live.surveyId));
+      // Exactly one run: the one the window was opened on. Its record may not
+      // exist yet (a survey is running before the backend has been asked for
+      // it again), which is why the id leads and the record follows.
+      const runId = _ndSvmRun != null ? _ndSvmRun
+        : (live ? live.surveyId : ((_ndSurveys || [])[0] || {}).id ?? null);
+      const sv = (_ndSurveys || []).find(x => x.id === runId) || null;
+      const showLive = !!(live && live.surveyId === runId);
       const rows = _ndSvRows(sv, showLive ? live : null);
       const c = _ndSvCounts(sv, showLive ? live : null);
 
@@ -13326,15 +13334,9 @@
           <div class="nd-sv-prog"><i style="width:${pct}%"></i></div>
         </div>` : '';
 
-      const runPicker = (_ndSurveys || []).length > 1 ? `
-        <div class="nd-svm-runs">
-          <span class="nd-svm-runs-label">Runs</span>
-          ${_ndSurveys.map(r => `
-          <span class="nd-svm-run-pick${(sv && r.id === sv.id) ? ' on' : ''}"
-                title="${escapeHtml(_ndSvWhen(r))} · ${r.trigger === 'install' ? 'first install' : 'manual'} · ${r.candidates || 0} site(s)"
-                onclick="_ndSvmRun=${r.id}; _ndSurveyModalRender();">${escapeHtml(_ndSvWhen(r))}${
-                  r.status === 'running' ? ' · running' : ''}</span>`).join('')}
-        </div>` : '';
+      // No run picker here on purpose: the Site survey panel lists every run
+      // and opens this on one of them. A second list inside the thing it
+      // opened is just the same choice offered twice.
 
       const body = rows.length ? `
         <table class="nd-svm-table">
@@ -13361,7 +13363,11 @@
           }).join('')}</tbody>
         </table>`
         : `<div class="nd-empty" style="border:none;background:none;">${
-            showLive ? 'No readings yet — the first wave is still being measured.' : 'Nothing was measured on this run.'}</div>`;
+            !showLive ? 'Nothing was measured on this run.'
+            : _ndAgentPublishesReadings()
+              ? 'No readings yet — the first wave is still being measured.'
+              : `This node's agent reports its readings when the survey finishes, so this fills in at the end. `
+                + `Agent 0.2.38 and newer publish each one as it is taken.`}</div>`;
 
       const skipped = ((sv && sv.results) || []).filter(r => r.verdict === 'skipped');
 
@@ -13379,7 +13385,6 @@
           </div>
           <div class="nd-svm-body">
             ${progress}
-            ${runPicker}
             <div class="nd-svm-tiles">
               ${tile(c.pass, 'Heard', 'at or above 65%', '#4ade80')}
               ${tile(c.fail, 'Heard, too weak', 'below the 65% bar', '#fb923c')}
