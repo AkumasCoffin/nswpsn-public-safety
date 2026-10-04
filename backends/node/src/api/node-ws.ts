@@ -39,6 +39,7 @@ import { buildConfigPayload } from '../services/nodes/configMerge.js';
 import { shapeNodeLive } from '../services/nodeLive.js';
 import { liveCallWindow } from '../services/nodeCallWindow.js';
 import { ingestChanMgrLog } from '../services/nodes/chanmgrLog.js';
+import { maybeStartInstallSurvey } from '../services/siteSurvey.js';
 
 // The hub is pure connection plumbing and must not import config/DB itself, so
 // the Live row shaper is handed to it from here (module load = route setup).
@@ -317,6 +318,10 @@ async function handleAgentMessage(
         } catch (err) {
           log.debug({ err, nodeId: ctx.nodeId }, 'hello: config push skipped');
         }
+        // First-install site survey: a radio node with zero channels, an LGA,
+        // and no survey history gets one automatic run. All guards (and the
+        // once-ever rule) live in the service; fire-and-forget.
+        void maybeStartInstallSurvey(node);
       }
       return;
     }

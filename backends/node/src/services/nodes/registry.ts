@@ -94,6 +94,7 @@ export interface NodeRow {
   // Coarse locality (ABS LGA name, same vocabulary as the boundaries table).
   // Pager nodes only; display/attribution, not validated against the DB.
   lga: string | null;
+  suburb: string | null;
   // LAN address self-reported by the agent on hello (display only). Kept in
   // the row so the last known address survives the node going offline.
   local_ip: string | null;
@@ -111,7 +112,7 @@ export interface HelloMeta {
 
 const NODE_COLS = `id, kind, user_id, install_id, name, enabled, feed_enabled, config_override,
   config_version, agent_version, sdrtrunk_version, rdio_version, os, arch,
-  last_seen_at, notes, created_at, token_prefix, lat, lon, zone, state, lga, local_ip`;
+  last_seen_at, notes, created_at, token_prefix, lat, lon, zone, state, lga, suburb, local_ip`;
 
 /** Max distinct installs (nodes) one contributor may register. `install_id` is
  *  an attacker-chosen header, so without a cap a single token could create
@@ -152,6 +153,7 @@ export async function createNode(
     zone: string | null;
     state: string | null;
     lga: string | null;
+    suburb?: string | null;
     /** Exact antenna position. Required at creation for adsb nodes (their
      *  decoder needs it to report range); null for the other kinds, which set
      *  it later via PUT /api/feeder/nodes/:id/location. */
@@ -163,12 +165,12 @@ export async function createNode(
   if (!pool) return null;
   const cleanName = clampMeta(name, 120) || `${kind}-node`;
   const res = await pool.query<NodeRow>(
-    `INSERT INTO nodes (user_id, kind, name, token_hash, token_prefix, zone, state, lga, lat, lon)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    `INSERT INTO nodes (user_id, kind, name, token_hash, token_prefix, zone, state, lga, suburb, lat, lon)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
      RETURNING ${NODE_COLS}`,
     [
       userId, kind, cleanName, tokenHash, tokenPrefix,
-      loc.zone, loc.state, loc.lga, loc.lat ?? null, loc.lon ?? null,
+      loc.zone, loc.state, loc.lga, loc.suburb ?? null, loc.lat ?? null, loc.lon ?? null,
     ],
   );
   const row = res.rows[0] ?? null;
@@ -394,6 +396,7 @@ export async function setNodeLocation(
     zone?: string | null;
     state?: string | null;
     lga?: string | null;
+    suburb?: string | null;
     lat?: number | null;
     lon?: number | null;
   },
@@ -402,17 +405,19 @@ export async function setNodeLocation(
   if (!pool) return null;
   const res = await pool.query<NodeRow>(
     `UPDATE nodes SET
-       zone  = CASE WHEN $2::boolean  THEN $3  ELSE zone  END,
-       state = CASE WHEN $4::boolean  THEN $5  ELSE state END,
-       lga   = CASE WHEN $6::boolean  THEN $7  ELSE lga   END,
-       lat   = CASE WHEN $8::boolean  THEN $9  ELSE lat   END,
-       lon   = CASE WHEN $10::boolean THEN $11 ELSE lon   END
+       zone   = CASE WHEN $2::boolean  THEN $3  ELSE zone   END,
+       state  = CASE WHEN $4::boolean  THEN $5  ELSE state  END,
+       lga    = CASE WHEN $6::boolean  THEN $7  ELSE lga    END,
+       suburb = CASE WHEN $8::boolean  THEN $9  ELSE suburb END,
+       lat    = CASE WHEN $10::boolean THEN $11 ELSE lat    END,
+       lon    = CASE WHEN $12::boolean THEN $13 ELSE lon    END
      WHERE id = $1 RETURNING ${NODE_COLS}`,
     [
       id,
       loc.zone !== undefined, loc.zone ?? null,
       loc.state !== undefined, loc.state ?? null,
       loc.lga !== undefined, loc.lga ?? null,
+      loc.suburb !== undefined, loc.suburb ?? null,
       loc.lat !== undefined, loc.lat ?? null,
       loc.lon !== undefined, loc.lon ?? null,
     ],

@@ -50,6 +50,7 @@ import { liveCallWindow } from '../services/nodeCallWindow.js';
 import { getZoneGroups, isValidZone } from '../services/nodes/rfsZones.js';
 import { AU_STATES } from '../lib/stateMask.js';
 import { pushConfigToNode } from '../services/nodes/configPush.js';
+import { listSurveys } from '../services/siteSurvey.js';
 import { getPool } from '../db/pool.js';
 import { feederRadioStats } from './node-data.js';
 
@@ -269,18 +270,19 @@ const CreateNodeSchema = z
     // Free text on purpose (ABS LGA vocabulary via the UI's datalist, but ACT
     // has no LGAs and a dev DB may have no boundaries table).
     lga: z.string().trim().min(1).max(120).optional(),
+    suburb: z.string().trim().max(120).optional(),
     lat: z.number().min(-90).max(90).optional(),
     lon: z.number().min(-180).max(180).optional(),
   })
   .superRefine((v, ctx) => {
-    if (v.kind === 'pager') {
-      if (!v.state) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['state'], message: 'state required for pager nodes' });
-      if (!v.lga) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['lga'], message: 'lga required for pager nodes' });
+    if (v.kind === 'pager' || v.kind === 'radio') {
+      // Radio joined the pager model (state + LGA) for the site survey;
+      // zone is accepted but no longer required.
+      if (!v.state) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['state'], message: `state required for ${v.kind} nodes` });
+      if (!v.lga) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['lga'], message: `lga required for ${v.kind} nodes` });
     } else if (v.kind === 'adsb') {
       if (typeof v.lat !== 'number') ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['lat'], message: 'exact antenna position (lat) required for ADS-B nodes' });
       if (typeof v.lon !== 'number') ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['lon'], message: 'exact antenna position (lon) required for ADS-B nodes' });
-    } else if (!v.zone) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['zone'], message: 'zone required' });
     }
   });
 feederRouter.post('/api/feeder/nodes', async (c) => {
@@ -305,8 +307,9 @@ feederRouter.post('/api/feeder/nodes', async (c) => {
     const isAdsbKind = parsed.data.kind === 'adsb';
     const node = await createNode(userId, name, parsed.data.kind, tokenHash, tokenPrefix, {
       zone: isPagerKind || isAdsbKind ? null : parsed.data.zone ?? null,
-      state: isPagerKind ? parsed.data.state ?? null : isAdsbKind ? null : 'NSW',
-      lga: isPagerKind ? parsed.data.lga ?? null : null,
+      state: isAdsbKind ? null : parsed.data.state ?? (isPagerKind ? null : 'NSW'),
+      lga: isAdsbKind ? null : parsed.data.lga ?? null,
+      suburb: isAdsbKind ? null : parsed.data.suburb ?? null,
       // ADS-B nodes are created WITH their pin (schema-enforced above) so the
       // first config push already carries --lat/--lon; the other kinds set it
       // later via PUT .../location.
@@ -1093,8 +1096,14 @@ feederRouter.get('/api/feeder/zones', (c) => {
 // statistics from them, so an approximate position produces wrong numbers and
 // a missing one produces none at all.
 // ---------------------------------------------------------------------------
+// Radio nodes adopted the pager location model (state + LGA) when the site
+// survey arrived — candidate GRN sites are selected by LGA adjacency. The RFS
+// `zone` is retired from this form; the column survives for old rows and
+// displays fall back zone ?? lga.
 const RadioLocationSchema = z.object({
-  zone: z.string().min(1).refine(isValidZone, 'unknown zone'),
+  state: z.enum(AU_STATES as unknown as [string, ...string[]]),
+  lga: z.string().trim().min(1).max(120),
+  suburb: z.string().trim().max(120).optional(),
   lat: z.number().min(-90).max(90).nullable(),
   lon: z.number().min(-180).max(180).nullable(),
 });
@@ -1132,7 +1141,11 @@ feederRouter.put('/api/feeder/nodes/:id/location', async (c) => {
     );
   }
   try {
-    const updated = await setNodeLocation(node.id, parsed.data);
+    const updated = await setNodeLocation(node.id, {
+      ...parsed.data,
+      // Radio saves write suburb (possibly clearing it); other kinds leave it.
+      ...(node.kind === 'radio' ? { suburb: (parsed.data as { suburb?: string }).suburb ?? null } : {}),
+    });
     // A pager node's state selects its frequency plan, and an ADS-B node's
     // lat/lon become the decoder's --lat/--lon — re-push so either change
     // retunes the node live (no-op when offline or unchanged).
@@ -1141,6 +1154,22 @@ feederRouter.put('/api/feeder/nodes/:id/location', async (c) => {
   } catch (err) {
     log.error({ err, id: node.id }, 'Error setting node location');
     return c.json({ error: 'Failed to set location' }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/feeder/nodes/:id/site-surveys — the owner's read-only view of their
+// radio node's survey history (the trigger stays staff-side).
+// ---------------------------------------------------------------------------
+feederRouter.get('/api/feeder/nodes/:id/site-surveys', async (c) => {
+  const node = await ownedNode(c);
+  if (!node) return c.json({ error: 'not your node' }, 404);
+  if (node.kind !== 'radio') return c.json({ error: 'surveys are radio-only' }, 400);
+  try {
+    return c.json({ surveys: await listSurveys(node.id) });
+  } catch (err) {
+    log.error({ err, id: node.id }, 'Error fetching surveys (owner)');
+    return c.json({ error: 'Failed to fetch surveys' }, 500);
   }
 });
 

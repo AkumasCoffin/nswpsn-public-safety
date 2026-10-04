@@ -27,6 +27,7 @@ import { config } from '../config.js';
 import { log } from '../lib/log.js';
 import { describeRelayError } from '../lib/relayError.js';
 import { resolveNodeToken } from '../services/auth/nodeToken.js';
+import { ingestSurveyResults } from '../services/siteSurvey.js';
 import { bumpNodeCallStat, getNode, touchNodeSeenThrottled } from '../services/nodes/registry.js';
 import { getPagerIngest } from '../services/nodes/globalConfig.js';
 import { hub } from '../services/nodes/hub.js';
@@ -570,6 +571,90 @@ const SiteBodySchema = z.union([
   z.array(SiteSnapshotSchema).max(256),
   z.object({ sites: z.array(SiteSnapshotSchema).max(256) }),
 ]);
+
+// ---------------------------------------------------------------------------
+// POST /api/node-ingest/site-survey — the agent reports a finished (or
+// aborted) RF site survey: raw medians per candidate, no threshold applied
+// (the backend owns the pass bar). Auth/limits mirror /site-snapshots.
+// ---------------------------------------------------------------------------
+const surveyRateOk = makeNodeRateLimiter(6, 60_000);
+const MAX_SURVEY_BYTES = 256 * 1024;
+
+const SurveyResultSchema = z.object({
+  grnKey: z.string().max(120).nullable().optional(),
+  siteName: z.string().min(1).max(120),
+  freqHz: z.number().int().positive(),
+  altFreqHz: z.number().int().positive().nullable().optional(),
+  outcome: z.enum(['measured', 'noLock', 'unmeasured']),
+  medianPct: z.number().min(0).max(100).nullable().optional(),
+  samples: z.number().int().min(0).max(1000).default(0),
+  signalDbfs: z.number().min(-200).max(0).nullable().optional(),
+  isAlt: z.boolean().default(false),
+});
+const SurveyBodySchema = z.object({
+  surveyId: z.number().int().positive(),
+  aborted: z.boolean().default(false),
+  note: z.string().max(500).nullable().optional(),
+  results: z.array(SurveyResultSchema).max(400),
+});
+
+nodeIngestRouter.post('/api/node-ingest/site-survey', async (c) => {
+  const token = c.req.header('X-Node-Token');
+  const installId = c.req.header('X-Node-Install');
+  if (!token || !installId) {
+    return c.json({ error: 'missing node credentials' }, 401);
+  }
+  const r = await resolveNodeToken(token);
+  if (!r.ok) {
+    if (r.reason === 'no_role') return c.json({ error: 'contributor role removed' }, 403);
+    // 503, not 401: the token could not be CHECKED — the agent must retry,
+    // not discard the result as permanently refused.
+    if (r.reason === 'unavailable') return c.json({ error: 'node registry unavailable' }, 503);
+    return c.json({ error: 'unauthorized' }, 401);
+  }
+  if (r.installId && r.installId !== installId) {
+    return c.json({ error: 'install mismatch' }, 401);
+  }
+  if (r.kind !== 'radio') {
+    return c.json({ error: 'not a radio node' }, 403);
+  }
+  if (!surveyRateOk(r.nodeId)) {
+    return c.json({ ok: false, error: 'rate limit' }, 429);
+  }
+  const lenHeader = c.req.header('content-length');
+  const len = Number(lenHeader ?? '');
+  if (lenHeader === undefined || !Number.isFinite(len)) {
+    return c.json({ error: 'length required' }, 411);
+  }
+  if (len > MAX_SURVEY_BYTES) {
+    return c.json({ error: 'report too large' }, 413);
+  }
+  let parsed: z.infer<typeof SurveyBodySchema>;
+  try {
+    parsed = SurveyBodySchema.parse(await c.req.json());
+  } catch {
+    return c.json({ error: 'bad body' }, 400);
+  }
+  const out = await ingestSurveyResults(
+    r.nodeId,
+    parsed.surveyId,
+    parsed.results.map((x) => ({
+      grnKey: x.grnKey ?? null,
+      siteName: x.siteName,
+      freqHz: x.freqHz,
+      altFreqHz: x.altFreqHz ?? null,
+      outcome: x.outcome,
+      medianPct: x.medianPct ?? null,
+      samples: x.samples,
+      signalDbfs: x.signalDbfs ?? null,
+      isAlt: x.isAlt,
+    })),
+    parsed.note ?? null,
+    parsed.aborted,
+  );
+  if (!out.ok) return c.json({ error: out.error }, 409);
+  return c.json({ ok: true, added: out.added ?? 0 });
+});
 
 nodeIngestRouter.post('/api/node-ingest/site-snapshots', async (c) => {
   // 1-2. Node credentials + per-node token resolve (role gated), TOFU install

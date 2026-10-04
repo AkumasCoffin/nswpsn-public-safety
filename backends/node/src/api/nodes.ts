@@ -44,6 +44,7 @@ import {
 } from '../services/nodes/registry.js';
 import { hub } from '../services/nodes/hub.js';
 import { listChanMgrLog } from '../services/nodes/chanmgrLog.js';
+import { startSurvey, failSurvey, listSurveys } from '../services/siteSurvey.js';
 import { nodeUptimeMany } from '../services/nodes/nodeUptime.js';
 import { liveCallWindow } from '../services/nodeCallWindow.js';
 import { isAgentCommandAction } from '../services/nodes/protocol.js';
@@ -311,6 +312,63 @@ nodesRouter.get('/api/nodes/:id/chanmgr-log', requireRole(canViewNodeData), asyn
 });
 
 // ---------------------------------------------------------------------------
+// GET /api/nodes/:id/site-surveys — the node's RF survey history: every run
+// with every site tested (passes, failures, skips). Staff view tier.
+// ---------------------------------------------------------------------------
+nodesRouter.get('/api/nodes/:id/site-surveys', requireRole(canViewNodeData), async (c) => {
+  const id = c.req.param('id');
+  try {
+    const node = await getNode(id);
+    if (!node) return c.json({ error: 'node not found' }, 404);
+    return c.json({ surveys: await listSurveys(id) });
+  } catch (err) {
+    log.error({ err, id }, 'Error fetching site surveys');
+    return c.json({ error: 'Failed to fetch surveys' }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// PUT /api/nodes/:id/location — staff edit of a node's location. The owner
+// path (feeder.ts) stays; this exists so staff can fix a missing/wrong LGA
+// before running a survey without waiting on the owner.
+// ---------------------------------------------------------------------------
+const StaffAreaLocationSchema = z.object({
+  state: z.enum(AU_STATES as unknown as [string, ...string[]]),
+  lga: z.string().trim().min(1).max(120),
+  suburb: z.string().trim().max(120).optional(),
+  lat: z.number().min(-90).max(90).nullable(),
+  lon: z.number().min(-180).max(180).nullable(),
+});
+const StaffAdsbLocationSchema = z.object({
+  lat: z.number().min(-90).max(90),
+  lon: z.number().min(-180).max(180),
+});
+nodesRouter.put('/api/nodes/:id/location', requireRole(canManageNodes), async (c) => {
+  const id = c.req.param('id');
+  try {
+    const node = await getNode(id);
+    if (!node) return c.json({ error: 'node not found' }, 404);
+    const body = await c.req.json().catch(() => ({}));
+    const parsed =
+      node.kind === 'adsb'
+        ? StaffAdsbLocationSchema.safeParse(body)
+        : StaffAreaLocationSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid location', details: parsed.error.issues }, 400);
+    }
+    const updated = await setNodeLocation(id, {
+      ...parsed.data,
+      ...(node.kind !== 'adsb' ? { suburb: (parsed.data as { suburb?: string }).suburb ?? null } : {}),
+    });
+    if (node.kind !== 'radio') await pushConfigToNode(id).catch(() => undefined);
+    return c.json({ node: updated ? toApi(updated) : null });
+  } catch (err) {
+    log.error({ err, id }, 'Error setting node location (staff)');
+    return c.json({ error: 'Failed to set location' }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // PATCH /api/nodes/:id
 // ---------------------------------------------------------------------------
 nodesRouter.patch('/api/nodes/:id', requireRole(canManageNodes), async (c) => {
@@ -518,6 +576,22 @@ nodesRouter.post('/api/nodes/:id/cmd', requireRole(canManageNodes), async (c) =>
     }
     if (!hub.isOnline(id)) {
       return c.json({ error: 'node offline' }, 409);
+    }
+    // Site surveys are orchestrated server-side: candidates come from the
+    // node's LGA neighbourhood here, never from the browser.
+    if (action === 'surveySites') {
+      const rings = Number((body.args as { rings?: unknown } | undefined)?.rings ?? 1);
+      const sr = await startSurvey(id, 'manual', (c.get('userId') as string | undefined) ?? null, rings);
+      return c.json(
+        sr.ok ? { ok: true, message: `survey started (#${sr.surveyId})` } : { ok: false, message: sr.error },
+        sr.ok ? 200 : 502,
+      );
+    }
+    if (action === 'surveyCancel') {
+      const surveyId = Number((body.args as { surveyId?: unknown } | undefined)?.surveyId ?? 0);
+      const r = await hub.sendCmd(id, action, body.args);
+      if (surveyId > 0) await failSurvey(id, surveyId, 'cancelled by staff');
+      return c.json(r, r.ok ? 200 : 502);
     }
     const r = await hub.sendCmd(id, action, body.args);
     return c.json(r, r.ok ? 200 : 502);
