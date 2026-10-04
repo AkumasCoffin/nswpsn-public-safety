@@ -880,6 +880,8 @@
       border-radius: 8px; color: var(--text-primary, #e2e8f0); font: inherit; font-size: 13px; padding: 0.5rem 0.7rem; }
     .nd-sp-searchwrap { padding: 0.7rem 1rem; border-bottom: 1px solid var(--border-subtle, #334155); }
     .nd-sp-hint { font-size: 11px; color: var(--text-soft); margin-top: 6px; }
+    .nd-sp-sortrow { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+    .nd-sp-sortrow label { font-size: 11px; color: var(--text-soft); text-transform: uppercase; letter-spacing: 0.05em; }
     .nd-sp-list { overflow-y: auto; flex: 1; padding: 0.35rem 0.5rem; }
     .nd-sp-row { display: grid; grid-template-columns: 20px 1fr auto auto; gap: 10px; align-items: center;
       padding: 0.4rem 0.5rem; border-radius: 6px; cursor: pointer; font-size: 13px; }
@@ -10748,6 +10750,7 @@
       _ndStatus = null;
       _ndChanMgr = null; _ndMgrLog = [];
       _ndSurveys = []; _ndSurveyLive = null;
+      _ndSites = null; _ndSitesPending = null;
       _ndTuners = []; _ndChannels = []; _ndCalls = []; _ndEvents = []; _ndPagerMsgs = [];
       _ndTunersSig = null;
       _ndReadersSig = null;
@@ -10783,6 +10786,10 @@
       _ndCfgFetch(); // pull current config_override for the tuner-persist + channel editor
       _ndMgrLogFetch(); // auto-management audit log (radio only)
       _ndSurveyFetch(); // RF site survey history (radio only)
+      // Warm the GRN site list in the background: tagging the dataset against
+      // the boundary layers is the slow part, and doing it while the drawer
+      // opens means the picker is instant when staff reach for it.
+      if ((node.kind || 'radio') === 'radio') _ndSitesLoad().catch(() => {});
 
       // Supabase access token — same source as authHeader().
       let token = null;
@@ -12832,6 +12839,27 @@
     // survey uses, so a hand-added site and a surveyed one agree.
     let _ndSites = null;        // the fetched dataset (null = not loaded yet)
     let _ndSitePicked = new Set();
+    let _ndSitesPending = null; // in-flight fetch, so two opens share one request
+
+    /** Fetch the node's ranked site list once per drawer. Called in the
+     *  background when the drawer opens so the picker has it ready, and
+     *  awaited by the picker itself if it is still in flight. */
+    function _ndSitesLoad() {
+      if (_ndSites) return Promise.resolve(_ndSites);
+      if (_ndSitesPending) return _ndSitesPending;
+      const nodeId = _ndNodeId;
+      _ndSitesPending = (async () => {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/${nodeId}/grn-sites`, {
+          headers: { 'Authorization': await authHeader() }
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        // A drawer switch mid-flight: the answer belongs to the old node.
+        if (String(nodeId) === String(_ndNodeId)) _ndSites = data;
+        return data;
+      })().finally(() => { _ndSitesPending = null; });
+      return _ndSitesPending;
+    }
 
     async function _ndSitePickerOpen() {
       if (_nodeWriteBlocked && _nodeWriteBlocked()) return;
@@ -12849,8 +12877,17 @@
             <button class="btn btn-secondary btn-sm" onclick="_ndSitePickerClose()">Close</button>
           </div>
           <div class="nd-sp-searchwrap">
-            <input id="nd-sp-q" class="nd-sp-search" placeholder="Search by site name, council area or frequency…" autocomplete="off" oninput="_ndSitePickerRender()">
-            <div class="nd-sp-hint" id="nd-sp-hint">Loading the site list…</div>
+            <input id="nd-sp-q" class="nd-sp-search" placeholder="Search by site name, suburb, council area, state or frequency…" autocomplete="off" oninput="_ndSitePickerRender()">
+            <div class="nd-sp-sortrow">
+              <label for="nd-sp-sort">Sort</label>
+              <select id="nd-sp-sort" class="nd-survey-rings" onchange="_ndSitePickerRender()">
+                <option value="near" selected>Nearest first</option>
+                <option value="place">State · council area · suburb</option>
+                <option value="name">Site name</option>
+                <option value="freq">Frequency</option>
+              </select>
+              <span class="nd-sp-hint" id="nd-sp-hint" style="margin:0;">Loading the site list…</span>
+            </div>
           </div>
           <div class="nd-sp-list" id="nd-sp-list"></div>
           <div class="nd-sp-foot">
@@ -12863,12 +12900,7 @@
       setTimeout(() => document.getElementById('nd-sp-q')?.focus(), 30);
 
       try {
-        const res = await fetch(`${API_BASE_URL}/api/nodes/${_ndNodeId}/grn-sites`, {
-          headers: { 'Authorization': await authHeader() }
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        _ndSites = data;
+        await _ndSitesLoad();
       } catch (e) {
         const hint = document.getElementById('nd-sp-hint');
         if (hint) hint.textContent = 'Could not load the site list — try again shortly.';
@@ -12903,14 +12935,38 @@
       const matches = (_ndSites.sites || []).filter(s => {
         if (!q) return true;
         return (s.name || '').toLowerCase().includes(q)
+          || (s.suburb || '').toLowerCase().includes(q)
           || (s.lga || '').toLowerCase().includes(q)
+          || (s.state || '').toLowerCase().includes(q)
           || (s.system || '').toLowerCase().includes(q)
           || (s.grnKey || '').toLowerCase().includes(q)
           || (s.mhz != null && String(s.mhz).includes(q));
       });
 
+      // The server hands the list back nearest-first; any other order is
+      // applied here so switching it costs no round trip.
+      const sort = document.getElementById('nd-sp-sort')?.value || 'near';
+      const by = (...keys) => (a, b) => {
+        for (const k of keys) {
+          // Unknowns sort last whichever key they are missing, so a site with
+          // no suburb doesn't jump to the top of a suburb sort.
+          const av = a[k], bv = b[k];
+          if (av == null && bv == null) continue;
+          if (av == null) return 1;
+          if (bv == null) return -1;
+          const c = typeof av === 'number' ? av - bv : String(av).localeCompare(String(bv));
+          if (c) return c;
+        }
+        return 0;
+      };
+      if (sort === 'place') matches.sort(by('state', 'lga', 'suburb', 'name'));
+      else if (sort === 'name') matches.sort(by('name'));
+      else if (sort === 'freq') matches.sort(by('mhz', 'name'));
+
       if (hint) {
-        hint.textContent = _ndSites.located
+        hint.textContent = sort !== 'near'
+          ? `${matches.length} site(s).`
+          : _ndSites.located
           ? 'Nearest to this node first.'
           : (_ndSites.nodeLga
             ? `Sites in ${_ndSites.nodeLga} first, then neighbouring council areas. Set an antenna pin to sort by actual distance.`
@@ -12926,11 +12982,15 @@
         const bad = s.mhz == null;
         const on = _ndSitePicked.has(s.name);
         const cls = bad ? 'is-bad' : dup ? 'is-dup' : on ? 'is-on' : '';
-        const sub = [s.lga, s.ring === 0 ? 'this council area' : (s.ring != null ? `${s.ring} area(s) away` : null)]
+        const sub = [s.suburb, s.lga, s.state,
+          s.ring === 0 ? 'this council area' : (s.ring != null ? `${s.ring} area(s) away` : null)]
           .filter(Boolean).join(' · ');
         const right = bad ? `<span class="nd-sp-sub">${escapeHtml(s.note || 'no control channel')}</span>`
           : dup ? `<span class="nd-sp-sub">already added</span>`
-          : `<span class="nd-sp-freq">${s.mhz.toFixed(4)} MHz${s.altMhz != null ? ` <span class="nd-ch-alt">+alt</span>` : ''}</span>`;
+          : `<span class="nd-sp-freq">${s.mhz.toFixed(4)} MHz${
+              // The alternate is shown because it is worth knowing the site
+              // has one; only the control frequency is added.
+              s.altMhz != null ? `<span class="nd-sp-sub"> alt ${s.altMhz.toFixed(4)}</span>` : ''}</span>`;
         return `<div class="nd-sp-row ${cls}" ${(bad || dup) ? '' : `onclick="_ndSitePickerToggle('${jsArg(s.name)}')"`}>
           <span>${(bad || dup) ? '' : `<input type="checkbox" ${on ? 'checked' : ''} onclick="event.preventDefault()">`}</span>
           <span class="nd-sp-name">${escapeHtml(s.name)}${sub ? `<div class="nd-sp-sub">${escapeHtml(sub)}</div>` : ''}</span>
@@ -12957,9 +13017,14 @@
       _ndSitePickerRender();
     }
 
-    // Add the ticked sites as channels, shaped exactly like the ones a survey
-    // adds: the primary control frequency, the alternate carried alongside it,
-    // and the site's own name for both channel and site.
+    // Every channel on a node belongs to the one radio system. Hard-coded
+    // while NSW PSN is the only one; when sites from other states' systems
+    // join the dataset this becomes a per-site lookup, not a free-text field.
+    const _ND_SITE_SYSTEM = 'NSWPSN';
+
+    // Add the ticked sites as channels: the site's CONTROL frequency and
+    // nothing else. A site's alternate control channel is shown in the picker
+    // but deliberately not added — one channel, one frequency.
     function _ndSitePickerAdd() {
       if (!_ndConfig) return;
       if (!Array.isArray(_ndConfig.channels)) _ndConfig.channels = [];
@@ -12969,18 +13034,11 @@
         if (!_ndSitePicked.has(s.name) || s.mhz == null) continue;
         const hz = Math.round(s.mhz * 1e6);
         if (freqs.has(hz) || names.has(s.name.trim().toLowerCase())) continue;
-        const ch = {
+        _ndConfig.channels.push({
           name: s.name, frequency: hz, decoder: 'p25p1',
-          system: s.system || 'NSWPSN', site: s.name, autoStart: true,
+          system: _ND_SITE_SYSTEM, site: s.name, autoStart: true,
           order: _ndConfig.channels.length, sdr: '', decoderConfig: {},
-        };
-        // The alternate control channel rides along: SDR-Trunk locks one and
-        // falls back to the other, which is the whole point of listing both.
-        if (s.altMhz != null) {
-          const alt = Math.round(s.altMhz * 1e6);
-          if (alt !== hz) ch.frequencies = [alt];
-        }
-        _ndConfig.channels.push(ch);
+        });
         freqs.add(hz);
         names.add(s.name.trim().toLowerCase());
         added++;

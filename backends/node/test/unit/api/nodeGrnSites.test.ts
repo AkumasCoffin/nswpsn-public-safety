@@ -35,7 +35,8 @@ vi.mock('../../../src/services/auth/roles.js', async (orig) => {
 // ranking is the only thing under test.
 const site = (over: Record<string, unknown> = {}) => ({
   name: 'Site', grnKey: null, lga: 'Blue Mountains', mhz: 420, altMhz: null,
-  rawCc: '420.0000', lat: -33.7, lon: 150.3, system: 'NSWPSN', ...over,
+  rawCc: '420.0000', lat: -33.7, lon: 150.3, system: 'NSWPSN',
+  state: 'NSW', suburb: 'Katoomba', ...over,
 });
 let fakeSites: ReturnType<typeof site>[] = [];
 let fakeDepths = new Map<string, number>();
@@ -102,10 +103,16 @@ describe('GET /api/nodes/:id/grn-sites', () => {
     expect(body.sites[0].note).toContain('TBA');
   });
 
-  it('carries the alternate control channel so it can ride along on the channel', async () => {
+  it('reports the alternate control channel for display', async () => {
     fakeSites = [site({ name: 'Two CCs', mhz: 422.375, altMhz: 421 })];
     const body = await (await get('/api/nodes/node-1/grn-sites')).json();
     expect(body.sites[0]).toMatchObject({ mhz: 422.375, altMhz: 421, note: null });
+  });
+
+  it('carries the state and suburb the picker sorts by', async () => {
+    fakeSites = [site({ name: 'Somewhere', state: 'NSW', suburb: 'Mount Victoria' })];
+    const body = await (await get('/api/nodes/node-1/grn-sites')).json();
+    expect(body.sites[0]).toMatchObject({ state: 'NSW', suburb: 'Mount Victoria', lga: 'Blue Mountains' });
   });
 
   it('works for a node with no location at all', async () => {

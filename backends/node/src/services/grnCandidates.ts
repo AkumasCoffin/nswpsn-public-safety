@@ -6,8 +6,12 @@
 // (to a chosen ring depth), and what frequency should the survey test.
 //
 // Three derived facts, each computed once and cached for the process:
-//   - site → LGA: ray-cast of each GRN site's lat/lon against the ABS LGA
-//     polygons (boundaryForPoint — the incident-geo machinery).
+//   - site → LGA + suburb: ray-cast of each GRN site's lat/lon against the
+//     ABS LGA and locality polygons. Deliberately NOT boundaryForPoint per
+//     site: that is one database round trip each, and 665 of them took long
+//     enough to be felt every time the cache went cold. Here the points go
+//     down in ONE query per layer, which returns only the polygons whose
+//     bounding box could contain a site, and the ray-casting happens here.
 //   - LGA adjacency: adjacent ABS polygons share exact vertices (the source
 //     is generalised at a fixed offset, so a shared border generalises
 //     identically on both sides). Hash every vertex at 5dp; two LGA names on
@@ -17,9 +21,10 @@
 //     665 are a bare MHz; the rest are ranges, annotations or placeholders
 //     ("TBA", "Pending Confirmation"). First plausible MHz match wins;
 //     no match = the site is reported as skipped, never guessed.
+import type { Pool } from 'pg';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
-import { boundaryForPoint } from '../api/boundaries.js';
+import { geometryContains } from '../api/boundaries.js';
 
 export interface SurveyCandidate {
   name: string;
@@ -67,6 +72,69 @@ export interface TaggedSite {
   lon: number | null;
   /** The dataset's own system name, for telling two same-named sites apart. */
   system: string | null;
+  /** From the boundary layers, not the dataset: where the site actually is. */
+  state: string | null;
+  suburb: string | null;
+}
+
+interface PolyRow {
+  name: string;
+  state: string | null;
+  min_lon: number | string;
+  max_lon: number | string;
+  min_lat: number | string;
+  max_lat: number | string;
+  geom: unknown;
+}
+
+/**
+ * Which boundary of `kind` contains each point, in ONE query.
+ *
+ * The query ships the points down and returns only polygons whose bounding
+ * box could contain at least one of them — so a national locality layer costs
+ * a few hundred shapes rather than thousands, and the containment test itself
+ * (the same ray-cast boundaryForPoint uses) runs here over the whole batch.
+ * Smallest-box-first ordering is preserved: where boxes nest, the tighter
+ * shape is the more specific answer.
+ */
+async function tagPoints(
+  pool: Pool,
+  kind: string,
+  pts: Array<{ lon: number; lat: number }>,
+): Promise<Array<{ name: string; state: string | null } | null>> {
+  const out: Array<{ name: string; state: string | null } | null> = new Array(pts.length).fill(null);
+  if (pts.length === 0) return out;
+  const params: unknown[] = [];
+  const values = pts
+    .map((pt) => {
+      params.push(pt.lon, pt.lat);
+      return `($${params.length - 1}::float8, $${params.length}::float8)`;
+    })
+    .join(',');
+  params.push(kind);
+  const r = await pool.query<PolyRow>(
+    `WITH pts(lon, lat) AS (VALUES ${values})
+     SELECT b.name, b.state, b.min_lon, b.max_lon, b.min_lat, b.max_lat, b.geom
+       FROM boundaries b
+      WHERE b.kind = $${params.length}
+        AND EXISTS (
+          SELECT 1 FROM pts
+           WHERE b.min_lon <= pts.lon AND b.max_lon >= pts.lon
+             AND b.min_lat <= pts.lat AND b.max_lat >= pts.lat)
+      ORDER BY (b.max_lat - b.min_lat) * (b.max_lon - b.min_lon) ASC`,
+    params,
+  );
+  for (const poly of r.rows) {
+    const minLon = Number(poly.min_lon), maxLon = Number(poly.max_lon);
+    const minLat = Number(poly.min_lat), maxLat = Number(poly.max_lat);
+    for (let i = 0; i < pts.length; i++) {
+      if (out[i]) continue; // smallest box first, so the first hit is the best
+      const pt = pts[i]!;
+      if (pt.lon < minLon || pt.lon > maxLon || pt.lat < minLat || pt.lat > maxLat) continue;
+      if (geometryContains(poly.geom, pt.lon, pt.lat)) out[i] = { name: poly.name, state: poly.state };
+    }
+  }
+  return out;
 }
 
 let _tagged: { at: number; sites: TaggedSite[] } | null = null;
@@ -76,6 +144,7 @@ async function taggedSites(): Promise<TaggedSite[]> {
   if (_tagged && Date.now() - _tagged.at < TAG_TTL_MS) return _tagged.sites;
   const pool = await getPool();
   if (!pool) return _tagged?.sites ?? [];
+  const started = Date.now();
   const r = await pool.query<GrnSiteRow>('SELECT id, data FROM grn_sites');
   const sites: TaggedSite[] = [];
   for (const row of r.rows) {
@@ -84,26 +153,46 @@ async function taggedSites(): Promise<TaggedSite[]> {
     if (!name) continue;
     const lat = Number(d['Latitude']);
     const lon = Number(d['Longitude']);
-    let lga: string | null = null;
-    if (Number.isFinite(lat) && Number.isFinite(lon)) {
-      const b = await boundaryForPoint('lga', lon, lat);
-      lga = b?.name ?? null;
-    }
     const rawCc = typeof d['Control Channel'] === 'string' ? (d['Control Channel'] as string) : '';
     sites.push({
       name,
       grnKey: typeof d['GRN Site ID #'] === 'string' ? (d['GRN Site ID #'] as string) : null,
-      lga,
+      lga: null,
       mhz: parseControlMhz(d['Control Channel']),
       altMhz: parseControlMhz(d['Alt Control Channel']),
       rawCc,
       lat: Number.isFinite(lat) ? lat : null,
       lon: Number.isFinite(lon) ? lon : null,
       system: typeof d['SYSTEM NAME'] === 'string' ? (d['SYSTEM NAME'] as string) : null,
+      state: null,
+      suburb: null,
     });
   }
+
+  // Locate every site that has coordinates, one layer at a time. The state
+  // comes off the LGA row — same vocabulary the nodes themselves use.
+  const located = sites.filter((s) => s.lat !== null && s.lon !== null);
+  const pts = located.map((s) => ({ lon: s.lon as number, lat: s.lat as number }));
+  const [lgas, localities] = await Promise.all([
+    tagPoints(pool, 'lga', pts),
+    tagPoints(pool, 'locality', pts),
+  ]);
+  located.forEach((s, i) => {
+    s.lga = lgas[i]?.name ?? null;
+    s.state = lgas[i]?.state ?? null;
+    s.suburb = localities[i]?.name ?? null;
+  });
+
   _tagged = { at: Date.now(), sites };
-  log.info({ sites: sites.length, withLga: sites.filter((s) => s.lga).length }, 'grn sites tagged by LGA');
+  log.info(
+    {
+      sites: sites.length,
+      withLga: sites.filter((s) => s.lga).length,
+      withSuburb: sites.filter((s) => s.suburb).length,
+      ms: Date.now() - started,
+    },
+    'grn sites tagged by LGA + suburb',
+  );
   return sites;
 }
 

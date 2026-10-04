@@ -1,32 +1,57 @@
 /**
  * GRN candidate selection: the control-frequency parser over the dataset's
- * real mess, LGA adjacency from shared polygon vertices, and the
- * LGA-neighbourhood filter with ring depth.
+ * real mess, LGA adjacency from shared polygon vertices, the bulk site
+ * tagging (LGA + suburb in one query per layer), and the LGA-neighbourhood
+ * filter with ring depth.
+ *
+ * The boundary machinery is NOT mocked — the fake pool returns real polygons
+ * and the real ray-cast decides what is inside what, which is the part worth
+ * testing.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-let resultQueue: Array<{ rows: unknown[] }> = [];
+/** A unit square with its lower-left corner at (x0, 0). */
+const square = (x0: number): unknown => ({
+  type: 'Polygon',
+  coordinates: [[[x0, 0], [x0 + 1, 0], [x0 + 1, 1], [x0, 1], [x0, 0]]],
+});
+
+/** A boundary row as the tag query selects it, bbox included. */
+const poly = (name: string, x0: number, state = 'NSW') => ({
+  name, state, geom: square(x0),
+  min_lon: x0, max_lon: x0 + 1, min_lat: 0, max_lat: 1,
+});
+
+// What the fake database holds, per test.
+let grnRows: unknown[] = [];
+let lgaPolys: unknown[] = [];
+let localityPolys: unknown[] = [];
+let queries: string[] = [];
+
 const fakePool = {
-  query: vi.fn(async () => resultQueue.shift() ?? { rows: [] }),
-};
-vi.mock('../../../src/db/pool.js', () => ({
-  getPool: vi.fn(async () => fakePool),
-}));
-
-// Site→LGA tagging calls boundaryForPoint per site — fake it by longitude band.
-vi.mock('../../../src/api/boundaries.js', () => ({
-  boundaryForPoint: vi.fn(async (_kind: string, lon: number) => {
-    if (lon < 150) return { name: 'Alpha', shortName: 'Alpha', state: 'NSW' };
-    if (lon < 151) return { name: 'Beta', shortName: 'Beta', state: 'NSW' };
-    return { name: 'Gamma', shortName: 'Gamma', state: 'NSW' };
+  query: vi.fn(async (sql: string, params: unknown[] = []) => {
+    queries.push(sql);
+    if (sql.includes('FROM grn_sites')) return { rows: grnRows };
+    if (sql.includes('WITH pts(lon, lat)')) {
+      // The kind is the last parameter of the bulk tag query.
+      const kind = params[params.length - 1];
+      return { rows: kind === 'lga' ? lgaPolys : localityPolys };
+    }
+    if (sql.includes("kind = 'lga'")) return { rows: lgaPolys };
+    return { rows: [] };
   }),
-}));
+};
+vi.mock('../../../src/db/pool.js', () => ({ getPool: vi.fn(async () => fakePool) }));
 
-const { parseControlMhz, lgaAdjacency, lgaNeighbourhood, candidatesForNode, _resetGrnCandidateCaches } =
+const { parseControlMhz, lgaAdjacency, lgaNeighbourhood, lgaRingDepths, candidatesForNode, allTaggedSites, _resetGrnCandidateCaches } =
   await import('../../../src/services/grnCandidates.js');
 
 beforeEach(() => {
-  resultQueue = [];
+  grnRows = [];
+  lgaPolys = [];
+  localityPolys = [];
+  queries = [];
+  fakePool.query.mockClear();
   _resetGrnCandidateCaches();
 });
 
@@ -49,58 +74,88 @@ describe('parseControlMhz', () => {
   });
 });
 
-// Two squares sharing an edge (Alpha/Beta share x=1 vertices), Gamma detached.
-const square = (x0: number): unknown => ({
-  type: 'Polygon',
-  coordinates: [[[x0, 0], [x0 + 1, 0], [x0 + 1, 1], [x0, 1], [x0, 0]]],
-});
-
-describe('lgaAdjacency / lgaNeighbourhood', () => {
+describe('lgaAdjacency / ring depth', () => {
   it('shared vertices make neighbours; detached polygons stay isolated', async () => {
-    resultQueue = [{ rows: [
-      { name: 'Alpha', geom: square(0) },
-      { name: 'Beta', geom: square(1) },
-      { name: 'Gamma', geom: square(5) },
-    ] }];
+    lgaPolys = [poly('Alpha', 0), poly('Beta', 1), poly('Gamma', 5)];
     const adj = await lgaAdjacency('NSW');
     expect([...(adj.get('Alpha') ?? [])]).toEqual(['Beta']);
     expect([...(adj.get('Beta') ?? [])]).toEqual(['Alpha']);
     expect(adj.get('Gamma')).toBeUndefined();
   });
 
-  it('ring depth walks the chain', async () => {
-    // A-B-C-D in a line, each sharing an edge with the next.
-    resultQueue = [{ rows: [
-      { name: 'A', geom: square(0) }, { name: 'B', geom: square(1) },
-      { name: 'C', geom: square(2) }, { name: 'D', geom: square(3) },
-    ] }];
+  it('ring depth walks the chain and counts the hops', async () => {
+    lgaPolys = [poly('A', 0), poly('B', 1), poly('C', 2), poly('D', 3)];
     expect([...(await lgaNeighbourhood('NSW', 'A', 1))].sort()).toEqual(['A', 'B']);
-    _resetGrnCandidateCaches();
-    resultQueue = [{ rows: [
-      { name: 'A', geom: square(0) }, { name: 'B', geom: square(1) },
-      { name: 'C', geom: square(2) }, { name: 'D', geom: square(3) },
-    ] }];
     expect([...(await lgaNeighbourhood('NSW', 'A', 3))].sort()).toEqual(['A', 'B', 'C', 'D']);
+    const depths = await lgaRingDepths('NSW', 'A', 4);
+    expect([...depths.entries()].sort()).toEqual([['A', 0], ['B', 1], ['C', 2], ['D', 3]]);
+  });
+
+  it('caches the adjacency rather than re-reading the boundaries each time', async () => {
+    lgaPolys = [poly('A', 0), poly('B', 1)];
+    await lgaAdjacency('NSW');
+    await lgaAdjacency('NSW');
+    expect(queries.filter((q) => q.includes("kind = 'lga'"))).toHaveLength(1);
+  });
+});
+
+describe('site tagging', () => {
+  const site = (name: string, lon: number) => ({
+    id: 1,
+    data: { NAME: name, Latitude: 0.5, Longitude: lon, 'Control Channel': '422.3750' },
+  });
+
+  it('tags every site in one query per layer, not one per site', async () => {
+    grnRows = [site('One', 0.5), site('Two', 1.5), site('Three', 2.5)];
+    lgaPolys = [poly('Alpha', 0), poly('Beta', 1), poly('Gamma', 2)];
+    localityPolys = [poly('Smallville', 0), poly('Bigtown', 1), poly('Elsewhere', 2)];
+
+    const sites = await allTaggedSites();
+    expect(sites.map((s) => [s.name, s.lga, s.suburb, s.state])).toEqual([
+      ['One', 'Alpha', 'Smallville', 'NSW'],
+      ['Two', 'Beta', 'Bigtown', 'NSW'],
+      ['Three', 'Gamma', 'Elsewhere', 'NSW'],
+    ]);
+    // Three sites, two layers: two tag queries, not six.
+    expect(queries.filter((q) => q.includes('WITH pts(lon, lat)'))).toHaveLength(2);
+  });
+
+  it('leaves a site outside every polygon untagged rather than guessing', async () => {
+    grnRows = [site('Offshore', 40)];
+    lgaPolys = [poly('Alpha', 0)];
+    const sites = await allTaggedSites();
+    expect(sites[0]).toMatchObject({ name: 'Offshore', lga: null, suburb: null, state: null });
+  });
+
+  it('skips sites with no coordinates without upsetting the batch', async () => {
+    grnRows = [
+      { id: 1, data: { NAME: 'Nowhere', 'Control Channel': '422.3750' } },
+      site('Somewhere', 0.5),
+    ];
+    lgaPolys = [poly('Alpha', 0)];
+    const sites = await allTaggedSites();
+    expect(sites.map((s) => [s.name, s.lga])).toEqual([['Nowhere', null], ['Somewhere', 'Alpha']]);
+  });
+
+  it('caches the tagged set', async () => {
+    grnRows = [site('One', 0.5)];
+    lgaPolys = [poly('Alpha', 0)];
+    await allTaggedSites();
+    await allTaggedSites();
+    expect(queries.filter((q) => q.includes('FROM grn_sites'))).toHaveLength(1);
   });
 });
 
 describe('candidatesForNode', () => {
   it('filters by LGA neighbourhood, parses freqs, reports skips', async () => {
-    resultQueue = [
-      // lgaNeighbourhood runs first: boundaries read — Alpha/Beta adjacent
-      { rows: [
-        { name: 'Alpha', geom: square(0) },
-        { name: 'Beta', geom: square(1) },
-        { name: 'Gamma', geom: square(5) },
-      ] },
-      // then taggedSites: grn_sites read (lon decides the faked LGA)
-      { rows: [
-        { id: 1, data: { NAME: 'Good Hill', Latitude: -33, Longitude: 149.5, 'Control Channel': '422.3750', 'Alt Control Channel': '421.0000', 'GRN Site ID #': '004-083' } },
-        { id: 2, data: { NAME: 'Broken CC', Latitude: -33, Longitude: 149.6, 'Control Channel': 'TBA' } },
-        { id: 3, data: { NAME: 'Next Door', Latitude: -33, Longitude: 150.5, 'Control Channel': '419.5000' } },
-        { id: 4, data: { NAME: 'Far Away', Latitude: -33, Longitude: 151.5, 'Control Channel': '418.0000' } },
-      ] },
+    lgaPolys = [poly('Alpha', 0), poly('Beta', 1), poly('Gamma', 5)];
+    grnRows = [
+      { id: 1, data: { NAME: 'Good Hill', Latitude: 0.5, Longitude: 0.5, 'Control Channel': '422.3750', 'Alt Control Channel': '421.0000', 'GRN Site ID #': '004-083' } },
+      { id: 2, data: { NAME: 'Broken CC', Latitude: 0.5, Longitude: 0.6, 'Control Channel': 'TBA' } },
+      { id: 3, data: { NAME: 'Next Door', Latitude: 0.5, Longitude: 1.5, 'Control Channel': '419.5000' } },
+      { id: 4, data: { NAME: 'Far Away', Latitude: 0.5, Longitude: 5.5, 'Control Channel': '418.0000' } },
     ];
+
     const { candidates, skipped } = await candidatesForNode({ state: 'NSW', lga: 'Alpha' }, 1);
     expect(candidates.map((c) => c.name)).toEqual(['Good Hill', 'Next Door']); // own LGA first
     expect(candidates[0]).toMatchObject({ mhz: 422.375, altMhz: 421, grnKey: '004-083' });

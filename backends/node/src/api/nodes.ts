@@ -337,6 +337,8 @@ nodesRouter.get('/api/nodes/:id/grn-sites', requireRole(canViewNodeData), async 
       name: s.name,
       grnKey: s.grnKey,
       lga: s.lga,
+      state: s.state,
+      suburb: s.suburb,
       system: s.system,
       mhz: s.mhz,
       altMhz: s.altMhz,
