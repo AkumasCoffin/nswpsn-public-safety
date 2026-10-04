@@ -950,6 +950,42 @@
     .nd-sv-prog i { display: block; height: 100%; background: linear-gradient(90deg, #fbbf24, #f59e0b);
       transition: width 0.4s ease; }
 
+    /* The survey window: tiles, then every test with its decode rate. */
+    .nd-svm-overlay { position: fixed; inset: 0; background: rgba(2, 6, 23, 0.78); z-index: 2500;
+      display: flex; align-items: center; justify-content: center; padding: 2vh 2vw; }
+    .nd-svm { background: var(--bg-elevated, #0f172a); border: 1px solid var(--border-subtle, #334155);
+      border-radius: 12px; width: min(1180px, 100%); max-height: 96vh; display: flex; flex-direction: column; }
+    .nd-svm-head { display: flex; gap: 12px; align-items: center; padding: 14px 18px;
+      border-bottom: 1px solid var(--border-subtle, #334155); }
+    .nd-svm-head h3 { margin: 0; font-size: 15px; }
+    .nd-svm-head .nd-svm-sub { font-size: 12px; color: var(--text-soft); }
+    .nd-svm-head .nd-svm-right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+    .nd-svm-body { overflow-y: auto; padding: 14px 18px 18px; }
+
+    .nd-svm-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 10px; }
+    .nd-svm-tile { background: rgba(148, 163, 184, 0.07); border: 1px solid var(--border-subtle, #334155);
+      border-radius: 8px; padding: 10px 12px; }
+    .nd-svm-tile .v { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
+    .nd-svm-tile .l { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em;
+      color: var(--text-soft); margin-top: 3px; }
+    .nd-svm-tile .h { font-size: 10.5px; color: var(--text-soft); opacity: 0.8; margin-top: 2px; }
+
+    .nd-svm-sec { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+      color: var(--text-soft); font-weight: 600; margin: 16px 0 6px; }
+    .nd-svm-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    .nd-svm-table th { text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em;
+      color: var(--text-soft); font-weight: 600; padding: 4px 8px; border-bottom: 1px solid var(--border-subtle); }
+    .nd-svm-table th.r, .nd-svm-table td.r { text-align: right; }
+    .nd-svm-table td { padding: 5px 8px; border-bottom: 1px solid rgba(148, 163, 184, 0.10); }
+    .nd-svm-table tr:hover td { background: rgba(148, 163, 184, 0.05); }
+    .nd-svm-table td.site { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .nd-svm-num { font-variant-numeric: tabular-nums; }
+    .nd-svm-pending { color: var(--text-soft); font-style: italic; }
+    .nd-svm-runs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 4px; }
+    .nd-svm-run-pick { background: rgba(148, 163, 184, 0.10); border: 1px solid var(--border-subtle);
+      border-radius: 999px; padding: 3px 10px; font-size: 11px; color: var(--text-soft); cursor: pointer; }
+    .nd-svm-run-pick.on { color: var(--text-primary); border-color: #7dd3fc; background: rgba(125, 211, 252, 0.12); }
+
     /* The sites that could not be tested at all: counted, not listed. */
     .nd-sv-skip { margin: 4px 0 2px; }
     .nd-sv-skip > summary { cursor: pointer; font-size: 11px; color: var(--text-soft); padding: 4px 8px;
@@ -8103,6 +8139,12 @@
         chs = chs.concat(s.channels || []);
         calls = calls.concat(s.calls || []);
       }
+      // A node mid-survey carries a test channel per candidate site — dozens
+      // of them, stopped between waves, none of them a channel this node is
+      // configured for. They would swamp a fleet-wide view of what is on air,
+      // so they are counted here and shown on the node's own survey window.
+      const surveying = chs.filter(c => String(c.name || '').startsWith('SURVEY: ')).length;
+      if (surveying) chs = chs.filter(c => !String(c.name || '').startsWith('SURVEY: '));
       // STABLE ordering: node, then channel name. Never by decode — those
       // figures change every report, so at the 1s cadence sorting by them made
       // rows swap places constantly and the table impossible to read. Position
@@ -8130,6 +8172,9 @@
       const meta = document.getElementById('nd2-live-meta');
       if (meta) {
         meta.innerHTML = `${chs.length} channel(s) · ${nodes} node(s) online `
+          + (surveying
+            ? `<span class="nd2-chip" title="A site survey is running: ${surveying} temporary test channel(s) are hidden. Open the node to watch it."><i class="fas fa-magnifying-glass-location"></i> ${surveying} surveying</span> `
+            : '')
           + (pushing
             ? `<span class="nd2-chip nd2-live-on" title="Pushed over the staff WebSocket — updates the moment a node reports"><i class="fas fa-bolt"></i> live</span>`
             : `<span class="nd2-chip nd2-live-off" title="WebSocket unavailable — falling back to a 5s poll, so rows can be up to 5s stale"><i class="fas fa-rotate"></i> polling</span>`);
@@ -13165,6 +13210,180 @@
       });
     }
 
+    /** When a run happened, in the drawer's usual short form. */
+    function _ndSvWhen(sv) {
+      const d = sv && sv.startedAt ? new Date(sv.startedAt) : null;
+      if (!d || Number.isNaN(d.getTime())) return 'Survey';
+      return d.toLocaleDateString([], { day: 'numeric', month: 'short' }) + ' '
+        + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+
+    /**
+     * Every reading for one run, live or finished, keyed by site+frequency.
+     *
+     * A running survey publishes its readings on the node's status frame as it
+     * takes them; a finished one has them in the record. Both are merged so
+     * the window reads the same either way, with the live reading winning
+     * while the run is still going.
+     */
+    function _ndSvRows(sv, live) {
+      const rows = new Map();
+      const key = (name, hz, alt) => `${String(name || '').trim()}|${hz || 0}|${alt ? 1 : 0}`;
+      for (const r of ((sv && sv.results) || [])) {
+        // A site with no control channel in the dataset was never tested, so
+        // it is not a reading: it is counted, and listed in its own fold.
+        if (r.verdict === 'skipped') continue;
+        rows.set(key(r.siteName, r.freqHz, false), {
+          site: r.siteName, freqHz: r.freqHz, verdict: r.verdict, pct: r.medianPct,
+          samples: r.samples, signal: r.signalDbfs, added: r.added, note: r.note,
+        });
+      }
+      for (const r of ((live && live.results) || [])) {
+        const verdict = r.medianPct != null
+          ? (r.medianPct >= 65 ? 'pass' : 'fail')
+          : (r.outcome === 'noLock' ? 'noLock' : 'unmeasured');
+        rows.set(key(r.site, r.freqHz, r.isAlt), {
+          site: r.site + (r.isAlt ? ' (alt)' : ''), freqHz: r.freqHz, verdict,
+          pct: r.medianPct, samples: null, signal: null, added: false, note: null, live: true,
+        });
+      }
+      return [...rows.values()];
+    }
+
+    /** The tallies the window leads with. */
+    function _ndSvCounts(sv, live) {
+      const rows = _ndSvRows(sv, live);
+      const n = (v) => rows.filter(r => r.verdict === v).length;
+      return {
+        pass: n('pass'), fail: n('fail'), noLock: n('noLock'), unmeasured: n('unmeasured'),
+        skipped: ((sv && sv.results) || []).filter(r => r.verdict === 'skipped').length,
+        added: (sv && sv.added) || 0,
+        tested: rows.length,
+      };
+    }
+
+    function _ndSurveyModalOpen() {
+      if (document.getElementById('nd-survey-modal')) return;
+      _ndSvmRun = null;
+      const overlay = document.createElement('div');
+      overlay.id = 'nd-survey-modal';
+      overlay.className = 'nd-svm-overlay';
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) _ndSurveyModalClose(); });
+      document.body.appendChild(overlay);
+      document.addEventListener('keydown', _ndSurveyModalEsc);
+      _ndSurveyModalRender();
+      // A finished run's rows live on the backend; make sure we have them.
+      _ndSurveyFetch();
+    }
+
+    function _ndSurveyModalClose() {
+      const el = document.getElementById('nd-survey-modal');
+      if (el) el.remove();
+      document.removeEventListener('keydown', _ndSurveyModalEsc);
+    }
+
+    function _ndSurveyModalEsc(e) {
+      if (e.key === 'Escape') _ndSurveyModalClose();
+    }
+
+    function _ndSurveyModalRender() {
+      const overlay = document.getElementById('nd-survey-modal');
+      if (!overlay) return;
+      const live = (_ndSurveyLive && _ndSurveyLive.running) ? _ndSurveyLive : null;
+      // The live run is always the newest record; an explicitly picked older
+      // run is shown on its own, with no live readings merged into it.
+      const sv = _ndSvmRun != null
+        ? (_ndSurveys || []).find(x => x.id === _ndSvmRun) || null
+        : (_ndSurveys || [])[0] || null;
+      const showLive = live && (_ndSvmRun == null || (sv && sv.id === live.surveyId));
+      const rows = _ndSvRows(sv, showLive ? live : null);
+      const c = _ndSvCounts(sv, showLive ? live : null);
+
+      const RANK = { pass: 0, fail: 1, unmeasured: 2, noLock: 3 };
+      rows.sort((a, b) => (RANK[a.verdict] ?? 9) - (RANK[b.verdict] ?? 9)
+        || (b.pct ?? -1) - (a.pct ?? -1)
+        || String(a.site || '').localeCompare(String(b.site || '')));
+
+      const tile = (v, label, hint, colour) => `<div class="nd-svm-tile">
+        <div class="v" style="color:${colour}">${v}</div><div class="l">${label}</div>
+        ${hint ? `<div class="h">${hint}</div>` : ''}</div>`;
+
+      const pct = live && live.total ? Math.round(100 * (live.done || 0) / live.total) : 0;
+      const progress = showLive ? `
+        <div class="nd-sv-live" style="margin-bottom:12px;">
+          <div class="nd-sv-live-head">
+            <b>${escapeHtml(live.phase || 'testing')} ${live.done || 0} of ${live.total || '?'}</b>
+            <span>${escapeHtml(live.current || '')}</span>
+            <span class="nd-sv-live-at">${pct}%</span>
+          </div>
+          <div class="nd-sv-prog"><i style="width:${pct}%"></i></div>
+        </div>` : '';
+
+      const runPicker = (_ndSurveys || []).length > 1 ? `
+        <div class="nd-svm-runs">${_ndSurveys.map(r => `
+          <span class="nd-svm-run-pick${(sv && r.id === sv.id) ? ' on' : ''}"
+                onclick="_ndSvmRun=${r.id}; _ndSurveyModalRender();">${escapeHtml(_ndSvWhen(r))}</span>`).join('')}
+        </div>` : '';
+
+      const body = rows.length ? `
+        <table class="nd-svm-table">
+          <thead><tr>
+            <th>Verdict</th><th>Site</th><th class="r">Control freq</th>
+            <th class="r">Decode</th><th class="r">Samples</th><th class="r">Signal</th><th></th>
+          </tr></thead>
+          <tbody>${rows.map(r => {
+            const v = _ndSvVerdict(r.verdict);
+            const p = r.pct == null ? null : Math.round(r.pct);
+            const cls = p == null ? '' : (p >= 85 ? ' good' : (p >= 65 ? ' ok' : ' weak'));
+            return `<tr>
+              <td><span class="nd-mgr-badge" style="color:${v.color}; border-color:${v.color};">${escapeHtml(v.label)}</span></td>
+              <td class="site" title="${escapeHtml(r.site || '')}">${escapeHtml(r.site || '—')}</td>
+              <td class="r nd-svm-num">${r.freqHz ? (r.freqHz / 1e6).toFixed(4) : '—'}</td>
+              <td class="r">${p == null
+                ? `<span class="nd-sv-note">${r.verdict === 'noLock' ? 'no signal' : 'no reading'}</span>`
+                : `<span class="nd-sync${cls}">${p}%</span>
+                   <span class="nd-sv-bar" style="margin-left:6px;"><i style="width:${p}%; background:${v.color}"></i></span>`}</td>
+              <td class="r nd-svm-num">${r.samples != null ? r.samples : (r.live ? '<span class="nd-svm-pending">live</span>' : '—')}</td>
+              <td class="r nd-svm-num">${r.signal != null ? Math.round(r.signal) + ' dB' : '—'}</td>
+              <td class="r">${r.added ? '<span class="nd-sv-added">added</span>' : ''}</td>
+            </tr>`;
+          }).join('')}</tbody>
+        </table>`
+        : `<div class="nd-empty" style="border:none;background:none;">${
+            showLive ? 'No readings yet — the first wave is still being measured.' : 'Nothing was measured on this run.'}</div>`;
+
+      const skipped = ((sv && sv.results) || []).filter(r => r.verdict === 'skipped');
+
+      overlay.innerHTML = `
+        <div class="nd-svm">
+          <div class="nd-svm-head">
+            <h3><i class="fas fa-magnifying-glass-location"></i> Site survey</h3>
+            <span class="nd-svm-sub">${escapeHtml(_ndSvWhen(sv))}${sv ? ` · ${sv.trigger === 'install' ? 'first install' : 'manual'}
+              · ${sv.rings || 1} ring${(sv.rings || 1) === 1 ? '' : 's'} · ${sv.candidates || 0} site(s)` : ''}${
+              sv && sv.note ? ` · ${escapeHtml(sv.note)}` : ''}</span>
+            <span class="nd-svm-right">
+              ${showLive ? `<button class="btn btn-secondary btn-sm nd-write" onclick="_ndCancelSurvey()">Cancel survey</button>` : ''}
+              <button class="btn btn-secondary btn-sm" onclick="_ndSurveyModalClose()">Close</button>
+            </span>
+          </div>
+          <div class="nd-svm-body">
+            ${progress}
+            ${runPicker}
+            <div class="nd-svm-tiles">
+              ${tile(c.pass, 'Heard', 'at or above 65%', '#4ade80')}
+              ${tile(c.fail, 'Heard, too weak', 'below the 65% bar', '#fb923c')}
+              ${tile(c.noLock, 'Not heard', 'never locked on', '#f87171')}
+              ${tile(c.unmeasured, 'No reading', 'locked, nothing measurable', '#94a3b8')}
+              ${tile(c.added, 'Added', 'now in the channel list', c.added ? '#4ade80' : '#94a3b8')}
+              ${tile(c.skipped, 'Not testable', 'no control channel listed', '#94a3b8')}
+            </div>
+            <div class="nd-svm-sec">Decode rate per site tested (${rows.length})</div>
+            ${body}
+            ${_ndSvSkippedHtml(skipped)}
+          </div>
+        </div>`;
+    }
+
     function _ndCancelSurvey() {
       // The live frame knows the id while the node is reporting progress; the
       // fetched history knows it either way, which matters when the node has
@@ -13265,9 +13484,14 @@
       </details>`;
     }
 
+    /** Which run the survey window is showing (null = the newest). */
+    let _ndSvmRun = null;
+
     function _ndRenderSurveys() {
       const el = document.getElementById('nd-survey-log');
       const sub = document.getElementById('nd-survey-sub');
+      // The window, if it is open, is the thing that shows detail.
+      if (document.getElementById('nd-survey-modal')) _ndSurveyModalRender();
       if (!el) return;
 
       const live = _ndSurveyLive && _ndSurveyLive.running ? _ndSurveyLive : null;
@@ -13278,6 +13502,7 @@
           : (_ndSurveys.length ? 'newest first · last 10 runs' : '');
       }
 
+      // The panel itself stays small: the state of play, and a way in.
       let html = '';
       if (live) {
         const pct = live.total ? Math.round(100 * (live.done || 0) / live.total) : 0;
@@ -13295,51 +13520,28 @@
         return;
       }
 
-      html += _ndSurveys.map(sv => {
-        const when = sv.startedAt ? new Date(sv.startedAt) : null;
-        const whenTxt = when && !Number.isNaN(when.getTime())
-          ? when.toLocaleDateString([], { day: 'numeric', month: 'short' }) + ' ' + when.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-          : '—';
-        const all = sv.results || [];
-        const tested = all.filter(r => r.verdict !== 'skipped')
-          .sort((a, b) => _ndSvVerdict(a.verdict).rank - _ndSvVerdict(b.verdict).rank
-            || (b.medianPct ?? -1) - (a.medianPct ?? -1)
-            || String(a.siteName || '').localeCompare(String(b.siteName || '')));
-        const skipped = all.filter(r => r.verdict === 'skipped');
-
-        // What the run found, counted — the line staff actually read.
-        const n = (v) => all.filter(r => r.verdict === v).length;
-        const tally = [
-          ['Heard', n('pass'), '#4ade80'],
-          ['Too weak', n('fail'), '#fb923c'],
-          ['Not heard', n('noLock'), '#f87171'],
-          ['No reading', n('unmeasured'), '#94a3b8'],
-        ].filter(([, c]) => c > 0)
-          .map(([label, c, col]) => `<span><b style="color:${col}">${c}</b> ${label.toLowerCase()}</span>`)
-          .join('');
-
-        const head = `<div class="nd-sv-run">
-          <div class="nd-sv-when">${escapeHtml(whenTxt)}${
-            sv.status === 'running' ? ' <span style="color:#fbbf24">· running</span>'
-            : sv.status !== 'done' ? ` <span style="color:#fb923c">· ${escapeHtml(sv.status)}</span>` : ''}</div>
-          <div class="nd-sv-meta">${sv.trigger === 'install' ? 'first install' : 'manual'} ·
-            ${sv.rings || 1} ring${(sv.rings || 1) === 1 ? '' : 's'} ·
-            ${sv.candidates || 0} site(s) ·
-            <b style="color:${sv.added ? '#4ade80' : 'var(--text-soft)'}">${sv.added != null ? sv.added : 0}</b> added${
-              sv.note ? ` · ${escapeHtml(sv.note)}` : ''}</div>
-          ${tally ? `<div class="nd-sv-tally">${tally}</div>` : ''}
+      const latest = _ndSurveys[0];
+      if (latest || live) {
+        const counts = _ndSvCounts(latest, live);
+        html += `<div class="nd-sv-run" style="display:flex; align-items:center; gap:12px;">
+          <div style="flex:1; min-width:0;">
+            <div class="nd-sv-when">${escapeHtml(_ndSvWhen(latest))}${
+              live ? ' <span style="color:#fbbf24">· running</span>' : ''}</div>
+            <div class="nd-sv-tally">
+              <span><b style="color:#4ade80">${counts.pass}</b> heard</span>
+              <span><b style="color:#fb923c">${counts.fail}</b> too weak</span>
+              <span><b style="color:#f87171">${counts.noLock}</b> not heard</span>
+              ${counts.added ? `<span><b style="color:#4ade80">${counts.added}</b> added</span>` : ''}
+            </div>
+          </div>
+          <button class="btn btn-secondary btn-sm" onclick="_ndSurveyModalOpen()">
+            <i class="fas fa-chart-simple"></i> ${live ? 'View progress' : 'View results'}
+          </button>
         </div>`;
+        el.innerHTML = html;
+        return;
+      }
 
-        const body = tested.length
-          ? tested.map(_ndSvRowHtml).join('')
-          : (sv.status === 'running'
-            ? `<div class="nd-sv-meta" style="padding:2px 8px 6px;">No results yet.</div>`
-            : `<div class="nd-sv-meta" style="padding:2px 8px 6px;">Nothing was measured.</div>`);
-
-        return head + body + _ndSvSkippedHtml(skipped);
-      }).join('');
-
-      el.innerHTML = html;
     }
 
     function _ndRenderEvents() {
@@ -14058,6 +14260,8 @@
     function closeNodeDrawer() {
       const drawer = document.getElementById('node-drawer');
       if (!drawer || !drawer.classList.contains('open')) return;
+      // The survey window belongs to this node; it must not outlive the drawer.
+      _ndSurveyModalClose();
       // Stop any live spectrum + unsubscribe while the socket is still open,
       // then tear the socket down (suppress onclose so it doesn't flip the UI
       // to a "disconnected" state on an intentional close).

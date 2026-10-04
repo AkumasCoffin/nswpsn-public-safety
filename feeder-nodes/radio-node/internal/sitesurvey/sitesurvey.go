@@ -134,7 +134,22 @@ type Report struct {
 	Results  []Result `json:"results"`
 }
 
+// LiveResult is one site's reading as the survey has it so far.
+type LiveResult struct {
+	Site      string   `json:"site"`
+	FreqHz    int64    `json:"freqHz"`
+	Outcome   string   `json:"outcome"`
+	MedianPct *float64 `json:"medianPct"`
+	IsAlt     bool     `json:"isAlt"`
+}
+
 // Progress is the survey's live state for the status frame.
+//
+// It carries the readings taken so far, not just a count. A survey is minutes
+// of work and the report it files at the end is the only other time anyone
+// would learn what it heard — which makes watching one pointless, and a long
+// run impossible to judge until it is over. The readings are small and the
+// heartbeat already carries far more than this.
 type Progress struct {
 	Running  bool   `json:"running"`
 	SurveyID int64  `json:"surveyId"`
@@ -142,6 +157,9 @@ type Progress struct {
 	Done     int    `json:"done"`
 	Total    int    `json:"total"`
 	Current  string `json:"current"`
+	// Results so far, in the order the sites were planned. Omitted while
+	// there is nothing measured yet.
+	Results []LiveResult `json:"results,omitempty"`
 }
 
 // Options wires the survey to the node. Everything it touches is injected, so
@@ -250,7 +268,10 @@ func (r *Runner) Run(ctx context.Context, req Request) {
 			return
 		}
 		restored = true
-		r.setProgress(Progress{Running: true, SurveyID: req.SurveyID, Phase: "restoring", Total: len(plan)})
+		r.setProgress(Progress{
+			Running: true, SurveyID: req.SurveyID, Phase: "restoring",
+			Total: len(plan), Done: len(plan), Results: liveResults(plan),
+		})
 		if err := r.opts.Import(nil, false); err != nil {
 			// Loud: the node is now running a configuration with survey
 			// channels in it until the next config push or restart.
@@ -319,6 +340,23 @@ func (r *Runner) silenceOwnChannels(ctx context.Context) {
 	}
 }
 
+// liveResults is what has been measured so far, for the status frame.
+func liveResults(plan []*measurement) []LiveResult {
+	out := make([]LiveResult, 0, len(plan))
+	for _, m := range plan {
+		if m.res == nil {
+			continue
+		}
+		row := LiveResult{Site: m.cand.Name, FreqHz: m.freqHz, Outcome: string(m.res.Outcome), IsAlt: m.isAlt}
+		if m.res.Outcome == decodeprobe.Measured {
+			pct := m.res.MedianPct
+			row.MedianPct = &pct
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
 // measureAll runs the waves and fills in each measurement's result. It returns
 // aborted=true when the survey could not be completed honestly.
 func (r *Runner) measureAll(ctx context.Context, surveyID int64, plan []*measurement) (bool, string) {
@@ -331,6 +369,7 @@ func (r *Runner) measureAll(ctx context.Context, surveyID int64, plan []*measure
 		r.setProgress(Progress{
 			Running: true, SurveyID: surveyID, Phase: "testing",
 			Done: done, Total: len(plan), Current: describe(wave),
+			Results: liveResults(plan),
 		})
 		gone := r.measureBatch(ctx, wave)
 		if gone {
@@ -340,6 +379,10 @@ func (r *Runner) measureAll(ctx context.Context, surveyID int64, plan []*measure
 			return true, "the node's configuration changed during the survey"
 		}
 		done += len(wave)
+		r.setProgress(Progress{
+			Running: true, SurveyID: surveyID, Phase: "testing",
+			Done: done, Total: len(plan), Results: liveResults(plan),
+		})
 
 		// Solo retest for anything that disappointed in company. Only worth it
 		// when the wave actually had company to blame.
@@ -354,6 +397,7 @@ func (r *Runner) measureAll(ctx context.Context, surveyID int64, plan []*measure
 				r.setProgress(Progress{
 					Running: true, SurveyID: surveyID, Phase: "retesting",
 					Done: done, Total: len(plan), Current: m.cand.Name,
+					Results: liveResults(plan),
 				})
 				before := m.res
 				if gone := r.measureBatch(ctx, []*measurement{m}); gone {
@@ -473,7 +517,10 @@ func (r *Runner) probeDeps() decodeprobe.Deps {
 // measurements that DID happen are the audit trail, and the backend decides
 // what an aborted survey is allowed to change (nothing).
 func (r *Runner) finish(ctx context.Context, surveyID int64, plan []*measurement, aborted bool, note string) {
-	r.setProgress(Progress{Running: true, SurveyID: surveyID, Phase: "reporting", Total: len(plan)})
+	r.setProgress(Progress{
+		Running: true, SurveyID: surveyID, Phase: "reporting",
+		Total: len(plan), Done: len(plan), Results: liveResults(plan),
+	})
 	rep := Report{SurveyID: surveyID, Aborted: aborted, Results: make([]Result, 0, len(plan))}
 	if note != "" {
 		n := note

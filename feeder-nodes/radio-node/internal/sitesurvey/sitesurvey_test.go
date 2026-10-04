@@ -505,6 +505,65 @@ func TestClusterPacksCloseFrequencies(t *testing.T) {
 	}
 }
 
+func TestProgressCarriesReadingsAsTheyAreTaken(t *testing.T) {
+	// A survey is minutes of work; if the only time it says what it heard is
+	// the report at the end, watching one is pointless.
+	w := newWorld()
+	w.decode = decodesAt(map[string]float64{
+		channelPrefix + "Strong": 90,
+		channelPrefix + "Weak":   20,
+		channelPrefix + "Dead":   -1,
+	}, 50)
+	var seen [][]LiveResult
+	r := New(Options{
+		Fetch: w.runner().opts.Fetch, Start: w.runner().opts.Start, Stop: w.runner().opts.Stop,
+		Suppress: w.runner().opts.Suppress, Import: w.runner().opts.Import, Tuners: func() int { return 1 },
+		Pause: func(bool) {}, Report: w.runner().opts.Report,
+		OnProgress: func(p Progress) {
+			if len(p.Results) > 0 {
+				seen = append(seen, append([]LiveResult(nil), p.Results...))
+			}
+		},
+		Now: func() time.Time { return w.now },
+		Sleep: func(_ context.Context, d time.Duration) { w.now = w.now.Add(d) },
+	})
+	// Three frequencies far enough apart to be three separate waves.
+	r.Run(context.Background(), Request{SurveyID: 30, Candidates: []Candidate{
+		cand("Strong", 400), cand("Weak", 410), cand("Dead", 420),
+	}})
+
+	if len(seen) < 3 {
+		t.Fatalf("want readings published as each wave lands, got %d updates", len(seen))
+	}
+	// They accumulate rather than resetting.
+	for i := 1; i < len(seen); i++ {
+		if len(seen[i]) < len(seen[i-1]) {
+			t.Fatalf("readings went backwards: %d then %d", len(seen[i-1]), len(seen[i]))
+		}
+	}
+	first := seen[0]
+	if len(first) != 1 || first[0].Site != "Strong" {
+		t.Fatalf("the first wave should publish its own site: %+v", first)
+	}
+	if first[0].MedianPct == nil || *first[0].MedianPct != 90 {
+		t.Fatalf("a measured site publishes its decode rate: %+v", first[0])
+	}
+	last := seen[len(seen)-1]
+	if len(last) != 3 {
+		t.Fatalf("every site should be published by the end: %+v", last)
+	}
+	byName := map[string]LiveResult{}
+	for _, r := range last {
+		byName[r.Site] = r
+	}
+	if byName["Dead"].Outcome != "noLock" || byName["Dead"].MedianPct != nil {
+		t.Fatalf("a site that never locked carries no rate: %+v", byName["Dead"])
+	}
+	if byName["Weak"].MedianPct == nil || *byName["Weak"].MedianPct != 20 {
+		t.Fatalf("weak site: %+v", byName["Weak"])
+	}
+}
+
 func TestSurveyTakesTheRadioForItself(t *testing.T) {
 	// A tuner already sourcing the node's own channels cannot retune to a
 	// candidate, so the survey silences them — and because an import does not
