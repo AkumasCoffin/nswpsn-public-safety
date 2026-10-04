@@ -630,6 +630,153 @@ describe('isRealTalkerAlias', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Mis-decoded P25 ids.
+//
+// WACN and system id are read off the air, so a corrupt control frame yields a
+// plausible pair belonging to no network — production carries 0xAEE00 and
+// 0xBAE03 against a real 0xBEE00, one bit apart. Each bad pair used to render
+// as a whole extra system on the Data page, and because logical grouping keys
+// on the system id, a reception read with corrupt ids could not join the call
+// its siblings were in either.
+//
+// Dynamic import per test: the canonical set caches for five minutes.
+// ---------------------------------------------------------------------------
+describe('mis-decoded P25 identity', () => {
+  const REAL = { system: 721, wacn: 781824, label: 'NSWPSN' };
+  /** The canonical-set read; `n` is how many receptions back the pair. */
+  const canonRows = (n: number, over: Record<string, unknown> = {}) => ({
+    rows: [{ system_label: REAL.label, wacn: REAL.wacn, system: REAL.system, n: String(n), ...over }],
+  });
+
+  const ev = (over: Partial<ActivityEventInput> = {}): ActivityEventInput => ({
+    ...baseEvent, systemId: REAL.system, wacn: REAL.wacn, systemName: REAL.label, ...over,
+  });
+
+  beforeEach(() => {
+    clientQuery.mockReset();
+    clientRelease.mockReset();
+    poolQuery.mockReset();
+    readPool = null;
+    vi.resetModules();
+  });
+
+  it('files a corrupt pair under the system its label belongs to', async () => {
+    poolQuery.mockResolvedValue(canonRows(1_200_000));
+    readPool = { query: poolQuery };
+    armQueries({ foundRadio: null, insertIds: ['901'] });
+
+    const mod = await import('../../../src/services/nodeEvents.js');
+    // 0xAEE00 — one bit off the real 0xBEE00.
+    await mod.recordActivityEvents('node-aaaa', 'stream-1', [ev({ wacn: 0xaee00, systemId: 721 })]);
+
+    const ins = callWith('INSERT INTO node_radio_events');
+    expect(ins?.[6]).toBe(REAL.system);  // system
+    expect(ins?.[15]).toBe(REAL.wacn);   // wacn
+  });
+
+  it('corrects the id BEFORE grouping, so the call is not forked', async () => {
+    poolQuery.mockResolvedValue(canonRows(1_200_000));
+    readPool = { query: poolQuery };
+    armQueries({ foundRadio: null, insertIds: ['902'] });
+
+    const mod = await import('../../../src/services/nodeEvents.js');
+    await mod.recordActivityEvents('node-aaaa', 'stream-1', [ev({ systemId: 2201, wacn: 165887 })]);
+
+    // Both halves of the grouping key carry the real system, so this reception
+    // can still join the call its siblings opened.
+    expect(callWith('pg_advisory_xact_lock')).toEqual([`nrc:${REAL.system}:${12345}`]);
+    expect(callWith('SELECT c.logical_call_id')?.[0]).toBe(REAL.system);
+  });
+
+  it('leaves a reception that already carries the right ids alone', async () => {
+    poolQuery.mockResolvedValue(canonRows(1_200_000));
+    readPool = { query: poolQuery };
+    armQueries({ foundRadio: null, insertIds: ['903'] });
+
+    const mod = await import('../../../src/services/nodeEvents.js');
+    await mod.recordActivityEvents('node-aaaa', 'stream-1', [ev()]);
+
+    const ins = callWith('INSERT INTO node_radio_events');
+    expect(ins?.[6]).toBe(REAL.system);
+    expect(ins?.[15]).toBe(REAL.wacn);
+  });
+
+  it('never merges two networks: a different label keeps its own identity', async () => {
+    poolQuery.mockResolvedValue(canonRows(1_200_000));
+    readPool = { query: poolQuery };
+    armQueries({ foundRadio: null, insertIds: ['904'] });
+
+    const mod = await import('../../../src/services/nodeEvents.js');
+    // Another state's system — its own label, so nothing about NSWPSN applies.
+    await mod.recordActivityEvents('node-bbbb', 'stream-1', [
+      ev({ systemName: 'VICPSN', systemId: 999, wacn: 123456 }),
+    ]);
+
+    const ins = callWith('INSERT INTO node_radio_events');
+    expect(ins?.[6]).toBe(999);
+    expect(ins?.[15]).toBe(123456);
+  });
+
+  it('will not canonicalise a young deployment onto the first pair it heard', async () => {
+    // Below the confidence floor: the busiest pair might itself be the corrupt
+    // one when there are only a handful of receptions.
+    poolQuery.mockResolvedValue(canonRows(12));
+    readPool = { query: poolQuery };
+    armQueries({ foundRadio: null, insertIds: ['905'] });
+
+    const mod = await import('../../../src/services/nodeEvents.js');
+    await mod.recordActivityEvents('node-aaaa', 'stream-1', [ev({ systemId: 2201, wacn: 165887 })]);
+
+    const ins = callWith('INSERT INTO node_radio_events');
+    expect(ins?.[6]).toBe(2201);
+    expect(ins?.[15]).toBe(165887);
+  });
+
+  it('stores what it was given when there is nothing to compare against', async () => {
+    readPool = null; // no read pool = no canonical set
+    armQueries({ foundRadio: null, insertIds: ['906'] });
+
+    const mod = await import('../../../src/services/nodeEvents.js');
+    await mod.recordActivityEvents('node-aaaa', 'stream-1', [ev({ systemId: 2201, wacn: 165887 })]);
+
+    const ins = callWith('INSERT INTO node_radio_events');
+    expect(ins?.[6]).toBe(2201);
+    expect(ins?.[15]).toBe(165887);
+  });
+
+  it('leaves an unlabelled reception exactly as it arrived', async () => {
+    poolQuery.mockResolvedValue(canonRows(1_200_000));
+    readPool = { query: poolQuery };
+    armQueries({ foundRadio: null, insertIds: ['907'] });
+
+    const mod = await import('../../../src/services/nodeEvents.js');
+    // An older agent sends no system name; there is nothing to decide by.
+    await mod.recordActivityEvents('node-aaaa', 'stream-1', [
+      ev({ systemName: null, systemId: 2201, wacn: 165887 }),
+    ]);
+
+    const ins = callWith('INSERT INTO node_radio_events');
+    expect(ins?.[6]).toBe(2201);
+    expect(ins?.[15]).toBe(165887);
+  });
+
+  it('reads the canonical set once per batch, not once per reception', async () => {
+    poolQuery.mockResolvedValue(canonRows(1_200_000));
+    readPool = { query: poolQuery };
+    armQueries({ foundRadio: null, insertIds: ['908', '909', '910'] });
+
+    const mod = await import('../../../src/services/nodeEvents.js');
+    await mod.recordActivityEvents('node-aaaa', 'stream-1', [
+      ev({ id: 1 }), ev({ id: 2 }), ev({ id: 3 }),
+    ]);
+    const canonReads = poolQuery.mock.calls.filter(
+      (args) => String(args[0] ?? '').includes('DISTINCT ON (system_label)'),
+    );
+    expect(canonReads).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // recordScannerCall — the P25 identity a scanner call is filed under.
 //
 // Every rollup on the Data page groups by (wacn, system). A scanner row that

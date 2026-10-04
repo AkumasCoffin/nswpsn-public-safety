@@ -291,6 +291,130 @@ export interface ActivityEventInput {
   patchMembers?: number[] | null;
 }
 
+// ---------------------------------------------------------------------------
+// Canonical P25 identity
+// ---------------------------------------------------------------------------
+
+/** The (wacn, system) pair a system's own receptions overwhelmingly carry. */
+interface CanonicalSystem {
+  wacn: number | null;
+  system: number;
+  events: number;
+}
+
+/**
+ * A system is only as trustworthy as the frames it is read from, and the WACN
+ * and system id are READ OFF THE AIR: a single corrupt control frame yields a
+ * plausible-looking pair that belongs to no network. Production has them —
+ * 0xAEE00 and 0xBAE03 against a real 0xBEE00, one bit apart, a handful of
+ * receptions each against 1.2 million.
+ *
+ * They are not harmless. Every rollup on the Data page groups by
+ * (wacn, system), so each bad pair renders as a whole extra system beside the
+ * real one, carrying off a few of its talkgroups and calls; worse, logical
+ * call grouping keys on the system id too, so a reception read with a corrupt
+ * id cannot join the call its siblings are in and splits off as a call of its
+ * own.
+ *
+ * The fix is to decide identity by something that is NOT read off the air:
+ * the channel's configured system name, which the operator sets and the agent
+ * ships verbatim. Within one label the pair that the overwhelming majority of
+ * receptions carry is what the network actually transmits; anything else
+ * under that label is a mis-decode and is filed under the real identity.
+ *
+ * What this deliberately does NOT do is merge two systems. A different
+ * network carries a different label — that is how a node is configured — so
+ * adding another state's system creates its own canonical pair and is never
+ * touched by this. The assumption is only ever "one label, one network", and
+ * every correction is counted into the log so a systematic deviation (an
+ * operator who labelled two different networks the same) shows up as
+ * thousands of corrections rather than passing silently.
+ */
+let _canonCache: { at: number; byLabel: Map<string, CanonicalSystem> } | null = null;
+let _canonRefreshing: Promise<Map<string, CanonicalSystem>> | null = null;
+const CANON_TTL_MS = 10 * 60_000;
+/**
+ * How many receptions a label needs before its busiest pair is taken as
+ * authoritative. A young deployment must not canonicalise itself onto the
+ * first pair it ever heard, which might be the corrupt one.
+ */
+const CANON_MIN_EVENTS = 1000;
+/**
+ * Window the answer is read from. Short on purpose: this table holds millions
+ * of rows, and the question — "which pair does this network transmit" — is
+ * answered just as well by a few hours of it as by a month. The call-group
+ * filter is what lets the partial rollup index carry the scan.
+ */
+const CANON_WINDOW = '6 hours';
+
+async function refreshCanonicalSystems(): Promise<Map<string, CanonicalSystem>> {
+  const byLabel = new Map<string, CanonicalSystem>();
+  try {
+    const pool = await getPool();
+    if (pool) {
+      const res = await pool.query<{ system_label: string; wacn: number | null; system: number; n: string }>(
+        `SELECT DISTINCT ON (system_label) system_label, wacn, system, COUNT(*)::text AS n
+           FROM node_radio_events
+          WHERE received_at >= now() - interval '${CANON_WINDOW}'
+            AND (event_type LIKE 'CALL_GROUP%' OR event_type LIKE 'CALL_PATCH_GROUP%')
+            AND system IS NOT NULL
+            AND system_label IS NOT NULL
+          GROUP BY system_label, wacn, system
+          ORDER BY system_label, COUNT(*) DESC`,
+      );
+      for (const r of res.rows) {
+        byLabel.set(r.system_label, { wacn: r.wacn ?? null, system: r.system, events: Number(r.n) || 0 });
+      }
+    }
+  } catch (err) {
+    // No canonical set = nothing is corrected, which is the old behaviour.
+    log.warn({ err }, 'nodeEvents: canonicalSystems failed');
+  }
+  _canonCache = { at: Date.now(), byLabel };
+  return byLabel;
+}
+
+/**
+ * The canonical identities, without ever making an arriving batch wait on a
+ * refresh. The very first call has nothing to serve and awaits one read; from
+ * then on the cached answer goes back immediately and a stale one is renewed
+ * in the background. The pair a network transmits does not change, so serving
+ * a ten-minute-old answer for the length of one query is free.
+ */
+async function canonicalSystems(): Promise<Map<string, CanonicalSystem>> {
+  if (!_canonCache) {
+    _canonRefreshing ??= refreshCanonicalSystems().finally(() => { _canonRefreshing = null; });
+    return await _canonRefreshing;
+  }
+  if (Date.now() - _canonCache.at >= CANON_TTL_MS && !_canonRefreshing) {
+    _canonRefreshing = refreshCanonicalSystems().finally(() => { _canonRefreshing = null; });
+  }
+  return _canonCache.byLabel;
+}
+
+/**
+ * The identity this reception should be filed under: its own, unless its
+ * label's network is known to transmit a different pair.
+ */
+function canonicalPair(
+  canon: Map<string, CanonicalSystem>,
+  label: string | null,
+  system: number | null,
+  wacn: number | null,
+): { system: number | null; wacn: number | null; corrected: boolean } {
+  if (label === null || system === null) return { system, wacn, corrected: false };
+  const c = canon.get(label);
+  if (!c || c.events < CANON_MIN_EVENTS) return { system, wacn, corrected: false };
+  if (c.system === system && c.wacn === wacn) return { system, wacn, corrected: false };
+  return { system: c.system, wacn: c.wacn, corrected: true };
+}
+
+/** Test seam. */
+export function _resetCanonicalSystems(): void {
+  _canonCache = null;
+  _canonRefreshing = null;
+}
+
 /**
  * Record a batch of activity events for one node/stream. Returns how many
  * were NEWLY inserted (deduped re-sends are skipped silently — the unique
@@ -326,6 +450,11 @@ export async function recordActivityEvents(
     // table, and an empty lookup (central rdio down or unconfigured) simply
     // means every talkgroup groups as itself, exactly as before patches.
     const patches = await rdioPatches();
+    // Likewise once per batch: the known-good P25 identity per system label,
+    // used to file a reception whose transmitted ids were mis-decoded under
+    // the system it actually belongs to.
+    const canon = await canonicalSystems();
+    let corrected = 0;
 
     const client = await pool.connect();
     let failures = 0;
@@ -333,7 +462,13 @@ export async function recordActivityEvents(
     try {
       for (const ev of events) {
         const receivedAt = clampReceivedAt(new Date(ev.atMs));
-        const system = safeInt(ev.systemId);
+        const label = ev.systemName ?? null;
+        // Identity BEFORE grouping: the system id is half the logical-call
+        // key, so a reception read with corrupt ids has to be put right here
+        // or it forks a call of its own.
+        const id = canonicalPair(canon, label, safeInt(ev.systemId), safeInt(ev.wacn));
+        if (id.corrected) corrected++;
+        const system = id.system;
         const talkgroup = safeInt(ev.target);
         const sourceUnit = safeInt(ev.source);
         // PATCH GROUPING. A patch is several talkgroups carrying ONE
@@ -412,8 +547,8 @@ export async function recordActivityEvents(
               safeInt(ev.rfss),
               safeInt(ev.site),
               safeInt(ev.nac),
-              safeInt(ev.wacn),
-              ev.systemName ?? null,
+              id.wacn,
+              label,
               ev.sourceAlias ?? null,
               // Never the talkgroup itself: the call is already filed there,
               // and listing it as one of its own patch members would read as
@@ -518,6 +653,15 @@ export async function recordActivityEvents(
           node: nodeId.slice(0, 8),
         },
         'nodeEvents: recordActivityEvents partial failure',
+      );
+    }
+    if (corrected > 0) {
+      // Expect a trickle. A steady stream means either a node with a real
+      // decode problem or two different networks sharing one system label,
+      // and both want looking at rather than quietly papering over.
+      log.info(
+        { corrected, of: events.length, node: nodeId.slice(0, 8) },
+        'nodeEvents: receptions filed under their system despite mis-decoded P25 ids',
       );
     }
     failed = failures;
