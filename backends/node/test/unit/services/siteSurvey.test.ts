@@ -271,7 +271,9 @@ describe('maybeStartInstallSurvey — once-ever guards', () => {
     await maybeStartInstallSurvey(node());
     expect(sendCmd).toHaveBeenCalledOnce();
     const ins = executed.find((e) => e.sql.includes('INSERT INTO node_site_surveys'));
-    expect(ins?.params).toEqual([NODE, 'install', null, 1, 1]);
+    // rings 0: a node's first survey covers its own council area. Reaching
+    // past it costs a measurement window per site and is a person's call.
+    expect(ins?.params).toEqual([NODE, 'install', null, 0, 1]);
   });
 
   it('never fires for non-radio, configured, LGA-less, or previously surveyed nodes', async () => {

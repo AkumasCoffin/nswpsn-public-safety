@@ -83,6 +83,13 @@ describe('lgaAdjacency / ring depth', () => {
     expect(adj.get('Gamma')).toBeUndefined();
   });
 
+  it('ring 0 is the area itself, and nothing next to it', async () => {
+    // What a node's first survey asks for. 0 is a reach, not a missing value.
+    lgaPolys = [poly('A', 0), poly('B', 1), poly('C', 2)];
+    expect([...(await lgaNeighbourhood('NSW', 'A', 0))]).toEqual(['A']);
+    expect([...(await lgaRingDepths('NSW', 'A', 0)).entries()]).toEqual([['A', 0]]);
+  });
+
   it('ring depth walks the chain and counts the hops', async () => {
     lgaPolys = [poly('A', 0), poly('B', 1), poly('C', 2), poly('D', 3)];
     expect([...(await lgaNeighbourhood('NSW', 'A', 1))].sort()).toEqual(['A', 'B']);

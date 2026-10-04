@@ -47,6 +47,15 @@ export interface SurveyRow {
 // start
 // ---------------------------------------------------------------------------
 
+/**
+ * Start a survey.
+ *
+ * `rings` is how far past the node's own council area to look: 0 is that area
+ * alone, 1 adds its direct neighbours, and so on. A node's FIRST survey uses
+ * 0 — the sites it exists to hear are the ones around it, and testing a whole
+ * neighbourhood unasked costs a measurement window per site for candidates it
+ * was never going to reach. Going wider is something a person asks for.
+ */
 export async function startSurvey(
   nodeId: string,
   trigger: 'install' | 'manual',
@@ -70,7 +79,12 @@ export async function startSurvey(
 
   const { candidates, skipped } = await candidatesForNode(node, rings);
   if (candidates.length === 0) {
-    return { ok: false, error: `no testable GRN sites found for LGA "${node.lga}" (${skipped.length} skipped)` };
+    return {
+      ok: false,
+      error: rings === 0
+        ? `no testable GRN sites in "${node.lga}" (${skipped.length} skipped) — widen the search to include neighbouring areas`
+        : `no testable GRN sites found for LGA "${node.lga}" (${skipped.length} skipped)`,
+    };
   }
 
   const ins = await pool.query<{ id: number }>(
@@ -171,7 +185,7 @@ export async function maybeStartInstallSurvey(node: NodeRow): Promise<void> {
       [node.id],
     );
     if ((prior.rowCount ?? 0) > 0) return; // one automatic shot per node, ever
-    const r = await startSurvey(node.id, 'install', null, 1);
+    const r = await startSurvey(node.id, 'install', null, 0);
     if (!r.ok) log.info({ nodeId: node.id, error: r.error }, 'install survey not started');
   } catch (err) {
     log.warn({ err, nodeId: node.id }, 'install survey trigger failed');

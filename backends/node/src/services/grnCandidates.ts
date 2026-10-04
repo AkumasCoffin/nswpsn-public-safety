@@ -260,10 +260,16 @@ export async function lgaAdjacency(state: string): Promise<Map<string, Set<strin
  * How many LGA borders away each area is from the node's own — 0 for its own
  * LGA, 1 for a direct neighbour, and so on out to `rings`. Areas further than
  * that (or unreachable, like an island council) are simply absent.
+ *
+ * rings = 0 is the node's own LGA ALONE, which is what a first survey wants:
+ * the sites a node is there to hear, without spending a window each on the
+ * ones two council areas away that it was never going to reach.
  */
 export async function lgaRingDepths(state: string, lga: string, rings: number): Promise<Map<string, number>> {
   const adj = await lgaAdjacency(state);
-  const maxDepth = Math.max(1, Math.min(4, Math.trunc(rings) || 1));
+  // Deliberately not `|| 1`: 0 is a reach, not a missing value.
+  const n = Math.trunc(Number(rings));
+  const maxDepth = Number.isFinite(n) ? Math.max(0, Math.min(4, n)) : 1;
   const depths = new Map<string, number>([[lga, 0]]);
   let frontier = [lga];
   for (let hop = 1; hop <= maxDepth; hop++) {
@@ -282,7 +288,7 @@ export async function lgaRingDepths(state: string, lga: string, rings: number): 
   return depths;
 }
 
-/** The node's LGA plus neighbours out to `rings` hops. */
+/** The node's LGA, plus neighbours out to `rings` hops (0 = the LGA alone). */
 export async function lgaNeighbourhood(state: string, lga: string, rings: number): Promise<Set<string>> {
   return new Set((await lgaRingDepths(state, lga, rings)).keys());
 }

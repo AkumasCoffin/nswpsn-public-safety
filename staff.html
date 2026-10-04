@@ -4363,8 +4363,9 @@
                 <i class="fas fa-magnifying-glass-location"></i> Run site survey
               </button>
               <select id="nd-survey-rings" class="nd-survey-rings nd-write"
-                title="How far out to look: just this node's council area, or that plus one, two or three rings of neighbouring areas.">
-                <option value="1" selected>This LGA + neighbours</option>
+                title="How far out to look. A node's first survey covers its own council area; running one by hand is how you reach past it.">
+                <option value="0">This council area only</option>
+                <option value="1" selected>+ neighbouring areas</option>
                 <option value="2">+ 2 rings</option>
                 <option value="3">+ 3 rings</option>
                 <option value="4">+ 4 rings</option>
@@ -13196,7 +13197,9 @@
         return;
       }
       const rings = Number(document.getElementById('nd-survey-rings')?.value || 1);
-      const reach = rings === 1 ? 'its council area and the ones next to it' : `its council area and ${rings} rings of neighbours`;
+      const reach = rings <= 0 ? 'its own council area'
+        : rings === 1 ? 'its council area and the ones next to it'
+        : `its council area and ${rings} rings of neighbours`;
       uiConfirm(
         `Test every GRN site in ${reach}, a few at a time?
 
@@ -13226,6 +13229,14 @@
       const parts = String(n.agentVersion || '').split('.').map(v => parseInt(v, 10) || 0);
       const [maj, min, patch] = [parts[0] || 0, parts[1] || 0, parts[2] || 0];
       return maj > 0 || min > 2 || (min === 2 && patch >= 38);
+    }
+
+    /** How far a run looked. 0 is the node's own council area alone, which is
+     *  what a first survey does — NOT a missing value, so no `|| 1` here. */
+    function _ndSvReach(rings) {
+      const n = Number.isFinite(rings) ? rings : 1;
+      if (n <= 0) return 'this council area';
+      return `+${n} ring${n === 1 ? '' : 's'}`;
     }
 
     /** When a run happened, in the drawer's usual short form. */
@@ -13384,7 +13395,7 @@
           <div class="nd-svm-head">
             <h3><i class="fas fa-magnifying-glass-location"></i> Site survey</h3>
             <span class="nd-svm-sub">${escapeHtml(_ndSvWhen(sv))}${sv ? ` · ${sv.trigger === 'install' ? 'first install' : 'manual'}
-              · ${sv.rings || 1} ring${(sv.rings || 1) === 1 ? '' : 's'} · ${sv.candidates || 0} site(s)` : ''}${
+              · ${_ndSvReach(sv.rings)} · ${sv.candidates || 0} site(s)` : ''}${
               sv && sv.note ? ` · ${escapeHtml(sv.note)}` : ''}</span>
             <span class="nd-svm-right">
               ${showLive ? `<button class="btn btn-secondary btn-sm nd-write" onclick="_ndCancelSurvey()">Cancel survey</button>` : ''}
