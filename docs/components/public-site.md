@@ -107,8 +107,18 @@ Apache rules at the repo root. It:
 - blocks `backends/`, `discord-bot/`, `workers/`, `backup/`, `repo_stuff/`,
   `ref_data/` outright;
 - blocks dotfiles, and every `.env`, `.md`, `.py`, `.db`, `.sqlite`, `.json` and
-  `.sample` file — with named exceptions for `agency-data.json`,
-  `agency-extended.json` and `lga-regions.json`, which the frontend fetches;
+  `.sample` file — with named exceptions at `.htaccess:54` for
+  `agency-data.json`, `agency-extended.json` and `lga-regions.json`. Only two of
+  those three are real: `agency-data.json` is at the repo root and
+  `lga-regions.json` is at `data/boundaries/lga-regions.json` (the rule matches
+  on filename, so it applies there too). **`agency-extended.json` no longer
+  exists.** The extended agency tables are now served live from the CSV source
+  of truth by `GET /api/agency/extended`, which is public-exempt
+  (`backends/node/src/services/auth/apiKey.ts:58`) because the agency page needs
+  no login; `agencies.js:314` fetches that route and falls back to an empty
+  `{ agencies: {} }`, never to a file. The `.htaccess` exception and the
+  comments naming the static file in `agencies.js:3`, `:294`, `:312` and
+  `agency.html:434` are leftovers;
 - blocks `config.sample.js`, `ecosystem.config.js`, `README.md`,
   `package.json`;
 - sets `Cache-Control: no-cache, must-revalidate` on `.html`, `.css` and `.js`.
@@ -132,12 +142,31 @@ map.html  ──►  /api/rfs/incidents        (RFS fires)
           ──►  /api/firms/hotspots       (satellite hotspots)
           ──►  /api/adsb/aircraft, /api/adsb/trails
           ──►  /api/transport/*          (public transport)
-          ──►  /api/radio/monitored-sites  (repeater "Monitoring" badges — 18388)
+          ──►  /api/radio/grn-sites      (repeater site geography — 18474)
+          ──►  /api/radio/monitored-sites  (repeater "Monitoring" badges — 18451)
           ──►  /api/incidents            (community-added)
 
 live.html ──►  per-source counts, /api/summaries/latest, /api/news/rss,
                /api/stats/history, /api/heartbeat
+```
 
+**The repeater layer is two endpoints, and neither one carries a reception.**
+`/api/radio/grn-sites` is the *geography* — the GRN site list, served from the
+`grn_sites` table (`backends/node/src/api/radio-public.ts:246`), seeded once at
+boot from `data/nswpsn/NSW GRN Version 1.json` when the table is empty
+(`index.ts:204`), cached 30s. `/api/radio/monitored-sites` is the *liveness* —
+which of those sites the fleet is hearing right now. A site badge going green
+means a receiver is locked to that repeater, not that anything was said on it.
+
+That dataset is also **editable live by the owner**, which is not something a
+new contributor would guess: `PATCH /api/radio/grn-sites/:id`
+(`radio-public.ts:287`) is gated by `requireRole(isOwner)` and the body is
+constrained to the dataset's own 16 keys by `GrnSitePatchSchema`
+(`radio-public.ts:268`). `map.html:18602` is that editor, and it authenticates
+with the signed-in person's Supabase JWT rather than the shared site key —
+the backend owner-gates on verified identity, not on possession of the key.
+
+```
 logs.html ──►  /api/data/history, /api/data/history/{filters,sources,stats},
                /api/pager/hits
 
