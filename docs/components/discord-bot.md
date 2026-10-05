@@ -124,6 +124,10 @@ has its own alert types, role pings and filters:
 Muting is a **four-tier hierarchy with inheritance**: guild → channel → preset →
 per-alert-type.
 
+These 14 are the complete registered set — every `.command()` in
+`discord-bot/*.py`. There is no `/dev` group, whatever `bot.py` and
+`env.sample` still say about one.
+
 | Command | Does |
 |---|---|
 | `/setup` | Interactive wizard for alerts and/or pager hits |
@@ -167,8 +171,27 @@ a bot restart is retried rather than stuck.
 ## Guild removal does not delete anything
 
 `on_guild_remove` logs loudly and **deletes nothing**. Auto-deletion is disabled
-deliberately; cleaning up a stale guild's configuration is a manual
-`/dev-cleanup`.
+deliberately, because Discord's `guild_remove` event fires on network issues and
+reconnects as well as on a real removal, and acting on it was losing configs.
+
+Cleaning up a stale guild's configuration is therefore manual, and **there is
+no bot command for it.** The 14 commands in the table above are the complete
+registered set and none of them does this; removing a stale guild config means
+editing the store directly.
+
+Three places still say otherwise, and all three are wrong: `bot.py:814` and
+`:819` tell the operator to run `/dev-cleanup`, and `discord-bot/env.sample:14`
+describes gating `/dev clear-seen` and `/dev channel`. There is no `/dev`
+command group registered anywhere in `discord-bot/`.
+
+The history explains how the stale references got there without anyone
+noticing. `CHANGELOG.md:128-131` records seven `/dev` subcommands being
+replaced by the dashboard admin panel and the bot-action queue, and says a
+`/dev` group *survived* with `clear-seen`, `channel` and `setup`
+(`CHANGELOG.md:63` announces that survivor group). It did not survive to the
+current tree — nothing registers it now. So `env.sample:14` is describing a
+group that was real when it was written, and `bot.py` is naming a `/dev-cleanup`
+that was already gone by then. Reported as a code defect, not fixed here.
 
 This is the same principle as the account rule in
 [`../../AGENTS.md`](../../AGENTS.md): **never delete a user's or a guild's data
