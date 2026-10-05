@@ -1,199 +1,251 @@
 # AusAware
 
-Real-time Australian emergency services monitoring platform, deepest in NSW — aggregates government APIs, community-sourced data, and third-party feeds into interactive maps, live dashboards, and Discord alerts.
+A free, ad-free live view of what Australian emergency services are dealing with
+right now. Deepest in NSW.
 
 **Website:** https://nswpsn.forcequit.xyz
 
-## Features
+AusAware merges public data feeds — fire, traffic, power, weather, beaches,
+aircraft, public transport — with publicly receivable, unencrypted radio and
+pager traffic picked up off-air by volunteer-run receiver nodes. The result is a
+map, a live feed, a searchable log, and a Discord bot.
 
-### Public site
-- **Interactive Incident Map** — live markers for fires, traffic incidents, power outages, weather warnings, Waze hazards, and more
-- **Live Dashboard** (`/live`) — real-time scanner feed, active unit tracking, and current incident overview
-- **Incident Logs** (`/logs`) — searchable historical log of pager hits and ingested events
-- **Map Editor** — community editors can add and manage user-submitted incidents on the map
-- **Reference Pages** — quick-reference guides for Fire & Rescue NSW, NSW Ambulance, Rural Fire Service, and aviation callsigns
+It is live in production. There is no staging environment.
 
-### Discord bot
-- **Per-channel alert presets** — multi-bundle subscriptions per channel, each with its own alert types, role pings, and filters
-- **Per-preset filters** — keyword include/exclude, severity floor (RFS watch-and-act, BOM major), and a geographic bbox so a preset only fires for alerts inside a chosen region
-- **4-tier mute hierarchy** — guild → channel → preset → per-alert-type, with proper inheritance
-- **`/summary`** — paged Components V2 navigator over hourly radio summaries; walk back 24 hours or scope to a specific date
-- **`/overview`** — incident dashboard across all NSW data sources
-- **`/ts`** — search radio-scanner transcripts (full-text, optional date range)
-- **Hourly radio summaries** as a subscribable alert type (LLM-generated from rdio-scanner transcripts)
-- Works in DMs and via user-install for personal use
+---
 
-### Web management dashboard (`/dashboard`)
-- Discord-OAuth-authenticated UI replacing most slash-command setup
-- Sidebar of channels → expandable preset list → click any to edit
-- Per-preset editor: alert-type chips, role picker, capcodes, mute toggles, per-type overrides
-- Geographic filter with a Leaflet click-and-drag bbox
-- Mobile-responsive
-- **Admin panel** (gated by `DASHBOARD_ADMIN_IDS`) — global stats, source-health monitor, broadcast composer, queued bot actions (sync / test / cleanup), invite-bot button
+## What this is not
 
-## Data Sources
+AusAware is **named after** the NSW Public Safety Network. It is not part of it.
 
-| Provider | Data |
+There is no affiliation with any agency, government body or radio network. The
+site monitors traffic that anyone with a receiver can already hear, and nothing
+else.
+
+## Honest limits
+
+Read these before you read the feature list. They are not temporary.
+
+- **Most police traffic on the network is encrypted and carries no audio.**
+  AusAware receives what is transmitted in the clear. Radio coverage can never
+  be complete, and no amount of work on this repository will change that.
+- **Coverage depends on where contributors happen to live.** A receiver node
+  hears what its antenna can hear. There is no coverage in an area where nobody
+  has put a dongle on a roof, and the project cannot buy its way into one.
+- **The project is partial and unfunded by design.** It runs out of pocket on
+  donations. Features that would cost money recurring do not get built.
+- **Several layers are off unless configured.** NASA FIRMS hotspots, the
+  transcription tier, ntfy pushes, The Wire's media storage, TfNSW vehicle
+  positions and the Discord management dashboard are each gated on an
+  environment variable, and the matching endpoint answers 503 — or the source
+  returns an empty snapshot — when it is unset. See
+  `backends/node/src/config.ts`.
+- **Waze is gone.** It was retired as a source and then removed: no ingest, no
+  routes, and migrations `071`/`074` dropped the heatmap and archive tables. A
+  few dead fetches survive in `map.html`; they are leftovers, not a feature.
+
+## The stack
+
+| Part | Built with | Lives in | Entry point |
+|---|---|---|---|
+| Backend API | TypeScript, Hono, `pg`, zod, Vitest (`engines.node >= 20`) | `backends/node` | `backends/node/src/index.ts` |
+| Public site | vanilla HTML/CSS/JS + Leaflet, **no build step** | repo root | any `*.html` file |
+| Discord bot | Python 3.10+, discord.py | `discord-bot` | `discord-bot/bot.py` |
+| Radio node | Go 1.26 | `feeder-nodes/radio-node` | `cmd/nodeagent/main.go` |
+| Pager node | Go 1.26 | `feeder-nodes/pager-node` | `cmd/nodeagent/main.go` |
+| Aircraft node | Go 1.26 | `feeder-nodes/aircraft-node` | `cmd/nodeagent/main.go` |
+| Wire link-unfurl worker | Cloudflare Worker, vanilla JS | `workers/wire-embed` | `worker.js` |
+| Database | PostgreSQL, 119 numbered migrations | `backends/node/src/db/migrations` | run by `src/db/migrate.ts` |
+
+The repo root **is** the webroot. `.htaccess` serves it, gives clean URLs
+(`/live` for `/live.html`), and blocks `backends/`, `discord-bot/`, `workers/`,
+dotfiles and `.md` files from being served.
+
+Supabase holds **authentication and identity only**. PostgreSQL is the canonical
+store for everything else.
+
+**There is no Python/Flask backend.** It was deleted months ago and replaced by
+`backends/node`. If you find a document that describes one, that document is
+wrong.
+
+## What you can look at
+
+| Page | What it is |
 |---|---|
-| NSW Rural Fire Service | Active bush/grass fires |
-| Bureau of Meteorology | Weather warnings (land & marine) |
-| LiveTraffic NSW | Incidents, roadwork, flooding, fires, major events |
-| Waze | Hazards, police reports, roadwork (via userscript ingest) |
-| Endeavour Energy | Current & planned power outages |
-| Ausgrid | Power outages (with per-outage detail enrichment) |
-| Essential Energy | Current, planned & future outages |
-| Pagermon | Pager messages (self-hosted) |
-| rdio-scanner | Radio transcripts → hourly LLM summaries |
-| Community Editors | Manually added incidents and map data |
+| `/map` | The incident map. Fire, traffic, power, weather, pager pins, aircraft, public transport, receiver-monitored P25 repeater sites |
+| `/live` | Live dashboard — per-source counts, hourly radio summaries, news |
+| `/logs` | Searchable historical log, read from the archive tables |
+| `/wire` | The Wire — news and media posts |
+| `/feeds`, `/data-sources` | What is being ingested, and from where |
+| `/agency` | Reference pages for Fire & Rescue NSW, NSW Rural Fire Service, NSW Ambulance and aviation callsigns |
+| `/feeder` | Run a receiver node — enrolment and installer download |
+| `/dashboard` | Discord-OAuth management UI for the bot's alert presets |
+| `/staff` | Role-gated operations surface: nodes, receptions, decode health, coverage |
 
-## Architecture
+## What is ingested
 
-```
-                        External APIs / userscripts
-                                      │
-  ┌───────────────────────────────────┴──────────────────────────────────┐
-  │  Flask backend  (caching · prewarm cycle · GeoJSON · Postgres        │
-  │                  archive · source health · admin REST API)           │
-  └────────────────┬────────────────────────────────────┬────────────────┘
-                   │                                    │
-                   ▼                                    ▼
-       Static frontend (Leaflet maps,         Discord bot  (preset
-       live + log dashboards, Discord-         dispatch · mute resolution
-       OAuth admin/management dashboard)       · filter gate · action queue)
-```
+**38 polled sources** are declared in a registry
+(`backends/node/src/services/sourceRegistry.ts`), each with its own poll cadence
+and its own archive family. Registration happens at boot
+(`src/sources/registerAll.ts`, `src/sources/registerPower.ts`) and
+`src/services/poller.ts` schedules each one.
 
-### Components
+| Provider | Data | Cadence |
+|---|---|---|
+| NSW Rural Fire Service | Active bush and grass fires | 60s |
+| Bureau of Meteorology | Weather warnings, land and marine | 60s |
+| LiveTraffic NSW | Seven hazard kinds — incidents, roadwork, flood, fire, major events, alpine, council-submitted | 60s–5m |
+| Endeavour Energy | Current, planned and maintenance outages | 60s–5m |
+| Ausgrid | Outages, with per-outage detail enrichment | 2m |
+| Essential Energy | Current and future outages | 3m |
+| Pagermon (self-hosted) | Pager messages | 60s |
+| ACT Ambulance | Incidents | 60s |
+| QLD, VIC, WA, SA, NT fire and warning feeds | Incidents and warnings | 2–5m |
+| QLD traffic + flood cameras | Camera stills | 60s |
+| NSW Beachwatch / Beachsafe | Water quality and beach conditions | 10m |
+| NASA FIRMS | Satellite fire hotspots | 15m |
+| Aviation cameras | Camera stills | 5m |
+| Weather / rain radar | Current conditions, radar frames | 5m–30m |
+| Public ADS-B aggregators | Aircraft positions | 8s |
+| Community editors | Manually added incidents | 60s |
 
-- **Frontend** — static HTML/CSS/JS with Leaflet maps. No build step. Public auth via Supabase; admin auth via Discord OAuth.
-- **Backend** (`backends/`) — Flask API proxy that fetches, caches, converts, and archives upstream data; serves the dashboard's REST API; tracks per-source health. Runs on port 8000 behind Cloudflare.
-- **Discord bot** (`discord-bot/`) — polls the backend and distributes alerts to subscribed presets via Discord channels. Polls a `pending_bot_actions` Postgres table to execute admin-triggered sync / test / cleanup / broadcast.
-- **Database** — PostgreSQL is the canonical store for both the backend and the bot (separate databases). Supabase hosts user-incident rows and frontend auth.
+Plus layers that are not registry sources: AnyTrip and official TfNSW
+GTFS-Realtime public transport (`src/sources/tfnsw.ts`), MarineTraffic AIS,
+Central Watch cameras (both via a headless Chromium worker), and news RSS.
 
-## Setup
+And the part no public API provides: **off-air radio and pager traffic**, from
+the feeder-node fleet.
 
-### Prerequisites
+## The feeder-node fleet
 
-- Python 3.10+
-- Node.js + PM2 (`npm install -g pm2`)
-- PostgreSQL
-- A web server (Apache or Nginx) serving the document root
-- A Discord application with bot + OAuth2 (for the management dashboard)
+Volunteers run a small Go agent on a machine with an SDR dongle. Three kinds:
 
-### Clone
+| Node | Decodes | Needs |
+|---|---|---|
+| **radio** | P25 trunked voice (and DMR, and AM/airband), via a forked SDR-Trunk | RTL-SDR or better; Linux or Windows |
+| **pager** | POCSAG pages, via `rtl_fm | multimon-ng` | RTL-SDR; Linux (incl. Raspberry Pi) |
+| **aircraft** | ADS-B Mode S at 1090 MHz, via `dump1090-fa` | RTL-SDR; Linux (incl. Raspberry Pi) |
 
-```bash
-git clone https://github.com/AkumasCoffin/nswpsn-public-safety.git /var/www/nswpsn
-cd /var/www/nswpsn
-```
+All three enrol with a single-use code, hold a persistent WebSocket to the
+backend, buffer to a disk-backed queue so a dropped connection loses nothing,
+and self-update against a signed manifest
+(`backends/node/assets/node-versions.json`).
 
-The repo root contains the frontend files — point your web server's document root at this directory. The `.htaccess` in the repo root enables clean URLs (`/live` instead of `/live.html`) for Apache deployments.
+A radio node additionally **downloads and runs two forked upstream projects** —
+a headless SDR-Trunk build and a matching rdio-scanner — both pinned by version
+and sha256 in that manifest. See
+[`docs/components/forked-runtimes.md`](docs/components/forked-runtimes.md).
 
-### Frontend config
+If you already run your own rdio-scanner and would rather not install anything,
+one downstream entry is enough: [`docs/scanner-feed-setup.md`](docs/scanner-feed-setup.md).
 
-```bash
-cp config.sample.js config.js
-# Edit config.js with your Supabase project URL, anon key, API base URL, and API key.
-```
+## Vocabulary
 
-`config.js` is git-ignored so each deployment maintains its own values.
+**Ingested radio traffic is a *reception*, never a "call".** Several receivers
+hear one transmission; each hearing is a reception, and the backend groups them
+back into one logical event. "Call" is kept only when quoting rdio-scanner's own
+endpoint and table names.
 
-### Backend
+## Where to start
 
-```bash
-cd backends
-cp env.sample .env       # fill in values
-pip install -r requirements.txt
-python init_postgres.py  # first-time schema setup
-playwright install chromium  # required for Central Watch image scraping
-```
+| You want to | Read |
+|---|---|
+| Work on this repo at all | **[`AGENTS.md`](AGENTS.md)** — the operating rules. Not optional |
+| Understand the whole system | [`docs/architecture.md`](docs/architecture.md) |
+| Get set up and ship a change | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
+| Work on one component | [`docs/components/`](docs/components/) |
+| Run a receiver | [`docs/components/radio-node.md`](docs/components/radio-node.md) and its siblings |
 
-Required env vars: `DATABASE_URL`, `NSWPSN_API_KEY`, `SUPABASE_URL`, `SUPABASE_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, plus the dashboard block (`DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DISCORD_BOT_TOKEN`, `DASHBOARD_SESSION_SECRET`, `BOT_DATA_DATABASE_URL`, `PUBLIC_BASE_URL`). See `env.sample` for the full list with comments.
+### The rules, in four lines
 
-Update `cwd` in `ecosystem.config.js` to your install path, then start with PM2:
+- **Never deploy and never restart anything.** Work finishes at the commit on
+  `dev-beta`. The owner deploys.
+- **`dev-beta` is permanent and is never merged into `main`** by anyone but the
+  owner.
+- **No AI attribution in commit messages.**
+- **A reception is not a "call".**
 
-```bash
-pm2 start ecosystem.config.js
-pm2 start ecosystem.config.js --env dev   # verbose logging
-pm2 save
-```
+The full set, with the reasoning, is in [`AGENTS.md`](AGENTS.md).
 
-### Discord bot
-
-```bash
-cd discord-bot
-cp env.sample .env       # fill in values
-pip install -r requirements.txt
-python apply_schema_presets.py   # creates alert_presets, mute_state, fire_log,
-                                 # action_queue, dash_sessions tables (idempotent)
-pm2 start bot.py --name "NSWPSN-Bot" --interpreter python3
-pm2 save
-```
-
-Required env vars: `DISCORD_BOT_TOKEN`, `BOT_OWNER_ID`, `API_BASE_URL`, `NSWPSN_API_KEY`, `BOT_DATABASE_URL`. See `env.sample` for the full list.
-
-### Useful PM2 commands
-
-```bash
-pm2 status            # running processes
-pm2 logs              # tail all logs
-pm2 logs 1 --lines 200   # tail backend (id 1) only
-pm2 restart all       # restart everything
-pm2 startup           # enable PM2 to start on boot
-```
-
-### Updating
-
-Pull and restart whichever side changed:
+## Quick start
 
 ```bash
-cd /var/www/nswpsn && git pull
-pm2 restart 1   # backend
-pm2 restart 2   # bot
-# If the bot's schema changed, also:
-cd discord-bot && python apply_schema_presets.py
+git clone https://github.com/AkumasCoffin/nswpsn-public-safety.git
+cd nswpsn-public-safety
+git checkout dev-beta
+
+# Backend
+cd backends/node && npm install && npm run dev
+curl http://localhost:3000/api/health
+
+# Public site — nothing to build. Serve the repo root, or open a page.
+cp config.sample.js config.js   # git-ignored; fill in Supabase + API values
 ```
 
-## Environment variables
+Environment variables are declared and validated in one place:
+`backends/node/src/config.ts`. Almost all are optional — an unset variable turns
+its feature off rather than breaking startup. `backends/env.sample` is the
+annotated template.
 
-Both `backends/env.sample` and `discord-bot/env.sample` are documented templates. Copy each to `.env` and fill in. Notes:
+## Documentation
 
-- `NSWPSN_API_KEY` must match between the backend's `.env` and any client (frontend `config.js`, Discord bot `.env`).
-- `BOT_DATABASE_URL` (in the bot's `.env`) and `BOT_DATA_DATABASE_URL` (in the backend's `.env`) should both point at the **same** Postgres database — the backend reads it for the dashboard, the bot writes it for its own state.
-- `DASHBOARD_ADMIN_IDS` (backend) — comma-separated Discord user IDs that get the admin panel. Leave unset to disable.
-- `WAZE_INGEST_KEY` (backend) — required by the Violentmonkey userscript when posting Waze data to `/api/waze/ingest`.
-
-## Waze data
-
-Waze data is delivered exclusively by a Violentmonkey userscript running in a real browser. The script polls Waze's live-map georss endpoint and POSTs each region's payload to `/api/waze/ingest`. Setup is documented in `docs/waze-userscript.md`. There is no server-side Waze scraper.
+```
+AGENTS.md                           the operating rules (prohibitions)
+CLAUDE.md                           pointer at AGENTS.md + fast orientation
+CONTRIBUTING.md                     setup, workflow, which check to run
+docs/
+  architecture.md                   the whole system, end to end
+  components/
+    backend.md                      backends/node/src/index.ts
+    public-site.md                  the buildless static pages
+    discord-bot.md                  discord-bot/bot.py
+    radio-node.md                   feeder-nodes/radio-node/cmd/nodeagent
+    pager-node.md                   feeder-nodes/pager-node/cmd/nodeagent
+    aircraft-node.md                feeder-nodes/aircraft-node/cmd/nodeagent
+    forked-runtimes.md              the five forks, what changed, how pinned
+    transcription.md                the Whisper router and its two servers
+  scanner-feed-setup.md             contribute an existing rdio-scanner
+  uptime-kuma-monitors.md           monitor recipes against /api/status
+feeder-nodes/radio-node/docs/       SDR-Trunk + rdio config references
+```
 
 ## Project layout
 
 ```
 .
-├── *.html                 # static frontend pages
-├── styles.css             # shared styles
-├── analytics.js           # Umami event tracking
-├── auth-common.js         # Supabase auth helpers
-├── config.sample.js       # frontend config template
-├── .htaccess              # Apache rules: clean URLs, security headers, file blocks
+├── *.html                      static pages — the repo root is the webroot
+├── styles.css  logs.css        shared styles
+├── auth-common.js              Supabase auth helpers
+├── map-editor-module.js        map editor (bump ?v= in map.html when it changes)
+├── analytics.js                Umami event tracking
+├── config.sample.js            frontend config template (copy to config.js)
+├── .htaccess                   clean URLs, security headers, path blocks
+├── agency-data.json            agency directory agency.html reads
+├── assets/  data/  shared/     icons, geo + reference datasets, alert catalog
 │
 ├── backends/
-│   ├── external_api_proxy.py   # main Flask app (~16 k LoC)
-│   ├── db.py                   # Postgres helpers
-│   ├── init_postgres.py        # one-shot schema setup
-│   ├── ecosystem.config.js     # PM2 config
-│   ├── data/                   # cached upstream snapshots (e.g. centralwatch)
-│   ├── prompts/                # LLM prompts for radio summaries
-│   └── reference/              # local-only operator data (gitignored)
+│   ├── node/                   THE backend — see docs/components/backend.md
+│   │   ├── src/index.ts        entry point
+│   │   ├── src/server.ts       Hono app factory
+│   │   ├── src/config.ts       zod-validated env — the only process.env reader
+│   │   ├── src/api/            one route module per endpoint group
+│   │   ├── src/sources/        one module per polled upstream
+│   │   ├── src/services/       pollers, node hub, whisper router, LLM, …
+│   │   ├── src/store/          LiveStore (memory) + ArchiveWriter (Postgres)
+│   │   ├── src/db/migrations/  119 numbered SQL migrations
+│   │   ├── assets/             node-versions.json — the agent/component manifest
+│   │   └── scripts/deploy.sh   the deploy. The owner runs this. You do not
+│   ├── env.sample              annotated environment template
+│   ├── prompts/                LLM prompts for the hourly radio summaries
+│   └── ecosystem.config.js     STALE AND UNUSED — never cite it
 │
-└── discord-bot/
-    ├── bot.py                  # main bot, slash commands, dispatch, action worker
-    ├── alert_poller.py         # periodic upstream poller → new-alert detection
-    ├── database.py             # bot DB layer (presets, mute state, fire log, action queue)
-    ├── embeds.py               # Components V2 builders
-    └── apply_schema_presets.py # idempotent schema applier (tables, indexes, triggers)
+├── discord-bot/                Python bot — see docs/components/discord-bot.md
+├── feeder-nodes/               three Go modules, one per node kind
+├── workers/wire-embed/         Cloudflare Worker for Wire link previews
+├── scripts/                    one-off dataset builders (Python + mjs)
+└── docs/                       the documentation above
 ```
 
 ## License
 
-All rights reserved.
+GNU General Public License, version 3. See [`LICENSE`](LICENSE).

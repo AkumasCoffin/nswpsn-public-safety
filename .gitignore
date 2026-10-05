@@ -50,8 +50,8 @@ npm-debug.log*
 backup/
 
 # Internal docs are local-only by default — operator notes, probe scripts,
-# raw flow diagrams. The Waze userscript IS checked in so contributors and
-# self-hosters can grab the same code that powers the live ingest path.
+# raw flow diagrams. Anything a contributor needs in order to understand or
+# work on the repo is allowlisted below, one line at a time.
 docs/*
 !docs/waze-userscript.user.js
 !docs/waze-userscript-manual.user.js
@@ -59,6 +59,12 @@ docs/*
 # Handed to an outside contributor setting up a scanner feed, so it ships with
 # the code that serves the endpoint it describes.
 !docs/scanner-feed-setup.md
+# The documentation set AGENTS.md / CLAUDE.md / CONTRIBUTING.md point at. These
+# have to ship: a new contributor is expected to get the architecture right from
+# this repo alone, without asking the owner.
+!docs/architecture.md
+!docs/components/
+!docs/components/*.md
 
 # Radio unit reference data (local operator data, not for the public
 # repo). Patterns match individual files rather than the whole dir so
