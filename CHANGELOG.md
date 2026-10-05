@@ -7,6 +7,15 @@ calendar.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+> **Each entry describes the state at the time of that release, and is left
+> that way on purpose.** Some of what you read below has since been removed —
+> the Python/Flask backend and the Waze ingest both appear here as live, and
+> neither exists now. That is what a changelog is for; it is not corrected in
+> hindsight. For how the system works **today**, read
+> [`docs/architecture.md`](docs/architecture.md), which is kept current against
+> the code. Where the two disagree, the architecture doc is the live answer and
+> this file is the history.
+
 ---
 
 ## [2026-04-26] — Preset architecture, admin dashboard, project-wide cleanup
