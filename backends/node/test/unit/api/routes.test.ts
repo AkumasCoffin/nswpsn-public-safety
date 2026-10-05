@@ -291,6 +291,36 @@ describe('GET /api/pager/hits', () => {
     expect(body.count).toBe(2);
   });
 
+  // FOR-13: parsePagerCoords now rejects out-of-bbox pairs before they
+  // reach the snapshot, but a row archived before that fix could still
+  // carry a fabricated pair — this is the route's own defence in depth.
+  it('drops a message whose lat/lon fall outside the AU bbox', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    liveStore.set('pager', {
+      messages: [
+        {
+          id: 1,
+          incident_id: '0053-6653',
+          capcode: 'C',
+          alias: '',
+          agency: '',
+          source: '',
+          message: 'LOT 3, 221 OLD NORTHERN RD',
+          lat: 221,
+          lon: 3,
+          incident_time: null,
+          timestamp: now,
+        },
+      ],
+      count: 1,
+    });
+    const { pagerRouter } = await import('../../../src/api/pager.js');
+    const app = new Hono().route('/', pagerRouter);
+    const res = await app.request('/api/pager/hits');
+    const body = (await res.json()) as { count: number };
+    expect(body.count).toBe(0);
+  });
+
   it('drops messages older than the hours window', async () => {
     const old = Math.floor(Date.now() / 1000) - 30 * 3600; // 30 hours ago
     liveStore.set('pager', {

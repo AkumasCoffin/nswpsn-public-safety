@@ -22,6 +22,7 @@ import { log } from '../lib/log.js';
 import { formatSydneyNaive } from '../lib/sydneyTime.js';
 import { learnAliasesFromMessages } from '../services/capcodeAliasSync.js';
 import { capcodeAliases, normalizeCapcode } from '../api/node-data.js';
+import { inAuBbox } from './adsb.js';
 
 export interface PagerMessage {
   id: number | string;
@@ -71,7 +72,16 @@ const PAGER_HEADERS = {
 };
 
 /** Extract `[lon, lat]` style coords from a pager message body. Returns
- *  `[lat, lon]` to match Python's _parse_pager_coords. */
+ *  `[lat, lon]` to match Python's _parse_pager_coords.
+ *
+ *  The unbracketed fallback pattern matches ANY comma-separated number
+ *  pair in the body — unit numbers (`UNIT 5, 12 SMITH ST`), lot numbers
+ *  (`LOT 3, 221 OLD NORTHERN RD`) and street-number pairs
+ *  (`2, 4 BRIDGE ST`) all look like coords to that regex. Every real
+ *  source for this feed is NSW/FRNSW, so gate the result through the
+ *  AU bbox (`inAuBbox`, shared with the ADS-B source) — it rejects those
+ *  fabricated pairs (e.g. lat 221, lon 3) while still accepting genuine
+ *  bracketed `[lon,lat]` coords. */
 export function parsePagerCoords(message: string): [number | null, number | null] {
   const text = message || '';
   let m = text.match(/\[(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)\]/);
@@ -82,6 +92,7 @@ export function parsePagerCoords(message: string): [number | null, number | null
   const lon = Number(m[1]);
   const lat = Number(m[2]);
   if (!Number.isFinite(lon) || !Number.isFinite(lat)) return [null, null];
+  if (!inAuBbox(lat, lon)) return [null, null];
   return [lat, lon];
 }
 

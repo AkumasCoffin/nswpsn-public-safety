@@ -13,6 +13,7 @@ import { Hono } from 'hono';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { pagerSnapshot, stripLeadingPagerDate, type PagerMessage } from '../sources/pager.js';
+import { inAuBbox } from '../sources/adsb.js';
 import { SwrCache } from '../services/swrCache.js';
 
 export const pagerRouter = new Hono();
@@ -102,6 +103,10 @@ function snapshotFallback(
   for (const m of snap.messages as PagerMessage[]) {
     // Coordless rows (FRNSW FRINC turnouts) are logs-only — never mapped.
     if (m.lat === null || m.lon === null) continue;
+    // Defence in depth against rows archived before parsePagerCoords
+    // gained its bbox check (FOR-13) — a fabricated pair from a unit/lot
+    // number sitting in archive_misc would otherwise keep surfacing here.
+    if (!inAuBbox(m.lat, m.lon)) continue;
     if (m.timestamp !== null && m.timestamp < cutoff) continue;
     if (capcode && m.capcode !== capcode) continue;
     if (incidentId && m.incident_id !== incidentId) continue;
@@ -233,6 +238,10 @@ async function fetchPagerHitsFromDb(opts: {
   const features: PagerFeature[] = [];
   for (const r of rows) {
     if (r.lat === null || r.lng === null) continue;
+    // Defence in depth against rows archived before parsePagerCoords
+    // gained its bbox check (FOR-13) — a fabricated pair from a unit/lot
+    // number sitting in archive_misc would otherwise keep surfacing here.
+    if (!inAuBbox(r.lat, r.lng)) continue;
     const data = (r.data ?? {}) as Record<string, unknown>;
     const tsRaw = data['timestamp'];
     const ts = typeof tsRaw === 'number' ? tsRaw : tsRaw != null ? Number(tsRaw) : null;

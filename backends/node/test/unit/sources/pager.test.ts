@@ -44,6 +44,55 @@ describe('pager.parsePagerCoords', () => {
     const { parsePagerCoords } = await import('../../../src/sources/pager.js');
     expect(parsePagerCoords('no coords here')).toEqual([null, null]);
   });
+
+  // FOR-13: the unbracketed fallback pattern used to accept any
+  // comma-separated number pair in the body, so a unit/lot/street-number
+  // pair got read as real coordinates. These are the documented body
+  // formats from this file's own comments (:109-114).
+  it('extracts bracketed coords from a full RFS detail line', async () => {
+    const { parsePagerCoords } = await import('../../../src/sources/pager.js');
+    expect(
+      parsePagerCoords(
+        'CAP - 26-121910 - MVA - INCIDENT CALL - 10 SMITH ST - [151.2093,-33.8688]',
+      ),
+    ).toEqual([-33.8688, 151.2093]);
+  });
+
+  it('returns nulls for a coordless FRNSW FRINC turnout header', async () => {
+    const { parsePagerCoords } = await import('../../../src/sources/pager.js');
+    expect(
+      parsePagerCoords('FRINC TYPE: AFA TURNOUT: 405 INC: 146685-28072026'),
+    ).toEqual([null, null]);
+  });
+
+  it('rejects a fabricated pair from a unit number', async () => {
+    const { parsePagerCoords } = await import('../../../src/sources/pager.js');
+    expect(
+      parsePagerCoords('CAP - 26-121910 - AFA - UNIT 5, 12 SMITH ST PARRAMATTA'),
+    ).toEqual([null, null]);
+  });
+
+  it('rejects a fabricated pair from a lot number (invalid latitude)', async () => {
+    const { parsePagerCoords } = await import('../../../src/sources/pager.js');
+    expect(
+      parsePagerCoords('CAP - 0053-6653 - GRASS FIRE - LOT 3, 221 OLD NORTHERN RD'),
+    ).toEqual([null, null]);
+  });
+
+  it('rejects a fabricated pair from a street-number pair', async () => {
+    const { parsePagerCoords } = await import('../../../src/sources/pager.js');
+    expect(parsePagerCoords('RESPOND TO 2, 4 BRIDGE ST - STOP MESSAGE')).toEqual([
+      null,
+      null,
+    ]);
+  });
+
+  it('rejects an in-range-but-non-AU bracketed pair', async () => {
+    const { parsePagerCoords } = await import('../../../src/sources/pager.js');
+    // Valid lat/lon per se (London), but well outside the AU bbox every
+    // real source for this feed falls within.
+    expect(parsePagerCoords('foo [-0.1278,51.5074] bar')).toEqual([null, null]);
+  });
 });
 
 describe('pager.parsePagerIncidentId', () => {
