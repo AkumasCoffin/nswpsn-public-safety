@@ -64,6 +64,27 @@ const Schema = z.object({
   // (backend cwd is backends/node, hence the ../..).
   UPLOADS_DIR: z.string().default('../../uploads'),
 
+  // --- Gridded weather (the Windy-style map field) -----------------------
+  // These three multiply out into the Open-Meteo bill, so they live together.
+  // sources/weatherGrid.ts logs the resulting spend on boot and warns if the
+  // combination leaves the free tier. Do not tighten the step without reading
+  // that line.
+  //
+  // 0.5 deg over Australia is 85x69 = 5,865 cells. At one refresh a day that
+  // is 5,865 locations/day against a 10,000/day ceiling — safe even under the
+  // pessimistic reading where every location counts as its own call.
+  WEATHER_GRID_STEP: z.coerce.number().positive().default(0.5),
+  // Locations per HTTP request, via Open-Meteo's comma-separated coordinates.
+  // Fewer round trips; the cap keeps any single URL a sane length.
+  WEATHER_GRID_BATCH: z.coerce.number().int().positive().default(250),
+  // One full refresh a day. Each fetch already carries 9 days of time series,
+  // so refreshing more often buys freshness of the model run, not more range.
+  WEATHER_GRID_INTERVAL_MS: z.coerce.number().int().positive().default(24 * 60 * 60_000),
+  // Days of history and forecast in each point's series. 2 + 7 = 9 days, which
+  // is inside Open-Meteo's 2-week single-call weighting.
+  WEATHER_PAST_DAYS: z.coerce.number().int().min(0).max(92).default(2),
+  WEATHER_FORECAST_DAYS: z.coerce.number().int().min(1).max(16).default(7),
+
   // ArchiveWriter flush cadence in ms. Falls back to Python's
   // seconds-based ARCHIVE_FLUSH_INTERVAL when only the legacy var is
   // set in the shared .env, so a single env source drives both backends.
