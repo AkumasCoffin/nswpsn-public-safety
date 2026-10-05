@@ -393,6 +393,32 @@ let _notifTimer = null;
 let _notifPanel = null;
 const NOTIF_POLL_MS = 60_000;
 
+/**
+ * A notification link that is safe to put in an href.
+ *
+ * escNotif below escapes HTML entities, which does nothing to `javascript:` —
+ * that URL needs none of the characters being escaped. The link comes out of
+ * a database row, so this renderer is trusting whichever code path wrote it,
+ * now and in future. Checking it here means no writer can turn a notification
+ * into script execution, whatever it stores.
+ *
+ * Allowlist, never blocklist: one leading slash (a page on this site) or an
+ * absolute https URL. `//host` is refused precisely because it LOOKS like the
+ * relative form. Mirrors safeNoticeLink in the backend's staff-notices API,
+ * which refuses the same shapes on the way in.
+ */
+function safeNotifHref(link) {
+  const raw = String(link ?? '').trim();
+  if (raw === '' || raw.startsWith('//')) return null;
+  if (raw.startsWith('/')) return raw;
+  try {
+    const u = new URL(raw);
+    return u.protocol === 'https:' ? u.href : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 function escNotif(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
@@ -471,12 +497,22 @@ async function toggleNotifications(event) {
     if (!list.length) {
       panel.innerHTML = head + '<div style="padding:0.9rem 0.7rem; color:#64748b; font-size:0.8rem;">Nothing yet.</div>';
     } else {
-      panel.innerHTML = head + list.map((n) => `
-        <a href="${escNotif(n.link || '#')}" data-nid="${escNotif(n.id)}" style="display:block; padding:0.6rem; border-radius:8px; text-decoration:none; color:inherit; background:${n.read ? 'transparent' : 'rgba(249,115,22,0.09)'};">
+      // A notification without a usable link is not a link: rendering it as
+      // an <a href="#"> made every one of them navigable to nowhere, and an
+      // unchecked href is the one way a stored row could run code here.
+      panel.innerHTML = head + list.map((n) => {
+        const href = safeNotifHref(n.link);
+        const style = `display:block; padding:0.6rem; border-radius:8px; text-decoration:none; color:inherit; background:${n.read ? 'transparent' : 'rgba(249,115,22,0.09)'};`;
+        const inner = `
           <div style="font-size:0.8rem; font-weight:600; color:#e2e8f0;">${escNotif(n.title)}</div>
           ${n.body ? `<div style="font-size:0.75rem; color:#94a3b8; margin-top:0.15rem;">${escNotif(n.body)}</div>` : ''}
-          <div style="font-size:0.68rem; color:#64748b; margin-top:0.2rem;">${escNotif(notifAgo(n.created_at))}</div>
-        </a>`).join('');
+          <div style="font-size:0.68rem; color:#64748b; margin-top:0.2rem;">${escNotif(notifAgo(n.created_at))}</div>`;
+        // data-nid stays on whichever element it is, so marking read works
+        // the same for a plain row as for a link.
+        return href
+          ? `<a href="${escNotif(href)}" data-nid="${escNotif(n.id)}"${href.startsWith('/') ? '' : ' rel="noopener noreferrer"'} style="${style}">${inner}</a>`
+          : `<div data-nid="${escNotif(n.id)}" style="${style} cursor:default;">${inner}</div>`;
+      }).join('');
     }
     const readAll = panel.querySelector('#notif-readall');
     if (readAll) readAll.addEventListener('click', async (e) => {
