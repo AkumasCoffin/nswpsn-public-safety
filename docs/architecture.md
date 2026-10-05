@@ -1,7 +1,8 @@
 # AusAware architecture
 
 How the whole system fits together, and the full trace from a radio transmission
-in the air to a pin on the live map.
+in the air to where it surfaces. A pager transmission becomes a map pin; a voice
+transmission does not, and step 9 explains why.
 
 Every claim here names the file it came from. If a path in this document does not
 exist, the document is wrong — fix it.
@@ -32,7 +33,7 @@ Before changing anything, read [`../AGENTS.md`](../AGENTS.md).
    │   src/services/       poller · node hub · whisper router · LLM      │
    │   src/store/live.ts   LiveStore — current state, in memory          │
    │   src/store/archive.ts ArchiveWriter — history, into Postgres       │
-   │   src/api/*.ts        ~57 route modules, composed by src/server.ts  │
+   │   src/api/*.ts        57 route modules, composed by src/server.ts  │
    └───────┬──────────────────────────┬─────────────────────┬───────────┘
            │                          │                     │
            ▼                          ▼                     ▼
@@ -140,8 +141,11 @@ Take NSW RFS incidents.
 
 ### Registry contents
 
-38 entries. Cadences range from 8s (`adsb_aircraft`) to 30m
-(`weather_current`). The full list with each cadence is in the
+36 entries on a default boot — 38 are declared, and the two Ausgrid sources do
+not register unless `AUSGRID_DISABLED` is set to `false`
+(`backends/node/src/sources/ausgrid.ts:262`), which it is not by default.
+Cadences range from 8s (`adsb_aircraft`) to 30m (`weather_current`). The full
+list with each cadence is in the
 [backend component doc](components/backend.md#the-source-registry).
 
 ### Layers that are not registry sources
@@ -163,7 +167,7 @@ Take NSW RFS incidents.
 - **News RSS** — `src/sources/news.ts`, `/api/news/rss`.
 - **What3Words** proxy, **boundaries**, **agency reference data**.
 
-## Path 2 — a radio transmission reaches the live map
+## Path 2 — a radio transmission reaches the public site
 
 This is the trace the project exists for. Each step names its file.
 
@@ -190,7 +194,7 @@ See [`components/forked-runtimes.md`](components/forked-runtimes.md).
 ### 3. Two things leave SDR-Trunk, on different paths
 
 **Audio** goes to the node's own local rdio-scanner (also a pinned fork, on
-`127.0.0.1:17391` — `feeder-nodes/radio-node/cmd/nodeagent/main.go:51-58`).
+`127.0.0.1:17391` — `feeder-nodes/radio-node/cmd/nodeagent/main.go:54-60`).
 `internal/configapply` has configured that rdio with exactly one *downstream*,
 pointing at the agent itself.
 
@@ -274,9 +278,31 @@ The transcript is stored by the plugin, in the central rdio's database.
 
 ### 8. Where it surfaces
 
-**On the public map — the repeater layer.** `GET /api/radio/monitored-sites`
-(`src/api/radio-public.ts`) lists the P25 GRN sites the fleet is receiving right
-now, and `map.html:18388` badges each matching repeater pin as *Monitoring*.
+**On the public map — the repeater layer.** That layer is **two** endpoints, and
+the split matters: one supplies the geography, the other the liveness.
+**Neither carries a reception.**
+
+*Geography* — `GET /api/radio/grn-sites` (`src/api/radio-public.ts:246`) serves
+the GRN repeater site list from the `grn_sites` table
+(`SELECT id, data FROM grn_sites ORDER BY id`, `:253`), cached in process for
+30s and serving stale on a query failure (`:94`, `:258-262`). The table is
+seeded once at boot from `data/nswpsn/NSW GRN Version 1.json` when it is empty
+(`seedGrnSitesIfEmpty`, `:215`, called from `index.ts:204`). `map.html:18474`
+fetches the list. It is **owner-editable live**:
+`PATCH /api/radio/grn-sites/:id` (`:287`) is behind `requireRole(isOwner)` and
+constrains the body to the dataset's own 16 keys via `GrnSitePatchSchema`
+(`:268`) — `map.html:18602` is that editor, authenticated with the signed-in
+person's Supabase JWT rather than the site key.
+
+*Liveness* — `GET /api/radio/monitored-sites` (`src/api/radio-public.ts:97`)
+lists the P25 GRN sites the fleet is receiving right now. `map.html:18451`
+fetches it, inside `_rptLoadMonitored`, and `_rptApplyMonitored` badges each
+matching repeater pin as *Monitoring*. The comment block at `map.html:18386` is worth reading before you
+touch any of it: the agents re-report every ~60s regardless of traffic, so the
+badge is *"a live lock, not a traffic echo"*.
+
+Both are listed in `CACHEABLE_PATHS` (`src/server.ts:259-260`), so the CDN
+absorbs repeat hits.
 
 "Right now" is SDR-Trunk's own `site_last_seen_ms` — when the decoder last
 actually heard the site — inside a five-minute window. Three predicates are
@@ -310,8 +336,13 @@ one push. Off unless `RDIO_INCIDENT_ALERTS_ENABLED=true`.
 
 **A radio reception does not itself drop an incident pin on the map.** Nothing in
 the pipeline geocodes radio traffic into a location, and the public surface is
-deliberately narrow: site badges, hourly summaries, and the role-gated staff
-views.
+deliberately narrow — site badges, hourly summaries, and the role-gated staff
+views — with one exception: `GET /api/rdio/calls/:callId`
+(`backends/node/src/api/transcripts.ts:93`) returns a single reception with its
+transcript, is advertised in the root endpoint catalogue
+(`src/server.ts:499-500`), and is reachable by anyone holding the shared browser
+key. No page in this repo calls it; whether it should stay reachable is under
+review.
 
 The radio-adjacent feed that *does* produce pins is pager:
 
@@ -468,7 +499,12 @@ the main pool, the rdio pool, and the bot-data pool.
 
 ### Waze is gone, and the data with it
 
-Waze was retired as a data source and then removed completely:
+Waze was retired as a data source. **The ingest, the routes and the data are
+gone; the references are not.** Nothing about Waze works, but a contributor who
+greps for it will get a lot of hits — so read this section before concluding
+the layer is still wired up.
+
+What is genuinely gone:
 
 - No ingest. The `SourceFamily` union in `src/services/sourceRegistry.ts:20`
   does not include `waze` and no source module registers one.
@@ -479,10 +515,34 @@ Waze was retired as a data source and then removed completely:
   comment says it: *"Irreversible, and deliberately so — this is the last of the
   Waze data."*
 
-Two leftovers still reference it and cannot work: `map.html:3827` and
-`map.html:9489` fetch `/api/waze/police-heatmap`, `map.html:10864` fetches
-`/api/waze/police`, and `src/server.ts:453` still advertises `police-heatmap` in
-the root endpoint catalogue. Do not read those as evidence the layer exists.
+**The leftovers are extensive.** Four of them are live breakage — the frontend
+asks for routes that no longer exist:
+
+- `map.html:3827` and `map.html:9489` fetch `/api/waze/police-heatmap`
+- `map.html:10864` fetches `/api/waze/police`
+- `src/server.ts:453` still advertises `police-heatmap` in the root endpoint
+  catalogue
+
+The rest is dead reference rather than breakage, and there is a lot of it —
+roughly 88 mentions across 16 non-migration files under `backends/node/src`.
+The ones most likely to mislead:
+
+| Where | What survives |
+|---|---|
+| `services/sourceRegistry.ts:6` | the doc comment above `SourceFamily` still lists `waze` as a family — in the same file whose line 20 proves it is not one |
+| `store/filterCache.ts:68-71`, `:147`, `:193` | the four `waze_*` alert types, a `waze: { name: 'Waze', … }` display entry, and a `waze:` group |
+| `store/filterCache.ts:343-352` | two **orphaned doc comments**. The first describes `wazeAlertType()` and points at `services/wazeAlerts` and `api/waze-ingest`; the second describes a bbox-snapshot reader and points at `store/wazeIngestCache`. All four of those are gone — and because the comments were left behind, they now sit directly above the unrelated `dimSlotFor()` at `:353`, which reads as its documentation and is not |
+| `store/filterCache.ts:7-15` | the module header still describes Waze as a live in-memory path |
+| `services/sourceHealth.ts:48` | a `waze` threshold entry |
+| `api/status.ts:44`, `:64` | `STATUS_WAZE_STALE_SECS` and `WAZE_BOOT_GRACE_SECS`; live `/api/status` still reports `cleanup.last_waze_ended` |
+| `config.ts:86-102` | the userscript ingest keys and the bbox TTL are still parsed |
+
+Migrations under `src/db/migrations/` also mention Waze throughout. That is
+correct and must stay — a migration is a record of what happened.
+
+**None of this is evidence the layer exists.** Treat every Waze reference
+outside the migrations as residue until someone removes it, and do not extend
+any of it.
 
 ## Authentication, in layers
 

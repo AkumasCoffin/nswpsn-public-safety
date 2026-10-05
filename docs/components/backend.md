@@ -142,7 +142,10 @@ Discord bot consumes continuously whether or not anyone has the site open.
 Failures increment a counter, get backoff (`src/sources/shared/backoff.ts`), and
 feed `src/services/sourceHealth.ts`.
 
-### The 38 registered sources
+### The 36 registered sources
+
+38 sources are declared; two of them do not register by default, so a running
+backend holds **36**.
 
 | Source | Family | Interval |
 |---|---|---|
@@ -156,7 +159,7 @@ feed `src/services/sourceHealth.ts`.
 | `traffic_cameras` | traffic | 60s |
 | `traffic_incidents` | traffic | 60s |
 | `user_incidents` | misc | 60s |
-| `ausgrid`, `ausgrid_stats` | power | 2m |
+| `ausgrid`, `ausgrid_stats` | power | — **not registered** |
 | `qld_fire`, `qld_warning` | rfs | 2m |
 | `sa_cfs`, `sa_mfs` | rfs | 2m |
 | `vic_emergency` | rfs | 2m |
@@ -172,10 +175,26 @@ feed `src/services/sourceHealth.ts`.
 | `firms_hotspots` | misc | 15m |
 | `weather_current` | misc | 30m |
 
+**Ausgrid is off.** `register()` in `src/sources/ausgrid.ts:262` returns
+immediately unless `AUSGRID_DISABLED` is explicitly set to `false`, and the
+default is `'true'` — the upstream `webapi/*` endpoints have returned 404 for
+months, and the default keeps the dead poll from firing even on a fresh deploy.
+So `ausgrid` and `ausgrid_stats` are the two declared-but-unregistered sources,
+and there is no `ausgrid` key in `/api/status`. Setting
+`AUSGRID_DISABLED=false` brings them back at 2m each.
+
 The seven LiveTraffic hazard kinds come from one table in
 `src/sources/traffic.ts:428`. `traffic_lga` is council-submitted local-road
 records — a genuinely separate reporting stream with verified zero overlap
 against the others on id, coordinate and street-plus-suburb.
+
+`traffic_works` is **not** an eighth hazard kind and not a duplicate of
+`traffic_roadwork`. It is a separate upstream feed: `fetchTrafficWorks`
+(`src/sources/traffic.ts:502`) reads the LiveTraffic web feed rather than the
+`HAZARD_BASE/<endpoint>.json` the seven hazard kinds share, groups records by
+`apiSource`, restores groups that vanish between polls, and archives each
+record under the type its category implies instead of into a single bucket.
+`src/services/sourceHealth.ts:45` labels it "LiveTraffic — works & ACT".
 
 ### Not in the registry
 
@@ -291,11 +310,28 @@ variable turns its feature off rather than breaking the server. Specifically —
 - unset `DATABASE_URL`: the server still boots and `/api/health` answers;
 - unset `PAGERMON_URL`: the pager source registers and returns an empty
   snapshot, and `/api/pager/hits` is an empty FeatureCollection;
-- unset `RDIO_DATABASE_URL`, `GEMINI_API_KEY`, `FEEDER_TOKEN_SECRET`,
-  `WHISPER_BACKENDS`, the Discord block, or the Wire media block: the matching
-  routes answer **503 with a clear "not configured" body**, and the staff panel
-  hides the card rather than showing a failure for a feature nobody turned on;
+- unset `RDIO_DATABASE_URL`, `GEMINI_API_KEY`, `FEEDER_TOKEN_SECRET`, the
+  Discord block, or the Wire media block: the matching routes answer **503 with
+  a clear "not configured" body**, and the staff panel hides the card rather
+  than showing a failure for a feature nobody turned on;
 - unset `MAP_KEY` (NASA FIRMS): the source stays empty.
+
+**`WHISPER_BACKENDS` is the exception to that pattern — it never 503s.** With
+it unset, `src/api/whisper.ts` answers:
+
+| Route | Unconfigured response |
+|---|---|
+| `POST /api/whisper/v1/audio/transcriptions` | **404** (`whisper.ts:68`) |
+| `GET /api/whisper/v1/models` | **404** (`whisper.ts:100`) |
+| `GET /api/whisper/status` | **200** with `configured: false` (`whisper.ts:113`) |
+| `GET /api/whisper/history` (`whisper.ts:164`) | **200** with `configured: false`, empty rows (`whisper.ts:139`) |
+| `POST /api/whisper/drain` | **404** with an error body (`whisper.ts:193`) |
+
+The 200-with-`configured: false` shape is a contract the staff panel and the PC
+watcher depend on, not an oversight — see
+[`transcription.md`](transcription.md). The only 503 in that file
+(`whisper.ts:81`) is a pass-through of an upstream whisper server's own 503,
+which is a different condition entirely.
 
 Kill switches that stay off while the credential remains configured:
 `ADSB_DISABLED`, `TRANSPORT_DISABLED`, `TFNSW_DISABLED`,
@@ -392,8 +428,8 @@ table really is `calls`. Describing *our* traffic as a "call" is wrong.
 
 ## See also
 
-- [`../architecture.md`](../architecture.md) — the system, and the full
-  air-to-pin trace.
+- [`../architecture.md`](../architecture.md) — the system, and the full trace
+  from a transmission in the air to where it surfaces.
 - [`transcription.md`](transcription.md) — the whisper router.
 - [`radio-node.md`](radio-node.md), [`pager-node.md`](pager-node.md),
   [`aircraft-node.md`](aircraft-node.md) — what talks to the ingest routes.

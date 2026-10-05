@@ -37,12 +37,18 @@ Read these before you read the feature list. They are not temporary.
 - **Several layers are off unless configured.** NASA FIRMS hotspots, the
   transcription tier, ntfy pushes, The Wire's media storage, TfNSW vehicle
   positions and the Discord management dashboard are each gated on an
-  environment variable, and the matching endpoint answers 503 — or the source
-  returns an empty snapshot — when it is unset. See
-  `backends/node/src/config.ts`.
+  environment variable. What an unset variable does varies by route — most
+  answer 503 or return an empty snapshot, but some report their own
+  unconfigured state with a 200 instead (`/api/whisper/status` returns
+  `configured: false`). See `backends/node/src/config.ts`, and the component
+  doc for the layer you care about.
 - **Waze is gone.** It was retired as a source and then removed: no ingest, no
-  routes, and migrations `071`/`074` dropped the heatmap and archive tables. A
-  few dead fetches survive in `map.html`; they are leftovers, not a feature.
+  routes, and migrations `071`/`074` dropped the heatmap and archive tables.
+  Plenty of dead references survive in both the frontend and the backend —
+  including three `map.html` fetches that cannot be answered. They are
+  leftovers, not a feature. See
+  [`docs/architecture.md`](docs/architecture.md#waze-is-gone-and-the-data-with-it)
+  before acting on a `waze` grep hit.
 
 ## The stack
 
@@ -76,7 +82,8 @@ wrong.
 | `/live` | Live dashboard — per-source counts, hourly radio summaries, news |
 | `/logs` | Searchable historical log, read from the archive tables |
 | `/wire` | The Wire — news and media posts |
-| `/feeds`, `/data-sources` | What is being ingested, and from where |
+| `/feeds` | Direct Feeds — listen-live radio and pager streams |
+| `/data-sources` | What is being ingested, and from where |
 | `/agency` | Reference pages for Fire & Rescue NSW, NSW Rural Fire Service, NSW Ambulance and aviation callsigns |
 | `/feeder` | Run a receiver node — enrolment and installer download |
 | `/dashboard` | Discord-OAuth management UI for the bot's alert presets |
@@ -84,7 +91,7 @@ wrong.
 
 ## What is ingested
 
-**38 polled sources** are declared in a registry
+**36 polled sources** run on a default boot, out of 38 declared in a registry
 (`backends/node/src/services/sourceRegistry.ts`), each with its own poll cadence
 and its own archive family. Registration happens at boot
 (`src/sources/registerAll.ts`, `src/sources/registerPower.ts`) and
@@ -96,7 +103,7 @@ and its own archive family. Registration happens at boot
 | Bureau of Meteorology | Weather warnings, land and marine | 60s |
 | LiveTraffic NSW | Seven hazard kinds — incidents, roadwork, flood, fire, major events, alpine, council-submitted | 60s–5m |
 | Endeavour Energy | Current, planned and maintenance outages | 60s–5m |
-| Ausgrid | Outages, with per-outage detail enrichment | 2m |
+| Ausgrid | Outages, with per-outage detail enrichment | **off** — upstream has 404'd for months |
 | Essential Energy | Current and future outages | 3m |
 | Pagermon (self-hosted) | Pager messages | 60s |
 | ACT Ambulance | Incidents | 60s |
@@ -127,9 +134,12 @@ Volunteers run a small Go agent on a machine with an SDR dongle. Three kinds:
 | **aircraft** | ADS-B Mode S at 1090 MHz, via `dump1090-fa` | RTL-SDR; Linux (incl. Raspberry Pi) |
 
 All three enrol with a single-use code, hold a persistent WebSocket to the
-backend, buffer to a disk-backed queue so a dropped connection loses nothing,
-and self-update against a signed manifest
-(`backends/node/assets/node-versions.json`).
+backend, and buffer to a disk-backed queue so a dropped connection loses
+nothing. They also carry a self-update path driven by a version manifest
+(`backends/node/assets/node-versions.json`) — though for the agents themselves
+that path is **dormant**, because an entry with an empty sha256 is treated as
+nothing to do and all three agent entries currently have one. See
+[`docs/components/forked-runtimes.md`](docs/components/forked-runtimes.md#self-update-is-dormant-for-the-agents).
 
 A radio node additionally **downloads and runs two forked upstream projects** —
 a headless SDR-Trunk build and a matching rdio-scanner — both pinned by version
@@ -202,7 +212,7 @@ docs/
     radio-node.md                   feeder-nodes/radio-node/cmd/nodeagent
     pager-node.md                   feeder-nodes/pager-node/cmd/nodeagent
     aircraft-node.md                feeder-nodes/aircraft-node/cmd/nodeagent
-    forked-runtimes.md              the five forks, what changed, how pinned
+    forked-runtimes.md              four forks and one original plugin set
     transcription.md                the Whisper router and its two servers
   scanner-feed-setup.md             contribute an existing rdio-scanner
   uptime-kuma-monitors.md           monitor recipes against /api/status
