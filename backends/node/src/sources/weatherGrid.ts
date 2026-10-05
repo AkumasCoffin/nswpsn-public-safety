@@ -123,6 +123,23 @@ export function cellCount(g: GridGeometry): number {
 }
 
 /**
+ * The marine grid, which is deliberately coarser than the land grid.
+ *
+ * Not a shortcut — two reasons. Budget: marine on the same 0.5 degree grid
+ * would cost up to another 5,865 locations a day, and 11,730 combined is past
+ * the free tier even before a single retry. And physics: swell is a far
+ * smoother field than land temperature. It varies over hundreds of kilometres,
+ * so the detail a tighter grid would buy is mostly interpolation of itself.
+ *
+ * Worst case at 1 degree — every cell ocean — is 1,505, which keeps the
+ * combined daily spend inside the ceiling without relying on the land/sea mask
+ * to come out any particular way.
+ */
+export function marineGeometry(stepDeg = config.WEATHER_MARINE_STEP): GridGeometry {
+  return gridGeometry(stepDeg);
+}
+
+/**
  * Cell index -> coordinates. Row-major from the SOUTH-WEST corner, so index 0
  * is the bottom-left and rows run north. The client's renderer flips this when
  * it writes image rows, since canvas y grows downward.
@@ -145,6 +162,8 @@ export function allCells(g: GridGeometry): Array<{ lat: number; lon: number }> {
 
 export interface SpendEstimate {
   cells: number;
+  /** Marine cells, counted at their WORST case — every cell ocean. */
+  marineCells: number;
   /** HTTP requests per full refresh, after batching. */
   requestsPerRefresh: number;
   refreshesPerDay: number;
@@ -167,14 +186,21 @@ export function estimateSpend(
   g: GridGeometry = gridGeometry(),
   batchSize = config.WEATHER_GRID_BATCH,
   refreshesPerDay = 86_400_000 / config.WEATHER_GRID_INTERVAL_MS,
+  marine: GridGeometry | null = marineGeometry(),
 ): SpendEstimate {
   const cells = cellCount(g);
-  const requestsPerRefresh = Math.ceil(cells / batchSize);
-  const locationsPerDay = Math.ceil(cells * refreshesPerDay);
+  // Counted at the worst case — every marine cell ocean. The real number is
+  // lower because the land/sea mask excludes inland cells, but a budget that
+  // only holds if the coastline comes out a particular way is not a budget.
+  const marineCells = marine ? cellCount(marine) : 0;
+  const perRefresh = cells + marineCells;
+  const requestsPerRefresh = Math.ceil(cells / batchSize) + Math.ceil(marineCells / batchSize);
+  const locationsPerDay = Math.ceil(perRefresh * refreshesPerDay);
   // 31 so a long month cannot be the thing that tips it over.
   const locationsPerMonth = locationsPerDay * 31;
   return {
     cells,
+    marineCells,
     requestsPerRefresh,
     refreshesPerDay,
     locationsPerDay,
@@ -190,10 +216,12 @@ export function reportSpend(): SpendEstimate {
   const est = estimateSpend();
   const detail = {
     cells: est.cells,
+    marineCells: est.marineCells,
     locationsPerDay: est.locationsPerDay,
     locationsPerMonth: est.locationsPerMonth,
     requestsPerDay: est.requestsPerDay,
     stepDeg: config.WEATHER_GRID_STEP,
+    marineStepDeg: config.WEATHER_MARINE_STEP,
   };
   if (est.withinFreeTier) {
     log.info(detail, 'weather grid: within the Open-Meteo free tier');

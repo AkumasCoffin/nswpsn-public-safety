@@ -74,6 +74,10 @@ const Schema = z.object({
   // is 5,865 locations/day against a 10,000/day ceiling — safe even under the
   // pessimistic reading where every location counts as its own call.
   WEATHER_GRID_STEP: z.coerce.number().positive().default(0.5),
+  // Marine runs on its own, coarser grid. Swell varies over hundreds of
+  // kilometres, and matching the land grid would add up to 5,865 more
+  // locations a day - past the free tier before a single retry.
+  WEATHER_MARINE_STEP: z.coerce.number().positive().default(1.0),
   // Locations per HTTP request, via Open-Meteo's comma-separated coordinates.
   // Fewer round trips; the cap keeps any single URL a sane length.
   WEATHER_GRID_BATCH: z.coerce.number().int().positive().default(250),

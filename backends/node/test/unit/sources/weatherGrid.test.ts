@@ -12,7 +12,7 @@ import { describe, it, expect } from 'vitest';
 const {
   AU_BBOX, FREE_TIER, LAND_VARS, NODATA,
   gridGeometry, cellCount, cellLatLon, allCells,
-  estimateSpend, quantise, dequantise, batchCells, VAR_SCALE,
+  estimateSpend, quantise, dequantise, batchCells, VAR_SCALE, marineGeometry,
 } = await import('../../../src/sources/weatherGrid.js');
 
 describe('grid geometry', () => {
@@ -85,7 +85,12 @@ describe('the Open-Meteo bill', () => {
     // nothing about whether multiple coordinates in one request count once or
     // once each. The defaults have to survive the worse answer.
     const est = estimateSpend();
-    expect(est.locationsPerDay).toBe(5865);
+    // Land at 0.5 deg plus marine at its own coarser 1 deg grid, with marine
+    // counted at its WORST case (every cell ocean) so the budget does not
+    // depend on how the coastline happens to fall.
+    expect(est.cells).toBe(5865);
+    expect(est.marineCells).toBe(1505);
+    expect(est.locationsPerDay).toBe(5865 + 1505);
     expect(est.requestsPerDay).toBeLessThan(est.locationsPerDay);
   });
 
@@ -108,9 +113,29 @@ describe('the Open-Meteo bill', () => {
   });
 
   it('counts a part-full final batch', () => {
-    const est = estimateSpend(gridGeometry(0.5), 250, 1);
+    const est = estimateSpend(gridGeometry(0.5), 250, 1, null);
     expect(est.requestsPerRefresh).toBe(Math.ceil(5865 / 250));
     expect(est.requestsPerRefresh).toBe(24);
+  });
+
+  it('marine on the land grid would break the budget, which is why it is coarser', () => {
+    // The reason marineGeometry exists. Sharing the 0.5 deg grid costs another
+    // 5,865 locations a day and 11,730 combined is past the ceiling before a
+    // single retry — so this must be caught rather than discovered in
+    // production when the quota trips mid-afternoon.
+    const shared = estimateSpend(gridGeometry(0.5), 250, 1, gridGeometry(0.5));
+    expect(shared.locationsPerDay).toBe(11730);
+    expect(shared.withinFreeTier).toBe(false);
+
+    // The shipped pairing fits, with room.
+    const shipped = estimateSpend(gridGeometry(0.5), 250, 1, marineGeometry(1));
+    expect(shipped.withinFreeTier).toBe(true);
+    expect(shipped.locationsPerMonth).toBeLessThanOrEqual(FREE_TIER.perMonth);
+  });
+
+  it('the marine grid is coarser than the land grid', () => {
+    expect(marineGeometry().stepDeg).toBeGreaterThan(gridGeometry().stepDeg);
+    expect(cellCount(marineGeometry())).toBeLessThan(cellCount(gridGeometry()));
   });
 });
 

@@ -2959,6 +2959,7 @@
         <label><input type="radio" name="wx-layer" id="chk-wx-wind" onchange="wxSetLayer('wind')"> Wind</label>
         <label><input type="radio" name="wx-layer" id="chk-wx-temp" onchange="wxSetLayer('temperature_2m')"> Temperature</label>
         <label><input type="radio" name="wx-layer" id="chk-wx-rain" onchange="wxSetLayer('precipitation')"> Rain forecast</label>
+        <label><input type="radio" name="wx-layer" id="chk-wx-waves" onchange="wxSetLayer('wave_height')"> Waves <span class="wx-note">at sea</span></label>
         <div class="wx-sep"></div>
         <label><input type="checkbox" id="chk-radar" onchange="toggleRadar(this.checked)"> Rain radar <span class="wx-note">observed</span></label>
         <label><input type="checkbox" id="chk-weather-pins" onchange="toggleWeatherPins(this.checked)"> Weather stations</label>
@@ -19641,7 +19642,28 @@ function initPagerHoursFromStorage() {
       temperature_2m: 'Temperature',
       precipitation: 'Rain',
       wind_gusts_10m: 'Gusts',
+      wave_height: 'Wave height',
+      swell_wave_height: 'Swell',
     };
+    // Which variables are marine is a fact about the variable, not about
+    // whether the manifest happens to list it yet. Deriving it from the
+    // manifest alone means that before the marine source has ever run,
+    // wave_height reads as "not marine" — so it would be validated against the
+    // land time axis and the guard that should refuse the layer never fires.
+    const WX_MARINE_VARS = ['wave_height', 'wave_direction', 'wave_period', 'swell_wave_height'];
+
+    /** Marine variables live on their own coarser grid and their own time axis. */
+    function wxIsMarine(name) {
+      if (WX_MARINE_VARS.indexOf(name) !== -1) return true;
+      const meta = wxVarMeta(name);
+      return !!(meta && meta.marine);
+    }
+    function wxAxis(name) {
+      if (!_wxManifest) return [];
+      return wxIsMarine(name)
+        ? (_wxManifest.marineTimesteps || [])
+        : _wxManifest.timesteps;
+    }
 
     async function wxLoadManifest() {
       if (_wxManifest) return _wxManifest;
@@ -19675,8 +19697,9 @@ function initPagerHoursFromStorage() {
     function wxNowIndex() {
       if (!_wxManifest) return 0;
       const now = Date.now();
+      const axis = wxAxis(_wxLayer === 'wind' ? 'wind_speed_10m' : _wxLayer);
       let best = 0, bestGap = Infinity;
-      _wxManifest.timesteps.forEach(function (t, i) {
+      axis.forEach(function (t, i) {
         const gap = Math.abs(Date.parse(t) - now);
         if (gap < bestGap) { bestGap = gap; best = i; }
       });
@@ -19686,7 +19709,8 @@ function initPagerHoursFromStorage() {
     function wxRenderTimeLabel() {
       const el = document.getElementById('wx-time-display');
       if (!el || !_wxManifest) return;
-      const iso = _wxManifest.timesteps[_wxTimeIdx];
+      const axis = wxAxis(_wxLayer === 'wind' ? 'wind_speed_10m' : _wxLayer);
+      const iso = axis[_wxTimeIdx];
       if (!iso) { el.textContent = '--'; return; }
       // Formatted in the VIEWER's zone, not the grid's. Data is stored in UTC
       // because Australia spans three zones and no single local clock fits a
@@ -19725,7 +19749,8 @@ function initPagerHoursFromStorage() {
 
     async function wxApply() {
       if (_wxLayer === 'none' || !_wxManifest || !_wxField) return;
-      const iso = _wxManifest.timesteps[_wxTimeIdx];
+      const axis = wxAxis(_wxLayer === 'wind' ? 'wind_speed_10m' : _wxLayer);
+      const iso = axis[_wxTimeIdx];
       if (!iso) return;
       const container = document.getElementById('wx-time-container');
       if (container) container.classList.add('is-loading');
@@ -19741,6 +19766,7 @@ function initPagerHoursFromStorage() {
           ]);
           const spd = pair[0], dir = pair[1];
           if (token !== _wxLoadToken || !spd || !dir) return;
+          _wxField.setGeometry(_wxManifest.geometry);
           _wxField.setWind(spd, dir, wxVarMeta('wind_speed_10m'), wxVarMeta('wind_direction_10m'));
           _wxField.setVariable('wind_speed_10m');
           _wxField.setData(spd, wxVarMeta('wind_speed_10m'));
@@ -19749,6 +19775,12 @@ function initPagerHoursFromStorage() {
           const grid = await wxFetchGrid(_wxLayer, iso);
           if (token !== _wxLoadToken || !grid) return;
           _wxField.setAnimated(false);
+          // Geometry BEFORE data: marine is a coarser grid, and handing a
+          // 43x35 array to a renderer still sized for 85x69 would read the
+          // array off its end and smear the waves across the continent.
+          _wxField.setGeometry(wxIsMarine(_wxLayer)
+            ? (_wxManifest.marineGeometry || _wxManifest.geometry)
+            : _wxManifest.geometry);
           _wxField.setVariable(_wxLayer);
           _wxField.setData(grid, wxVarMeta(_wxLayer));
         }
@@ -19788,6 +19820,18 @@ function initPagerHoursFromStorage() {
         return;
       }
 
+      if (wxIsMarine(which) && !m.marineGeometry) {
+        // The land field can be live for a day before marine first runs. Say so
+        // rather than selecting a radio over an empty map.
+        if (typeof showToast === 'function') {
+          showToast('Wave data is still being prepared - try again shortly.');
+        }
+        const off = document.getElementById('chk-wx-none');
+        if (off) off.checked = true;
+        _wxLayer = 'none';
+        return;
+      }
+
       if (!_wxField) {
         if (!window.WeatherField) { console.warn('weather module not loaded'); return; }
         _wxField = window.WeatherField.create(map, {
@@ -19795,16 +19839,23 @@ function initPagerHoursFromStorage() {
           fieldPane: 'wxFieldPane',
           particlePane: 'wxParticlePane',
         });
-        _wxTimeIdx = wxNowIndex();
-        const slider = document.getElementById('wx-time-slider');
-        if (slider) {
-          slider.min = 0;
-          slider.max = String(m.timesteps.length - 1);
-          slider.value = String(_wxTimeIdx);
-        }
       }
+      wxSyncSlider();
       if (container) container.style.display = 'block';
       await wxApply();
+    }
+
+    /** Range and position follow whichever axis the active layer rides. */
+    function wxSyncSlider() {
+      if (!_wxManifest) return;
+      const axis = wxAxis(_wxLayer === 'wind' ? 'wind_speed_10m' : _wxLayer);
+      _wxTimeIdx = wxNowIndex();
+      const slider = document.getElementById('wx-time-slider');
+      if (slider) {
+        slider.min = 0;
+        slider.max = String(Math.max(0, axis.length - 1));
+        slider.value = String(_wxTimeIdx);
+      }
     }
 
     function wxSetTime(value) {

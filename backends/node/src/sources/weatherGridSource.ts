@@ -220,8 +220,15 @@ export async function refreshWeatherGrid(force = false): Promise<WeatherManifest
     issuedAt: new Date().toISOString(),
     geometry,
     timesteps,
-    vars,
+    // Marine is a separate source on its own grid and time axis, and it folds
+    // itself into this manifest. Rebuilding `vars` from LAND_VARS alone would
+    // drop it — and because prune below keeps only what the manifest lists,
+    // that would delete every marine grid on disk and force a full refetch the
+    // same day. Carry whatever marine already knows about straight through.
+    vars: [...vars, ...(existing?.vars.filter((v) => v.marine) ?? [])],
     nodata: -32768,
+    ...(existing?.marineGeometry ? { marineGeometry: existing.marineGeometry } : {}),
+    ...(existing?.marineTimesteps ? { marineTimesteps: existing.marineTimesteps } : {}),
   };
   await writeManifest(manifest);
   await pruneGrids(manifest);

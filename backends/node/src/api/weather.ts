@@ -17,7 +17,7 @@ import {
   weatherCurrentSnapshot,
   weatherRadarSnapshot,
 } from '../sources/weather.js';
-import { LAND_VARS, VAR_SCALE, type GridVar } from '../sources/weatherGrid.js';
+import { LAND_VARS, MARINE_VARS, VAR_SCALE, type GridVar } from '../sources/weatherGrid.js';
 import { readGridBytes, readManifest } from '../services/weatherStore.js';
 import { SwrCache } from '../services/swrCache.js';
 import { fetchJson } from '../sources/shared/http.js';
@@ -67,16 +67,26 @@ weatherRouter.get('/api/weather/grid', async (c) => {
   const v = (c.req.query('var') ?? '').trim() as GridVar;
   const t = (c.req.query('t') ?? '').trim();
 
-  if (!LAND_VARS.includes(v as (typeof LAND_VARS)[number])) {
-    return c.json({ error: 'unknown variable' }, 400);
-  }
+  const isLand = LAND_VARS.includes(v as (typeof LAND_VARS)[number]);
+  const isMarine = MARINE_VARS.includes(v as (typeof MARINE_VARS)[number]);
+  if (!isLand && !isMarine) return c.json({ error: 'unknown variable' }, 400);
   if (!t) return c.json({ error: 'missing timestep' }, 400);
 
   const m = await readManifest();
   if (!m) return c.json({ error: 'weather grid not built yet', ready: false }, 503);
+
+  // Marine lives on its own coarser grid and its own time axis. Validating a
+  // marine request against the land axis would reject perfectly good timesteps,
+  // and returning land geometry for it would stretch the waves across the
+  // continent at the wrong scale.
+  const geometry = isMarine ? m.marineGeometry : m.geometry;
+  const axis = isMarine ? m.marineTimesteps : m.timesteps;
+  if (!geometry || !axis) {
+    return c.json({ error: 'marine field not built yet', ready: false }, 503);
+  }
   // Only timesteps the manifest advertises. Without this the timestep is a
   // caller-controlled string reaching a filename.
-  if (!m.timesteps.includes(t)) return c.json({ error: 'unknown timestep' }, 404);
+  if (!axis.includes(t)) return c.json({ error: 'unknown timestep' }, 404);
 
   const bytes = await readGridBytes(v, t);
   if (!bytes) return c.json({ error: 'grid not available' }, 404);
@@ -86,8 +96,8 @@ weatherRouter.get('/api/weather/grid', async (c) => {
   // writes new timesteps rather than rewriting old ones — so this is safe to
   // cache hard, which is what makes scrubbing back and forth feel instant.
   c.header('Cache-Control', 'public, max-age=86400, immutable');
-  c.header('X-Grid-Cols', String(m.geometry.cols));
-  c.header('X-Grid-Rows', String(m.geometry.rows));
+  c.header('X-Grid-Cols', String(geometry.cols));
+  c.header('X-Grid-Rows', String(geometry.rows));
   c.header('X-Grid-Scale', String(VAR_SCALE[v]));
   return c.body(new Uint8Array(bytes));
 });

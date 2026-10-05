@@ -40,6 +40,13 @@ export interface WeatherManifest {
   timesteps: string[];
   vars: ManifestVar[];
   nodata: number;
+  /**
+   * Marine runs on its own coarser grid and its own time axis, so a marine
+   * variable must be read against these rather than the land pair above.
+   * Absent until the marine source has run at least once.
+   */
+  marineGeometry?: GridGeometry;
+  marineTimesteps?: string[];
 }
 
 export function weatherDir(): string {
@@ -132,7 +139,11 @@ export async function pruneGrids(m: WeatherManifest): Promise<number> {
 
   const keep = new Set<string>();
   for (const v of m.vars) {
-    for (const t of m.timesteps) keep.add(gridFileName(v.name, t));
+    // Each variable is kept on ITS OWN axis. Pruning marine against the land
+    // timesteps would delete every marine grid the moment the two axes differ
+    // by so much as an hour.
+    const axis = v.marine ? (m.marineTimesteps ?? []) : m.timesteps;
+    for (const t of axis) keep.add(gridFileName(v.name, t));
   }
 
   let removed = 0;
