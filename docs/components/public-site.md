@@ -54,6 +54,22 @@ Consequences you have to work with:
 | `/about`, `/contact`, `/links`, `/privacy`, `/terms` | … | Static content |
 | `/map-editor` | `map-editor.html` | **A redirect stub.** The editor merged into `map.html`, which enables editor mode automatically when a signed-in user has the role. The stub only keeps old links working |
 
+### `/feeds` is a link page, not a player
+
+Worth calling out because it is the site's widest public surface and the only
+page that does not get its data from this backend. `feeds.html` holds no audio
+element and calls no AusAware API except `/api/heartbeat` (`feeds.html:164`).
+It links out to three services hosted alongside AusAware but served by
+something else: `radio.forcequit.xyz` (`feeds.html:106`), which is the
+**central rdio-scanner's own web UI** with live receptions, per-talkgroup
+search and playback; and `nsw-pager.forcequit.xyz` (`:116`) and
+`qld-pager.forcequit.xyz` (`:126`), the two Pagermon instances.
+
+Nothing in this repo gates those links, so radio audio is publicly listenable
+with no login — on a host this repo does not configure. See
+[`../architecture.md`](../architecture.md) step 8 before writing anything that
+describes the public surface as audio-free.
+
 ## Shared files
 
 | File | Purpose |

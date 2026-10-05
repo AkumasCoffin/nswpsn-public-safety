@@ -327,6 +327,32 @@ database.
 per-site decode, coverage, relationships and history. This is where a reception
 is visible as a reception.
 
+**On `/feeds` — the audio itself, and this is the widest public surface of the
+lot.** `feeds.html` is a link page, not a player: it carries no audio element
+and calls no AusAware API except `/api/heartbeat` (`feeds.html:164`). It links
+out to three services hosted alongside AusAware but **not served by this
+backend**:
+
+| Link (`feeds.html`) | What it is |
+|---|---|
+| `radio.forcequit.xyz` (`:106`) | the **central rdio-scanner's own web UI** — live P25 receptions with per-talkgroup search and playback |
+| `nsw-pager.forcequit.xyz` (`:116`) | the NSW Pagermon instance — live POCSAG messages |
+| `qld-pager.forcequit.xyz` (`:126`) | a second Pagermon for QFES paging |
+
+So the audio a radio node uploaded is publicly listenable, with no login, on
+the central rdio's own interface. It does not pass through `backends/node` to
+get there — the backend reads that same database read-only for transcripts and
+summaries, while rdio serves its own UI. `data-sources.html:147` and
+`terms.html:174` name the same hosts, and `terms.html:174-176` is the statement
+of what they are: streams of *"publicly receivable, non-encrypted radio and
+pager transmissions received from over-the-air signals."*
+
+Two things follow that are easy to get wrong. The site badge on the map is
+**not** how a reception is heard — it is a liveness lock, and the hearing
+happens on an external host this repo does not configure. And nothing in this
+repo gates those three links, so do not describe the public surface as
+transcript-free or audio-free; it is neither.
+
 **As a push, optionally.** `src/services/rdioIncidentAlerts.ts` watches the
 central rdio database for a burst of transcribed receptions on one talkgroup and
 publishes one ntfy notification per incident, with a cooldown so one incident is
@@ -334,10 +360,21 @@ one push. Off unless `RDIO_INCIDENT_ALERTS_ENABLED=true`.
 
 ### 9. What a radio reception does *not* do
 
-**A radio reception does not itself drop an incident pin on the map.** Nothing in
-the pipeline geocodes radio traffic into a location, and the public surface is
-deliberately narrow — site badges, hourly summaries, and the role-gated staff
-views — with one exception: `GET /api/rdio/calls/:callId`
+**A radio reception does not itself drop an incident pin on the map.** Nothing
+in the pipeline geocodes radio traffic into a location — there is no step that
+turns a transcript into a coordinate, and no code in `backends/node/src` that
+could.
+
+Be careful with the stronger version of that claim, though, because it is false:
+**the surface is narrow on the *map*, not narrow in general.** On the map itself
+a reception produces only a site badge. Beyond the map it produces an hourly
+summary on `/live`, a role-gated staff Live row, a permanent row in the central
+rdio database — and, via the `/feeds` links in step 8, **publicly listenable
+audio with a transcript search on the central rdio's own web UI, with no login
+at all.** AusAware's own API is the narrow part; the rdio instance behind it is
+not.
+
+One AusAware route belongs in the same list: `GET /api/rdio/calls/:callId`
 (`backends/node/src/api/transcripts.ts:93`) returns a single reception with its
 transcript, is advertised in the root endpoint catalogue
 (`src/server.ts:499-500`), and is reachable by anyone holding the shared browser
@@ -357,9 +394,32 @@ POCSAG page → pager node (rtl_fm | multimon-ng → internal/pagerdecode)
             → map.html:6265 — a pin
 ```
 
-A page without coordinates — an FRNSW `FRINC` turnout, for instance — is
-archived and shows in `/logs`, but is never mapped. `lat`/`lon` are nullable in
-`src/sources/pager.ts` precisely so that distinction survives.
+**There is no geocoder in that chain, and that is the whole reason it works.**
+The dispatch system puts the coordinates *in the message body*, as a trailing
+`[lon,lat]` bracket. `parsePagerCoords` (`src/sources/pager.ts:75`) pulls them
+out with a regex — two patterns, the bracketed form first and a looser
+unbracketed fallback — and returns them swapped to `[lat, lon]`. Nothing is
+looked up: no geocoder, no gazetteer, no address matching, no network call. A
+pager pin is as accurate as whatever the dispatch system wrote, and no more.
+
+That is also the real difference between the two paths. A pager message arrives
+carrying its own coordinates; a voice transmission arrives carrying audio. One
+can be mapped by parsing, the other would need something that does not exist
+here.
+
+Two consequences worth knowing:
+
+- A page without coordinates — an FRNSW `FRINC` turnout, for instance, whose
+  format carries an incident number and no location — is archived and shows in
+  `/logs`, but is never mapped. `lat`/`lon` are nullable in
+  `src/sources/pager.ts:46-47` precisely so that distinction survives, and the
+  comment above them says it: *"Coordless messages are archived (logs page) but
+  never mapped."*
+- Coordinates are **inherited within an incident**. `src/sources/pager.ts:279-281`
+  runs two passes: parse ids and coords, then group by `incident_id` so every
+  message in a group inherits whichever message in that group had explicit
+  coords. So a follow-up page with no bracket still lands on the right pin,
+  provided something else in its incident carried one.
 
 So the honest one-line answer to "trace a transmission to a pin": a **pager**
 transmission becomes a pin; a **voice** transmission becomes a monitored-site
