@@ -143,6 +143,31 @@ Documentation under `docs/` is therefore **not** reachable over the web — the
 `.md` block covers it. That is intentional; docs are for people reading the
 repository.
 
+### `uploads/` — user images inside the webroot
+
+Incident photos are user-generated content, written by
+`backends/node/src/services/incidentImages.ts` to
+`<repo>/uploads/incident-images/<incidentId>/` (`UPLOADS_DIR`, default
+`../../uploads`, `backends/node/src/config.ts:65`) and streamed to disk by
+`src/api/incidents.ts` rather than buffered in memory. Because the repo root
+doubles as the Apache webroot, that directory is served directly, at
+`https://nswpsn.forcequit.xyz/uploads/incident-images/<id>/<img>.jpg`, resized
+on demand by Cloudflare Image Transformations (`/cdn-cgi/image/...`).
+
+That means it needs its **own**, second `.htaccess` — the repo-root one above
+says nothing about it — and that file is an **allowlist**, not a blocklist:
+`uploads/.htaccess` denies every filename by default and grants only a bare
+`<uuid>.<jpg|png|webp|gif>` basename, so the allowlist's safety depends on the
+uploader only ever writing that exact filename shape. It also explicitly kills
+PHP handling on PHP-ish names (`SetHandler none`, not just `RemoveHandler`),
+specifically to override an inherited PHP-FPM `SetHandler proxy:fcgi` that
+`RemoveHandler` cannot undo.
+
+Contrast with The Wire's media (`docs/architecture.md`, Path 5): Wire photos
+and video go browser-to-Cloudflare directly and never touch the origin.
+Incident photos do touch the origin disk, so this second `.htaccess` is the
+only thing standing between an upload and code execution.
+
 ## How a page gets data
 
 Every page talks to the backend over `/api/...` at the API base URL from

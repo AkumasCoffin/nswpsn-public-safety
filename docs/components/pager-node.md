@@ -230,10 +230,16 @@ a node only via a fresh install. Details:
   encryption ceiling here. The ceiling is **coverage**: a node hears what its
   antenna hears, and there is none where nobody has put one up.
 - At most two frequencies per node.
-- **A page without coordinates is never mapped.** An FRNSW `FRINC` turnout, for
-  instance, has no location in the body. `lat`/`lon` are nullable in
-  `backends/node/src/sources/pager.ts` precisely so the distinction survives:
-  coordinate-less pages are archived and appear in `/logs`, but get no pin.
+- **A page is left off the map only if the backend's coordinate parser found
+  nothing at all.** An FRNSW `FRINC` turnout, for instance, has no
+  comma-separated number pair anywhere in the body, so it archives and appears
+  in `/logs` with no pin — `lat`/`lon` are nullable in
+  `backends/node/src/sources/pager.ts` precisely so that distinction survives.
+  But the parser's fallback pattern treats *any* bare comma-separated number
+  pair in the body as coordinates, bracketed or not, with no range check on
+  the result — a unit number next to a street number can parse as a
+  coordinate and get a pin. A page without real coordinates is not guaranteed
+  to be mapless.
 - Linux only.
 
 ## See also

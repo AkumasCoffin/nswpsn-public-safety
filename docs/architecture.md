@@ -399,8 +399,13 @@ The dispatch system puts the coordinates *in the message body*, as a trailing
 `[lon,lat]` bracket. `parsePagerCoords` (`src/sources/pager.ts:75`) pulls them
 out with a regex — two patterns, the bracketed form first and a looser
 unbracketed fallback — and returns them swapped to `[lat, lon]`. Nothing is
-looked up: no geocoder, no gazetteer, no address matching, no network call. A
-pager pin is as accurate as whatever the dispatch system wrote, and no more.
+looked up: no geocoder, no gazetteer, no address matching, no network call.
+But the fallback pattern's bracket is optional, so it also matches any bare
+comma-separated number pair in the body — a unit/lot number next to a street
+number (`UNIT 5, 12 SMITH ST` → `[12, 5]`) parses as if it were coordinates,
+and nothing downstream range-checks the result. So a pager pin can be **less**
+accurate than whatever the dispatch system wrote, not just as accurate: the
+fallback can manufacture a coordinate pair out of text that carried none.
 
 That is also the real difference between the two paths. A pager message arrives
 carrying its own coordinates; a voice transmission arrives carrying audio. One
@@ -409,12 +414,14 @@ here.
 
 Two consequences worth knowing:
 
-- A page without coordinates — an FRNSW `FRINC` turnout, for instance, whose
-  format carries an incident number and no location — is archived and shows in
-  `/logs`, but is never mapped. `lat`/`lon` are nullable in
-  `src/sources/pager.ts:46-47` precisely so that distinction survives, and the
-  comment above them says it: *"Coordless messages are archived (logs page) but
-  never mapped."*
+- A page is left off the map only if `parsePagerCoords` found nothing at all —
+  an FRNSW `FRINC` turnout, for instance, whose format carries an incident
+  number and no comma-separated number pair anywhere in the body, so both
+  regex patterns miss and it archives with `lat`/`lon` null (nullable in
+  `src/sources/pager.ts:46-47`, shown in `/logs`). That is **not** the same as
+  "no coordinates in the body guarantees no pin" — see above: the unbracketed
+  fallback can turn an unrelated number pair (a unit and lot number, a street
+  number pair) into coordinates it then maps.
 - Coordinates are **inherited within an incident**. `src/sources/pager.ts:279-281`
   runs two passes: parse ids and coords, then group by `incident_id` so every
   message in a group inherits whichever message in that group had explicit
