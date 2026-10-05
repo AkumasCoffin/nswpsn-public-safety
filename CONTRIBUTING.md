@@ -34,7 +34,7 @@ needs nothing installed at all — it is one entry in your rdio admin page.
 
 1. [`README.md`](README.md) — what AusAware is and what it honestly cannot do.
 2. [`docs/architecture.md`](docs/architecture.md) — the whole system, and the
-   full trace from a transmission in the air to a pin on the live map.
+   full trace from a transmission in the air to where it surfaces.
 3. [`docs/components/`](docs/components/) — one short doc per component. Each
    names the file execution starts from.
 
@@ -93,15 +93,26 @@ is no workspace tying them together, so build each from its own directory.
 2. Make the change. Match the surrounding code's naming, comment density and
    idiom.
 3. Run the smallest check that proves it (below).
-4. Commit to `dev-beta` in logical commits.
-5. Open a PR against `dev-beta`, never against `main`.
+4. Commit in logical commits.
+5. Get it onto `dev-beta`. **How depends on whether you have push access:**
+   - **With push access** — push your commits to `dev-beta` directly. That is
+     where all work lands first.
+   - **Without push access** — open a PR against `dev-beta`. Never against
+     `main`.
+
+   Either way the target is `dev-beta` and never `main`.
+
+**Work finishes there.** You do not deploy, and you do not merge `dev-beta`
+into `main` — that merge is the release and it is the owner's, every time. If
+your change needs a deploy to take effect, say so in the commit or the PR and
+stop.
 
 CI (`.github/workflows/tests.yml`) runs on every push and PR to `main` and
 `dev-beta`:
 
 - **Backend** — `npm run typecheck` then `npx vitest run`, from `backends/node`.
 - **Frontend** — every classic inline `<script>` in a root `.html` file is
-  parsed. A syntax error anywhere in a 900 KB page fails the build.
+  parsed. A syntax error anywhere in a 960 KB page fails the build.
 - **Discord bot** — `py_compile` over `discord-bot/*.py`, plus ruff
   (informational; it never blocks).
 

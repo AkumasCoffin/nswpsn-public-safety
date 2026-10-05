@@ -80,6 +80,15 @@ answers are in `backends/node/src/config.ts` (environment) and
 `backends/node/scripts/deploy.sh` (how the process is actually started and
 restarted).
 
+The trap is that the file is **not empty** — it holds plausible, stale values.
+`kill_timeout: 30_000` really is at `ecosystem.config.js:56`, and it really has
+no effect; the 30s that applies comes from `deploy.sh:233` passing
+`--kill-timeout 30000` on the pm2 restart, and `deploy.sh:217-224` explains at
+length why it lives there instead — including that the running process was
+checked on the box and had no `kill_timeout` at all. Finding a value in this
+file is not evidence that the value is in force. Open `deploy.sh` or
+`config.ts` and confirm.
+
 ## 8. Never propose row-level security on the incident or role tables.
 
 Those tables live in the backend's own PostgreSQL, not in Supabase. RLS is a
@@ -180,7 +189,10 @@ document that describes one, that document is wrong — fix the document.
 
 ## Branch and deploy workflow
 
-1. Branch from `dev-beta` and commit back to `dev-beta`. Never commit to `main`.
+1. Branch from `dev-beta` and get the work back onto `dev-beta`. Never commit to
+   `main`. With push access, push to `dev-beta` directly; without it, open a PR
+   against `dev-beta`. Either way the target is `dev-beta`.
+   [`CONTRIBUTING.md`](CONTRIBUTING.md) has the step-by-step.
 2. CI (`.github/workflows/tests.yml`) runs on every push and PR to `main` and
    `dev-beta`: backend `npm run typecheck` + `npx vitest run` from
    `backends/node`, a parse pass over every classic inline `<script>` in the
@@ -206,6 +218,6 @@ If your change needs a deploy to take effect, finish at the commit and say so.
 
 - [`README.md`](README.md) — what AusAware is, and its honest limits.
 - [`docs/architecture.md`](docs/architecture.md) — the whole system, and the
-  full trace from a transmission in the air to a pin on the live map.
+  full trace from a transmission in the air to where it surfaces.
 - [`docs/components/`](docs/components/) — one short doc per component, each
   naming the file execution starts from.
