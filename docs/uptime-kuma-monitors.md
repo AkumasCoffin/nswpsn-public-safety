@@ -25,31 +25,53 @@ carries the finer ok/degraded/down detail used by these expressions.
 
 ## Backend internals
 
+The check keys written by `backends/node/src/api/status.ts` are `database`,
+`archive_writer`, `archive_buffer`, `filter_cache`, `ingest`, `cleanup`,
+`ram_cache`, `rdio_scheduler` and `sources`.
+
 | Monitor | Expression | Expected |
 |---|---|---|
 | Database | `checks.database.ok` | `true` |
 | Archive writer | `checks.archive_writer.ok` | `true` |
 | Archive buffer | `checks.archive_buffer.ok` | `true` |
-| Waze ingest | `checks.waze_ingest.ok` | `true` |
-| Police heatmap | `checks.police_heatmap.ok` | `true` |
 | Filter cache | `checks.filter_cache.ok` | `true` |
+| rdio summary scheduler | `checks.rdio_scheduler.ok` | `true` |
+
+`cleanup` and `ram_cache` are present for response-shape parity with the
+pre-rewrite backend, which had those subsystems. They report informational
+fields and `ok: true` so a dashboard panel renders rather than showing a dash,
+and they never trip the overall status — so there is nothing useful to monitor
+on them.
 
 ## Sources
 
+The `sources` block is built from the **source registry**
+(`backends/node/src/services/sourceRegistry.ts`), so each key is a registry
+source name. A source is `ok` when LiveStore holds a snapshot for it and
+`unknown` when it does not. Each entry also carries
+`soft_threshold_secs` (its poll cadence) and `hard_threshold_secs` (twice that).
+
 | Monitor | Expression | Expected |
 |---|---|---|
-| RFS | `sources.rfs.ok` | `true` |
-| BOM | `sources.bom.ok` | `true` |
-| Pager | `sources.pager.ok` | `true` |
-| LiveTraffic incidents | `sources.traffic_incidents.ok` | `true` |
-| LiveTraffic roadwork | `sources.traffic_roadwork.ok` | `true` |
-| LiveTraffic flood | `sources.traffic_flood.ok` | `true` |
-| LiveTraffic fire | `sources.traffic_fire.ok` | `true` |
-| LiveTraffic majors | `sources.traffic_major.ok` | `true` |
-| Endeavour | `sources.power_endeavour.ok` | `true` |
-| Ausgrid | `sources.power_ausgrid.ok` | `true` |
-| Waze | `sources.waze.ok` | `true` |
-| rdio-scanner | `sources.rdio.ok` | `true` |
+| RFS | `checks.sources.rfs_incidents.ok` | `true` |
+| BOM | `checks.sources.bom_warnings.ok` | `true` |
+| Pager | `checks.sources.pager.ok` | `true` |
+| LiveTraffic incidents | `checks.sources.traffic_incidents.ok` | `true` |
+| LiveTraffic roadwork | `checks.sources.traffic_roadwork.ok` | `true` |
+| LiveTraffic flood | `checks.sources.traffic_flood.ok` | `true` |
+| LiveTraffic fire | `checks.sources.traffic_fire.ok` | `true` |
+| LiveTraffic majors | `checks.sources.traffic_majorevent.ok` | `true` |
+| LiveTraffic council roads | `checks.sources.traffic_lga.ok` | `true` |
+| Endeavour | `checks.sources.endeavour_current.ok` | `true` |
+| Ausgrid | `checks.sources.ausgrid.ok` | `true` |
+| Essential | `checks.sources.essential_current.ok` | `true` |
+| NASA FIRMS | `checks.sources.firms_hotspots.ok` | `true` |
+| ACT Ambulance | `checks.sources.act_ambulance.ok` | `true` |
+| Aircraft (aggregators) | `checks.sources.adsb_aircraft.ok` | `true` |
+
+Any other registry source works the same way — use its registry name. A rollup is
+available too: `summary.sources_total`, `summary.sources_ok` and
+`summary.sources_unknown`.
 
 ## Notes
 
@@ -67,12 +89,17 @@ carries the finer ok/degraded/down detail used by these expressions.
   pointed at `/api/status` would still see 200. Use these JSONata
   monitors for source-level alerting.
 
-- **Threshold tuning** is via env vars on the backend (no monitor change
-  needed): `STATUS_DB_TIMEOUT_SECS`, `STATUS_WRITER_STALE_SECS`,
-  `STATUS_WAZE_STALE_SECS`, `STATUS_BUFFER_WARN_RECORDS`,
-  `STATUS_HEATMAP_STALE_SECS`, `STATUS_FILTER_CACHE_STALE_SECS`.
-  Per-source soft/hard thresholds live in `_SOURCE_THRESHOLDS` in
-  `external_api_proxy.py`.
+- **Thresholds are constants in the backend**, not environment variables —
+  changing one is a code change and a deploy, not a restart.
+  `STATUS_DB_TIMEOUT_SECS`, `STATUS_WRITER_STALE_SECS`,
+  `STATUS_BUFFER_WARN_RECORDS` and `STATUS_FILTER_CACHE_STALE_SECS` are at
+  the top of `backends/node/src/api/status.ts`. Per-source soft and hard
+  thresholds live in `SOURCE_THRESHOLDS` in
+  `backends/node/src/services/sourceHealth.ts`.
+
+- **The Waze monitor no longer has anything to report.** Waze was removed as
+  a source — no ingest, no routes, and migrations `071`/`074` dropped its
+  tables — so `sources.waze` is not populated. Drop that monitor.
 
 - **Endpoint is unauthenticated** so external monitors can hit it without
   juggling API keys. The information surface is intentionally just
