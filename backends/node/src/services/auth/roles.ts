@@ -66,6 +66,18 @@ function expandAliases(roles: readonly string[]): string[] {
 }
 
 /**
+ * Every name a role may be STORED under — its canonical form plus the legacy
+ * one it was renamed from. Querying user_roles by a single name misses the
+ * rows migration 059 never rewrote, so anything that selects rows BY role
+ * (rather than testing a user's roles) has to ask for both.
+ */
+export function storedRoleNames(role: string): string[] {
+  const canonical = canonicalRole(role);
+  const legacy = ROLE_ALIASES_REVERSE[canonical];
+  return legacy ? [canonical, legacy] : [canonical];
+}
+
+/**
  * Canonicalise a role name (legacy → current). Use at every ASSIGNMENT site so
  * newly granted roles are always stored under the new name.
  */
@@ -218,6 +230,18 @@ export async function canHandleTickets(userId: string): Promise<boolean> {
  * area's content/config, not user accounts or role grants.
  */
 export async function canManageUsers(userId: string): Promise<boolean> {
+  return hasRole(userId, ['owner', 'staff']);
+}
+
+/**
+ * Owner OR staff — gates sending a manual notification to users.
+ *
+ * Same membership as canManageUsers but named for the job, because the two can
+ * reasonably diverge: reaching every account is a louder power than editing a
+ * role grant, and if it is ever narrowed to the owner this is the one line
+ * that moves.
+ */
+export async function canSendNotices(userId: string): Promise<boolean> {
   return hasRole(userId, ['owner', 'staff']);
 }
 

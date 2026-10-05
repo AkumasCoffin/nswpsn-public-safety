@@ -39,6 +39,7 @@ import { profilesRouter } from './api/profiles.js';
 import { editorRouter } from './api/editor.js';
 import { ticketsRouter } from './api/tickets.js';
 import { staffNotifyRouter } from './api/staffNotify.js';
+import { staffNoticesRouter } from './api/staffNotices.js';
 import { referralsRouter } from './api/referrals.js';
 import { usersRouter } from './api/users.js';
 // Data-history archive reads (W6).
@@ -391,6 +392,7 @@ export function createApp() {
   app.route('/', editorRouter);
   app.route('/', ticketsRouter);
   app.route('/', staffNotifyRouter);
+  app.route('/', staffNoticesRouter);
   app.route('/', referralsRouter);
   app.route('/', usersRouter);
   // Data-history archive reads (W6)

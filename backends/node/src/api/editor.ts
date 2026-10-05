@@ -783,8 +783,12 @@ editorRouter.get('/api/check-admin/:userId', async (c) => {
       can_assign_privileged_roles: isOwner,
       can_review_agency_data: canReviewAgencyData,
       can_edit_agency_data: canEditAgencyData,
-      // Wire moderation queue (Requests → Wire approvals/takedowns).
+      // Wire moderation queue (Moderation → Wire approvals/takedowns).
       can_moderate_wire: isOwner || isStaff || isWireManager,
+      // Sending a notification straight to users (Moderation → Notifications).
+      // Same membership as user management, named separately because reaching
+      // every account is a louder power than editing a role grant.
+      can_send_notices: isOwner || isStaff,
       is_support: isSupport,
       tabs: {
         requests: canViewRequests,
