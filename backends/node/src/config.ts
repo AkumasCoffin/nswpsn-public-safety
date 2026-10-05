@@ -81,6 +81,13 @@ const Schema = z.object({
   // Locations per HTTP request, via Open-Meteo's comma-separated coordinates.
   // Fewer round trips; the cap keeps any single URL a sane length.
   WEATHER_GRID_BATCH: z.coerce.number().int().positive().default(250),
+  // Open-Meteo also caps 600 calls per MINUTE, and counts per location. The
+  // first production run sent 5,865 locations in six seconds and was 429'd
+  // partway through the grid. This is the shared ceiling every weather source
+  // paces against; 400 leaves headroom for the point-readout endpoint, and
+  // turns a full land refresh into a ~15 minute background job, which for a
+  // once-a-day fetch costs nothing.
+  WEATHER_LOCATIONS_PER_MIN: z.coerce.number().int().positive().default(400),
   // One full refresh a day. Each fetch already carries 9 days of time series,
   // so refreshing more often buys freshness of the model run, not more range.
   WEATHER_GRID_INTERVAL_MS: z.coerce.number().int().positive().default(24 * 60 * 60_000),

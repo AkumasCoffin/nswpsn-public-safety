@@ -30,10 +30,9 @@ import {
   readManifest, writeGrid, writeManifest, manifestIsFresh,
   type ManifestVar, type WeatherManifest,
 } from '../services/weatherStore.js';
-import { pickTimesteps, toUtcIso } from './weatherGridSource.js';
+import { pacedFetch, pickTimesteps, toUtcIso } from './weatherGridSource.js';
 
 const MARINE_URL = 'https://marine-api.open-meteo.com/v1/marine';
-const BATCH_PAUSE_MS = 250;
 
 const UNITS: Readonly<Record<string, string>> = {
   wave_height: 'm',
@@ -107,9 +106,7 @@ export async function refreshMarineGrid(force = false): Promise<WeatherManifest 
 
   for (let b = 0; b < batches.length; b += 1) {
     const batch = batches[b]!;
-    const data = await fetchJson<MarinePoint | MarinePoint[]>(buildUrl(batch), {
-      headers: { 'User-Agent': 'AusAware/1.0 (+https://nswpsn.forcequit.xyz)' },
-    });
+    const data = await pacedFetch<MarinePoint | MarinePoint[]>(buildUrl(batch), batch.length);
     const points = Array.isArray(data) ? data : [data];
     if (points.length !== batch.length) {
       throw new Error(
@@ -147,7 +144,6 @@ export async function refreshMarineGrid(force = false): Promise<WeatherManifest 
     }
 
     seen += batch.length;
-    if (b < batches.length - 1) await sleep(BATCH_PAUSE_MS);
   }
 
   if (timesteps.length === 0) {

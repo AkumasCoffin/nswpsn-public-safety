@@ -298,6 +298,71 @@ export function dequantise(packed: Int16Array, v: GridVar): Array<number | null>
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Rate pacing
+// ---------------------------------------------------------------------------
+
+/**
+ * A shared budget of locations per minute, across every weather source.
+ *
+ * LEARNED THE HARD WAY. The daily ceiling was the obvious constraint and the
+ * one this module was built around, but Open-Meteo also caps 600 calls per
+ * MINUTE — and it counts per location, not per request. The first production
+ * run sent 5,865 locations in about six seconds across 24 requests, which is
+ * roughly sixty times the per-minute allowance, and died on an HTTP 429
+ * partway through the grid. 24 requests looked harmless; 5,865 calls was not.
+ *
+ * It is module-level rather than per-source on purpose: the poller prewarms
+ * every source with `Promise.allSettled`, so land, marine and flood all start
+ * at once. Three separate pacers would each stay under the limit and together
+ * sail straight past it.
+ *
+ * A sliding 60-second window rather than a fixed one, because a fixed window
+ * lets a refresh land at :59 and another at :01 and burst double the rate
+ * across the boundary.
+ */
+const _rateWindow: Array<{ at: number; n: number }> = [];
+
+/** For tests — the window is process-global state. */
+export function _resetRateWindow(): void {
+  _rateWindow.length = 0;
+}
+
+export function locationsUsedInLastMinute(now = Date.now()): number {
+  let used = 0;
+  for (const w of _rateWindow) if (now - w.at <= 60_000) used += w.n;
+  return used;
+}
+
+/**
+ * Block until `n` more locations fit inside the per-minute allowance.
+ *
+ * Deliberately waits rather than throwing: a daily refresh has all the time in
+ * the world, and taking twenty minutes over it is free. Failing is not — a
+ * refusal part-way through wastes every location already spent on that run.
+ */
+export async function reserveLocations(
+  n: number,
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => { setTimeout(r, ms); }),
+): Promise<void> {
+  const limit = config.WEATHER_LOCATIONS_PER_MIN;
+  for (;;) {
+    const now = Date.now();
+    while (_rateWindow.length > 0 && now - _rateWindow[0]!.at > 60_000) _rateWindow.shift();
+    const used = locationsUsedInLastMinute(now);
+
+    // A batch larger than the whole minute's allowance would wait for ever.
+    // Let it through once the window is clear and let the upstream decide.
+    if (used + n <= limit || (used === 0 && n > limit)) {
+      _rateWindow.push({ at: now, n });
+      return;
+    }
+    const oldest = _rateWindow[0];
+    const waitMs = oldest ? Math.max(250, 60_000 - (now - oldest.at) + 50) : 1_000;
+    await sleep(waitMs);
+  }
+}
+
 /** Split cells into batches for the comma-separated coordinate form. */
 export function batchCells<T>(cells: readonly T[], batchSize = config.WEATHER_GRID_BATCH): T[][] {
   if (batchSize < 1) throw new Error(`batch size must be >= 1, got ${batchSize}`);

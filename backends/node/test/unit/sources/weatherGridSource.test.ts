@@ -21,6 +21,15 @@ vi.mock('../../../src/sources/shared/http.js', () => ({
   fetchJson: (...args: unknown[]) => fetchJsonMock(...args),
 }));
 
+// Lift the per-minute pacing ceiling for this file only. A real refresh is
+// 5,865 locations at 400/minute — about a quarter of an hour of deliberate
+// waiting, which is correct in production and absurd in a unit test. The pacer
+// itself is covered properly in weatherGrid.test.ts, against a fake clock.
+vi.mock('../../../src/config.js', async (orig) => {
+  const actual = await orig<typeof import('../../../src/config.js')>();
+  return { ...actual, config: { ...actual.config, WEATHER_LOCATIONS_PER_MIN: 1_000_000 } };
+});
+
 vi.mock('node:fs/promises', () => ({
   mkdir: vi.fn(async () => undefined),
   readFile: vi.fn(async (p: string) => {

@@ -39,10 +39,9 @@ import {
   readManifest, writeGrid, writeManifest, manifestIsFresh,
   type ManifestVar, type WeatherManifest,
 } from '../services/weatherStore.js';
-import { toUtcIso } from './weatherGridSource.js';
+import { pacedFetch, toUtcIso } from './weatherGridSource.js';
 
 const FLOOD_URL = 'https://flood-api.open-meteo.com/v1/flood';
-const BATCH_PAUSE_MS = 250;
 
 /**
  * Hard ceiling on the requested window, in days.
@@ -131,9 +130,7 @@ export async function refreshFloodGrid(force = false): Promise<WeatherManifest |
 
   for (let b = 0; b < batches.length; b += 1) {
     const batch = batches[b]!;
-    const data = await fetchJson<FloodPoint | FloodPoint[]>(buildUrl(batch), {
-      headers: { 'User-Agent': 'AusAware/1.0 (+https://nswpsn.forcequit.xyz)' },
-    });
+    const data = await pacedFetch<FloodPoint | FloodPoint[]>(buildUrl(batch), batch.length);
     const points = Array.isArray(data) ? data : [data];
     if (points.length !== batch.length) {
       throw new Error(
@@ -172,7 +169,6 @@ export async function refreshFloodGrid(force = false): Promise<WeatherManifest |
     }
 
     seen += batch.length;
-    if (b < batches.length - 1) await sleep(BATCH_PAUSE_MS);
   }
 
   if (timesteps.length === 0) {

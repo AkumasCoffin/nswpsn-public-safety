@@ -26,6 +26,7 @@ import { registerSource } from '../services/sourceRegistry.js';
 import {
   LAND_VARS, VAR_SCALE, type GridVar,
   allCells, batchCells, cellCount, gridGeometry, quantiseOne, reportSpend,
+  reserveLocations,
 } from './weatherGrid.js';
 import {
   pruneGrids, readManifest, writeGrid, writeManifest,
@@ -36,9 +37,6 @@ const FORECAST_URL = 'https://api.open-meteo.com/v1/forecast';
 
 /** Hours between stored timesteps. */
 export const STEP_HOURS = 3;
-
-/** Pause between batches so a cold start does not burst the per-minute limit. */
-const BATCH_PAUSE_MS = 250;
 
 const UNITS: Readonly<Record<string, string>> = {
   temperature_2m: '°C',
@@ -58,6 +56,40 @@ interface OpenMeteoPoint {
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => { setTimeout(r, ms); });
+
+/**
+ * Fetch one batch, pacing first and surviving a rate limit.
+ *
+ * Shared by the land, marine and flood sources so there is one place that
+ * knows how to talk to Open-Meteo at scale.
+ *
+ * A 429 is retried rather than thrown, because throwing discards every
+ * location already spent on this run — the most expensive possible response to
+ * being told to slow down. The pacer should prevent it; this is what happens
+ * when the pacer is wrong, which it has been once already.
+ */
+export async function pacedFetch<T>(url: string, locations: number): Promise<T> {
+  const MAX_ATTEMPTS = 4;
+  for (let attempt = 1; ; attempt += 1) {
+    await reserveLocations(locations);
+    try {
+      return await fetchJson<T>(url, {
+        headers: { 'User-Agent': 'AusAware/1.0 (+https://nswpsn.forcequit.xyz)' },
+      });
+    } catch (err) {
+      const status = (err as { status?: number | null }).status ?? null;
+      if (status !== 429 || attempt >= MAX_ATTEMPTS) throw err;
+      // Wait out a whole window before trying again: a 429 means the last
+      // minute is already spent, so anything shorter just earns another one.
+      const waitMs = 60_000 * attempt;
+      log.warn(
+        { attempt, waitMs, locations },
+        'weather: rate limited by Open-Meteo, backing off',
+      );
+      await sleep(waitMs);
+    }
+  }
+}
 
 function asNumber(v: unknown): number | null {
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
@@ -153,9 +185,9 @@ export async function refreshWeatherGrid(force = false): Promise<WeatherManifest
 
   for (let b = 0; b < batches.length; b += 1) {
     const batch = batches[b]!;
-    const data = await fetchJson<OpenMeteoPoint | OpenMeteoPoint[]>(buildUrl(batch), {
-      headers: { 'User-Agent': 'AusAware/1.0 (+https://nswpsn.forcequit.xyz)' },
-    });
+    const data = await pacedFetch<OpenMeteoPoint | OpenMeteoPoint[]>(
+      buildUrl(batch), batch.length,
+    );
     const points = Array.isArray(data) ? data : [data];
 
     if (points.length !== batch.length) {
@@ -198,7 +230,6 @@ export async function refreshWeatherGrid(force = false): Promise<WeatherManifest
     }
 
     cellBase += batch.length;
-    if (b < batches.length - 1) await sleep(BATCH_PAUSE_MS);
   }
 
   if (timesteps.length === 0) throw new Error('weather grid: upstream returned no time axis');

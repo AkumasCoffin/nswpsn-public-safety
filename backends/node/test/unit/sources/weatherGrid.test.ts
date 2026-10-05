@@ -7,12 +7,13 @@
  * grid for a nicer-looking field cannot silently exceed the quota and take the
  * layer down for everyone.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 
 const {
   AU_BBOX, FREE_TIER, LAND_VARS, NODATA,
   gridGeometry, cellCount, cellLatLon, allCells,
   estimateSpend, quantise, dequantise, batchCells, VAR_SCALE, marineGeometry,
+  reserveLocations, locationsUsedInLastMinute, _resetRateWindow,
 } = await import('../../../src/sources/weatherGrid.js');
 
 describe('grid geometry', () => {
@@ -232,5 +233,84 @@ describe('batching', () => {
 
   it('refuses a zero batch size instead of looping forever', () => {
     expect(() => batchCells([1, 2, 3], 0)).toThrow(/batch size/);
+  });
+});
+
+describe('per-minute pacing', () => {
+  // The constraint that actually took the first production run down. The daily
+  // ceiling was never the problem: 5,865 locations went out in about six
+  // seconds across 24 requests, roughly sixty times the 600/minute allowance,
+  // and Open-Meteo returned 429 partway through the grid.
+  const LIMIT = 400;
+
+  beforeEach(() => { _resetRateWindow(); });
+
+  it('lets a batch through while the window has room', async () => {
+    const waits: number[] = [];
+    await reserveLocations(250, async (ms) => { waits.push(ms); });
+    expect(waits).toEqual([]);
+    expect(locationsUsedInLastMinute()).toBe(250);
+  });
+
+  it('makes the caller wait once the minute is spent', async () => {
+    const waits: number[] = [];
+    // A fake clock, so the test does not actually sit through a minute.
+    let now = 1_000_000;
+    const realNow = Date.now;
+    Date.now = () => now;
+    try {
+      await reserveLocations(LIMIT, async () => {});
+      // The allowance is gone; the next batch has to wait for the window.
+      const p = reserveLocations(100, async (ms) => {
+        waits.push(ms);
+        now += ms;
+      });
+      await p;
+      expect(waits.length).toBeGreaterThan(0);
+      expect(waits[0]).toBeGreaterThan(50_000);
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
+  it('paces a full grid refresh below the per-minute ceiling', async () => {
+    // The regression test for the 429. Walk every batch of a real refresh
+    // through the pacer on a fake clock and assert the rate never exceeds the
+    // limit in any 60-second window.
+    let now = 1_000_000;
+    const realNow = Date.now;
+    Date.now = () => now;
+    const sent: Array<{ at: number; n: number }> = [];
+    try {
+      const batches = batchCells(allCells(gridGeometry(0.5)), 250);
+      for (const b of batches) {
+        await reserveLocations(b.length, async (ms) => { now += ms; });
+        sent.push({ at: now, n: b.length });
+      }
+    } finally {
+      Date.now = realNow;
+    }
+
+    expect(sent.length).toBe(24);
+    for (const probe of sent) {
+      const inWindow = sent
+        .filter((s) => s.at > probe.at - 60_000 && s.at <= probe.at)
+        .reduce((sum, s) => sum + s.n, 0);
+      expect(inWindow).toBeLessThanOrEqual(LIMIT);
+    }
+
+    // And it is the pacing, not luck: unpaced, the same 24 batches would have
+    // put 5,865 locations into one window.
+    const total = sent.reduce((s, x) => s + x.n, 0);
+    expect(total).toBe(5865);
+    expect(total).toBeGreaterThan(LIMIT * 10);
+  });
+
+  it('does not deadlock on a batch larger than the whole allowance', async () => {
+    // Misconfiguration must degrade to "send it and let the upstream judge",
+    // not to a refresh that silently never finishes.
+    const waits: number[] = [];
+    await reserveLocations(LIMIT * 3, async (ms) => { waits.push(ms); });
+    expect(waits).toEqual([]);
   });
 });
