@@ -93,9 +93,16 @@ function escapeDrawText(text: string): string {
 /**
  * Path to escape for use as a drawtext `fontfile` value — on top of the normal
  * escaping, a Windows drive letter's colon has to survive.
+ *
+ * Backslashes are converted to forward slashes rather than escaped: ffmpeg's
+ * filter parser reads a backslash as an escape character, and a Windows path is
+ * mostly backslashes. Doing that first means nothing reaching the second step
+ * contains one, so the two meta-characters are escaped in a single pass — which
+ * is also what makes it checkably correct, rather than depending on the reader
+ * noticing that an earlier replace already cleared the escape character.
  */
 function escapeFontFile(p: string): string {
-  return p.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
+  return p.replace(/\\/g, '/').replace(/[:']/g, (ch) => `\\${ch}`);
 }
 
 /** Build the video filter chain: downscale-if-needed, then optional watermark. */

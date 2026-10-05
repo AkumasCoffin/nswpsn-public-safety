@@ -216,6 +216,19 @@ describe('ffmpeg argv', () => {
       .toContain("fontfile='C\\:/Windows/Fonts/arial.ttf'");
   });
 
+  it('leaves no unescaped quote or dangling escape in a fontfile path', () => {
+    // The path sits inside fontfile='…', so an unescaped quote would end the
+    // value and let the rest be read as further drawtext options. Backslashes
+    // are turned into forward slashes rather than escaped, so the thing that
+    // would make the escaping incomplete — a backslash surviving to pair with
+    // the escape of the next metacharacter — cannot be present.
+    const f = buildFilter('akuma', "/f/o'n\\t:s/x.ttf");
+    const value = /fontfile='((?:[^'\\]|\\.)*)'/.exec(f)?.[1];
+    expect(value).toBe("/f/o\\'n/t\\:s/x.ttf");
+    // No backslash left over except the two that escape a metacharacter.
+    expect(value!.replace(/\\[:']/g, '')).not.toContain('\\');
+  });
+
   it('parses duration and dimensions out of the ffmpeg banner', () => {
     const stderr = `  Duration: 00:01:05.20, start: 0.000000, bitrate: 8000 kb/s
   Stream #0:0: Video: h264 (High), yuv420p, 1920x1080 [SAR 1:1 DAR 16:9], 30 fps`;
