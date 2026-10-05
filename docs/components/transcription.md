@@ -8,7 +8,7 @@ servers** and rdio-scanner's transcripts plugin accepts exactly **one** base URL
 so something has to choose between them per reception. That something is this
 router, inside the backend.
 
-Read [`../../AGENTS.md`](../../AGENTS.md) before changing anything here.
+Read [`../../OPERATING-RULES.md`](../../OPERATING-RULES.md) before changing anything here.
 
 ---
 

@@ -57,7 +57,7 @@ docs/*
 # Handed to an outside contributor setting up a scanner feed, so it ships with
 # the code that serves the endpoint it describes.
 !docs/scanner-feed-setup.md
-# The documentation set AGENTS.md / CLAUDE.md / CONTRIBUTING.md point at. These
+# The documentation set OPERATING-RULES.md and CONTRIBUTING.md point at. These
 # have to ship: a new contributor is expected to get the architecture right from
 # this repo alone, without asking the owner.
 !docs/architecture.md

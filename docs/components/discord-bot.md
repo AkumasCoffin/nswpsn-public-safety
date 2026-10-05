@@ -6,7 +6,7 @@ Python 3.10+ with discord.py. It polls the AusAware backend, detects what is
 new, and dispatches it to subscribed Discord channels. It never talks to an
 upstream data provider directly — everything comes through the backend's `/api`.
 
-Read [`../../AGENTS.md`](../../AGENTS.md) before changing anything here.
+Read [`../../OPERATING-RULES.md`](../../OPERATING-RULES.md) before changing anything here.
 
 ---
 
@@ -194,7 +194,7 @@ group that was real when it was written, and `bot.py` is naming a `/dev-cleanup`
 that was already gone by then. Reported as a code defect, not fixed here.
 
 This is the same principle as the account rule in
-[`../../AGENTS.md`](../../AGENTS.md): **never delete a user's or a guild's data
+[`../../OPERATING-RULES.md`](../../OPERATING-RULES.md): **never delete a user's or a guild's data
 because of an absence.** A guild that looks gone may be a transient disconnect.
 An account with no roles and no signup request is a normal public user.
 

@@ -10,7 +10,7 @@ What it decodes: **P25 trunked voice** (plus DMR, and AM/airband) — whatever
 SDR-Trunk can decode from the channels the backend pushes it. It is the only
 agent that downloads and runs external forked software.
 
-Read [`../../AGENTS.md`](../../AGENTS.md) before changing anything here.
+Read [`../../OPERATING-RULES.md`](../../OPERATING-RULES.md) before changing anything here.
 
 ---
 

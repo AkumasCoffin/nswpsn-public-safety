@@ -7,7 +7,7 @@ transmission does not, and step 9 explains why.
 Every claim here names the file it came from. If a path in this document does not
 exist, the document is wrong — fix it.
 
-Before changing anything, read [`../AGENTS.md`](../AGENTS.md).
+Before changing anything, read [`../OPERATING-RULES.md`](../OPERATING-RULES.md).
 
 ---
 

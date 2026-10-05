@@ -11,7 +11,7 @@ deleted months ago. Some code comments still cite line numbers in it as the
 reference the TypeScript was ported against — those are historical notes about
 behaviour that was matched, not a live dependency.
 
-Read [`../../AGENTS.md`](../../AGENTS.md) before changing anything here.
+Read [`../../OPERATING-RULES.md`](../../OPERATING-RULES.md) before changing anything here.
 
 ---
 

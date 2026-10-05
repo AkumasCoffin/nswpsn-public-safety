@@ -1,6 +1,6 @@
 # Contributing to AusAware
 
-**Read [`AGENTS.md`](AGENTS.md) first.** It holds the operating rules for this
+**Read [`OPERATING-RULES.md`](OPERATING-RULES.md) first.** It holds the operating rules for this
 repository and they are prohibitions, not advice. This file covers how to get
 set up and how a change travels; it does not restate the rules.
 
@@ -37,6 +37,18 @@ needs nothing installed at all — it is one entry in your rdio admin page.
    full trace from a transmission in the air to where it surfaces.
 3. [`docs/components/`](docs/components/) — one short doc per component. Each
    names the file execution starts from.
+
+If you only need the shape of it:
+
+| Question | Answer |
+|---|---|
+| Where is the backend? | `backends/node`, entry point `backends/node/src/index.ts` |
+| What is it built with? | Node + TypeScript, Hono, `pg`, zod, Vitest |
+| Where is the public site? | The repo root. Static `.html` files, Leaflet, **no build step** |
+| Where is the Discord bot? | `discord-bot/bot.py` (Python, discord.py) |
+| Where are the feeder nodes? | `feeder-nodes/{radio,pager,aircraft}-node/cmd/nodeagent` (Go 1.26) |
+| Which branch? | `dev-beta`. Never `main` |
+| Is there a Python backend? | No. It was deleted months ago |
 
 ## Local setup
 

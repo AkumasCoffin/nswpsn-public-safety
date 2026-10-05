@@ -12,7 +12,7 @@ This is the node kind that produces **pins on the public map**: a page carries a
 address, the backend parses coordinates out of the message body, and
 `/api/pager/hits` becomes markers on `map.html`.
 
-Read [`../../AGENTS.md`](../../AGENTS.md) before changing anything here.
+Read [`../../OPERATING-RULES.md`](../../OPERATING-RULES.md) before changing anything here.
 
 ---
 

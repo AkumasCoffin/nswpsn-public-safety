@@ -17,7 +17,7 @@ was matched, not a live dependency.
 middleware order, the source registry with every cadence, authentication layers,
 and the deploy. This file is the short version.
 
-Before changing anything here, read [`AGENTS.md`](../../AGENTS.md).
+Before changing anything here, read [`OPERATING-RULES.md`](../../OPERATING-RULES.md).
 
 ## Quickstart
 
@@ -130,6 +130,6 @@ really is `calls`.
 
 ## See also
 
-- [`AGENTS.md`](../../AGENTS.md) — the operating rules.
+- [`OPERATING-RULES.md`](../../OPERATING-RULES.md) — the operating rules.
 - [`docs/components/backend.md`](../../docs/components/backend.md) — the full doc.
 - [`docs/architecture.md`](../../docs/architecture.md) — the whole system.

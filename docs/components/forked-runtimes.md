@@ -12,7 +12,7 @@ not a current fact; a `git log` or a GitHub compare against the named upstream i
 the live answer. The *pinned versions and digests* in the manifest are the thing
 that is authoritative here, and those are in the repo.
 
-Read [`../../AGENTS.md`](../../AGENTS.md) before changing anything here.
+Read [`../../OPERATING-RULES.md`](../../OPERATING-RULES.md) before changing anything here.
 
 ---
 

@@ -15,7 +15,7 @@ and the installer sets it up. `dump1090-mutability` speaks the same
 says "`dump1090`" generically where either will do, and names `dump1090-fa`
 where the exact binary matters.
 
-Read [`../../AGENTS.md`](../../AGENTS.md) before changing anything here.
+Read [`../../OPERATING-RULES.md`](../../OPERATING-RULES.md) before changing anything here.
 
 ---
 

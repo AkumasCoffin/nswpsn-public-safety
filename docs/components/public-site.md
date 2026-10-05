@@ -7,7 +7,7 @@ Vanilla HTML, CSS and JavaScript with Leaflet. **No build step.** The repo root
 **is** the webroot — Apache serves these files directly, and a page you open from
 the filesystem is the same page production serves.
 
-Read [`../../AGENTS.md`](../../AGENTS.md) before changing anything here.
+Read [`../../OPERATING-RULES.md`](../../OPERATING-RULES.md) before changing anything here.
 
 ---
 

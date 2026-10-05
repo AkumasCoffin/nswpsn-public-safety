@@ -4,8 +4,8 @@ These are the rules for anyone working on AusAware. They are prohibitions, not
 advice. Several exist because they were broken once already and cost real
 damage.
 
-Read this file before your first change. `CLAUDE.md` and `CONTRIBUTING.md` both
-point here; this file is the single copy.
+Read this file before your first change. `CONTRIBUTING.md` points here; this
+file is the single copy.
 
 The site is **live in production**. There is no staging environment.
 
@@ -152,10 +152,12 @@ Increment the number. Miss it and phones pin the old build — `.htaccess` sets
 `map-editor-module.js` paired with a fresh `map.html` is exactly the breakage
 that policy cannot fix on its own.
 
-## 15. Leave the `.claude/` entries in `.gitignore` alone.
+## 15. Leave the local-tooling entries in `.gitignore` alone.
 
-`.gitignore:21` ignores `.claude/`. It is a path that needs ignoring, not an
-attribution. Do not remove it, and do not treat it as something to clean up.
+The ignore list includes editor and local-tooling directories that genuinely
+need ignoring across every clone. They are paths, not endorsements. Do not
+remove them, do not relocate them to `.git/info/exclude`, and do not treat them
+as something to tidy up.
 
 ## 16. No new paid services, hosting, or paid APIs.
 

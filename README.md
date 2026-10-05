@@ -160,7 +160,7 @@ endpoint and table names.
 
 | You want to | Read |
 |---|---|
-| Work on this repo at all | **[`AGENTS.md`](AGENTS.md)** — the operating rules. Not optional |
+| Work on this repo at all | **[`OPERATING-RULES.md`](OPERATING-RULES.md)** — the operating rules. Not optional |
 | Understand the whole system | [`docs/architecture.md`](docs/architecture.md) |
 | Get set up and ship a change | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 | Work on one component | [`docs/components/`](docs/components/) |
@@ -175,7 +175,7 @@ endpoint and table names.
 - **No AI attribution in commit messages.**
 - **A reception is not a "call".**
 
-The full set, with the reasoning, is in [`AGENTS.md`](AGENTS.md).
+The full set, with the reasoning, is in [`OPERATING-RULES.md`](OPERATING-RULES.md).
 
 ## Quick start
 
@@ -200,8 +200,7 @@ annotated template.
 ## Documentation
 
 ```
-AGENTS.md                           the operating rules (prohibitions)
-CLAUDE.md                           pointer at AGENTS.md + fast orientation
+OPERATING-RULES.md                  the operating rules (prohibitions)
 CONTRIBUTING.md                     setup, workflow, which check to run
 docs/
   architecture.md                   the whole system, end to end
