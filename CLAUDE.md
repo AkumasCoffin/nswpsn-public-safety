@@ -1,4 +1,4 @@
-# CLAUDE.md
+# Repository orientation
 
 The operating rules for this repository are in **[`AGENTS.md`](AGENTS.md)**.
 Read that file before making any change. It is the single copy; this file does
