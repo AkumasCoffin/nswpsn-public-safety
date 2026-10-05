@@ -31,6 +31,8 @@ export interface ManifestVar {
   unit: string;
   /** Ocean-only. Inland cells are NODATA, which the client must not render. */
   marine: boolean;
+  /** Land-only river discharge, on a DAILY axis rather than 3-hourly. */
+  flood?: boolean;
 }
 
 export interface WeatherManifest {
@@ -47,6 +49,12 @@ export interface WeatherManifest {
    */
   marineGeometry?: GridGeometry;
   marineTimesteps?: string[];
+  /**
+   * Flood shares marine's grid (it takes the land cells marine leaves) but has
+   * its own DAILY axis, so it cannot be read against either of the pairs above.
+   */
+  floodGeometry?: GridGeometry;
+  floodTimesteps?: string[];
 }
 
 export function weatherDir(): string {
@@ -142,7 +150,9 @@ export async function pruneGrids(m: WeatherManifest): Promise<number> {
     // Each variable is kept on ITS OWN axis. Pruning marine against the land
     // timesteps would delete every marine grid the moment the two axes differ
     // by so much as an hour.
-    const axis = v.marine ? (m.marineTimesteps ?? []) : m.timesteps;
+    const axis = v.flood
+      ? (m.floodTimesteps ?? [])
+      : v.marine ? (m.marineTimesteps ?? []) : m.timesteps;
     for (const t of axis) keep.add(gridFileName(v.name, t));
   }
 

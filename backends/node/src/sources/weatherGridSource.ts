@@ -225,10 +225,12 @@ export async function refreshWeatherGrid(force = false): Promise<WeatherManifest
     // drop it — and because prune below keeps only what the manifest lists,
     // that would delete every marine grid on disk and force a full refetch the
     // same day. Carry whatever marine already knows about straight through.
-    vars: [...vars, ...(existing?.vars.filter((v) => v.marine) ?? [])],
+    vars: [...vars, ...(existing?.vars.filter((v) => v.marine || v.flood) ?? [])],
     nodata: -32768,
     ...(existing?.marineGeometry ? { marineGeometry: existing.marineGeometry } : {}),
     ...(existing?.marineTimesteps ? { marineTimesteps: existing.marineTimesteps } : {}),
+    ...(existing?.floodGeometry ? { floodGeometry: existing.floodGeometry } : {}),
+    ...(existing?.floodTimesteps ? { floodTimesteps: existing.floodTimesteps } : {}),
   };
   await writeManifest(manifest);
   await pruneGrids(manifest);

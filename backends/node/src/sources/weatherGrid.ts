@@ -66,9 +66,23 @@ export const MARINE_VARS = [
   'swell_wave_height',
 ] as const;
 
+/**
+ * River discharge, on the land cells of the marine grid.
+ *
+ * Two variables, not one: the raw flow means little on its own, because a
+ * number that is a flood on one river is a dry spell on another. Carrying the
+ * climatological median alongside it lets the client show flow RELATIVE to
+ * normal, which is the thing that actually says "this river is running high".
+ */
+export const FLOOD_VARS = [
+  'river_discharge',
+  'river_discharge_median',
+] as const;
+
 export type LandVar = (typeof LAND_VARS)[number];
 export type MarineVar = (typeof MARINE_VARS)[number];
-export type GridVar = LandVar | MarineVar;
+export type FloodVar = (typeof FLOOD_VARS)[number];
+export type GridVar = LandVar | MarineVar | FloodVar;
 
 /**
  * How each variable is packed into an Int16.
@@ -92,6 +106,12 @@ export const VAR_SCALE: Readonly<Record<GridVar, number>> = {
   wave_direction: 10,
   wave_period: 10,
   swell_wave_height: 100,
+  // Scale 1, so the Int16 ceiling is 32,767 m3/s. No Australian river comes
+  // near that - the Murray in major flood runs in the low thousands - and the
+  // cost is that a creek under 0.5 m3/s rounds to zero, which is fine for a
+  // layer about significant flow.
+  river_discharge: 1,
+  river_discharge_median: 1,
 };
 
 export interface GridGeometry {

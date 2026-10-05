@@ -2960,6 +2960,7 @@
         <label><input type="radio" name="wx-layer" id="chk-wx-temp" onchange="wxSetLayer('temperature_2m')"> Temperature</label>
         <label><input type="radio" name="wx-layer" id="chk-wx-rain" onchange="wxSetLayer('precipitation')"> Rain forecast</label>
         <label><input type="radio" name="wx-layer" id="chk-wx-waves" onchange="wxSetLayer('wave_height')"> Waves <span class="wx-note">at sea</span></label>
+        <label><input type="radio" name="wx-layer" id="chk-wx-flood" onchange="wxSetLayer('river_discharge')"> River flow <span class="wx-note">daily</span></label>
         <div class="wx-sep"></div>
         <label><input type="checkbox" id="chk-radar" onchange="toggleRadar(this.checked)"> Rain radar <span class="wx-note">observed</span></label>
         <label><input type="checkbox" id="chk-weather-pins" onchange="toggleWeatherPins(this.checked)"> Weather stations</label>
@@ -19644,7 +19645,10 @@ function initPagerHoursFromStorage() {
       wind_gusts_10m: 'Gusts',
       wave_height: 'Wave height',
       swell_wave_height: 'Swell',
+      river_discharge: 'River flow',
     };
+    const WX_FLOOD_VARS = ['river_discharge', 'river_discharge_median'];
+    function wxIsFlood(name) { return WX_FLOOD_VARS.indexOf(name) !== -1; }
     // Which variables are marine is a fact about the variable, not about
     // whether the manifest happens to list it yet. Deriving it from the
     // manifest alone means that before the marine source has ever run,
@@ -19660,9 +19664,9 @@ function initPagerHoursFromStorage() {
     }
     function wxAxis(name) {
       if (!_wxManifest) return [];
-      return wxIsMarine(name)
-        ? (_wxManifest.marineTimesteps || [])
-        : _wxManifest.timesteps;
+      if (wxIsFlood(name)) return _wxManifest.floodTimesteps || [];
+      if (wxIsMarine(name)) return _wxManifest.marineTimesteps || [];
+      return _wxManifest.timesteps;
     }
 
     async function wxLoadManifest() {
@@ -19728,6 +19732,18 @@ function initPagerHoursFromStorage() {
       const items = document.getElementById('wx-legend-items');
       const title = document.getElementById('wx-legend-title');
       if (!box || !items || !title) return;
+      if (wxIsFlood(_wxLayer)) {
+        title.textContent = 'River flow vs normal';
+        items.innerHTML = [
+          ['#38bdf8', 'normal'], ['#eab308', '1.25×'], ['#f97316', '2×'],
+          ['#ef4444', '4×'], ['#7c3aed', '8×+'],
+        ].map(function (p) {
+          return '<div class="legend-item"><span class="legend-color" style="background:'
+            + p[0] + ';"></span><span>' + p[1] + '</span></div>';
+        }).join('');
+        box.style.display = 'block';
+        return;
+      }
       const legend = (_wxField && _wxField.legend) ? _wxField.legend() : null;
       if (!legend || !legend.stops || !legend.stops.length) {
         box.style.display = 'none';
@@ -19771,6 +19787,25 @@ function initPagerHoursFromStorage() {
           _wxField.setVariable('wind_speed_10m');
           _wxField.setData(spd, wxVarMeta('wind_speed_10m'));
           _wxField.setAnimated(true);
+        } else if (wxIsFlood(_wxLayer)) {
+          const pair = await Promise.all([
+            wxFetchGrid('river_discharge', iso),
+            wxFetchGrid('river_discharge_median', iso),
+          ]);
+          if (token !== _wxLoadToken || !pair[0]) return;
+          // The colour field is cleared, not left underneath: two
+          // representations of the same thing stacked is just noise.
+          _wxField.setAnimated(false);
+          // Clearing, not supplying data. The scale is passed only so the
+          // renderer does not warn about a missing one — there is no variable
+          // here to scale, and a warning on every flood selection would train
+          // people to ignore the one that matters.
+          _wxField.setData(null, { scale: 1 });
+          const n = wxRenderFlood(pair[0], pair[1],
+            _wxManifest.floodGeometry || _wxManifest.geometry);
+          if (!map.hasLayer(_wxFloodLayer)) map.addLayer(_wxFloodLayer);
+          const disp = document.getElementById('wx-time-display');
+          if (disp && n === 0) disp.textContent += ' · nothing running high';
         } else {
           const grid = await wxFetchGrid(_wxLayer, iso);
           if (token !== _wxLoadToken || !grid) return;
@@ -19793,9 +19828,90 @@ function initPagerHoursFromStorage() {
       wxRenderTimeLabel();
     }
 
+    // River flow is drawn as discrete markers, NOT as a colour field.
+    //
+    // The sample is one point per degree against a 5 km river network, so each
+    // value belongs to whatever river happened to be nearest that point.
+    // Interpolating between them would paint a smooth surface across country
+    // with no river in it at all — authoritative-looking and wrong. Dots say
+    // "we sampled here, and this is what we found", which is the truth.
+    const _wxFloodLayer = L.layerGroup();
+    const _wxFloodRenderer = L.canvas({ padding: 0.3 });
+
+    /** Flow relative to its own climatological median: 1 is normal, 3 is high. */
+    function wxFloodRatio(flow, median) {
+      if (flow === null || median === null || !(median > 0)) return null;
+      return flow / median;
+    }
+
+    function wxFloodColour(ratio) {
+      if (ratio >= 8) return '#7c3aed';
+      if (ratio >= 4) return '#ef4444';
+      if (ratio >= 2) return '#f97316';
+      if (ratio >= 1.25) return '#eab308';
+      return '#38bdf8';
+    }
+
+    function wxRenderFlood(flow, median, geometry) {
+      _wxFloodLayer.clearLayers();
+      if (!flow || !geometry) return 0;
+      const nodata = (_wxManifest && _wxManifest.nodata) || -32768;
+      const scale = (wxVarMeta('river_discharge') || {}).scale || 1;
+      const medScale = (wxVarMeta('river_discharge_median') || {}).scale || 1;
+      let drawn = 0;
+
+      for (let i = 0; i < flow.length; i += 1) {
+        const raw = flow[i];
+        if (raw === nodata) continue;
+        const q = raw / scale;
+        const med = (median && median[i] !== nodata) ? median[i] / medScale : null;
+        const ratio = wxFloodRatio(q, med);
+
+        // Below a cubic metre a second there is effectively no watercourse at
+        // this sample point, and plotting those would carpet the inland in dots
+        // that mean nothing.
+        if (q < 1) continue;
+        // Normal flow is not news. Only draw what is running above its median,
+        // or what is simply large.
+        if (ratio !== null && ratio < 1.25 && q < 200) continue;
+
+        const row = Math.floor(i / geometry.cols);
+        const col = i % geometry.cols;
+        const lat = geometry.south + row * geometry.stepDeg;
+        const lon = geometry.west + col * geometry.stepDeg;
+
+        // Area scales with flow, so a river ten times the size reads as ten
+        // times the ink rather than ten times the radius.
+        const radius = Math.max(3, Math.min(16, Math.sqrt(q) / 2));
+        const colour = wxFloodColour(ratio === null ? 1 : ratio);
+        const dot = L.circleMarker([lat, lon], {
+          renderer: _wxFloodRenderer,
+          radius: radius,
+          color: colour,
+          weight: 1,
+          fillColor: colour,
+          fillOpacity: 0.45,
+          interactive: true,
+        });
+        dot.bindTooltip(
+          Math.round(q).toLocaleString() + ' m³/s'
+          + (ratio !== null ? ' · ' + ratio.toFixed(1) + '× normal' : ''),
+          { direction: 'top' },
+        );
+        _wxFloodLayer.addLayer(dot);
+        drawn += 1;
+      }
+      return drawn;
+    }
+
     async function wxSetLayer(which) {
       _wxLayer = which;
       const container = document.getElementById('wx-time-container');
+
+      if (!wxIsFlood(which) && map.hasLayer(_wxFloodLayer)) {
+        map.removeLayer(_wxFloodLayer);
+        _wxFloodLayer.clearLayers();
+      }
 
       if (which === 'none') {
         if (_wxField) { _wxField.remove(); _wxField = null; }
@@ -19813,6 +19929,16 @@ function initPagerHoursFromStorage() {
         // cleared). Say so rather than leaving a radio selected over a blank map.
         if (typeof showToast === 'function') {
           showToast('Weather forecast is still being prepared - try again shortly.');
+        }
+        const off = document.getElementById('chk-wx-none');
+        if (off) off.checked = true;
+        _wxLayer = 'none';
+        return;
+      }
+
+      if (wxIsFlood(which) && !m.floodGeometry) {
+        if (typeof showToast === 'function') {
+          showToast('River flow data is still being prepared - try again shortly.');
         }
         const off = document.getElementById('chk-wx-none');
         if (off) off.checked = true;
@@ -20972,7 +21098,7 @@ function initPagerHoursFromStorage() {
   <script src="ui-dialogs.js"></script>
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
-  <script src="map-weather-module.js?v=1"></script>
+  <script src="map-weather-module.js?v=2"></script>
   <script src="map-editor-module.js?v=43"></script>
 </body>
 </html>

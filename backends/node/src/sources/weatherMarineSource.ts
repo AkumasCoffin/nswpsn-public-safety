@@ -166,6 +166,7 @@ export async function refreshMarineGrid(force = false): Promise<WeatherManifest 
     scale: VAR_SCALE[name],
     unit: UNITS[name] ?? '',
     marine: true,
+    flood: false,
   }));
 
   const merged: WeatherManifest = {

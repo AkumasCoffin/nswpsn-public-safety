@@ -10,6 +10,7 @@ import registerBeach from './beach.js';
 import registerWeather from './weather.js';
 import { registerWeatherGridSource } from './weatherGridSource.js';
 import { registerMarineGridSource } from './weatherMarineSource.js';
+import { registerFloodGridSource } from './weatherFloodSource.js';
 import registerPager from './pager.js';
 import registerAviation from './aviation.js';
 import registerFirms from './firms.js';
@@ -31,6 +32,7 @@ export function registerAllSources(): void {
   registerWeather();
   registerWeatherGridSource();
   registerMarineGridSource();
+  registerFloodGridSource();
   registerPager();
   registerAviation();
   registerFirms();
