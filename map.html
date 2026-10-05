@@ -608,6 +608,10 @@
     }
     .weather-panel.open { display: block; }
     .weather-panel h4 { margin: 0 0 10px 0; color: #38bdf8; font-size: 13px; font-weight: 600; }
+    .weather-panel .wx-sep { height: 1px; background: rgba(148,163,184,0.22); margin: 8px 0; }
+    .weather-panel .wx-note { color: #64748b; font-size: 10px; }
+    #wx-legend .legend-color { width: 14px; height: 10px; border-radius: 2px; display: inline-block; }
+    #wx-time-container.is-loading #wx-time-display::after { content: ' · loading…'; color: #64748b; }
     .weather-panel label { display: flex; align-items: center; gap: 8px; color: #e2e8f0; font-size: 12px; margin-bottom: 8px; cursor: pointer; }
     .weather-panel input[type="checkbox"] { accent-color: #38bdf8; width: 16px; height: 16px; }
     .weather-panel .slider-container { margin: 12px 0 8px 0; }
@@ -2951,8 +2955,29 @@
       <!-- Weather Panel -->
       <div class="weather-panel" id="weather-panel">
         <h4>🌦️ Weather Layers</h4>
-        <label><input type="checkbox" id="chk-radar" onchange="toggleRadar(this.checked)"> Rain Radar</label>
-        <label><input type="checkbox" id="chk-weather-pins" onchange="toggleWeatherPins(this.checked)"> Weather Stations</label>
+        <label><input type="radio" name="wx-layer" id="chk-wx-none" checked onchange="wxSetLayer('none')"> Off</label>
+        <label><input type="radio" name="wx-layer" id="chk-wx-wind" onchange="wxSetLayer('wind')"> Wind</label>
+        <label><input type="radio" name="wx-layer" id="chk-wx-temp" onchange="wxSetLayer('temperature_2m')"> Temperature</label>
+        <label><input type="radio" name="wx-layer" id="chk-wx-rain" onchange="wxSetLayer('precipitation')"> Rain forecast</label>
+        <div class="wx-sep"></div>
+        <label><input type="checkbox" id="chk-radar" onchange="toggleRadar(this.checked)"> Rain radar <span class="wx-note">observed</span></label>
+        <label><input type="checkbox" id="chk-weather-pins" onchange="toggleWeatherPins(this.checked)"> Weather stations</label>
+        <!-- The forecast field and the radar run on different clocks: the radar
+             is observed and only looks backwards, the field is modelled and runs
+             forward. They get separate controls and separate labels so the
+             timeline below can never be read as scrubbing the radar. -->
+        <div class="slider-container" id="wx-time-container" style="display:none;">
+          <div class="slider-label">
+            <span id="wx-time-label">Forecast</span>
+            <button class="btn-live" id="wx-btn-now" onclick="wxJumpToNow()">● NOW</button>
+          </div>
+          <input type="range" id="wx-time-slider" min="0" max="0" value="0" oninput="wxSetTime(this.value)">
+          <div class="radar-time" id="wx-time-display">--</div>
+        </div>
+        <div class="temp-legend" id="wx-legend" style="display:none;">
+          <div class="legend-title" id="wx-legend-title">Legend</div>
+          <div class="legend-items" id="wx-legend-items"></div>
+        </div>
         <div class="slider-container" id="radar-slider-container" style="display:none;">
           <div class="slider-label">
             <span id="radar-time-label">Radar Time</span>
@@ -19575,6 +19600,11 @@ function initPagerHoursFromStorage() {
         // Closing panel - turn off all weather layers
         document.getElementById('chk-radar').checked = false;
         document.getElementById('chk-weather-pins').checked = false;
+        const wxOff = document.getElementById('chk-wx-none');
+        if (wxOff) wxOff.checked = true;
+        // Not cosmetic: the field owns an animation loop, and leaving it running
+        // behind a closed panel is a battery drain nobody can see.
+        wxSetLayer('none');
         toggleRadar(false);
         toggleWeatherPins(false);
         removeFilterButton('weather');
@@ -19586,6 +19616,211 @@ function initPagerHoursFromStorage() {
       btn.classList.toggle('active', !isOpen);
       updateFilterPanelPositions();
       updateSettingsBackdrop();
+    }
+
+
+    // ---- the gridded weather field ----------------------------------------
+    // The field is a continuous surface served as Int16 grids, one per variable
+    // per 3-hourly timestep. This holds the manifest, the currently selected
+    // variable and time, and the WeatherField controller that paints them.
+    //
+    // Deliberately separate from the radar below: the radar is observed and only
+    // looks backwards; this is modelled and runs two days back to seven forward.
+    let _wxManifest = null;
+    let _wxField = null;
+    let _wxLayer = 'none';
+    let _wxTimeIdx = 0;
+    // Grids are immutable once written, so one fetched for a timestep stays
+    // valid for the whole session. Caching them is what makes scrubbing back and
+    // forth feel instant instead of refetching on every drag of the slider.
+    const _wxGridCache = new Map();
+    let _wxLoadToken = 0;
+    // Names people use, not the upstream variable keys.
+    const WX_LABELS = {
+      wind_speed_10m: 'Wind',
+      temperature_2m: 'Temperature',
+      precipitation: 'Rain',
+      wind_gusts_10m: 'Gusts',
+    };
+
+    async function wxLoadManifest() {
+      if (_wxManifest) return _wxManifest;
+      const res = await apiFetch(PROXY_BASE + '/api/weather/grid/manifest');
+      if (!res.ok) return null;
+      _wxManifest = await res.json();
+      return _wxManifest;
+    }
+
+    async function wxFetchGrid(varName, iso) {
+      const key = varName + '@' + iso;
+      const hit = _wxGridCache.get(key);
+      if (hit) return hit;
+      const url = PROXY_BASE + '/api/weather/grid?var=' + encodeURIComponent(varName)
+        + '&t=' + encodeURIComponent(iso);
+      const res = await apiFetch(url);
+      if (!res.ok) return null;
+      const buf = await res.arrayBuffer();
+      const arr = new Int16Array(buf);
+      _wxGridCache.set(key, arr);
+      return arr;
+    }
+
+    function wxVarMeta(name) {
+      if (!_wxManifest) return null;
+      for (const v of _wxManifest.vars) if (v.name === name) return v;
+      return null;
+    }
+
+    /** Timestep nearest to now - where the slider should sit on open. */
+    function wxNowIndex() {
+      if (!_wxManifest) return 0;
+      const now = Date.now();
+      let best = 0, bestGap = Infinity;
+      _wxManifest.timesteps.forEach(function (t, i) {
+        const gap = Math.abs(Date.parse(t) - now);
+        if (gap < bestGap) { bestGap = gap; best = i; }
+      });
+      return best;
+    }
+
+    function wxRenderTimeLabel() {
+      const el = document.getElementById('wx-time-display');
+      if (!el || !_wxManifest) return;
+      const iso = _wxManifest.timesteps[_wxTimeIdx];
+      if (!iso) { el.textContent = '--'; return; }
+      // Formatted in the VIEWER's zone, not the grid's. Data is stored in UTC
+      // because Australia spans three zones and no single local clock fits a
+      // continental field, but a person reading it wants their own time.
+      const d = new Date(iso);
+      el.textContent = d.toLocaleString(undefined, {
+        weekday: 'short', hour: 'numeric', minute: '2-digit',
+      });
+      const btn = document.getElementById('wx-btn-now');
+      if (btn) btn.classList.toggle('active', _wxTimeIdx === wxNowIndex());
+    }
+
+    function wxRenderLegend() {
+      const box = document.getElementById('wx-legend');
+      const items = document.getElementById('wx-legend-items');
+      const title = document.getElementById('wx-legend-title');
+      if (!box || !items || !title) return;
+      const legend = (_wxField && _wxField.legend) ? _wxField.legend() : null;
+      if (!legend || !legend.stops || !legend.stops.length) {
+        box.style.display = 'none';
+        return;
+      }
+      title.textContent = (WX_LABELS[legend.variable] || legend.variable)
+        + (legend.unit ? ' (' + legend.unit + ')' : '');
+      // The bar is the renderer's own gradient, not a reconstruction of it, so
+      // the legend cannot drift from the colours actually on the map. Only the
+      // end labels are drawn: the stops are a continuous ramp, and listing nine
+      // swatches implies bands the field does not have.
+      items.innerHTML =
+        '<div style="height:10px;border-radius:2px;background:' + escapeHtml(legend.gradientCss) + ';"></div>'
+        + '<div style="display:flex;justify-content:space-between;font-size:10px;color:#94a3b8;margin-top:3px;">'
+        + '<span>' + escapeHtml(String(legend.min)) + '</span>'
+        + '<span>' + escapeHtml(String(legend.max)) + '</span></div>';
+      box.style.display = 'block';
+    }
+
+    async function wxApply() {
+      if (_wxLayer === 'none' || !_wxManifest || !_wxField) return;
+      const iso = _wxManifest.timesteps[_wxTimeIdx];
+      if (!iso) return;
+      const container = document.getElementById('wx-time-container');
+      if (container) container.classList.add('is-loading');
+      // Every apply takes a token; a slower earlier fetch that lands after a
+      // newer one must not paint stale data over it. Dragging the slider fires
+      // these faster than the network answers.
+      const token = ++_wxLoadToken;
+      try {
+        if (_wxLayer === 'wind') {
+          const pair = await Promise.all([
+            wxFetchGrid('wind_speed_10m', iso),
+            wxFetchGrid('wind_direction_10m', iso),
+          ]);
+          const spd = pair[0], dir = pair[1];
+          if (token !== _wxLoadToken || !spd || !dir) return;
+          _wxField.setWind(spd, dir, wxVarMeta('wind_speed_10m'), wxVarMeta('wind_direction_10m'));
+          _wxField.setVariable('wind_speed_10m');
+          _wxField.setData(spd, wxVarMeta('wind_speed_10m'));
+          _wxField.setAnimated(true);
+        } else {
+          const grid = await wxFetchGrid(_wxLayer, iso);
+          if (token !== _wxLoadToken || !grid) return;
+          _wxField.setAnimated(false);
+          _wxField.setVariable(_wxLayer);
+          _wxField.setData(grid, wxVarMeta(_wxLayer));
+        }
+        wxRenderLegend();
+      } catch (e) {
+        console.warn('weather field failed to load', e);
+      } finally {
+        if (token === _wxLoadToken && container) container.classList.remove('is-loading');
+      }
+      wxRenderTimeLabel();
+    }
+
+    async function wxSetLayer(which) {
+      _wxLayer = which;
+      const container = document.getElementById('wx-time-container');
+
+      if (which === 'none') {
+        if (_wxField) { _wxField.remove(); _wxField = null; }
+        if (container) container.style.display = 'none';
+        const box = document.getElementById('wx-legend');
+        if (box) box.style.display = 'none';
+        return;
+      }
+
+      if (typeof umami !== 'undefined') umami.track('map-layer-toggle', { layer: 'weather-' + which });
+
+      const m = await wxLoadManifest();
+      if (!m) {
+        // The field simply has not been built yet (first boot, or the cache was
+        // cleared). Say so rather than leaving a radio selected over a blank map.
+        if (typeof showToast === 'function') {
+          showToast('Weather forecast is still being prepared - try again shortly.');
+        }
+        const off = document.getElementById('chk-wx-none');
+        if (off) off.checked = true;
+        _wxLayer = 'none';
+        return;
+      }
+
+      if (!_wxField) {
+        if (!window.WeatherField) { console.warn('weather module not loaded'); return; }
+        _wxField = window.WeatherField.create(map, {
+          geometry: m.geometry,
+          fieldPane: 'wxFieldPane',
+          particlePane: 'wxParticlePane',
+        });
+        _wxTimeIdx = wxNowIndex();
+        const slider = document.getElementById('wx-time-slider');
+        if (slider) {
+          slider.min = 0;
+          slider.max = String(m.timesteps.length - 1);
+          slider.value = String(_wxTimeIdx);
+        }
+      }
+      if (container) container.style.display = 'block';
+      await wxApply();
+    }
+
+    function wxSetTime(value) {
+      const idx = Number(value);
+      if (!Number.isFinite(idx)) return;
+      _wxTimeIdx = idx;
+      wxRenderTimeLabel();
+      wxApply();
+    }
+
+    function wxJumpToNow() {
+      _wxTimeIdx = wxNowIndex();
+      const slider = document.getElementById('wx-time-slider');
+      if (slider) slider.value = String(_wxTimeIdx);
+      wxRenderTimeLabel();
+      wxApply();
     }
 
     async function toggleRadar(enabled) {
@@ -20686,6 +20921,7 @@ function initPagerHoursFromStorage() {
   <script src="ui-dialogs.js"></script>
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
+  <script src="map-weather-module.js?v=1"></script>
   <script src="map-editor-module.js?v=43"></script>
 </body>
 </html>
