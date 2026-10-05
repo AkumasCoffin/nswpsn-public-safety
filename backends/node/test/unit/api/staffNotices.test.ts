@@ -36,8 +36,32 @@ vi.mock('../../../src/services/auth/roles.js', async (orig) => {
   return { ...actual, canSendNotices: vi.fn(async () => sender) };
 });
 
+// The people picker reads the account directory, which needs these two set to
+// do anything at all. Everything else about the config stays real.
+vi.mock('../../../src/config.js', async (orig) => {
+  const actual = await orig<typeof import('../../../src/config.js')>();
+  return {
+    ...actual,
+    config: {
+      ...actual.config,
+      SUPABASE_URL: 'https://supa.test',
+      SUPABASE_SERVICE_ROLE_KEY: 'svc-key',
+    },
+  };
+});
+
 const { staffNoticesRouter, safeNoticeLink, _resetNoticeRateLimit } =
   await import('../../../src/api/staffNotices.js');
+
+type DirectoryUser = { id: string; email?: string; user_metadata?: Record<string, unknown> };
+
+/** Answer the next account-directory call with these accounts. */
+function withDirectory(users: DirectoryUser[]) {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(
+    JSON.stringify({ users }),
+    { status: 200, headers: { 'Content-Type': 'application/json' } },
+  )));
+}
 
 function app(userId: string | null = 'staff-1') {
   const a = new Hono();
@@ -74,6 +98,7 @@ beforeEach(() => {
   _resetNoticeRateLimit();
   fakePool.query.mockClear();
   fakeClient.query.mockClear();
+  vi.unstubAllGlobals();
 });
 
 describe('safeNoticeLink', () => {
@@ -225,5 +250,40 @@ describe('GET /api/staff/notices/user-search', () => {
   it('is gated', async () => {
     sender = false;
     expect((await app().request('/api/staff/notices/user-search?q=abc')).status).toBe(403);
+  });
+
+  it('carries each match a face, and null for whoever has none', async () => {
+    // Picking out of a list of near-identical usernames is slow; a photo is
+    // what makes the dropdown scannable, so the search has to resolve it.
+    withDirectory([
+      { id: 'u-1', email: 'alice@example.com', user_metadata: { username: 'alice' } },
+      { id: 'u-2', email: 'alicia@example.com', user_metadata: { username: 'alicia' } },
+    ]);
+    resultQueue = [{ rows: [
+      { user_id: 'u-1', avatar_key: null, discord_avatar_url: 'https://cdn.discordapp.com/a.png' },
+    ] }];
+
+    const body = await (await app().request('/api/staff/notices/user-search?q=ali')).json() as
+      { users: Array<{ id: string; username: string; avatar: string | null }> };
+
+    expect(body.users.map((u) => [u.id, u.avatar])).toEqual([
+      ['u-1', 'https://cdn.discordapp.com/a.png'],
+      ['u-2', null],
+    ]);
+    expect(calls.some((x) => x.sql.includes('FROM user_profiles'))).toBe(true);
+  });
+
+  it('still returns the matches when the avatar lookup falls over', async () => {
+    // A face is decoration. Losing it must not cost the staff member the
+    // search they are mid-way through typing.
+    withDirectory([{ id: 'u-1', email: 'alice@example.com', user_metadata: { username: 'alice' } }]);
+    fakePool.query.mockImplementationOnce(async () => { throw new Error('no profiles table'); });
+
+    const res = await app().request('/api/staff/notices/user-search?q=ali');
+    expect(res.status).toBe(200);
+    const body = await res.json() as { users: Array<{ id: string; avatar: string | null }> };
+    expect(body.users).toEqual([
+      { id: 'u-1', username: 'alice', email: 'alice@example.com', avatar: null },
+    ]);
   });
 });

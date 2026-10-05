@@ -13,6 +13,7 @@ import { config } from '../config.js';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { canSendNotices, isKnownRole, requireRole } from '../services/auth/roles.js';
+import { avatarMap } from '../services/wireComments.js';
 import {
   MAX_NAMED_RECIPIENTS,
   listNotices,
@@ -196,6 +197,11 @@ staffNoticesRouter.get('/api/staff/notices/targets', requireRole(canSendNotices)
 // Its own endpoint rather than /api/users for the same reason tickets has one:
 // that route is canManageUsers-gated and returns the whole directory, and a
 // picker needs an id, a name and an email for the handful that match.
+//
+// It also carries each match's avatar, because a list of similar usernames is
+// slow to pick from and a face is not. Avatars come from user_profiles via the
+// shared resolver, so the picker shows the same image the rest of the site
+// does, and are decoration: a failure there never fails the search.
 // ---------------------------------------------------------------------------
 staffNoticesRouter.get('/api/staff/notices/user-search', requireRole(canSendNotices), async (c) => {
   const q = (c.req.query('q') ?? '').trim().toLowerCase();
@@ -217,7 +223,7 @@ staffNoticesRouter.get('/api/staff/notices/user-search', requireRole(canSendNoti
     };
     const str = (v: unknown): string | null =>
       typeof v === 'string' && v.trim() !== '' ? v.trim() : null;
-    const users = (data.users ?? [])
+    const matched = (data.users ?? [])
       .map((u) => {
         const md = u.user_metadata ?? {};
         const username =
@@ -227,6 +233,10 @@ staffNoticesRouter.get('/api/staff/notices/user-search', requireRole(canSendNoti
       })
       .filter((u) => u.id && (u.username.toLowerCase().includes(q) || u.email.toLowerCase().includes(q)))
       .slice(0, 20);
+
+    const pool = await getPool();
+    const avatars = pool ? await avatarMap(pool, matched.map((u) => u.id)) : new Map<string, string>();
+    const users = matched.map((u) => ({ ...u, avatar: avatars.get(u.id) ?? null }));
     return c.json({ users });
   } catch (err) {
     log.error({ err }, 'notice user-search failed');
