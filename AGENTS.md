@@ -1,8 +1,8 @@
 # Operating rules for this repository
 
-These are the rules for anyone working on AusAware — person or agent. They are
-prohibitions, not advice. Several exist because they were broken once already
-and cost real damage.
+These are the rules for anyone working on AusAware. They are prohibitions, not
+advice. Several exist because they were broken once already and cost real
+damage.
 
 Read this file before your first change. `CLAUDE.md` and `CONTRIBUTING.md` both
 point here; this file is the single copy.
