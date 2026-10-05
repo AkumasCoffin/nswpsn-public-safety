@@ -33,6 +33,17 @@ Read [`../../AGENTS.md`](../../AGENTS.md) before changing anything here.
 hosts. The code refers to `whisper_openai_server.py` (the server) and
 `whisper_watch.ps1` (the PC's idle watcher), which live on those machines.
 
+A note on where that description comes from, so you know which half to trust.
+Everything about the *router* — the preference order, the health probe, the
+draining protocol, the quarantine — is read out of
+`backends/node/src/services/whisperRouter.ts` and is checkable here. The
+characterisation of the **two machines** as "a preferred PC that is up only when
+idle" and "an always-on VM safety net" comes from that file's own comments and
+from the example `WHISPER_BACKENDS` value, **not** from reading the deployed
+environment variable. What is actually configured on the live host is whatever
+`WHISPER_BACKENDS` says there; the router does not care how many backends there
+are or what they are called.
+
 The router lives inside the backend rather than being its own service because
 everything is on one LAN, so the extra hop costs nothing on the network and one
 fewer supervised process is worth more than the isolation. The cost that buys is
@@ -209,7 +220,12 @@ rdio-scanner's database — not by AusAware. The backend reads that database
 **read-only** (`RDIO_DATABASE_URL`, `src/services/rdio.ts`) for:
 
 - `/api/rdio/calls/:id` — one reception by id, with system, talkgroup and unit
-  labels resolved;
+  labels resolved (`src/api/transcripts.ts:93`). **No page in this repo calls
+  it.** It is not public-exempt — `requireApiKey` does gate it — but the gate is
+  the shared site key, which the browser is handed by `/api/config` by design,
+  so anyone who reads it out of page source can call this route with a numeric
+  id. It 503s unless `RDIO_DATABASE_URL` is set. Whether it should stay
+  reachable is under review; do not build anything new on it;
 - the **hourly summaries** (`src/services/llm.ts`, Gemini, prompt in
   `backends/prompts/rdio_hourly.txt`), surfaced at `/api/summaries/latest` and
   shown on `/live` and in the bot's `/summary`;
@@ -262,4 +278,5 @@ detail: [`forked-runtimes.md`](forked-runtimes.md).
 - [`forked-runtimes.md`](forked-runtimes.md) — the plugin and the rdio fork.
 - [`radio-node.md`](radio-node.md) — where the audio came from.
 - [`backend.md`](backend.md) — the config and the rdio pool.
-- [`../architecture.md`](../architecture.md) — the full air-to-pin trace.
+- [`../architecture.md`](../architecture.md) — the full trace from a transmission
+  in the air to where it surfaces.
