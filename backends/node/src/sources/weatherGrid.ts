@@ -208,6 +208,19 @@ export function reportSpend(): SpendEstimate {
   return est;
 }
 
+/**
+ * Pack one real into Int16. The scalar form of `quantise`.
+ *
+ * The grid fetcher calls this a few million times per refresh (cells x
+ * timesteps x variables), so it exists to avoid allocating a one-element array
+ * for each of them.
+ */
+export function quantiseOne(raw: number | null | undefined, v: GridVar): number {
+  if (raw === null || raw === undefined || !Number.isFinite(raw)) return NODATA;
+  const packed = Math.round(raw * VAR_SCALE[v]);
+  return packed > 32767 ? 32767 : packed < -32767 ? -32767 : packed;
+}
+
 /** Pack reals into Int16 with the variable's scale. `null`/non-finite -> NODATA. */
 export function quantise(values: ReadonlyArray<number | null | undefined>, v: GridVar): Int16Array {
   const scale = VAR_SCALE[v];
