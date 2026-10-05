@@ -15589,6 +15589,13 @@
         const canManageNodes = (result.can_manage_nodes !== undefined)
           ? !!result.can_manage_nodes
           : !!(result.is_owner || result.is_dev);
+        // Sending notifications to users. Same partial-deploy fallback as
+        // can_manage_nodes above: an older backend returns nothing here, and
+        // the entry would then be hidden from the very people who have the
+        // power, so fall back to the rule the backend itself applies.
+        const canSendNotices = (result.can_send_notices !== undefined)
+          ? !!result.can_send_notices
+          : !!(result.is_owner || result.is_team_member);
         userPermissions = {
           is_owner: !!result.is_owner,
           is_team_member: !!result.is_team_member,
@@ -15597,6 +15604,7 @@
           is_node_monitor: !!result.is_node_monitor,
           can_manage_users: !!result.can_manage_users,
           can_manage_nodes: canManageNodes,
+          can_send_notices: canSendNotices,
           can_assign_privileged_roles: !!result.can_assign_privileged_roles,
           // Canonical role list — drives the role chip next to the wordmark.
           roles: Array.isArray(result.roles) ? result.roles : [],
