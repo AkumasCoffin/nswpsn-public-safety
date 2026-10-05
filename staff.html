@@ -1287,6 +1287,32 @@
     /* --- Discord notification settings (Requests -> Discord notifications).
        Own classes rather than .nd-fld: that one's 0.6rem uppercase labels are
        sized for the dense node-config grid and read as illegible here. --- */
+    /* Notify-users compose. Its own block rather than reusing .dn-fld for the
+       same reason that one exists: a form with a textarea and a recipient
+       picker is a different shape to a row of selects. */
+    .nt-fld { display: block; margin-bottom: 0.9rem; }
+    .nt-fld > span { display: block; font-size: 0.72rem; text-transform: uppercase;
+      letter-spacing: 0.06em; color: var(--text-soft); font-weight: 600; margin-bottom: 0.3rem; }
+    .nt-fld input[type="text"], .nt-fld textarea, .nt-fld select {
+      width: 100%; box-sizing: border-box; background: rgba(0,0,0,0.25);
+      border: 1px solid var(--border-subtle); border-radius: 8px; color: var(--text-primary);
+      font-family: inherit; font-size: 0.88rem; padding: 0.55rem 0.7rem; }
+    .nt-fld textarea { min-height: 7rem; resize: vertical; line-height: 1.5; }
+    .nt-fld select option { background: #0f172a; color: #e2e8f0; }
+    .nt-hint { font-size: 0.72rem; color: var(--text-soft); margin-top: 0.25rem; }
+    .nt-count { font-size: 0.72rem; color: var(--text-soft); text-align: right; margin-top: 0.2rem; }
+    .nt-aud { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.7rem; }
+    .nt-picked { display: flex; gap: 0.35rem; flex-wrap: wrap; margin-top: 0.5rem; }
+    .nt-chip { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.78rem;
+      background: rgba(125,211,252,0.12); border: 1px solid rgba(125,211,252,0.4);
+      color: var(--text-primary); border-radius: 999px; padding: 0.15rem 0.5rem; }
+    .nt-chip button { background: none; border: 0; color: var(--text-soft); cursor: pointer;
+      font: inherit; line-height: 1; padding: 0; }
+    .nt-chip button:hover { color: #f87171; }
+    .nt-results { max-height: 11rem; overflow-y: auto; margin-top: 0.4rem; }
+    .nt-reach { font-size: 0.85rem; color: var(--text-primary); margin: 0.9rem 0; }
+    .nt-reach b { color: #7dd3fc; }
+    .nt-reach.nt-everyone b { color: #fbbf24; }
     .dn-fld { display: flex; flex-direction: column; gap: 0.35rem; margin-bottom: 1.1rem; max-width: 420px; }
     .dn-fld > label { font-size: 0.78rem; font-weight: 600; color: var(--text-primary); }
     .dn-fld select {
@@ -3019,16 +3045,17 @@
       <div class="tab-nav">
         <div class="tab-dd" id="requests-dd">
           <button class="tab-btn active" data-tab="requests" id="requests-tab-btn" aria-haspopup="menu" aria-expanded="false" onclick="toggleRequestsMenu(event)">
-            <i class="fas fa-inbox"></i> Requests
+            <i class="fas fa-shield-halved"></i> Moderation
             <span class="badge" id="pending-badge" style="display: none;">0</span>
             <i class="fas fa-caret-down tab-dd-caret"></i>
           </button>
-          <div class="tab-dd-menu" id="requests-dd-menu" role="menu" aria-label="Request kind">
+          <div class="tab-dd-menu" id="requests-dd-menu" role="menu" aria-label="Moderation section">
             <button class="tab-dd-item active" role="menuitem" data-kind="signup" onclick="openRequestsView('signup')"><i class="fas fa-user-plus"></i> Signup requests</button>
             <button class="tab-dd-item" role="menuitem" data-kind="data" onclick="openRequestsView('data')"><i class="fas fa-table"></i> Data changes <span class="dd-count" id="dd-data-badge" style="display:none;"></span></button>
             <button class="tab-dd-item" role="menuitem" data-kind="approvals" onclick="openRequestsView('approvals')"><i class="fas fa-clock"></i> Wire approvals <span class="dd-count" id="dd-approvals-badge" style="display:none;"></span></button>
             <button class="tab-dd-item" role="menuitem" data-kind="takedowns" onclick="openRequestsView('takedowns')"><i class="fas fa-flag"></i> Wire takedowns <span class="dd-count" id="dd-takedowns-badge" style="display:none;"></span></button>
             <button class="tab-dd-item" role="menuitem" data-kind="restrictions" onclick="openRequestsView('restrictions')"><i class="fas fa-comment-slash"></i> Comment restrictions <span class="dd-count" id="dd-restrictions-badge" style="display:none;"></span></button>
+            <button class="tab-dd-item" role="menuitem" data-kind="notices" id="dd-notices-item" onclick="openRequestsView('notices')"><i class="fas fa-bullhorn"></i> Notify users</button>
             <button class="tab-dd-item" role="menuitem" data-kind="discord" onclick="openRequestsView('discord')"><i class="fab fa-discord"></i> Discord notifications</button>
           </div>
         </div>
@@ -3194,6 +3221,29 @@
         <!-- Where the three staff queues above get announced in Discord.
              Owner-only: these channels carry moderation traffic, so the
              gate is staff roles, not Discord's "Manage Channels". -->
+        <div id="requests-notices-view" style="display:none;">
+          <div class="dev-section-h">Notify users</div>
+          <div class="dev-card" style="max-width:860px;">
+            <p style="color:var(--text-soft); font-size:0.88rem; line-height:1.6; margin-bottom:1rem;">
+              Send a notification straight to someone&rsquo;s account. It appears in their
+              notifications bell on any page of the site, alongside approvals and ticket
+              replies. There is no email or push behind it &mdash; it waits for them to visit.
+              There is no unsend.
+            </p>
+            <div id="nt-status" style="margin-bottom:1rem;"></div>
+            <div id="nt-body">
+              <div class="loading"><i class="fas fa-spinner"></i></div>
+            </div>
+          </div>
+
+          <div class="dev-section-h" style="margin-top:1.6rem;">Sent</div>
+          <div class="dev-card" style="max-width:860px;">
+            <div id="nt-log">
+              <div class="loading"><i class="fas fa-spinner"></i></div>
+            </div>
+          </div>
+        </div>
+
         <div id="requests-discord-view" style="display:none;">
           <div class="dev-section-h">Discord notifications</div>
           <div class="dev-card" style="max-width:760px;">
@@ -15587,7 +15637,7 @@
       try { view = new URLSearchParams(location.search).get('view') || ''; } catch (e) { return; }
       if (!view) return;
       const tabs = userPermissions.tabs || {};
-      const requestViews = { signup: 1, data: 1, approvals: 1, takedowns: 1, restrictions: 1, discord: 1 };
+      const requestViews = { signup: 1, data: 1, approvals: 1, takedowns: 1, restrictions: 1, notices: 1, discord: 1 };
       if (requestViews[view]) {
         if (tabs.requests) openRequestsView(view);
       } else if (view === 'users' || view === 'members') {
@@ -15617,6 +15667,11 @@
       if (devBtn) devBtn.style.display = tabs.dev      ? '' : 'none';
       if (datBtn) (datBtn.closest('.tab-dd') || datBtn).style.display = tabs.data ? '' : 'none';
       if (nodBtn) nodBtn.style.display = tabs.nodes    ? '' : 'none';
+      // Notify users sits inside Moderation but carries its own permission:
+      // reviewing a signup request and telling every account something are
+      // not the same power, so the menu entry goes when the flag does.
+      const ntItem = document.getElementById('dd-notices-item');
+      if (ntItem) ntItem.style.display = userPermissions.can_send_notices ? '' : 'none';
 
       // View-only Nodes tab: when the viewer can't manage nodes (node_monitor),
       // flip the body into read-only mode so the CSS strips every mutating
@@ -15678,12 +15733,13 @@
     let _dcFilter = 'pending';
     let _reqKind = 'signup';
     function switchRequestsView(kind) {
-      const views = { signup: 'requests-signup-view', data: 'requests-datachanges-view', approvals: 'requests-approvals-view', takedowns: 'requests-takedowns-view', restrictions: 'requests-restrictions-view', discord: 'requests-discord-view' };
+      const views = { signup: 'requests-signup-view', data: 'requests-datachanges-view', approvals: 'requests-approvals-view', takedowns: 'requests-takedowns-view', restrictions: 'requests-restrictions-view', notices: 'requests-notices-view', discord: 'requests-discord-view' };
       Object.entries(views).forEach(([k, id]) => { const el = document.getElementById(id); if (el) el.style.display = (k === kind) ? 'block' : 'none'; });
       if (kind === 'data') loadDataChanges();
       else if (kind === 'approvals') loadApprovals();
       else if (kind === 'takedowns') loadTakedowns();
       else if (kind === 'restrictions') loadRestrictions();
+      else if (kind === 'notices') loadNotices();
       else if (kind === 'discord') loadDiscordNotify();
     }
     // Requests dropdown lives in the tab bar and behaves exactly like the Data
@@ -15913,6 +15969,276 @@
       } catch (e) {
         showToast('Reopen failed: ' + e.message, 'error');
       }
+    }
+
+    // ======================= Notify users =============================
+    // Compose a notification and put it in people's bells. The roster, the
+    // audience counts and the send all come from the backend — this only
+    // collects the message and asks once before an irreversible send.
+    const NT_AUDIENCES = [
+      ['users', 'Specific people'],
+      ['role', 'By role'],
+      ['all', 'Everyone'],
+    ];
+    let _ntAudience = 'users';
+    let _ntPicked = [];        // [{id, username, email}]
+    let _ntSearchResults = [];
+    let _ntSearchT = null;
+    let _ntTargets = { all: 0, byRole: [] };
+    let _ntSending = false;
+
+    async function _ntApi(path, opts) {
+      const res = await fetch(`${API_BASE_URL}${path}`, {
+        ...(opts || {}),
+        headers: {
+          'Authorization': await authHeader(),
+          ...((opts && opts.body) ? { 'Content-Type': 'application/json' } : {}),
+        },
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      return body;
+    }
+
+    function _ntNote(kind, text) {
+      const el = document.getElementById('nt-status');
+      if (!el) return;
+      const colour = kind === 'error' ? '#f87171' : kind === 'warn' ? '#fbbf24' : '#4ade80';
+      el.innerHTML = text
+        ? `<div style="color:${colour}; font-size:0.85rem;">${escapeHtml(text)}</div>`
+        : '';
+    }
+
+    async function loadNotices() {
+      const body = document.getElementById('nt-body');
+      if (!body) return;
+      try {
+        _ntTargets = await _ntApi('/api/staff/notices/targets');
+      } catch (e) {
+        body.innerHTML = `<div class="empty-state"><i class="fas fa-exclamation-triangle"></i><p>Couldn't load the audience list.</p></div>`;
+        return;
+      }
+      _ntRender();
+      _ntLoadLog();
+    }
+
+    function _ntRender() {
+      const body = document.getElementById('nt-body');
+      if (!body) return;
+      const roleOpts = (_ntTargets.byRole || [])
+        .map((r) => `<option value="${escapeHtml(r.role)}">${escapeHtml((ROLE_LABELS[r.role] || r.role))} — ${r.count} ${r.count === 1 ? 'person' : 'people'}</option>`)
+        .join('');
+      body.innerHTML = `
+        <div class="nt-aud">${NT_AUDIENCES.map(([k, label]) => `
+          <button class="filter-btn${k === _ntAudience ? ' active' : ''}" data-ntaud="${k}" onclick="_ntSetAudience('${k}')">${escapeHtml(label)}</button>`).join('')}
+        </div>
+
+        <div id="nt-aud-users" style="display:${_ntAudience === 'users' ? 'block' : 'none'};">
+          <label class="nt-fld">
+            <span>Who</span>
+            <input type="text" id="nt-user-q" placeholder="Search by name or email…" autocomplete="off" oninput="_ntSearchDebounced()">
+          </label>
+          <div class="nt-results" id="nt-user-results"></div>
+          <div class="nt-picked" id="nt-picked"></div>
+        </div>
+
+        <div id="nt-aud-role" style="display:${_ntAudience === 'role' ? 'block' : 'none'};">
+          <label class="nt-fld">
+            <span>Role</span>
+            <select id="nt-role" onchange="_ntRenderReach()">${roleOpts || '<option value="">No roles with members</option>'}</select>
+          </label>
+        </div>
+
+        <label class="nt-fld">
+          <span>Title</span>
+          <input type="text" id="nt-title" maxlength="120" placeholder="What this is about" oninput="_ntRenderReach()">
+        </label>
+        <label class="nt-fld">
+          <span>Message</span>
+          <textarea id="nt-message" maxlength="2000" placeholder="What you want them to know." oninput="_ntRenderReach()"></textarea>
+          <div class="nt-count" id="nt-msg-count">0 / 2000</div>
+        </label>
+        <label class="nt-fld">
+          <span>Link <span style="text-transform:none; letter-spacing:0; opacity:0.7;">(optional)</span></span>
+          <input type="text" id="nt-link" maxlength="500" placeholder="/feeder">
+          <div class="nt-hint">A page on this site (starting with /) or an https:// address.</div>
+        </label>
+
+        <div class="nt-reach" id="nt-reach"></div>
+        <button class="btn btn-primary" id="nt-send" onclick="_ntSend()">
+          <i class="fas fa-paper-plane"></i> Send notification
+        </button>`;
+      _ntRenderPicked();
+      _ntRenderReach();
+    }
+
+    function _ntSetAudience(kind) {
+      _ntAudience = kind;
+      document.querySelectorAll('[data-ntaud]').forEach((b) => b.classList.toggle('active', b.dataset.ntaud === kind));
+      const show = (id, on) => { const el = document.getElementById(id); if (el) el.style.display = on ? 'block' : 'none'; };
+      show('nt-aud-users', kind === 'users');
+      show('nt-aud-role', kind === 'role');
+      _ntRenderReach();
+    }
+
+    /** How many people this will reach, said before the send rather than after. */
+    function _ntReachCount() {
+      if (_ntAudience === 'all') return _ntTargets.all || 0;
+      if (_ntAudience === 'role') {
+        const role = document.getElementById('nt-role')?.value || '';
+        return (_ntTargets.byRole || []).find((r) => r.role === role)?.count || 0;
+      }
+      return _ntPicked.length;
+    }
+
+    function _ntRenderReach() {
+      const el = document.getElementById('nt-reach');
+      const msg = document.getElementById('nt-message');
+      const counter = document.getElementById('nt-msg-count');
+      if (counter && msg) counter.textContent = `${msg.value.length} / 2000`;
+      if (!el) return;
+      const n = _ntReachCount();
+      const who = _ntAudience === 'all' ? 'every account on the site'
+        : _ntAudience === 'role' ? 'everyone holding that role'
+        : n === 1 ? 'the person selected' : 'the people selected';
+      el.className = 'nt-reach' + (_ntAudience === 'all' ? ' nt-everyone' : '');
+      el.innerHTML = n
+        ? `This goes to <b>${n}</b> ${n === 1 ? 'person' : 'people'} — ${escapeHtml(who)}.`
+        : `<span style="color:var(--text-soft);">Nobody selected yet.</span>`;
+      const btn = document.getElementById('nt-send');
+      if (btn) btn.disabled = _ntSending || n === 0;
+    }
+
+    // ---- the people picker (multi-select) ----
+    function _ntSearchDebounced() {
+      if (_ntSearchT) clearTimeout(_ntSearchT);
+      _ntSearchT = setTimeout(_ntSearch, 300);
+    }
+
+    async function _ntSearch() {
+      const q = (document.getElementById('nt-user-q')?.value || '').trim();
+      const out = document.getElementById('nt-user-results');
+      if (!out) return;
+      if (q.length < 2) { out.innerHTML = ''; return; }
+      try {
+        const j = await _ntApi(`/api/staff/notices/user-search?q=${encodeURIComponent(q)}`);
+        _ntSearchResults = j.users || [];
+        const picked = new Set(_ntPicked.map((u) => u.id));
+        out.innerHTML = _ntSearchResults.length
+          ? _ntSearchResults.map((u, i) => `
+            <div class="tk-urow" ${picked.has(u.id) ? 'style="opacity:0.5;"' : `onclick="_ntPick(${i})"`}>
+              <i class="fas fa-user" style="color:var(--text-soft);"></i>
+              <strong>${escapeHtml(u.username)}</strong>
+              <span style="color:var(--text-soft);">${escapeHtml(u.email)}</span>
+              ${picked.has(u.id) ? '<span style="color:var(--text-soft);">· added</span>' : ''}
+            </div>`).join('')
+          : '<div style="color:var(--text-soft); font-size:0.8rem; padding:0.3rem;">No matches.</div>';
+      } catch (e) {
+        out.innerHTML = `<div style="color:#f87171; font-size:0.8rem;">${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    function _ntPick(i) {
+      const u = _ntSearchResults[i];
+      if (!u || _ntPicked.some((p) => p.id === u.id)) return;
+      _ntPicked.push(u);
+      _ntRenderPicked();
+      _ntRenderReach();
+      _ntSearch();
+    }
+
+    function _ntUnpick(id) {
+      _ntPicked = _ntPicked.filter((u) => u.id !== id);
+      _ntRenderPicked();
+      _ntRenderReach();
+      _ntSearch();
+    }
+
+    function _ntRenderPicked() {
+      const el = document.getElementById('nt-picked');
+      if (!el) return;
+      el.innerHTML = _ntPicked.map((u) => `
+        <span class="nt-chip">${escapeHtml(u.username || u.email)}
+          <button type="button" title="Remove" onclick="_ntUnpick('${jsArg(u.id)}')">&times;</button>
+        </span>`).join('');
+    }
+
+    // ---- send ----
+    async function _ntSend() {
+      if (_ntSending) return;
+      const title = (document.getElementById('nt-title')?.value || '').trim();
+      const message = (document.getElementById('nt-message')?.value || '').trim();
+      const link = (document.getElementById('nt-link')?.value || '').trim();
+      if (!title) { showToast('Give it a title.', 'warn'); return; }
+      if (!message) { showToast('Write a message.', 'warn'); return; }
+      const n = _ntReachCount();
+      if (!n) { showToast('Nobody is selected.', 'warn'); return; }
+
+      // There is no unsend, so the count is confirmed in words before it goes.
+      const who = _ntAudience === 'all'
+        ? `EVERY account on the site — ${n} ${n === 1 ? 'person' : 'people'}`
+        : `${n} ${n === 1 ? 'person' : 'people'}`;
+      const ok = await uiConfirm(
+        `Send "${title}" to ${who}?\n\nIt appears in their notifications. There is no unsend.`,
+        { title: 'Send notification?', okText: 'Send', danger: _ntAudience === 'all' },
+      );
+      if (!ok) return;
+
+      const payload = { audience: _ntAudience, title, body: message };
+      if (link) payload.link = link;
+      if (_ntAudience === 'role') payload.role = document.getElementById('nt-role')?.value || '';
+      if (_ntAudience === 'users') payload.userIds = _ntPicked.map((u) => u.id);
+
+      // Held for the whole request so a second click cannot send it twice.
+      _ntSending = true;
+      const btn = document.getElementById('nt-send');
+      if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Sending…'; }
+      try {
+        const out = await _ntApi('/api/staff/notices', { method: 'POST', body: JSON.stringify(payload) });
+        showToast(`Sent to ${out.recipients} ${out.recipients === 1 ? 'person' : 'people'}.`, 'success');
+        _ntNote('ok', '');
+        _ntPicked = [];
+        _ntRender();
+        _ntLoadLog();
+      } catch (e) {
+        _ntNote('error', e.message);
+        showToast('Could not send: ' + e.message, 'error');
+      } finally {
+        _ntSending = false;
+        if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-paper-plane"></i> Send notification'; }
+        _ntRenderReach();
+      }
+    }
+
+    // ---- what has been sent ----
+    async function _ntLoadLog() {
+      const el = document.getElementById('nt-log');
+      if (!el) return;
+      try {
+        const j = await _ntApi('/api/staff/notices?limit=20');
+        const items = j.notices || [];
+        if (!items.length) {
+          el.innerHTML = `<div class="empty-state"><i class="fas fa-bullhorn"></i><p>Nothing has been sent yet.</p></div>`;
+          return;
+        }
+        el.innerHTML = `<table class="nd-table">
+          <thead><tr><th>When</th><th>Sent by</th><th>To</th><th>People</th><th>Title</th></tr></thead>
+          <tbody>${items.map((x) => `<tr>
+            <td>${escapeHtml(fmtDate(x.createdAt, { time: true }))}</td>
+            <td>${escapeHtml(x.sentByName || x.sentBy.slice(0, 8))}</td>
+            <td>${escapeHtml(_ntAudienceLabel(x))}</td>
+            <td>${Number(x.recipients) || 0}</td>
+            <td title="${escapeHtml(x.body)}">${escapeHtml(x.title)}</td>
+          </tr>`).join('')}</tbody></table>`;
+      } catch (e) {
+        el.innerHTML = `<div class="empty-state"><i class="fas fa-exclamation-triangle"></i><p>Couldn't load what was sent.</p></div>`;
+      }
+    }
+
+    function _ntAudienceLabel(x) {
+      if (x.audience === 'all') return 'Everyone';
+      if (x.audience === 'role') return ROLE_LABELS[x.targetRole] || x.targetRole || 'a role';
+      return x.recipients === 1 ? 'One person' : 'Selected people';
     }
 
     // --- staff-initiated ticket (New ticket modal) ---
