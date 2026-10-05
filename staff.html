@@ -13300,6 +13300,21 @@
 
     /** How far a run looked. 0 is the node's own council area alone, which is
      *  what a first survey does — NOT a missing value, so no `|| 1` here. */
+    /**
+     * A figure for an HTML or an inline-JS context.
+     *
+     * Survey figures arrive from two places that are not this page: the API,
+     * and the node agent's status over the socket. A count, an id or a sample
+     * size is never markup, so coercing is both the escaping and the
+     * validation — a number cannot carry a quote out of an attribute or a tag
+     * into the document. Non-numeric becomes 0 rather than "NaN" so a bad
+     * figure reads as nothing measured instead of as an error.
+     */
+    function _ndNum(v) {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : 0;
+    }
+
     function _ndSvReach(rings) {
       const n = Number.isFinite(rings) ? rings : 1;
       if (n <= 0) return 'this council area';
@@ -13407,14 +13422,14 @@
         || String(a.site || '').localeCompare(String(b.site || '')));
 
       const tile = (v, label, hint, colour) => `<div class="nd-svm-tile">
-        <div class="v" style="color:${colour}">${v}</div><div class="l">${label}</div>
+        <div class="v" style="color:${colour}">${_ndNum(v)}</div><div class="l">${label}</div>
         ${hint ? `<div class="h">${hint}</div>` : ''}</div>`;
 
       const pct = live && live.total ? Math.round(100 * (live.done || 0) / live.total) : 0;
       const progress = showLive ? `
         <div class="nd-sv-live" style="margin-bottom:12px;">
           <div class="nd-sv-live-head">
-            <b>${escapeHtml(live.phase || 'testing')} ${live.done || 0} of ${live.total || '?'}</b>
+            <b>${escapeHtml(live.phase || 'testing')} ${_ndNum(live.done)} of ${live.total ? _ndNum(live.total) : '?'}</b>
             <span>${escapeHtml(live.current || '')}</span>
             <span class="nd-sv-live-at">${pct}%</span>
           </div>
@@ -13442,7 +13457,7 @@
               <td class="r">${p == null
                 ? `<span class="nd-sv-note">${r.verdict === 'noLock' ? 'no signal' : 'no reading'}</span>`
                 : `<span class="nd-sync${cls}">${p}%</span>`}</td>
-              <td class="r nd-svm-num">${r.samples != null ? r.samples : '—'}</td>
+              <td class="r nd-svm-num">${r.samples != null ? _ndNum(r.samples) : '—'}</td>
               <td class="r nd-svm-num">${r.signal != null ? Math.round(r.signal) + ' dB' : '—'}</td>
               <td class="r">${r.added ? '<span class="nd-sv-added">added</span>' : ''}</td>
             </tr>`;
@@ -13462,7 +13477,7 @@
           <div class="nd-svm-head">
             <h3><i class="fas fa-magnifying-glass-location"></i> Site survey</h3>
             <span class="nd-svm-sub">${escapeHtml(_ndSvWhen(sv))}${sv ? ` · ${sv.trigger === 'install' ? 'first install' : 'manual'}
-              · ${_ndSvReach(sv.rings)} · ${sv.candidates || 0} site(s)` : ''}${
+              · ${_ndSvReach(sv.rings)} · ${_ndNum(sv.candidates)} site(s)` : ''}${
               sv && sv.note ? ` · ${escapeHtml(sv.note)}` : ''}</span>
             <span class="nd-svm-right">
               ${showLive ? `<button class="btn btn-secondary btn-sm nd-write" onclick="_ndCancelSurvey()">Cancel survey</button>` : ''}
@@ -13611,19 +13626,19 @@
           [c.noLock, 'not heard', '#f87171'],
           [c.added, 'added', '#4ade80'],
         ].filter(([n], i) => n > 0 || i < 3)
-          .map(([n, label, col]) => `<span><b style="color:${col}">${n}</b> ${label}</span>`).join('');
+          .map(([n, label, col]) => `<span><b style="color:${col}">${_ndNum(n)}</b> ${label}</span>`).join('');
         return `<div class="nd-sv-run nd-sv-runrow">
           <div class="nd-sv-runmain">
             <div class="nd-sv-when">${escapeHtml(sv.startedAt ? _ndSvWhen(sv) : 'Starting')}${
               isLive ? ' <span style="color:#fbbf24">· running</span>'
               : sv.status && sv.status !== 'done' ? ` <span style="color:#fb923c">· ${escapeHtml(sv.status)}</span>` : ''}</div>
             ${isLive
-              ? `<div class="nd-sv-meta">${escapeHtml(live.phase || 'testing')} ${live.done || 0} of ${live.total || '?'}${
+              ? `<div class="nd-sv-meta">${escapeHtml(live.phase || 'testing')} ${_ndNum(live.done)} of ${live.total ? _ndNum(live.total) : '?'}${
                   live.current ? ` · ${escapeHtml(live.current)}` : ''}</div>
                  <div class="nd-sv-prog"><i style="width:${pct}%"></i></div>`
               : `<div class="nd-sv-tally">${tally}</div>`}
           </div>
-          <button class="btn btn-secondary btn-sm" onclick="_ndSurveyModalOpen(${sv.id})">
+          <button class="btn btn-secondary btn-sm" onclick="_ndSurveyModalOpen(${_ndNum(sv.id)})">
             <i class="fas fa-chart-simple"></i> ${isLive ? 'View progress' : 'View results'}
           </button>
         </div>`;
