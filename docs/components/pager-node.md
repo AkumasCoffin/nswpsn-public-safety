@@ -201,6 +201,12 @@ is treated as "nothing to do" — not an error.
 `pager-agent.version` is bumped in that manifest.** `deploy.sh` skips the rebuild
 when the built binary already reports the manifest version.
 
+Bumping the version is necessary but **not currently sufficient**: the
+`pager-agent` entry's sha256 is empty on both platforms, and an empty sha256 is
+treated as nothing to do, so self-update is dormant and a changed agent reaches
+a node only via a fresh install. Details:
+[`forked-runtimes.md`](forked-runtimes.md#self-update-is-dormant-for-the-agents).
+
 ## Internal packages
 
 | Package | Does |

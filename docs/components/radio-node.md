@@ -108,6 +108,13 @@ already installed, which may be nothing, in which case they stay skipped.
 is bumped in `backends/node/assets/node-versions.json`.** `deploy.sh` skips the
 Go rebuild entirely when the built binary already reports the manifest version.
 
+Bumping the version is necessary but **not currently sufficient**: the `agent`
+entry's sha256 is empty, and an empty sha256 is treated as nothing to do
+(`internal/update/update.go:138`), so agent self-update is dormant and a
+changed agent reaches a node only via a fresh install. Self-update does work
+for `sdrtrunk` and `rdio`, whose digests are filled. Details:
+[`forked-runtimes.md`](forked-runtimes.md#self-update-is-dormant-for-the-agents).
+
 ## Supervision
 
 `internal/supervise` runs the two children and restarts them on exit.
@@ -120,7 +127,7 @@ that could be something as generic as `java`, and matching it would SIGKILL
 unrelated JVMs belonging to other users.
 
 The local rdio-scanner binds `127.0.0.1:17391` — admin API and upload on the same
-port (`main.go:51-58`). SDR-Trunk's state lives under `--app-root`, with its
+port (`main.go:54-60`). SDR-Trunk's state lives under `--app-root`, with its
 config database at `<app-root>/database/sdrtrunk.sqlite`.
 
 A fresh per-boot bearer token (32 random hex bytes) is generated and shared
@@ -337,6 +344,7 @@ Two config references live beside the code, written from the fork's sources:
 - [`forked-runtimes.md`](forked-runtimes.md) — what the two forks changed, why,
   and how they are pinned.
 - [`transcription.md`](transcription.md) — what happens to the audio afterwards.
-- [`../architecture.md`](../architecture.md) — the full air-to-pin trace.
+- [`../architecture.md`](../architecture.md) — the full trace from a transmission
+  in the air to where it surfaces.
 - [`../scanner-feed-setup.md`](../scanner-feed-setup.md) — contributing from an
   existing rdio-scanner with nothing to install.

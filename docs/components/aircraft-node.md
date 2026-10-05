@@ -8,6 +8,13 @@ Go module with its own `go.mod` — build it from its own directory.
 What it decodes: **ADS-B Mode S at 1090 MHz**, via a supervised `dump1090`
 decoder. It reads the decoder's JSON output files rather than a network socket.
 
+**Install `dump1090-fa`.** That is the default and the preferred build —
+`dump1090_bin: "dump1090-fa"` in `feeder-nodes/aircraft-node/agent.example.yaml:51`,
+and the installer sets it up. `dump1090-mutability` speaks the same
+`--write-json` contract and works too (`agent.example.yaml:44-45`). This doc
+says "`dump1090`" generically where either will do, and names `dump1090-fa`
+where the exact binary matters.
+
 Read [`../../AGENTS.md`](../../AGENTS.md) before changing anything here.
 
 ---
@@ -230,6 +237,12 @@ kind-aware: an ADS-B node is served the `adsb-agent` entry from
 in its own comment, because `deploy.sh` skips the Go rebuild when the built
 binary already reports the manifest version.
 
+Bumping the version is necessary but **not currently sufficient**: the
+`adsb-agent` entry's sha256 is empty on both platforms, and an empty sha256 is
+treated as nothing to do, so self-update is dormant and a changed agent reaches
+a node only via a fresh install. Details:
+[`forked-runtimes.md`](forked-runtimes.md#self-update-is-dormant-for-the-agents).
+
 ## What the backend does with it
 
 `backends/node/src/services/nodes/adsb*.ts`:
@@ -271,7 +284,7 @@ public surface never reveals which receivers exist or where they are.
   mostly a question of height and horizon.
 - An exact antenna position is mandatory, not optional.
 - Linux only.
-- `dump1090` must already be installed — the agent does not install it.
+- `dump1090-fa` must already be installed — the agent does not install it.
 - Gain adaptation costs about 2s of reception per step, so it moves slowly by
   design.
 

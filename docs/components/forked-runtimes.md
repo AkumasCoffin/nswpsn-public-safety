@@ -6,6 +6,12 @@ node downloads and runs two of them**; the other three run centrally.
 None of this code lives in this repository. What lives here is the manifest that
 pins it: **`backends/node/assets/node-versions.json`**.
 
+Every "commits ahead / behind" figure below is dated **2026-10** and goes out of
+date the next time anyone pushes to either side. Treat them as a sense of scale,
+not a current fact; a `git log` or a GitHub compare against the named upstream is
+the live answer. The *pinned versions and digests* in the manifest are the thing
+that is authoritative here, and those are in the repo.
+
 Read [`../../AGENTS.md`](../../AGENTS.md) before changing anything here.
 
 ---
@@ -72,11 +78,28 @@ The agent compares three numeric parts. `6.14.1-beta.7` therefore reads as
 | `pager-agent` | `0.1.22` | empty, same reason |
 | `adsb-agent` | `0.1.12` | empty, same reason |
 
-**Bumping an agent version in this manifest is how an agent change reaches
-running nodes.** `backends/node/scripts/deploy.sh` skips the Go rebuild entirely
-when the built binary already reports the manifest version, and the built binary's
-version is stamped from the manifest (`-ldflags -X …/version.Version`) so
-self-update compares equal and does not loop.
+### Self-update is dormant for the agents
+
+Bumping an agent version in this manifest is how an agent change is *intended*
+to reach running nodes. **As the manifest stands, it does not.**
+`downloadVerified` returns `ErrNothingToDo` when the entry's sha256 is empty
+(`feeder-nodes/radio-node/internal/update/update.go:138`), and all three agent
+entries are empty on every platform — see the table above. The update package
+says so itself at `update.go:10-11`: the manifest "currently ships PLACEHOLDER
+urls and EMPTY sha256 values", and every entry point treats that as nothing to
+do.
+
+So today a bumped **agent** version reaches a node only through a fresh
+install, which verifies against the published `.sha256` sidecar instead of the
+manifest. Self-update does work for the two runtimes (`sdrtrunk`, `rdio`),
+whose sha256 values are filled. Filling in the agent sha256 values is what
+would turn agent self-update on.
+
+The version plumbing is in place either way:
+`backends/node/scripts/deploy.sh` skips the Go rebuild entirely when the built
+binary already reports the manifest version, and the built binary's version is
+stamped from the manifest (`-ldflags -X …/version.Version`) so self-update
+compares equal and does not loop.
 
 The two big forked runtimes are **placed in the downloads directory once, by
 hand** — the deploy does not rebuild them. Refreshing one means rebuilding its
@@ -88,7 +111,7 @@ here.
 ## `AkumasCoffin/sdrtrunk` — branch `feature/node-control`
 
 Fork of `DSheirer/sdrtrunk`, the Java application that actually decodes P25.
-**32 commits ahead** of upstream `master`.
+**32 commits ahead** of upstream `master` (as of 2026-10).
 
 No node runs this build. It is where the headless control server was written,
 before being ported onto the VCE line. It matters because it is the origin of the
@@ -124,7 +147,7 @@ branch.
 ## `AkumasCoffin/sdrtrunk-vce` — branch `feature/node-control`
 
 Fork of `tylerwatt12/sdrtrunk-vce`, itself a fork of SDR-Trunk with extra
-features and optimisations. **21 commits ahead, 482 behind** its upstream `main`.
+features and optimisations. **21 commits ahead, 482 behind** its upstream `main` (as of 2026-10).
 
 **This is the build every radio node actually runs.** Its first commit on the
 branch is *"node-control: port headless control server + node-runtime build from
@@ -157,7 +180,7 @@ so `internal/update` tries both in preference order.
 ## `AkumasCoffin/rdio-scanner` — branch `master`
 
 Fork of `chuot/rdio-scanner`, the Go-plus-Angular scanner that stores reception
-audio and serves the listening interface. **431 commits ahead, 26 behind**
+audio and serves the listening interface. **431 commits ahead, 26 behind** (as of 2026-10)
 upstream `main`. A radio node runs it locally; there is also a central instance.
 
 ### Why the fork is not optional
@@ -279,7 +302,7 @@ Branches other than `main` may hold untested work.
 ## `AkumasCoffin/pagermon` — branch `master`
 
 Fork of `pagermon/pagermon`, a multimon-ng pager message parser and viewer,
-JavaScript. **3 commits ahead, 0 behind** — 10 files, and that is the whole fork:
+JavaScript. **3 commits ahead, 0 behind** (as of 2026-10) — 10 files, and that is the whole fork:
 
 - restyle the default theme to match the AusAware dark design;
 - remove browser notifications, add a one-hour inactivity timeout;
@@ -324,4 +347,5 @@ Leave it empty rather than guessing.
   these.
 - [`transcription.md`](transcription.md) — where the `transcripts` plugin sends
   audio.
-- [`../architecture.md`](../architecture.md) — the full air-to-pin trace.
+- [`../architecture.md`](../architecture.md) — the full trace from a transmission
+  in the air to where it surfaces.
