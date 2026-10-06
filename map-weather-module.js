@@ -130,21 +130,6 @@
         [4000, 170, 40, 160]
       ]
     },
-    // Wind gusts, same ramp as sustained wind so the two are comparable at a
-    // glance — a gust layer on its own scale would make a 60 km/h gust look
-    // like a different kind of thing from a 60 km/h wind.
-    wind_gusts_10m: {
-      unit: 'km/h',
-      stops: [
-        [0, 40, 70, 110, 0.15],
-        [15, 60, 140, 180],
-        [30, 90, 200, 160],
-        [45, 230, 210, 90],
-        [60, 240, 140, 60],
-        [80, 230, 60, 60],
-        [120, 170, 40, 170]
-      ]
-    },
     // Swell height. Deliberately NOT the same ramp as total wave height: a
     // two-metre groundswell and a two-metre windchop are the same number and
     // completely different days on the water, so they should not look alike.
@@ -274,10 +259,17 @@
   // Variables that share another variable's scale. Apparent temperature is
   // still a temperature; a gust is still a wind speed. Keeping them aliased
   // means the two layers are directly comparable by eye.
+  // Aliases are consulted BEFORE SCALES, so an entry here overrides a
+  // dedicated ramp of the same name — which silently happened to gusts and
+  // swell: both had their own scale written and neither was ever used. Only
+  // list a variable here if it genuinely has no scale of its own.
   const SCALE_ALIASES = {
     apparent_temperature: 'temperature_2m',
-    wind_gusts_10m: 'wind_speed_10m',
-    swell_wave_height: 'wave_height'
+    // Gusts deliberately share the sustained-wind ramp. They are read AGAINST
+    // each other - "gusting to 80 where it is blowing 45" - and that
+    // comparison only works if the same number is the same colour on both.
+    // A dedicated gust ramp was written here once and removed for this reason.
+    wind_gusts_10m: 'wind_speed_10m'
   };
 
   /**
@@ -778,6 +770,24 @@
         this._reset();
       },
 
+      /**
+       * Wind is sampled on its own geometry, not the field's.
+       *
+       * Particles overlay EVERY layer, the way Windy does — so the field
+       * underneath may be on the coarse marine or air grid while the wind
+       * arrays are still the land grid they were fetched on. Sharing one
+       * geometry would index the wind array with the wrong stride and send
+       * every particle off in a confidently wrong direction.
+       */
+      setWindGeometry: function (geometry) {
+        this._windGeometry = geometry || null;
+        this._seedParticles();
+      },
+
+      _windGeo: function () {
+        return this._windGeometry || this._geometry;
+      },
+
       setWind: function (speed, dir, speedVar, dirVar) {
         this._windSpeed = speed || null;
         this._windDir = dir || null;
@@ -833,7 +843,7 @@
 
       /** Wind at a point as { speed, direction, u, v }, or null. */
       windAt: function (lat, lon) {
-        const g = this._geometry;
+        const g = this._windGeo();
         if (!g || !this._windSpeed || !this._windDir) return null;
         const cx = (lon - g.west) / g.stepDeg;
         const cy = (lat - g.south) / g.stepDeg;
@@ -859,7 +869,7 @@
 
       _syncAnimation: function () {
         if (!this._animator || !this._map) return;
-        const haveWind = !!(this._windSpeed && this._windDir && this._geometry);
+        const haveWind = !!(this._windSpeed && this._windDir && this._windGeo());
         const hidden = !!(typeof document !== 'undefined' && document.hidden);
         if (!this._animated || !haveWind || hidden) {
           this._animator.stop();
@@ -903,21 +913,31 @@
           );
           return;
         }
-        // Double the rows so the Mercator pre-stretch has somewhere to put the
-        // rows it moves; any more is wasted, the GPU smooths the rest.
-        const outRows = g.rows * 2;
+        // Interpolated up here rather than by the browser — see UPSAMPLE.
+        const up = upsampleGrid(this._values, g.cols, g.rows, UPSAMPLE, NODATA);
+        // The dense grid covers the same ground, so its geometry is the same
+        // extent with a proportionally smaller step. The Mercator row map
+        // needs that to place rows correctly.
+        const ug = {
+          south: g.south,
+          west: g.west,
+          stepDeg: g.stepDeg * (g.rows - 1) / (up.rows - 1),
+          cols: up.cols,
+          rows: up.rows
+        };
+        const outRows = up.rows;
         if (!this._rowMap || this._rowMap.length !== outRows) {
-          this._rowMap = rowSampleMap(g, outRows);
+          this._rowMap = rowSampleMap(ug, outRows);
         }
-        if (!this._cellCanvas || this._cellCanvas.width !== g.cols || this._cellCanvas.height !== outRows) {
-          const made = offscreen(g.cols, outRows);
+        if (!this._cellCanvas || this._cellCanvas.width !== up.cols || this._cellCanvas.height !== outRows) {
+          const made = offscreen(up.cols, outRows);
           if (!made) return;
           this._cellCanvas = made.el;
           this._cellCtx = made.ctx;
         }
         if (!this._cellCtx) return;
-        const img = this._cellCtx.createImageData(g.cols, outRows);
-        paintCells(this._values, g.cols, g.rows, scale.stops, this._valueScale, img.data, this._rowMap);
+        const img = this._cellCtx.createImageData(up.cols, outRows);
+        paintCells(up.values, up.cols, up.rows, scale.stops, this._valueScale, img.data, this._rowMap);
         this._cellCtx.putImageData(img, 0, 0);
         this._cellRows = outRows;
       },
@@ -1030,7 +1050,7 @@
         const ctx = c.ctx;
         const w = this._size.x;
         const h = this._size.y;
-        const g = this._geometry;
+        const g = this._windGeo();
 
         // Fade, do not clear: this is what leaves trails. It has to be
         // destination-out — painting a low-alpha black rectangle instead would
@@ -1094,7 +1114,7 @@
         const c = this._wind;
         if (!c || !c.ctx || !this._proj || !this._windSpeed || !this._windDir) return;
         const ctx = c.ctx;
-        const g = this._geometry;
+        const g = this._windGeo();
         const w = this._size.x;
         const h = this._size.y;
         ctx.clearRect(0, 0, w, h);
@@ -1182,6 +1202,66 @@
       console.warn('[weather] no 2d canvas:', e && e.message);
       return null;
     }
+  }
+
+  /**
+   * How much to upsample the grid before it is handed to the browser.
+   *
+   * WHY THIS EXISTS. The field was built at one pixel per grid cell — 85 wide
+   * — and drawImage'd up to a ~1700px viewport with imageSmoothingEnabled on,
+   * trusting the browser's bilinear filter to make it smooth. It does not: at
+   * a 20x upscale, from a bitmap whose rows were already nearest-neighbour
+   * duplicated for the Mercator stretch, the cell structure survives and the
+   * field renders as visible hard-edged blocks.
+   *
+   * So the interpolation happens here instead, in VALUE space rather than
+   * colour space. Interpolating values and then colour-mapping follows the
+   * scale correctly; interpolating the mapped colours would blend across
+   * scale stops and invent shades the ramp never defines.
+   *
+   * Five is enough that whatever the browser does on the remaining ~4x is
+   * invisible. It runs once per data change, never per frame.
+   */
+  const UPSAMPLE = 5;
+
+  /**
+   * Bilinear upsample of an Int16 grid, NODATA-aware.
+   *
+   * A cell with no data is not zero, so it cannot be averaged in — a single
+   * absent neighbour would otherwise drag a real reading toward whatever zero
+   * means on that scale. Any sample whose four corners are not all present
+   * stays NODATA, which keeps coastlines and data edges honest instead of
+   * smearing them outward.
+   */
+  function upsampleGrid(values, cols, rows, factor, nodata) {
+    const outCols = (cols - 1) * factor + 1;
+    const outRows = (rows - 1) * factor + 1;
+    const out = new Int16Array(outCols * outRows);
+    for (let oy = 0; oy < outRows; oy++) {
+      const sy = oy / factor;
+      const y0 = Math.min(rows - 1, Math.floor(sy));
+      const y1 = Math.min(rows - 1, y0 + 1);
+      const fy = sy - y0;
+      for (let ox = 0; ox < outCols; ox++) {
+        const sx = ox / factor;
+        const x0 = Math.min(cols - 1, Math.floor(sx));
+        const x1 = Math.min(cols - 1, x0 + 1);
+        const fx = sx - x0;
+
+        const v00 = values[y0 * cols + x0];
+        const v10 = values[y0 * cols + x1];
+        const v01 = values[y1 * cols + x0];
+        const v11 = values[y1 * cols + x1];
+        if (v00 === nodata || v10 === nodata || v01 === nodata || v11 === nodata) {
+          out[oy * outCols + ox] = nodata;
+          continue;
+        }
+        const top = v00 + (v10 - v00) * fx;
+        const bot = v01 + (v11 - v01) * fx;
+        out[oy * outCols + ox] = Math.round(top + (bot - top) * fy);
+      }
+    }
+    return { values: out, cols: outCols, rows: outRows };
   }
 
   function makeCanvas(map, paneName, className) {

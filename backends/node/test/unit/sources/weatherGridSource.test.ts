@@ -218,3 +218,42 @@ describe('refreshWeatherGrid', () => {
     expect(url).toContain('temperature_2m');
   });
 });
+
+describe('a deploy that adds a variable', () => {
+  // THE PRODUCTION BUG. The land list grew from six variables to ten. The new
+  // build went out, the refresh found a six-variable manifest under a day old,
+  // called it current, and skipped — so four layers sat in the UI with no
+  // grids behind them for twenty-four hours. Worse, a missing grid makes the
+  // client bail out silently and leave the PREVIOUS layer on screen, so it
+  // looked like those layers were broken rather than absent.
+  it('refetches when the stored manifest is missing a variable', async () => {
+    const { writeManifest } = await import('../../../src/services/weatherStore.js');
+    const { LAND_VARS } = await import('../../../src/sources/weatherGrid.js');
+
+    // A manifest written minutes ago, but by an older build.
+    await writeManifest({
+      issuedAt: new Date().toISOString(),
+      geometry: { west: 112, south: -44, stepDeg: 0.5, cols: 85, rows: 69 },
+      timesteps: ['2026-10-05T00:00:00.000Z'],
+      vars: [{ name: 'temperature_2m', scale: 10, unit: '°C', marine: false }],
+      nodata: -32768,
+    });
+
+    const calls = stubUpstream();
+    const m = await refreshWeatherGrid(false);
+
+    expect(calls.length).toBeGreaterThan(0);
+    const names = m.vars.map((v) => v.name);
+    for (const want of LAND_VARS) expect(names).toContain(want);
+  });
+
+  it('still skips when the manifest is both current AND complete', async () => {
+    // The guard must not become "always refetch" — that would re-spend the
+    // whole daily budget on every restart.
+    const calls = stubUpstream();
+    await refreshWeatherGrid(true);
+    const first = calls.length;
+    await refreshWeatherGrid(false);
+    expect(calls.length).toBe(first);
+  });
+});

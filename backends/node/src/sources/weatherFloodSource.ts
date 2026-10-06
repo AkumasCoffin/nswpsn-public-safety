@@ -36,7 +36,7 @@ import {
 } from './weatherGrid.js';
 import { loadMask, LAND } from './weatherMask.js';
 import {
-  readManifest, writeGrid, writeManifest, manifestIsFresh,
+  readManifest, writeGrid, writeManifest, manifestIsFresh, manifestCovers,
   type ManifestVar, type WeatherManifest,
 } from '../services/weatherStore.js';
 import { pacedFetch, toUtcIso } from './weatherGridSource.js';
@@ -102,7 +102,7 @@ export async function refreshFloodGrid(force = false): Promise<WeatherManifest |
     return null;
   }
 
-  const alreadyHasFlood = base.vars.some((v) => v.flood);
+  const alreadyHasFlood = manifestCovers(base, FLOOD_VARS, (v) => !!v.flood);
   if (!force && alreadyHasFlood && manifestIsFresh(base, config.WEATHER_GRID_INTERVAL_MS)) {
     log.info({ issuedAt: base.issuedAt }, 'flood grid: stored dataset still current');
     return base;
@@ -212,7 +212,12 @@ export function registerFloodGridSource(): void {
   registerSource<WeatherManifest | null>({
     name: 'weather_flood',
     family: 'misc',
-    intervalMs: config.WEATHER_GRID_INTERVAL_MS,
+    // Short, NOT the daily interval. This source needs the land manifest to
+    // exist, and on a cold boot it does not for the first quarter of an hour —
+    // at a daily cadence, missing that window means missing the whole day. The
+    // coverage + freshness guard makes every call after the first a cheap
+    // no-op, so polling often costs nothing.
+    intervalMs: config.WEATHER_DEPENDENT_INTERVAL_MS,
     fetch: () => refreshFloodGrid(false),
   });
 }

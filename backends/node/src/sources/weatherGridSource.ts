@@ -30,7 +30,7 @@ import {
 } from './weatherGrid.js';
 import {
   pruneGrids, readManifest, writeGrid, writeManifest,
-  manifestIsFresh, type ManifestVar, type WeatherManifest,
+  manifestIsFresh, manifestCovers, type ManifestVar, type WeatherManifest,
 } from '../services/weatherStore.js';
 
 const FORECAST_URL = 'https://api.open-meteo.com/v1/forecast';
@@ -167,7 +167,11 @@ function buildUrl(cells: ReadonlyArray<{ lat: number; lon: number }>): string {
  */
 export async function refreshWeatherGrid(force = false): Promise<WeatherManifest> {
   const existing = await readManifest();
-  if (!force && manifestIsFresh(existing, config.WEATHER_GRID_INTERVAL_MS)) {
+  // Covers the variable list as well as the age — a deploy that adds a
+  // variable has to invalidate the cache, or the new layer has no grids
+  // behind it until tomorrow.
+  const covered = manifestCovers(existing, LAND_VARS, (v) => !v.marine && !v.flood && !v.air);
+  if (!force && covered && manifestIsFresh(existing, config.WEATHER_GRID_INTERVAL_MS)) {
     log.info({ issuedAt: existing!.issuedAt }, 'weather grid: stored dataset still current, not refetching');
     return existing!;
   }

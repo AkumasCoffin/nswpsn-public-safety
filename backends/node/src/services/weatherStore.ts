@@ -194,3 +194,27 @@ export function manifestIsFresh(m: WeatherManifest | null, maxAgeMs: number): bo
   if (!Number.isFinite(issued)) return false;
   return Date.now() - issued < maxAgeMs;
 }
+
+/**
+ * Does the stored manifest still describe the variables the code asks for?
+ *
+ * THE BUG THIS EXISTS FOR. Freshness used to be age alone. So when the land
+ * variable list grew from six to ten and the new build went out, the refresh
+ * found a six-variable manifest less than a day old, called it current, and
+ * skipped. Four layers were live in the UI with no grids behind them for
+ * twenty-four hours — and because a missing grid makes the client bail out
+ * silently, those pills left the PREVIOUS layer on screen rather than showing
+ * an error. It looked like the layers were broken, not like the cache was.
+ *
+ * Age is about the data going stale. This is about the SHAPE going stale, and
+ * a deploy changes the shape the moment it lands.
+ */
+export function manifestCovers(
+  m: WeatherManifest | null,
+  wanted: readonly string[],
+  kind: (v: ManifestVar) => boolean,
+): boolean {
+  if (!m) return false;
+  const have = new Set(m.vars.filter(kind).map((v) => v.name as string));
+  return wanted.every((w) => have.has(w));
+}

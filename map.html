@@ -12651,6 +12651,11 @@ function initPagerHoursFromStorage() {
           </div>
           ${radarTimeline}
           ${fieldPills}
+          <div class="ff-section-label">Animation</div>
+          <div class="floating-filter-pills">
+            ${_ffPill(typeof _wxParticles !== 'undefined' && _wxParticles,
+              '<i class="fa-solid fa-wind"></i> Wind particles', 'toggleWxParticles()')}
+          </div>
           ${fieldTimeline}
         `;
       },
@@ -19763,6 +19768,11 @@ function initPagerHoursFromStorage() {
     // How far ahead "Accum" adds up. Eight 3-hourly steps is the next 24 hours,
     // which is the window people actually ask about before a storm.
     const WX_ACCUM_STEPS = 8;
+    // Particles are an OVERLAY, not a layer. Windy draws them over whatever
+    // field is showing — rain, temperature, pressure — because wind is the
+    // thing that explains the others, and watching it move is most of why the
+    // map reads as weather rather than as a heatmap. On by default.
+    let _wxParticles = true;
     function wxIsFlood(name) { return WX_FLOOD_VARS.indexOf(name) !== -1; }
 
     /**
@@ -19917,6 +19927,48 @@ function initPagerHoursFromStorage() {
       box.style.display = 'block';
     }
 
+    /**
+     * Load the wind grids that drive the particles.
+     *
+     * Always on the LAND axis and the LAND geometry, whatever field is
+     * showing: wind only exists on that grid, and the renderer now samples it
+     * through its own geometry so a coarse marine field underneath does not
+     * drag the particles onto the wrong stride.
+     */
+    async function wxApplyParticles(token) {
+      if (!_wxField) return;
+      if (!_wxParticles) { _wxField.setAnimated(false); return; }
+      const axis = _wxManifest.timesteps || [];
+      // The land axis and a marine or daily axis are different lengths, so the
+      // field's index cannot be reused directly — match on the instant shown.
+      const shownIso = wxAxis(_wxLayer === 'wind' ? 'wind_speed_10m' : _wxLayer)[_wxTimeIdx];
+      let idx = 0, best = Infinity;
+      const want = Date.parse(shownIso || '');
+      axis.forEach(function (t, i) {
+        const gap = Math.abs(Date.parse(t) - (Number.isFinite(want) ? want : Date.now()));
+        if (gap < best) { best = gap; idx = i; }
+      });
+      const iso = axis[idx];
+      if (!iso) return;
+      const pair = await Promise.all([
+        wxFetchGrid('wind_speed_10m', iso),
+        wxFetchGrid('wind_direction_10m', iso),
+      ]);
+      if (token !== _wxLoadToken || !pair[0] || !pair[1]) return;
+      _wxField.setWindGeometry(_wxManifest.geometry);
+      _wxField.setWind(pair[0], pair[1], wxVarMeta('wind_speed_10m'), wxVarMeta('wind_direction_10m'));
+      _wxField.setAnimated(true);
+    }
+
+    window.toggleWxParticles = function () {
+      _wxParticles = !_wxParticles;
+      if (_wxField) {
+        if (!_wxParticles) _wxField.setAnimated(false);
+        else wxApplyParticles(_wxLoadToken);
+      }
+      refreshActiveFilterPanel();
+    };
+
     async function wxApply() {
       if (_wxLayer === 'none' || !_wxManifest || !_wxField) return;
       const axis = wxAxis(_wxLayer === 'wind' ? 'wind_speed_10m' : _wxLayer);
@@ -19930,24 +19982,17 @@ function initPagerHoursFromStorage() {
       const token = ++_wxLoadToken;
       try {
         if (_wxLayer === 'wind') {
-          const pair = await Promise.all([
-            wxFetchGrid('wind_speed_10m', iso),
-            wxFetchGrid('wind_direction_10m', iso),
-          ]);
-          const spd = pair[0], dir = pair[1];
-          if (token !== _wxLoadToken || !spd || !dir) return;
+          const spd = await wxFetchGrid('wind_speed_10m', iso);
+          if (token !== _wxLoadToken || !spd) return;
           _wxField.setGeometry(_wxManifest.geometry);
-          _wxField.setWind(spd, dir, wxVarMeta('wind_speed_10m'), wxVarMeta('wind_direction_10m'));
           _wxField.setVariable('wind_speed_10m');
           _wxField.setData(spd, wxVarMeta('wind_speed_10m'));
-          _wxField.setAnimated(true);
         } else if (_wxLayer === 'precip_accum') {
           const meta = wxVarMeta('precipitation');
           const grid = await wxAccumGrid(
             _wxTimeIdx, (meta && meta.scale) || 100, _wxManifest.nodata || -32768,
           );
           if (token !== _wxLoadToken || !grid) return;
-          _wxField.setAnimated(false);
           _wxField.setGeometry(_wxManifest.geometry);
           _wxField.setVariable('precip_accum');
           // Carries precipitation's scale, because that is the unit it was
@@ -19961,7 +20006,6 @@ function initPagerHoursFromStorage() {
           if (token !== _wxLoadToken || !pair[0]) return;
           // The colour field is cleared, not left underneath: two
           // representations of the same thing stacked is just noise.
-          _wxField.setAnimated(false);
           // Clearing, not supplying data. The scale is passed only so the
           // renderer does not warn about a missing one — there is no variable
           // here to scale, and a warning on every flood selection would train
@@ -19975,7 +20019,6 @@ function initPagerHoursFromStorage() {
         } else {
           const grid = await wxFetchGrid(_wxLayer, iso);
           if (token !== _wxLoadToken || !grid) return;
-          _wxField.setAnimated(false);
           // Geometry BEFORE data: marine is a coarser grid, and handing a
           // 43x35 array to a renderer still sized for 85x69 would read the
           // array off its end and smear the waves across the continent.
@@ -19987,6 +20030,7 @@ function initPagerHoursFromStorage() {
           _wxField.setData(grid, wxVarMeta(_wxLayer));
         }
         wxRenderLegend();
+        await wxApplyParticles(token);
       } catch (e) {
         console.warn('weather field failed to load', e);
       } finally {
@@ -21275,7 +21319,7 @@ function initPagerHoursFromStorage() {
   <script src="ui-dialogs.js"></script>
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
-  <script src="map-weather-module.js?v=4"></script>
+  <script src="map-weather-module.js?v=5"></script>
   <script src="map-editor-module.js?v=43"></script>
 </body>
 </html>

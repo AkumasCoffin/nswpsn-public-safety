@@ -182,7 +182,12 @@ export function registerAirGridSource(): void {
   registerSource<WeatherManifest | null>({
     name: 'weather_air',
     family: 'misc',
-    intervalMs: config.WEATHER_GRID_INTERVAL_MS,
+    // Short, NOT the daily interval. This source needs the land manifest to
+    // exist, and on a cold boot it does not for the first quarter of an hour —
+    // at a daily cadence, missing that window means missing the whole day. The
+    // coverage + freshness guard makes every call after the first a cheap
+    // no-op, so polling often costs nothing.
+    intervalMs: config.WEATHER_DEPENDENT_INTERVAL_MS,
     fetch: () => refreshAirGrid(false),
   });
 }

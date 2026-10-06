@@ -27,7 +27,7 @@ import {
 } from './weatherGrid.js';
 import { loadMask, oceanCellIndices } from './weatherMask.js';
 import {
-  readManifest, writeGrid, writeManifest, manifestIsFresh,
+  readManifest, writeGrid, writeManifest, manifestIsFresh, manifestCovers,
   type ManifestVar, type WeatherManifest,
 } from '../services/weatherStore.js';
 import { pacedFetch, pickTimesteps, toUtcIso } from './weatherGridSource.js';
@@ -81,7 +81,7 @@ export async function refreshMarineGrid(force = false): Promise<WeatherManifest 
     return null;
   }
 
-  const alreadyHasMarine = base.vars.some((v) => v.marine);
+  const alreadyHasMarine = manifestCovers(base, MARINE_VARS, (v) => !!v.marine);
   if (!force && alreadyHasMarine && manifestIsFresh(base, config.WEATHER_GRID_INTERVAL_MS)) {
     log.info({ issuedAt: base.issuedAt }, 'marine grid: stored dataset still current');
     return base;
@@ -192,7 +192,12 @@ export function registerMarineGridSource(): void {
   registerSource<WeatherManifest | null>({
     name: 'weather_marine',
     family: 'misc',
-    intervalMs: config.WEATHER_GRID_INTERVAL_MS,
+    // Short, NOT the daily interval. This source needs the land manifest to
+    // exist, and on a cold boot it does not for the first quarter of an hour —
+    // at a daily cadence, missing that window means missing the whole day. The
+    // coverage + freshness guard makes every call after the first a cheap
+    // no-op, so polling often costs nothing.
+    intervalMs: config.WEATHER_DEPENDENT_INTERVAL_MS,
     fetch: () => refreshMarineGrid(false),
   });
 }

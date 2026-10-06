@@ -94,6 +94,10 @@ const Schema = z.object({
   // One full refresh a day. Each fetch already carries 9 days of time series,
   // so refreshing more often buys freshness of the model run, not more range.
   WEATHER_GRID_INTERVAL_MS: z.coerce.number().int().positive().default(24 * 60 * 60_000),
+  // Marine, flood and air all fold into the land manifest and can only run
+  // once it exists. They poll often and no-op cheaply, so a cold boot picks
+  // them up minutes after the land grid lands rather than a day later.
+  WEATHER_DEPENDENT_INTERVAL_MS: z.coerce.number().int().positive().default(10 * 60_000),
   // Days of history and forecast in each point's series. 2 + 7 = 9 days, which
   // is inside Open-Meteo's 2-week single-call weighting.
   WEATHER_PAST_DAYS: z.coerce.number().int().min(0).max(92).default(2),
