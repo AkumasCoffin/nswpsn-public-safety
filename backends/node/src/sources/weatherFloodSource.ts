@@ -41,7 +41,7 @@ import {
 } from '../services/weatherStore.js';
 import { pacedFetch, toUtcIso } from './weatherGridSource.js';
 
-const FLOOD_URL = 'https://flood-api.open-meteo.com/v1/flood';
+const FLOOD_URL = config.OPEN_METEO_FLOOD_URL;
 
 /**
  * Hard ceiling on the requested window, in days.

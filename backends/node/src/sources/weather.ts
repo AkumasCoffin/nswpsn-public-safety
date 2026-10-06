@@ -6,11 +6,12 @@
  * Mirrors the Python routes at external_api_proxy.py:6847 + 6999.
  */
 import { fetchJson } from './shared/http.js';
+import { config } from '../config.js';
 import { registerSource } from '../services/sourceRegistry.js';
 import { liveStore } from '../store/live.js';
 
 const RADAR_URL = 'https://api.rainviewer.com/public/weather-maps.json';
-const OPEN_METEO_BASE = 'https://api.open-meteo.com/v1/forecast';
+const OPEN_METEO_BASE = config.OPEN_METEO_FORECAST_URL;
 
 export interface NswLocation {
   name: string;

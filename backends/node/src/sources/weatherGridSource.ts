@@ -33,7 +33,7 @@ import {
   manifestIsFresh, manifestCovers, type ManifestVar, type WeatherManifest,
 } from '../services/weatherStore.js';
 
-const FORECAST_URL = 'https://api.open-meteo.com/v1/forecast';
+const FORECAST_URL = config.OPEN_METEO_FORECAST_URL;
 
 /** Hours between stored timesteps. */
 export const STEP_HOURS = 3;

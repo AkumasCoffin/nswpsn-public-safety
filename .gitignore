@@ -57,6 +57,9 @@ docs/*
 # Handed to an outside contributor setting up a scanner feed, so it ships with
 # the code that serves the endpoint it describes.
 !docs/scanner-feed-setup.md
+# The self-hosted Open-Meteo runbook: the operator runs the container, so
+# the exact compose file and .env block have to live where they can be read.
+!docs/self-hosted-open-meteo.md
 # The documentation set OPERATING-RULES.md and CONTRIBUTING.md point at. These
 # have to ship: a new contributor is expected to get the architecture right from
 # this repo alone, without asking the owner.

@@ -32,7 +32,7 @@ import {
   type GridGeometry,
 } from './weatherGrid.js';
 
-const ELEVATION_URL = 'https://api.open-meteo.com/v1/elevation';
+const ELEVATION_URL = config.OPEN_METEO_ELEVATION_URL;
 
 /**
  * The elevation API's own coordinate ceiling, which is NOT the forecast API's.

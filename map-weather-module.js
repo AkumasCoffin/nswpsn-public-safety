@@ -959,7 +959,7 @@
           return;
         }
         // Interpolated up here rather than by the browser — see UPSAMPLE.
-        const up = upsampleGrid(this._values, g.cols, g.rows, UPSAMPLE, NODATA);
+        const up = upsampleGrid(this._values, g.cols, g.rows, upsampleFactorFor(g.cols, g.rows), NODATA);
         // The dense grid covers the same ground, so its geometry is the same
         // extent with a proportionally smaller step. The Mercator row map
         // needs that to place rows correctly.
@@ -1270,6 +1270,23 @@
   const UPSAMPLE = 5;
 
   /**
+   * Upsample factor that respects a bitmap budget.
+   *
+   * Written for the self-hosted upstream: at 0.15 degrees the grid is already
+   * 281x227, and a blind 5x on top of the Mercator row-doubling would build a
+   * ~60 MB RGBA offscreen canvas per data change. A grid that dense needs
+   * little help anyway — the factor steps down so the output stays under
+   * about two million pixels, and never below 1.
+   */
+  function upsampleFactorFor(cols, rows) {
+    const BUDGET_PX = 2_000_000;
+    let f = UPSAMPLE;
+    // x2 for the Mercator row doubling applied after the upsample.
+    while (f > 1 && ((cols - 1) * f + 1) * (((rows - 1) * f + 1) * 2) > BUDGET_PX) f -= 1;
+    return f;
+  }
+
+  /**
    * Bilinear upsample of an Int16 grid, NODATA-aware.
    *
    * A cell with no data is not zero, so it cannot be averaged in — a single
@@ -1558,6 +1575,7 @@
     dequantise: dequantise,
     paintCells: paintCells,
     upsampleGrid: upsampleGrid,
+    upsampleFactorFor: upsampleFactorFor,
     rowSampleMap: rowSampleMap,
     sampleBilinear: sampleBilinear,
     sampleDirection: sampleDirection,

@@ -90,7 +90,21 @@ const Schema = z.object({
   // paces against; 400 leaves headroom for the point-readout endpoint, and
   // turns a full land refresh into a ~15 minute background job, which for a
   // once-a-day fetch costs nothing.
-  WEATHER_LOCATIONS_PER_MIN: z.coerce.number().int().positive().default(400),
+  // 0 (or any non-positive value) disables pacing entirely — for a
+  // self-hosted Open-Meteo, which has no rate limits.
+  WEATHER_LOCATIONS_PER_MIN: z.coerce.number().int().default(400),
+
+  // --- Open-Meteo upstreams ----------------------------------------------
+  // Defaults are the public API. Point these at a self-hosted instance
+  // (ghcr.io/open-meteo/open-meteo serves the same endpoints) and set
+  // WEATHER_LOCATIONS_PER_MIN=0 to lift the pacing — that is the entire
+  // switch; no code changes. docs/self-hosted-open-meteo.md is the runbook.
+  OPEN_METEO_FORECAST_URL: z.string().default('https://api.open-meteo.com/v1/forecast'),
+  OPEN_METEO_MARINE_URL: z.string().default('https://marine-api.open-meteo.com/v1/marine'),
+  OPEN_METEO_AIR_URL: z.string().default('https://air-quality-api.open-meteo.com/v1/air-quality'),
+  OPEN_METEO_FLOOD_URL: z.string().default('https://flood-api.open-meteo.com/v1/flood'),
+  OPEN_METEO_ELEVATION_URL: z.string().default('https://api.open-meteo.com/v1/elevation'),
+
   // One full refresh a day. Each fetch already carries 9 days of time series,
   // so refreshing more often buys freshness of the model run, not more range.
   WEATHER_GRID_INTERVAL_MS: z.coerce.number().int().positive().default(24 * 60 * 60_000),

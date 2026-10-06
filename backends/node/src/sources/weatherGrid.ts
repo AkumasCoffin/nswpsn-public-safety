@@ -311,7 +311,12 @@ export function reportSpend(): SpendEstimate {
     stepDeg: config.WEATHER_GRID_STEP,
     marineStepDeg: config.WEATHER_MARINE_STEP,
   };
-  if (est.withinFreeTier) {
+  const selfHosted = !config.OPEN_METEO_FORECAST_URL.startsWith('https://api.open-meteo.com');
+  if (selfHosted) {
+    // No rate limits on a self-hosted instance, so the free-tier arithmetic
+    // is informational only.
+    log.info(detail, 'weather grid: self-hosted Open-Meteo upstream, no quota applies');
+  } else if (est.withinFreeTier) {
     log.info(detail, 'weather grid: within the Open-Meteo free tier');
   } else {
     log.warn(

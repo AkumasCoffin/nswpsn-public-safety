@@ -32,7 +32,7 @@ import {
 } from '../services/weatherStore.js';
 import { pacedFetch, pickTimesteps, toUtcIso } from './weatherGridSource.js';
 
-const MARINE_URL = 'https://marine-api.open-meteo.com/v1/marine';
+const MARINE_URL = config.OPEN_METEO_MARINE_URL;
 
 const UNITS: Readonly<Record<string, string>> = {
   wave_height: 'm',

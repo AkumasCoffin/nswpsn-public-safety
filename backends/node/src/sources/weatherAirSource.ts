@@ -33,7 +33,7 @@ import {
 } from '../services/weatherStore.js';
 import { pacedFetch, pickTimesteps } from './weatherGridSource.js';
 
-const AIR_URL = 'https://air-quality-api.open-meteo.com/v1/air-quality';
+const AIR_URL = config.OPEN_METEO_AIR_URL;
 
 const UNITS: Readonly<Record<string, string>> = {
   pm2_5: 'µg/m³',

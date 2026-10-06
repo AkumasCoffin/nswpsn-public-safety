@@ -13,6 +13,7 @@
  * field does not (observed rain, named towns).
  */
 import { Hono } from 'hono';
+import { config } from '../config.js';
 import {
   weatherCurrentSnapshot,
   weatherRadarSnapshot,
@@ -154,7 +155,7 @@ weatherRouter.get('/api/weather/point', async (c) => {
         timezone: 'UTC',
         forecast_days: '7',
       });
-      return fetchJson<unknown>(`https://api.open-meteo.com/v1/forecast?${params.toString()}`, {
+      return fetchJson<unknown>(`${config.OPEN_METEO_FORECAST_URL}?${params.toString()}`, {
         headers: { 'User-Agent': 'AusAware/1.0 (+https://nswpsn.forcequit.xyz)' },
       });
     }, POINT_SWR);
