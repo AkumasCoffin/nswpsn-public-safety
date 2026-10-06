@@ -104,6 +104,15 @@ const Schema = z.object({
   OPEN_METEO_AIR_URL: z.string().default('https://air-quality-api.open-meteo.com/v1/air-quality'),
   OPEN_METEO_FLOOD_URL: z.string().default('https://flood-api.open-meteo.com/v1/flood'),
   OPEN_METEO_ELEVATION_URL: z.string().default('https://api.open-meteo.com/v1/elevation'),
+  // Explicit model pins, comma-separated, empty = let the API choose.
+  //
+  // MANDATORY on a self-hosted instance. Without models= the server picks its
+  // default chain, and the S3 mirror's Australian default (BOM ACCESS-G)
+  // stopped updating in June 2025 — every value comes back null and nothing
+  // errors. ukmo_global_deterministic_10km is current, hourly and 10 km.
+  OPEN_METEO_FORECAST_MODELS: z.string().default(''),
+  OPEN_METEO_MARINE_MODELS: z.string().default(''),
+  OPEN_METEO_AIR_MODELS: z.string().default(''),
 
   // One full refresh a day. Each fetch already carries 9 days of time series,
   // so refreshing more often buys freshness of the model run, not more range.

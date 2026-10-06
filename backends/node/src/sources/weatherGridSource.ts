@@ -156,6 +156,7 @@ function buildUrl(cells: ReadonlyArray<{ lat: number; lon: number }>): string {
     past_days: String(config.WEATHER_PAST_DAYS),
     forecast_days: String(config.WEATHER_FORECAST_DAYS),
   });
+  if (config.OPEN_METEO_FORECAST_MODELS) params.set('models', config.OPEN_METEO_FORECAST_MODELS);
   return `${FORECAST_URL}?${params.toString()}`;
 }
 
