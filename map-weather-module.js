@@ -466,21 +466,32 @@
    */
   const EDGE_FADE_CELLS = 6;
 
-  function edgeAlpha(x, y, cols, rows, fade) {
+  function edgeAlpha(x, y, cols, rows, fade, edges) {
     // Proportional, and never more than a quarter of the smaller dimension.
     // A fixed margin is a sensible 7% of the real 85x69 grid and would erase a
     // small one outright — which is exactly what it did to a 3x2 test grid.
     const span = Math.min(cols, rows);
     const f = Math.min(fade, Math.floor(span / 4));
     if (!(f > 0)) return 1;
-    const d = Math.min(x, y, cols - 1 - x, rows - 1 - y);
+    // When the painted bitmap is a viewport WINDOW of the grid, only the sides
+    // that are real data boundaries fade; a side the window was clipped on
+    // continues past the screen and fading it would draw a phantom edge in
+    // the middle of the field. y counts from the SOUTH edge here.
+    const e = edges || { west: true, east: true, south: true, north: true };
+    const d = Math.min(
+      e.west ? x : Infinity,
+      e.south ? y : Infinity,
+      e.east ? cols - 1 - x : Infinity,
+      e.north ? rows - 1 - y : Infinity,
+    );
+    if (d === Infinity) return 1;
     if (d >= f) return 1;
     // Smoothstep, so the boundary has no visible banding of its own.
     const t = d / f;
     return t * t * (3 - 2 * t);
   }
 
-  function paintCells(values, cols, rows, stops, scale, out, rowMap) {
+  function paintCells(values, cols, rows, stops, scale, out, rowMap, edges) {
     const outRows = rowMap ? rowMap.length : rows;
     const s = scale > 0 ? scale : 1;
     for (let y = 0; y < outRows; y += 1) {
@@ -509,7 +520,7 @@
         out[o + 2] = c.b;
         // Faded at the boundary of the data, so coverage ends like a field
         // rather than like a rectangle dropped on the ocean.
-        out[o + 3] = Math.round(c.a * edgeAlpha(col, srcRow, cols, rows, EDGE_FADE_CELLS));
+        out[o + 3] = Math.round(c.a * edgeAlpha(col, srcRow, cols, rows, EDGE_FADE_CELLS, edges));
       }
     }
     return outRows;
@@ -946,11 +957,22 @@
         sizeCanvas(this._wind, this._size, this._dpr);
       },
 
-      /** Colour-map the grid once, into the small offscreen canvas. */
+      /**
+       * Colour-map the VISIBLE WINDOW of the grid into the offscreen canvas.
+       *
+       * The field used to be painted once, whole-continent, into a bitmap the
+       * browser then stretched to wherever the map was looking. That made
+       * zooming in a magnification of the same image: the move to 0.1-degree
+       * data visibly improved the national view and barely improved Sydney.
+       * Rendering the window the user is actually looking at — at a factor
+       * aimed at the screen's own pixels — is what makes zoom raise quality.
+       * The cost is bounded by the viewport, so a finer grid costs no more.
+       */
       _rebuildCells: function () {
         const g = this._geometry;
         const scale = scaleFor(this._variable);
         this._cellRows = 0;
+        this._cellGeo = null;
         if (!g || !this._values || !scale) return;
         if (this._values.length < g.cols * g.rows) {
           console.warn(
@@ -958,21 +980,85 @@
           );
           return;
         }
+
+        // The visible cell window, padded so a drag reveals field, not blank.
+        let x0 = 0;
+        let y0 = 0;
+        let x1 = g.cols - 1;
+        let y1 = g.rows - 1;
+        let targetCols = 0;
+        try {
+          const b = this._map && this._map.getBounds ? this._map.getBounds() : null;
+          if (b) {
+            const PAD = 2;
+            x0 = Math.max(0, Math.floor((b.getWest() - g.west) / g.stepDeg) - PAD);
+            x1 = Math.min(g.cols - 1, Math.ceil((b.getEast() - g.west) / g.stepDeg) + PAD);
+            y0 = Math.max(0, Math.floor((b.getSouth() - g.south) / g.stepDeg) - PAD);
+            y1 = Math.min(g.rows - 1, Math.ceil((b.getNorth() - g.south) / g.stepDeg) + PAD);
+            if (x1 < x0 + 1 || y1 < y0 + 1) return; // grid is off-screen
+          }
+        } catch (e) {
+          /* a map stub without bounds falls back to the whole grid */
+        }
+
+        const sub = {
+          west: g.west + x0 * g.stepDeg,
+          south: g.south + y0 * g.stepDeg,
+          stepDeg: g.stepDeg,
+          cols: x1 - x0 + 1,
+          rows: y1 - y0 + 1
+        };
+        // Which sides of the window are the DATA's own edges. Only those fade;
+        // a clipped side continues off-screen and must not grow a border.
+        const edges = {
+          west: x0 === 0,
+          east: x1 === g.cols - 1,
+          south: y0 === 0,
+          north: y1 === g.rows - 1
+        };
+
+        let values = this._values;
+        if (sub.cols !== g.cols || sub.rows !== g.rows) {
+          values = new Int16Array(sub.cols * sub.rows);
+          for (let r = 0; r < sub.rows; r += 1) {
+            const srcBase = (y0 + r) * g.cols + x0;
+            values.set(this._values.subarray(srcBase, srcBase + sub.cols), r * sub.cols);
+          }
+        }
+
+        // Aim the bitmap at the window's on-screen size.
+        try {
+          if (this._map) {
+            const tl = this._map.latLngToContainerPoint(
+              [sub.south + (sub.rows - 1) * sub.stepDeg, sub.west]);
+            const br = this._map.latLngToContainerPoint(
+              [sub.south, sub.west + (sub.cols - 1) * sub.stepDeg]);
+            targetCols = Math.abs(br.x - tl.x);
+          }
+        } catch (e) {
+          targetCols = 0;
+        }
+
         // Interpolated up here rather than by the browser — see UPSAMPLE.
-        const up = upsampleGrid(this._values, g.cols, g.rows, upsampleFactorFor(g.cols, g.rows), NODATA);
-        // The dense grid covers the same ground, so its geometry is the same
+        const up = upsampleGrid(
+          values, sub.cols, sub.rows,
+          upsampleFactorFor(sub.cols, sub.rows, targetCols), NODATA);
+        // The dense window covers the same ground, so its geometry is the same
         // extent with a proportionally smaller step. The Mercator row map
         // needs that to place rows correctly.
         const ug = {
-          south: g.south,
-          west: g.west,
-          stepDeg: g.stepDeg * (g.rows - 1) / (up.rows - 1),
+          south: sub.south,
+          west: sub.west,
+          stepDeg: sub.stepDeg * (sub.rows - 1) / (up.rows - 1),
           cols: up.cols,
           rows: up.rows
         };
         const outRows = up.rows;
-        if (!this._rowMap || this._rowMap.length !== outRows) {
+        // The map depends on where the window sits, not just how tall it is.
+        const rowKey = ug.south + ':' + ug.stepDeg + ':' + outRows;
+        if (!this._rowMap || this._rowMapKey !== rowKey) {
           this._rowMap = rowSampleMap(ug, outRows);
+          this._rowMapKey = rowKey;
         }
         if (!this._cellCanvas || this._cellCanvas.width !== up.cols || this._cellCanvas.height !== outRows) {
           const made = offscreen(up.cols, outRows);
@@ -982,9 +1068,10 @@
         }
         if (!this._cellCtx) return;
         const img = this._cellCtx.createImageData(up.cols, outRows);
-        paintCells(up.values, up.cols, up.rows, scale.stops, this._valueScale, img.data, this._rowMap);
+        paintCells(up.values, up.cols, up.rows, scale.stops, this._valueScale, img.data, this._rowMap, edges);
         this._cellCtx.putImageData(img, 0, 0);
         this._cellRows = outRows;
+        this._cellGeo = sub;
       },
 
       /** Reposition both canvases to the viewport and repaint. */
@@ -994,6 +1081,10 @@
         if (this._field) L.DomUtil.setPosition(this._field.el, origin);
         if (this._wind) L.DomUtil.setPosition(this._wind.el, origin);
         this._recomputeProjection();
+        // The window the bitmap covers moved with the view, so repaint it.
+        // Bounded by the viewport budget, this is cheap enough for every
+        // settled pan and zoom (getEvents fires _reset on moveend/zoomend).
+        this._rebuildCells();
         this._drawField();
         // Trails are drawn in screen space, so any pan or zoom invalidates
         // every pixel of them. Clear rather than smear.
@@ -1054,7 +1145,9 @@
         if (!c || !c.ctx) return;
         const ctx = c.ctx;
         ctx.clearRect(0, 0, this._size.x, this._size.y);
-        const g = this._geometry;
+        // The painted bitmap covers the viewport WINDOW, so it is projected by
+        // the window's own corners — the full grid's would smear it.
+        const g = this._cellGeo || this._geometry;
         if (!g || !this._cellCanvas || !this._cellRows) return;
         const half = g.stepDeg / 2;
         const north = g.south + (g.rows - 1) * g.stepDeg + half;
@@ -1278,11 +1371,18 @@
    * little help anyway — the factor steps down so the output stays under
    * about two million pixels, and never below 1.
    */
-  function upsampleFactorFor(cols, rows) {
-    const BUDGET_PX = 2_000_000;
-    let f = UPSAMPLE;
-    // x2 for the Mercator row doubling applied after the upsample.
-    while (f > 1 && ((cols - 1) * f + 1) * (((rows - 1) * f + 1) * 2) > BUDGET_PX) f -= 1;
+  function upsampleFactorFor(cols, rows, targetCols) {
+    const BUDGET_PX = 2_500_000;
+    const MAX_FACTOR = 10;
+    const fits = (f) => ((cols - 1) * f + 1) * (((rows - 1) * f + 1) * 2) <= BUDGET_PX;
+    // With a screen target (viewport-windowed rendering): aim the bitmap at
+    // half the on-screen pixel width of the window, so the browser's own
+    // bilinear only ever smooths a 2x stretch — crisp at any zoom, and the
+    // cost is bounded by the viewport, not by the grid.
+    let f = targetCols
+      ? Math.min(MAX_FACTOR, Math.max(1, Math.ceil(targetCols / 2 / Math.max(1, cols))))
+      : UPSAMPLE;
+    while (f > 1 && !fits(f)) f -= 1;
     return f;
   }
 
