@@ -210,6 +210,10 @@ export async function fetchWeatherCurrent(): Promise<WeatherSnapshot> {
 
   const data = await fetchJson<unknown>(url, {
     headers: { 'User-Agent': 'Mozilla/5.0' },
+    // A cold self-hosted instance pulls model chunks from S3 on its first
+    // request — well past the 15s default, which timed this source out on
+    // every boot of the first self-hosted deploy.
+    timeoutMs: 60_000,
   });
   const list: OpenMeteoEntry[] = Array.isArray(data)
     ? (data as OpenMeteoEntry[])

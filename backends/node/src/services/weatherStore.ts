@@ -120,6 +120,37 @@ export async function writeManifest(m: WeatherManifest): Promise<void> {
   await writeFileAtomic(join(dir, 'manifest.json'), JSON.stringify(m));
 }
 
+/**
+ * Serialized read-modify-write of the manifest.
+ *
+ * Land, marine, flood and air refresh CONCURRENTLY (prewarm runs them
+ * together), each takes minutes, and each used to read the manifest at the
+ * START of its run and write `{...thatStaleBase, itsOwnPart}` at the END —
+ * so whoever finished last erased everyone who finished during its run. In
+ * production: marine refreshed at 12:28, air (which had read the manifest
+ * before that) wrote at 12:30, and the marine section was gone — waves,
+ * swell and currents dead on the map with all their grids sitting on disk.
+ *
+ * Every manifest write goes through here: the mutator receives the manifest
+ * AS IT IS NOW, under a queue that lets only one merge run at a time, and
+ * returns the next manifest. A mutator must build its own section from its
+ * own data and take EVERYTHING ELSE from `current`.
+ */
+let _mergeQueue: Promise<unknown> = Promise.resolve();
+
+export function mergeManifest(
+  mutate: (current: WeatherManifest | null) => WeatherManifest,
+): Promise<WeatherManifest> {
+  const run = _mergeQueue.then(async () => {
+    const next = mutate(await readManifest());
+    await writeManifest(next);
+    return next;
+  });
+  // A failed merge must not jam the queue for every later writer.
+  _mergeQueue = run.catch(() => {});
+  return run;
+}
+
 export async function readManifest(): Promise<WeatherManifest | null> {
   try {
     const raw = await readFile(join(weatherDir(), 'manifest.json'), 'utf8');

@@ -29,6 +29,7 @@ import {
   reserveLocations,
 } from './weatherGrid.js';
 import {
+  mergeManifest,
   pruneGrids, readManifest, writeGrid, writeManifest,
   manifestIsFresh, manifestCovers, type ManifestVar, type WeatherManifest,
 } from '../services/weatherStore.js';
@@ -278,25 +279,30 @@ export async function refreshWeatherGrid(force = false): Promise<WeatherManifest
     marine: false,
   }));
 
-  const manifest: WeatherManifest = {
+  // Through the serialized merge, against the manifest AS IT IS NOW — not the
+  // `existing` read when this refresh started. A land refresh takes minutes,
+  // and marine, flood or air may all have folded themselves in during it;
+  // building from the stale copy erased their sections (and pruneGrids then
+  // deleted their grids from disk).
+  //
+  // Marine is a separate source on its own grid and time axis, and it folds
+  // itself into this manifest. Rebuilding `vars` from LAND_VARS alone would
+  // drop it — and because prune below keeps only what the manifest lists,
+  // that would delete every marine grid on disk and force a full refetch the
+  // same day. Carry whatever the dependents already wrote straight through.
+  const manifest = await mergeManifest((current) => ({
     issuedAt: new Date().toISOString(),
     geometry,
     timesteps,
-    // Marine is a separate source on its own grid and time axis, and it folds
-    // itself into this manifest. Rebuilding `vars` from LAND_VARS alone would
-    // drop it — and because prune below keeps only what the manifest lists,
-    // that would delete every marine grid on disk and force a full refetch the
-    // same day. Carry whatever marine already knows about straight through.
-    vars: [...vars, ...(existing?.vars.filter((v) => v.marine || v.flood || v.air) ?? [])],
+    vars: [...vars, ...(current?.vars.filter((v) => v.marine || v.flood || v.air) ?? [])],
     nodata: -32768,
-    ...(existing?.marineGeometry ? { marineGeometry: existing.marineGeometry } : {}),
-    ...(existing?.marineTimesteps ? { marineTimesteps: existing.marineTimesteps } : {}),
-    ...(existing?.floodGeometry ? { floodGeometry: existing.floodGeometry } : {}),
-    ...(existing?.floodTimesteps ? { floodTimesteps: existing.floodTimesteps } : {}),
-    ...(existing?.airGeometry ? { airGeometry: existing.airGeometry } : {}),
-    ...(existing?.airTimesteps ? { airTimesteps: existing.airTimesteps } : {}),
-  };
-  await writeManifest(manifest);
+    ...(current?.marineGeometry ? { marineGeometry: current.marineGeometry } : {}),
+    ...(current?.marineTimesteps ? { marineTimesteps: current.marineTimesteps } : {}),
+    ...(current?.floodGeometry ? { floodGeometry: current.floodGeometry } : {}),
+    ...(current?.floodTimesteps ? { floodTimesteps: current.floodTimesteps } : {}),
+    ...(current?.airGeometry ? { airGeometry: current.airGeometry } : {}),
+    ...(current?.airTimesteps ? { airTimesteps: current.airTimesteps } : {}),
+  }));
   await pruneGrids(manifest);
 
   log.info(

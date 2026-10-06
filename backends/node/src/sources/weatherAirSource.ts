@@ -28,6 +28,7 @@ import {
   airGeometry, allCells, batchCells, cellCount, quantiseOne,
 } from './weatherGrid.js';
 import {
+  mergeManifest,
   readManifest, writeGrid, writeManifest, manifestIsFresh,
   type ManifestVar, type WeatherManifest,
 } from '../services/weatherStore.js';
@@ -161,16 +162,21 @@ export async function refreshAirGrid(force = false): Promise<WeatherManifest | n
     air: true,
   }));
 
-  const merged: WeatherManifest = {
-    ...base,
-    airGeometry: geometry,
-    // Its own axis, for the same reason marine keeps one: the two APIs are asked
-    // for the same window, and a mismatch must not quietly have the client read
-    // a land timestep off an air grid.
-    airTimesteps: timesteps,
-    vars: [...base.vars.filter((v) => !v.air), ...airVars],
-  };
-  await writeManifest(merged);
+  // Merged against the manifest AS IT IS NOW — see marine for why. This exact
+  // source was the one that erased marine in production: it read the manifest
+  // before marine wrote, and wrote after.
+  const merged = await mergeManifest((current) => {
+    const b = current ?? base;
+    return {
+      ...b,
+      airGeometry: geometry,
+      // Its own axis, for the same reason marine keeps one: the two APIs are
+      // asked for the same window, and a mismatch must not quietly have the
+      // client read a land timestep off an air grid.
+      airTimesteps: timesteps,
+      vars: [...b.vars.filter((v) => !v.air), ...airVars],
+    };
+  });
 
   log.info(
     { cells: total, timesteps: timesteps.length, requests: batches.length },

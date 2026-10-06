@@ -27,6 +27,7 @@ import {
 } from './weatherGrid.js';
 import { loadMask, oceanCellIndices } from './weatherMask.js';
 import {
+  mergeManifest,
   readManifest, writeGrid, writeManifest, manifestIsFresh, manifestCovers,
   type ManifestVar, type WeatherManifest,
 } from '../services/weatherStore.js';
@@ -171,16 +172,21 @@ export async function refreshMarineGrid(force = false): Promise<WeatherManifest 
     air: false,
   }));
 
-  const merged: WeatherManifest = {
-    ...base,
-    marineGeometry: geometry,
-    // Marine timesteps are its own: the two APIs are asked for the same window
-    // but a mismatch must not silently make the client read a land timestep off
-    // a marine grid.
-    marineTimesteps: timesteps,
-    vars: [...base.vars.filter((v) => !v.marine), ...marineVars],
-  };
-  await writeManifest(merged);
+  // Merged against the manifest AS IT IS NOW, not the `base` read before the
+  // fetches: another source may have written while this one was running, and
+  // building on the stale copy erased its section.
+  const merged = await mergeManifest((current) => {
+    const b = current ?? base;
+    return {
+      ...b,
+      marineGeometry: geometry,
+      // Marine timesteps are its own: the two APIs are asked for the same
+      // window but a mismatch must not silently make the client read a land
+      // timestep off a marine grid.
+      marineTimesteps: timesteps,
+      vars: [...b.vars.filter((v) => !v.marine), ...marineVars],
+    };
+  });
 
   log.info(
     { oceanCells: oceanIdx.length, of: total, timesteps: timesteps.length, requests: batches.length },

@@ -36,6 +36,7 @@ import {
 } from './weatherGrid.js';
 import { loadMask, LAND } from './weatherMask.js';
 import {
+  mergeManifest,
   readManifest, writeGrid, writeManifest, manifestIsFresh, manifestCovers,
   type ManifestVar, type WeatherManifest,
 } from '../services/weatherStore.js';
@@ -190,13 +191,16 @@ export async function refreshFloodGrid(force = false): Promise<WeatherManifest |
     flood: true,
   }));
 
-  const merged: WeatherManifest = {
-    ...base,
-    floodGeometry: geometry,
-    floodTimesteps: timesteps,
-    vars: [...base.vars.filter((v) => !v.flood), ...floodVars],
-  };
-  await writeManifest(merged);
+  // Merged against the manifest AS IT IS NOW — see marine for why.
+  const merged = await mergeManifest((current) => {
+    const b = current ?? base;
+    return {
+      ...b,
+      floodGeometry: geometry,
+      floodTimesteps: timesteps,
+      vars: [...b.vars.filter((v) => !v.flood), ...floodVars],
+    };
+  });
 
   log.info(
     {
