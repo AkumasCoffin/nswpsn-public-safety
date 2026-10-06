@@ -95,10 +95,17 @@ const Schema = z.object({
   WEATHER_LOCATIONS_PER_MIN: z.coerce.number().int().default(400),
 
   // --- Open-Meteo upstreams ----------------------------------------------
-  // Defaults are the public API. Point these at a self-hosted instance
-  // (ghcr.io/open-meteo/open-meteo serves the same endpoints) and set
-  // WEATHER_LOCATIONS_PER_MIN=0 to lift the pacing — that is the entire
-  // switch; no code changes. docs/self-hosted-open-meteo.md is the runbook.
+  // Defaults are the public API, which splits its services across FOUR
+  // hostnames — that is the only reason four URL vars exist. A self-hosted
+  // instance serves everything on one host, so OPEN_METEO_BASE_URL alone
+  // covers it: when set, forecast/marine/air/elevation derive from it as
+  // <base>/v1/<service>, and an individual *_URL var still wins if also set.
+  //
+  // FLOOD is deliberately NOT derived from the base. GloFAS is not in the
+  // S3 mirror a self-hosted instance reads from, so deriving it would point
+  // rivers at a dataset that does not exist there. It stays on the public
+  // API unless its own var is set.
+  OPEN_METEO_BASE_URL: z.string().default(''),
   OPEN_METEO_FORECAST_URL: z.string().default('https://api.open-meteo.com/v1/forecast'),
   OPEN_METEO_MARINE_URL: z.string().default('https://marine-api.open-meteo.com/v1/marine'),
   OPEN_METEO_AIR_URL: z.string().default('https://air-quality-api.open-meteo.com/v1/air-quality'),
@@ -575,6 +582,25 @@ if (!parsed.success) {
 }
 
 export const config = parsed.data;
+
+// One base URL covers a self-hosted instance (see the schema comment). The
+// derivation happens after parse so every module keeps reading the same
+// config.OPEN_METEO_*_URL names regardless of how the operator set them.
+if (config.OPEN_METEO_BASE_URL) {
+  const base = config.OPEN_METEO_BASE_URL.replace(/\/+$/, '');
+  const defaults: Array<[keyof typeof config, string, string]> = [
+    ['OPEN_METEO_FORECAST_URL', 'https://api.open-meteo.com/v1/forecast', `${base}/v1/forecast`],
+    ['OPEN_METEO_MARINE_URL', 'https://marine-api.open-meteo.com/v1/marine', `${base}/v1/marine`],
+    ['OPEN_METEO_AIR_URL', 'https://air-quality-api.open-meteo.com/v1/air-quality', `${base}/v1/air-quality`],
+    ['OPEN_METEO_ELEVATION_URL', 'https://api.open-meteo.com/v1/elevation', `${base}/v1/elevation`],
+    // No flood row: GloFAS is not mirrored on self-hosted instances.
+  ];
+  for (const [key, publicDefault, derived] of defaults) {
+    // Only derive when the var is still at its public default — an explicit
+    // individual setting always beats the base.
+    if (config[key] === publicDefault) (config as Record<string, unknown>)[key] = derived;
+  }
+}
 export type Config = typeof config;
 
 // Convenience for the response shape on /api/health, which Python returns

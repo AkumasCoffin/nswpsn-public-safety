@@ -69,13 +69,10 @@ curl 'http://127.0.0.1:8081/v1/forecast?latitude=-33.87&longitude=151.21&hourly=
 Backend `.env` (then deploy as usual):
 
 ```ini
-OPEN_METEO_FORECAST_URL=http://<docker-vm>:8081/v1/forecast
-OPEN_METEO_MARINE_URL=http://<docker-vm>:8081/v1/marine
-OPEN_METEO_AIR_URL=http://<docker-vm>:8081/v1/air-quality
-OPEN_METEO_ELEVATION_URL=http://<docker-vm>:8081/v1/elevation
-# Flood is NOT in the S3 mirror — leave it on the public API (737 cells/day,
-# comfortably inside the free tier on its own):
-#   OPEN_METEO_FLOOD_URL stays unset
+# One line covers the whole instance: forecast, marine, air and elevation all
+# derive from it. Flood deliberately does NOT — GloFAS is not in the S3
+# mirror, so rivers stay on the public API (737 cells/day fits the free tier).
+OPEN_METEO_BASE_URL=http://<docker-vm>:8081
 
 # Pin the models — mandatory, see section 2.
 OPEN_METEO_FORECAST_MODELS=ukmo_global_deterministic_10km
