@@ -2,7 +2,7 @@
  * The land/sea mask: the caching contract and the classification.
  *
  * Two kinds of mistake are expensive here and neither announces itself. The
- * first is refetching — the mask is supposed to cost 24 requests once in the
+ * first is refetching — the mask is supposed to cost 59 requests once in the
  * lifetime of the deployment, so a cache that silently misses turns a one-time
  * cost into a daily one. The second is reusing a mask that doesn't belong to
  * this grid, which produces a complete, plausible, entirely wrong coastline.
@@ -17,6 +17,16 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const { fetchJson } = vi.hoisted(() => ({ fetchJson: vi.fn() }));
+// The mask now goes through the shared per-minute pacer, and this file builds
+// a 5,865-cell mask — at the real 400/minute that is a quarter of an hour of
+// deliberate waiting, so every test here timed out. Stub the pacer itself
+// rather than the config value behind it: this file is about mask logic, and
+// the pacer has its own coverage in weatherGrid.test.ts against a fake clock.
+vi.mock('../../../src/sources/weatherGrid.js', async (orig) => {
+  const actual = await orig<typeof import('../../../src/sources/weatherGrid.js')>();
+  return { ...actual, reserveLocations: async () => undefined };
+});
+
 vi.mock('../../../src/sources/shared/http.js', () => ({
   fetchJson,
   HttpError: class HttpError extends Error {},
@@ -37,8 +47,10 @@ vi.mock('../../../src/config.js', async (orig) => {
 
 const { config } = await import('../../../src/config.js');
 const { gridGeometry, allCells, cellCount } = await import('../../../src/sources/weatherGrid.js');
-const { loadMask, isOcean, oceanCellIndices, classifyOcean, maskPath, _resetMaskCache, OCEAN, LAND } =
-  await import('../../../src/sources/weatherMask.js');
+const {
+  loadMask, isOcean, oceanCellIndices, classifyOcean, maskPath, _resetMaskCache,
+  OCEAN, LAND, ELEVATION_MAX_COORDS,
+} = await import('../../../src/sources/weatherMask.js');
 
 const G = gridGeometry(0.5);
 const CELLS = allCells(G);
@@ -181,8 +193,10 @@ describe('mask caching', () => {
       loadMask(G, { batchPauseMs: 0 }),
     ]);
     expect(Array.from(a!)).toEqual(Array.from(b!));
-    // 5,865 cells at 250 a request is 24 — not 48.
-    expect(fetchJson).toHaveBeenCalledTimes(Math.ceil(cellCount(G) / config.WEATHER_GRID_BATCH));
+    // 5,865 cells at the ELEVATION api's own 100-coordinate ceiling is 59.
+    // Not 24: that was this file assuming the forecast API's batch of 250,
+    // which the elevation endpoint rejects outright with HTTP 400.
+    expect(fetchJson).toHaveBeenCalledTimes(Math.ceil(cellCount(G) / ELEVATION_MAX_COORDS));
   });
 });
 
@@ -247,10 +261,12 @@ describe('fetching', () => {
   it('never asks for more locations than the configured batch size', async () => {
     await loadMask(G, { batchPauseMs: 0 });
 
+    // The ELEVATION limit, which is lower than the forecast batch size and is
+    // what actually bounds these requests.
     expect(requestedSizes.length).toBe(
-      Math.ceil(cellCount(G) / config.WEATHER_GRID_BATCH),
+      Math.ceil(cellCount(G) / ELEVATION_MAX_COORDS),
     );
-    expect(Math.max(...requestedSizes)).toBeLessThanOrEqual(config.WEATHER_GRID_BATCH);
+    expect(Math.max(...requestedSizes)).toBeLessThanOrEqual(ELEVATION_MAX_COORDS);
     expect(requestedSizes.reduce((a, b) => a + b, 0)).toBe(cellCount(G));
   });
 
@@ -279,13 +295,23 @@ describe('fetching', () => {
     await expect(loadMask(G, { batchPauseMs: 0 })).rejects.toThrow(/no elevation array/);
   });
 
-  it('lets a failed build be retried rather than caching the failure', async () => {
+  it('cools down after a failure instead of retrying immediately', async () => {
+    // Deliberately NOT instantly retryable any more. The dependent sources
+    // poll every ten minutes, so an unbuildable mask was re-attempted six
+    // times an hour by EACH of marine and flood — thousands of locations an
+    // hour on requests that could not succeed, which starved the land grid
+    // into HTTP 429 as well. A build that just failed will fail again.
     fetchJson.mockImplementationOnce(async () => {
       throw new Error('boom');
     });
     await expect(loadMask(G, { batchPauseMs: 0 })).rejects.toThrow(/boom/);
 
     answerFromDem();
+    await expect(loadMask(G, { batchPauseMs: 0 })).rejects.toThrow(/cooling down/);
+
+    // Once the cooldown lapses it is retryable, so a transient outage does not
+    // poison the mask for the life of the process.
+    _resetMaskCache();
     const mask = await loadMask(G, { batchPauseMs: 0 });
     expect(mask.length).toBe(cellCount(G));
   });

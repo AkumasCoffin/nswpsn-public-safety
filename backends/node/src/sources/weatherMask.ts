@@ -26,12 +26,26 @@ import { fetchJson } from './shared/http.js';
 import {
   allCells,
   batchCells,
+  reserveLocations,
   cellCount,
   gridGeometry,
   type GridGeometry,
 } from './weatherGrid.js';
 
 const ELEVATION_URL = 'https://api.open-meteo.com/v1/elevation';
+
+/**
+ * The elevation API's own coordinate ceiling, which is NOT the forecast API's.
+ *
+ * "Up to 100 coordinates can be requested at once." The forecast endpoint
+ * takes 250 happily, so reusing WEATHER_GRID_BATCH sent 250 and earned a flat
+ * HTTP 400 on every request — which failed the mask, which failed marine and
+ * flood together, with nothing in the error naming the real cause.
+ *
+ * Exported so tests derive their expected request count from the real
+ * constraint rather than restating a number that can drift from it.
+ */
+export const ELEVATION_MAX_COORDS = 100;
 
 /** Mask byte values. One byte per cell, index-aligned with the grid. */
 export const OCEAN = 1;
@@ -235,9 +249,24 @@ async function readCachedMask(path: string, expected: number): Promise<Uint8Arra
  */
 const inFlight = new Map<string, Promise<Uint8Array>>();
 
+/**
+ * How long to leave a failed build alone before trying again.
+ *
+ * Retrying immediately turned one bug into a quota fire. The dependent sources
+ * poll every ten minutes, so a mask that could not build was re-attempted six
+ * times an hour by EACH of marine and flood — thousands of locations an hour
+ * spent on requests that could never succeed, which then starved the land grid
+ * into HTTP 429 as well. A build that just failed will almost certainly fail
+ * again a minute later; what is worth protecting is everything else sharing
+ * the allowance.
+ */
+const FAILURE_COOLDOWN_MS = 30 * 60_000;
+const failedAt = new Map<string, number>();
+
 /** Drop the memoised masks. Tests only. */
 export function _resetMaskCache(): void {
   inFlight.clear();
+  failedAt.clear();
 }
 
 /** One byte per cell: 1 = ocean, 0 = land, in cell-index order. */
@@ -249,9 +278,17 @@ export async function loadMask(
   const existing = inFlight.get(path);
   if (existing) return existing;
 
+  const failed = failedAt.get(path);
+  if (failed !== undefined && Date.now() - failed < FAILURE_COOLDOWN_MS) {
+    throw new Error('weather mask: last build failed, cooling down before retrying');
+  }
+
   const build = buildMask(g, path, opts);
   inFlight.set(path, build);
-  build.catch(() => inFlight.delete(path));
+  build.then(
+    () => { failedAt.delete(path); },
+    () => { inFlight.delete(path); failedAt.set(path, Date.now()); },
+  );
   return build;
 }
 
@@ -264,7 +301,9 @@ async function buildMask(
   const cached = await readCachedMask(path, n);
   if (cached) return cached;
 
-  const batches = batchCells(allCells(g), opts.batchSize ?? config.WEATHER_GRID_BATCH);
+  // Clamped to the elevation limit even when a caller asks for more.
+  const requested = opts.batchSize ?? config.WEATHER_GRID_BATCH;
+  const batches = batchCells(allCells(g), Math.min(requested, ELEVATION_MAX_COORDS));
   const pauseMs = opts.batchPauseMs ?? BATCH_PAUSE_MS;
   const startedAt = Date.now();
 
@@ -275,7 +314,11 @@ async function buildMask(
         setTimeout(resolve, pauseMs);
       });
     }
-    elevations.push(...(await fetchElevations(batches[b] as Array<{ lat: number; lon: number }>)));
+    const batch = batches[b] as Array<{ lat: number; lon: number }>;
+    // Through the shared per-minute allowance like every other weather fetch.
+    // This module predates the pacer and was burst-sending ~5,900 locations.
+    await reserveLocations(batch.length);
+    elevations.push(...(await fetchElevations(batch)));
   }
 
   const mask = classifyOcean(g, elevations);

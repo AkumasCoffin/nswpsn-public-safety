@@ -413,7 +413,14 @@ export async function reserveLocations(
   n: number,
   sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => { setTimeout(r, ms); }),
 ): Promise<void> {
-  const limit = config.WEATHER_LOCATIONS_PER_MIN;
+  // A non-finite or non-positive ceiling means "unpaced", never "wait for
+  // ever". Without this guard a missing config value turns the loop below into
+  // an infinite sleep that no caller can distinguish from a slow upstream —
+  // which is exactly how it presented: a 20-second test timeout with no error.
+  const raw = config.WEATHER_LOCATIONS_PER_MIN;
+  const limit = Number.isFinite(raw) && raw > 0 ? raw : Infinity;
+  if (!Number.isFinite(limit)) return;
+
   for (;;) {
     const now = Date.now();
     while (_rateWindow.length > 0 && now - _rateWindow[0]!.at > 60_000) _rateWindow.shift();

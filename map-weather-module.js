@@ -80,8 +80,8 @@
     relative_humidity_2m: {
       unit: '%',
       stops: [
-        [0, 120, 80, 40, 0.05],
-        [20, 150, 120, 60, 0.35],
+        [0, 120, 80, 40],
+        [20, 150, 120, 60],
         [40, 120, 160, 120],
         [60, 60, 170, 170],
         [80, 40, 130, 200],
@@ -108,7 +108,7 @@
     uv_index: {
       unit: '',
       stops: [
-        [0, 40, 90, 120, 0.1],
+        [0, 40, 90, 120],
         [3, 90, 190, 120],
         [6, 240, 210, 80],
         [8, 240, 140, 60],
@@ -136,7 +136,7 @@
     swell_wave_height: {
       unit: 'm',
       stops: [
-        [0, 30, 60, 110, 0.2],
+        [0, 30, 60, 110],
         [1, 50, 130, 190],
         [2, 70, 190, 190],
         [3, 220, 200, 110],
@@ -149,7 +149,7 @@
     ocean_current_velocity: {
       unit: 'm/s',
       stops: [
-        [0, 30, 60, 100, 0.1],
+        [0, 30, 60, 100],
         [0.25, 60, 150, 170],
         [0.5, 90, 200, 150],
         [1, 230, 200, 90],
@@ -163,7 +163,7 @@
     us_aqi: {
       unit: 'AQI',
       stops: [
-        [0, 80, 200, 120, 0.25],
+        [0, 80, 200, 120],
         [50, 230, 220, 90],
         [100, 240, 160, 70],
         [150, 230, 80, 70],
@@ -175,7 +175,7 @@
     pm2_5: {
       unit: 'µg/m³',
       stops: [
-        [0, 80, 200, 120, 0.2],
+        [0, 80, 200, 120],
         [12, 230, 220, 90],
         [35, 240, 160, 70],
         [55, 230, 80, 70],
@@ -437,6 +437,34 @@
    * Writes into `out` (a Uint8ClampedArray / array of cols*outRows*4) and
    * returns the number of rows written.
    */
+  /**
+   * How many cells of soft edge at the boundary of the data.
+   *
+   * The grid is a rectangle over Australia, and the map is not. Ending the
+   * field on a hard rectangular edge put a bright square in the middle of a
+   * dark ocean — it read as a misplaced image rather than as weather. Fading
+   * the outer cells makes the coverage end the way a real field does.
+   *
+   * This is a property of the DATA BOUNDARY, not of the values, which is why
+   * it lives here and not in the scales. Scales fading at their low end was
+   * the other half of the washed-out look.
+   */
+  const EDGE_FADE_CELLS = 6;
+
+  function edgeAlpha(x, y, cols, rows, fade) {
+    // Proportional, and never more than a quarter of the smaller dimension.
+    // A fixed margin is a sensible 7% of the real 85x69 grid and would erase a
+    // small one outright — which is exactly what it did to a 3x2 test grid.
+    const span = Math.min(cols, rows);
+    const f = Math.min(fade, Math.floor(span / 4));
+    if (!(f > 0)) return 1;
+    const d = Math.min(x, y, cols - 1 - x, rows - 1 - y);
+    if (d >= f) return 1;
+    // Smoothstep, so the boundary has no visible banding of its own.
+    const t = d / f;
+    return t * t * (3 - 2 * t);
+  }
+
   function paintCells(values, cols, rows, stops, scale, out, rowMap) {
     const outRows = rowMap ? rowMap.length : rows;
     const s = scale > 0 ? scale : 1;
@@ -464,7 +492,9 @@
         out[o] = c.r;
         out[o + 1] = c.g;
         out[o + 2] = c.b;
-        out[o + 3] = c.a;
+        // Faded at the boundary of the data, so coverage ends like a field
+        // rather than like a rectangle dropped on the ocean.
+        out[o + 3] = Math.round(c.a * edgeAlpha(col, srcRow, cols, rows, EDGE_FADE_CELLS));
       }
     }
     return outRows;
@@ -674,7 +704,7 @@
         this._size = { x: 0, y: 0 };
         this._dpr = 1;
         this._windPxPerSec = this._o.windSpeedPxPerSec > 0 ? this._o.windSpeedPxPerSec : 0.9;
-        this._opacity = typeof this._o.opacity === 'number' ? this._o.opacity : 0.88;
+        this._opacity = typeof this._o.opacity === 'number' ? this._o.opacity : 1;
         this._onVisibility = this._visibilityChanged.bind(this);
       },
 
