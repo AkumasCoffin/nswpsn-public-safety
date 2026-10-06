@@ -20121,6 +20121,11 @@ function initPagerHoursFromStorage() {
         await wxApplyParticles(token);
       } catch (e) {
         console.warn('weather field failed to load', e);
+        // Say so on the card too. The particle system was broken for days by a
+        // thrown method that only ever reached the console — an error state
+        // the user cannot see is an error state that does not get reported.
+        const disp = document.getElementById('wx-time-display');
+        if (disp) disp.textContent = 'layer failed — see console';
       } finally {
         if (token === _wxLoadToken && container) container.classList.remove('is-loading');
       }
@@ -21407,7 +21412,7 @@ function initPagerHoursFromStorage() {
   <script src="ui-dialogs.js"></script>
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
-  <script src="map-weather-module.js?v=7"></script>
+  <script src="map-weather-module.js?v=8"></script>
   <script src="map-editor-module.js?v=43"></script>
 </body>
 </html>

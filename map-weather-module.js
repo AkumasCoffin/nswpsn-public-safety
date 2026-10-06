@@ -284,8 +284,23 @@
     return SCALES[key] || null;
   }
 
+  // A stop's 5th element is a FRACTION (0..1) — that is how every ramp in
+  // SCALES writes it. This returns BYTES, because everything downstream (the
+  // Uint8 pixel buffer, rgbaCss's /255) expects bytes.
+  //
+  // THE BUG THIS FIXES: it used to return 255 when the element was absent but
+  // the RAW fraction when present, so an alpha of 0.3 was written into the
+  // pixel buffer and rounded to zero — and interpolating 0.3 → 255 produced
+  // nonsense mid-ramp. Every layer whose ramp carries fractional alpha (the
+  // sparse ones: thunder, rain, accumulation) rendered as binary
+  // visible/invisible cells — hard squares — while the opaque layers looked
+  // fine, which is exactly the shape of the user report that found it.
   function stopAlpha(stop) {
-    return stop.length > 4 ? stop[4] : 255;
+    if (stop.length <= 4) return 255;
+    const a = stop[4];
+    // Defensive: a value above 1 is already a byte, should a ramp ever be
+    // written that way.
+    return a <= 1 ? Math.round(a * 255) : Math.round(Math.min(a, 255));
   }
 
   /**
@@ -1443,6 +1458,11 @@
       setVariable: guard('setVariable'),
       setData: guard('setData'),
       setWind: guard('setWind'),
+      // Missing from this list once, and its absence killed the entire
+      // particle system: map.html calls it on this wrapper, the call threw,
+      // and the page's catch swallowed it — on every layer click, silently.
+      // The regression test drives this wrapper exactly as the page does.
+      setWindGeometry: guard('setWindGeometry'),
       setGeometry: guard('setGeometry'),
       setAnimated: guard('setAnimated'),
       setOpacity: guard('setOpacity'),
