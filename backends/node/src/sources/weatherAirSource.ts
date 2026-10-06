@@ -32,7 +32,7 @@ import {
   readManifest, writeGrid, writeManifest, manifestIsFresh,
   type ManifestVar, type WeatherManifest,
 } from '../services/weatherStore.js';
-import { pacedFetch, pickTimesteps } from './weatherGridSource.js';
+import { pacedFetch, pickTimesteps, runBatches, batchConcurrency } from './weatherGridSource.js';
 
 const AIR_URL = config.OPEN_METEO_AIR_URL;
 
@@ -93,10 +93,8 @@ export async function refreshAirGrid(force = false): Promise<WeatherManifest | n
   let pick: number[] = [];
 
   const batches = batchCells(cells, config.WEATHER_GRID_BATCH);
-  let cellBase = 0;
 
-  for (let b = 0; b < batches.length; b += 1) {
-    const batch = batches[b]!;
+  await runBatches(batches, batchConcurrency(AIR_URL), async (batch, b, offset) => {
     // Always through the pacer, never fetchJson directly: land, marine, flood
     // and air are prewarmed together and share one per-minute allowance. The
     // first production run learned what happens when a source spends it alone.
@@ -113,7 +111,7 @@ export async function refreshAirGrid(force = false): Promise<WeatherManifest | n
     for (let i = 0; i < points.length; i += 1) {
       // Position in the overall sequence, not a count of successes: a point that
       // comes back empty must still consume its index and stay NODATA.
-      const cellIndex = cellBase + i;
+      const cellIndex = offset + i;
       const hourly = points[i]?.hourly;
       if (!hourly) continue;
 
@@ -140,8 +138,7 @@ export async function refreshAirGrid(force = false): Promise<WeatherManifest | n
       }
     }
 
-    cellBase += batch.length;
-  }
+  });
 
   if (timesteps.length === 0) {
     log.warn('air grid: upstream returned no time axis');

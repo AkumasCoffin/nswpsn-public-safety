@@ -88,6 +88,60 @@ export function isPublicOpenMeteo(url: string): boolean {
   }
 }
 
+/**
+ * How many batches to keep in flight against this upstream.
+ *
+ * One, always, for the public API: its limit is per-minute locations, so
+ * concurrency there only spends the window faster and earns 429s. Against a
+ * private instance the picture inverts — the first 0.1-degree land run left
+ * a 4-CPU container near idle (CPU 5%, RAM 2%) because the backend sent one
+ * request and waited, 575 times in a row.
+ */
+export function batchConcurrency(url: string): number {
+  if (isPublicOpenMeteo(url)) return 1;
+  const n = config.WEATHER_FETCH_CONCURRENCY;
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 1;
+}
+
+/**
+ * Run `worker(batch, index, offset)` over every batch with at most
+ * `concurrency` in flight. `offset` is the batch's starting position in the
+ * flattened cell sequence — precomputed, because with concurrent completion
+ * an accumulated counter would assign cells by FINISH order and scatter the
+ * field. The first failure stops lanes from starting new batches and the
+ * whole run rejects, preserving the all-or-nothing contract of the loops
+ * this replaces.
+ */
+export async function runBatches<T>(
+  batches: ReadonlyArray<ReadonlyArray<T>>,
+  concurrency: number,
+  worker: (batch: ReadonlyArray<T>, index: number, offset: number) => Promise<void>,
+): Promise<void> {
+  const offsets: number[] = [];
+  let acc = 0;
+  for (const b of batches) { offsets.push(acc); acc += b.length; }
+  let next = 0;
+  let failed = false;
+  const lanes = Array.from(
+    { length: Math.max(1, Math.min(concurrency, batches.length)) },
+    async () => {
+      for (;;) {
+        if (failed) return;
+        const i = next;
+        next += 1;
+        if (i >= batches.length) return;
+        try {
+          await worker(batches[i]!, i, offsets[i]!);
+        } catch (err) {
+          failed = true;
+          throw err;
+        }
+      }
+    },
+  );
+  await Promise.all(lanes);
+}
+
 export async function pacedFetch<T>(url: string, locations: number): Promise<T> {
   const MAX_ATTEMPTS = 4;
   const publicUpstream = isPublicOpenMeteo(url);
@@ -228,11 +282,9 @@ export async function refreshWeatherGrid(force = false): Promise<WeatherManifest
   let timesteps: string[] = [];
   let pick: number[] = [];
   const planes = new Map<GridVar, Int16Array[]>();
-  let cellBase = 0;
   let filled = 0;
 
-  for (let b = 0; b < batches.length; b += 1) {
-    const batch = batches[b]!;
+  await runBatches(batches, batchConcurrency(FORECAST_URL), async (batch, b, offset) => {
     const data = await pacedFetch<OpenMeteoPoint | OpenMeteoPoint[]>(
       buildUrl(batch), batch.length,
     );
@@ -250,8 +302,10 @@ export async function refreshWeatherGrid(force = false): Promise<WeatherManifest
       // Position in the overall sequence, never a count of successes. A point
       // that comes back without an hourly block must still consume its index
       // and stay NODATA — advancing only on success would slide every cell
-      // after the gap one place west and skew the whole field.
-      const cellIndex = cellBase + i;
+      // after the gap one place west and skew the whole field. The offset is
+      // the batch's own, precomputed: with concurrent batches an accumulated
+      // counter would assign cells by finish order.
+      const cellIndex = offset + i;
       const hourly = points[i]?.hourly;
       if (!hourly) continue;
 
@@ -276,9 +330,7 @@ export async function refreshWeatherGrid(force = false): Promise<WeatherManifest
       }
       filled += 1;
     }
-
-    cellBase += batch.length;
-  }
+  });
 
   if (timesteps.length === 0) throw new Error('weather grid: upstream returned no time axis');
 

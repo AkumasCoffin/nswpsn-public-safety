@@ -31,7 +31,7 @@ import {
   readManifest, writeGrid, writeManifest, manifestIsFresh, manifestCovers,
   type ManifestVar, type WeatherManifest,
 } from '../services/weatherStore.js';
-import { pacedFetch, pickTimesteps, toUtcIso } from './weatherGridSource.js';
+import { pacedFetch, pickTimesteps, toUtcIso, runBatches, batchConcurrency } from './weatherGridSource.js';
 
 const MARINE_URL = config.OPEN_METEO_MARINE_URL;
 
@@ -108,10 +108,8 @@ export async function refreshMarineGrid(force = false): Promise<WeatherManifest 
 
   const oceanCells = oceanIdx.map((i) => cells[i]!);
   const batches = batchCells(oceanCells, config.WEATHER_GRID_BATCH);
-  let seen = 0;
 
-  for (let b = 0; b < batches.length; b += 1) {
-    const batch = batches[b]!;
+  await runBatches(batches, batchConcurrency(MARINE_URL), async (batch, b, offset) => {
     const data = await pacedFetch<MarinePoint | MarinePoint[]>(buildUrl(batch), batch.length);
     const points = Array.isArray(data) ? data : [data];
     if (points.length !== batch.length) {
@@ -124,7 +122,7 @@ export async function refreshMarineGrid(force = false): Promise<WeatherManifest 
       // Position within the OCEAN sequence maps back to a grid index via the
       // mask. Using the loop counter directly would write wave data into land
       // cells and leave the sea empty.
-      const gridIndex = oceanIdx[seen + i]!;
+      const gridIndex = oceanIdx[offset + i]!;
       const hourly = points[i]?.hourly;
       if (!hourly) continue;
 
@@ -149,8 +147,7 @@ export async function refreshMarineGrid(force = false): Promise<WeatherManifest 
       }
     }
 
-    seen += batch.length;
-  }
+  });
 
   if (timesteps.length === 0) {
     log.warn('marine grid: upstream returned no time axis');

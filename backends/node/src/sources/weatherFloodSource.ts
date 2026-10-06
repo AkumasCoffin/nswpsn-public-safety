@@ -40,7 +40,7 @@ import {
   readManifest, writeGrid, writeManifest, manifestIsFresh, manifestCovers,
   type ManifestVar, type WeatherManifest,
 } from '../services/weatherStore.js';
-import { pacedFetch, toUtcIso } from './weatherGridSource.js';
+import { pacedFetch, toUtcIso, runBatches, batchConcurrency } from './weatherGridSource.js';
 
 const FLOOD_URL = config.OPEN_METEO_FLOOD_URL;
 
@@ -127,10 +127,8 @@ export async function refreshFloodGrid(force = false): Promise<WeatherManifest |
   let timesteps: string[] = [];
   const landCells = landIdx.map((i) => cells[i]!);
   const batches = batchCells(landCells, config.WEATHER_GRID_BATCH);
-  let seen = 0;
 
-  for (let b = 0; b < batches.length; b += 1) {
-    const batch = batches[b]!;
+  await runBatches(batches, batchConcurrency(FLOOD_URL), async (batch, b, offset) => {
     const data = await pacedFetch<FloodPoint | FloodPoint[]>(buildUrl(batch), batch.length);
     const points = Array.isArray(data) ? data : [data];
     if (points.length !== batch.length) {
@@ -142,7 +140,7 @@ export async function refreshFloodGrid(force = false): Promise<WeatherManifest |
     for (let i = 0; i < points.length; i += 1) {
       // Position within the LAND sequence maps back through the mask. Using the
       // loop counter would write river flows into the ocean.
-      const gridIndex = landIdx[seen + i]!;
+      const gridIndex = landIdx[offset + i]!;
       const daily = points[i]?.daily;
       if (!daily) continue;
 
@@ -169,8 +167,7 @@ export async function refreshFloodGrid(force = false): Promise<WeatherManifest |
       }
     }
 
-    seen += batch.length;
-  }
+  });
 
   if (timesteps.length === 0) {
     log.warn('flood grid: upstream returned no time axis');

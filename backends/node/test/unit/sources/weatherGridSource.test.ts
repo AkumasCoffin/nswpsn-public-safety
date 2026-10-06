@@ -287,3 +287,57 @@ describe('pacedFetch retry classification', () => {
     expect(fetchJsonMock).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('batch concurrency', () => {
+  // The first 0.1-degree land run left a 4-CPU self-hosted container near
+  // idle (CPU 5%, RAM 2%): the backend sent one request and waited, 575 times
+  // in a row. Concurrency belongs to the upstream: a private instance takes
+  // parallel batches, the public API never does — its limit is per-minute
+  // locations, and parallelism there only spends the window faster.
+  it('public API is always one batch at a time, whatever the config says', async () => {
+    const { batchConcurrency } = await import('../../../src/sources/weatherGridSource.js');
+    expect(batchConcurrency('https://api.open-meteo.com/v1/forecast?x')).toBe(1);
+    expect(batchConcurrency('https://flood-api.open-meteo.com/v1/flood?x')).toBe(1);
+  });
+
+  it('a private upstream gets the configured parallelism', async () => {
+    const { batchConcurrency } = await import('../../../src/sources/weatherGridSource.js');
+    expect(batchConcurrency('http://10.1.0.135:8081/v1/forecast?x')).toBeGreaterThan(1);
+  });
+
+  it('runBatches keeps the limit, hands out precomputed offsets, and finishes everything', async () => {
+    const { runBatches } = await import('../../../src/sources/weatherGridSource.js');
+    const batches = [[1, 2, 3], [4, 5], [6], [7, 8], [9]];
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const seen: Array<{ index: number; offset: number }> = [];
+    await runBatches(batches, 2, async (batch, index, offset) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      // Yield so lanes genuinely overlap.
+      await new Promise((r) => { setTimeout(r, 1); });
+      seen.push({ index, offset });
+      inFlight -= 1;
+    });
+    expect(maxInFlight).toBe(2);
+    expect(seen).toHaveLength(5);
+    // Offsets are by batch POSITION, not finish order — with concurrency an
+    // accumulated counter would scatter cells by whichever batch landed first.
+    const byIndex = [...seen].sort((a, b) => a.index - b.index).map((s) => s.offset);
+    expect(byIndex).toEqual([0, 3, 5, 6, 8]);
+  });
+
+  it('runBatches stops launching new batches after a failure', async () => {
+    const { runBatches } = await import('../../../src/sources/weatherGridSource.js');
+    const batches = Array.from({ length: 10 }, (_, i) => [i]);
+    let started = 0;
+    await expect(runBatches(batches, 2, async (_batch, index) => {
+      started += 1;
+      await new Promise((r) => { setTimeout(r, 1); });
+      if (index === 1) throw new Error('boom');
+    })).rejects.toThrow('boom');
+    // Both lanes may have one in flight when the failure lands; nothing new
+    // starts after it.
+    expect(started).toBeLessThanOrEqual(4);
+  });
+});

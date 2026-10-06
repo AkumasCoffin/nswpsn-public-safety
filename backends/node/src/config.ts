@@ -120,6 +120,10 @@ const Schema = z.object({
   OPEN_METEO_FORECAST_MODELS: z.string().default(''),
   OPEN_METEO_MARINE_MODELS: z.string().default(''),
   OPEN_METEO_AIR_MODELS: z.string().default(''),
+  // Batches kept in flight against a PRIVATE upstream. The public API is
+  // always fetched one batch at a time regardless — concurrency there just
+  // spends the rate window faster.
+  WEATHER_FETCH_CONCURRENCY: z.coerce.number().int().default(6),
 
   // One full refresh a day. Each fetch already carries 9 days of time series,
   // so refreshing more often buys freshness of the model run, not more range.
