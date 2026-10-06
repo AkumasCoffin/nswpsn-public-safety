@@ -12516,13 +12516,101 @@ function initPagerHoursFromStorage() {
       toggleRadar(next);
       refreshActiveFilterPanel();
     };
-    window.toggleWeatherPinsPill = function () {
-      const chk = document.getElementById('chk-weather-pins');
-      const next = chk ? !chk.checked : true;
-      _ffSetCheckbox('chk-weather-pins', next);
-      toggleWeatherPins(next);
-      refreshActiveFilterPanel();
-    };
+    // The weather readout: click the map, get that point's conditions.
+    //
+    // Replaces a layer of ~100 fixed station pins. Those answered "what is it
+    // doing at one of these towns"; this answers "what is it doing HERE",
+    // which is the question people actually arrive with. It also costs nothing
+    // to carry — /api/weather/point serves any coordinate and was already
+    // built and unused.
+    let _wxPointPopup = null;
+
+    function wxPointRow(icon, label, value) {
+      if (value === null || value === undefined || value === '') return '';
+      return '<div style="display:flex;gap:6px;align-items:baseline;">'
+        + '<i class="fa-solid ' + icon + '" style="color:#38bdf8;width:13px;"></i>'
+        + '<span style="color:#94a3b8;">' + label + '</span>'
+        + '<strong style="margin-left:auto;color:#e2e8f0;">' + value + '</strong></div>';
+    }
+
+    /** Index of the hour nearest the instant the field is showing. */
+    function wxNearestHour(times, wantIso) {
+      const want = Date.parse(wantIso || '');
+      const target = Number.isFinite(want) ? want : Date.now();
+      let best = 0, gap = Infinity;
+      times.forEach(function (t, i) {
+        const d = Math.abs(Date.parse(t + 'Z') - target);
+        if (d < gap) { gap = d; best = i; }
+      });
+      return best;
+    }
+
+    async function wxShowPointReadout(latlng) {
+      if (!map) return;
+      const lat = latlng.lat, lon = latlng.lng;
+      const popup = L.popup({ maxWidth: 260, className: 'wx-point-popup' })
+        .setLatLng(latlng)
+        .setContent('<div style="font-size:12px;color:#94a3b8;">Reading the forecast…</div>')
+        .openOn(map);
+      _wxPointPopup = popup;
+
+      try {
+        const res = await apiFetch(PROXY_BASE + '/api/weather/point?lat='
+          + encodeURIComponent(lat.toFixed(4)) + '&lon=' + encodeURIComponent(lon.toFixed(4)));
+        if (!res.ok) throw new Error('lookup failed');
+        const data = await res.json();
+        // A popup the user has already dismissed or replaced must not be
+        // written into — the fetch outlives the click that started it.
+        if (_wxPointPopup !== popup || !popup.isOpen()) return;
+
+        const h = data.hourly || {};
+        const times = Array.isArray(h.time) ? h.time : [];
+        if (!times.length) throw new Error('no series');
+        // Lined up with whatever moment the field is showing, so the numbers
+        // agree with the colours under the cursor.
+        const shownIso = (_wxManifest && _wxLayer !== 'none')
+          ? wxAxis(_wxLayer === 'wind' ? 'wind_speed_10m' : _wxLayer)[_wxTimeIdx]
+          : null;
+        const i = wxNearestHour(times, shownIso);
+        const num = (arr, dp) => (Array.isArray(arr) && typeof arr[i] === 'number')
+          ? arr[i].toFixed(dp === undefined ? 0 : dp) : null;
+
+        const when = new Date(times[i] + 'Z').toLocaleString(undefined,
+          { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+        const dir = (Array.isArray(h.wind_direction_10m) && typeof h.wind_direction_10m[i] === 'number')
+          ? ' ' + ['N','NE','E','SE','S','SW','W','NW'][Math.round(h.wind_direction_10m[i] / 45) % 8]
+          : '';
+        const spd = num(h.wind_speed_10m);
+        const gust = num(h.wind_gusts_10m);
+
+        popup.setContent(
+          '<div style="font-size:12px;line-height:1.6;min-width:190px;">'
+          + '<div style="font-weight:600;color:#38bdf8;margin-bottom:4px;">'
+          + escapeHtml(lat.toFixed(3) + ', ' + lon.toFixed(3)) + '</div>'
+          + '<div style="color:#64748b;font-size:11px;margin-bottom:6px;">' + escapeHtml(when) + '</div>'
+          + wxPointRow('fa-temperature-half', 'Temp', num(h.temperature_2m, 1) === null ? null : num(h.temperature_2m, 1) + '°C')
+          + wxPointRow('fa-person', 'Feels', num(h.apparent_temperature, 1) === null ? null : num(h.apparent_temperature, 1) + '°C')
+          + wxPointRow('fa-droplet', 'Humidity', num(h.relative_humidity_2m) === null ? null : num(h.relative_humidity_2m) + '%')
+          + wxPointRow('fa-wind', 'Wind', spd === null ? null : spd + ' km/h' + dir + (gust ? ' (gusts ' + gust + ')' : ''))
+          + wxPointRow('fa-cloud-showers-heavy', 'Rain', num(h.precipitation, 1) === null ? null : num(h.precipitation, 1) + ' mm')
+          + wxPointRow('fa-gauge', 'Pressure', num(h.pressure_msl) === null ? null : num(h.pressure_msl) + ' hPa')
+          + wxPointRow('fa-sun', 'UV', num(h.uv_index, 1))
+          + '</div>');
+      } catch (e) {
+        if (_wxPointPopup === popup && popup.isOpen()) {
+          popup.setContent('<div style="font-size:12px;color:#94a3b8;">No forecast for this spot.</div>');
+        }
+      }
+    }
+
+    // Only while the weather panel is the active filter — otherwise every
+    // click anywhere on the map would open a weather popup over whatever the
+    // user was actually trying to click.
+    map.on('click', function (e) {
+      if (_activeFilterKey !== 'weather') return;
+      if (typeof onW3WMapClick === 'function' && document.getElementById('w3w-toggle')?.checked) return;
+      wxShowPointReadout(e.latlng);
+    });
     window.setRadarSliderFromPanel = function (v) {
       const r = document.getElementById('radar-slider');
       if (r) { r.value = String(v); if (typeof onRadarSliderChange === 'function') onRadarSliderChange(v); }
@@ -12602,7 +12690,6 @@ function initPagerHoursFromStorage() {
       color: '#38bdf8',
       render() {
         const radarOn = document.getElementById('chk-radar')?.checked ?? false;
-        const pinsOn  = document.getElementById('chk-weather-pins')?.checked ?? false;
         const slider = document.getElementById('radar-slider');
         const max = Number(slider?.max ?? 0);
         const val = Number(slider?.value ?? 0);
@@ -12644,10 +12731,11 @@ function initPagerHoursFromStorage() {
         ` : '';
         return `
           <h4><i class="fa-solid fa-cloud-sun" style="color:#38bdf8;"></i> Weather</h4>
-          <div class="ff-section-label">Observed</div>
+          <div class="ff-section-label">Observed
+            <span style="font-weight:400;opacity:.6;">· click the map for local conditions</span>
+          </div>
           <div class="floating-filter-pills">
-            ${_ffPill(radarOn, '<i class="fa-solid fa-cloud-rain"></i> Rain Radar', 'toggleRadarPill()')}
-            ${_ffPill(pinsOn, '<i class="fa-solid fa-temperature-half"></i> Stations', 'toggleWeatherPinsPill()')}
+            ${_ffPill(radarOn, '<i class="fa-solid fa-satellite-dish"></i> Radar', 'toggleRadarPill()')}
           </div>
           ${radarTimeline}
           ${fieldPills}
@@ -21319,7 +21407,7 @@ function initPagerHoursFromStorage() {
   <script src="ui-dialogs.js"></script>
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
-  <script src="map-weather-module.js?v=6"></script>
+  <script src="map-weather-module.js?v=7"></script>
   <script src="map-editor-module.js?v=43"></script>
 </body>
 </html>
