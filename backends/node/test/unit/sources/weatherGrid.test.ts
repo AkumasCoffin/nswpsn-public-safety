@@ -11,7 +11,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 
 const {
   AU_BBOX, FREE_TIER, LAND_VARS, NODATA,
-  gridGeometry, cellCount, cellLatLon, allCells,
+  gridGeometry, cellCount, cellLatLon, allCells, MARINE_VARS, AIR_VARS, FLOOD_VARS,
   estimateSpend, quantise, dequantise, batchCells, VAR_SCALE, marineGeometry,
   reserveLocations, locationsUsedInLastMinute, _resetRateWindow,
 } = await import('../../../src/sources/weatherGrid.js');
@@ -91,13 +91,25 @@ describe('the Open-Meteo bill', () => {
     // depend on how the coastline happens to fall.
     expect(est.cells).toBe(5865);
     expect(est.marineCells).toBe(1505);
-    expect(est.locationsPerDay).toBe(5865 + 1505);
+    expect(est.airCells).toBe(667);
+    expect(est.locationsPerDay).toBe(5865 + 1505 + 667);
     expect(est.requestsPerDay).toBeLessThan(est.locationsPerDay);
   });
 
-  it('stays under ten variables, so a request still weighs one call', () => {
+  it('stays at or under ten variables, so a request still weighs one call', () => {
     // "More than 10 weather variables ... are considered multiple API calls."
-    expect(LAND_VARS.length).toBeLessThanOrEqual(10);
+    // The land list is deliberately AT the limit, so this is the test that
+    // stops an eleventh being added without anyone noticing it doubles the
+    // cost of all 5,865 cells.
+    expect(LAND_VARS.length).toBe(10);
+    expect(MARINE_VARS.length).toBeLessThanOrEqual(10);
+    expect(AIR_VARS.length).toBeLessThanOrEqual(10);
+  });
+
+  it('every variable has a scale, or it silently renders unscaled', () => {
+    for (const v of [...LAND_VARS, ...MARINE_VARS, ...AIR_VARS, ...FLOOD_VARS]) {
+      expect(VAR_SCALE[v], `no scale for ${v}`).toBeGreaterThan(0);
+    }
   });
 
   it('catches a resolution bump that would blow the quota', () => {
@@ -114,7 +126,7 @@ describe('the Open-Meteo bill', () => {
   });
 
   it('counts a part-full final batch', () => {
-    const est = estimateSpend(gridGeometry(0.5), 250, 1, null);
+    const est = estimateSpend(gridGeometry(0.5), 250, 1, null, null);
     expect(est.requestsPerRefresh).toBe(Math.ceil(5865 / 250));
     expect(est.requestsPerRefresh).toBe(24);
   });
@@ -124,12 +136,12 @@ describe('the Open-Meteo bill', () => {
     // 5,865 locations a day and 11,730 combined is past the ceiling before a
     // single retry — so this must be caught rather than discovered in
     // production when the quota trips mid-afternoon.
-    const shared = estimateSpend(gridGeometry(0.5), 250, 1, gridGeometry(0.5));
+    const shared = estimateSpend(gridGeometry(0.5), 250, 1, gridGeometry(0.5), null);
     expect(shared.locationsPerDay).toBe(11730);
     expect(shared.withinFreeTier).toBe(false);
 
     // The shipped pairing fits, with room.
-    const shipped = estimateSpend(gridGeometry(0.5), 250, 1, marineGeometry(1));
+    const shipped = estimateSpend(gridGeometry(0.5), 250, 1, marineGeometry(1), null);
     expect(shipped.withinFreeTier).toBe(true);
     expect(shipped.locationsPerMonth).toBeLessThanOrEqual(FREE_TIER.perMonth);
   });

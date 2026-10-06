@@ -3417,11 +3417,20 @@
 
     // SUPABASE_URL, SUPABASE_KEY, and sb are provided by auth-common.js
 
-    const darkBase = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?key=cb1_29rl_1_764d57ded0436220d836abc9', { attribution: '&copy; CartoDB', subdomains: 'abcd', maxZoom: 19 });
+    const darkBase = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png?key=cb1_29rl_1_764d57ded0436220d836abc9', { attribution: '&copy; CartoDB', subdomains: 'abcd', maxZoom: 19 });
+    // Labels only, drawn ABOVE the weather field (pane z 260 vs the field's
+    // 250). Added and removed with darkBase so the two halves never separate.
+    const darkLabels = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png?key=cb1_29rl_1_764d57ded0436220d836abc9', { pane: 'labelPane', subdomains: 'abcd', maxZoom: 19 });
     const satBase = L.tileLayer('https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', { maxZoom: 21, subdomains: ['mt0', 'mt1', 'mt2', 'mt3'], maxNativeZoom: 19, attribution: '© Google' });
     const topoBase = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', { attribution: 'Map data: &copy; OpenStreetMap | Map style: &copy; OpenTopoMap', maxZoom: 17 });
 
     const map = L.map('map', { zoomControl: false, layers: [darkBase] }).setView([-33.8688, 151.2093], 7);
+    // Above the weather field (250/251), below every marker pane. Created
+    // before the labels layer is added so Leaflet has somewhere to put it.
+    map.createPane('labelPane');
+    map.getPane('labelPane').style.zIndex = 260;
+    map.getPane('labelPane').style.pointerEvents = 'none';
+    darkLabels.addTo(map);
 
     // Close any open tooltips when the map starts moving / zooming.
     // Workaround for a Leaflet quirk: during a drag the map element
@@ -3816,11 +3825,12 @@
     function setMapType(type) {
       if (typeof umami !== 'undefined') umami.track('map-type-change', { type: type });
       map.removeLayer(darkBase); map.removeLayer(satBase); map.removeLayer(topoBase);
+      map.removeLayer(darkLabels);
       document.querySelectorAll('.map-type-btn').forEach(btn => btn.classList.remove('active'));
       const mapDiv = document.getElementById('map');
       // Remove all mode classes first
       mapDiv.classList.remove('map-dark-mode', 'map-sat-mode', 'map-topo-mode');
-      if (type === 'dark') { map.addLayer(darkBase); mapDiv.classList.add('map-dark-mode'); document.getElementById('btn-type-dark').classList.add('active'); }
+      if (type === 'dark') { map.addLayer(darkBase); map.addLayer(darkLabels); mapDiv.classList.add('map-dark-mode'); document.getElementById('btn-type-dark').classList.add('active'); }
       else if (type === 'sat') { map.addLayer(satBase); mapDiv.classList.add('map-sat-mode'); document.getElementById('btn-type-sat').classList.add('active'); }
       else if (type === 'topo') { map.addLayer(topoBase); mapDiv.classList.add('map-topo-mode'); document.getElementById('btn-type-topo').classList.add('active'); }
       document.querySelectorAll('#maptype-seg .seg-opt').forEach((o) => {
@@ -12523,20 +12533,53 @@ function initPagerHoursFromStorage() {
     // which field is showing; these just drive it, exactly as toggleRadarPill
     // drives #chk-radar. Two surfaces, one state — otherwise the card and the
     // panel can disagree about what is on the map.
-    const WX_FIELD_PILLS = [
-      ['wind', 'chk-wx-wind', '<i class="fa-solid fa-wind"></i> Wind'],
-      ['temperature_2m', 'chk-wx-temp', '<i class="fa-solid fa-temperature-half"></i> Temp'],
-      ['precipitation', 'chk-wx-rain', '<i class="fa-solid fa-cloud-showers-heavy"></i> Rain'],
-      ['wave_height', 'chk-wx-waves', '<i class="fa-solid fa-water"></i> Waves'],
-      ['river_discharge', 'chk-wx-flood', '<i class="fa-solid fa-house-flood-water"></i> Rivers'],
+    const WX_FIELD_GROUPS = [
+      ['Wind', [
+        ['wind', '<i class="fa-solid fa-wind"></i> Wind'],
+        ['wind_gusts_10m', '<i class="fa-solid fa-wind"></i> Gusts'],
+      ]],
+      ['Sky', [
+        ['temperature_2m', '<i class="fa-solid fa-temperature-half"></i> Temp'],
+        ['relative_humidity_2m', '<i class="fa-solid fa-droplet"></i> Humidity'],
+        ['pressure_msl', '<i class="fa-solid fa-gauge"></i> Pressure'],
+        ['uv_index', '<i class="fa-solid fa-sun"></i> UV'],
+      ]],
+      ['Rain &amp; storms', [
+        ['precipitation', '<i class="fa-solid fa-cloud-showers-heavy"></i> Rain'],
+        ['precip_accum', '<i class="fa-solid fa-bucket"></i> Accum'],
+        ['cape', '<i class="fa-solid fa-bolt"></i> Thunder'],
+      ]],
+      ['Sea', [
+        ['wave_height', '<i class="fa-solid fa-water"></i> Waves'],
+        ['swell_wave_height', '<i class="fa-solid fa-wave-square"></i> Swell'],
+        ['ocean_current_velocity', '<i class="fa-solid fa-arrows-turn-right"></i> Currents'],
+      ]],
+      ['Land &amp; air', [
+        ['river_discharge', '<i class="fa-solid fa-house-flood-water"></i> Rivers'],
+        ['us_aqi', '<i class="fa-solid fa-smog"></i> Air quality'],
+        ['pm2_5', '<i class="fa-solid fa-industry"></i> PM2.5'],
+      ]],
     ];
+    const WX_FIELD_PILLS = WX_FIELD_GROUPS.flatMap(function (g) { return g[1]; });
+
+    // The legacy #weather-panel radios only ever described five layers, and
+    // there are fourteen now. Rather than keep a hidden radio per layer in two
+    // places forever, the pills read _wxLayer directly and only sync the radios
+    // that still exist — they remain the deep-link/keyboard path for those.
+    const WX_LEGACY_RADIO = {
+      wind: 'chk-wx-wind',
+      temperature_2m: 'chk-wx-temp',
+      precipitation: 'chk-wx-rain',
+      wave_height: 'chk-wx-waves',
+      river_discharge: 'chk-wx-flood',
+    };
 
     window.toggleWxFieldPill = function (which) {
       // Clicking the active pill turns it off, which is how every other pill
       // on this card behaves.
       const next = (typeof _wxLayer !== 'undefined' && _wxLayer === which) ? 'none' : which;
-      for (const [key, id] of WX_FIELD_PILLS.map((p) => [p[0], p[1]])) {
-        _ffSetCheckbox(id, key === next);
+      for (const key of Object.keys(WX_LEGACY_RADIO)) {
+        _ffSetCheckbox(WX_LEGACY_RADIO[key], key === next);
       }
       _ffSetCheckbox('chk-wx-none', next === 'none');
       Promise.resolve(wxSetLayer(next)).then(refreshActiveFilterPanel, refreshActiveFilterPanel);
@@ -12566,9 +12609,13 @@ function initPagerHoursFromStorage() {
         const timeLbl = document.getElementById('radar-time-display')?.textContent ?? '--:--';
 
         const active = (typeof _wxLayer !== 'undefined') ? _wxLayer : 'none';
-        const fieldPills = WX_FIELD_PILLS
-          .map((p) => _ffPill(active === p[0], p[2], `toggleWxFieldPill('${p[0]}')`))
-          .join('');
+        const fieldPills = WX_FIELD_GROUPS.map(function (g) {
+          const pills = g[1]
+            .map((p) => _ffPill(active === p[0], p[1], `toggleWxFieldPill('${p[0]}')`))
+            .join('');
+          return `<div class="ff-section-label">${g[0]}</div>`
+            + `<div class="floating-filter-pills">${pills}</div>`;
+        }).join('');
 
         // The forecast scrubber only appears once a field is showing. It is
         // deliberately separate from the radar timeline above: the radar is
@@ -12603,8 +12650,7 @@ function initPagerHoursFromStorage() {
             ${_ffPill(pinsOn, '<i class="fa-solid fa-temperature-half"></i> Stations', 'toggleWeatherPinsPill()')}
           </div>
           ${radarTimeline}
-          <div class="ff-section-label">Forecast field</div>
-          <div class="floating-filter-pills">${fieldPills}</div>
+          ${fieldPills}
           ${fieldTimeline}
         `;
       },
@@ -19712,7 +19758,50 @@ function initPagerHoursFromStorage() {
       river_discharge: 'River flow',
     };
     const WX_FLOOD_VARS = ['river_discharge', 'river_discharge_median'];
+    const WX_AIR_VARS = ['pm2_5', 'pm10', 'us_aqi'];
+    function wxIsAir(name) { return WX_AIR_VARS.indexOf(name) !== -1; }
+    // How far ahead "Accum" adds up. Eight 3-hourly steps is the next 24 hours,
+    // which is the window people actually ask about before a storm.
+    const WX_ACCUM_STEPS = 8;
     function wxIsFlood(name) { return WX_FLOOD_VARS.indexOf(name) !== -1; }
+
+    /**
+     * Rain accumulation, summed on the client rather than fetched.
+     *
+     * The API would happily return a precipitation sum, but it would cost one
+     * of the ten variable slots the land grid is already full of — and every
+     * number needed to compute it is in grids we have already downloaded and
+     * cached. Adding them up locally is free and instant when scrubbing.
+     *
+     * Returns a fresh Int16Array on the same grid and scale as precipitation,
+     * so the renderer needs to know nothing about it.
+     */
+    async function wxAccumGrid(startIdx, scale, nodata) {
+      const axis = _wxManifest.timesteps;
+      const first = await wxFetchGrid('precipitation', axis[startIdx]);
+      if (!first) return null;
+      const out = new Int16Array(first.length);
+      // Seeded from the first step so a cell that is absent in every step
+      // stays absent, rather than becoming a confident zero.
+      for (let i = 0; i < first.length; i += 1) out[i] = first[i];
+
+      const last = Math.min(axis.length - 1, startIdx + WX_ACCUM_STEPS - 1);
+      for (let t = startIdx + 1; t <= last; t += 1) {
+        const g = await wxFetchGrid('precipitation', axis[t]);
+        if (!g) break;
+        for (let i = 0; i < out.length; i += 1) {
+          if (g[i] === nodata) continue;
+          out[i] = out[i] === nodata ? g[i] : out[i] + g[i];
+        }
+      }
+      // Totals over 24 hours routinely exceed what one 3-hourly step needs, so
+      // clamp rather than let the Int16 wrap into a negative rainfall.
+      const cap = 32767;
+      for (let i = 0; i < out.length; i += 1) {
+        if (out[i] !== nodata && out[i] > cap) out[i] = cap;
+      }
+      return out;
+    }
     // Which variables are marine is a fact about the variable, not about
     // whether the manifest happens to list it yet. Deriving it from the
     // manifest alone means that before the marine source has ever run,
@@ -19730,6 +19819,7 @@ function initPagerHoursFromStorage() {
       if (!_wxManifest) return [];
       if (wxIsFlood(name)) return _wxManifest.floodTimesteps || [];
       if (wxIsMarine(name)) return _wxManifest.marineTimesteps || [];
+      if (wxIsAir(name)) return _wxManifest.airTimesteps || [];
       return _wxManifest.timesteps;
     }
 
@@ -19851,6 +19941,18 @@ function initPagerHoursFromStorage() {
           _wxField.setVariable('wind_speed_10m');
           _wxField.setData(spd, wxVarMeta('wind_speed_10m'));
           _wxField.setAnimated(true);
+        } else if (_wxLayer === 'precip_accum') {
+          const meta = wxVarMeta('precipitation');
+          const grid = await wxAccumGrid(
+            _wxTimeIdx, (meta && meta.scale) || 100, _wxManifest.nodata || -32768,
+          );
+          if (token !== _wxLoadToken || !grid) return;
+          _wxField.setAnimated(false);
+          _wxField.setGeometry(_wxManifest.geometry);
+          _wxField.setVariable('precip_accum');
+          // Carries precipitation's scale, because that is the unit it was
+          // summed in — only the colour ramp differs.
+          _wxField.setData(grid, { name: 'precip_accum', scale: (meta && meta.scale) || 100 });
         } else if (wxIsFlood(_wxLayer)) {
           const pair = await Promise.all([
             wxFetchGrid('river_discharge', iso),
@@ -19877,8 +19979,9 @@ function initPagerHoursFromStorage() {
           // Geometry BEFORE data: marine is a coarser grid, and handing a
           // 43x35 array to a renderer still sized for 85x69 would read the
           // array off its end and smear the waves across the continent.
-          _wxField.setGeometry(wxIsMarine(_wxLayer)
-            ? (_wxManifest.marineGeometry || _wxManifest.geometry)
+          _wxField.setGeometry(
+            wxIsMarine(_wxLayer) ? (_wxManifest.marineGeometry || _wxManifest.geometry)
+            : wxIsAir(_wxLayer) ? (_wxManifest.airGeometry || _wxManifest.geometry)
             : _wxManifest.geometry);
           _wxField.setVariable(_wxLayer);
           _wxField.setData(grid, wxVarMeta(_wxLayer));
@@ -19993,6 +20096,16 @@ function initPagerHoursFromStorage() {
         // cleared). Say so rather than leaving a radio selected over a blank map.
         if (typeof showToast === 'function') {
           showToast('Weather forecast is still being prepared - try again shortly.');
+        }
+        const off = document.getElementById('chk-wx-none');
+        if (off) off.checked = true;
+        _wxLayer = 'none';
+        return;
+      }
+
+      if (wxIsAir(which) && !m.airGeometry) {
+        if (typeof showToast === 'function') {
+          showToast('Air quality data is still being prepared - try again shortly.');
         }
         const off = document.getElementById('chk-wx-none');
         if (off) off.checked = true;
@@ -21162,7 +21275,7 @@ function initPagerHoursFromStorage() {
   <script src="ui-dialogs.js"></script>
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
-  <script src="map-weather-module.js?v=3"></script>
+  <script src="map-weather-module.js?v=4"></script>
   <script src="map-editor-module.js?v=43"></script>
 </body>
 </html>

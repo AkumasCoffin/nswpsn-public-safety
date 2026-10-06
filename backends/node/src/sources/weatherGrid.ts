@@ -19,12 +19,13 @@
  *
  * Open-Meteo weights a call by variables and time span — "more than 10 weather
  * variables or ... more than 2 weeks for a single location" counts as multiple.
- * We request 6 variables over 9 days, so each request weighs one call. What the
- * docs do NOT say is whether a multi-location request counts once or once per
- * location. The defaults here are deliberately safe under BOTH readings:
+ * We request 10 variables over 9 days - exactly on the line - so each request
+ * still weighs one call. What the docs do NOT say is whether a request counts once or once per
+ * location. It counts per LOCATION - the first production run proved that by
+ * being 429'd - and the defaults are inside the ceiling on that reading:
  *
- *   per-location:  5,865/day, 176k/month   (vs 10k/day, 300k/month)
- *   per-request:   ~6/day
+ *   land 0.5deg 5,865 + marine 1deg 1,505 + air 1.5deg 667
+ *   = 8,037/day, 249k/month   (vs 10k/day, 300k/month)
  *
  * `estimateSpend()` reports both so the real number is observable rather than
  * assumed, and GRID_STEP_DEG is config so the grid can be tightened once actual
@@ -46,24 +47,49 @@ export const AU_BBOX = {
 export const FREE_TIER = { perDay: 10_000, perMonth: 300_000 } as const;
 
 /**
- * Variables pulled for every land cell. Six, deliberately: at eleven the
- * request starts counting as more than one call.
+ * Variables pulled for every land cell. TEN — the exact limit.
+ *
+ * Open-Meteo: "more than 10 weather variables ... are considered multiple API
+ * calls". So ten is free and eleven costs double across all 5,865 cells. This
+ * list is therefore full: anything new has to displace something, or move to
+ * its own grid where it can be sampled more coarsely.
+ *
+ * Note what is NOT here. Rain accumulation is derived on the client by summing
+ * precipitation across timesteps — asking the API for it as well would spend
+ * one of ten slots re-sending a number we can already add up. `cape` is the
+ * thunderstorm layer: it is what convective forecasting actually keys on, and
+ * it is a real gridded field, where "chance of thunder" is not.
  */
 export const LAND_VARS = [
   'temperature_2m',
   'apparent_temperature',
+  'relative_humidity_2m',
   'precipitation',
+  'pressure_msl',
+  'uv_index',
+  'cape',
   'wind_speed_10m',
   'wind_direction_10m',
   'wind_gusts_10m',
 ] as const;
 
-/** Marine variables, ocean cells only. */
+/**
+ * Marine variables, ocean cells only. Eight, so still one call.
+ *
+ * Swell is carried separately from total wave height on purpose: they are the
+ * two numbers anyone going out on the water actually compares. A two-metre sea
+ * that is all short local windchop and a two-metre long-period groundswell are
+ * the same height and completely different days.
+ */
 export const MARINE_VARS = [
   'wave_height',
   'wave_direction',
   'wave_period',
   'swell_wave_height',
+  'swell_wave_direction',
+  'swell_wave_period',
+  'ocean_current_velocity',
+  'ocean_current_direction',
 ] as const;
 
 /**
@@ -79,10 +105,24 @@ export const FLOOD_VARS = [
   'river_discharge_median',
 ] as const;
 
+/**
+ * Air quality, on its own coarser grid again.
+ *
+ * Separate because it is a separate upstream API, and coarse because haze and
+ * smoke plumes are hundreds of kilometres across — the scale that matters for
+ * "is the smoke reaching us" is not the scale that matters for wind.
+ */
+export const AIR_VARS = [
+  'pm2_5',
+  'pm10',
+  'us_aqi',
+] as const;
+
 export type LandVar = (typeof LAND_VARS)[number];
 export type MarineVar = (typeof MARINE_VARS)[number];
 export type FloodVar = (typeof FLOOD_VARS)[number];
-export type GridVar = LandVar | MarineVar | FloodVar;
+export type AirVar = (typeof AIR_VARS)[number];
+export type GridVar = LandVar | MarineVar | FloodVar | AirVar;
 
 /**
  * How each variable is packed into an Int16.
@@ -98,7 +138,15 @@ export const NODATA = -32768;
 export const VAR_SCALE: Readonly<Record<GridVar, number>> = {
   temperature_2m: 10,
   apparent_temperature: 10,
+  relative_humidity_2m: 10,
   precipitation: 100,
+  // Mean sea-level pressure sits around 1013 hPa, so scale 10 gives a tenth
+  // of a hectopascal and tops out at 3276 — far beyond any real reading.
+  pressure_msl: 10,
+  uv_index: 100,
+  // CAPE reaches a few thousand J/kg in a severe storm, so it has to stay at
+  // scale 1 to keep the top of the range representable.
+  cape: 1,
   wind_speed_10m: 10,
   wind_direction_10m: 10,
   wind_gusts_10m: 10,
@@ -106,6 +154,13 @@ export const VAR_SCALE: Readonly<Record<GridVar, number>> = {
   wave_direction: 10,
   wave_period: 10,
   swell_wave_height: 100,
+  swell_wave_direction: 10,
+  swell_wave_period: 10,
+  ocean_current_velocity: 100,
+  ocean_current_direction: 10,
+  pm2_5: 10,
+  pm10: 10,
+  us_aqi: 1,
   // Scale 1, so the Int16 ceiling is 32,767 m3/s. No Australian river comes
   // near that - the Murray in major flood runs in the low thousands - and the
   // cost is that a creek under 0.5 m3/s rounds to zero, which is fine for a
@@ -159,6 +214,11 @@ export function marineGeometry(stepDeg = config.WEATHER_MARINE_STEP): GridGeomet
   return gridGeometry(stepDeg);
 }
 
+/** The air-quality grid. Coarser again — see AIR_VARS for why. */
+export function airGeometry(stepDeg = config.WEATHER_AIR_STEP): GridGeometry {
+  return gridGeometry(stepDeg);
+}
+
 /**
  * Cell index -> coordinates. Row-major from the SOUTH-WEST corner, so index 0
  * is the bottom-left and rows run north. The client's renderer flips this when
@@ -184,6 +244,8 @@ export interface SpendEstimate {
   cells: number;
   /** Marine cells, counted at their WORST case — every cell ocean. */
   marineCells: number;
+  /** Air-quality cells. Every cell, since air quality has no mask. */
+  airCells: number;
   /** HTTP requests per full refresh, after batching. */
   requestsPerRefresh: number;
   refreshesPerDay: number;
@@ -207,20 +269,25 @@ export function estimateSpend(
   batchSize = config.WEATHER_GRID_BATCH,
   refreshesPerDay = 86_400_000 / config.WEATHER_GRID_INTERVAL_MS,
   marine: GridGeometry | null = marineGeometry(),
+  air: GridGeometry | null = airGeometry(),
 ): SpendEstimate {
   const cells = cellCount(g);
   // Counted at the worst case — every marine cell ocean. The real number is
   // lower because the land/sea mask excludes inland cells, but a budget that
   // only holds if the coastline comes out a particular way is not a budget.
   const marineCells = marine ? cellCount(marine) : 0;
-  const perRefresh = cells + marineCells;
-  const requestsPerRefresh = Math.ceil(cells / batchSize) + Math.ceil(marineCells / batchSize);
+  const airCells = air ? cellCount(air) : 0;
+  const perRefresh = cells + marineCells + airCells;
+  const requestsPerRefresh = Math.ceil(cells / batchSize)
+    + Math.ceil(marineCells / batchSize)
+    + Math.ceil(airCells / batchSize);
   const locationsPerDay = Math.ceil(perRefresh * refreshesPerDay);
   // 31 so a long month cannot be the thing that tips it over.
   const locationsPerMonth = locationsPerDay * 31;
   return {
     cells,
     marineCells,
+    airCells,
     requestsPerRefresh,
     refreshesPerDay,
     locationsPerDay,
@@ -237,6 +304,7 @@ export function reportSpend(): SpendEstimate {
   const detail = {
     cells: est.cells,
     marineCells: est.marineCells,
+    airCells: est.airCells,
     locationsPerDay: est.locationsPerDay,
     locationsPerMonth: est.locationsPerMonth,
     requestsPerDay: est.requestsPerDay,

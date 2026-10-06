@@ -41,7 +41,11 @@ export const STEP_HOURS = 3;
 const UNITS: Readonly<Record<string, string>> = {
   temperature_2m: '°C',
   apparent_temperature: '°C',
+  relative_humidity_2m: '%',
   precipitation: 'mm',
+  pressure_msl: 'hPa',
+  uv_index: '',
+  cape: 'J/kg',
   wind_speed_10m: 'km/h',
   wind_direction_10m: '°',
   wind_gusts_10m: 'km/h',
@@ -256,12 +260,14 @@ export async function refreshWeatherGrid(force = false): Promise<WeatherManifest
     // drop it — and because prune below keeps only what the manifest lists,
     // that would delete every marine grid on disk and force a full refetch the
     // same day. Carry whatever marine already knows about straight through.
-    vars: [...vars, ...(existing?.vars.filter((v) => v.marine || v.flood) ?? [])],
+    vars: [...vars, ...(existing?.vars.filter((v) => v.marine || v.flood || v.air) ?? [])],
     nodata: -32768,
     ...(existing?.marineGeometry ? { marineGeometry: existing.marineGeometry } : {}),
     ...(existing?.marineTimesteps ? { marineTimesteps: existing.marineTimesteps } : {}),
     ...(existing?.floodGeometry ? { floodGeometry: existing.floodGeometry } : {}),
     ...(existing?.floodTimesteps ? { floodTimesteps: existing.floodTimesteps } : {}),
+    ...(existing?.airGeometry ? { airGeometry: existing.airGeometry } : {}),
+    ...(existing?.airTimesteps ? { airTimesteps: existing.airTimesteps } : {}),
   };
   await writeManifest(manifest);
   await pruneGrids(manifest);

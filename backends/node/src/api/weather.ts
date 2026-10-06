@@ -17,7 +17,7 @@ import {
   weatherCurrentSnapshot,
   weatherRadarSnapshot,
 } from '../sources/weather.js';
-import { LAND_VARS, MARINE_VARS, FLOOD_VARS, VAR_SCALE, type GridVar } from '../sources/weatherGrid.js';
+import { LAND_VARS, MARINE_VARS, FLOOD_VARS, AIR_VARS, VAR_SCALE, type GridVar } from '../sources/weatherGrid.js';
 import { readGridBytes, readManifest } from '../services/weatherStore.js';
 import { SwrCache } from '../services/swrCache.js';
 import { fetchJson } from '../sources/shared/http.js';
@@ -70,7 +70,10 @@ weatherRouter.get('/api/weather/grid', async (c) => {
   const isLand = LAND_VARS.includes(v as (typeof LAND_VARS)[number]);
   const isMarine = MARINE_VARS.includes(v as (typeof MARINE_VARS)[number]);
   const isFlood = FLOOD_VARS.includes(v as (typeof FLOOD_VARS)[number]);
-  if (!isLand && !isMarine && !isFlood) return c.json({ error: 'unknown variable' }, 400);
+  const isAir = AIR_VARS.includes(v as (typeof AIR_VARS)[number]);
+  if (!isLand && !isMarine && !isFlood && !isAir) {
+    return c.json({ error: 'unknown variable' }, 400);
+  }
   if (!t) return c.json({ error: 'missing timestep' }, 400);
 
   const m = await readManifest();
@@ -80,10 +83,16 @@ weatherRouter.get('/api/weather/grid', async (c) => {
   // marine request against the land axis would reject perfectly good timesteps,
   // and returning land geometry for it would stretch the waves across the
   // continent at the wrong scale.
-  const geometry = isFlood ? m.floodGeometry : isMarine ? m.marineGeometry : m.geometry;
-  const axis = isFlood ? m.floodTimesteps : isMarine ? m.marineTimesteps : m.timesteps;
+  const geometry = isFlood ? m.floodGeometry
+    : isMarine ? m.marineGeometry
+    : isAir ? m.airGeometry
+    : m.geometry;
+  const axis = isFlood ? m.floodTimesteps
+    : isMarine ? m.marineTimesteps
+    : isAir ? m.airTimesteps
+    : m.timesteps;
   if (!geometry || !axis) {
-    const which = isFlood ? 'flood' : 'marine';
+    const which = isFlood ? 'flood' : isMarine ? 'marine' : 'air';
     return c.json({ error: `${which} field not built yet`, ready: false }, 503);
   }
   // Only timesteps the manifest advertises. Without this the timestep is a

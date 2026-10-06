@@ -39,6 +39,10 @@ const UNITS: Readonly<Record<string, string>> = {
   wave_direction: '°',
   wave_period: 's',
   swell_wave_height: 'm',
+  swell_wave_direction: '°',
+  swell_wave_period: 's',
+  ocean_current_velocity: 'm/s',
+  ocean_current_direction: '°',
 };
 
 interface HourlyBlock { time?: unknown; [key: string]: unknown }
@@ -163,6 +167,7 @@ export async function refreshMarineGrid(force = false): Promise<WeatherManifest 
     unit: UNITS[name] ?? '',
     marine: true,
     flood: false,
+    air: false,
   }));
 
   const merged: WeatherManifest = {

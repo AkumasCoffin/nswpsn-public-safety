@@ -78,6 +78,9 @@ const Schema = z.object({
   // kilometres, and matching the land grid would add up to 5,865 more
   // locations a day - past the free tier before a single retry.
   WEATHER_MARINE_STEP: z.coerce.number().positive().default(1.0),
+  // Air quality, coarser again: smoke and haze move in plumes hundreds of
+  // kilometres across, and it is a third grid competing for the same quota.
+  WEATHER_AIR_STEP: z.coerce.number().positive().default(1.5),
   // Locations per HTTP request, via Open-Meteo's comma-separated coordinates.
   // Fewer round trips; the cap keeps any single URL a sane length.
   WEATHER_GRID_BATCH: z.coerce.number().int().positive().default(250),

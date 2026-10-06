@@ -59,6 +59,145 @@
   // EXPORTED on purpose: the legend must be generated from this same table.
   // A legend that drifts from the map is worse than no legend at all.
   const SCALES = {
+    // Rain accumulated over the next 24 hours. A much wider range than the
+    // per-step precipitation ramp, which tops out where this one starts —
+    // reusing that ramp would paint every wet day the same saturated red.
+    precip_accum: {
+      unit: 'mm',
+      stops: [
+        [0, 40, 80, 120, 0],
+        [1, 70, 150, 200, 0.4],
+        [5, 80, 200, 170],
+        [15, 230, 220, 90],
+        [30, 240, 150, 60],
+        [60, 230, 70, 70],
+        [120, 170, 40, 170]
+      ]
+    },
+    // Relative humidity. Dry is left deliberately near-transparent: the
+    // interesting end is the muggy one, and a brown wash over every desert is
+    // not information.
+    relative_humidity_2m: {
+      unit: '%',
+      stops: [
+        [0, 120, 80, 40, 0.05],
+        [20, 150, 120, 60, 0.35],
+        [40, 120, 160, 120],
+        [60, 60, 170, 170],
+        [80, 40, 130, 200],
+        [100, 30, 70, 190]
+      ]
+    },
+    // Mean sea-level pressure. The band is narrow on purpose — real pressure
+    // almost never leaves 960-1040, and a scale wide enough for the
+    // theoretical range would render every weather system the same colour.
+    pressure_msl: {
+      unit: 'hPa',
+      stops: [
+        [960, 140, 40, 160],
+        [980, 90, 70, 200],
+        [1000, 60, 150, 200],
+        [1013, 120, 200, 170],
+        [1025, 230, 200, 90],
+        [1040, 230, 120, 60]
+      ]
+    },
+    // UV index, banded to the public advisory thresholds rather than a smooth
+    // ramp — 3, 6, 8 and 11 are the numbers the advice actually changes at, so
+    // the colour should change there too.
+    uv_index: {
+      unit: '',
+      stops: [
+        [0, 40, 90, 120, 0.1],
+        [3, 90, 190, 120],
+        [6, 240, 210, 80],
+        [8, 240, 140, 60],
+        [11, 220, 60, 60],
+        [15, 150, 40, 170]
+      ]
+    },
+    // CAPE — convective available potential energy, i.e. thunderstorm fuel.
+    // Near-transparent below ~300 because most of the map is not convective
+    // most of the time, and the whole point is to see where it IS.
+    cape: {
+      unit: 'J/kg',
+      stops: [
+        [0, 60, 80, 120, 0],
+        [300, 90, 160, 200, 0.3],
+        [800, 230, 210, 90],
+        [1500, 240, 150, 60],
+        [2500, 230, 70, 60],
+        [4000, 170, 40, 160]
+      ]
+    },
+    // Wind gusts, same ramp as sustained wind so the two are comparable at a
+    // glance — a gust layer on its own scale would make a 60 km/h gust look
+    // like a different kind of thing from a 60 km/h wind.
+    wind_gusts_10m: {
+      unit: 'km/h',
+      stops: [
+        [0, 40, 70, 110, 0.15],
+        [15, 60, 140, 180],
+        [30, 90, 200, 160],
+        [45, 230, 210, 90],
+        [60, 240, 140, 60],
+        [80, 230, 60, 60],
+        [120, 170, 40, 170]
+      ]
+    },
+    // Swell height. Deliberately NOT the same ramp as total wave height: a
+    // two-metre groundswell and a two-metre windchop are the same number and
+    // completely different days on the water, so they should not look alike.
+    swell_wave_height: {
+      unit: 'm',
+      stops: [
+        [0, 30, 60, 110, 0.2],
+        [1, 50, 130, 190],
+        [2, 70, 190, 190],
+        [3, 220, 200, 110],
+        [5, 230, 120, 70],
+        [8, 200, 50, 90]
+      ]
+    },
+    // Surface current. Metres per second, and the top of the scale is low
+    // because anything over about 1.5 m/s is a genuinely strong current.
+    ocean_current_velocity: {
+      unit: 'm/s',
+      stops: [
+        [0, 30, 60, 100, 0.1],
+        [0.25, 60, 150, 170],
+        [0.5, 90, 200, 150],
+        [1, 230, 200, 90],
+        [1.5, 230, 120, 70],
+        [2.5, 200, 50, 90]
+      ]
+    },
+    // US AQI, banded at the published breakpoints (50/100/150/200/300) and
+    // coloured with the standard palette, because those colours are already
+    // what people have seen on every other air-quality map.
+    us_aqi: {
+      unit: 'AQI',
+      stops: [
+        [0, 80, 200, 120, 0.25],
+        [50, 230, 220, 90],
+        [100, 240, 160, 70],
+        [150, 230, 80, 70],
+        [200, 160, 60, 160],
+        [300, 130, 30, 60]
+      ]
+    },
+    // Fine particulates. The layer that matters on a smoke day.
+    pm2_5: {
+      unit: 'µg/m³',
+      stops: [
+        [0, 80, 200, 120, 0.2],
+        [12, 230, 220, 90],
+        [35, 240, 160, 70],
+        [55, 230, 80, 70],
+        [150, 160, 60, 160],
+        [250, 130, 30, 60]
+      ]
+    },
     // Degrees Celsius. Range covers Australian extremes with headroom at both
     // ends — Oodnadatta summers and alpine winters are both inside it.
     temperature_2m: {
@@ -543,7 +682,7 @@
         this._size = { x: 0, y: 0 };
         this._dpr = 1;
         this._windPxPerSec = this._o.windSpeedPxPerSec > 0 ? this._o.windSpeedPxPerSec : 0.9;
-        this._opacity = typeof this._o.opacity === 'number' ? this._o.opacity : 0.72;
+        this._opacity = typeof this._o.opacity === 'number' ? this._o.opacity : 0.88;
         this._onVisibility = this._visibilityChanged.bind(this);
       },
 

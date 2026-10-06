@@ -33,6 +33,8 @@ export interface ManifestVar {
   marine: boolean;
   /** Land-only river discharge, on a DAILY axis rather than 3-hourly. */
   flood?: boolean;
+  /** Air quality, on its own coarser grid and its own axis. */
+  air?: boolean;
 }
 
 export interface WeatherManifest {
@@ -55,6 +57,9 @@ export interface WeatherManifest {
    */
   floodGeometry?: GridGeometry;
   floodTimesteps?: string[];
+  /** Air quality: coarser grid again, 3-hourly like land but its own axis. */
+  airGeometry?: GridGeometry;
+  airTimesteps?: string[];
 }
 
 export function weatherDir(): string {
@@ -150,9 +155,14 @@ export async function pruneGrids(m: WeatherManifest): Promise<number> {
     // Each variable is kept on ITS OWN axis. Pruning marine against the land
     // timesteps would delete every marine grid the moment the two axes differ
     // by so much as an hour.
-    const axis = v.flood
-      ? (m.floodTimesteps ?? [])
-      : v.marine ? (m.marineTimesteps ?? []) : m.timesteps;
+    // Every non-land grid MUST have a branch here. Falling through to the
+    // land axis gives that variable an empty keep-set, so the next land
+    // refresh deletes every one of its files and forces a same-day refetch.
+    // Marine and flood each had to learn this; air nearly did too.
+    const axis = v.flood ? (m.floodTimesteps ?? [])
+      : v.marine ? (m.marineTimesteps ?? [])
+      : v.air ? (m.airTimesteps ?? [])
+      : m.timesteps;
     for (const t of axis) keep.add(gridFileName(v.name, t));
   }
 
