@@ -124,6 +124,16 @@ const Schema = z.object({
   // always fetched one batch at a time regardless — concurrency there just
   // spends the rate window faster.
   WEATHER_FETCH_CONCURRENCY: z.coerce.number().int().default(6),
+  // The LAND field's bounding box. Defaults to Australia; against a
+  // self-hosted instance it can widen to the whole Oceania viewport (the
+  // runbook's block uses 90E-180E, 55S-15N) so the field fills the screen the
+  // way Windy's does instead of ending in a rectangle mid-ocean. Marine,
+  // flood and air keep the Australian box: flood rides the public API's
+  // quota, and the others gain nothing a viewer would see.
+  WEATHER_GRID_WEST: z.coerce.number().default(112),
+  WEATHER_GRID_SOUTH: z.coerce.number().default(-44),
+  WEATHER_GRID_EAST: z.coerce.number().default(154),
+  WEATHER_GRID_NORTH: z.coerce.number().default(-10),
 
   // One full refresh a day. Each fetch already carries 9 days of time series,
   // so refreshing more often buys freshness of the model run, not more range.

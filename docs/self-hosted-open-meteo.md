@@ -93,6 +93,27 @@ WEATHER_AIR_STEP=0.75
 WEATHER_GRID_INTERVAL_MS=10800000
 ```
 
+To make the field fill the screen the way Windy's does — across the Tasman,
+Indonesia, PNG and New Zealand instead of ending in a rectangle mid-ocean —
+widen the LAND box (marine, flood and air stay Australian; flood rides the
+public API's quota):
+
+```ini
+WEATHER_GRID_WEST=90
+WEATHER_GRID_EAST=180
+WEATHER_GRID_SOUTH=-55
+WEATHER_GRID_NORTH=15
+# 0.15 over the wide box: 601x467 = 280,667 cells, ~12 min per refresh at
+# concurrency 6, ~360 MB transient heap during a refresh. 0.1 over this box
+# would be 631k cells and ~820 MB of heap mid-refresh — do not pair them on
+# the 10 GB web host.
+WEATHER_GRID_STEP=0.15
+```
+
+(Stay east of 180: the renderer assumes the view does not straddle the
+antimeridian, and Fiji at 178E still fits.)
+
+
 Then wipe the old grids once, so the freshness guard does not hold the coarse
 dataset against the new geometry:
 

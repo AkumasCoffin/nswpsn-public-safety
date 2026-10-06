@@ -193,9 +193,18 @@ export interface GridGeometry {
  */
 export function gridGeometry(stepDeg = config.WEATHER_GRID_STEP): GridGeometry {
   if (!(stepDeg > 0)) throw new Error(`weather grid step must be positive, got ${stepDeg}`);
-  const cols = Math.floor((AU_BBOX.east - AU_BBOX.west) / stepDeg) + 1;
-  const rows = Math.floor((AU_BBOX.north - AU_BBOX.south) / stepDeg) + 1;
-  return { west: AU_BBOX.west, south: AU_BBOX.south, stepDeg, cols, rows };
+  // The land box is config so a self-hosted deployment can widen it; the
+  // renderer and every lookup read geometry from the manifest, so nothing
+  // downstream assumes Australia. Falls back to the Australian box on
+  // nonsense rather than building an empty or inverted grid.
+  let { WEATHER_GRID_WEST: west, WEATHER_GRID_SOUTH: south,
+    WEATHER_GRID_EAST: east, WEATHER_GRID_NORTH: north } = config;
+  if (!(east > west) || !(north > south)) {
+    ({ west, south, east, north } = AU_BBOX);
+  }
+  const cols = Math.floor((east - west) / stepDeg) + 1;
+  const rows = Math.floor((north - south) / stepDeg) + 1;
+  return { west, south, stepDeg, cols, rows };
 }
 
 export function cellCount(g: GridGeometry): number {

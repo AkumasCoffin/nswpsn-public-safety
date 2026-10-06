@@ -187,20 +187,33 @@
     // ends — Oodnadatta summers and alpine winters are both inside it.
     temperature_2m: {
       unit: '°C',
+      // Rebuilt against Windy's reading of the same field, after a side-by-
+      // side: the old ramp was technically correct and visually a pale wash.
+      // What makes the Windy look is saturation and a dense run of stops
+      // through the inhabited range — a rich green 10-18, decisive yellow-
+      // orange steps 21-30 — so neighbouring airmasses read as different
+      // colours, not different pastels. Range still covers Australian
+      // extremes at both ends.
       stops: [
-        [-30, 60, 0, 90],
-        [-20, 90, 20, 150],
-        [-10, 40, 80, 220],
-        [0, 70, 160, 230],
-        [5, 120, 210, 230],
-        [10, 160, 230, 180],
-        [15, 200, 240, 130],
-        [20, 250, 230, 100],
-        [25, 250, 180, 70],
-        [30, 240, 120, 50],
-        [35, 220, 50, 40],
-        [40, 170, 20, 40],
-        [50, 110, 10, 60]
+        [-35, 115, 70, 180],
+        [-25, 140, 90, 205],
+        [-15, 95, 100, 225],
+        [-8, 60, 120, 230],
+        [-2, 50, 150, 225],
+        [2, 55, 180, 210],
+        [6, 70, 200, 175],
+        [10, 95, 210, 125],
+        [14, 140, 215, 85],
+        [17, 180, 215, 70],
+        [20, 220, 210, 60],
+        [23, 240, 185, 50],
+        [26, 248, 155, 42],
+        [29, 250, 120, 36],
+        [32, 248, 85, 40],
+        [36, 230, 50, 60],
+        [40, 200, 28, 90],
+        [45, 160, 15, 115],
+        [50, 115, 8, 125]
       ]
     },
     // Millimetres in the timestep (3-hourly). The zero stop is deliberately
