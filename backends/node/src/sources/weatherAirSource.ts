@@ -40,6 +40,7 @@ const UNITS: Readonly<Record<string, string>> = {
   pm2_5: 'µg/m³',
   pm10: 'µg/m³',
   us_aqi: 'AQI',
+  uv_index: '',
 };
 
 interface HourlyBlock { time?: unknown; [key: string]: unknown }

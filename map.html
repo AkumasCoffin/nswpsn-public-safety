@@ -19851,7 +19851,9 @@ function initPagerHoursFromStorage() {
       river_discharge: 'River flow',
     };
     const WX_FLOOD_VARS = ['river_discharge', 'river_discharge_median'];
-    const WX_AIR_VARS = ['pm2_5', 'pm10', 'us_aqi'];
+    // uv_index is served by the AIR source (CAMS), not the weather models —
+    // it must read the air geometry and time axis or every lookup misses.
+    const WX_AIR_VARS = ['pm2_5', 'pm10', 'us_aqi', 'uv_index'];
     function wxIsAir(name) { return WX_AIR_VARS.indexOf(name) !== -1; }
     // How far ahead "Accum" adds up. Eight 3-hourly steps is the next 24 hours,
     // which is the window people actually ask about before a storm.
@@ -21449,7 +21451,7 @@ function initPagerHoursFromStorage() {
   <script src="ui-dialogs.js"></script>
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
-  <script src="map-weather-module.js?v=11"></script>
+  <script src="map-weather-module.js?v=12"></script>
   <script src="map-editor-module.js?v=43"></script>
 </body>
 </html>

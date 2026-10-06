@@ -66,7 +66,6 @@ export const LAND_VARS = [
   'relative_humidity_2m',
   'precipitation',
   'pressure_msl',
-  'uv_index',
   'cape',
   'wind_speed_10m',
   'wind_direction_10m',
@@ -116,6 +115,12 @@ export const AIR_VARS = [
   'pm2_5',
   'pm10',
   'us_aqi',
+  // UV is not a weather-model output: no mirrored forecast model (UKMO,
+  // ECMWF IFS) publishes it, because Open-Meteo derives it from CAMS — the
+  // same atmosphere service the air grid already reads. It lives here so it
+  // keeps working against a self-hosted instance, and the coarser air grid
+  // suits it: UV varies with the sun and the ozone column, not with paddocks.
+  'uv_index',
 ] as const;
 
 export type LandVar = (typeof LAND_VARS)[number];

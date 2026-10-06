@@ -105,15 +105,31 @@ export async function pacedFetch<T>(url: string, locations: number): Promise<T> 
       });
     } catch (err) {
       const status = (err as { status?: number | null }).status ?? null;
-      if (status !== 429 || attempt >= MAX_ATTEMPTS) throw err;
-      // Wait out a whole window before trying again: a 429 means the last
-      // minute is already spent, so anything shorter just earns another one.
-      const waitMs = 60_000 * attempt;
-      log.warn(
-        { attempt, waitMs, locations },
-        'weather: rate limited by Open-Meteo, backing off',
-      );
-      await sleep(waitMs);
+      // Transient: a dropped socket or timeout (status null) or a 5xx. These
+      // heal in seconds — the self-hosted container closes connections while
+      // it rewrites multi-GB chunk files, and one such blip used to kill a
+      // whole 575-batch refresh and restart it from batch zero, which across
+      // a ten-minute run meant it might never complete. A 4xx other than 429
+      // is a request that can never succeed; retrying it is just noise.
+      const transient = status === null || status >= 500;
+      if (attempt >= MAX_ATTEMPTS || (!transient && status !== 429)) throw err;
+      if (status === 429) {
+        // Wait out a whole window: a 429 means the last minute is already
+        // spent, so anything shorter just earns another one.
+        const waitMs = 60_000 * attempt;
+        log.warn(
+          { attempt, waitMs, locations },
+          'weather: rate limited by Open-Meteo, backing off',
+        );
+        await sleep(waitMs);
+      } else {
+        const waitMs = 10_000 * attempt;
+        log.warn(
+          { attempt, waitMs, err: (err as Error).message },
+          'weather: transient upstream failure, retrying',
+        );
+        await sleep(waitMs);
+      }
     }
   }
 }

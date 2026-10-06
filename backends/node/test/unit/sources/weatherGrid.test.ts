@@ -102,7 +102,11 @@ describe('the Open-Meteo bill', () => {
     // The land list is deliberately AT the limit, so this is the test that
     // stops an eleventh being added without anyone noticing it doubles the
     // cost of all 5,865 cells.
-    expect(LAND_VARS.length).toBe(10);
+    // Nine, not ten: uv_index moved to the AIR source, because no mirrored
+    // weather model publishes it — Open-Meteo derives UV from CAMS, which is
+    // what the air grid reads. The ceiling that matters is still 10.
+    expect(LAND_VARS.length).toBe(9);
+    expect(LAND_VARS).not.toContain('uv_index');
     expect(MARINE_VARS.length).toBeLessThanOrEqual(10);
     expect(AIR_VARS.length).toBeLessThanOrEqual(10);
   });

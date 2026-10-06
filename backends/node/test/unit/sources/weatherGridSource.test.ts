@@ -257,3 +257,33 @@ describe('a deploy that adds a variable', () => {
     expect(calls.length).toBe(first);
   });
 });
+
+describe('pacedFetch retry classification', () => {
+  // One dropped socket used to kill a whole 575-batch refresh and restart it
+  // from batch zero — across a ten-minute run it might never complete. The
+  // self-hosted container closes connections while it rewrites multi-GB chunk
+  // files, so transient failures are a certainty, not an edge case.
+  it('retries a dropped socket instead of failing the whole refresh', async () => {
+    vi.useFakeTimers();
+    try {
+      fetchJsonMock
+        .mockRejectedValueOnce(Object.assign(
+          new Error('fetch failed: UND_ERR_SOCKET other side closed'), { status: null }))
+        .mockResolvedValueOnce({ ok: true });
+      const { pacedFetch } = await import('../../../src/sources/weatherGridSource.js');
+      const p = pacedFetch('http://10.1.0.135:8081/v1/forecast?x', 10);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(p).resolves.toEqual({ ok: true });
+      expect(fetchJsonMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not retry a 400 — that request can never succeed', async () => {
+    fetchJsonMock.mockRejectedValueOnce(Object.assign(new Error('HTTP 400 for u'), { status: 400 }));
+    const { pacedFetch } = await import('../../../src/sources/weatherGridSource.js');
+    await expect(pacedFetch('http://10.1.0.135:8081/v1/forecast?x', 10)).rejects.toThrow('HTTP 400');
+    expect(fetchJsonMock).toHaveBeenCalledTimes(1);
+  });
+});

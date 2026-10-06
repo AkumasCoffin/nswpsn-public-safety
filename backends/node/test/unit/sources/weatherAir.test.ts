@@ -135,7 +135,7 @@ beforeEach(() => {
 });
 
 describe('the request', () => {
-  it('asks the air-quality endpoint for the three variables, in UTC', async () => {
+  it('asks the air-quality endpoint for its variables, in UTC', async () => {
     await seedLandManifest();
     const calls = stubUpstream();
     await refreshAirGrid(true);
@@ -144,7 +144,7 @@ describe('the request', () => {
     expect(url).toContain('air-quality-api.open-meteo.com/v1/air-quality');
     expect(url).toContain('timezone=UTC');
     const hourly = decodeURIComponent(url.split('hourly=')[1]!.split('&')[0]!);
-    expect(hourly.split(',')).toEqual(['pm2_5', 'pm10', 'us_aqi']);
+    expect(hourly.split(',')).toEqual(['pm2_5', 'pm10', 'us_aqi', 'uv_index']);
     expect(url).toContain('past_days=');
     expect(url).toContain('forecast_days=');
   });
@@ -242,8 +242,10 @@ describe('the manifest', () => {
     stubUpstream();
     const m = await refreshAirGrid(true);
     expect(m!.vars.some((v) => v.name === 'temperature_2m')).toBe(true);
+    // uv_index rides the air source: CAMS is the only upstream that serves
+    // it on a self-hosted instance.
     expect(m!.vars.filter((v) => v.air).map((v) => v.name))
-      .toEqual(['pm2_5', 'pm10', 'us_aqi']);
+      .toEqual(['pm2_5', 'pm10', 'us_aqi', 'uv_index']);
     // Not marine and not flood: the client picks an axis off these flags, and a
     // var claiming two would be read against the wrong grid.
     expect(m!.vars.filter((v) => v.air).every((v) => !v.marine && !v.flood)).toBe(true);
