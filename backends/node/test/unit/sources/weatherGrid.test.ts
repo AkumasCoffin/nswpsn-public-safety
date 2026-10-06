@@ -15,6 +15,7 @@ const {
   estimateSpend, quantise, dequantise, batchCells, VAR_SCALE, marineGeometry,
   reserveLocations, locationsUsedInLastMinute, _resetRateWindow,
 } = await import('../../../src/sources/weatherGrid.js');
+const { config } = await import('../../../src/config.js');
 
 describe('grid geometry', () => {
   it('covers Australia inclusive of both edges', () => {
@@ -245,6 +246,59 @@ describe('batching', () => {
 
   it('refuses a zero batch size instead of looping forever', () => {
     expect(() => batchCells([1, 2, 3], 0)).toThrow(/batch size/);
+  });
+});
+
+describe('per-minute pacing by upstream', () => {
+  // The second production lesson: pacing is a property of the UPSTREAM, not of
+  // the process. WEATHER_LOCATIONS_PER_MIN=0 means the operator's own instance
+  // has no limits — but flood always talks to the PUBLIC API (GloFAS is not in
+  // the self-host mirror), and on the first self-hosted deploy it burst its
+  // whole grid there inside a minute and was 429'd.
+  beforeEach(() => { _resetRateWindow(); });
+
+  it('still paces a public-API request when the configured pacer is off', async () => {
+    const original = config.WEATHER_LOCATIONS_PER_MIN;
+    (config as { WEATHER_LOCATIONS_PER_MIN: number }).WEATHER_LOCATIONS_PER_MIN = 0;
+    try {
+      const waits: number[] = [];
+      // Fill the public window to its built-in floor, then one more batch.
+      await reserveLocations(400, async () => {}, true);
+      let released = false;
+      const p = reserveLocations(100, async (ms) => {
+        waits.push(ms);
+        _resetRateWindow();
+        released = true;
+      }, true);
+      await p;
+      expect(released).toBe(true);
+      expect(waits.length).toBeGreaterThan(0);
+    } finally {
+      (config as { WEATHER_LOCATIONS_PER_MIN: number }).WEATHER_LOCATIONS_PER_MIN = original;
+    }
+  });
+
+  it('lets a private (self-hosted) request through unpaced when the pacer is off', async () => {
+    const original = config.WEATHER_LOCATIONS_PER_MIN;
+    (config as { WEATHER_LOCATIONS_PER_MIN: number }).WEATHER_LOCATIONS_PER_MIN = 0;
+    try {
+      const waits: number[] = [];
+      // Far beyond any public allowance, in one go, with no waiting.
+      await reserveLocations(143_561, async (ms) => { waits.push(ms); }, false);
+      await reserveLocations(143_561, async (ms) => { waits.push(ms); }, false);
+      expect(waits).toEqual([]);
+    } finally {
+      (config as { WEATHER_LOCATIONS_PER_MIN: number }).WEATHER_LOCATIONS_PER_MIN = original;
+    }
+  });
+
+  it('keeps separate windows: private traffic never spends the public budget', async () => {
+    // A self-hosted burst followed by a public request: the public window is
+    // empty, so the public request must not wait.
+    await reserveLocations(10_000, async () => {}, false);
+    const waits: number[] = [];
+    await reserveLocations(250, async (ms) => { waits.push(ms); }, true);
+    expect(waits).toEqual([]);
   });
 });
 

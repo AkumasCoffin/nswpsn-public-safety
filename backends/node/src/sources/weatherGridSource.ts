@@ -72,13 +72,35 @@ const sleep = (ms: number) => new Promise<void>((r) => { setTimeout(r, ms); });
  * being told to slow down. The pacer should prevent it; this is what happens
  * when the pacer is wrong, which it has been once already.
  */
+/**
+ * Whether a URL points at Open-Meteo's own public service — the one with the
+ * rate limit. Everything else (a self-hosted instance, a test server) is a
+ * private upstream the operator controls.
+ */
+export function isPublicOpenMeteo(url: string): boolean {
+  try {
+    const host = new URL(url).hostname;
+    return host === 'open-meteo.com' || host.endsWith('.open-meteo.com');
+  } catch {
+    // An unparseable URL gets the cautious treatment.
+    return true;
+  }
+}
+
 export async function pacedFetch<T>(url: string, locations: number): Promise<T> {
   const MAX_ATTEMPTS = 4;
+  const publicUpstream = isPublicOpenMeteo(url);
   for (let attempt = 1; ; attempt += 1) {
-    await reserveLocations(locations);
+    await reserveLocations(locations, undefined, publicUpstream);
     try {
       return await fetchJson<T>(url, {
         headers: { 'User-Agent': 'AusAware/1.0 (+https://nswpsn.forcequit.xyz)' },
+        // Far beyond the 15s default. A freshly started self-hosted instance
+        // answers its first request for each variable by pulling model chunks
+        // from S3, which takes well over 15s for a 250-location batch — the
+        // first self-hosted deploy timed out every source for its first
+        // minutes. The public API answers in seconds and never feels this.
+        timeoutMs: 120_000,
       });
     } catch (err) {
       const status = (err as { status?: number | null }).status ?? null;

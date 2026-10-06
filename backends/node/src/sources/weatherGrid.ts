@@ -394,16 +394,34 @@ export function dequantise(packed: Int16Array, v: GridVar): Array<number | null>
  * lets a refresh land at :59 and another at :01 and burst double the rate
  * across the boundary.
  */
-const _rateWindow: Array<{ at: number; n: number }> = [];
+/**
+ * The public API's per-minute allowance, used as the floor whenever a request
+ * is going to open-meteo.com and the configured pacer is switched off.
+ *
+ * WEATHER_LOCATIONS_PER_MIN=0 means "my upstream has no limits" — true for a
+ * self-hosted instance, and FALSE for anything still pointed at the public
+ * API, which flood always is (GloFAS is not in the self-host mirror). The
+ * first self-hosted deploy proved the failure: flood burst its whole grid at
+ * the public API inside a minute and was 429'd while every self-hosted fetch
+ * was legitimately unpaced.
+ */
+export const PUBLIC_LOCATIONS_PER_MIN = 400;
+
+type RateEntry = { at: number; n: number };
+// Separate windows so self-hosted traffic never counts against the public
+// allowance and vice versa — they are different budgets at different hosts.
+const _rateWindows: Record<'public' | 'private', RateEntry[]> = { public: [], private: [] };
 
 /** For tests — the window is process-global state. */
 export function _resetRateWindow(): void {
-  _rateWindow.length = 0;
+  _rateWindows.public.length = 0;
+  _rateWindows.private.length = 0;
 }
 
-export function locationsUsedInLastMinute(now = Date.now()): number {
+export function locationsUsedInLastMinute(now = Date.now(), publicUpstream = true): number {
   let used = 0;
-  for (const w of _rateWindow) if (now - w.at <= 60_000) used += w.n;
+  const win = _rateWindows[publicUpstream ? 'public' : 'private'];
+  for (const w of win) if (now - w.at <= 60_000) used += w.n;
   return used;
 }
 
@@ -417,27 +435,34 @@ export function locationsUsedInLastMinute(now = Date.now()): number {
 export async function reserveLocations(
   n: number,
   sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => { setTimeout(r, ms); }),
+  publicUpstream = true,
 ): Promise<void> {
   // A non-finite or non-positive ceiling means "unpaced", never "wait for
   // ever". Without this guard a missing config value turns the loop below into
   // an infinite sleep that no caller can distinguish from a slow upstream —
   // which is exactly how it presented: a 20-second test timeout with no error.
+  //
+  // "Unpaced" is only honoured for a PRIVATE upstream. A request to the public
+  // API is paced regardless of configuration, because the 600-locations-a-
+  // minute limit over there is theirs, not ours to switch off.
   const raw = config.WEATHER_LOCATIONS_PER_MIN;
-  const limit = Number.isFinite(raw) && raw > 0 ? raw : Infinity;
+  let limit = Number.isFinite(raw) && raw > 0 ? raw : Infinity;
+  if (publicUpstream && !Number.isFinite(limit)) limit = PUBLIC_LOCATIONS_PER_MIN;
   if (!Number.isFinite(limit)) return;
 
+  const win = _rateWindows[publicUpstream ? 'public' : 'private'];
   for (;;) {
     const now = Date.now();
-    while (_rateWindow.length > 0 && now - _rateWindow[0]!.at > 60_000) _rateWindow.shift();
-    const used = locationsUsedInLastMinute(now);
+    while (win.length > 0 && now - win[0]!.at > 60_000) win.shift();
+    const used = locationsUsedInLastMinute(now, publicUpstream);
 
     // A batch larger than the whole minute's allowance would wait for ever.
     // Let it through once the window is clear and let the upstream decide.
     if (used + n <= limit || (used === 0 && n > limit)) {
-      _rateWindow.push({ at: now, n });
+      win.push({ at: now, n });
       return;
     }
-    const oldest = _rateWindow[0];
+    const oldest = win[0];
     const waitMs = oldest ? Math.max(250, 60_000 - (now - oldest.at) + 50) : 1_000;
     await sleep(waitMs);
   }

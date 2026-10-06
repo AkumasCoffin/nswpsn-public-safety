@@ -31,6 +31,7 @@ import {
   gridGeometry,
   type GridGeometry,
 } from './weatherGrid.js';
+import { isPublicOpenMeteo } from './weatherGridSource.js';
 
 const ELEVATION_URL = config.OPEN_METEO_ELEVATION_URL;
 
@@ -317,7 +318,7 @@ async function buildMask(
     const batch = batches[b] as Array<{ lat: number; lon: number }>;
     // Through the shared per-minute allowance like every other weather fetch.
     // This module predates the pacer and was burst-sending ~5,900 locations.
-    await reserveLocations(batch.length);
+    await reserveLocations(batch.length, undefined, isPublicOpenMeteo(ELEVATION_URL));
     elevations.push(...(await fetchElevations(batch)));
   }
 

@@ -155,6 +155,9 @@ weatherRouter.get('/api/weather/point', async (c) => {
         timezone: 'UTC',
         forecast_days: '7',
       });
+      if (config.OPEN_METEO_FORECAST_MODELS) {
+        params.set('models', config.OPEN_METEO_FORECAST_MODELS);
+      }
       return fetchJson<unknown>(`${config.OPEN_METEO_FORECAST_URL}?${params.toString()}`, {
         headers: { 'User-Agent': 'AusAware/1.0 (+https://nswpsn.forcequit.xyz)' },
       });

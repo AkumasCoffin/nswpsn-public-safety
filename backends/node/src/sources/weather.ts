@@ -201,7 +201,12 @@ export async function fetchWeatherCurrent(): Promise<WeatherSnapshot> {
     `${OPEN_METEO_BASE}?latitude=${lats}&longitude=${lons}` +
     `&current=temperature_2m,relative_humidity_2m,apparent_temperature,` +
     `precipitation,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m` +
-    `&timezone=Australia%2FSydney`;
+    `&timezone=Australia%2FSydney` +
+    // Same pin as the grid: a self-hosted instance's default model for
+    // Australia can be the dead BOM mirror, which answers with nulls.
+    (config.OPEN_METEO_FORECAST_MODELS
+      ? `&models=${encodeURIComponent(config.OPEN_METEO_FORECAST_MODELS)}`
+      : '');
 
   const data = await fetchJson<unknown>(url, {
     headers: { 'User-Agent': 'Mozilla/5.0' },
