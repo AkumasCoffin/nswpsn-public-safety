@@ -12517,6 +12517,42 @@ function initPagerHoursFromStorage() {
       const r = document.getElementById('radar-slider');
       if (r) { r.value = String(v); if (typeof onRadarSliderChange === 'function') onRadarSliderChange(v); }
     };
+
+    // ---- the gridded field, driven from the floating card ------------------
+    // #weather-panel holds the radios and stays the single source of truth for
+    // which field is showing; these just drive it, exactly as toggleRadarPill
+    // drives #chk-radar. Two surfaces, one state — otherwise the card and the
+    // panel can disagree about what is on the map.
+    const WX_FIELD_PILLS = [
+      ['wind', 'chk-wx-wind', '<i class="fa-solid fa-wind"></i> Wind'],
+      ['temperature_2m', 'chk-wx-temp', '<i class="fa-solid fa-temperature-half"></i> Temp'],
+      ['precipitation', 'chk-wx-rain', '<i class="fa-solid fa-cloud-showers-heavy"></i> Rain'],
+      ['wave_height', 'chk-wx-waves', '<i class="fa-solid fa-water"></i> Waves'],
+      ['river_discharge', 'chk-wx-flood', '<i class="fa-solid fa-house-flood-water"></i> Rivers'],
+    ];
+
+    window.toggleWxFieldPill = function (which) {
+      // Clicking the active pill turns it off, which is how every other pill
+      // on this card behaves.
+      const next = (typeof _wxLayer !== 'undefined' && _wxLayer === which) ? 'none' : which;
+      for (const [key, id] of WX_FIELD_PILLS.map((p) => [p[0], p[1]])) {
+        _ffSetCheckbox(id, key === next);
+      }
+      _ffSetCheckbox('chk-wx-none', next === 'none');
+      Promise.resolve(wxSetLayer(next)).then(refreshActiveFilterPanel, refreshActiveFilterPanel);
+    };
+
+    window.setWxTimeFromPanel = function (v) {
+      const r = document.getElementById('wx-time-slider');
+      if (r) r.value = String(v);
+      if (typeof wxSetTime === 'function') wxSetTime(v);
+      refreshActiveFilterPanel();
+    };
+
+    window.wxJumpToNowFromPanel = function () {
+      if (typeof wxJumpToNow === 'function') wxJumpToNow();
+      refreshActiveFilterPanel();
+    };
     FILTER_REGISTRY.weather = {
       icon: 'fa-cloud-sun',
       label: 'Weather',
@@ -12528,6 +12564,30 @@ function initPagerHoursFromStorage() {
         const max = Number(slider?.max ?? 0);
         const val = Number(slider?.value ?? 0);
         const timeLbl = document.getElementById('radar-time-display')?.textContent ?? '--:--';
+
+        const active = (typeof _wxLayer !== 'undefined') ? _wxLayer : 'none';
+        const fieldPills = WX_FIELD_PILLS
+          .map((p) => _ffPill(active === p[0], p[2], `toggleWxFieldPill('${p[0]}')`))
+          .join('');
+
+        // The forecast scrubber only appears once a field is showing. It is
+        // deliberately separate from the radar timeline above: the radar is
+        // observed and only looks backwards, this runs two days back to seven
+        // forward, and one slider implying it drives both would be a lie.
+        const wxSlider = document.getElementById('wx-time-slider');
+        const wxMax = Number(wxSlider?.max ?? 0);
+        const wxVal = Number(wxSlider?.value ?? 0);
+        const wxLbl = document.getElementById('wx-time-display')?.textContent ?? '--';
+        const fieldTimeline = (active !== 'none' && wxMax > 0) ? `
+          <div class="ff-section-label">Forecast time
+            <button class="floating-filter-pill" style="padding:1px 7px;font-size:10px;margin-left:6px;"
+                    onclick="wxJumpToNowFromPanel()">NOW</button>
+          </div>
+          <input type="range" min="0" max="${wxMax}" value="${wxVal}"
+                 oninput="setWxTimeFromPanel(this.value)"
+                 style="width:100%;accent-color:#38bdf8;cursor:pointer;">
+          <div style="text-align:center;font-size:11px;color:#cbd5e1;font-family:monospace;margin-top:4px;">${wxLbl}</div>
+        ` : '';
         const radarTimeline = (radarOn && max > 0) ? `
           <div class="ff-section-label">Radar time</div>
           <input type="range" min="0" max="${max}" value="${val}"
@@ -12537,11 +12597,15 @@ function initPagerHoursFromStorage() {
         ` : '';
         return `
           <h4><i class="fa-solid fa-cloud-sun" style="color:#38bdf8;"></i> Weather</h4>
+          <div class="ff-section-label">Observed</div>
           <div class="floating-filter-pills">
             ${_ffPill(radarOn, '<i class="fa-solid fa-cloud-rain"></i> Rain Radar', 'toggleRadarPill()')}
             ${_ffPill(pinsOn, '<i class="fa-solid fa-temperature-half"></i> Stations', 'toggleWeatherPinsPill()')}
           </div>
           ${radarTimeline}
+          <div class="ff-section-label">Forecast field</div>
+          <div class="floating-filter-pills">${fieldPills}</div>
+          ${fieldTimeline}
         `;
       },
     };
@@ -21098,7 +21162,7 @@ function initPagerHoursFromStorage() {
   <script src="ui-dialogs.js"></script>
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
-  <script src="map-weather-module.js?v=2"></script>
+  <script src="map-weather-module.js?v=3"></script>
   <script src="map-editor-module.js?v=43"></script>
 </body>
 </html>
