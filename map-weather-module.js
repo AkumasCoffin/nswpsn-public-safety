@@ -1052,10 +1052,21 @@
           targetCols = 0;
         }
 
+        // Zoomed out, a dense grid's cell-to-cell noise reads as speckle —
+        // smooth it in value space before interpolating. Zoomed in, the
+        // passes drop to zero and the raw detail comes through untouched.
+        const pxPerCell = targetCols > 0 ? targetCols / sub.cols : Infinity;
+        let passes = smoothPassesFor(pxPerCell);
+        while (passes > 0) {
+          values = smoothGrid(values, sub.cols, sub.rows, NODATA);
+          passes -= 1;
+        }
+
         // Interpolated up here rather than by the browser — see UPSAMPLE.
         const up = upsampleGrid(
           values, sub.cols, sub.rows,
-          upsampleFactorFor(sub.cols, sub.rows, targetCols), NODATA);
+          Math.max(smoothPassesFor(pxPerCell) > 0 ? 2 : 1,
+            upsampleFactorFor(sub.cols, sub.rows, targetCols)), NODATA);
         // The dense window covers the same ground, so its geometry is the same
         // extent with a proportionally smaller step. The Mercator row map
         // needs that to place rows correctly.
@@ -1384,6 +1395,58 @@
    * little help anyway — the factor steps down so the output stays under
    * about two million pixels, and never below 1.
    */
+  /**
+   * One NODATA-aware 3x3 box-blur pass in VALUE space.
+   *
+   * For the zoomed-out view. A dense grid drawn at a couple of screen pixels
+   * per cell shows the model's own cell-to-cell noise as speckle — the 0.1
+   * degree upgrade made the field GRAINIER at national zoom, because the old
+   * coarse grid was getting 5x cubic smoothing while the dense one rendered
+   * raw. Windy's wide view is a smoothed field; this is that smoothing.
+   * Display-only: readouts and particles sample the raw grid.
+   */
+  function smoothGrid(values, cols, rows, nodata) {
+    const out = new Int16Array(values.length);
+    for (let y = 0; y < rows; y += 1) {
+      for (let x = 0; x < cols; x += 1) {
+        const i = y * cols + x;
+        const v = values[i];
+        if (v === nodata) { out[i] = nodata; continue; }
+        let sum = 0;
+        let n = 0;
+        for (let dy = -1; dy <= 1; dy += 1) {
+          const yy = y + dy;
+          if (yy < 0 || yy >= rows) continue;
+          for (let dx = -1; dx <= 1; dx += 1) {
+            const xx = x + dx;
+            if (xx < 0 || xx >= cols) continue;
+            const sv = values[yy * cols + xx];
+            // A NODATA neighbour is left out of the average, not treated as
+            // zero — averaging the sentinel in would drag coastal values
+            // toward -3276.8 of whatever unit the layer is in.
+            if (sv === nodata) continue;
+            sum += sv;
+            n += 1;
+          }
+        }
+        out[i] = n > 0 ? Math.round(sum / n) : nodata;
+      }
+    }
+    return out;
+  }
+
+  /**
+   * How many smoothing passes a view deserves: none when each cell gets
+   * plenty of screen pixels (the detail IS the point when zoomed in), more as
+   * cells shrink toward single pixels and their noise becomes speckle.
+   */
+  function smoothPassesFor(pxPerCell) {
+    if (!(pxPerCell > 0)) return 0;
+    if (pxPerCell < 2.5) return 2;
+    if (pxPerCell < 6) return 1;
+    return 0;
+  }
+
   function upsampleFactorFor(cols, rows, targetCols) {
     const BUDGET_PX = 2_500_000;
     const MAX_FACTOR = 10;
@@ -1689,6 +1752,8 @@
     paintCells: paintCells,
     upsampleGrid: upsampleGrid,
     upsampleFactorFor: upsampleFactorFor,
+    smoothGrid: smoothGrid,
+    smoothPassesFor: smoothPassesFor,
     rowSampleMap: rowSampleMap,
     sampleBilinear: sampleBilinear,
     sampleDirection: sampleDirection,
