@@ -21,7 +21,7 @@ vi.mock('../../../src/config.js', async (importOriginal) => {
 });
 
 const {
-  mergeManifest, readManifest, writeManifest,
+  mergeManifest, readManifest, writeManifest, geometryMatches, sectionIsFresh,
 } = await import('../../../src/services/weatherStore.js');
 type WeatherManifest = NonNullable<Awaited<ReturnType<typeof readManifest>>>;
 
@@ -109,5 +109,65 @@ describe('mergeManifest', () => {
       issuedAt: '2026-10-06T13:00:00.000Z',
     }));
     expect(after.issuedAt).toBe('2026-10-06T13:00:00.000Z');
+  });
+});
+
+describe('geometryMatches', () => {
+  // Freshness used to be age plus variable coverage, so changing a grid step
+  // or bounding box in .env did nothing until the age lapsed. Every such
+  // change needed a manual delete of the state directory, and a forgotten one
+  // left the old resolution on screen looking like the change had failed.
+  const g = { west: 112, south: -44, stepDeg: 0.1, cols: 421, rows: 341 };
+
+  it('accepts the same grid', () => {
+    expect(geometryMatches({ ...g }, g)).toBe(true);
+  });
+
+  it('rejects a changed step', () => {
+    expect(geometryMatches({ ...g, stepDeg: 0.5, cols: 85, rows: 69 }, g)).toBe(false);
+  });
+
+  it('rejects a moved or widened box', () => {
+    expect(geometryMatches({ ...g, west: 90 }, g)).toBe(false);
+    expect(geometryMatches({ ...g, cols: 601 }, g)).toBe(false);
+  });
+
+  it('a section that was never stored does not match', () => {
+    expect(geometryMatches(undefined, g)).toBe(false);
+    expect(geometryMatches(null, g)).toBe(false);
+  });
+
+  it('is not fooled by float noise in the step', () => {
+    expect(geometryMatches({ ...g, stepDeg: 0.1 + 1e-12 }, g)).toBe(true);
+  });
+});
+
+describe('sectionIsFresh', () => {
+  // Marine, flood and air used to borrow the land grid's issuedAt, so their
+  // cadence was an accident of the land grid's. Flood in particular stays on
+  // the PUBLIC API: tied to a three-hourly land refresh it would spend the
+  // public quota eight times a day for data GloFAS publishes once.
+  const HOUR = 60 * 60 * 1000;
+
+  it('a section with no timestamp of its own is stale', () => {
+    expect(sectionIsFresh(undefined, 24 * HOUR)).toBe(false);
+  });
+
+  it('is fresh inside its own window and stale outside it', () => {
+    const twoHoursAgo = new Date(Date.now() - 2 * HOUR).toISOString();
+    expect(sectionIsFresh(twoHoursAgo, 3 * HOUR)).toBe(true);
+    expect(sectionIsFresh(twoHoursAgo, 1 * HOUR)).toBe(false);
+  });
+
+  it('flood on a daily window outlives several land refreshes', () => {
+    // Fetched ten hours ago: three land cycles have passed, and it is still
+    // not time to spend the public quota again.
+    const tenHoursAgo = new Date(Date.now() - 10 * HOUR).toISOString();
+    expect(sectionIsFresh(tenHoursAgo, 24 * HOUR)).toBe(true);
+    expect(sectionIsFresh(tenHoursAgo, 3 * HOUR)).toBe(false);
+  });
+
+  it('an unparseable timestamp is stale, not fresh forever', () => {
+    expect(sectionIsFresh('not a date', 24 * HOUR)).toBe(false);
   });
 });

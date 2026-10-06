@@ -56,6 +56,14 @@ export interface WeatherManifest {
    * its own DAILY axis, so it cannot be read against either of the pairs above.
    */
   floodGeometry?: GridGeometry;
+  /**
+   * When each dependent section was last fetched. They used to borrow the
+   * land grid's `issuedAt`, which made their refresh cadence an accident of
+   * the land grid's: a section could be refetched every tick, or never.
+   */
+  marineIssuedAt?: string;
+  floodIssuedAt?: string;
+  airIssuedAt?: string;
   floodTimesteps?: string[];
   /** Air quality: coarser grid again, 3-hourly like land but its own axis. */
   airGeometry?: GridGeometry;
@@ -219,6 +227,33 @@ export async function pruneGrids(m: WeatherManifest): Promise<number> {
  * would re-fetch the whole grid and re-spend a day of the Open-Meteo budget.
  * A redeploy during an incident is exactly when that must not happen.
  */
+/** Is a section's own timestamp younger than `maxAgeMs`? Absent = stale. */
+export function sectionIsFresh(issuedAt: string | undefined, maxAgeMs: number): boolean {
+  if (!issuedAt) return false;
+  const issued = Date.parse(issuedAt);
+  if (!Number.isFinite(issued)) return false;
+  return Date.now() - issued < maxAgeMs;
+}
+
+/**
+ * Does a stored section's grid still match the grid the config asks for?
+ *
+ * Freshness used to be age plus variable coverage, so changing a step or a
+ * bounding box in .env did nothing until the age lapsed — every such change
+ * needed a manual delete of the state directory, and one that was forgotten
+ * left the old resolution on screen looking like the change had failed.
+ */
+export function geometryMatches(
+  stored: GridGeometry | undefined | null,
+  wanted: GridGeometry,
+): boolean {
+  if (!stored) return false;
+  const close = (a: number, b: number) => Math.abs(a - b) < 1e-9;
+  return close(stored.west, wanted.west) && close(stored.south, wanted.south)
+    && close(stored.stepDeg, wanted.stepDeg)
+    && stored.cols === wanted.cols && stored.rows === wanted.rows;
+}
+
 export function manifestIsFresh(m: WeatherManifest | null, maxAgeMs: number): boolean {
   if (!m) return false;
   const issued = Date.parse(m.issuedAt);

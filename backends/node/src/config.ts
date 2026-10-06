@@ -124,6 +124,12 @@ const Schema = z.object({
   // always fetched one batch at a time regardless — concurrency there just
   // spends the rate window faster.
   WEATHER_FETCH_CONCURRENCY: z.coerce.number().int().default(6),
+  // Flood refreshes on its own clock. GloFAS publishes daily, and flood is
+  // the one source that stays on the PUBLIC API even when everything else is
+  // self-hosted — tying it to the land grid's cadence (three-hourly on a
+  // self-hosted deployment) would spend the public quota eight times over
+  // for data that had not changed.
+  WEATHER_FLOOD_INTERVAL_MS: z.coerce.number().int().positive().default(24 * 60 * 60 * 1000),
   // The LAND field's bounding box. Defaults to Australia; against a
   // self-hosted instance it can widen to the whole Oceania viewport (the
   // runbook's block uses 90E-180E, 55S-15N) so the field fills the screen the

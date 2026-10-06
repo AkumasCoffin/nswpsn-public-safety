@@ -19964,6 +19964,15 @@ function initPagerHoursFromStorage() {
       return best;
     }
 
+    // A short status for the current layer, shown after the time.
+    //
+    // It has to live in a variable: wxRenderTimeLabel repaints the whole
+    // display at the end of every load, so anything written straight into the
+    // element — "nothing running high", "layer failed" — was erased in the
+    // same tick it appeared. For as long as this card has existed, none of
+    // its explanations were ever actually visible.
+    let _wxNote = '';
+
     function wxRenderTimeLabel() {
       const el = document.getElementById('wx-time-display');
       if (!el || !_wxManifest) return;
@@ -19976,7 +19985,7 @@ function initPagerHoursFromStorage() {
       const d = new Date(iso);
       el.textContent = d.toLocaleString(undefined, {
         weekday: 'short', hour: 'numeric', minute: '2-digit',
-      });
+      }) + (_wxNote ? ' \u00b7 ' + _wxNote : '');
       const btn = document.getElementById('wx-btn-now');
       if (btn) btn.classList.toggle('active', _wxTimeIdx === wxNowIndex());
     }
@@ -20090,6 +20099,7 @@ function initPagerHoursFromStorage() {
       // newer one must not paint stale data over it. Dragging the slider fires
       // these faster than the network answers.
       const token = ++_wxLoadToken;
+      _wxNote = '';
       try {
         if (_wxLayer === 'wind') {
           const spd = await wxFetchGrid('wind_speed_10m', iso);
@@ -20108,6 +20118,8 @@ function initPagerHoursFromStorage() {
           // Carries precipitation's scale, because that is the unit it was
           // summed in — only the colour ramp differs.
           _wxField.setData(grid, { name: 'precip_accum', scale: (meta && meta.scale) || 100 });
+          _wxNote = wxEmptyNote('precip_accum', grid,
+            { scale: (meta && meta.scale) || 100 }, _wxManifest.geometry);
         } else if (wxIsFlood(_wxLayer)) {
           const pair = await Promise.all([
             wxFetchGrid('river_discharge', iso),
@@ -20124,8 +20136,8 @@ function initPagerHoursFromStorage() {
           const n = wxRenderFlood(pair[0], pair[1],
             _wxManifest.floodGeometry || _wxManifest.geometry);
           if (!map.hasLayer(_wxFloodLayer)) map.addLayer(_wxFloodLayer);
-          const disp = document.getElementById('wx-time-display');
-          if (disp && n === 0) disp.textContent += ' · nothing running high';
+          _wxNote = n.drawn === 0 ? 'no river data here'
+            : n.drawn + ' rivers, ' + (n.high === 0 ? 'none' : n.high) + ' above normal';
         } else {
           const grid = await wxFetchGrid(_wxLayer, iso);
           if (token !== _wxLoadToken) return;
@@ -20139,6 +20151,7 @@ function initPagerHoursFromStorage() {
             : _wxManifest.geometry);
           _wxField.setVariable(_wxLayer);
           _wxField.setData(grid, wxVarMeta(_wxLayer));
+          _wxNote = wxEmptyNote(_wxLayer, grid, wxVarMeta(_wxLayer), _wxManifest.geometry);
         }
         wxRenderLegend();
         await wxApplyParticles(token);
@@ -20147,8 +20160,7 @@ function initPagerHoursFromStorage() {
         // Say so on the card too. The particle system was broken for days by a
         // thrown method that only ever reached the console — an error state
         // the user cannot see is an error state that does not get reported.
-        const disp = document.getElementById('wx-time-display');
-        if (disp) disp.textContent = 'layer failed — see console';
+        _wxNote = 'layer failed \u2014 see console';
       } finally {
         if (token === _wxLoadToken && container) container.classList.remove('is-loading');
       }
@@ -20186,6 +20198,7 @@ function initPagerHoursFromStorage() {
       const scale = (wxVarMeta('river_discharge') || {}).scale || 1;
       const medScale = (wxVarMeta('river_discharge_median') || {}).scale || 1;
       let drawn = 0;
+      let high = 0;
 
       for (let i = 0; i < flow.length; i += 1) {
         const raw = flow[i];
@@ -20198,9 +20211,13 @@ function initPagerHoursFromStorage() {
         // this sample point, and plotting those would carpet the inland in dots
         // that mean nothing.
         if (q < 1) continue;
-        // Normal flow is not news. Only draw what is running above its median,
-        // or what is simply large.
-        if (ratio !== null && ratio < 1.25 && q < 200) continue;
+        // Every sampled watercourse is drawn. The first version drew only
+        // what was running above its median ("normal flow is not news"), which
+        // in a dry spell is nothing at all — a layer that shows an empty map
+        // reads as broken, not as "all quiet". Normal flow gets the calm
+        // baseline colour and the eye still goes to the ones that are not.
+        const isHigh = ratio !== null && ratio >= 1.25;
+        if (isHigh) high += 1;
 
         const row = Math.floor(i / geometry.cols);
         const col = i % geometry.cols;
@@ -20217,7 +20234,9 @@ function initPagerHoursFromStorage() {
           color: colour,
           weight: 1,
           fillColor: colour,
-          fillOpacity: 0.45,
+          // Quieter when normal, so a river in flood still stands out of a
+          // map that now has every river on it.
+          fillOpacity: isHigh ? 0.6 : 0.3,
           interactive: true,
         });
         dot.bindTooltip(
@@ -20228,7 +20247,36 @@ function initPagerHoursFromStorage() {
         _wxFloodLayer.addLayer(dot);
         drawn += 1;
       }
-      return drawn;
+      return { drawn: drawn, high: high };
+    }
+
+    // Layers that are legitimately blank most of the time. A blank map with no
+    // explanation is indistinguishable from a broken one, so say which it is.
+    const WX_SPARSE = {
+      precipitation: { min: 0.2, what: 'no rain in view at this time' },
+      cape: { min: 300, what: 'no storm energy in view at this time' },
+      precip_accum: { min: 1, what: 'no rain expected in view over 24 h' },
+    };
+
+    /** A note when a sparse layer has nothing to show inside the viewport. */
+    function wxEmptyNote(layer, grid, meta, geometry) {
+      const rule = WX_SPARSE[layer];
+      if (!rule || !grid || !geometry || !map) return '';
+      const scale = (meta && meta.scale) || 1;
+      const nodata = (_wxManifest && _wxManifest.nodata) || -32768;
+      const threshold = rule.min * scale;
+      const b = map.getBounds();
+      const x0 = Math.max(0, Math.floor((b.getWest() - geometry.west) / geometry.stepDeg));
+      const x1 = Math.min(geometry.cols - 1, Math.ceil((b.getEast() - geometry.west) / geometry.stepDeg));
+      const y0 = Math.max(0, Math.floor((b.getSouth() - geometry.south) / geometry.stepDeg));
+      const y1 = Math.min(geometry.rows - 1, Math.ceil((b.getNorth() - geometry.south) / geometry.stepDeg));
+      for (let y = y0; y <= y1; y += 1) {
+        for (let x = x0; x <= x1; x += 1) {
+          const v = grid[y * geometry.cols + x];
+          if (v !== nodata && v >= threshold) return '';
+        }
+      }
+      return rule.what;
     }
 
     async function wxSetLayer(which) {
@@ -20420,10 +20468,13 @@ function initPagerHoursFromStorage() {
       
       currentFrameIndex = index;
       const frame = radarFrames[index];
-      // 512-pixel tiles, and RainViewer serves real data to zoom ~10 — the
-      // old config requested 256px tiles and stopped native data at 7, so
-      // zooming in just stretched a small blurry tile further. tileSize 512
-      // with zoomOffset -1 is Leaflet's standard pairing for 512 tiles.
+      // 512-pixel tiles at RainViewer's real ceiling, URL zoom 7. Anything
+      // above that returns a "Zoom Level Not Supported" PLACEHOLDER IMAGE with
+      // HTTP 200 — which is how a status-code check once "verified" zoom 10
+      // and shipped a map full of grey notices. tileSize 512 + zoomOffset -1
+      // means URL z = tile zoom - 1, so maxNativeZoom 8 requests z7 at 512px:
+      // the genuine best available, twice the pixels of the original 256px
+      // tiles. Beyond it Leaflet stretches, as it always did.
       const url = `https://tilecache.rainviewer.com${frame.path}/512/{z}/{x}/{y}/6/1_1.png`;
       
       if (radarLayer) map.removeLayer(radarLayer);
@@ -20432,7 +20483,7 @@ function initPagerHoursFromStorage() {
         zIndex: 100,
         tileSize: 512,
         zoomOffset: -1,
-        maxNativeZoom: 10,
+        maxNativeZoom: 8,
         maxZoom: 21
       }).addTo(map);
       
@@ -21451,7 +21502,7 @@ function initPagerHoursFromStorage() {
   <script src="ui-dialogs.js"></script>
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
-  <script src="map-weather-module.js?v=14"></script>
+  <script src="map-weather-module.js?v=15"></script>
   <script src="map-editor-module.js?v=43"></script>
 </body>
 </html>

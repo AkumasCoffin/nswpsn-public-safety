@@ -27,6 +27,7 @@ import {
 } from './weatherGrid.js';
 import { loadMask, oceanCellIndices } from './weatherMask.js';
 import {
+  geometryMatches, sectionIsFresh,
   mergeManifest,
   readManifest, writeGrid, writeManifest, manifestIsFresh, manifestCovers,
   type ManifestVar, type WeatherManifest,
@@ -84,12 +85,13 @@ export async function refreshMarineGrid(force = false): Promise<WeatherManifest 
   }
 
   const alreadyHasMarine = manifestCovers(base, MARINE_VARS, (v) => !!v.marine);
-  if (!force && alreadyHasMarine && manifestIsFresh(base, config.WEATHER_GRID_INTERVAL_MS)) {
-    log.info({ issuedAt: base.issuedAt }, 'marine grid: stored dataset still current');
+  const geometry = marineGeometry();
+  if (!force && alreadyHasMarine && geometryMatches(base.marineGeometry, geometry)
+    && sectionIsFresh(base.marineIssuedAt, config.WEATHER_GRID_INTERVAL_MS)) {
+    log.info({ issuedAt: base.marineIssuedAt }, 'marine grid: stored dataset still current');
     return base;
   }
 
-  const geometry = marineGeometry();
   const total = cellCount(geometry);
   const cells = allCells(geometry);
 
@@ -177,6 +179,7 @@ export async function refreshMarineGrid(force = false): Promise<WeatherManifest 
     return {
       ...b,
       marineGeometry: geometry,
+      marineIssuedAt: new Date().toISOString(),
       // Marine timesteps are its own: the two APIs are asked for the same
       // window but a mismatch must not silently make the client read a land
       // timestep off a marine grid.

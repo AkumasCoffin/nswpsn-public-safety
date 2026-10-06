@@ -66,7 +66,7 @@
       unit: 'mm',
       stops: [
         [0, 40, 80, 120, 0],
-        [1, 70, 150, 200, 0.4],
+        [1, 70, 150, 200, 0.65],
         [5, 80, 200, 170],
         [15, 230, 220, 90],
         [30, 240, 150, 60],
@@ -123,7 +123,7 @@
       unit: 'J/kg',
       stops: [
         [0, 60, 80, 120, 0],
-        [300, 90, 160, 200, 0.3],
+        [300, 90, 160, 200, 0.5],
         [800, 230, 210, 90],
         [1500, 240, 150, 60],
         [2500, 230, 70, 60],
@@ -225,9 +225,9 @@
       unit: 'mm',
       stops: [
         [0, 160, 220, 255, 0],
-        [0.2, 150, 210, 250, 90],
-        [1, 80, 170, 240, 160],
-        [2.5, 50, 130, 230, 200],
+        [0.2, 150, 210, 250, 150],
+        [1, 80, 170, 240, 205],
+        [2.5, 50, 130, 230, 228],
         [5, 50, 200, 130, 215],
         [10, 240, 220, 80, 230],
         [20, 240, 140, 50, 240],
@@ -742,7 +742,9 @@
         this._animated = this._o.animated !== false;
         this._size = { x: 0, y: 0 };
         this._dpr = 1;
-        this._windPxPerSec = this._o.windSpeedPxPerSec > 0 ? this._o.windSpeedPxPerSec : 0.9;
+        // Screen pixels per second, per km/h of wind. 0.9 moved a 20 km/h
+        // breeze at 18 px/s — with the old fade that was a dot, not a streak.
+        this._windPxPerSec = this._o.windSpeedPxPerSec > 0 ? this._o.windSpeedPxPerSec : 2.4;
         this._opacity = typeof this._o.opacity === 'number' ? this._o.opacity : 1;
         this._onVisibility = this._visibilityChanged.bind(this);
       },
@@ -1219,13 +1221,18 @@
         // build a dark veil over the basemap, since this canvas is transparent
         // and sits on top of the map rather than over its own background.
         ctx.globalCompositeOperation = 'destination-out';
-        ctx.fillStyle = 'rgba(0,0,0,0.14)';
+        // 0.06, down from 0.14. At 0.14 a trail lived about seven frames —
+        // two pixels of it — so the overlay rendered as static specks over
+        // every layer and read as grain on the field underneath.
+        ctx.fillStyle = 'rgba(0,0,0,0.06)';
         ctx.fillRect(0, 0, w, h);
         ctx.globalCompositeOperation = 'source-over';
 
-        ctx.lineWidth = 1.1;
+        ctx.lineWidth = 1.3;
         ctx.lineCap = 'round';
-        ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+        // Lower alpha than before: trails now overlap themselves for longer,
+        // and the same per-frame alpha would saturate into solid white lines.
+        ctx.strokeStyle = 'rgba(255,255,255,0.5)';
         ctx.beginPath();
 
         const seconds = dt / 1000;
@@ -1436,15 +1443,22 @@
   }
 
   /**
-   * How many smoothing passes a view deserves: none when each cell gets
-   * plenty of screen pixels (the detail IS the point when zoomed in), more as
-   * cells shrink toward single pixels and their noise becomes speckle.
+   * How many smoothing passes a view gets. Never zero.
+   *
+   * The first version switched smoothing OFF above six screen pixels a cell,
+   * on the theory that zoomed in "the detail is the point". Rendering the
+   * live grid and looking at it said otherwise: a 10 km model's 2 m
+   * temperature carries real cell-to-cell terrain noise of a degree or more,
+   * and at regional zoom, unsmoothed, that is a stair-stepped coastline and
+   * speckle across every range — the "pixelated" the map was reported as. The
+   * cell is the model's sampling interval, not a feature anyone can use, so
+   * it is always smoothed away; the more screen each cell covers, the more
+   * visible its edges and the more passes it takes.
    */
   function smoothPassesFor(pxPerCell) {
     if (!(pxPerCell > 0)) return 0;
-    if (pxPerCell < 2.5) return 2;
-    if (pxPerCell < 6) return 1;
-    return 0;
+    if (pxPerCell > 25) return 3;
+    return 2;
   }
 
   function upsampleFactorFor(cols, rows, targetCols) {

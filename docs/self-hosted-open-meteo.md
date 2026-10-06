@@ -86,7 +86,9 @@ WEATHER_LOCATIONS_PER_MIN=0
 # trivial against localhost; ~200 MB of grids on the backend's disk.
 WEATHER_GRID_STEP=0.1
 WEATHER_MARINE_STEP=0.5
-WEATHER_AIR_STEP=0.75
+# CAMS is ~0.4 degrees native; 0.75 rendered air quality, PM2.5 and UV as
+# 56 km blobs for no reason on an instance with no quota.
+WEATHER_AIR_STEP=0.4
 
 # Refresh every 3 hours — the models update at that cadence, and daily was
 # leaving most runs unseen.
@@ -114,14 +116,15 @@ WEATHER_GRID_STEP=0.15
 antimeridian, and Fiji at 178E still fits.)
 
 
-Then wipe the old grids once, so the freshness guard does not hold the coarse
-dataset against the new geometry:
+No manual cleanup is needed after changing a step or a bounding box: each
+stored section records its own geometry and timestamp, and a section whose
+grid no longer matches the config is refetched on the next tick. (Until
+October 2026 this needed an `rm` of the state directory, and a forgotten one
+left the old resolution on screen looking like the change had failed.)
 
-```bash
-rm -f /var/www/nswpsn/backends/node/state/weather/g_*.bin \
-      /var/www/nswpsn/backends/node/state/weather/mask-*.bin \
-      /var/www/nswpsn/backends/node/state/weather/manifest.json
-```
+Flood refreshes on its own daily clock (`WEATHER_FLOOD_INTERVAL_MS`), not the
+land grid's — it is the one source still on the public API, and GloFAS only
+publishes daily.
 
 ## 5. What to expect
 

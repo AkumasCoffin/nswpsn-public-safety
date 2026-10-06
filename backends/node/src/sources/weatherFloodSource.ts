@@ -36,6 +36,7 @@ import {
 } from './weatherGrid.js';
 import { loadMask, LAND } from './weatherMask.js';
 import {
+  geometryMatches, sectionIsFresh,
   mergeManifest,
   readManifest, writeGrid, writeManifest, manifestIsFresh, manifestCovers,
   type ManifestVar, type WeatherManifest,
@@ -104,8 +105,9 @@ export async function refreshFloodGrid(force = false): Promise<WeatherManifest |
   }
 
   const alreadyHasFlood = manifestCovers(base, FLOOD_VARS, (v) => !!v.flood);
-  if (!force && alreadyHasFlood && manifestIsFresh(base, config.WEATHER_GRID_INTERVAL_MS)) {
-    log.info({ issuedAt: base.issuedAt }, 'flood grid: stored dataset still current');
+  if (!force && alreadyHasFlood && geometryMatches(base.floodGeometry, marineGeometry())
+    && sectionIsFresh(base.floodIssuedAt, config.WEATHER_FLOOD_INTERVAL_MS)) {
+    log.info({ issuedAt: base.floodIssuedAt }, 'flood grid: stored dataset still current');
     return base;
   }
 
@@ -194,6 +196,7 @@ export async function refreshFloodGrid(force = false): Promise<WeatherManifest |
     return {
       ...b,
       floodGeometry: geometry,
+      floodIssuedAt: new Date().toISOString(),
       floodTimesteps: timesteps,
       vars: [...b.vars.filter((v) => !v.flood), ...floodVars],
     };

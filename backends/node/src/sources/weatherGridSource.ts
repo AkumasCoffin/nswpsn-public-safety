@@ -29,6 +29,7 @@ import {
   reserveLocations,
 } from './weatherGrid.js';
 import {
+  geometryMatches,
   mergeManifest,
   pruneGrids, readManifest, writeGrid, writeManifest,
   manifestIsFresh, manifestCovers, type ManifestVar, type WeatherManifest,
@@ -265,7 +266,8 @@ export async function refreshWeatherGrid(force = false): Promise<WeatherManifest
   // variable has to invalidate the cache, or the new layer has no grids
   // behind it until tomorrow.
   const covered = manifestCovers(existing, LAND_VARS, (v) => !v.marine && !v.flood && !v.air);
-  if (!force && covered && manifestIsFresh(existing, config.WEATHER_GRID_INTERVAL_MS)) {
+  if (!force && covered && geometryMatches(existing?.geometry, gridGeometry())
+    && manifestIsFresh(existing, config.WEATHER_GRID_INTERVAL_MS)) {
     log.info({ issuedAt: existing!.issuedAt }, 'weather grid: stored dataset still current, not refetching');
     return existing!;
   }
@@ -370,6 +372,9 @@ export async function refreshWeatherGrid(force = false): Promise<WeatherManifest
     ...(current?.floodTimesteps ? { floodTimesteps: current.floodTimesteps } : {}),
     ...(current?.airGeometry ? { airGeometry: current.airGeometry } : {}),
     ...(current?.airTimesteps ? { airTimesteps: current.airTimesteps } : {}),
+    ...(current?.marineIssuedAt ? { marineIssuedAt: current.marineIssuedAt } : {}),
+    ...(current?.floodIssuedAt ? { floodIssuedAt: current.floodIssuedAt } : {}),
+    ...(current?.airIssuedAt ? { airIssuedAt: current.airIssuedAt } : {}),
   }));
   await pruneGrids(manifest);
 

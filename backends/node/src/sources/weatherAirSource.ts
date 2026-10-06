@@ -28,6 +28,7 @@ import {
   airGeometry, allCells, batchCells, cellCount, quantiseOne,
 } from './weatherGrid.js';
 import {
+  geometryMatches, sectionIsFresh, manifestCovers,
   mergeManifest,
   readManifest, writeGrid, writeManifest, manifestIsFresh,
   type ManifestVar, type WeatherManifest,
@@ -78,13 +79,17 @@ export async function refreshAirGrid(force = false): Promise<WeatherManifest | n
     return null;
   }
 
-  const alreadyHasAir = base.vars.some((v) => v.air);
-  if (!force && alreadyHasAir && manifestIsFresh(base, config.WEATHER_GRID_INTERVAL_MS)) {
-    log.info({ issuedAt: base.issuedAt }, 'air grid: stored dataset still current');
+  // Coverage of the whole list, not "has any air variable": when uv_index
+  // joined this source, an any-check would have called the old three-variable
+  // dataset complete and left the UV layer with no grids behind it.
+  const alreadyHasAir = manifestCovers(base, AIR_VARS, (v) => !!v.air);
+  const geometry = airGeometry();
+  if (!force && alreadyHasAir && geometryMatches(base.airGeometry, geometry)
+    && sectionIsFresh(base.airIssuedAt, config.WEATHER_GRID_INTERVAL_MS)) {
+    log.info({ issuedAt: base.airIssuedAt }, 'air grid: stored dataset still current');
     return base;
   }
 
-  const geometry = airGeometry();
   const total = cellCount(geometry);
   const cells = allCells(geometry);
 
@@ -168,6 +173,7 @@ export async function refreshAirGrid(force = false): Promise<WeatherManifest | n
     return {
       ...b,
       airGeometry: geometry,
+      airIssuedAt: new Date().toISOString(),
       // Its own axis, for the same reason marine keeps one: the two APIs are
       // asked for the same window, and a mismatch must not quietly have the
       // client read a land timestep off an air grid.
