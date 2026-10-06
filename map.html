@@ -20057,6 +20057,26 @@ function initPagerHoursFromStorage() {
       refreshActiveFilterPanel();
     };
 
+    /**
+     * A layer whose grids are not on the server yet. Distinct from an error:
+     * the first full dataset takes a day of quota to build, and during that
+     * window clicking a new layer used to silently leave the previous one on
+     * screen — which reads as "broken" with no explanation. Say so, and put
+     * the picker back to Off so the card's state matches the map.
+     */
+    function wxNoData() {
+      if (typeof showToast === 'function') {
+        showToast('That layer\u2019s data is still being prepared \u2014 try again later.');
+      }
+      const off = document.getElementById('chk-wx-none');
+      if (off) off.checked = true;
+      _wxLayer = 'none';
+      if (_wxField) _wxField.setData(null, { scale: 1 });
+      const box = document.getElementById('wx-legend');
+      if (box) box.style.display = 'none';
+      refreshActiveFilterPanel();
+    }
+
     async function wxApply() {
       if (_wxLayer === 'none' || !_wxManifest || !_wxField) return;
       const axis = wxAxis(_wxLayer === 'wind' ? 'wind_speed_10m' : _wxLayer);
@@ -20106,7 +20126,8 @@ function initPagerHoursFromStorage() {
           if (disp && n === 0) disp.textContent += ' · nothing running high';
         } else {
           const grid = await wxFetchGrid(_wxLayer, iso);
-          if (token !== _wxLoadToken || !grid) return;
+          if (token !== _wxLoadToken) return;
+          if (!grid) { wxNoData(); return; }
           // Geometry BEFORE data: marine is a coarser grid, and handing a
           // 43x35 array to a renderer still sized for 85x69 would read the
           // array off its end and smear the waves across the continent.
@@ -20237,6 +20258,16 @@ function initPagerHoursFromStorage() {
         const off = document.getElementById('chk-wx-none');
         if (off) off.checked = true;
         _wxLayer = 'none';
+        return;
+      }
+
+      // The manifest is the truth about what exists. A variable it does not
+      // list has no grids behind it — the server is still building that part
+      // of the dataset — and asking for one would 400.
+      const neededVar = which === 'wind' ? 'wind_speed_10m'
+        : which === 'precip_accum' ? 'precipitation' : which;
+      if (!wxVarMeta(neededVar)) {
+        wxNoData();
         return;
       }
 
@@ -20387,13 +20418,19 @@ function initPagerHoursFromStorage() {
       
       currentFrameIndex = index;
       const frame = radarFrames[index];
-      const url = `https://tilecache.rainviewer.com${frame.path}/256/{z}/{x}/{y}/6/1_1.png`;
+      // 512-pixel tiles, and RainViewer serves real data to zoom ~10 — the
+      // old config requested 256px tiles and stopped native data at 7, so
+      // zooming in just stretched a small blurry tile further. tileSize 512
+      // with zoomOffset -1 is Leaflet's standard pairing for 512 tiles.
+      const url = `https://tilecache.rainviewer.com${frame.path}/512/{z}/{x}/{y}/6/1_1.png`;
       
       if (radarLayer) map.removeLayer(radarLayer);
       radarLayer = L.tileLayer(url, {
         opacity: 0.65,
         zIndex: 100,
-        maxNativeZoom: 7,
+        tileSize: 512,
+        zoomOffset: -1,
+        maxNativeZoom: 10,
         maxZoom: 21
       }).addTo(map);
       
@@ -21412,7 +21449,7 @@ function initPagerHoursFromStorage() {
   <script src="ui-dialogs.js"></script>
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
-  <script src="map-weather-module.js?v=8"></script>
+  <script src="map-weather-module.js?v=9"></script>
   <script src="map-editor-module.js?v=43"></script>
 </body>
 </html>

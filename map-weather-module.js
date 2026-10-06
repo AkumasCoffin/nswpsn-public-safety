@@ -1278,32 +1278,84 @@
    * stays NODATA, which keeps coastlines and data edges honest instead of
    * smearing them outward.
    */
+  /**
+   * One dimension of Catmull-Rom. p1 and p2 are the bracketing samples, p0 and
+   * p3 their outer neighbours; t is the fraction between p1 and p2.
+   */
+  function catmull(p0, p1, p2, p3, t) {
+    const t2 = t * t;
+    return 0.5 * (
+      (2 * p1) + (-p0 + p2) * t
+      + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2
+      + (-p0 + 3 * p1 - 3 * p2 + p3) * t2 * t
+    );
+  }
+
   function upsampleGrid(values, cols, rows, factor, nodata) {
     const outCols = (cols - 1) * factor + 1;
     const outRows = (rows - 1) * factor + 1;
     const out = new Int16Array(outCols * outRows);
+
+    // Clamped sample: edges repeat their last row/column, NODATA reads as
+    // null so the caller can decide.
+    const at = (x, y) => {
+      const cx = x < 0 ? 0 : x >= cols ? cols - 1 : x;
+      const cy = y < 0 ? 0 : y >= rows ? rows - 1 : y;
+      return values[cy * cols + cx];
+    };
+
     for (let oy = 0; oy < outRows; oy++) {
       const sy = oy / factor;
-      const y0 = Math.min(rows - 1, Math.floor(sy));
-      const y1 = Math.min(rows - 1, y0 + 1);
-      const fy = sy - y0;
+      const y1 = Math.min(rows - 1, Math.floor(sy));
+      const fy = sy - y1;
       for (let ox = 0; ox < outCols; ox++) {
         const sx = ox / factor;
-        const x0 = Math.min(cols - 1, Math.floor(sx));
-        const x1 = Math.min(cols - 1, x0 + 1);
-        const fx = sx - x0;
+        const x1 = Math.min(cols - 1, Math.floor(sx));
+        const fx = sx - x1;
+        const o = oy * outCols + ox;
 
-        const v00 = values[y0 * cols + x0];
-        const v10 = values[y0 * cols + x1];
-        const v01 = values[y1 * cols + x0];
-        const v11 = values[y1 * cols + x1];
-        if (v00 === nodata || v10 === nodata || v01 === nodata || v11 === nodata) {
-          out[oy * outCols + ox] = nodata;
+        // The 2x2 the sample sits inside decides presence: a NODATA corner
+        // keeps the sample NODATA, so coastlines and data edges stay honest
+        // instead of smearing outward. (The wider 4x4 below is only used for
+        // SHAPE, with missing outer neighbours falling back to the inner
+        // ring — curvature degrades gracefully to linear at a data edge.)
+        const c00 = at(x1, y1), c10 = at(x1 + 1, y1);
+        const c01 = at(x1, y1 + 1), c11 = at(x1 + 1, y1 + 1);
+        if (c00 === nodata || c10 === nodata || c01 === nodata || c11 === nodata) {
+          out[o] = nodata;
           continue;
         }
-        const top = v00 + (v10 - v00) * fx;
-        const bot = v01 + (v11 - v01) * fx;
-        out[oy * outCols + ox] = Math.round(top + (bot - top) * fy);
+
+        // Catmull-Rom rather than bilinear, for SHAPE. Bilinear turns an
+        // isolated high cell — one wet cell in a dry field, one storm cell —
+        // into a pyramid with visible square shoulders at any upscale factor,
+        // which is exactly how rain and thunder looked in production. A cubic
+        // through the same points rounds it into a blob. The overshoot a
+        // cubic can produce is clamped to the local min/max so a ring of
+        // false rain can never appear around a real cell.
+        const row = (yy) => {
+          const m1 = at(x1 - 1, yy), p0 = at(x1, yy), p1 = at(x1 + 1, yy), p2 = at(x1 + 2, yy);
+          return catmull(
+            m1 === nodata ? p0 : m1,
+            p0 === nodata ? 0 : p0,
+            p1 === nodata ? p0 : p1,
+            p2 === nodata ? p1 : p2,
+            fx,
+          );
+        };
+        const rm1 = row(y1 - 1), r0 = row(y1), r1 = row(y1 + 1), r2 = row(y1 + 2);
+        let v = catmull(
+          Number.isFinite(rm1) ? rm1 : r0,
+          r0, r1,
+          Number.isFinite(r2) ? r2 : r1,
+          fy,
+        );
+
+        const lo = Math.min(c00, c10, c01, c11);
+        const hi = Math.max(c00, c10, c01, c11);
+        if (v < lo) v = lo;
+        if (v > hi) v = hi;
+        out[o] = Math.round(v);
       }
     }
     return { values: out, cols: outCols, rows: outRows };
@@ -1505,6 +1557,7 @@
     NODATA: NODATA,
     dequantise: dequantise,
     paintCells: paintCells,
+    upsampleGrid: upsampleGrid,
     rowSampleMap: rowSampleMap,
     sampleBilinear: sampleBilinear,
     sampleDirection: sampleDirection,
