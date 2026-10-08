@@ -10494,13 +10494,16 @@
       // same way: a place if there is one, and whether the exact pin is set.
       // A receiver with no pin is called out, because range cannot be measured
       // without one — that is a fault, not a blank field.
-      // adsb included: its `zone` is always null server-side, so an ADS-B card
-      // used to degenerate to a bare "pinned" even with a full state · lga on
-      // record. Missing-location warnings now live on the alerts row, so the
-      // footer only ever states facts.
-      const place = (isPager || isAdsb)
-        ? [node.state, node.lga].filter(Boolean).join(' · ')
-        : node.zone;
+      // Missing-location warnings live on the alerts row, so the footer only
+      // ever states facts.
+      //
+      // Every kind locates by State + LGA (+ suburb) now. This used to read
+      // `node.zone` for radio nodes — the retired RFS zone — so a radio node
+      // saved in the current format had a full location on record and a card
+      // that said "no region". Zone survives only as the fallback for nodes
+      // saved before the change and never re-saved.
+      const place = [node.suburb, node.lga, node.state].filter(Boolean).join(' · ')
+        || (isPager || isAdsb ? '' : (node.zone || ''));
       const pinned = typeof node.lat === 'number' && typeof node.lon === 'number';
       let placeHtml;
       if (place) {
