@@ -394,15 +394,23 @@ async function canonicalSystems(): Promise<Map<string, CanonicalSystem>> {
 
 /**
  * The identity this reception should be filed under: its own, unless its
- * label's network is known to transmit a different pair.
+ * label's network is known to transmit a different pair — or it arrived with
+ * no numeric identity at all.
+ *
+ * That second case used to be skipped ("nothing to correct"), and it is the
+ * one that put the same talkgroup on a node's table twice. An agent can emit
+ * an event before its control channel has identified the system — the label
+ * is there, the numbers are not — and filed under (NULL, NULL, talkgroup) it
+ * forms a second group beside the real one. The label names the network; if
+ * that network's pair is known, the event belongs under it.
  */
-function canonicalPair(
+export function canonicalPair(
   canon: Map<string, CanonicalSystem>,
   label: string | null,
   system: number | null,
   wacn: number | null,
 ): { system: number | null; wacn: number | null; corrected: boolean } {
-  if (label === null || system === null) return { system, wacn, corrected: false };
+  if (label === null) return { system, wacn, corrected: false };
   const c = canon.get(label);
   if (!c || c.events < CANON_MIN_EVENTS) return { system, wacn, corrected: false };
   if (c.system === system && c.wacn === wacn) return { system, wacn, corrected: false };
