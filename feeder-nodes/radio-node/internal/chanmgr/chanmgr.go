@@ -167,13 +167,8 @@ const (
 )
 
 type entry struct {
-	state       chanState
-	noLockSince time.Time // lowWatch: running but not acquired since this moment (zero = locked)
-	// lowSince is ZERO until the first MEASURED sample below the low threshold.
-	// An entry born in the not-locked branch has none yet, and the dwell switch
-	// must never run against a zero: now.Sub(zero) is ~2.5 million hours, which
-	// satisfies every dwell on the first sample. That was the production fault
-	// — every auto-stop reason on the affected node read "for 2562047h…".
+	state        chanState
+	noLockSince  time.Time // lowWatch: running but not acquired since this moment (zero = locked)
 	lowSince     time.Time // lowWatch: first measured sample below the low threshold, this streak
 	severeSince  time.Time // lowWatch: first measured sample below the severe threshold, this streak (zero = none)
 	goodLow      int       // consecutive measured samples at/above the low threshold
@@ -478,11 +473,6 @@ func (m *Manager) detect(live map[string]sdrctl.Channel, pol Policy, now time.Ti
 			}
 			if e.noLockSince.IsZero() {
 				e.noLockSince = now
-				// A lock loss ends the low streak. Samples taken before the gap
-				// say nothing about the channel that comes back: when it relocks
-				// its clocks start from its first measured sample, below.
-				e.lowSince, e.severeSince = time.Time{}, time.Time{}
-				e.goodLow, e.goodSevere = 0, 0
 			}
 			if now.Sub(e.noLockSince) >= noLockDwell {
 				m.autoStop(name, ch, e, now, -1,
@@ -522,16 +512,6 @@ func (m *Manager) detect(live map[string]sdrctl.Channel, pol Policy, now time.Ti
 				e.severeSince = now
 			}
 			m.entries[name] = e
-			continue
-		}
-		if e.lowSince.IsZero() {
-			// Tracked since before it locked (or since a lock loss): this is
-			// the first measured sample of the streak, so the dwell starts
-			// here — the same ten minutes a freshly tracked channel gets.
-			e.lowSince = now
-			if pct < severeThresholdPct {
-				e.severeSince = now
-			}
 			continue
 		}
 		// The severe clock runs while samples stay below the severe threshold.
@@ -797,11 +777,7 @@ func (m *Manager) Snapshot() any {
 		row := map[string]any{"state": state, "reason": e.reason}
 		switch e.state {
 		case stLowWatch:
-			// Unmeasured so far (tracked for a missing lock): no streak start
-			// to report, rather than a zero time rendered as a 1970 epoch.
-			if !e.lowSince.IsZero() {
-				row["sinceMs"] = e.lowSince.UnixMilli()
-			}
+			row["sinceMs"] = e.lowSince.UnixMilli()
 		case stAutoStopped:
 			row["sinceMs"] = e.stoppedAt.UnixMilli()
 			row["lastProbeAtMs"] = e.lastProbeAt.UnixMilli()
