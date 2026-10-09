@@ -64,8 +64,11 @@ function captureCalls(): Call[] {
   return calls;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   queryMock.mockReset();
+  // The talkgroup page is cached per query string, and these tests reuse
+  // query strings with different mocks behind them.
+  (await import('../../../src/api/node-data.js'))._resetTalkgroupsCache();
   // Fresh module per test so the label/site-name caches (~60s TTL) never leak
   // one test's mocked rows into the next.
   vi.resetModules();
@@ -349,6 +352,45 @@ describe('display enrichment (labels, site names, aliases)', () => {
     expect(body.sites[0].topTalkgroup).toEqual({ talkgroup: 10101, label: 'Sydney Metro 01', calls: 5 });
   });
 
+  it('/talkgroups reduces the single grouped pass: top site and node by calls, last site by time', async () => {
+    // One grouped row per (site, node). The three laterals this replaced
+    // answered "newest site", "busiest site", "busiest node" with three scans;
+    // the reduction has to give the same answers from one.
+    const OLD = '2026-10-08T01:00:00.000Z';
+    const NEW = '2026-10-08T02:00:00.000Z';
+    queryMock.mockImplementation((sql: string) => {
+      if (sql.includes('DISTINCT ON (system_id, rfss, site_id)')) return { rows: [SNAPSHOT_ROW] };
+      if (sql.includes('AS n')) return { rows: [{ n: 1 }] };
+      if (sql.includes('GROUP BY wacn, system, talkgroup')) {
+        return { rows: [{ wacn: null, system: 721, talkgroup: 10101, calls: 9, logical: 4, enc: 0, last_seen: LAST_SEEN }] };
+      }
+      if (sql.includes('FROM nodes WHERE id = ANY')) {
+        return { rows: [{ id: 'n1', name: 'Node 1' }, { id: 'n2', name: 'Node 2' }] };
+      }
+      if (sql.includes('WITH ORDINALITY')) {
+        return {
+          rows: [
+            // Site 4/85 is busiest (3+3=6) and node n2 is busiest (3+2=5),
+            // but the NEWEST row with a site is site 4/86 on n1.
+            { ord: 1, site_rfss: 4, site_id: 85, node_id: 'n1', calls: 3, last_at: OLD },
+            { ord: 1, site_rfss: 4, site_id: 85, node_id: 'n2', calls: 3, last_at: OLD },
+            { ord: 1, site_rfss: 4, site_id: 86, node_id: 'n1', calls: 1, last_at: NEW },
+            { ord: 1, site_rfss: null, site_id: null, node_id: 'n2', calls: 2, last_at: NEW },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+    const app = await setupApp();
+    const res = await app.request('/api/node-data/talkgroups?window=7d&system=721');
+    expect(res.status).toBe(200);
+    const tg = (await res.json()).talkgroups[0];
+    expect(tg.topSite).toMatchObject({ rfss: 4, site: 85, calls: 6 });
+    expect(tg.topNode).toMatchObject({ id: 'n2', name: 'Node 2', calls: 5 });
+    // A row with no site must not become the last site, however new it is.
+    expect(tg.lastSite).toMatchObject({ rfss: 4, site: 86 });
+  });
+
   it('/talkgroups attaches label and lastSite/topSite names from snapshots', async () => {
     queryMock.mockImplementation((sql: string) => {
       if (sql.includes('DISTINCT ON (system_id, rfss, site_id)')) return { rows: [SNAPSHOT_ROW] };
@@ -356,13 +398,11 @@ describe('display enrichment (labels, site names, aliases)', () => {
       if (sql.includes('GROUP BY wacn, system, talkgroup')) {
         return { rows: [{ wacn: null, system: 721, talkgroup: 10101, calls: 5, logical: 3, enc: 0, last_seen: LAST_SEEN }] };
       }
+      if (sql.includes('FROM nodes WHERE id = ANY')) return { rows: [{ id: 'n1', name: 'Node 1' }] };
       if (sql.includes('WITH ORDINALITY')) {
         return {
-          rows: [{
-            ord: 1, last_rfss: 4, last_site: 85,
-            top_rfss: 4, top_site: 85, top_site_calls: 5,
-            top_node_id: 'n1', top_node_name: 'Node 1', top_node_calls: 5,
-          }],
+          // One grouped row per (key, site, node); the handler reduces it.
+          rows: [{ ord: 1, site_rfss: 4, site_id: 85, node_id: 'n1', calls: 5, last_at: LAST_SEEN }],
         };
       }
       return { rows: [] };
@@ -383,6 +423,7 @@ describe('display enrichment (labels, site names, aliases)', () => {
       if (sql.includes('GROUP BY wacn, system, source_unit')) {
         return { rows: [{ wacn: null, system: 721, radio: 999, alias: 'CAR 1', calls: 5, last_seen: LAST_SEEN }] };
       }
+      if (sql.includes('FROM nodes WHERE id = ANY')) return { rows: [{ id: 'n1', name: 'Node 1' }] };
       if (sql.includes('WITH ORDINALITY')) {
         return {
           rows: [{

@@ -37,6 +37,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Hono } from 'hono';
 import type { Pool } from 'pg';
+import { SwrCache } from '../services/swrCache.js';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { learnedAliasMap } from '../services/capcodeAliasSync.js';
@@ -540,6 +541,28 @@ const callGroup = (prefix = ''): string =>
   `(${prefix}event_type LIKE 'CALL_GROUP%'` +
   ` OR ${prefix}event_type LIKE 'CALL_PATCH_GROUP%')`;
 const CALL_GROUP = callGroup();
+
+/**
+ * The talkgroup table, cached per exact query string.
+ *
+ * The staff page polls this while it is open, and a global 7-day page is a
+ * 1.5-2 s grouped scan over hundreds of thousands of logical calls even warm.
+ * Twenty seconds fresh is below the poll interval, so a poll serves from
+ * cache; two minutes stale lets a repeat visit paint instantly while the
+ * refresh runs behind it. Keyed on the full query string, so window, scope,
+ * sort, page, filters are all distinct entries.
+ */
+const talkgroupsCache = new SwrCache<unknown>(200, 10 * 60_000);
+
+/** Test seam: tests reuse query strings, and a cached page would cross them. */
+export function _resetTalkgroupsCache(): void {
+  talkgroupsCache.clear();
+}
+const TALKGROUPS_SWR = {
+  fresh: 20_000,
+  stale: 120_000,
+  onError: (err: unknown) => log.warn({ err }, 'talkgroups refresh failed'),
+};
 
 /** Log phase timings only when the whole request was slow. Matches the request
  *  logger's threshold closely enough that the two lines appear together. */
@@ -3133,6 +3156,7 @@ nodeDataRouter.get(
       const dir = url.searchParams.get('dir') === 'asc' ? 'ASC' : 'DESC';
       const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit') ?? 50) || 50));
       const offset = Math.max(0, Number(url.searchParams.get('offset') ?? 0) || 0);
+
       const nodeId = qpNode(url);
       const scope = qpSiteScope(url);
       if (scope.error) return c.json({ error: scope.error }, 400);
@@ -3140,6 +3164,11 @@ nodeDataRouter.get(
       // Server-side rather than a client filter because the list is paged: a
       // client filter would punch holes in pages and break the total.
       const encHide = url.searchParams.get('enc') === 'hide';
+
+      // Everything below is the cached unit. Validation has already passed,
+      // so a cached entry can never be a 400 wearing a 200.
+      const cacheKey = url.search;
+      const compute = async () => {
 
       const params: unknown[] = [WINDOW_INTERVAL[window]];
       // CALL_GROUP restricts to talkgroup voice calls; TG_VALID additionally
@@ -3298,61 +3327,37 @@ nodeDataRouter.get(
         nodeLat += ` AND e.site_rfss = ${latAdd(scope.rfss)} AND e.site_id = ${latAdd(scope.site)}`;
       }
       if (page.length > 0) {
+        // ONE grouped pass over the page's keys, reduced in JS.
+        //
+        // This was three LATERAL subqueries per key - last site, top site, top
+        // node - each re-reading the talkgroup's events for the window. The
+        // index on (node, talkgroup, time) finds the rows, but every one is a
+        // heap fetch, and the two aggregating laterals read every row of
+        // every talkgroup on the page: measured at 64 ms for a single busy
+        // talkgroup, 1.4-2.1 s for a page. Grouping by (key, site, node) in a
+        // single scan reads each row once; the three answers fall out of the
+        // groups.
         const enrich = await pool.query<{
           ord: number;
-          last_rfss: number | null;
-          last_site: number | null;
-          top_rfss: number | null;
-          top_site: number | null;
-          top_site_calls: unknown;
-          top_node_id: string | null;
-          top_node_name: string | null;
-          top_node_calls: unknown;
+          site_rfss: number | null;
+          site_id: number | null;
+          node_id: string;
+          calls: unknown;
+          last_at: Date | string;
         }>(
           `SELECT k.ord::int AS ord,
-                  ls.rfss AS last_rfss, ls.site AS last_site,
-                  ts.rfss AS top_rfss, ts.site AS top_site, ts.calls AS top_site_calls,
-                  tn.node_id AS top_node_id, n.name AS top_node_name, tn.calls AS top_node_calls
+                  e.site_rfss, e.site_id, e.node_id,
+                  COUNT(*)::int AS calls,
+                  MAX(e.received_at) AS last_at
              FROM unnest($2::int[], $3::int[], $4::int[])
                   WITH ORDINALITY AS k(wacn, system, talkgroup, ord)
-             LEFT JOIN LATERAL (
-               SELECT e.site_rfss AS rfss, e.site_id AS site
-                 FROM node_radio_events e
-                WHERE e.received_at >= now() - $1::interval
-                  AND e.wacn IS NOT DISTINCT FROM k.wacn
-                  AND e.system IS NOT DISTINCT FROM k.system
-                  AND e.talkgroup = k.talkgroup${nodeLat}
-                  AND ${callGroup('e.')}
-                  AND e.site_rfss IS NOT NULL AND e.site_id IS NOT NULL
-                ORDER BY e.received_at DESC
-                LIMIT 1
-             ) ls ON true
-             LEFT JOIN LATERAL (
-               SELECT e.site_rfss AS rfss, e.site_id AS site, COUNT(*)::int AS calls
-                 FROM node_radio_events e
-                WHERE e.received_at >= now() - $1::interval
-                  AND e.wacn IS NOT DISTINCT FROM k.wacn
-                  AND e.system IS NOT DISTINCT FROM k.system
-                  AND e.talkgroup = k.talkgroup${nodeLat}
-                  AND ${callGroup('e.')}
-                  AND e.site_rfss IS NOT NULL AND e.site_id IS NOT NULL
-                GROUP BY e.site_rfss, e.site_id
-                ORDER BY calls DESC, rfss ASC, site ASC
-                LIMIT 1
-             ) ts ON true
-             LEFT JOIN LATERAL (
-               SELECT e.node_id, COUNT(*)::int AS calls
-                 FROM node_radio_events e
-                WHERE e.received_at >= now() - $1::interval
-                  AND e.wacn IS NOT DISTINCT FROM k.wacn
-                  AND e.system IS NOT DISTINCT FROM k.system
-                  AND e.talkgroup = k.talkgroup${nodeLat}
-                  AND ${callGroup('e.')}
-                GROUP BY e.node_id
-                ORDER BY calls DESC, e.node_id ASC
-                LIMIT 1
-             ) tn ON true
-             LEFT JOIN nodes n ON n.id = tn.node_id`,
+             JOIN node_radio_events e
+               ON e.received_at >= now() - $1::interval
+              AND e.talkgroup = k.talkgroup
+              AND e.wacn IS NOT DISTINCT FROM k.wacn
+              AND e.system IS NOT DISTINCT FROM k.system${nodeLat}
+              AND ${callGroup('e.')}
+            GROUP BY k.ord, e.site_rfss, e.site_id, e.node_id`,
           [
             WINDOW_INTERVAL[window],
             page.map((r) => r.wacn),
@@ -3361,21 +3366,66 @@ nodeDataRouter.get(
             ...latParams,
           ],
         );
+
+        type Acc = {
+          lastAt: number;
+          lastSite: { rfss: number; site: number } | null;
+          sites: Map<string, { rfss: number; site: number; calls: number }>;
+          nodes: Map<string, number>;
+        };
+        const acc = new Map<number, Acc>();
         for (const r of enrich.rows) {
-          extras.set(num(r.ord), {
-            lastSite:
-              r.last_rfss !== null && r.last_site !== null
-                ? { rfss: r.last_rfss, site: r.last_site }
-                : null,
-            topSite:
-              r.top_rfss !== null && r.top_site !== null
-                ? { rfss: r.top_rfss, site: r.top_site, calls: num(r.top_site_calls) }
-                : null,
-            topNode:
-              r.top_node_id !== null
-                ? { id: r.top_node_id, name: r.top_node_name, calls: num(r.top_node_calls) }
-                : null,
-          });
+          const ord = num(r.ord);
+          let a = acc.get(ord);
+          if (!a) {
+            a = { lastAt: -Infinity, lastSite: null, sites: new Map(), nodes: new Map() };
+            acc.set(ord, a);
+          }
+          const calls = num(r.calls);
+          const at = new Date(r.last_at).getTime();
+          if (r.site_rfss !== null && r.site_id !== null) {
+            const sk = `${r.site_rfss}/${r.site_id}`;
+            const site = a.sites.get(sk) ?? { rfss: r.site_rfss, site: r.site_id, calls: 0 };
+            site.calls += calls;
+            a.sites.set(sk, site);
+            // Newest row that HAS a site, which is what the lateral asked for.
+            if (at > a.lastAt) {
+              a.lastAt = at;
+              a.lastSite = { rfss: r.site_rfss, site: r.site_id };
+            }
+          }
+          a.nodes.set(r.node_id, (a.nodes.get(r.node_id) ?? 0) + calls);
+        }
+
+        const nodeIds = new Set<string>();
+        for (const a of acc.values()) for (const id of a.nodes.keys()) nodeIds.add(id);
+        const nodeNames = new Map<string, string | null>();
+        if (nodeIds.size > 0) {
+          const nn = await pool.query<{ id: string; name: string | null }>(
+            `SELECT id, name FROM nodes WHERE id = ANY($1::text[])`,
+            [[...nodeIds]],
+          );
+          for (const r of nn.rows) nodeNames.set(r.id, r.name);
+        }
+
+        for (const [ord, a] of acc) {
+          // Ties break the way the laterals did: calls DESC, then the lower
+          // rfss/site or node id, so the page does not flicker between equals.
+          let topSite: { rfss: number; site: number; calls: number } | null = null;
+          for (const site of a.sites.values()) {
+            if (!topSite || site.calls > topSite.calls
+              || (site.calls === topSite.calls
+                && (site.rfss < topSite.rfss || (site.rfss === topSite.rfss && site.site < topSite.site)))) {
+              topSite = site;
+            }
+          }
+          let topNode: { id: string; name: string | null; calls: number } | null = null;
+          for (const [id, calls] of a.nodes) {
+            if (!topNode || calls > topNode.calls || (calls === topNode.calls && id < topNode.id)) {
+              topNode = { id, name: nodeNames.get(id) ?? null, calls };
+            }
+          }
+          extras.set(ord, { lastSite: a.lastSite, topSite, topNode });
         }
       }
 
@@ -3386,7 +3436,7 @@ nodeDataRouter.get(
       const siteMap = await siteNames(pool);
       timer.mark('lookups');
       timer.done();
-      return c.json({
+      return {
         window,
         total,
         limit,
@@ -3414,7 +3464,9 @@ nodeDataRouter.get(
             topNode: ex?.topNode ?? null,
           };
         }),
-      });
+      };
+      };
+      return c.json((await talkgroupsCache.get(cacheKey, compute, TALKGROUPS_SWR)).value);
     } catch (err) {
       log.error({ err }, '/api/node-data/talkgroups error');
       return c.json({ error: 'failed to load talkgroups' }, 500);
