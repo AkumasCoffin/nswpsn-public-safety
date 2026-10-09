@@ -6763,7 +6763,7 @@
                 <span title="calls / receptions"><i class="fas fa-phone-volume"></i>${nd2Num(s.logicalCalls)}<span class="nd-sub">/${nd2Num(s.calls)}</span></span>
                 <span title="sites"><i class="fas fa-tower-cell"></i>${nd2Num(s.siteCount)}</span>
                 <span title="talkgroups"><i class="fas fa-walkie-talkie"></i>${nd2Num(s.talkgroups)}</span>
-                <span title="radios"><i class="fas fa-user-astronaut"></i>${nd2Num(s.radios)}</span>
+                <span title="${s.radios == null ? 'radios \u2014 not tracked for fleet-wide windows' : 'radios'}"><i class="fas fa-user-astronaut"></i>${s.radios == null ? '\u2014' : nd2Num(s.radios)}</span>
                 <span class="nd2-tree-seen">${nd2LastSeen(s.lastSeen)}</span>
               </span>
             </div>

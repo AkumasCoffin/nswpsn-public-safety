@@ -76,6 +76,9 @@ beforeEach(async () => {
 
 // The DISTINCT ON snapshot row siteNames() builds its map from.
 const SNAPSHOT_ROW = { system_id: 721, rfss: 4, site_id: 85, channel_name: 'Cambewarra MT' };
+const isPageSql = (sql: string) =>
+  (sql.includes('GROUP BY wacn, system, talkgroup') || sql.includes('GROUP BY system, talkgroup'))
+  && !sql.includes('AS n');
 const LAST_SEEN = new Date('2026-08-01T00:00:00Z');
 
 describe('GET /api/node-data/talkgroups', () => {
@@ -84,8 +87,12 @@ describe('GET /api/node-data/talkgroups', () => {
     const app = await setupApp();
     const res = await app.request('/api/node-data/talkgroups?window=7d&system=721');
     expect(res.status).toBe(200);
-    const grouped = calls.find((c) => c.sql.includes('GROUP BY wacn, system, talkgroup'));
+    const grouped = calls.find((c) => isPageSql(c.sql));
     expect(grouped).toBeDefined();
+    // Fleet-wide: the hourly rollups plus the hour in progress, not a scan of
+    // every reception in the window.
+    expect(grouped?.sql).toContain('FROM node_radio_hourly_sys');
+    expect(grouped?.sql).toContain('FROM node_radio_events');
     // $1 is the window interval, so the system predicate binds $2 = 721.
     expect(grouped?.sql).toContain('system = $2');
     expect(grouped?.params).toContain(721);
@@ -96,7 +103,7 @@ describe('GET /api/node-data/talkgroups', () => {
     const app = await setupApp();
     const res = await app.request('/api/node-data/talkgroups?window=7d');
     expect(res.status).toBe(200);
-    const grouped = calls.find((c) => c.sql.includes('GROUP BY wacn, system, talkgroup'));
+    const grouped = calls.find((c) => isPageSql(c.sql));
     expect(grouped?.sql).not.toContain('system = $');
   });
 
@@ -111,9 +118,11 @@ describe('GET /api/node-data/talkgroups', () => {
     const app = await setupApp();
     const res = await app.request('/api/node-data/talkgroups?window=7d&system=721&node=n1');
     expect(res.status).toBe(200);
-    const grouped = calls.find((c) => c.sql.includes('GROUP BY wacn, system, talkgroup'));
+    const grouped = calls.find((c) => isPageSql(c.sql));
     expect(grouped?.sql).toContain('node_id = $');
     expect(grouped?.params).toContain('n1');
+    // Node-scoped stays on raw events: the rollups carry no node.
+    expect(grouped?.sql).not.toContain('node_radio_hourly_sys');
   });
 
   // The site drill-down reuses this endpoint one rung down, so a site scope has
@@ -125,7 +134,7 @@ describe('GET /api/node-data/talkgroups', () => {
     queryMock.mockImplementation((sql: string, params: unknown[] = []) => {
       calls.push({ sql, params });
       if (sql.includes('AS n')) return { rows: [{ n: 1 }] };
-      if (sql.includes('GROUP BY wacn, system, talkgroup')) {
+      if (isPageSql(sql)) {
         return { rows: [{ wacn: 1, system: 721, talkgroup: 10101, calls: 5, logical: 3, enc: 0, last_seen: LAST_SEEN }] };
       }
       return { rows: [] };
@@ -133,7 +142,7 @@ describe('GET /api/node-data/talkgroups', () => {
     const app = await setupApp();
     const res = await app.request('/api/node-data/talkgroups?window=7d&system=721&rfss=4&site=85');
     expect(res.status).toBe(200);
-    const grouped = calls.find((c) => c.sql.includes('GROUP BY wacn, system, talkgroup'));
+    const grouped = calls.find((c) => isPageSql(c.sql));
     expect(grouped?.sql).toContain('site_rfss = $');
     expect(grouped?.sql).toContain('site_id = $');
     expect(grouped?.params).toEqual(expect.arrayContaining([4, 85]));
@@ -157,15 +166,15 @@ describe('GET /api/node-data/talkgroups', () => {
     const app = await setupApp();
     const res = await app.request('/api/node-data/talkgroups?window=7d&enc=hide');
     expect(res.status).toBe(200);
-    // The page rolls up in two levels now, so its HAVING sums the inner
-    // group's counts rather than re-counting rows.
-    const grouped = calls.find((c) => c.sql.includes('GROUP BY wacn, system, talkgroup') && !c.sql.includes('AS n'));
-    expect(grouped?.sql).toContain('HAVING SUM(g.enc) < SUM(g.calls)');
-    // The count groups per talkgroup only, so it keeps the flat predicate —
-    // and either way it must group first and count the survivors, because the
-    // predicate is per-group.
+    // Fleet-wide reads the rollups, whose encrypted count is in LOGICAL
+    // calls — so "always encrypted" is enc = logical, and the filter is the
+    // same predicate on the page and the count. Either way the count must
+    // group first and count the survivors, because the predicate is
+    // per-group.
+    const grouped = calls.find((c) => isPageSql(c.sql));
+    expect(grouped?.sql).toContain('HAVING SUM(enc) < SUM(logical)');
     const count = calls.find((c) => c.sql.includes('AS n'));
-    expect(count?.sql).toContain('HAVING COUNT(*) FILTER (WHERE encrypted) < COUNT(*)');
+    expect(count?.sql).toContain('HAVING SUM(enc) < SUM(logical)');
     expect(count?.sql).not.toContain('COUNT(DISTINCT (wacn, system, talkgroup))');
   });
 
@@ -204,7 +213,7 @@ describe('talkgroup range filter (radio ids excluded)', () => {
       // Distinct-talkgroup COUNT for pagination total.
       if (sql.includes('AS n')) return { rows: [{ n: applyRange(sql, CANDIDATE_TGS).length }] };
       // Grouped per-talkgroup page (the list).
-      if (sql.includes('GROUP BY wacn, system, talkgroup')) {
+      if (isPageSql(sql)) {
         return { rows: applyRange(sql, CANDIDATE_TGS) };
       }
       return { rows: [] };
@@ -264,25 +273,31 @@ describe('GET /api/node-data/systems (folder tree + node filter)', () => {
   it('eager-loads each system\'s sites[] with resolved names', async () => {
     queryMock.mockImplementation((sql: string) => {
       if (sql.includes('DISTINCT ON (system_id, rfss, site_id)')) return { rows: [SNAPSHOT_ROW] };
-      // System rollup row (the folder).
-      if (sql.includes('MIN(received_at) AS first_seen')) {
+      // Fleet-wide: the system row comes from the hourly rollups (no wacn,
+      // name or radios there), the folder's children likewise.
+      if (sql.includes('MIN(first_seen) AS first_seen')) {
         return {
           rows: [{
-            wacn: null, system: 721, name: 'NSWPSN', calls: 10, logical: 6, enc: 0,
-            sites: 1, talkgroups: 2, radios: 3, first_seen: LAST_SEEN, last_seen: LAST_SEEN,
+            system: 721, calls: 10, logical: 6, enc: 0,
+            sites: 1, talkgroups: 2, first_seen: LAST_SEEN, last_seen: LAST_SEEN,
           }],
         };
       }
-      // Per-site rollup (the folder's children).
-      if (sql.includes('GROUP BY system, site_rfss, site_id')) {
+      if (sql.includes('GROUP BY system, rfss, site')) {
         return { rows: [{ system: 721, rfss: 4, site: 85, calls: 5, logical: 3, last_seen: LAST_SEEN }] };
       }
+      // WACN and label resolve from the system's newest reception.
+      if (sql.includes('AS k(system)')) return { rows: [{ system: 721, wacn: 781824, system_label: 'NSWPSN' }] };
       return { rows: [] };
     });
     const app = await setupApp();
     const res = await app.request('/api/node-data/systems?window=7d');
     expect(res.status).toBe(200);
     const body = await res.json();
+    expect(body.systems[0].name).toBe('NSWPSN');
+    expect(body.systems[0].wacn).toBe(781824);
+    // No rollup carries radios: fleet-wide reports null, never a fake zero.
+    expect(body.systems[0].radios).toBeNull();
     expect(body.systems[0].siteCount).toBe(1);
     expect(Array.isArray(body.systems[0].sites)).toBe(true);
     expect(body.systems[0].sites[0]).toEqual({
@@ -309,8 +324,13 @@ describe('GET /api/node-data/systems (folder tree + node filter)', () => {
     const app = await setupApp();
     const res = await app.request('/api/node-data/systems?window=7d');
     expect(res.status).toBe(200);
-    const sys = calls.find((c) => c.sql.includes('MIN(received_at) AS first_seen'));
+    // Fleet-wide goes to the rollups; the raw five-COUNT(DISTINCT) scan over
+    // every reception in the window did not finish inside 150 s at 7 days.
+    const sys = calls.find((c) => c.sql.includes('MIN(first_seen) AS first_seen'));
+    expect(sys).toBeDefined();
+    expect(sys?.sql).toContain('FROM node_radio_hourly_sys');
     expect(sys?.sql).not.toContain('node_id = $');
+    expect(calls.some((c) => c.sql.includes('MIN(received_at) AS first_seen'))).toBe(false);
   });
 });
 
@@ -361,7 +381,7 @@ describe('display enrichment (labels, site names, aliases)', () => {
     queryMock.mockImplementation((sql: string) => {
       if (sql.includes('DISTINCT ON (system_id, rfss, site_id)')) return { rows: [SNAPSHOT_ROW] };
       if (sql.includes('AS n')) return { rows: [{ n: 1 }] };
-      if (sql.includes('GROUP BY wacn, system, talkgroup')) {
+      if (isPageSql(sql)) {
         return { rows: [{ wacn: null, system: 721, talkgroup: 10101, calls: 9, logical: 4, enc: 0, last_seen: LAST_SEEN }] };
       }
       if (sql.includes('FROM nodes WHERE id = ANY')) {
@@ -395,9 +415,12 @@ describe('display enrichment (labels, site names, aliases)', () => {
     queryMock.mockImplementation((sql: string) => {
       if (sql.includes('DISTINCT ON (system_id, rfss, site_id)')) return { rows: [SNAPSHOT_ROW] };
       if (sql.includes('AS n')) return { rows: [{ n: 1 }] };
-      if (sql.includes('GROUP BY wacn, system, talkgroup')) {
+      if (isPageSql(sql)) {
         return { rows: [{ wacn: null, system: 721, talkgroup: 10101, calls: 5, logical: 3, enc: 0, last_seen: LAST_SEEN }] };
       }
+      // The rollups carry no wacn; the page fills it from the system's newest
+      // reception.
+      if (sql.includes('AS k(system)')) return { rows: [{ system: 721, wacn: 781824, system_label: 'NSWPSN' }] };
       if (sql.includes('FROM nodes WHERE id = ANY')) return { rows: [{ id: 'n1', name: 'Node 1' }] };
       if (sql.includes('WITH ORDINALITY')) {
         return {
@@ -412,6 +435,7 @@ describe('display enrichment (labels, site names, aliases)', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.talkgroups[0].label).toBe('Sydney Metro 01');
+    expect(body.talkgroups[0].wacn).toBe(781824);
     expect(body.talkgroups[0].lastSite).toEqual({ rfss: 4, site: 85, name: 'Cambewarra MT' });
     expect(body.talkgroups[0].topSite).toEqual({ rfss: 4, site: 85, calls: 5, name: 'Cambewarra MT' });
   });
@@ -507,7 +531,7 @@ describe('CALL_GROUP filter (talkgroup voice calls only)', () => {
       if (sql.includes('DISTINCT ON (system_id, rfss, site_id)')) return { rows: [SNAPSHOT_ROW] };
       const kept = onlyCalls(sql);
       if (sql.includes('AS n')) return { rows: [{ n: kept.length }] };
-      if (sql.includes('GROUP BY wacn, system, talkgroup')) {
+      if (isPageSql(sql)) {
         return {
           rows: kept.map((r) => ({
             wacn: null, system: 721, talkgroup: r.talkgroup,
