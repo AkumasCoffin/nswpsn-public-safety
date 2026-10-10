@@ -1689,6 +1689,7 @@
     }
   </style>
   <script src="auth-common.js"></script>
+  <script src="api-session.js"></script>
 </head>
 
 <body>
@@ -2527,9 +2528,7 @@
     
     // API Base URLs
     const API_BASE = 'https://api.forcequit.xyz';
-    // API Key - loaded from backend config
-    let API_KEY = null;
-    
+
     // Scroll to section when stat card is clicked
     function scrollToSection(sectionId) {
       if (typeof umami !== 'undefined') umami.track('live-stat-card-click', { section: sectionId });
@@ -2544,24 +2543,19 @@
       }
     }
     
-    // Authenticated fetch wrapper
+    // Authenticated fetch wrapper: the page's browser session token
+    // (api-session.js) rides every call; it mints, refreshes and retries.
     function apiFetch(url, options = {}) {
-      const headers = {
-        ...options.headers,
-        ...(API_KEY ? { 'Authorization': `Bearer ${API_KEY}` } : {})
-      };
-      return fetch(url, { ...options, headers });
+      return AusApi.fetch(url, options);
     }
-    
-    // Load API config from backend
+
+    // Warm the session token before the first fetches.
     async function loadApiConfig() {
       try {
-        const res = await fetch(`${API_BASE}/api/config`);
-        const config = await res.json();
-        API_KEY = config.apiKey;
-        console.log('API config loaded');
+        await AusApi.token();
+        console.log('API session ready');
       } catch (e) {
-        console.error('Failed to load API config:', e);
+        console.error('Failed to get an API session:', e);
       }
     }
     

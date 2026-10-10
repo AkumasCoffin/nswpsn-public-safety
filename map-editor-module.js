@@ -9,7 +9,7 @@
    top of the normal public map.
 
    Depends on globals provided by map.html + auth-common.js:
-     map, L, sb, PROXY_BASE, API_BASE_URL, API_KEY, escapeHtml,
+     map, L, sb, PROXY_BASE, API_BASE_URL, AusApi, escapeHtml,
      safeUrl (the only sanctioned way to put a feed-supplied URL in an
      href — it resolves, admits http/https only, and escapes; anything
      else becomes an inert '#'),
@@ -544,7 +544,6 @@
       // options.auth === true forces the Supabase JWT even on a GET (used by
       // owner-only reads such as the suggestions review list).
       const needsJwt = isMutating || options.auth === true;
-      let bearer = API_KEY;
       if (needsJwt) {
         const { data } = await sb.auth.getSession();
         const token = data?.session?.access_token;
@@ -556,17 +555,12 @@
           }
           return Promise.reject(new Error('apiFetch blocked: no editor session'));
         }
-        bearer = token;
-      } else if (!API_KEY) {
-        // Reads before /api/config loads — send unauthenticated and let
-        // the caller's error handling deal with the 401.
-        bearer = null;
+        const headers = { ...options.headers, 'Authorization': `Bearer ${token}` };
+        return fetch(url, { ...options, headers });
       }
-      const headers = {
-        ...options.headers,
-        ...(bearer ? { 'Authorization': `Bearer ${bearer}` } : {})
-      };
-      return fetch(url, { ...options, headers });
+      // Public reads carry the page's browser session token (api-session.js),
+      // which mints on first use and refreshes itself.
+      return AusApi.fetch(url, options);
     }
     // Rendering stays with the public unified renderer (loadAllData) so
     // user/RFS/pager pins keep merging; the editor just re-triggers it

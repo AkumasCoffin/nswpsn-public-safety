@@ -2798,6 +2798,7 @@
   
   </style>
   <script src="auth-common.js"></script>
+  <script src="api-session.js"></script>
 </head>
 <body>
   <!-- Camera Selection Badge -->
@@ -8698,9 +8699,9 @@ function initPagerHoursFromStorage() {
     // Proxy base URL for external API calls
     const PROXY_BASE = 'https://api.forcequit.xyz';
     
-    // API Key - loaded from backend config
-    let API_KEY = null;
-    
+    // Credential: the page's browser session token, from api-session.js
+    // (window.AusApi). Mints on first use, refreshes itself, retries a 401.
+
     // Authenticated fetch wrapper
     // In-flight request dedupe. The map page wires up several layers
     // that each kick off their own fetch on init, so the same endpoint
@@ -8742,10 +8743,6 @@ function initPagerHoursFromStorage() {
 
     function apiFetch(url, options = {}) {
       const method = (options.method || 'GET').toUpperCase();
-      const headers = {
-        ...options.headers,
-        ...(API_KEY ? { 'Authorization': `Bearer ${API_KEY}` } : {})
-      };
       // Dedupe only safe idempotent reads. Anything with a body or
       // non-GET/HEAD method gets a fresh fetch.
       const dedupable = (method === 'GET' || method === 'HEAD') && !options.body;
@@ -8759,30 +8756,28 @@ function initPagerHoursFromStorage() {
         if (existing) {
           return existing.then(r => r.clone()).then(promote);
         }
-        const p = fetch(url, { ...options, headers }).finally(() => {
+        const p = AusApi.fetch(url, options).finally(() => {
           _inflightFetches.delete(key);
         });
         _inflightFetches.set(key, p);
         return p.then(r => r.clone()).then(promote);
       }
-      return fetch(url, { ...options, headers }).then(promote);
+      return AusApi.fetch(url, options).then(promote);
     }
-    
-    // Load API config from backend (with flood guard)
+
+    // Warm the session token before the first burst of layer fetches so they
+    // don't each wait on (and dedupe through) one mint. Flood-guarded.
     let _apiConfigLoaded = false;
     let _apiConfigInFlight = false;
     async function loadApiConfig() {
-      // Prevent loading config more than once, and prevent concurrent calls
       if (_apiConfigLoaded || _apiConfigInFlight) return;
       _apiConfigInFlight = true;
       try {
-        const res = await fetch(`${PROXY_BASE}/api/config`);
-        const config = await res.json();
-        API_KEY = config.apiKey;
+        await AusApi.token();
         _apiConfigLoaded = true;
-        console.log('✓ API config loaded');
+        console.log('✓ API session ready');
       } catch (e) {
-        console.error('Failed to load API config:', e);
+        console.error('Failed to get an API session:', e);
       } finally {
         _apiConfigInFlight = false;
       }
@@ -21503,6 +21498,6 @@ function initPagerHoursFromStorage() {
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
   <script src="map-weather-module.js?v=15"></script>
-  <script src="map-editor-module.js?v=43"></script>
+  <script src="map-editor-module.js?v=44"></script>
 </body>
 </html>

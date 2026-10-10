@@ -248,7 +248,9 @@ exists. See the architecture doc.
    for 4xx, and for all 2xx outside production; `warn` for 5xx; silent for
    OPTIONS. Every line is tagged with the caller it identified — `browser`,
    `discord-bot`, `node`, `rdio`, `whisper`, `whisper-node`, `other` — and
-   colour-coded outside production.
+   colour-coded outside production. A request that passed the credential gate
+   also carries `auth=jwt|browser|static` or `auth=key:<prefix>` (a named
+   key's lookup prefix, never the key).
 
    Path beats header for `rdio` and `whisper`: nothing else posts to those
    routes, and the callers that do cannot set custom headers at all.
@@ -261,24 +263,49 @@ exists. See the architecture doc.
    per-user paths are excluded.
 
 4. **CORS** — an explicit allowlist of exact first-party origins, extensible
-   without a code change via `CORS_ALLOWED_ORIGINS`. Deliberately narrow:
-   `/api/config` returns the API key in its body, and `credentials: true` is
-   required for the dashboard's session cookie — a wildcard, or a
-   `*.forcequit.xyz` regex, would let a compromised sibling subdomain make
-   credentialed reads with a logged-in user's cookie.
+   without a code change via `CORS_ALLOWED_ORIGINS`. The allowlist is
+   `services/auth/firstParty.ts`, shared with the browser-token gate below so
+   the origins that may read responses are exactly the origins that may hold
+   a session token. Deliberately narrow: `credentials: true` is required for
+   the dashboard's session cookie — a wildcard, or a `*.forcequit.xyz` regex,
+   would let a compromised sibling subdomain make credentialed reads with a
+   logged-in user's cookie.
 
 5. **`optionalSupabaseJwt`** — identify the user before any gate, so a privileged
    route can role-check the real person.
 
-6. **`requireApiKey`** — the global `NSWPSN_API_KEY` gate. Short-circuits for
-   OPTIONS, a list of public endpoints, anything outside `/api`, and any request
-   already authenticated as a Supabase user.
+6. **`requireApiKey`** — the credential gate. Short-circuits for OPTIONS, a
+   list of public endpoints, anything outside `/api`, and any request already
+   authenticated as a Supabase user; otherwise resolves one of the three
+   credential classes in the table below and tags the request with it.
 
 ### Authentication
 
+A static site cannot keep a secret, so a browser is never given one. A page
+asks `POST /api/session/token` for a **browser session token** — 15 minutes,
+HMAC-signed, bound to the caller's address (/24, /48) and User-Agent, issued
+only to requests carrying a first-party `Origin`/`Referer`, rate-limited per
+address — and the gate accepts it only alongside a first-party origin. Copied
+to curl it fails; past its lifetime it fails; the page re-mints silently
+(`api-session.js`). Nothing is stored server-side.
+
+People who need scripted access get a **named API key** from the `api_keys`
+table (migration 120; issued with `scripts/issue-api-key.ts`, revoked with
+`scripts/revoke-api-key.ts`). Only the sha256 and a lookup prefix are stored.
+A key carries scopes, its own per-minute limit, an optional expiry and a
+`revoked_at`. **Keys are refused from web pages**: a request presenting one
+with a browser `Origin` header is a 403, so a key cannot be used from another
+site, nor pasted into ours.
+
+The static `NSWPSN_API_KEY` remains for server-side callers that predate the
+above — the Discord bot and rdio's transcripts plugin — and is no longer
+returned by `/api/config` or carried in `config.js`.
+
 | Caller | Credential | Where |
 |---|---|---|
-| Browser / public | `NSWPSN_API_KEY`, handed out by `/api/config` | `services/auth/apiKey.ts` |
+| Browser page | session token `bt1.…` from `POST /api/session/token` | `services/auth/browserToken.ts`, `api/session.ts` |
+| Script / CLI user | named key `ak_<prefix>_…` (DB, hashed), CLI-only | `services/auth/apiKeys.ts` |
+| Discord bot, rdio plugin | static `NSWPSN_API_KEY` | `services/auth/apiKey.ts` |
 | Logged-in user | Supabase JWT (HS256, `SUPABASE_JWT_SECRET`) | `services/auth/supabaseJwt.ts` |
 | Staff | role check on top of the JWT | `services/auth/roles.ts` |
 | Node agent | `X-Node-Token` + `X-Node-Install` | `services/auth/nodeToken.ts` |

@@ -15,6 +15,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="auth-common.js"></script>
+  <script src="api-session.js"></script>
   <script src="agencies.js"></script>
   <script src="fleet-vocab.js"></script>
 
@@ -302,7 +303,6 @@
   </script>
   <script type="module">
     const API_BASE = (typeof API_BASE_URL !== 'undefined') ? API_BASE_URL : 'https://api.forcequit.xyz';
-    let API_KEY = null;
     const qs = new URLSearchParams(location.search);
     const editId = qs.get('edit');
 
@@ -323,8 +323,9 @@
     let _meName = '';
     function wantsWatermark() { const el = $('#watermarkToggle'); return !!(el && el.checked); }
 
-    async function loadKey() { try { const r = await fetch(`${API_BASE}/api/config`); API_KEY = (await r.json()).apiKey; } catch (e) {} }
-    async function keyHeaders() { return API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {}; }
+    // Anonymous reads carry the page's browser session token (api-session.js).
+    async function loadKey() { try { await AusApi.token(); } catch (e) {} }
+    async function keyHeaders() { try { return await AusApi.headers(); } catch (e) { return {}; } }
     async function userHeaders(json) {
       const { data } = await sb.auth.getSession(); const t = data.session?.access_token;
       const h = t ? { Authorization: `Bearer ${t}` } : await keyHeaders();

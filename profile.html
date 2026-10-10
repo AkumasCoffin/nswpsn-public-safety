@@ -15,6 +15,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="auth-common.js"></script>
+  <script src="api-session.js"></script>
   <script src="agencies.js"></script>
   <style>
     .prof-main { padding: 2rem clamp(1rem, 4vw, 2.4rem) 4rem; }
@@ -97,18 +98,16 @@
     const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     // Only allow http(s) links (defence-in-depth on top of the backend's URL check).
     const safeUrl = (u) => { try { const url = new URL(u, location.origin); return (url.protocol === 'http:' || url.protocol === 'https:') ? url.href : '#'; } catch (e) { return '#'; } };
-    let API_KEY = null;
-
     const qs = new URLSearchParams(location.search);
     const uid = qs.get('u');
     const nameHint = qs.get('name');
 
+    // Anonymous reads carry the page's browser session token (api-session.js).
     async function keyHeaders() {
-      if (!API_KEY) { try { API_KEY = (await (await fetch(`${API_BASE}/api/config`)).json()).apiKey; } catch (e) {} }
-      return API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {};
+      try { return await AusApi.headers(); } catch (e) { return {}; }
     }
     // Send the viewer's JWT when logged in so the owner-only soft-launch gate
-    // recognises them; falls back to the public key when signed out.
+    // recognises them; falls back to the session token when signed out.
     async function userHeaders() {
       try { const { data } = await window.sb.auth.getSession(); const t = data.session?.access_token; if (t) return { Authorization: `Bearer ${t}` }; } catch (e) {}
       return keyHeaders();

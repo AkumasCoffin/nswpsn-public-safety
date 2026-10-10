@@ -41,6 +41,7 @@
   <script src="livetraffic-vocab.js?v=1"></script>
   <script src="fire-vocab.js?v=3"></script>
   <script src="auth-common.js"></script>
+  <script src="api-session.js"></script>
   <script src="ui-dialogs.js"></script>
 </head>
 <body>
@@ -372,7 +373,6 @@
   <script>
     // === CONFIG ===
     const API_BASE = 'https://api.forcequit.xyz';
-    let API_KEY = '';
     let pageSize = 20; // configurable — keep low so each list query is cheap
     const LOGS_PAGE_ID = 'logs_' + Math.random().toString(36).substr(2, 9);
     const LOGS_PAGE_TYPE = 'logs';
@@ -483,36 +483,21 @@
     }
     
     // === API HELPERS ===
+    // Every call carries the page's browser session token (api-session.js):
+    // it mints on first use, refreshes itself and retries one 401. When no
+    // token can be had the promise rejects, so the caller's catch sees a real
+    // error instead of a confusing 401.
     async function apiFetch(url) {
-      // Never fire a request with an empty/missing key — that silently goes
-      // out as `api_key=` (unauthenticated) and the failure is opaque. Try
-      // to (re)load config first; if it still isn't there, surface a real
-      // error so the caller's catch handles it instead of a confusing 401.
-      if (!API_KEY) await loadApiConfig();
-      if (!API_KEY) throw new Error('API key unavailable — /api/config failed to load');
-      return fetch(url, { headers: { 'Authorization': `Bearer ${API_KEY}` } });
+      return AusApi.fetch(url);
     }
 
-    let _apiConfigPromise = null;
+    // Warm the token before the first page of results.
     async function loadApiConfig() {
-      // Cache the in-flight load so concurrent callers share one request,
-      // but DROP the cache if we still don't have a key, so a transient
-      // /api/config failure can be retried on the next call rather than
-      // permanently leaving every request unauthenticated.
-      if (API_KEY) return;
-      if (_apiConfigPromise) return _apiConfigPromise;
-      _apiConfigPromise = (async () => {
-        try {
-          const res = await fetch(`${API_BASE}/api/config`);
-          const config = await res.json();
-          if (config && config.apiKey) API_KEY = config.apiKey;
-        } catch (e) {
-          console.error('Failed to load API config:', e);
-        } finally {
-          if (!API_KEY) _apiConfigPromise = null;
-        }
-      })();
-      return _apiConfigPromise;
+      try {
+        await AusApi.token();
+      } catch (e) {
+        console.error('Failed to get an API session:', e);
+      }
     }
     
     // === HEARTBEAT ===
@@ -2660,7 +2645,7 @@
         // snapshots returned exactly one.
         const url = `${API_BASE}/api/data/history?source=${item.source}&source_id=${encodeURIComponent(item.source_id)}&limit=50&order=desc&full=1&unique=0`;
         console.log('History URL:', url);
-        const res = await fetch(url, { headers: { 'Authorization': `Bearer ${API_KEY}` } });
+        const res = await AusApi.fetch(url);
         if (!res.ok) throw new Error(`API returned ${res.status}`);
         const data = await res.json();
 
@@ -2942,7 +2927,7 @@
           if (incidentId && !incidentId.startsWith('noid-')) {
             try {
               const pagerUrl = `${API_BASE}/api/pager/hits?incident_id=${encodeURIComponent(incidentId)}&hours=72&limit=20`;
-              const pagerRes = await fetch(pagerUrl, { headers: { 'Authorization': `Bearer ${API_KEY}` } });
+              const pagerRes = await AusApi.fetch(pagerUrl);
               if (!pagerRes.ok) throw new Error(`API returned ${pagerRes.status}`);
               const pagerJson = await pagerRes.json();
               
@@ -2974,7 +2959,7 @@
               // ~20m radius, search all pagers (unique=0 explicit to
               // include ended ones — backend default is now unique=1)
               const proximityUrl = `${API_BASE}/api/data/history?source=pager&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100&unique=0&full=1`;
-              const proxRes = await fetch(proximityUrl, { headers: { 'Authorization': `Bearer ${API_KEY}` } });
+              const proxRes = await AusApi.fetch(proximityUrl);
               if (!proxRes.ok) throw new Error(`API returned ${proxRes.status}`);
               const proxData = await proxRes.json();
               
@@ -3035,7 +3020,7 @@
               // Search nearby (~20m radius), unique=0 explicit to
               // include ended incidents (backend default is now unique=1)
               const incUrl = `${API_BASE}/api/data/history?source=rfs,traffic_incident,traffic_fire&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100&unique=0&full=1`;
-              const incRes = await fetch(incUrl, { headers: { 'Authorization': `Bearer ${API_KEY}` } });
+              const incRes = await AusApi.fetch(incUrl);
               if (!incRes.ok) throw new Error(`API returned ${incRes.status}`);
               const incData = await incRes.json();
               
@@ -3158,7 +3143,7 @@
           // ~20m radius, search all pagers (unique=0 explicit to
           // include ended ones — backend default is now unique=1)
           const url = `${API_BASE}/api/data/history?source=pager&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100&unique=0&full=1`;
-          const res = await fetch(url, { headers: { 'Authorization': `Bearer ${API_KEY}` } });
+          const res = await AusApi.fetch(url);
           if (!res.ok) throw new Error(`API returned ${res.status}`);
           const data = await res.json();
 
@@ -3251,7 +3236,7 @@
         
         try {
           const url = `${API_BASE}/api/data/history?source=${source}&source_id=${encodeURIComponent(sourceId)}&limit=1&unique=1`;
-          const res = await fetch(url, { headers: { 'Authorization': `Bearer ${API_KEY}` } });
+          const res = await AusApi.fetch(url);
           if (!res.ok) throw new Error(`API returned ${res.status}`);
           const data = await res.json();
 

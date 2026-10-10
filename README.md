@@ -34,6 +34,13 @@ Read these before you read the feature list. They are not temporary.
   has put a dongle on a roof, and the project cannot buy its way into one.
 - **The project is partial and unfunded by design.** It runs out of pocket on
   donations. Features that would cost money recurring do not get built.
+- **The API is scraper-hostile, not scraper-proof.** A static site cannot hold
+  a secret, so pages carry a short-lived session token bound to their own
+  browser instead of a key; curl, a typed URL or another site gets a 401.
+  A determined scraper can still script the mint from one address, through
+  one rate-limited, logged choke point. Scripted access is meant to go through
+  named API keys, which work from the command line and are refused from web
+  pages.
 - **Several layers are off unless configured.** NASA FIRMS hotspots, the
   transcription tier, ntfy pushes, The Wire's media storage, TfNSW vehicle
   positions and the Discord management dashboard are each gated on an

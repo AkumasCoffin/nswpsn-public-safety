@@ -94,9 +94,12 @@ template and fill it in:
 cp config.sample.js config.js
 ```
 
-It carries the Supabase project URL and anon key, the API base URL, and the API
-key. `.htaccess` explicitly allows `config.js`, `auth-common.js` and
-`analytics.js` to be served while blocking most other paths.
+It carries the Supabase project URL and anon key and the API base URL — and
+**no API key**. Pages authenticate with a short-lived browser session token
+from `api-session.js` (see below); the backend's `NSWPSN_API_KEY` is for
+server-side callers and must not be put in this file. `.htaccess` explicitly
+allows `config.js`, `auth-common.js`, `api-session.js` and `analytics.js` to
+be served while blocking most other paths.
 
 ## The cache-busting rule
 
@@ -171,8 +174,14 @@ only thing standing between an upload and code execution.
 ## How a page gets data
 
 Every page talks to the backend over `/api/...` at the API base URL from
-`config.js`, authenticating with the key `/api/config` hands out. Nothing on the
-public site reads a database directly.
+`config.js`. The credential is a **browser session token**: `api-session.js`
+(`window.AusApi`) asks `POST /api/session/token` for one on first use, keeps it
+in `sessionStorage`, refreshes it before its 15-minute expiry and retries one
+401. The backend issues it only to first-party pages and binds it to the
+requesting browser, so it is useless from curl, a scraper or a typed URL. Each
+page keeps its own `apiFetch`/`userHeaders` helper and reads the token from
+`AusApi`; logged-in users send their Supabase JWT instead, unchanged. Nothing
+on the public site reads a database directly.
 
 ```
 map.html  ──►  /api/rfs/incidents        (RFS fires)

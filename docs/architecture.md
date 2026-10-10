@@ -131,9 +131,12 @@ Take NSW RFS incidents.
 5. **Serve.** `src/api/rfs.ts` reads LiveStore and answers
    `GET /api/rfs/incidents`. `src/server.ts` mounts it. The global
    `requireApiKey` gate applies; `/api/health`, `/api/config`, `/api/heartbeat`
-   and a short list of others are public. A browser-usable key is handed out by
-   `/api/config`, which is why CORS is a narrow allowlist of exact first-party
-   origins rather than a wildcard.
+   and a short list of others are public. A page authenticates with a
+   short-lived browser session token it requests from
+   `POST /api/session/token`; the token is issued only to first-party origins
+   and bound to the requesting browser, which is why CORS and the token gate
+   share one narrow allowlist of exact first-party origins
+   (`src/services/auth/firstParty.ts`) rather than a wildcard.
 6. **Draw.** `map.html` fetches `/api/rfs/incidents` and adds Leaflet markers.
    For a set of cheap GETs the response carries
    `Cache-Control: public, max-age=30, stale-while-revalidate=300`, so repeat
@@ -615,10 +618,15 @@ any of it.
 
 1. `optionalSupabaseJwt` runs first (`src/services/auth/supabaseJwt.ts`), so a
    logged-in user is identified before any gate.
-2. `requireApiKey` (`src/services/auth/apiKey.ts`) is the global
-   `NSWPSN_API_KEY` gate. It short-circuits for OPTIONS preflights, a list of
-   public endpoints, anything outside `/api`, and any request already
-   authenticated as a Supabase user.
+2. `requireApiKey` (`src/services/auth/apiKey.ts`) is the credential gate.
+   It short-circuits for OPTIONS preflights, a list of public endpoints,
+   anything outside `/api`, and any request already authenticated as a
+   Supabase user; otherwise it accepts one of three classes — a browser
+   session token (`bt1.…`, valid only with a first-party `Origin` and only
+   for the browser it was minted for), a named API key (`ak_…`, from the
+   `api_keys` table, refused whenever a browser `Origin` is present), or the
+   static `NSWPSN_API_KEY` for the Discord bot and rdio's transcripts
+   plugin. Browsers are never given the static key.
 3. Role checks (`src/services/auth/roles.ts`) gate the staff surfaces. Roles
    live in the backend PostgreSQL, not in Supabase.
 4. Node agents use `X-Node-Token` + `X-Node-Install`

@@ -1,7 +1,7 @@
 /**
  * Sanity test for the W1 endpoints. Verifies:
  *   - /api/health returns the same shape Python does
- *   - /api/config returns apiKey + version
+ *   - /api/config returns a version and never a key
  *   - Unknown routes 404 (Hono default)
  *
  * Once W2 lands and we have prod-captured contract fixtures, these
@@ -30,12 +30,16 @@ describe('W1 endpoints', () => {
     expect(typeof body['active_viewers']).toBe('number');
   });
 
-  it('GET /api/config returns apiKey + version', async () => {
+  it('GET /api/config returns a version and NO key', async () => {
+    // The static key used to ride this body, which is how anyone with a
+    // network tab got a key that worked from curl. Pages mint a browser
+    // session token now (POST /api/session/token); the key must never
+    // reappear here.
     const res = await app.request('/api/config');
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
-    expect(typeof body['apiKey']).toBe('string');
-    expect((body['apiKey'] as string).length).toBeGreaterThan(0);
+    expect(body['apiKey']).toBeUndefined();
+    expect(JSON.stringify(body)).not.toContain('test-api-key');
     expect(typeof body['version']).toBe('string');
   });
 

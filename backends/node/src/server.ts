@@ -78,7 +78,9 @@ import { nodeIngestRouter } from './api/node-ingest.js';
 import { scannerIngestRouter } from './api/scanner-ingest.js';
 import { nodeDataRouter } from './api/node-data.js';
 import { requireApiKey } from './services/auth/apiKey.js';
+import { isFirstPartyOrigin } from './services/auth/firstParty.js';
 import { optionalSupabaseJwt } from './services/auth/supabaseJwt.js';
+import { sessionRouter } from './api/session.js';
 import { log } from './lib/log.js';
 
 // Paths that should never appear in the request log even on
@@ -206,7 +208,16 @@ const requestLogger: MiddlewareHandler = async (c, next) => {
   // signal under {"method":"GET",…} on every line. Embed everything in
   // the message string instead — production ndjson keeps it grep-able,
   // dev pretty-print shows the same clean line.
-  const line = `${method} ${path} → ${status} ${ms}ms ${clientTag(client)}`;
+  // Which credential class got the request through the gate (apiKey.ts). A
+  // named key is tagged by its lookup prefix — enough to tell keys apart in
+  // a tail, never the key itself. Absent on public paths and refusals.
+  const authClass = c.get('authClass');
+  const authTag = !authClass
+    ? ''
+    : authClass === 'apikey'
+      ? ` auth=key:${c.get('apiKeyPrefix') ?? '?'}`
+      : ` auth=${authClass}`;
+  const line = `${method} ${path} → ${status} ${ms}ms ${clientTag(client)}${authTag}`;
 
   if (status >= 500) {
     log.warn(`5xx ${line}`);
@@ -315,25 +326,17 @@ export function createApp() {
   // cookie. Listing exact origins removes that pivot. The public
   // map/live/logs pages are served from nswpsn.forcequit.xyz, which is
   // included, so they keep working.
-  const ALLOWED_ORIGIN_RE =
-    /^https?:\/\/(localhost(:\d+)?|127\.0\.0\.1(:\d+)?|nswpsn\.forcequit\.xyz|forcequit\.xyz|www\.forcequit\.xyz|nswpsn\.org|www\.nswpsn\.org)$/i;
-  // Operator-extensible without a code change: CORS_ALLOWED_ORIGINS is a
-  // comma-separated list of EXACT origins (e.g. "https://foo.example")
-  // that are additionally allowed. Empty/whitespace entries are ignored.
-  const EXTRA_ALLOWED_ORIGINS = new Set(
-    (process.env['CORS_ALLOWED_ORIGINS'] ?? '')
-      .split(',')
-      .map((o) => o.trim())
-      .filter((o) => o.length > 0),
-  );
+  //
+  // The allowlist itself (the regex plus CORS_ALLOWED_ORIGINS) lives in
+  // services/auth/firstParty.ts, shared with the browser-token gate: the set
+  // of origins that may read responses must be the set that may hold a
+  // session token, or a page CORS admits would fail every fetch.
   app.use(
     '*',
     cors({
       origin: (origin) => {
         if (!origin) return '*'; // file://, curl, server-to-server
-        if (ALLOWED_ORIGIN_RE.test(origin)) return origin;
-        if (EXTRA_ALLOWED_ORIGINS.has(origin)) return origin;
-        return null;
+        return isFirstPartyOrigin(origin) ? origin : null;
       },
       credentials: true,
       allowHeaders: ['Authorization', 'Content-Type', 'X-API-Key', 'Accept'],
@@ -366,6 +369,7 @@ export function createApp() {
   // the Python equivalents.
   app.route('/', healthRouter);
   app.route('/', configRouter);
+  app.route('/', sessionRouter);
   // Simple sources
   app.route('/', rfsRouter);
   app.route('/', actAmbulanceRouter);

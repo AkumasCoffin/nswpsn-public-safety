@@ -755,7 +755,7 @@
     }
 
     // Current Supabase access token — required as a Bearer for every
-    // /api/feeder call (the endpoints gate on the JWT, not the API_KEY).
+    // /api/feeder call (the endpoints gate on the JWT, not a site credential).
     async function getToken() {
       const { data } = await sb.auth.getSession();
       return data?.session?.access_token || null;

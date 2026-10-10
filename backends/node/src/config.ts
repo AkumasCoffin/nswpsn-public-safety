@@ -42,6 +42,14 @@ const Schema = z.object({
     .min(1, 'NSWPSN_API_KEY is required')
     .default('nswpsn-live-2024-secure'),
 
+  // Browser session tokens (services/auth/browserToken.ts): what a page
+  // holds instead of NSWPSN_API_KEY. The secret signs them; unset derives one
+  // from NSWPSN_API_KEY (with a boot warning) so a deploy can't lock the site
+  // out. TTL is the token lifetime; the mint budget is per address per 10 min.
+  BROWSER_TOKEN_SECRET: z.string().min(16).optional(),
+  BROWSER_TOKEN_TTL_SECS: z.coerce.number().int().min(60).max(86_400).default(900),
+  SESSION_MINT_PER_10MIN: z.coerce.number().int().positive().default(60),
+
   // Postgres connection string. Optional during W1 because /api/health
   // and /api/config don't touch the DB; gets enforced in later weeks
   // when the archive layer comes online.

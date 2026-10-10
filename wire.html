@@ -29,6 +29,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="auth-common.js"></script>
+  <script src="api-session.js"></script>
   <script src="ui-dialogs.js"></script>
   <script src="agencies.js"></script>
   <script src="fleet-vocab.js"></script>
@@ -543,7 +544,6 @@
       return out.join('\n');
     }
 
-    let API_KEY = null;
     let ME = { userId: null, canFeed: false, canModerate: false, isOwner: false };
     // ONE article feed since the media/article merge; ?tab=fleet switches
     // this page to the Fleet directory instead. Other old ?tab= values just
@@ -564,16 +564,11 @@
     }
 
 
+    // Anonymous reads carry the page's browser session token (api-session.js).
     async function loadKey() {
-      if (API_KEY) return API_KEY;
-      try {
-        const r = await fetch(`${API_BASE}/api/config`);
-        const j = await r.json();
-        API_KEY = j.apiKey || null;
-      } catch (e) { console.warn('config load failed', e); }
-      return API_KEY;
+      try { return await AusApi.token(); } catch (e) { console.warn('session token failed', e); return null; }
     }
-    async function keyHeaders() { await loadKey(); return API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {}; }
+    async function keyHeaders() { try { return await AusApi.headers(); } catch (e) { return {}; } }
     async function userHeaders() {
       try { const { data } = await sb.auth.getSession(); const t = data.session?.access_token; if (t) return { Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' }; } catch (e) {}
       return keyHeaders();
