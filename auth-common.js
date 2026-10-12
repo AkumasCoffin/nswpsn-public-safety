@@ -810,7 +810,11 @@ async function handleProfileAvatar(e) {
       const v = (id) => (document.getElementById(id)?.value || '').trim();
       const uname = (document.getElementById('profile-username')?.value || '').trim();
       const body = { display_name: uname || null, bio: v('profile-bio'), avatar_key: key, twitter: v('profile-twitter'), facebook: v('profile-facebook'), instagram: v('profile-instagram'), youtube: v('profile-youtube'), website: v('profile-website') };
-      await fetch(`${API_BASE_URL}/api/profiles`, { method: 'PUT', headers: { Authorization: 'Bearer ' + jwt, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const save = await fetch(`${API_BASE_URL}/api/profiles`, { method: 'PUT', headers: { Authorization: 'Bearer ' + jwt, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      // A rejected write has to reach the catch below: the key is what makes
+      // the picture part of the profile, so clearing it on a 4xx/5xx would
+      // leave the sidebar showing a picture the public profile never got.
+      if (!save.ok) throw new Error('save ' + save.status);
       _pendingAvatarKey = null; _pendingAvatarUrl = null;
       if (typeof checkAuthState === 'function') checkAuthState();
       if (msg) { msg.style.color = '#22c55e'; msg.textContent = 'Picture saved.'; }
@@ -1380,7 +1384,16 @@ async function saveProfile() {
       const v = (id) => (document.getElementById(id)?.value || '').trim();
       const body = { display_name: username || null, bio: v('profile-bio'), twitter: v('profile-twitter'), facebook: v('profile-facebook'), instagram: v('profile-instagram'), youtube: v('profile-youtube'), website: v('profile-website') };
       if (_pendingAvatarKey) body.avatar_key = _pendingAvatarKey;
-      await fetch(`${API_BASE_URL}/api/profiles`, { method: 'PUT', headers: { Authorization: 'Bearer ' + jwt, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(() => {});
+      // The bio, the socials and the avatar key live ONLY here — Supabase holds
+      // none of them — so a failed write means those edits are gone. Swallowing
+      // it said "Saved!" over a profile that had not changed, and dropped the
+      // pending avatar key on the way, so a second Save could not apply it
+      // either. Surface the error and keep the pending state for the retry.
+      const r = await fetch(`${API_BASE_URL}/api/profiles`, { method: 'PUT', headers: { Authorization: 'Bearer ' + jwt, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.error || 'Could not save your profile (HTTP ' + r.status + ').');
+      }
     }
     _pendingAvatarKey = null; _pendingAvatarUrl = null;
     if (typeof umami !== 'undefined') umami.track('profile-saved');

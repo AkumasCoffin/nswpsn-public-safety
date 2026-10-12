@@ -112,6 +112,33 @@
       try { const { data } = await window.sb.auth.getSession(); const t = data.session?.access_token; if (t) return { Authorization: `Bearer ${t}` }; } catch (e) {}
       return keyHeaders();
     }
+    /**
+     * fetch() plus the recovery AusApi.fetch performs and this page used to
+     * miss. AusApi judges a cached session token by age alone, so one the
+     * backend REJECTS — the reader's address left the /24 or /48, or the
+     * signing secret rotated on a deploy — kept being sent for most of its 15
+     * minutes, across reloads, and the profile rendered as a blank
+     * "Contributor" with no posts until it aged out. Only an anonymous 401 is
+     * retried: a signed-in viewer's 401 belongs to their Supabase JWT, which
+     * re-minting cannot fix — and that is why this is not AusApi.fetch, which
+     * would overwrite Authorization and drop that JWT.
+     */
+    async function profFetch(url, options) {
+      const res = await fetch(url, options);
+      if (res.status !== 401) return res;
+      const hdrs = Object.assign({}, (options && options.headers) || {});
+      const sent = hdrs.Authorization || hdrs.authorization || '';
+      let stale = null;
+      try { stale = await AusApi.token(); } catch (e) { /* nothing to retry with */ }
+      if (!stale || sent !== `Bearer ${stale}`) return res;
+      AusApi.invalidate();
+      let minted;
+      try { minted = await AusApi.token(); } catch (e) { return res; }
+      if (minted === stale) return res;
+      delete hdrs.authorization;
+      hdrs.Authorization = `Bearer ${minted}`;
+      return fetch(url, Object.assign({}, options, { headers: hdrs }));
+    }
 
     const SOCIALS = [
       { key: 'twitter', icon: 'fa-brands fa-x-twitter', label: 'X / Twitter' },
@@ -168,7 +195,8 @@
     async function loadPosts() {
       try {
         const hdr = await userHeaders();
-        const aj = await fetch(`${API_BASE}/api/wire/articles?author=${encodeURIComponent(uid)}`, { headers: hdr }).then((r) => r.json()).catch(() => ({}));
+        const aj = await profFetch(`${API_BASE}/api/wire/articles?author=${encodeURIComponent(uid)}`, { headers: hdr })
+          .then((r) => (r.ok ? r.json() : {})).catch(() => ({}));
         const items = (aj.articles || []).sort((a, b) => new Date(b.published_at || b.created_at || 0) - new Date(a.published_at || a.created_at || 0));
         if (!items.length) return;
         document.getElementById('profPosts').innerHTML = `<div class="pp-head">Posts on The Wire</div><div class="pp-grid">${items.map(card).join('')}</div>`;
@@ -190,7 +218,7 @@
     (async function init() {
       if (!uid) { document.getElementById('profContent').innerHTML = '<div class="prof-loading">No profile specified.</div>'; return; }
       try {
-        const r = await fetch(`${API_BASE}/api/profiles/${encodeURIComponent(uid)}`, { headers: await keyHeaders() });
+        const r = await profFetch(`${API_BASE}/api/profiles/${encodeURIComponent(uid)}`, { headers: await keyHeaders() });
         const j = await r.json();
         render(j.profile || null, j.stats || null, j.tags || []);
       } catch (e) { render(null, null, []); }

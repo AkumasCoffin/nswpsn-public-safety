@@ -8790,13 +8790,20 @@ function initPagerHoursFromStorage() {
     let _heartbeatInFlight = false;  // Guard: prevent concurrent heartbeat requests
     
     // Shared session ID across all pages AND tabs - uses localStorage to persist
-    const MAP_PAGE_ID = localStorage.getItem('nswpsn_session_id') || (() => {
-      const id = 'session-' + (crypto.randomUUID ? crypto.randomUUID() : 
+    const MAP_PAGE_ID = (() => {
+      // localStorage can throw in blocked-storage / private modes — guard it
+      // so a failure here doesn't abort the whole inline script. This runs at
+      // top level, so an unguarded read took the boot IIFE, the polling and
+      // every deep link down with it and left the page on bare base tiles.
+      let stored = null;
+      try { stored = localStorage.getItem('nswpsn_session_id'); } catch (e) {}
+      if (stored) return stored;
+      const id = 'session-' + ((typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() :
         'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
           const r = Math.random() * 16 | 0;
           return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
         }));
-      localStorage.setItem('nswpsn_session_id', id);
+      try { localStorage.setItem('nswpsn_session_id', id); } catch (e) {}
       return id;
     })();
     const MAP_PAGE_TYPE = 'map';
@@ -21498,6 +21505,6 @@ function initPagerHoursFromStorage() {
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
   <script src="map-weather-module.js?v=15"></script>
-  <script src="map-editor-module.js?v=44"></script>
+  <script src="map-editor-module.js?v=45"></script>
 </body>
 </html>

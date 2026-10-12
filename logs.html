@@ -626,8 +626,8 @@
           const opt = document.createElement('div');
           opt.className = 'custom-dropdown-option';
           opt.dataset.value = p.name;
-          const iconName = p.icon || 'circle';
-          const iconColor = p.color || '#64748b';
+          const iconName = safeIconName(p.icon, 'circle');
+          const iconColor = safeIconColor(p.color, '#64748b');
           opt.dataset.icon = iconName;
           opt.dataset.color = iconColor;
           opt.innerHTML = `<i class="fa-solid fa-${iconName}" style="color: ${iconColor};"></i><span>${escapeHtml(p.name)}</span><span class="option-count">${p.count.toLocaleString()}</span>`;
@@ -669,9 +669,9 @@
       
       // Update displayed selection (icon is just the name like 'car', we add 'fa-' prefix)
       const selectedEl = document.querySelector('#provider-dropdown .custom-dropdown-selected');
-      const iconName = icon || 'circle';
-      const iconColor = color || '#64748b';
-      selectedEl.innerHTML = `<i class="fa-solid fa-${iconName} provider-icon" style="color: ${iconColor};"></i><span id="provider-selected-text">${text}</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
+      const iconName = safeIconName(icon, 'circle');
+      const iconColor = safeIconColor(color, '#64748b');
+      selectedEl.innerHTML = `<i class="fa-solid fa-${iconName} provider-icon" style="color: ${iconColor};"></i><span id="provider-selected-text">${escapeHtml(text)}</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
       
       // Update selected state in options
       document.querySelectorAll('#provider-options .custom-dropdown-option').forEach(opt => {
@@ -736,9 +736,9 @@
       
       // Update displayed selection
       const selectedEl = document.querySelector('#type-dropdown .custom-dropdown-selected');
-      const iconName = icon || 'layer-group';
-      const iconColor = color || '#64748b';
-      selectedEl.innerHTML = `<i class="fa-solid fa-${iconName} provider-icon" style="color: ${iconColor};"></i><span id="type-selected-text">${text}</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
+      const iconName = safeIconName(icon, 'layer-group');
+      const iconColor = safeIconColor(color, '#64748b');
+      selectedEl.innerHTML = `<i class="fa-solid fa-${iconName} provider-icon" style="color: ${iconColor};"></i><span id="type-selected-text">${escapeHtml(text)}</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
       
       // Update selected state in options
       document.querySelectorAll('#type-options .custom-dropdown-option').forEach(opt => {
@@ -778,9 +778,9 @@
       
       // Update displayed selection
       const selectedEl = document.querySelector('#subcategory-dropdown .custom-dropdown-selected');
-      const iconName = icon || 'tags';
-      const iconColor = color || '#64748b';
-      selectedEl.innerHTML = `<i class="fa-solid fa-${iconName} provider-icon" style="color: ${iconColor};"></i><span id="subcategory-selected-text">${text}</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
+      const iconName = safeIconName(icon, 'tags');
+      const iconColor = safeIconColor(color, '#64748b');
+      selectedEl.innerHTML = `<i class="fa-solid fa-${iconName} provider-icon" style="color: ${iconColor};"></i><span id="subcategory-selected-text">${escapeHtml(text)}</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
       
       // Update selected state in options
       document.querySelectorAll('#subcategory-options .custom-dropdown-option').forEach(opt => {
@@ -795,7 +795,7 @@
       document.getElementById('filter-subcategory').value = '';
       const selectedEl = document.querySelector('#subcategory-dropdown .custom-dropdown-selected');
       if (selectedEl) {
-        selectedEl.innerHTML = `<i class="fa-solid fa-tags provider-icon"></i><span id="subcategory-selected-text">${labelText}</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
+        selectedEl.innerHTML = `<i class="fa-solid fa-tags provider-icon"></i><span id="subcategory-selected-text">${escapeHtml(labelText)}</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
       }
       const optionsContainer = document.getElementById('subcategory-options');
       if (optionsContainer) optionsContainer.innerHTML = '';
@@ -961,9 +961,9 @@
     function selectStatus(value, text, icon, color) {
       document.getElementById('filter-incident-status').value = value;
       const selectedEl = document.querySelector('#status-dropdown .custom-dropdown-selected');
-      const iconName = icon || 'clipboard-list';
-      const iconColor = color || '#64748b';
-      selectedEl.innerHTML = `<i class="fa-solid fa-${iconName} provider-icon" style="color: ${iconColor};"></i><span id="status-selected-text">${text}</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
+      const iconName = safeIconName(icon, 'clipboard-list');
+      const iconColor = safeIconColor(color, '#64748b');
+      selectedEl.innerHTML = `<i class="fa-solid fa-${iconName} provider-icon" style="color: ${iconColor};"></i><span id="status-selected-text">${escapeHtml(text)}</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
       document.querySelectorAll('#status-options .custom-dropdown-option').forEach(opt => {
         opt.classList.toggle('selected', opt.dataset.value === value);
       });
@@ -1003,9 +1003,9 @@
     function selectAlertLevel(value, text, icon, color) {
       document.getElementById('filter-alert-level').value = value;
       const selectedEl = document.querySelector('#alert-level-dropdown .custom-dropdown-selected');
-      const iconName = icon || 'bell';
-      const iconColor = color || '#64748b';
-      selectedEl.innerHTML = `<i class="fa-solid fa-${iconName} provider-icon" style="color: ${iconColor};"></i><span id="alert-level-selected-text">${text}</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
+      const iconName = safeIconName(icon, 'bell');
+      const iconColor = safeIconColor(color, '#64748b');
+      selectedEl.innerHTML = `<i class="fa-solid fa-${iconName} provider-icon" style="color: ${iconColor};"></i><span id="alert-level-selected-text">${escapeHtml(text)}</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
       document.querySelectorAll('#alert-level-options .custom-dropdown-option').forEach(opt => {
         opt.classList.toggle('selected', opt.dataset.value === value);
       });
@@ -4277,6 +4277,21 @@
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
+    }
+    /**
+     * A facet's icon and colour land in a class and in a style attribute, so
+     * escaping them is not enough on its own: a colour that survives as text
+     * is still free to carry more CSS. Both are held to the shape the
+     * dropdowns actually use — a Font Awesome glyph name, and a hex or named
+     * colour — and anything else falls back to the caller's default rather
+     * than reaching the attribute. The provider list is the one place these
+     * come from the API rather than a table in this file.
+     */
+    function safeIconName(icon, fallback) {
+      return /^[a-z0-9-]{1,40}$/.test(String(icon || '')) ? String(icon) : fallback;
+    }
+    function safeIconColor(color, fallback) {
+      return /^(?:#[0-9a-fA-F]{3,8}|[a-zA-Z]{3,20})$/.test(String(color || '')) ? String(color) : fallback;
     }
     /**
      * Escape a value for interpolation inside a QUOTED string in an inline

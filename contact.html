@@ -487,13 +487,18 @@
     const PROXY_BASE = 'https://api.forcequit.xyz';
     let heartbeatTimer = null;
 
-    const PAGE_ID = localStorage.getItem('nswpsn_session_id') || (() => {
-      const id = 'session-' + (crypto.randomUUID ? crypto.randomUUID() :
+    const PAGE_ID = (() => {
+      // localStorage can throw in blocked-storage / private modes — guard it
+      // so a failure here doesn't abort the whole inline script.
+      let stored = null;
+      try { stored = localStorage.getItem('nswpsn_session_id'); } catch (e) {}
+      if (stored) return stored;
+      const id = 'session-' + ((typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() :
         'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
           const r = Math.random() * 16 | 0;
           return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
         }));
-      localStorage.setItem('nswpsn_session_id', id);
+      try { localStorage.setItem('nswpsn_session_id', id); } catch (e) {}
       return id;
     })();
     const PAGE_TYPE = 'contact';

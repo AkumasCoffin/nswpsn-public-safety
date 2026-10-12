@@ -6797,14 +6797,14 @@
         let children = '';
         if (expanded) {
           const inner = sites.length ? sites.map(st => {
-            const nameArg = encodeURIComponent(st.name || '');
+            const nameArg = nd2Arg(st.name || '');
             const label = st.name
               ? `<span class="nd-strong">${escapeHtml(String(st.name))}</span> <span class="nd-sub">R${escapeHtml(String(st.rfss))} S${escapeHtml(String(st.site))}</span>`
               : `<span class="nd-strong">R${escapeHtml(String(st.rfss))} S${escapeHtml(String(st.site))}</span>`;
             return `
             <div class="nd2-tree-row nd2-tree-site" role="button" tabindex="0"
-              onclick="nd2TreeOpenSite(${sid}, ${wacnArg}, ${Number(st.rfss)}, ${Number(st.site)}, '${nameArg}')"
-              onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();nd2TreeOpenSite(${sid}, ${wacnArg}, ${Number(st.rfss)}, ${Number(st.site)}, '${nameArg}');}">
+              onclick="nd2TreeOpenSite(${sid}, ${wacnArg}, ${Number(st.rfss)}, ${Number(st.site)}, ${nameArg})"
+              onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();nd2TreeOpenSite(${sid}, ${wacnArg}, ${Number(st.rfss)}, ${Number(st.site)}, ${nameArg});}">
               <i class="fas fa-tower-cell nd2-tree-ico"></i>
               <span class="nd2-tree-name">${label}</span>
               <span class="nd2-tree-counts">
@@ -7122,7 +7122,7 @@
         const sites = data.sites || [];
         if (sitesBody) {
           sitesBody.innerHTML = sites.length ? sites.map(st => `
-            <tr class="nd2-rowlink" onclick="nd2OpenSite(${Number(st.rfss)}, ${Number(st.site)}, '${encodeURIComponent(st.name || '')}')">
+            <tr class="nd2-rowlink" onclick="nd2OpenSite(${Number(st.rfss)}, ${Number(st.site)}, ${nd2Arg(st.name || '')})">
               <td>${st.name
                 ? `<span class="nd-strong">${escapeHtml(String(st.name))}</span> <span class="nd-sub">R${escapeHtml(String(st.rfss))} S${escapeHtml(String(st.site))}</span>`
                 : `<span class="nd-strong">R${escapeHtml(String(st.rfss))} S${escapeHtml(String(st.site))}</span>`}</td>
@@ -7177,7 +7177,9 @@
     function nd2OpenSite(rfss, site, name) {
       nd2.sys.rfss = rfss;
       nd2.sys.site = site;
-      nd2.sys.siteName = name ? decodeURIComponent(name) : null;
+      // The name arrives as a plain string: both callers pass it through
+      // nd2Arg, which writes a JS literal rather than a percent-encoded one.
+      nd2.sys.siteName = name || null;
       // Entering a new scope resets paging and the search boxes: page 3 (or a
       // talkgroup filter) carried over from the system level would show an
       // empty or misleading slice of a much smaller list.
@@ -7548,7 +7550,13 @@
       // last Systems drill-down happened to leave in nd2.sys, filtering the
       // table down to nothing. Treat it like the top-level view: no system or
       // site params, and no nd2.sys.level staleness check.
-      const top = view === 'talkgroups' || nd2.nodes.level === 'detail';
+      //
+      // Except on the node's own Systems tab, which is the Systems drill-down
+      // again, nested one level in: there nd2.sys IS the live scope, so a
+      // node-wide read would contradict the heading and the neighbouring
+      // Radios tab, both of which name the open system or site.
+      const top = view === 'talkgroups'
+        || (nd2.nodes.level === 'detail' && nd2.nodes.tab !== 'systems');
       // Scoped to the open system — and, one level down, to the open SITE.
       if (!top && nd2.sys.system != null) params.set('system', String(nd2.sys.system));
       const level = nd2.sys.level;
@@ -14212,12 +14220,32 @@
     }
 
     // PATCH the full merged config_override back to the node.
+    //
+    // The whole override is replaced, so the save has to prove which version it
+    // was built from: a site survey that added channels while this panel sat
+    // open would otherwise be silently undone by the next Save. The backend
+    // answers 409 config_changed with the stored config, which we adopt and
+    // re-render so the operator can see what arrived and redo their edit.
     async function _ndCfgPatch(cfg, notify) {
       const res = await fetch(`${API_BASE_URL}/api/nodes/${_ndNodeId}`, {
         method: 'PATCH',
         headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ config_override: cfg })
+        body: JSON.stringify({
+          config_override: cfg,
+          config_override_version: _ndNode?.configOverrideVersion,
+        })
       });
+      if (res.status === 409) {
+        const conflict = await res.json().catch(() => ({}));
+        if (conflict.configOverride) {
+          _ndConfig = conflict.configOverride;
+          if (!Array.isArray(_ndConfig.channels)) _ndConfig.channels = [];
+          if (!Array.isArray(_ndConfig.tuners)) _ndConfig.tuners = [];
+          if (_ndNode) _ndNode.configOverrideVersion = conflict.configOverrideVersion;
+          _ndCfgRender();
+        }
+        throw new Error(conflict.message || "This node's configuration changed — reload and try again.");
+      }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       try {
         const data = await res.json();
@@ -14228,6 +14256,9 @@
           if (!Array.isArray(_ndConfig.tuners)) _ndConfig.tuners = [];
         }
         if (node && node.configVersion != null && _ndNode) _ndNode.configVersion = node.configVersion;
+        if (node && node.configOverrideVersion != null && _ndNode) {
+          _ndNode.configOverrideVersion = node.configOverrideVersion;
+        }
       } catch (e) { /* body may be empty */ }
       if (notify) showToast('Config saved.', 'success');
     }

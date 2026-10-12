@@ -574,6 +574,38 @@
       return keyHeaders();
     }
 
+    /**
+     * fetch() with the headers this page built, plus the one recovery
+     * AusApi.fetch performs and this page used to miss. AusApi judges a cached
+     * session token by age alone, so a token the backend REJECTS — the reader's
+     * address left the /24 or /48, or the signing secret rotated on a deploy —
+     * kept being sent for most of its 15 minutes, across reloads in the same
+     * tab, and every read here failed while the page showed "Nothing posted
+     * yet." Map and Live recovered because they go through AusApi.fetch.
+     *
+     * Only an anonymous 401 is retried, and only when the token we actually
+     * sent is the session token: a signed-in reader's 401 belongs to their
+     * Supabase JWT, which re-minting cannot fix. That is also why this is not
+     * AusApi.fetch — that helper overwrites Authorization, so it would strip
+     * the JWT off every signed-in call.
+     */
+    async function wireFetch(url, options) {
+      const res = await fetch(url, options);
+      if (res.status !== 401) return res;
+      const hdrs = Object.assign({}, (options && options.headers) || {});
+      const sent = hdrs.Authorization || hdrs.authorization || '';
+      let stale = null;
+      try { stale = await AusApi.token(); } catch (e) { /* nothing to retry with */ }
+      if (!stale || sent !== `Bearer ${stale}`) return res;
+      AusApi.invalidate();
+      let minted;
+      try { minted = await AusApi.token(); } catch (e) { return res; }
+      if (minted === stale) return res;
+      delete hdrs.authorization;
+      hdrs.Authorization = `Bearer ${minted}`;
+      return fetch(url, Object.assign({}, options, { headers: hdrs }));
+    }
+
     async function loadMe() {
       try {
         const { data } = await sb.auth.getSession();
@@ -792,8 +824,11 @@
       grid.innerHTML = ''; empty.style.display = 'none'; $('#showMore').style.display = 'none'; loading.style.display = 'block';
       try {
         const hdr = await userHeaders();
-        const items = await fetch(`${API_BASE}/api/wire/articles?mine=1`, { headers: hdr })
-          .then((r) => r.json()).then((j) => j.articles || []).catch(() => []);
+        // A refused request is not an empty list: swallowing it reported "you
+        // haven't posted anything" to people whose posts were simply not read.
+        const items = await wireFetch(`${API_BASE}/api/wire/articles?mine=1`, { headers: hdr })
+          .then((r) => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+          .then((j) => j.articles || []);
         loading.style.display = 'none';
         if (!items.length) { empty.textContent = "You haven't posted anything here yet."; empty.style.display = 'block'; return; }
         grid.innerHTML = items.map(cardHTML).join('');
@@ -836,7 +871,10 @@
       try {
         // Send the JWT when logged in (userHeaders falls back to the public key)
         // so the owner-only soft-launch gate recognises the owner.
-        const r = await fetch(`${API_BASE}/api/wire/${FEED_PATH()}?${feedParams(0)}`, { headers: await userHeaders() });
+        const r = await wireFetch(`${API_BASE}/api/wire/${FEED_PATH()}?${feedParams(0)}`, { headers: await userHeaders() });
+        // An error body carries no articles, so reading it as a list showed an
+        // empty feed — "Nothing posted yet." — for what was really a failure.
+        if (!r.ok) throw new Error('HTTP ' + r.status);
         const j = await r.json();
         const items = feedItems(j);
         loading.style.display = 'none';
@@ -851,7 +889,10 @@
     async function loadMore() {
       const btn = $('#showMore'); btn.disabled = true; const orig = btn.innerHTML; btn.innerHTML = 'Loading…';
       try {
-        const r = await fetch(`${API_BASE}/api/wire/${FEED_PATH()}?${feedParams(feedOffset)}`, { headers: await userHeaders() });
+        const r = await wireFetch(`${API_BASE}/api/wire/${FEED_PATH()}?${feedParams(feedOffset)}`, { headers: await userHeaders() });
+        // Same reasoning as loadFeed: a refused page is not the end of the feed,
+        // so it must not retire the button as though there were nothing more.
+        if (!r.ok) throw new Error('HTTP ' + r.status);
         const j = await r.json();
         const items = feedItems(j);
         $('#grid').insertAdjacentHTML('beforeend', items.map(feedCard).join(''));
@@ -870,7 +911,7 @@
       // kind is otherwise vestigial since the merge -- every post is an
       // article, and the API resolves both slugs and pre-merge media ids.
       try {
-        const r = await fetch(`${API_BASE}/api/wire/articles/${encodeURIComponent(key)}`, { headers: await userHeaders() });
+        const r = await wireFetch(`${API_BASE}/api/wire/articles/${encodeURIComponent(key)}`, { headers: await userHeaders() });
         if (!r.ok) { toast('Post not found.'); return; }
         const j = await r.json();
         if (j.tombstone) {
@@ -895,7 +936,7 @@
         // your JWT so the server enforces the same exclusion.
         const credited = ME.userId && ((item.author && item.author.id === ME.userId) || (item.co_authors || []).some((c) => c && c.id === ME.userId));
         if (!credited) {
-          fetch(`${API_BASE}/api/wire/articles/${encodeURIComponent(item.id)}/view`, { method: 'POST', headers: await userHeaders() }).catch(() => {});
+          wireFetch(`${API_BASE}/api/wire/articles/${encodeURIComponent(item.id)}/view`, { method: 'POST', headers: await userHeaders() }).catch(() => {});
         }
       } catch (e) { console.warn(e); }
     }
@@ -914,7 +955,7 @@
     // ---- fleet detail ----
     async function openFleetDetail(id, push = true) {
       try {
-        const r = await fetch(`${API_BASE}/api/wire/fleet/${encodeURIComponent(id)}`, { headers: await userHeaders() });
+        const r = await wireFetch(`${API_BASE}/api/wire/fleet/${encodeURIComponent(id)}`, { headers: await userHeaders() });
         if (!r.ok) { toast('Vehicle not found.'); return; }
         const v = (await r.json()).vehicle;
         currentItem = { id: v.id, kind: 'fleet', title: v.callsign };
@@ -926,7 +967,7 @@
         if (push) history.pushState({ kind: 'fleet', key: id }, '', `wire?tab=fleet&vehicle=${encodeURIComponent(id)}`);
         if (push && typeof umami !== 'undefined') umami.track('wire-open', { kind: 'fleet' });
         if (!(ME.userId && v.author && v.author.id === ME.userId)) {
-          fetch(`${API_BASE}/api/wire/fleet/${encodeURIComponent(v.id)}/view`, { method: 'POST', headers: await userHeaders() }).catch(() => {});
+          wireFetch(`${API_BASE}/api/wire/fleet/${encodeURIComponent(v.id)}/view`, { method: 'POST', headers: await userHeaders() }).catch(() => {});
         }
       } catch (e) { console.warn(e); }
     }
@@ -1012,14 +1053,14 @@
       if (del) del.addEventListener('click', async () => {
         const ok = await uiConfirm(`"${v.callsign}" will be hidden immediately and permanently deleted in 5 days. Until then you can recover it from your profile's My posts tab.`, { title: 'Delete this vehicle?', okText: 'Delete', danger: true });
         if (!ok) return;
-        const r = await fetch(`${API_BASE}/api/wire/fleet/${encodeURIComponent(v.id)}`, { method: 'DELETE', headers: await userHeaders() });
+        const r = await wireFetch(`${API_BASE}/api/wire/fleet/${encodeURIComponent(v.id)}`, { method: 'DELETE', headers: await userHeaders() });
         if (r.ok) { closeDetail(); loadFeed(); } else toast('Failed to delete.');
       });
       const rem = $('#detail [data-fact="remove"]');
       if (rem) rem.addEventListener('click', async () => {
         const ok = await uiConfirm(`"${v.callsign}" — remove this vehicle?`, { title: 'Remove this vehicle?', okText: 'Remove', danger: true });
         if (!ok) return;
-        const r = await fetch(`${API_BASE}/api/wire/fleet/${encodeURIComponent(v.id)}/remove`, { method: 'POST', headers: await userHeaders() });
+        const r = await wireFetch(`${API_BASE}/api/wire/fleet/${encodeURIComponent(v.id)}/remove`, { method: 'POST', headers: await userHeaders() });
         if (r.ok) { closeDetail(); loadFeed(); } else toast('Failed to remove.');
       });
     }
@@ -1168,7 +1209,7 @@
       if (!ME.userId) { toast('Sign in to like posts.'); return; }
       btn.disabled = true;
       try {
-        const r = await fetch(`${API_BASE}/api/wire/like`, {
+        const r = await wireFetch(`${API_BASE}/api/wire/like`, {
           method: 'POST', headers: await userHeaders(),
           body: JSON.stringify({ type: item.kind === 'article' ? 'article' : 'media', id: item.id }),
         });
@@ -1193,9 +1234,9 @@
         // Comment list is public; the composer's state needs the caller's own
         // restriction, which only exists when signed in.
         const [listRes, statusRes] = await Promise.all([
-          fetch(`${API_BASE}/api/wire/comments?type=${type}&id=${encodeURIComponent(item.id)}`, { headers: await userHeaders() }),
+          wireFetch(`${API_BASE}/api/wire/comments?type=${type}&id=${encodeURIComponent(item.id)}`, { headers: await userHeaders() }),
           ME.userId
-            ? fetch(`${API_BASE}/api/wire/my-comment-status`, { headers: await userHeaders() }).catch(() => null)
+            ? wireFetch(`${API_BASE}/api/wire/my-comment-status`, { headers: await userHeaders() }).catch(() => null)
             : Promise.resolve(null),
         ]);
         const list = await listRes.json().catch(() => ({ comments: [] }));
@@ -1287,7 +1328,7 @@
       btn.disabled = true;
       try {
         const item = commentState.item;
-        const r = await fetch(`${API_BASE}/api/wire/comments`, {
+        const r = await wireFetch(`${API_BASE}/api/wire/comments`, {
           method: 'POST', headers: await userHeaders(),
           body: JSON.stringify({ type: item.kind === 'article' ? 'article' : 'media', id: item.id, body }),
         });
@@ -1317,7 +1358,7 @@
         title: 'Delete your comment?', okText: 'Delete', danger: true,
       }))) return;
       try {
-        const r = await fetch(`${API_BASE}/api/wire/comments/${encodeURIComponent(id)}`, {
+        const r = await wireFetch(`${API_BASE}/api/wire/comments/${encodeURIComponent(id)}`, {
           method: 'DELETE', headers: await userHeaders(),
           body: JSON.stringify(reason ? { reason } : {}),
         });
@@ -1413,7 +1454,7 @@
     async function reasonOptions() {
       if (_reasonOptions) return _reasonOptions;
       try {
-        const r = await fetch(`${API_BASE}/api/wire/comment-restrictions/options`, { headers: await userHeaders() });
+        const r = await wireFetch(`${API_BASE}/api/wire/comment-restrictions/options`, { headers: await userHeaders() });
         if (r.ok) _reasonOptions = await r.json();
       } catch (e) { /* fall through to a safe default */ }
       if (!_reasonOptions) _reasonOptions = { reasons: [{ key: 'other', label: 'Other' }], timeoutHours: [1, 24] };
@@ -1484,7 +1525,7 @@
         };
         if (payload.kind === 'timeout') payload.hours = Number(wrap.querySelector('#rsHours').value);
         try {
-          const r = await fetch(`${API_BASE}/api/wire/comment-restrictions`, {
+          const r = await wireFetch(`${API_BASE}/api/wire/comment-restrictions`, {
             method: 'POST', headers: await userHeaders(), body: JSON.stringify(payload),
           });
           const j = await r.json().catch(() => ({}));
@@ -1525,7 +1566,7 @@
       $('#editsBody').innerHTML = '<div class="wire-empty">Loading…</div>';
       $('#editsModal').classList.add('on');
       try {
-        const r = await fetch(`${API_BASE}/api/wire/edits/${encodeURIComponent(currentItem.kind)}/${encodeURIComponent(currentItem.id)}`, { headers: await userHeaders() });
+        const r = await wireFetch(`${API_BASE}/api/wire/edits/${encodeURIComponent(currentItem.kind)}/${encodeURIComponent(currentItem.id)}`, { headers: await userHeaders() });
         if (!r.ok) throw new Error('http ' + r.status);
         const j = await r.json();
         renderEdits(Array.isArray(j.edits) ? j.edits : []);
@@ -1556,7 +1597,7 @@
         good_faith: true, accuracy: true,
       };
       try {
-        const r = await fetch(`${API_BASE}/api/wire/takedown`, { method: 'POST', headers: { ...(await keyHeaders()), 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const r = await wireFetch(`${API_BASE}/api/wire/takedown`, { method: 'POST', headers: { ...(await keyHeaders()), 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
         const j = await r.json().catch(() => ({}));
         if (r.ok) { if (typeof umami !== 'undefined') umami.track('wire-takedown-submit', { kind: currentItem.kind }); msg('Notice submitted — our team will review it.'); setTimeout(closeReportModal, 1800); }
         else msg(j.error || 'Failed to submit notice.', true);
@@ -1576,7 +1617,7 @@
       if (!ok) return;
       const base = item.kind === 'article' ? 'articles' : 'media';
       const url = `${API_BASE}/api/wire/${base}/${encodeURIComponent(item.id)}${moderate ? '/remove' : ''}`;
-      const r = await fetch(url, { method: moderate ? 'POST' : 'DELETE', headers: await userHeaders() });
+      const r = await wireFetch(url, { method: moderate ? 'POST' : 'DELETE', headers: await userHeaders() });
       if (r.ok) { closeDetail(); loadFeed(); } else { toast(`Failed to ${verb}.`); }
     }
 
@@ -1609,7 +1650,7 @@
         let names = _flLgaCache[feedState];
         if (!names) {
           try {
-            const r = await fetch(`${API_BASE}/api/boundaries/lga-names?state=${feedState}`, { headers: await userHeaders() });
+            const r = await wireFetch(`${API_BASE}/api/boundaries/lga-names?state=${feedState}`, { headers: await userHeaders() });
             if (r.ok) {
               names = (await r.json()).names || [];
               _flLgaCache[feedState] = names;
@@ -1674,7 +1715,7 @@
     let syncLgaFilter = () => {};  // bound in applySection (needs its closures)
     async function loadWireSettings() {
       try {
-        const r = await fetch(`${API_BASE}/api/wire/settings`, { headers: await userHeaders() });
+        const r = await wireFetch(`${API_BASE}/api/wire/settings`, { headers: await userHeaders() });
         if (!r.ok) return null;
         const j = await r.json();
         WIRE_IS_PUBLIC = j.wire_public === true;
@@ -1683,7 +1724,7 @@
     }
     async function feedVisibleToMe() {
       try {
-        const r = await fetch(`${API_BASE}/api/wire/articles?limit=1`, { headers: await userHeaders() });
+        const r = await wireFetch(`${API_BASE}/api/wire/articles?limit=1`, { headers: await userHeaders() });
         if (!r.ok) return false;
         // The server answers 200 with an empty list when the Wire is gated, so
         // r.ok alone said "visible" either way and the coming-soon page never
@@ -1705,7 +1746,7 @@
       if (!host || WIRE_IS_PUBLIC !== false) return;
       let hasAnyPost = true;
       try {
-        const a = await fetch(`${API_BASE}/api/wire/articles?limit=1`, { headers: await userHeaders() })
+        const a = await wireFetch(`${API_BASE}/api/wire/articles?limit=1`, { headers: await userHeaders() })
           .then((r) => r.json()).catch(() => ({}));
         hasAnyPost = (a.articles || []).length > 0;
       } catch (e) { /* assume posts exist — the weaker claim */ }

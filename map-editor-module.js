@@ -10,6 +10,8 @@
 
    Depends on globals provided by map.html + auth-common.js:
      map, L, sb, PROXY_BASE, API_BASE_URL, AusApi, escapeHtml,
+     jsArg (for a value that lands inside a quoted string in an inline
+     handler — escapeHtml is the wrong tool there, see map.html),
      safeUrl (the only sanctioned way to put a feed-supplied URL in an
      href — it resolves, admits http/https only, and escapes; anything
      else becomes an inert '#'),
@@ -938,8 +940,15 @@
       }
 
       const kindLabel = s.kind === 'edit' ? 'EDIT' : (s.kind === 'note' ? 'NOTE' : escapeHtml(String(s.kind || '')));
-      const sid = encodeURIComponent(s.id);
-      const iid = encodeURIComponent(incidentId);
+      // These land inside a quoted string in an inline handler, so they need a
+      // JS-string escape rather than a URL one: encodeURIComponent leaves
+      // ' ( ) alone, and an incident id is a TEXT key the creating editor
+      // chooses — so one shaped like `x'-alert(1)-'` used to break out of the
+      // literal and run in the reviewing admin's session. jsArg (map.html)
+      // encodes every non-alphanumeric byte, leaving nothing for either parser
+      // to misread; the two handlers encode the ids for their own URLs.
+      const sid = jsArg(s.id);
+      const iid = jsArg(incidentId);
       return `
         <div style="border:1px solid rgba(255,255,255,0.1); border-radius:6px; padding:0.6rem 0.7rem; margin-bottom:0.6rem; background:rgba(0,0,0,0.2);">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem; font-size:0.7rem; color:var(--text-soft);">
@@ -964,7 +973,7 @@
 
     async function approveSuggestion(incidentId, sid) {
       try {
-        const res = await apiFetch(`${PROXY_BASE}/api/incidents/${incidentId}/suggestions/${sid}/approve`, { method: 'POST' });
+        const res = await apiFetch(`${PROXY_BASE}/api/incidents/${encodeURIComponent(incidentId)}/suggestions/${encodeURIComponent(sid)}/approve`, { method: 'POST' });
         if (!res.ok) { uiAlert('Failed to approve suggestion.', {title:'Error'}); return; }
         // Re-fetch the incident so the editor + review panel reflect the applied change.
         await refreshSelectedIncident(incidentId);
@@ -975,7 +984,7 @@
 
     async function rejectSuggestion(incidentId, sid) {
       try {
-        const res = await apiFetch(`${PROXY_BASE}/api/incidents/${incidentId}/suggestions/${sid}/reject`, { method: 'POST' });
+        const res = await apiFetch(`${PROXY_BASE}/api/incidents/${encodeURIComponent(incidentId)}/suggestions/${encodeURIComponent(sid)}/reject`, { method: 'POST' });
         if (!res.ok) { uiAlert('Failed to reject suggestion.', {title:'Error'}); return; }
         loadIncidentSuggestions(incidentId);
       } catch (e) {
@@ -987,7 +996,7 @@
     // approval auto-applies a change). Falls back to a logs+suggestions refresh.
     async function refreshSelectedIncident(incidentId) {
       try {
-        const res = await apiFetch(`${PROXY_BASE}/api/incidents/${incidentId}`);
+        const res = await apiFetch(`${PROXY_BASE}/api/incidents/${encodeURIComponent(incidentId)}`);
         if (res.ok) {
           const fresh = await res.json();
           if (fresh && fresh.id) {

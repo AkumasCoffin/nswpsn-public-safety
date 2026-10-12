@@ -2504,14 +2504,14 @@
         }
       }
       
-      // If we have access_token but no type specified, default to password reset
-      // (password resets are more common than email verifications for existing users)
-      if (params.access_token && !params.type) {
-        const redirectUrl = 'reset-password' + (window.location.hash || window.location.search);
-        window.location.href = redirectUrl;
-        return;
-      }
-      
+      // A bare access_token with no type is NOT a recovery link — a recovery
+      // redirect always carries type=recovery, which the branch above takes.
+      // The implicit-flow OAuth return has exactly this shape, and linking
+      // Discord from the profile modal returns to whichever page opened it, so
+      // treating it as a reset asked people who had just linked an account to
+      // choose a new password. Leave the fragment to supabase-js, which reads
+      // it and stores the session itself.
+
       // If we have a token parameter but no type, it might be in the URL from email
       // Check if we came from Supabase auth endpoint
       if (params.token && document.referrer.includes('supabase.co/auth')) {
@@ -2807,13 +2807,20 @@
     let topOfHourTimer = null;
 
     // Shared session ID across all pages - uses localStorage to persist
-    const LIVE_PAGE_ID = localStorage.getItem('nswpsn_session_id') || (() => {
-      const id = 'session-' + (crypto.randomUUID ? crypto.randomUUID() : 
+    const LIVE_PAGE_ID = (() => {
+      // localStorage can throw in blocked-storage / private modes — guard it
+      // so a failure here doesn't abort the whole inline script. This runs at
+      // top level, so an unguarded read took the DOMContentLoaded registration
+      // with it and the page never loaded any data at all.
+      let stored = null;
+      try { stored = localStorage.getItem('nswpsn_session_id'); } catch (e) {}
+      if (stored) return stored;
+      const id = 'session-' + ((typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() :
         'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
           const r = Math.random() * 16 | 0;
           return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
         }));
-      localStorage.setItem('nswpsn_session_id', id);
+      try { localStorage.setItem('nswpsn_session_id', id); } catch (e) {}
       return id;
     })();
     const LIVE_PAGE_TYPE = 'live';
@@ -3490,12 +3497,15 @@
       }
     }
     
-    // Escape HTML to prevent XSS
+    // Escape HTML to prevent XSS.
+    // The textContent→innerHTML trick that used to live here escapes only
+    // & < >, because inside a text node a quote means nothing. Half of what
+    // this page escapes goes into an ATTRIBUTE, where a quote ends the value,
+    // so it has to cover " and ' as well — same five characters as escHTML.
     function escapeHtml(text) {
       if (!text) return '';
-      const div = document.createElement('div');
-      div.textContent = text;
-      return div.innerHTML;
+      return String(text).replace(/[&<>"']/g, c =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     }
 
     function stripHtml(text) {
@@ -3509,7 +3519,11 @@
       try {
         const u = new URL(url, window.location.href);
         if (u.protocol !== 'http:' && u.protocol !== 'https:') return '#';
-        return escapeHtml(url);
+        // The PARSED href, not the original string: the scheme check was made
+        // against u, so anything the parser dropped or re-encoded on the way
+        // (a stray quote in a feed's <link>, say) must not travel on into the
+        // href it vouched for.
+        return escapeHtml(u.href);
       } catch {
         return '#';
       }
@@ -4717,9 +4731,9 @@
               
               <div class="tt-outage-header">
                 <div class="tt-badges-row" style="margin-bottom:0;">
-                  <span class="tt-badge" style="background:${isMaintenance ? '#f97316' : (isPlanned ? '#a855f7' : '#ef4444')};">${escapeHtml(i.type).toUpperCase()}</span>
+                  <span class="tt-badge" style="background:${isMaintenance ? '#f97316' : (isPlanned ? '#a855f7' : '#ef4444')};">${escapeHtml(String(i.type || '').toUpperCase())}</span>
                   ${i.provider === 'Essential' ? '<span class="tt-badge" style="background:#06b6d4; font-size:0.55rem;">ESSENTIAL</span>' : ''}
-                  <span class="tt-status-text">${i.status || 'Active'}</span>
+                  <span class="tt-status-text">${escapeHtml(i.status || 'Active')}</span>
                 </div>
                 <div class="tt-badges-row" style="margin-bottom:0; gap:0.3rem;">
                   ${customers > 0 ? `<span class="tt-customers"><i class="fas fa-users"></i> ${customers.toLocaleString()}</span>` : ''}

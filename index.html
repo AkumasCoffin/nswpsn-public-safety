@@ -290,14 +290,14 @@
         }
       }
       
-      // If we have access_token but no type specified, default to password reset
-      // (password resets are more common than email verifications for existing users)
-      if (params.access_token && !params.type) {
-        const redirectUrl = 'reset-password' + (window.location.hash || window.location.search);
-        window.location.href = redirectUrl;
-        return;
-      }
-      
+      // A bare access_token with no type is NOT a recovery link — a recovery
+      // redirect always carries type=recovery, which the branch above takes.
+      // The implicit-flow OAuth return has exactly this shape, and linking
+      // Discord from the profile modal returns to whichever page opened it, so
+      // treating it as a reset asked people who had just linked an account to
+      // choose a new password. Leave the fragment to supabase-js, which reads
+      // it and stores the session itself.
+
       // If we have a token parameter but no type, it might be in the URL from email
       // Check if we came from Supabase auth endpoint
       if (params.token && document.referrer.includes('supabase.co/auth')) {
@@ -320,13 +320,18 @@
     let heartbeatTimer = null;
 
     // Shared session ID across all pages - uses localStorage to persist
-    const PAGE_ID = localStorage.getItem('nswpsn_session_id') || (() => {
-      const id = 'session-' + (crypto.randomUUID ? crypto.randomUUID() : 
+    const PAGE_ID = (() => {
+      // localStorage can throw in blocked-storage / private modes — guard it
+      // so a failure here doesn't abort the whole inline script.
+      let stored = null;
+      try { stored = localStorage.getItem('nswpsn_session_id'); } catch (e) {}
+      if (stored) return stored;
+      const id = 'session-' + ((typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() :
         'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
           const r = Math.random() * 16 | 0;
           return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
         }));
-      localStorage.setItem('nswpsn_session_id', id);
+      try { localStorage.setItem('nswpsn_session_id', id); } catch (e) {}
       return id;
     })();
     const PAGE_TYPE = 'index';
