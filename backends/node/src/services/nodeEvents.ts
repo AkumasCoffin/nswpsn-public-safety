@@ -521,15 +521,25 @@ export async function recordActivityEvents(
 
           // Dedupe: a re-sent event hits the unique (node_id, stream_id,
           // source_event_id) index → no row returned → skip stamps/buckets.
+          //
+          // logical_call_id is written HERE, not by a follow-up UPDATE. The
+          // lookup above already resolved which call this event belongs to,
+          // and updating a just-inserted row cost a second row version on
+          // every single event: logical_call_id is indexed, so the update
+          // could never be HOT and every index on the table took a second
+          // entry. A call averages ~29 events, so only the one that OPENS a
+          // call still needs the update below — it is the only event whose
+          // group is its own id, which does not exist until the insert
+          // returns.
           const ins = await client.query<{ id: string }>(
             `INSERT INTO node_radio_events
                (node_id, received_at, stream_id, source_event_id,
                 action, event_type, system, talkgroup, source_unit,
                 frequency, timeslot, encrypted,
                 site_rfss, site_id, site_nac, wacn,
-                system_label, source_alias, patch_members)
+                system_label, source_alias, patch_members, logical_call_id)
              VALUES ($1, $2::timestamptz, $3, $4, $5, $6, $7, $8, $9,
-                     $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+                     $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
              ON CONFLICT (node_id, stream_id, source_event_id) DO NOTHING
              RETURNING id`,
             [
@@ -562,6 +572,7 @@ export async function recordActivityEvents(
               // and listing it as one of its own patch members would read as
               // the transmission going out on it twice.
               patchMembersOf(ev.patchMembers, talkgroup),
+              existingGroup,
             ],
           );
           const rowId = ins.rows[0]?.id;
@@ -571,10 +582,14 @@ export async function recordActivityEvents(
             await client.query('COMMIT');
             continue;
           }
-          await client.query(
-            `UPDATE node_radio_events SET logical_call_id = $1 WHERE id = $2`,
-            [existingGroup ?? rowId, rowId],
-          );
+          if (existingGroup === null) {
+            // This event opened the call, so the group IS this row. Still a
+            // second write, but one per call rather than one per event.
+            await client.query(
+              `UPDATE node_radio_events SET logical_call_id = id WHERE id = $1`,
+              [rowId],
+            );
+          }
 
           // Remember the radio's over-the-air name permanently. This is where
           // aliases actually arrive — nearly all of them ride patch calls —
@@ -1479,16 +1494,21 @@ export async function recordScannerCall(call: ScannerCall): Promise<boolean> {
     );
     const existingGroup = found.rows[0]?.logical_call_id ?? null;
 
+    // logical_call_id rides the insert, as on the activity path above: the
+    // lookup has already resolved the group, and a follow-up update would
+    // leave a dead row version behind for every reception.
     const ins = await client.query<{ id: string }>(
       `INSERT INTO node_radio_events
          (node_id, received_at, stream_id, source_event_id,
           action, event_type, system, wacn, system_label,
           talkgroup, source_unit,
-          frequency, encrypted, recorded, audio_bytes, source_alias)
+          frequency, encrypted, recorded, audio_bytes, source_alias,
+          logical_call_id)
        VALUES ($1, $2::timestamptz, 'scanner', $3,
                'CALL', 'CALL_GROUP', $4, $5, $6,
                $7, $8,
-               $9, false, true, $10, $11)
+               $9, false, true, $10, $11,
+               $12)
        ON CONFLICT (node_id, stream_id, source_event_id) DO NOTHING
        RETURNING id`,
       [
@@ -1506,6 +1526,7 @@ export async function recordScannerCall(call: ScannerCall): Promise<boolean> {
         call.frequency,
         call.audioBytes,
         alias,
+        existingGroup,
       ],
     );
     const rowId = ins.rows[0]?.id;
@@ -1515,10 +1536,12 @@ export async function recordScannerCall(call: ScannerCall): Promise<boolean> {
       await client.query('COMMIT');
       return true;
     }
-    await client.query(`UPDATE node_radio_events SET logical_call_id = $1 WHERE id = $2`, [
-      existingGroup ?? rowId,
-      rowId,
-    ]);
+    if (existingGroup === null) {
+      // No node had this transmission open: this reception is the call.
+      await client.query(`UPDATE node_radio_events SET logical_call_id = id WHERE id = $1`, [
+        rowId,
+      ]);
+    }
 
     // The scanner's own OTA is durable identity like any other.
     if (alias && call.sourceUnit !== null) {

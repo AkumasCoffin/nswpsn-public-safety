@@ -407,12 +407,17 @@ either; the backend substitutes them when it forwards.
 
 ## Database
 
-PostgreSQL, 123 numbered migrations in `src/db/migrations/`, applied by
+PostgreSQL, 124 numbered migrations in `src/db/migrations/`, applied by
 `src/db/migrate.ts` at boot and by `npm run migrate` before the restart on
 deploy. The runner is idempotent, so applying twice is a no-op. New schema is a
-new numbered file; never edit an applied one. The two most recent are `122`, a
-global colour palette, and `123`, a third per-site attribution on the radio
-hourly rollups.
+new numbered file; never edit an applied one. The most recent are `122`, a
+global colour palette, `123`, a third per-site attribution on the radio hourly
+rollups, and `124`, index and autovacuum work on `node_radio_events`.
+
+The database runs in its own Proxmox LXC container: 2 vCPU, 5 GB RAM,
+`shared_buffers` 1 GB, on storage the kernel reports as rotational. Nothing here
+is sized for a working set that does not fit in page cache, which is why the
+next section exists.
 
 Three separate pools:
 
@@ -425,6 +430,49 @@ Three separate pools:
 `src/services/rdio.ts` sets a global type parser for OID 1114
 (`timestamp without time zone`), because rdio stores UTC values in a naive column
 and `pg` would otherwise parse them in the Node process's local timezone.
+
+### node_radio_events: the one table whose storage needs watching
+
+Every reception the radio nodes report lands here — 5.6 M rows on a 30-day
+retention — and it is read by the hourly rollup, by every staff Data page and by
+the ingest path's own grouping lookup. It is also the only table where the index
+footprint is worth thinking about: before migration `124` it carried 5795 MB of
+index against 1454 MB of heap, four times more index than data, in a container
+with 1 GB of shared buffers. That ratio decides whether a day-wide range scan
+costs ~120 ms warm or ~35 s cold, and the cold case is not hypothetical: it
+stalled the rollup's catch-up after the `123` deploy until
+`services/nodeHourlyRollup.ts` was given smaller batches and its own statement
+timeout.
+
+Three things to know before touching it:
+
+- **`uq_nre_node_stream_event` is correctness, not performance.** Both ingest
+  paths say `ON CONFLICT (node_id, stream_id, source_event_id) DO NOTHING`
+  (`services/nodeEvents.ts`), which is what makes a re-sent agent batch
+  idempotent. Never drop it. It is also the largest object on the table and
+  bloats faster than the rest, because its inserts land in node/stream order
+  rather than append order; `scripts/reindex-nre-unique.mjs` rebuilds it
+  concurrently, with no service stop.
+- **The node-led indexes are inflated by a type choice.** `node_id` is `TEXT`
+  averaging 35 bytes — a UUID stored as text — so every index leading on it pays
+  that per row. By contrast `idx_nre_time` (`received_at` alone) is 123 MB and
+  shows no bloat at all. Narrowing the column would shrink four indexes at once,
+  but it is a foreign key to `nodes(id)` and has not been attempted.
+- **`logical_call_id` is set by the INSERT, not by a follow-up UPDATE.** It used
+  to be stamped immediately after insert, which left a dead row version for
+  *every* event — and since the column is indexed, the update could never be HOT,
+  so all fourteen indexes took a second entry each. That was the engine behind a
+  standing 17 % dead-tuple ratio. The grouping lookup already knows the call
+  before inserting, so only the event that OPENS a call still takes a second
+  write (one per call, against ~29 events per call). If you add a column to
+  either insert, keep it that way.
+
+`124` also sets `autovacuum_vacuum_scale_factor` and
+`autovacuum_analyze_scale_factor` to 0.05 on `node_radio_events` and
+`adsb_tracks`. At the 0.2 cluster default, `node_radio_events` needed ~1.13 M
+dead tuples before autovacuum would fire and simply idled below the threshold for
+days at a time. These are deliberate per-table overrides — not leftovers to tidy
+away.
 
 ### Removed, so you do not go looking
 

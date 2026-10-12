@@ -147,7 +147,10 @@ describe('recordActivityEvents', () => {
     expect(find?.[1]).toEqual([12345]);
     expect(find?.[3]).toBe(777);
 
-    expect(callWith('SET logical_call_id')).toEqual(['101', '101']);
+    // Opening a call is the one case that still needs a second write: the
+    // group is this row's own id, which does not exist until the insert
+    // returns. `SET logical_call_id = id` takes only the row id.
+    expect(callWith('SET logical_call_id')).toEqual(['101']);
 
     // INSERT carries the dedupe triple + the new columns.
     const ins = callWith('INSERT INTO node_radio_events');
@@ -195,7 +198,7 @@ describe('recordActivityEvents', () => {
     armQueries({ foundRadio: null, insertIds: ['101'] });
     const a = await recordActivityEvents('node-aaaa', 'stream-aaaa', [{ ...baseEvent }]);
     expect(a).toEqual({ accepted: 1, failed: 0 });
-    expect(callWith('SET logical_call_id')).toEqual(['101', '101']);
+    expect(callWith('SET logical_call_id')).toEqual(['101']);
 
     // …node B's reception 2s later finds it and JOINS (no logical increment).
     clientQuery.mockReset();
@@ -205,10 +208,37 @@ describe('recordActivityEvents', () => {
       { ...baseEvent, id: 4, atMs: baseEvent.atMs + 2_000, rfss: 1, site: 12 },
     ]);
     expect(b).toEqual({ accepted: 1, failed: 0 });
-    expect(callWith('SET logical_call_id')).toEqual(['101', '102']);
+    // Joining an existing call takes NO second write: the group was already
+    // known before the insert, so it rides the insert's last parameter.
+    expect(countCalls('SET logical_call_id')).toBe(0);
+    expect(callWith('INSERT INTO node_radio_events')?.at(-1)).toBe('101');
     // Whether this reception started or joined a group is no longer recorded
     // at ingest time — the rollup derives it from logical_call_id later.
     expect(countCalls('node_radio_hourly')).toBe(0);
+  });
+
+  it('writes one row version per event: only the call-opening event is updated', async () => {
+    // The ratio this whole arrangement exists for. Every event used to be
+    // INSERTed and then immediately UPDATEd, which left a dead row version
+    // behind for each one — and because logical_call_id is indexed, the update
+    // could never be HOT, so every index on the table took a second entry too.
+    // A call averages ~29 events here, so at one update per CALL rather than
+    // per event the churn drops by about that factor.
+    let opened = false;
+    armQueries({
+      // First event finds nothing and opens the call; the rest find it.
+      foundRadio: () => (opened ? '101' : ((opened = true), null)),
+      insertIds: ['101', '102', '103', '104', '105'],
+    });
+    const accepted = await recordActivityEvents(
+      'node-aaaa',
+      'stream-1234',
+      [1, 2, 3, 4, 5].map((id) => ({ ...baseEvent, id, atMs: baseEvent.atMs + id * 100 })),
+    );
+
+    expect(accepted).toEqual({ accepted: 5, failed: 0 });
+    expect(countCalls('INSERT INTO node_radio_events')).toBe(5);
+    expect(countCalls('SET logical_call_id')).toBe(1);
   });
 
   it('dedupes a re-sent event: accepted 0, no stamps', async () => {
@@ -1063,10 +1093,10 @@ describe('recordScannerCall patch grouping', () => {
 
     await recordScannerCall(call);
 
-    // The new row is stamped with the EXISTING group, not its own id.
-    const upd = callWith('SET logical_call_id');
-    expect(upd?.[0]).toBe('900');
-    expect(upd?.[1]).toBe('503');
+    // The new row is stamped with the EXISTING group, not its own id — and it
+    // is stamped by the INSERT, so no second write happens at all.
+    expect(countCalls('SET logical_call_id')).toBe(0);
+    expect(callWith('INSERT INTO node_radio_events')?.at(-1)).toBe('900');
   });
 
   it('an unpatched talkgroup is a list of one and locks on itself', async () => {
