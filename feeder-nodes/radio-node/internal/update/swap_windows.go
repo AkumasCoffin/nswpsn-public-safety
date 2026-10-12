@@ -20,6 +20,12 @@ import (
 // NOTE: the restart path can only be end-to-end verified on a real machine with
 // the nswpsn-node service installed (or a real staged download). Compile-tested
 // here; the batch logic is best-effort and documented for the operator.
+//
+// serviceName is the OS service the agent installs itself as (cmd/nodeagent's
+// own serviceName). It is repeated here rather than passed down because the
+// update package sits below cmd in the import graph.
+const serviceName = "nswpsn-node"
+
 func swapAndRestart(exePath, pendingPath string) error {
 	if _, err := os.Stat(pendingPath); err != nil {
 		return fmt.Errorf("pending binary missing: %w", err)
@@ -30,18 +36,19 @@ func swapAndRestart(exePath, pendingPath string) error {
 setlocal
 set "TARGET=%s"
 set "PENDING=%s"
+set "SVC=%s"
 :retry
 move /Y "%%PENDING%%" "%%TARGET%%" >nul 2>&1
 if errorlevel 1 (
   ping -n 2 127.0.0.1 >nul
   goto retry
 )
-sc start nswpsn-node >nul 2>&1
+sc start "%%SVC%%" >nul 2>&1
 if errorlevel 1 (
   start "" "%%TARGET%%" run
 )
 del "%%~f0" >nul 2>&1
-`, exePath, pendingPath)
+`, exePath, pendingPath, serviceName)
 
 	if err := os.WriteFile(helper, []byte(script), 0o644); err != nil {
 		return fmt.Errorf("write update helper: %w", err)

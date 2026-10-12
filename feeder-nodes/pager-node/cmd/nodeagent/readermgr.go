@@ -45,11 +45,18 @@ const defaultGain = "49.6"
 // Matches the settle the Rescan path already uses.
 const readerSwapSettle = 1500 * time.Millisecond
 
-// maxPlausiblePPM bounds an accepted rtl_test -p reading. RTL crystal error is
-// realistically within this; a larger value means the measurement is unreliable
-// (common in a VM, where rtl_test -p compares against a jittery host clock) — we
-// discard it and use ppm=0 so a garbage reading can't detune the receiver out of
-// the channel. 0 is close enough for wide NBFM POCSAG anyway.
+// maxPlausiblePPM bounds an accepted rtl_test -p reading: a dongle needing more
+// correction than this is faulty, and writing an absurd ppm onto rtl_fm's
+// command line would be worse than not correcting at all.
+//
+// It is only a backstop. The thing that used to make a large reading dangerous
+// was that it could be NOISE — a bogus 94 ppm at 148.5875 MHz is ~14 kHz of
+// detune, which walks the POCSAG carrier out of rtl_fm's passband — and that is
+// now caught where it belongs, by pagersdr.MeasurePPM refusing a reading that
+// never settles. A settled 94 means the dongle really is 94 ppm out, and
+// applying it is the correction, so the bound stays loose on purpose rather
+// than throwing away a large but real one. Same number the aircraft agent's
+// sdrppm.MaxPlausible uses, for the same reason.
 const maxPlausiblePPM = 100
 
 // readerManager owns the pager reader components. It detects the attached SDRs
@@ -72,12 +79,17 @@ type readerManager struct {
 	relayURL   string
 	audioURL   string
 
-	rescanMu   sync.Mutex // single-flights Rescan (SDR detection can't run twice at once)
-	mu         sync.Mutex
-	devices    []pagersdr.Device
-	sup        *supervise.Supervisor
-	supCancel  context.CancelFunc
-	lastCfg    wsclient.PagerConfig // last applied config, replayed on Rescan
+	rescanMu  sync.Mutex // single-flights Rescan (SDR detection can't run twice at once)
+	mu        sync.Mutex
+	devices   []pagersdr.Device
+	sup       *supervise.Supervisor
+	supCancel context.CancelFunc
+	// rescanning: a rescan currently has the dongles open for rtl_test /
+	// rtl_eeprom / ppm. Guarded by mu, and distinct from rescanMu: that one
+	// stops two rescans overlapping, this one tells applyLocked to record
+	// intent instead of starting rtl_fm against a busy device.
+	rescanning bool
+	lastCfg    wsclient.PagerConfig // the config the readers are built from
 	audioLabel string               // reader label currently tapped for browser audio ("" = none)
 }
 
@@ -161,14 +173,47 @@ func measurePPMs(devs []pagersdr.Device) {
 	}
 }
 
-// Apply (re)computes the reader set from cfg and (re)starts the supervisor.
-// feedEnabled requires no agent action (the backend feed-gates the forward and
-// still counts reception) — it is only logged. captureEnabled drives whether the
-// readers run.
+// Apply records cfg as the config the readers should be built from, and builds
+// them. feedEnabled requires no agent action (the backend feed-gates the forward
+// and still counts reception) — it is only logged. captureEnabled drives whether
+// the readers run.
 func (m *readerManager) Apply(cfg wsclient.PagerConfig) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.lastCfg = cfg // remembered so Rescan can replay it after re-detecting SDRs
+	m.lastCfg = cfg
+	return m.applyLocked()
+}
+
+// applyCurrent rebuilds the readers from whatever config is current, for the
+// paths that change something OTHER than the config — a rescan's new device
+// set, the audio tap going on or off.
+//
+// It deliberately does not take a config argument. Those paths used to snapshot
+// m.lastCfg, drop the lock, do their slow work, and then call Apply with the
+// copy — and a config push that landed in that window was applied, persisted
+// and acked, then overwritten by the stale replay. The node ran the old
+// frequencies, gain and ppm while reporting the new configVersion, so the
+// backend saw it in sync and never pushed again.
+func (m *readerManager) applyCurrent() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.applyLocked()
+}
+
+// applyLocked renders the reader set from m.lastCfg (and m.audioLabel) and
+// restarts the supervisor on it. Caller holds m.mu.
+//
+// While a rescan is in flight it records intent and does nothing else: the
+// rescan has the dongles open for rtl_test, rtl_eeprom and half a minute of ppm
+// measurement, so starting rtl_fm now would fail with "device busy" AND spoil
+// the measurement it is in the middle of taking. Nothing is lost — the rescan
+// finishes by calling this again, with whatever m.lastCfg says by then.
+func (m *readerManager) applyLocked() error {
+	if m.rescanning {
+		log.Printf("readers: SDR rescan in progress; reader rebuild deferred until it finishes")
+		return nil
+	}
+	cfg := m.lastCfg
 
 	// Drop any out-of-range/garbage frequencies from the push before they reach
 	// rtl_fm, falling back to the defaults if nothing valid remains.
@@ -217,11 +262,11 @@ func (m *readerManager) Apply(cfg wsclient.PagerConfig) error {
 		if m.audioLabel != "" && m.audioLabel == label {
 			audioURL = m.audioURL
 		}
-		scriptPath, err := reader.Write(m.readersDir, label, freqs[i].MHz, dev.Serial, ppm, gain, protocols, m.relayURL, audioURL)
+		scriptPath, err := reader.Write(m.readersDir, label, freqs[i].MHz, dev.Index, dev.Serial, ppm, gain, protocols, m.relayURL, audioURL)
 		if err != nil {
 			return fmt.Errorf("write reader script for %s: %w", label, err)
 		}
-		log.Printf("readers: %s -> %.4f MHz on SDR serial %q ppm=%d gain=%q audio=%t (%s)", label, freqs[i].MHz, dev.Serial, ppm, gain, audioURL != "", scriptPath)
+		log.Printf("readers: %s -> %.4f MHz on SDR index=%d serial=%q ppm=%d gain=%q audio=%t (%s)", label, freqs[i].MHz, dev.Index, dev.Serial, ppm, gain, audioURL != "", scriptPath)
 		comps["reader:"+label] = agentcfg.ComponentCfg{
 			Enabled: cfg.CaptureEnabled,
 			Command: "bash",
@@ -266,14 +311,16 @@ func (m *readerManager) Rescan() error {
 	}
 	defer m.rescanMu.Unlock()
 
-	// Stop current readers first so rtl_test can open the dongles for detection.
+	// Stop current readers first so rtl_test can open the dongles for detection,
+	// and mark the scan in flight so a config push arriving mid-scan does not
+	// start rtl_fm on top of it.
 	m.mu.Lock()
+	m.rescanning = true
 	if m.supCancel != nil {
 		m.supCancel()
 		m.supCancel = nil
 		m.sup = nil
 	}
-	cfg := m.lastCfg
 	m.mu.Unlock()
 
 	log.Printf("readers: rescan requested — stopped readers, re-detecting SDRs")
@@ -281,12 +328,17 @@ func (m *readerManager) Rescan() error {
 	time.Sleep(1500 * time.Millisecond)
 
 	devs := detectDevices()
-	m.mu.Lock()
-	m.devices = devs
-	m.mu.Unlock()
 	log.Printf("readers: rescan detected %d SDR device(s); re-applying readers", len(devs))
 
-	return m.Apply(cfg)
+	// Clear the flag and rebuild under ONE hold of the lock, so nothing can
+	// slip between the two and rebuild twice. applyLocked reads m.lastCfg
+	// itself, so a config push that landed during the scan is what gets
+	// applied here rather than being reverted by a stale replay.
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.devices = devs
+	m.rescanning = false
+	return m.applyLocked()
 }
 
 // AudioStart taps the named reader's rtl_fm audio for the browser monitor by
@@ -297,10 +349,9 @@ func (m *readerManager) AudioStart(label string) error {
 	label = strings.TrimPrefix(strings.TrimSpace(label), "reader:")
 	m.mu.Lock()
 	m.audioLabel = label
-	cfg := m.lastCfg
 	m.mu.Unlock()
 	log.Printf("readers: audio monitor start for %q", label)
-	return m.Apply(cfg)
+	return m.applyCurrent()
 }
 
 // AudioStop clears the audio tap and rebuilds the readers without the tee.
@@ -308,13 +359,12 @@ func (m *readerManager) AudioStop() error {
 	m.mu.Lock()
 	had := m.audioLabel
 	m.audioLabel = ""
-	cfg := m.lastCfg
 	m.mu.Unlock()
 	if had == "" {
 		return nil // nothing was tapping; avoid a needless reader restart
 	}
 	log.Printf("readers: audio monitor stop (was %q)", had)
-	return m.Apply(cfg)
+	return m.applyCurrent()
 }
 
 // Restart restarts a single named reader component (e.g. "reader:NSWRFS").

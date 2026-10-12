@@ -1,10 +1,26 @@
 // Package reader renders the per-frequency pager capture script (reader.sh).
 //
 // Each script is a self-contained bash pipeline: rtl_fm demodulates one
-// frequency off a specific dongle (addressed by USB serial via -d), pipes NBFM
-// audio into multimon-ng which decodes POCSAG, and each decoded line is POSTed to
-// the agent's loopback relay. The supervisor launches the rendered script as a
-// component and restarts it on crash.
+// frequency off a specific dongle, pipes NBFM audio into multimon-ng which
+// decodes POCSAG, and each decoded line is POSTed to the agent's loopback relay.
+// The supervisor launches the rendered script as a component and restarts it on
+// crash.
+//
+// WHY -d TAKES THE INDEX, NOT THE SERIAL. The dongle's identity is still its
+// USB serial — that is what pagersdr guarantees unique, and what pairs a
+// frequency with an antenna — but librtlsdr's verbose_device_search() runs
+// strtol over the -d argument FIRST, and when the whole string parses to a
+// number below the device count it uses that number as a device INDEX; only
+// otherwise does it compare serials. The RTL-SDR Blog factory serial
+// "00000001" parses (base 0, so leading zeros make it octal) to 1, so on a
+// two-dongle node `rtl_fm -d 00000001` opened device 1 — and with both readers
+// resolving to the same dongle the second died on usb_claim_interface after
+// five restarts, leaving one of the two locked frequencies permanently silent.
+// A serial carrying a dash or an underscore had the opposite problem: sanitised
+// into a string no device reports, and that reader could never start at all.
+//
+// So the agent resolves the serial to an index itself — fresh at every detect
+// and rescan — and hands rtl_fm the index, which has only one meaning.
 package reader
 
 import (
@@ -29,41 +45,46 @@ var defaultProtocols = []string{"POCSAG512", "POCSAG1200", "POCSAG2400"}
 
 // tmplData is the render context for reader.sh.tmpl.
 type tmplData struct {
-	Serial    string // dongle USB serial for rtl_fm -d
-	FreqMHz   string // frequency in MHz, formatted without trailing zeros
-	PPM       string // sample-clock correction for rtl_fm -p (measured at startup)
-	Gain      string // fixed tuner gain (dB) for rtl_fm -g
-	ProtoArgs string // "-a POCSAG512 -a POCSAG1200 ..." for multimon-ng
-	RelayURL  string // loopback relay endpoint the decoded lines POST to
-	AudioURL  string // loopback relay /audio endpoint to tee PCM to (empty = off)
-	Label     string // human/source label (also the X-Pager-Source header)
+	DeviceIndex string // librtlsdr device index for rtl_fm -d
+	Serial      string // dongle USB serial, recorded in a script comment
+	FreqMHz     string // frequency in MHz, formatted without trailing zeros
+	PPM         string // sample-clock correction for rtl_fm -p (measured at startup)
+	Gain        string // fixed tuner gain (dB) for rtl_fm -g
+	ProtoArgs   string // "-a POCSAG512 -a POCSAG1200 ..." for multimon-ng
+	RelayURL    string // loopback relay endpoint the decoded lines POST to
+	AudioURL    string // loopback relay /audio endpoint to tee PCM to (empty = off)
+	Label       string // human/source label (also the X-Pager-Source header)
 }
 
 // Write renders the reader script for one frequency to <dir>/reader-<label>.sh
-// (0755) and returns its path. deviceSerial pins the reader to a specific dongle;
-// ppm is that dongle's measured sample-clock correction (rtl_fm -p, 0 = none);
-// gain is the fixed tuner gain in dB (rtl_fm -g); protocols selects the
-// multimon-ng POCSAG demodulators (defaulting to all three bauds when empty);
-// relayURL is the loopback endpoint decoded lines are POSTed to (e.g.
+// (0755) and returns its path. deviceIndex is the librtlsdr index the caller
+// resolved for this dongle and is what pins the reader to it (see the package
+// comment); deviceSerial is that dongle's serial, recorded in the script for
+// diagnosis. ppm is the dongle's measured sample-clock correction (rtl_fm -p,
+// 0 = none); gain is the fixed tuner gain in dB (rtl_fm -g); protocols selects
+// the multimon-ng POCSAG demodulators (defaulting to all three bauds when
+// empty); relayURL is the loopback endpoint decoded lines are POSTed to (e.g.
 // http://127.0.0.1:17390/pager). audioURL, when non-empty, is the loopback
 // /audio endpoint the raw PCM is tee'd to for the browser monitor; empty leaves
 // the audio tap out of the pipeline entirely (no overhead when nobody listens).
-func Write(dir, label string, freqMHz float64, deviceSerial string, ppm int, gain string, protocols []string, relayURL, audioURL string) (path string, err error) {
+func Write(dir, label string, freqMHz float64, deviceIndex int, deviceSerial string, ppm int, gain string, protocols []string, relayURL, audioURL string) (path string, err error) {
 	data := tmplData{
 		// The script is executed with bash, so every interpolated value is a
-		// potential shell-injection sink. Serial comes from device output and is
-		// single-quoted in the template, but sanitise it to a safe charset anyway
-		// (defense-in-depth against a crafted dongle EEPROM serial). Freq/PPM are
+		// potential shell-injection sink. The index is numeric-formatted; the
+		// serial comes from device output and only lands in a comment, but
+		// sanitise it anyway (defense-in-depth against a crafted dongle EEPROM
+		// serial, and against it breaking out of the comment line). Freq/PPM are
 		// numeric-formatted; Gain is a constant; Label is sanitised by the caller;
 		// ProtoArgs is allowlisted below.
-		Serial:    sanitizeToken(deviceSerial),
-		FreqMHz:   strconv.FormatFloat(freqMHz, 'f', -1, 64),
-		PPM:       strconv.Itoa(ppm),
-		Gain:      normalizeGain(gain),
-		ProtoArgs: protoArgs(protocols),
-		RelayURL:  relayURL,
-		AudioURL:  audioURL,
-		Label:     label,
+		DeviceIndex: strconv.Itoa(deviceIndex),
+		Serial:      sanitizeToken(deviceSerial),
+		FreqMHz:     strconv.FormatFloat(freqMHz, 'f', -1, 64),
+		PPM:         strconv.Itoa(ppm),
+		Gain:        normalizeGain(gain),
+		ProtoArgs:   protoArgs(protocols),
+		RelayURL:    relayURL,
+		AudioURL:    audioURL,
+		Label:       label,
 	}
 
 	var buf strings.Builder

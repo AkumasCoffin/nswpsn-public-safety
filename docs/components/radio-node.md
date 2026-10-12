@@ -96,7 +96,8 @@ Both carry a version and a per-platform sha256 in the manifest. The agent checks
 at start, every 6 hours, and on a `cmd{action:'update'}` frame: download to
 `.pending`, sha256-verify, swap the component directory (or self-replace via a
 detached helper for its own binary), restart. An **empty sha256 means "nothing to
-do"** — not an error, so a partially-filled manifest is safe.
+do"** — not an error, so an entry whose artifact is not hosted yet is skipped
+rather than failing the pass.
 
 Why forks at all, and what each changed:
 [`forked-runtimes.md`](forked-runtimes.md).
@@ -106,14 +107,19 @@ already installed, which may be nothing, in which case they stay skipped.
 
 **A change to this agent's Go code does not reach any node until `agent.version`
 is bumped in `backends/node/assets/node-versions.json`.** `deploy.sh` skips the
-Go rebuild entirely when the built binary already reports the manifest version.
+Go rebuild entirely when the built binary already reports the manifest version,
+so the bump is what triggers the rebuild — and the rebuild is what cross-builds
+the new binary into `<webroot>/downloads`, which is where the served manifest
+gets the digest the agent verifies against.
 
-Bumping the version is necessary but **not currently sufficient**: the `agent`
-entry's sha256 is empty, and an empty sha256 is treated as nothing to do
-(`internal/update/update.go:138`), so agent self-update is dormant and a
-changed agent reaches a node only via a fresh install. Self-update does work
-for `sdrtrunk` and `rdio`, whose digests are filled. Details:
-[`forked-runtimes.md`](forked-runtimes.md#self-update-is-dormant-for-the-agents).
+**The bump is also sufficient on its own, which makes it the deliberate act that
+pushes code onto every node that is online.** The sha256 values committed against
+the `agent` entry are empty, but those are not the values served: `loadManifest`
+fills each one at serve time by hashing whatever artifact is actually present in
+the downloads directory (`backends/node/src/api/node-updates.ts:98-118`). Treat an
+agent version bump as a deploy to the running fleet, not as a note for the next
+fresh install. Details:
+[`forked-runtimes.md`](forked-runtimes.md#how-a-version-bump-reaches-a-running-node).
 
 ## Supervision
 
@@ -240,7 +246,7 @@ it, and restores it when it recovers. The thresholds are two-tier
 |---|---|---|
 | Marginal | decode health below **60%** | **10 minutes** continuous |
 | Dead air | decode health below **40%** | **5 minutes** |
-| Never locked | a running control channel that never acquires | **5 minutes** |
+| Never locked | a running **trunked** channel that never acquires | **5 minutes** |
 
 The two decode clocks run alongside each other: a sample in [40, 60) resets only
 the severe clock; a sample at or above 60 resets both. A stopped channel is
@@ -255,6 +261,27 @@ figure is what the dwells are measured on. "No number" means "nothing to judge"
 for a channel whose runtime has no monitor — and exactly the wrong thing for one
 sitting on a dead frequency burning a tuner. The distinction is the lock, not the
 absence of data.
+
+It applies **only to a channel proved to be running a trunked decoder**, because
+only a trunked decoder has a lock to miss. `GET /channels` does not say which
+decoder a channel runs, so `controlLocking()` (`chanmgr.go:384`) infers it from
+what the channel reports: vce attaches its `ControlChannelQualityMonitor` only to
+a STANDARD channel decoding P25 Phase 1, P25 Phase 2, DMR or NXDN, and that
+monitor is the only writer of `syncPercent`, `signalDbfs`, `syncFrames` and
+`decodingForMs` — so any one of those fields being present, or a CONTROL lock, is
+proof of a trunked decoder. A conventional NBFM or AM channel gets no monitor and
+reports none of them, ever, at rest or in traffic, so it never enters the rule at
+all. The proof is sticky once seen, because it rests on a live quality snapshot
+and a snapshot can go stale for a tick without the decoder changing underneath
+it.
+
+Channel **state** is no use for this, and that is the trap the gate exists to
+close: NBFM and AM both report `CALL` while squelch is open, so a lock-looking
+state proves only that *something* is being decoded, not what. Gating on the
+decoder is what actually keeps the promise made below — that analog channels are
+never touched — which the no-lock rule had been quietly breaking, by stopping a
+quiet conventional channel for "never acquiring" when it was simply at rest
+between transmissions.
 
 Design rules, learned the hard way — two earlier agent-autonomy attempts were
 reverted for churning whole nodes:
@@ -274,7 +301,8 @@ reverted for churning whole nodes:
 - **An unmeasured channel is never judged.** A measured sample is `SyncPercent`
   non-nil and greater than zero; null and 0 both mean unmeasured. So analog
   (NBFM/AM) channels, and channels on an older SDR-Trunk runtime, are never
-  touched.
+  touched — and the no-lock rule above is gated on the same evidence, so neither
+  tier can reach them.
 - **Every decision is logged loudly**, and the full manager state rides the
   status frame so staff can see exactly what it is doing and why.
 - It **pauses** while a site survey runs, and idles by itself on a runtime that

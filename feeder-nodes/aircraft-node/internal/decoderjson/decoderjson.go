@@ -19,6 +19,8 @@
 // Both files are written to a temp name and renamed into place, so a reader
 // never observes a half-written file — but it CAN observe ENOENT while the
 // decoder is starting, which callers treat as "not ready", never as an error.
+// It can also observe a file the decoder has STOPPED writing, which parses
+// perfectly and describes aircraft that are no longer there; see ErrStale.
 package decoderjson
 
 import (
@@ -26,6 +28,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // Aircraft is one entry of aircraft.json. Field names are dump1090's own.
@@ -172,8 +175,35 @@ func NewReader(dir string) *Reader { return &Reader{dir: dir} }
 // never be logged as a failure.
 var ErrNotReady = fmt.Errorf("decoder json not written yet")
 
+// ErrStale is returned when a file is there and parses, but is no longer being
+// rewritten.
+//
+// A decoder that is stopped, disabled or crash-looping leaves its last
+// aircraft.json and stats.json behind, and NOTHING INSIDE THEM SAYS SO: `now`
+// and the window bounds freeze, seen_pos freezes at whatever sub-second value
+// it held, and every aircraft the receiver last saw still reads as present. A
+// caller that keeps re-reading them keeps shipping the same aircraft with a
+// fresh timestamp on every upload, so the last traffic a dead receiver heard
+// stays pinned to the public map and is refreshed for as long as the decoder is
+// down — while the coverage folds, the daily counters and the heartbeat's
+// aircraft count all report a dead receiver as a healthy one. The gain loop
+// reads the same frozen figures and can walk gain down to zero on them.
+//
+// It WRAPS ErrNotReady, because that is what it means to a caller: there is no
+// current decoder output to use. A caller that wants to say so differently
+// tests for ErrStale first.
+var ErrStale = fmt.Errorf("decoder json is stale: %w", ErrNotReady)
+
+// MaxStaleness is how long since the decoder last rewrote a file before it
+// counts as a leftover. The agent launches dump1090 with --write-json-every 1,
+// so ten seconds is two whole upload intervals of slack: long enough to ride
+// out a slow filesystem or a scheduler hiccup, short enough that a stopped
+// decoder stops producing map pins almost immediately.
+const MaxStaleness = 10 * time.Second
+
 func (r *Reader) read(name string, into any) error {
-	b, err := os.ReadFile(filepath.Join(r.dir, name))
+	path := filepath.Join(r.dir, name)
+	b, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return ErrNotReady
@@ -183,6 +213,15 @@ func (r *Reader) read(name string, into any) error {
 	if len(b) == 0 {
 		// A zero-length read is the same transient situation as ENOENT.
 		return ErrNotReady
+	}
+	// The decoder writes to a temp name and renames into place, so the file's
+	// modification time IS the time it last had something to say. Asked of the
+	// file rather than read out of it because it holds for both supported
+	// decoders and for whatever a future one chooses to put in its JSON.
+	if fi, serr := os.Stat(path); serr == nil {
+		if age := time.Since(fi.ModTime()); age > MaxStaleness {
+			return fmt.Errorf("%s last written %s ago: %w", name, age.Round(time.Second), ErrStale)
+		}
 	}
 	return json.Unmarshal(b, into)
 }

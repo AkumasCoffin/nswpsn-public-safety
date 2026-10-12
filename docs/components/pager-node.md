@@ -23,7 +23,7 @@ installs**. The readers drive system-installed `rtl_fm`, `multimon-ng` and `curl
 so the agent only ever self-updates its own binary.
 
 ```
-   antenna ─► RTL-SDR (addressed by USB serial)
+   antenna ─► RTL-SDR (identified by USB serial, opened by index)
                    │
                    ▼
         reader.sh:  rtl_fm ──► multimon-ng ──► curl
@@ -84,11 +84,27 @@ carries `X-Node-Token` + `X-Node-Install`, with
 (`reader.sh.tmpl`, `go:embed`). Each is a self-contained bash pipeline:
 
 ```
-rtl_fm -d <serial> -f <MHz> -p <ppm> -g <gain>  →  multimon-ng -a POCSAG512 -a POCSAG1200 -a POCSAG2400  →  curl → the agent's loopback relay
+rtl_fm -d <index> -f <MHz> -p <ppm> -g <gain>  →  multimon-ng -a POCSAG512 -a POCSAG1200 -a POCSAG2400  →  curl → the agent's loopback relay
 ```
 
 `internal/supervise` launches each rendered script as a component and restarts it
 on crash.
+
+`-p` is per dongle, measured at startup and again on every rescan by
+`pagersdr.MeasurePPM`. It runs `rtl_test -p` — which compares the RTL's actual
+sample rate against the host clock, so no antenna or signal is needed — and waits
+for the reading to **settle**: three consecutive cumulative readings agreeing to
+within 2 ppm. `PPMMeasureDur` is a **one-minute ceiling with an early exit**, not
+a fixed run; a healthy dongle settles in about thirty seconds and the run is
+interrupted (with SIGINT, so the USB device is released cleanly) the moment it
+does. Settling is the whole job: taking whatever the last line said after a fixed
+run is two or three readings still dominated by USB transfer jitter, and a bogus
+94 ppm at 148.5875 MHz is ~14 kHz of detune, which walks the POCSAG carrier out of
+`rtl_fm`'s passband at `-s 22050`. The reader then decodes nothing while the
+heartbeat still reports it running. A reading that never settles falls back to
+`ppm=0`, and so does one outside **±100 ppm** (`maxPlausiblePPM`): a clock that far
+out is faulty, and writing an absurd correction is worse than writing none. Zero
+is close enough for wide NBFM.
 
 Everything interpolated into the script is rendered from validated values —
 numbers from parsed floats, never from received text — because the settings
@@ -108,17 +124,36 @@ arrive from a server config push.
 frequencies. One dongle means the first frequency only; two or more means the
 first two, and extra dongles are idle spares.
 
-### Why dongles are addressed by serial
+### Why dongles are identified by serial but opened by index
 
 `internal/pagersdr` enumerates dongles by shelling out to `rtl_test` and
 `rtl_eeprom` (installed on the host by the node installer), and its key job is
-guaranteeing each has a **unique, stable USB serial** so a reader can be pinned
-to a specific antenna and frequency with `rtl_fm -d <serial>`.
+guaranteeing each has a **unique, stable USB serial**. The serial is the dongle's
+identity: it is what the agent matches when it enumerates, what pins a frequency
+to a particular antenna, and what the EEPROM work exists to protect.
 
-Cheap RTL-SDR clones ship with identical serials (`00000001`), which makes
-per-device addressing ambiguous. The agent rewrites an EEPROM serial **only when
-one actually collides** — an EEPROM write is a permanent hardware change, so a
-dongle that already has a distinct serial is left untouched.
+Cheap RTL-SDR clones ship with identical serials (`00000001`), which makes that
+identity ambiguous. The agent rewrites an EEPROM serial **only when one actually
+collides** — an EEPROM write is a permanent hardware change, so a dongle that
+already has a distinct serial is left untouched.
+
+What `rtl_fm -d` receives, though, is the **librtlsdr device index** the agent
+resolved for that serial, not the serial itself. librtlsdr's
+`verbose_device_search()` runs `strtol` over the `-d` argument *first* and, when
+the whole string parses to a number below the device count, treats it as an
+index — only otherwise does it compare serials. The factory serial `00000001`
+parses (base 0, so the leading zeros make it octal) to 1, so on a two-dongle node
+`rtl_fm -d 00000001` opened device 1: both readers resolved to the same dongle,
+the second died on `usb_claim_interface` after five restarts, and one of the two
+locked frequencies went permanently silent. A serial carrying a dash or an
+underscore had the opposite failure — sanitised into a string no device reports,
+so that reader could never start at all.
+
+So the agent resolves serial → index itself, freshly at every detect and rescan,
+and hands `rtl_fm` the index, which has exactly one meaning
+(`internal/reader/reader.go`). The serial is still recorded in a comment at the
+top of each generated `reader.sh`, so a script on disk says which physical dongle
+it was written for.
 
 ## Decoding and relaying
 
@@ -198,14 +233,15 @@ self-updates the `agent` component — its own binary.
 is treated as "nothing to do" — not an error.
 
 **A change to this agent's Go code does not reach any node until
-`pager-agent.version` is bumped in that manifest.** `deploy.sh` skips the rebuild
-when the built binary already reports the manifest version.
-
-Bumping the version is necessary but **not currently sufficient**: the
-`pager-agent` entry's sha256 is empty on both platforms, and an empty sha256 is
-treated as nothing to do, so self-update is dormant and a changed agent reaches
-a node only via a fresh install. Details:
-[`forked-runtimes.md`](forked-runtimes.md#self-update-is-dormant-for-the-agents).
+`pager-agent.version` is bumped in that manifest**, and that bump is **also all
+that is needed**. `deploy.sh` skips the rebuild when the built binary already
+reports the manifest version, so the bump is what triggers the cross-build into
+`<webroot>/downloads` — and the backend fills the entry's sha256 at serve time by
+hashing the binary sitting there, so the empty digests committed in the manifest
+are never the ones a pager node is served. A node running an older version picks
+the new binary up on its next check and self-replaces, so treat the bump as a
+deploy to the live pager fleet. Details:
+[`forked-runtimes.md`](forked-runtimes.md#how-a-version-bump-reaches-a-running-node).
 
 ## Internal packages
 

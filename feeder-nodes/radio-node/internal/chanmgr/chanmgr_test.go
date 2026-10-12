@@ -34,6 +34,7 @@ func newFake() *fake {
 
 func bptr(b bool) *bool       { return &b }
 func fptr(v float64) *float64 { return &v }
+func iptr(v int64) *int64     { return &v }
 
 // add registers a managed-capable STANDARD autoStart channel.
 func (f *fake) add(id int, name string, syncPct *float64) *sdrctl.Channel {
@@ -354,6 +355,12 @@ func TestNeverAcquiredIsStopped(t *testing.T) {
 	c := f.add(1, "Clarence Peak", nil)
 	c.State = "IDLE"
 	c.Control = false
+	// A P25 channel keeps its quality monitor whether or not it ever acquires,
+	// so it still reports a signal level and a frame count (zero frames, not no
+	// frames) — which is how the manager knows this is a trunked decoder with a
+	// lock to miss, and not a conventional one at rest.
+	c.SignalDbfs = fptr(-74)
+	c.SyncFrames = iptr(0)
 	m := f.manager()
 	f.seedPast(m)
 
@@ -416,6 +423,84 @@ func TestLockedButUnmeasuredKeepsItsExemption(t *testing.T) {
 	runDwell(m, f, 4*noLockDwell)
 	if len(f.calls) != 0 {
 		t.Fatalf("acted on a locked channel with no decode figure: %v", f.calls)
+	}
+}
+
+func TestQuietAnalogChannelIsNeverStopped(t *testing.T) {
+	// The reported failure: an AM airband / NBFM conventional channel sits IDLE
+	// whenever squelch is closed, so overnight it looked exactly like a control
+	// channel that never acquired and the no-lock rule stopped it — and its
+	// retest could never pass, because a conventional channel reports no
+	// decode figure for the probe to rule on. It gets no quality monitor at
+	// all, which is the fact the manager now reads it from.
+	f := newFake()
+	c := f.add(1, "Sydney Approach", nil)
+	c.State = "IDLE"
+	c.Control = false
+	c.SignalDbfs = nil
+	c.SyncFrames = nil
+	c.DecodingForMs = nil
+	m := f.manager()
+	f.seedPast(m)
+
+	runDwell(m, f, 4*noLockDwell)
+	if len(f.calls) != 0 {
+		t.Fatalf("stopped a quiet conventional channel: %v", f.calls)
+	}
+	if len(m.entries) != 0 {
+		t.Fatalf("a conventional channel at rest must not even be watched: %+v", m.entries)
+	}
+
+	// Squelch opens: an analog decoder reports CALL, not CONTROL. That is a
+	// transmission, not a control-channel lock, so when it closes again the
+	// channel must still be left alone.
+	c.State = "CALL"
+	runDwell(m, f, time.Minute)
+	c.State = "IDLE"
+	runDwell(m, f, 4*noLockDwell)
+	if len(f.calls) != 0 {
+		t.Fatalf("stopped a conventional channel after it carried traffic: %v", f.calls)
+	}
+}
+
+func TestNoLockWatchDoesNotShortCircuitTheLowDwell(t *testing.T) {
+	// A control channel on a marginal site shows a non-locked state on one
+	// tick, which opens a watch with no low streak in it. When a measured
+	// sample below 60% later lands on that watch, the streak has to start
+	// there: with a zero lowSince the elapsed time saturated and the channel
+	// was stopped on a single reading, bypassing both dwells.
+	f := newFake()
+	c := f.add(1, "A", nil)
+	c.State = "FADE"
+	c.Control = false
+	c.SignalDbfs = fptr(-80)
+	c.SyncFrames = iptr(0)
+	m := f.manager()
+	f.seedPast(m)
+
+	m.Tick(context.Background())
+	f.now = f.now.Add(pollInterval)
+	if e := m.entries["A"]; e == nil || !e.lowSince.IsZero() {
+		t.Fatalf("want a no-lock watch with no low streak, got %+v", m.entries["A"])
+	}
+
+	c.State = "CONTROL"
+	c.Control = true
+	c.SyncPercent = fptr(55)
+	m.Tick(context.Background())
+	if len(f.calls) != 0 {
+		t.Fatalf("one low sample stopped the channel: %v", f.calls)
+	}
+
+	// And the streak it started is honoured from that sample onwards, not from
+	// the zero time: the 10-minute rule still fires, just on its own evidence.
+	runDwell(m, f, lowDwell-2*time.Minute)
+	if len(f.calls) != 0 {
+		t.Fatalf("fired before the low dwell completed: %v", f.calls)
+	}
+	runDwell(m, f, 3*time.Minute)
+	if len(f.calls) < 2 || f.calls[0] != "suppress:A" || f.calls[1] != "stop:A" {
+		t.Fatalf("want suppress then stop once the dwell completed, got %v", f.calls)
 	}
 }
 

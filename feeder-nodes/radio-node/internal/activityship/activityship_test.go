@@ -203,6 +203,148 @@ func TestTickResetsOnLastIDRegression(t *testing.T) {
 	}
 }
 
+// vceFetch is what the control server actually answers: the rows above sinceId
+// in id order, capped at limit, with lastId floored at sinceId. That flooring
+// is the reason an empty poll cannot report a restarted id sequence.
+func vceFetch(db *[]sdrctl.ActivityEvent, probes *[]int64) FetchFunc {
+	return func(sinceID int64, limit int) ([]sdrctl.ActivityEvent, int64, error) {
+		if limit == 1 && probes != nil {
+			*probes = append(*probes, sinceID)
+		}
+		var out []sdrctl.ActivityEvent
+		lastID := sinceID
+		for _, ev := range *db {
+			if ev.ID <= sinceID {
+				continue
+			}
+			if len(out) >= limit {
+				break
+			}
+			out = append(out, ev)
+			if ev.ID > lastID {
+				lastID = ev.ID
+			}
+		}
+		return out, lastID, nil
+	}
+}
+
+func TestRecreatedDatabaseIsDetectedFromAnEmptyFeed(t *testing.T) {
+	// The reported failure: the vce database is recreated and its ids restart
+	// at 1 while the cursor still points at 100. Every poll then returns an
+	// empty batch with lastId == cursor, which the shipper read as "nothing
+	// new" — so node_radio_events for this node simply stopped, with no line in
+	// any log, until vce had produced 100 events again.
+	dir := t.TempDir()
+
+	db := []sdrctl.ActivityEvent{
+		{ID: 1, AtMs: 1, Action: "CALL", EventType: "CALL_GROUP"},
+		{ID: 2, AtMs: 2, Action: "CALL", EventType: "CALL_GROUP"},
+	}
+	var probes []int64
+
+	var shipped []int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Events []sdrctl.ActivityEvent `json:"events"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		for _, ev := range body.Events {
+			shipped = append(shipped, ev.ID)
+		}
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	s := New(Options{
+		DataDir:   dir,
+		DBPath:    filepath.Join(dir, "nonexistent.sqlite"),
+		Fetch:     vceFetch(&db, &probes),
+		ServerURL: srv.URL,
+		NodeToken: "tok",
+		InstallID: "inst",
+	})
+	if err := s.resetStream("keyA"); err != nil {
+		t.Fatalf("resetStream: %v", err)
+	}
+	s.st.LastID = 100
+	origStream := s.st.StreamID
+
+	s.tick(context.Background())
+
+	if s.st.StreamID == origStream {
+		t.Fatal("a restarted id sequence must generate a fresh streamId")
+	}
+	if len(shipped) != 2 || shipped[0] != 1 || shipped[1] != 2 {
+		t.Fatalf("the restarted sequence was not shipped from the start: %v", shipped)
+	}
+	if s.st.LastID != 2 {
+		t.Fatalf("cursor should follow the new sequence, got %d", s.st.LastID)
+	}
+	if got := readCursor(t, dir); got != s.st {
+		t.Fatalf("reset not persisted: file %+v != state %+v", got, s.st)
+	}
+	// Proved with two one-row queries: nothing at or above the cursor, but the
+	// database does still hold something below it.
+	if len(probes) != 2 || probes[0] != 99 || probes[1] != 0 {
+		t.Fatalf("want probes at since=99 then since=0, got %v", probes)
+	}
+}
+
+func TestAnIntactCursorIsNeverTreatedAsARestart(t *testing.T) {
+	dir := t.TempDir()
+
+	// A vce migration replaces the database file with every id preserved, and a
+	// quiet node polls an empty feed for hours. Both must be left alone: a
+	// reset here re-ships the whole retention under a streamId the backend has
+	// never seen, so its (streamId, id) dedupe cannot suppress any of it.
+	db := []sdrctl.ActivityEvent{
+		{ID: 99, AtMs: 1, Action: "CALL", EventType: "CALL_GROUP"},
+		{ID: 100, AtMs: 2, Action: "CALL", EventType: "CALL_GROUP"},
+	}
+	var probes []int64
+	s := New(Options{
+		DataDir: dir,
+		DBPath:  filepath.Join(dir, "nonexistent.sqlite"),
+		Fetch:   vceFetch(&db, &probes),
+	})
+	if err := s.resetStream("keyA"); err != nil {
+		t.Fatalf("resetStream: %v", err)
+	}
+	s.st.LastID = 100
+	origStream := s.st.StreamID
+
+	s.tick(context.Background())
+	if s.st.StreamID != origStream || s.st.LastID != 100 {
+		t.Fatalf("a quiet feed was mistaken for a restart: %+v", s.st)
+	}
+	// The cursor row is still there, so the second probe is never needed.
+	if len(probes) != 1 || probes[0] != 99 {
+		t.Fatalf("want one probe at since=99, got %v", probes)
+	}
+
+	// And it does not re-ask on every empty poll.
+	s.tick(context.Background())
+	if len(probes) != 1 {
+		t.Fatalf("the id check ran again inside its interval: %v", probes)
+	}
+
+	// An unreadable database answers every query empty — vce reports a locked
+	// or missing database as an empty batch — which proves nothing either way.
+	db = nil
+	probes = nil
+	s.lastRestartCheck = time.Time{}
+	s.tick(context.Background())
+	if s.st.StreamID != origStream || s.st.LastID != 100 {
+		t.Fatalf("an unreadable database must not reset the stream: %+v", s.st)
+	}
+	if len(probes) != 2 {
+		t.Fatalf("want both probes attempted, got %v", probes)
+	}
+}
+
 func TestTickShipsAndAdvancesCursorOnlyOn2xx(t *testing.T) {
 	dir := t.TempDir()
 

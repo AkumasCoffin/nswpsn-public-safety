@@ -6,10 +6,11 @@
 // dedupes on (streamId, event id).
 //
 // The cursor is bound to a specific generation of the vce SQLite database via
-// a stable "dbKey" (Linux: device+inode; Windows: file creation time). When
-// the database is recreated — dbKey changes, or a fetch's lastId regresses
-// below the persisted cursor — the shipper starts a fresh random streamId at
-// lastId=0 so the backend can distinguish the restarted id sequence.
+// a stable "dbKey" (Linux: device+inode; Windows: file creation time). A
+// changed dbKey is not by itself a new generation — see reconcileDBKey — so a
+// recreated database is proved from the event ids themselves (idsRestarted),
+// and only then does the shipper start a fresh random streamId at lastId=0 so
+// the backend can distinguish the restarted id sequence.
 package activityship
 
 import (
@@ -60,6 +61,12 @@ const (
 	// authCooldown pauses shipping after a 401/403 so a bad/revoked node token
 	// doesn't hammer the backend every tick.
 	authCooldown = time.Minute
+	// restartCheckInterval rate-limits the id-restart check (idsRestarted). It
+	// costs two extra one-row queries and only has an answer worth having while
+	// the feed is idle, so it runs at this cadence on an empty poll rather than
+	// on every one of them — and immediately whenever the database file changes
+	// underneath us.
+	restartCheckInterval = 5 * time.Minute
 	// shipTimeout bounds one backend POST.
 	shipTimeout = 30 * time.Second
 )
@@ -112,6 +119,10 @@ type Shipper struct {
 	// See shipBackoff: without these a 5xx was retried every 4s indefinitely.
 	shipFails  int
 	retryAfter time.Time
+
+	// lastRestartCheck is when idsRestarted last ran. Zero means "due now",
+	// which is the state at startup and after the database file changes.
+	lastRestartCheck time.Time
 }
 
 // New builds a Shipper. Call Run to start it.
@@ -174,21 +185,27 @@ func (s *Shipper) tick(ctx context.Context) {
 			return
 		}
 		if lastID < s.st.LastID {
-			// Ids restarted underneath us (DB recreated between dbKey checks).
-			log.Printf("activity: event ids restarted (lastId %d < cursor %d); starting a fresh stream", lastID, s.st.LastID)
-			// Re-stat so the fresh stream binds to the NEW database generation.
-			dbKey := s.st.DBKey
-			if key, ok := statDBKey(s.opts.DBPath); ok {
-				dbKey = key
-			}
-			if err := s.resetStream(dbKey); err != nil {
-				s.warnf("activity: cursor reset failed: %v", err)
+			// Ids restarted underneath us, and the response said so outright.
+			// vce floors lastId at sinceId, so this cannot currently fire — the
+			// empty-batch branch below is what actually catches a restart. Kept
+			// because a response that does regress is unambiguous evidence and
+			// should be acted on, not ignored.
+			if !s.restartStream(fmt.Sprintf("lastId %d < cursor %d", lastID, s.st.LastID)) {
 				return
 			}
 			continue // re-fetch from 0 this tick
 		}
 		if len(events) == 0 {
-			return // nothing new
+			// Nothing new — or nothing LEFT, because the database was recreated
+			// and its ids restarted below the cursor. The two look identical in
+			// an empty response, so the difference has to be asked for.
+			if !s.restartCheckDue() || !s.idsRestarted() {
+				return
+			}
+			if !s.restartStream(fmt.Sprintf("nothing at or above cursor %d, but the database still holds older events", s.st.LastID)) {
+				return
+			}
+			continue // re-fetch from 0 this tick
 		}
 
 		// A site survey configures a channel per candidate site. Those channels
@@ -246,6 +263,71 @@ func (s *Shipper) tick(ctx context.Context) {
 			return // drained
 		}
 	}
+}
+
+// restartCheckDue rate-limits the id-restart check and records that it ran.
+func (s *Shipper) restartCheckDue() bool {
+	if time.Since(s.lastRestartCheck) < restartCheckInterval {
+		return false
+	}
+	s.lastRestartCheck = time.Now()
+	return true
+}
+
+// idsRestarted reports whether vce's event id sequence has demonstrably
+// restarted below our cursor — the vce database was recreated (a wiped
+// app-root and the --fresh launch that follows, or a corrupt database rebuilt)
+// while the cursor kept pointing into the old generation.
+//
+// It cannot be read off an ordinary poll. vce answers with
+// lastId = max(sinceId, returned ids), so an empty batch always reports lastId
+// equal to the cursor: a node whose ids restarted looks exactly like a quiet
+// one, and the activity feed — the only source of node_radio_events — stops
+// with nothing in either log until vce produces as many events again, which on
+// a busy node is days.
+//
+// So it is proved with two one-row queries:
+//
+//  1. nothing at or above the cursor. Either the ids restarted, or the row the
+//     cursor sits on aged out of vce's retention.
+//  2. but the database does still hold an event older than the cursor. That
+//     both shows the read worked — vce reports a locked or missing database as
+//     an empty batch, which nothing else distinguishes from a readable empty
+//     one — and pins the highest id below the cursor.
+//
+// A vce migration installs a replacement database file with every id preserved,
+// so the cursor's own row is still there and test 1 fails: a migration is never
+// mistaken for a restart. Keeping that distinction is the whole reason
+// reconcileDBKey stopped resetting on a changed dbKey.
+func (s *Shipper) idsRestarted() bool {
+	if s.st.LastID <= 0 {
+		return false // already at the start of a sequence
+	}
+	at, _, err := s.opts.Fetch(s.st.LastID-1, 1)
+	if err != nil || len(at) > 0 {
+		return false
+	}
+	oldest, _, err := s.opts.Fetch(0, 1)
+	if err != nil || len(oldest) == 0 {
+		return false // unreadable, or genuinely empty: proof of nothing
+	}
+	return oldest[0].ID <= s.st.LastID
+}
+
+// restartStream starts a fresh stream after a restarted id sequence, binding
+// it to the database generation on disk right now. Reports whether it worked.
+func (s *Shipper) restartStream(why string) bool {
+	log.Printf("activity: event ids restarted (%s); starting a fresh stream", why)
+	// Re-stat so the fresh stream binds to the NEW database generation.
+	dbKey := s.st.DBKey
+	if key, ok := statDBKey(s.opts.DBPath); ok {
+		dbKey = key
+	}
+	if err := s.resetStream(dbKey); err != nil {
+		s.warnf("activity: cursor reset failed: %v", err)
+		return false
+	}
+	return true
 }
 
 // dropSurveyEvents removes everything decoded on a site survey's test
@@ -390,9 +472,11 @@ func (s *Shipper) persistState() error {
 // retention as new events. That fires on every vce upgrade that runs a
 // migration, which the agent's own component self-update makes routine.
 //
-// The authoritative signal is the one the data itself gives: lastId < cursor,
-// checked in tick(), which means the ids really did restart. This just keeps
-// the stored key current so the log line fires once rather than every tick.
+// The authoritative signal is the one the data itself gives — whether the ids
+// below the cursor are still there (idsRestarted) — so all this does is keep
+// the stored key current, so the log line fires once rather than every tick,
+// and bring the next id-restart check forward, because a replaced file is the
+// one moment it is most likely to have something to say.
 //
 // Unknown observations (ok=false, the DB file isn't statable yet) are ignored:
 // absence is not a change.
@@ -400,8 +484,9 @@ func (s *Shipper) reconcileDBKey(key string, ok bool) bool {
 	if !ok || key == s.st.DBKey {
 		return true
 	}
-	log.Printf("activity: sdrtrunk database file replaced (ids preserved; cursor kept at %d)", s.st.LastID)
+	log.Printf("activity: sdrtrunk database file replaced (cursor kept at %d pending an id check)", s.st.LastID)
 	s.st.DBKey = key
+	s.lastRestartCheck = time.Time{}
 	if err := s.persistState(); err != nil {
 		s.warnf("activity: dbKey persist failed: %v", err)
 	}

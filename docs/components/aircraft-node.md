@@ -138,6 +138,30 @@ Both files are written to a temp name and renamed into place, so a reader never
 sees a half-written file — but it *can* see `ENOENT` while the decoder is
 starting, which callers treat as "not ready", never as an error.
 
+It can also see a file the decoder has **stopped** writing, and that one is worse,
+because it parses perfectly. A decoder that is stopped, disabled or crash-looping
+leaves its last `aircraft.json` and `stats.json` behind and nothing inside them
+says so: `now` and the window bounds freeze, and every aircraft the receiver last
+saw still reads as present. Re-reading them means uploading the same aircraft with
+a fresh timestamp every cycle, so the last traffic a dead receiver heard stays
+pinned to the public map and is refreshed for as long as the decoder is down —
+while the coverage figures, the daily counters and the heartbeat's aircraft count
+all report a dead receiver as a healthy one, and the gain loop walks gain down on
+the frozen numbers.
+
+So `internal/decoderjson` judges freshness on the file's **modification time** —
+asked of the file rather than read out of it, so the rule holds for both supported
+decoders and for whatever a future one chooses to put in its JSON — and returns
+`ErrStale` once a file is older than `MaxStaleness`, **10 seconds**. The agent runs
+dump1090 with `--write-json-every 1`, so ten seconds is two whole upload intervals
+of slack: long enough to ride out a slow filesystem or a scheduler hiccup, short
+enough that a stopped decoder stops producing map pins almost immediately.
+
+`ErrStale` **wraps `ErrNotReady`**, because that is what it means to a caller:
+there is no current decoder output to use. Every existing quiet "not ready" path
+therefore covers it with no change, and the snapshot loop — which does want to say
+so differently — tests for `ErrStale` first (`cmd/nodeagent/snapshot.go:207-216`).
+
 ## Snapshots
 
 The loop in `cmd/nodeagent/snapshot.go` reads what the decoder can currently see,
@@ -237,11 +261,13 @@ kind-aware: an ADS-B node is served the `adsb-agent` entry from
 in its own comment, because `deploy.sh` skips the Go rebuild when the built
 binary already reports the manifest version.
 
-Bumping the version is necessary but **not currently sufficient**: the
-`adsb-agent` entry's sha256 is empty on both platforms, and an empty sha256 is
-treated as nothing to do, so self-update is dormant and a changed agent reaches
-a node only via a fresh install. Details:
-[`forked-runtimes.md`](forked-runtimes.md#self-update-is-dormant-for-the-agents).
+That bump is **also sufficient on its own**. It is what makes the deploy
+cross-build the binary into `<webroot>/downloads`, and the backend fills the
+entry's sha256 at serve time by hashing whatever is in that directory — so the
+empty digests committed in the manifest are never the values an ADS-B node is
+served, and a node on an older version fetches, verifies and self-replaces on its
+next check. Treat the bump as a deploy to the live fleet. Details:
+[`forked-runtimes.md`](forked-runtimes.md#how-a-version-bump-reaches-a-running-node).
 
 ## What the backend does with it
 

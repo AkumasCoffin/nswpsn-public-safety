@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // Fixtures are trimmed but structurally real dump1090-fa output.
@@ -161,5 +162,54 @@ func TestEmptyFileIsNotReady(t *testing.T) {
 	}
 	if _, err := NewReader(dir).Aircraft(); !errors.Is(err, ErrNotReady) {
 		t.Fatalf("empty file: got %v, want ErrNotReady", err)
+	}
+}
+
+// A decoder that stopped leaves its last output behind, and nothing in the file
+// says so: `now` and the window bounds freeze, seen_pos freezes at sub-second
+// values, and every aircraft the receiver last saw still reads as present. An
+// agent that kept reading it kept uploading those aircraft with a fresh
+// timestamp, so the last traffic a dead receiver heard stayed pinned to the
+// public map — and the coverage folds, the daily counters and the heartbeat's
+// aircraft count all reported the dead receiver as a healthy one.
+func TestFrozenFilesAreStaleNotLiveTraffic(t *testing.T) {
+	dir := writeFixtures(t)
+	old := time.Now().Add(-2 * MaxStaleness)
+	for _, name := range []string{"aircraft.json", "stats.json"} {
+		if err := os.Chtimes(filepath.Join(dir, name), old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := NewReader(dir)
+
+	air, err := r.Aircraft()
+	if !errors.Is(err, ErrStale) {
+		t.Fatalf("frozen aircraft.json: got %v, want ErrStale", err)
+	}
+	if air != nil {
+		t.Fatalf("a stale read must hand back nothing to upload, got %+v", air)
+	}
+	if _, err := r.Stats(); !errors.Is(err, ErrStale) {
+		t.Fatalf("frozen stats.json: got %v, want ErrStale", err)
+	}
+
+	// Stale means the same thing to a caller as not-ready — there is no current
+	// decoder output — so the existing quiet handling of ErrNotReady covers it
+	// without every call site having to learn a new error.
+	if !errors.Is(err, ErrNotReady) {
+		t.Fatalf("ErrStale should also read as ErrNotReady, got %v", err)
+	}
+}
+
+func TestFreshFilesAreNotStale(t *testing.T) {
+	// writeFixtures writes them now. The fixture's own `now` field is a fixed
+	// historical timestamp, which is exactly why freshness is asked of the
+	// FILE: a decoder's idea of the time is not the agent's business.
+	r := NewReader(writeFixtures(t))
+	if _, err := r.Aircraft(); err != nil {
+		t.Fatalf("a just-written aircraft.json must read cleanly: %v", err)
+	}
+	if _, err := r.Stats(); err != nil {
+		t.Fatalf("a just-written stats.json must read cleanly: %v", err)
 	}
 }

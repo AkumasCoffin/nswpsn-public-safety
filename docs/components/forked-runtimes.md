@@ -47,8 +47,18 @@ Then: download to `.pending`, **sha256-verify**, swap the component directory (o
 self-replace via a detached helper, for its own binary), restart.
 
 **An empty sha256 means "nothing to do".** The agent treats it as "no update" and
-skips, so a partially filled manifest is safe and a manifest fetch failure is a
+skips, so an entry with nothing to fetch is safe and a manifest fetch failure is a
 graceful no-op — components resolve from whatever is already installed.
+
+**The digests the agent sees are not always the ones committed here.** For every
+entry whose artifact is actually present in `<webroot>/downloads`, the backend
+**computes the sha256 at serve time** by hashing the file itself
+(`backends/node/src/api/node-updates.ts:98-118`, cached on mtime and size so a
+large zip is hashed once and re-hashed when it is replaced). So a committed value
+only ever matters for an artifact hosted somewhere else — a GitHub release asset —
+and an artifact that is *not* in the downloads directory still serves an empty
+sha256 and is still skipped. Nobody hand-hashes a locally hosted artifact; dropping
+the file in is the whole operator action.
 
 The backend serves the manifest at `GET /api/node-updates/manifest`,
 node-token authenticated, and the mapping is **kind-aware**: a pager node is
@@ -70,41 +80,53 @@ The agent compares three numeric parts. `6.14.1-beta.7` therefore reads as
 
 ### Pinned versions as committed
 
-| Entry | Version | sha256 present |
+| Entry | Version | What the agent is served as its sha256 |
 |---|---|---|
-| `sdrtrunk` | `0.7.17` | yes, `windows-amd64` and `linux-amd64` |
-| `rdio` | `6.14.1-beta.7` | yes, `windows-amd64` and `linux-amd64` |
-| `agent` | `0.2.39` | empty — the agent binaries are rebuilt by the deploy and the installer verifies against a published `.sha256` sidecar |
-| `pager-agent` | `0.1.22` | empty, same reason |
-| `adsb-agent` | `0.1.12` | empty, same reason |
+| `sdrtrunk` | `0.7.17` | the committed digests for `windows-amd64` and `linux-amd64` — the artifact is a GitHub release asset, so there is no local file to hash |
+| `rdio` | `6.14.1-beta.7` | the committed digests for `windows-amd64` and `linux-amd64`, same reason |
+| `agent` | `0.2.39` | computed at serve time from the `linux-amd64`, `linux-arm64` and `windows-amd64` binaries the deploy cross-builds into `<webroot>/downloads`. The committed values are empty and are never what is served |
+| `pager-agent` | `0.1.22` | the same, for the two Linux builds |
+| `adsb-agent` | `0.1.12` | the same, for the two Linux builds |
 
-### Self-update is dormant for the agents
+The installer is a separate path, because it has no node token and so cannot ask
+for the manifest at all. It verifies a fresh download against the published
+`<binary>.sha256` sidecar the deploy writes beside each binary, and when that
+sidecar is missing it warns and installs over TLS alone.
 
-Bumping an agent version in this manifest is how an agent change is *intended*
-to reach running nodes. **As the manifest stands, it does not.**
-`downloadVerified` returns `ErrNothingToDo` when the entry's sha256 is empty
-(`feeder-nodes/radio-node/internal/update/update.go:138`), and all three agent
-entries are empty on every platform — see the table above. The update package
-says so itself at `update.go:10-11`: the manifest "currently ships PLACEHOLDER
-urls and EMPTY sha256 values", and every entry point treats that as nothing to
-do.
+### How a version bump reaches a running node
 
-So today a bumped **agent** version reaches a node only through a fresh
-install, which verifies against the published `.sha256` sidecar instead of the
-manifest. Self-update does work for the two runtimes (`sdrtrunk`, `rdio`),
-whose sha256 values are filled. Filling in the agent sha256 values is what
-would turn agent self-update on.
+Bumping an agent version in this manifest is how an agent change reaches running
+nodes, and **it is sufficient on its own**. Nothing else has to be filled in, and
+the empty sha256 values committed against the agent entries do not stop it — they
+are not the values served (see above).
 
-The version plumbing is in place either way:
-`backends/node/scripts/deploy.sh` skips the Go rebuild entirely when the built
-binary already reports the manifest version, and the built binary's version is
-stamped from the manifest (`-ldflags -X …/version.Version`) so self-update
-compares equal and does not loop.
+The deploy supplies the rest of the chain. `backends/node/scripts/deploy.sh` reads
+the version out of this manifest, cross-builds the agent for every platform it
+ships into `<webroot>/downloads`, writes a `.sha256` sidecar beside each one, and
+stamps the built binary with that same version (`-ldflags -X …/version.Version`)
+so an up-to-date node compares *equal* and does not loop. It skips the rebuild
+entirely when the published binary already reports the manifest version — which is
+precisely why the bump is the trigger: no bump, no rebuild, no new binary. The
+backend then hashes the published binary when it serves the manifest, so the
+digest the agent verifies against always describes the bytes actually sitting in
+the downloads directory.
 
-The two big forked runtimes are **placed in the downloads directory once, by
-hand** — the deploy does not rebuild them. Refreshing one means rebuilding its
-release on its own repository, then bumping the version and the sha256 values
-here.
+A node whose own version is numerically lower than the manifest's therefore
+downloads the new binary on its next check — start, the 6-hourly pass, or a
+`cmd{action:'update'}` — verifies it, and self-replaces. **Treat an agent version
+bump as a deploy to every node that is online**, not as a note for the next fresh
+install. The one brake on it is the global auto-update switch, which the backend
+folds into the served manifest: with it off, the automatic passes (start and the
+6-hourly) decline to apply updates, while a manual update command still does.
+
+The single case that genuinely does nothing is an entry whose artifact is absent
+from the downloads directory. That serves an empty sha256, and the agent skips it.
+
+The two big forked runtimes work the other way round: they are **fetched straight
+off their own GitHub release assets**, against the digests committed here, and
+nothing in the deploy rebuilds them. Refreshing one means rebuilding its release
+on its own repository, then bumping the version *and* the sha256 values in this
+file by hand — there is no local file for the backend to hash on their behalf.
 
 ---
 

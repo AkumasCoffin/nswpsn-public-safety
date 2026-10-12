@@ -67,6 +67,9 @@ const (
 	// and exactly wrong for one that is sitting on a dead frequency burning a
 	// tuner, which is the case this covers. The distinction is the LOCK, not
 	// the absence of data.
+	//
+	// It applies ONLY to a trunked decoder, because only a trunked decoder has
+	// a lock to miss — see controlLocking.
 	noLockDwell = 5 * time.Minute
 
 	// firstProbeDelay/probeInterval: the FIRST retest comes quickly — a channel
@@ -167,17 +170,22 @@ const (
 )
 
 type entry struct {
-	state        chanState
-	noLockSince  time.Time // lowWatch: running but not acquired since this moment (zero = locked)
-	lowSince     time.Time // lowWatch: first measured sample below the low threshold, this streak
-	severeSince  time.Time // lowWatch: first measured sample below the severe threshold, this streak (zero = none)
-	goodLow      int       // consecutive measured samples at/above the low threshold
-	goodSevere   int       // consecutive measured samples at/above the severe threshold
-	stoppedAt    time.Time // autoStopped: when we stopped it
-	lastProbeAt  time.Time // autoStopped: last probe (or the stop itself)
-	probes       int       // autoStopped: retests run so far (0 = none yet → firstProbeDelay)
-	lastProbePct float64   // autoStopped: last probe's verdict; -1 = none / no lock
-	reason       string
+	state chanState
+	// controlLocking: this channel has proved itself a trunked decoder at some
+	// point (see controlLocking). Sticky, because the proof is a live quality
+	// snapshot and a snapshot can go stale for a tick without the decoder
+	// changing underneath it.
+	controlLocking bool
+	noLockSince    time.Time // lowWatch: running but not acquired since this moment (zero = locked)
+	lowSince       time.Time // lowWatch: first measured sample below the low threshold, this streak
+	severeSince    time.Time // lowWatch: first measured sample below the severe threshold, this streak (zero = none)
+	goodLow        int       // consecutive measured samples at/above the low threshold
+	goodSevere     int       // consecutive measured samples at/above the severe threshold
+	stoppedAt      time.Time // autoStopped: when we stopped it
+	lastProbeAt    time.Time // autoStopped: last probe (or the stop itself)
+	probes         int       // autoStopped: retests run so far (0 = none yet → firstProbeDelay)
+	lastProbePct   float64   // autoStopped: last probe's verdict; -1 = none / no lock
+	reason         string
 }
 
 // Manager runs the loop. Construct with New, start with Run.
@@ -357,6 +365,28 @@ func (m *Manager) Tick(ctx context.Context) {
 	m.maybeProbe(ctx, live, now)
 }
 
+// controlLocking reports whether this channel runs a TRUNKED decoder, whose
+// healthy resting state is a control-channel lock — the only kind the no-lock
+// rule may judge.
+//
+// GET /channels does not carry the decoder type, so it is inferred from what
+// the channel reports. vce attaches a ControlChannelQualityMonitor only to a
+// STANDARD channel decoding P25/DMR/NXDN (ChannelProcessingManager
+// .supportsControlChannelQuality), and that monitor is the sole source of the
+// quality fields — so any of syncPercent, signalDbfs, syncFrames or
+// decodingForMs being present is proof of a trunked decoder, as is a CONTROL
+// lock. A conventional NBFM/AM channel gets no monitor and never reports
+// CONTROL, so it reports none of them, ever, at rest or in traffic.
+//
+// Note that the channel STATE is no use here: NBFM and AM both report CALL
+// while squelch is open, so a locked state proves only that something is being
+// decoded, not what.
+func controlLocking(ch sdrctl.Channel) bool {
+	return ch.SyncPercent != nil || ch.SignalDbfs != nil ||
+		ch.SyncFrames != nil || ch.DecodingForMs != nil ||
+		ch.Control || ch.State == "CONTROL"
+}
+
 // goodLowReset clears the low-threshold recovery run when a sample falls back
 // below it. Safe on a nil entry (the first bad sample of a new streak).
 func (e *entry) goodLowReset(pct float64) {
@@ -459,6 +489,16 @@ func (m *Manager) detect(live map[string]sdrctl.Channel, pol Policy, now time.Ti
 			continue
 		}
 
+		// Which kind of decoder this is, remembered once proved: the no-lock
+		// rule below is only meaningful for a decoder that has a lock to miss.
+		locking := controlLocking(ch)
+		if e != nil {
+			if locking {
+				e.controlLocking = true
+			}
+			locking = e.controlLocking
+		}
+
 		// NOT ACQUIRED. A trunked control channel locks within seconds of
 		// starting when the signal is there; one that has been running for
 		// minutes without acquiring is not being slow, it is on a frequency
@@ -466,9 +506,18 @@ func (m *Manager) detect(live map[string]sdrctl.Channel, pol Policy, now time.Ti
 		// because it is not decoding. Judged on the LOCK, so a channel that
 		// has acquired but reports nothing (no monitor, older runtime) keeps
 		// the exemption below untouched.
+		//
+		// A CONVENTIONAL channel is exempt from the whole rule: NBFM and AM sit
+		// IDLE whenever squelch is closed, so a quiet analog channel is not
+		// failing to acquire, it is simply at rest — stopping it would lose
+		// every transmission on it. vce draws exactly the same line in its own
+		// IDLE self-heal heuristic (CONTROL_LOCKING_DECODERS).
 		if !decodeprobe.Locked(ch.Control, ch.State) {
+			if !locking {
+				continue // conventional at rest; the decode exemption covers it too
+			}
 			if e == nil {
-				e = &entry{state: stLowWatch}
+				e = &entry{state: stLowWatch, controlLocking: true}
 				m.entries[name] = e
 			}
 			if e.noLockSince.IsZero() {
@@ -513,6 +562,15 @@ func (m *Manager) detect(live map[string]sdrctl.Channel, pol Policy, now time.Ti
 			}
 			m.entries[name] = e
 			continue
+		}
+		// An entry can reach its first measured-low sample with no low streak
+		// ever having started: the no-lock path creates one the moment a
+		// channel fails to acquire, and a channel that then locks clears only
+		// the no-lock clock. Starting the streak here is what stops a zero
+		// lowSince reading as a streak stretching back to year 1 and firing the
+		// 10-minute rule on a single sample.
+		if e.lowSince.IsZero() {
+			e.lowSince = now
 		}
 		// The severe clock runs while samples stay below the severe threshold.
 		// A reading in [severe, low) ends that streak — again only once it is
@@ -777,7 +835,13 @@ func (m *Manager) Snapshot() any {
 		row := map[string]any{"state": state, "reason": e.reason}
 		switch e.state {
 		case stLowWatch:
-			row["sinceMs"] = e.lowSince.UnixMilli()
+			// A watch opened by the no-lock path has no low streak, so report
+			// whichever clock is actually running rather than the zero time.
+			since := e.lowSince
+			if since.IsZero() {
+				since = e.noLockSince
+			}
+			row["sinceMs"] = since.UnixMilli()
 		case stAutoStopped:
 			row["sinceMs"] = e.stoppedAt.UnixMilli()
 			row["lastProbeAtMs"] = e.lastProbeAt.UnixMilli()
