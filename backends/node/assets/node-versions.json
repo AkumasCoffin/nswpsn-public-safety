@@ -1,7 +1,7 @@
 {
   "_comment": "Node self-update + component manifest. Everything is served as static files off the site webroot (NODE_DOWNLOADS_BASE, default https://nswpsn.forcequit.xyz/downloads). Deploy builds the agent binaries there; the SDR-Trunk runtime (from the feature/node-control branch) and the rdio binary come from their own GitHub release assets, which is why those two need a hand-written sha256 here. The agents' sha256 values stay EMPTY in this file on purpose: the backend hashes whatever binary is present in the downloads dir at serve time (api/node-updates.ts), so what a node is served is never empty. An entry really served empty is one whose artifact nobody has published, and the agent skips it. Bumping a version here is therefore a DEPLOY to the online fleet, not a note for the next fresh install.",
   "agent": {
-    "version": "0.2.39",
+    "version": "0.2.40",
     "urls": {
       "windows-amd64": "https://nswpsn.forcequit.xyz/downloads/nodeagent-windows-amd64.exe",
       "linux-amd64": "https://nswpsn.forcequit.xyz/downloads/nodeagent-linux-amd64",
@@ -15,7 +15,7 @@
   },
   "pager-agent": {
     "_comment": "The PAGER-node agent binary (Linux only, amd64/arm64). Served to pager nodes as component 'agent' by /api/node-updates/manifest (kind-aware remap); the pager agent has no sdrtrunk/rdio components.",
-    "version": "0.1.22",
+    "version": "0.1.23",
     "urls": {
       "linux-amd64": "https://nswpsn.forcequit.xyz/downloads/nodeagent-pager-linux-amd64",
       "linux-arm64": "https://nswpsn.forcequit.xyz/downloads/nodeagent-pager-linux-arm64"
@@ -27,7 +27,7 @@
   },
   "adsb-agent": {
     "_comment": "The ADS-B node agent binary (Linux only, amd64/arm64). Served to adsb nodes as component 'agent' by /api/node-updates/manifest (kind-aware remap); the adsb agent supervises dump1090-fa and has no sdrtrunk/rdio components. deploy.sh SKIPS the Go rebuild when the built binary already reports this version, so agent changes only reach nodes once this is bumped.",
-    "version": "0.1.12",
+    "version": "0.1.13",
     "urls": {
       "linux-amd64": "https://nswpsn.forcequit.xyz/downloads/nodeagent-adsb-linux-amd64",
       "linux-arm64": "https://nswpsn.forcequit.xyz/downloads/nodeagent-adsb-linux-arm64"
