@@ -33,9 +33,11 @@ class AlertPoller:
         #     come back as 'endeavour_current').
         #   - 'essential_unplanned'/'essential_future' point at the Essential
         #     Energy backend endpoints.
-        #   - 'cfa'/'deeca' share /api/vic-emergency/events — one feed
-        #     carries every Victorian publisher; _extract_items splits on
-        #     properties.agency (SES/EMV/ESTA items are not alertable types).
+        #   - 'cfa'/'deeca'/'vicses'/'emv'/'esta' share
+        #     /api/vic-emergency/events — one feed carries every Victorian
+        #     publisher; _extract_items splits on properties.agency. All five
+        #     are alertable (the comment here claimed the last three were not,
+        #     which stopped being true when the catalog gained them).
         #   - The interstate feeds are all RFS-shaped GeoJSON, refreshed
         #     upstream every 2 min (NT: 5 min) — the 60s cycle just sees an
         #     unchanged snapshot on the off-beats; seen-dedup absorbs it.

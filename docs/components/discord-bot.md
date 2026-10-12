@@ -71,31 +71,75 @@ hand-maintained list anywhere.
 
 ## Polling and dispatch
 
-Four `@tasks.loop` loops in `bot.py`:
+Five `@tasks.loop` loops in `bot.py`:
 
 | Loop | Cadence | Does |
 |---|---|---|
-| `poll_alerts` | 60s | `AlertPoller.check_alerts()`, then batched dispatch. Emits an INFO heartbeat every fifth tick so quiet stretches are visible without DEBUG |
-| `poll_pager` | 30s | `check_pager()`, then batched dispatch |
+| `poll_alerts` | 60s | `AlertPoller.check_alerts()`, then dispatch. Emits an INFO heartbeat every fifth tick so quiet stretches are visible without DEBUG |
+| `poll_pager` | 30s | `check_pager()`, then dispatch |
 | `process_message_queue` | 1s | Drains a batch and sends it, fanning out **per channel concurrently** |
 | `drain_bot_actions` | 10s | Executes queued admin actions from the backend |
+| `run_retention` | 24h | Applies the retention windows to the bot's own tables |
+
+`run_retention` exists because every `cleanup_*` method in `database.py` had one
+and nothing ever called it. The only historical caller was a `/dev` clear-seen
+command, removed when the dashboard took over — so `seen_alerts` (every FIRMS
+cluster of every pass, plus every traffic and outage id), `seen_pager`,
+`incident_messages`, `preset_fire_log`, `pending_bot_actions` and
+`staff_notify_messages` had all grown without bound since the bot was first
+deployed, while the code comments and the backend's dashboard queries assumed the
+documented 7/14/30/90-day purge was happening. The window for each table is that
+method's own default. Every step is guarded individually: a failure on one table
+must not skip the rest and must not stop the loop, because nothing restarts it.
 
 `AlertPoller` (`alert_poller.py`) holds the endpoint map. Several canonical alert
 types share one backend fetch and are split apart at extraction:
 
 - `bom_land` and `bom_marine` both come from `/api/bom/warnings`, split by
   category;
-- `cfa` and `deeca` both come from `/api/vic-emergency/events` — one feed carries
-  every Victorian publisher, split on `properties.agency`. SES, EMV and ESTA
-  items arrive on the same feed and are **not** alertable types;
+- `cfa`, `deeca`, `vicses`, `emv` and `esta` all come from
+  `/api/vic-emergency/events` — one feed carries every Victorian publisher, split
+  on `properties.agency`. All five are alertable types in their own right, as are
+  `nt_bushfires`, `qfd_warning` and `dfes_warning`, and their keyword, severity
+  and geo filters work: the catalog now drives the poller's shape branches and
+  the embed builder's routing, where the hand-written lists those replaced had
+  never gained the newer agencies and still carried the pre-rename `qld_warning`
+  and `wa_warning` spellings;
 - `endeavour_planned` uses `/api/endeavour/planned`; current outages come back as
   `endeavour_current`;
 - the interstate feeds are all RFS-shaped GeoJSON and refresh upstream every
   2 minutes (NT: 5), so the 60s cycle mostly sees no change.
 
-Dispatch is **batched**: several alerts destined for the same channel in one poll
-cycle are coalesced into a single Components V2 `LayoutView`, chunked by
-character budget, rather than one message per alert × config.
+Dispatch is **one message per alert**, each a Components V2 `LayoutView`. Alerts
+keep their poll-result order within a channel and the send queue paces them.
+
+It used to pack a poll's alerts for a channel into a single `LayoutView`, which
+saved messages while the Waze firehose was running but cost two things that matter
+more at today's volume. **Incident tracking**: only the first incident-bearing
+alert in a batch could have its message recorded, because the row stores one
+`jump_url` per message, so every other incident in that batch was never written
+down and could never be linked to — or replied to — when it updated.
+**Legibility**: five unrelated incidents shared one timestamp and one block, and
+an update could only reply to the whole batch.
+
+**`firms` is the one exception**, for the opposite reason: a satellite hotspot is
+not an incident — it has no status to update and nothing to reply to — and one
+pass over a fire ground lights up hundreds of them. A poll's hotspots for a
+channel are collapsed into a single digest, built after the per-alert loop.
+
+`firms` is also **opt-in, and only honoured with a region**. A preset must carry a
+`geofilter` (or a legacy `bbox`), because an unscoped subscription meant every
+hotspot in Australia: on 2026-10-12 one poll queued 2,577 hotspots for a single
+channel, 9,990 fired inside the hour, the send queue filled, 1,996 messages were
+dropped and every other channel's alerts were delayed behind the backlog. The two
+presets responsible had swept `firms` in through a "select everything" type list
+and carried no filters at all. The rule is enforced in two places:
+`_SCOPED_ONLY_ALERT_TYPES` in `discord-bot/database.py` refuses an unscoped
+subscription at the single point where a subscription is resolved — which also
+stops FIRMS being fetched and clustered at all once nobody is left subscribed, and
+retires existing unscoped rows with no operator re-saving them — and
+`_OPT_IN_ONLY_TYPES` in `bot.py` keeps a catch-all picker ("Enable All", the
+generic `/setup` dropdown) from choosing the type in the first place.
 
 Per-channel fan-out in `process_message_queue` is concurrent on purpose. It used
 to be serial, and one slow or rate-limited channel then blocked every other —
@@ -161,9 +205,15 @@ writes a row to `pending_bot_actions` in the bot's database, and the bot's
 Rows are **HMAC-signed** with `BOT_ACTION_SIGNING_SECRET`, set to the same value
 on both sides (`backends/node/src/services/botActionSign.ts` signs,
 `discord-bot/database.py` verifies), so the bot rejects any insert that did not
-come from the backend. When the secret is unset, signing is disabled and the bot
-**fails open** — a rollout accommodation, and both sides log a warning. Generate
-one with `openssl rand -hex 32`.
+come from the backend. With the secret unset the bot **fails closed**: a queued
+action executes with no further authentication, so without the shared secret there
+is nothing to tell a backend insert from anyone else's. It refuses every queued
+action, logs one explainer the first time — naming what has stopped working: sync,
+test, broadcast and staff notifications — and completes each row as `error` with a
+reason the dashboard shows, so the misconfiguration surfaces instead of actions
+silently vanishing. This used to fail open as a rollout accommodation; the secret
+is deployed on both sides now, so an unsigned queue is a misconfiguration, not a
+migration state. Generate one with `openssl rand -hex 32`.
 
 The drainer reclaims stale `running` rows on each pass, so an action orphaned by
 a bot restart is retried rather than stuck.

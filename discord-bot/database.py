@@ -117,6 +117,15 @@ def sign_bot_action(secret: str, action: str, requested_by: str, params: Any) ->
     ).hexdigest()
 
 
+# A signature is a hex SHA-256 digest and nothing else. hmac.compare_digest
+# raises TypeError on a str holding any non-ASCII character, and that TypeError
+# would come out of the drain loop — which discord.ext.tasks does not retry —
+# so one row with a stray non-ASCII sig would stop every admin action draining
+# until a restart, then do it again on the next pass. Shape is checked first,
+# and a wrong shape is a rejection rather than an exception.
+_SIG_RE = re.compile(r'^[0-9a-fA-F]{64}$')
+
+
 def verify_bot_action_sig(
     secret: str,
     action: str,
@@ -126,10 +135,11 @@ def verify_bot_action_sig(
 ) -> bool:
     """Constant-time verify a bot-action row's signature.
 
-    Returns False when sig is missing/None or does not match — the caller
-    must refuse to execute the action in that case.
+    Returns False when sig is missing/None, is not a 64-char hex digest, or
+    does not match — the caller must refuse to execute the action in that
+    case.
     """
-    if not sig:
+    if not sig or not isinstance(sig, str) or not _SIG_RE.match(sig):
         return False
     expected = sign_bot_action(secret, action, requested_by, params)
     return hmac.compare_digest(expected, sig)
@@ -210,6 +220,10 @@ class Database:
     def __init__(self, db_path: str = None):
         self.db_path = db_path or DB_PATH
         self._pool = None
+        # Last (alert_type, preset ids) reported as unscoped, so the notice in
+        # get_presets_for_alert_type is logged on change rather than every
+        # poll cycle.
+        self._scoped_only_notice = None
 
     def _get_pool(self):
         """Lazily create the thread-safe Postgres connection pool. Lazy so the
@@ -600,6 +614,53 @@ class Database:
         logger.debug(f"list_all_presets -> {len(rows)} rows")
         return [dict(row) for row in rows]
 
+    # Alert types that a subscription must also SCOPE to be honoured.
+    #
+    # FIRMS is a satellite hotspot feed, not an incident feed: on 2026-10-12
+    # one poll queued 2,577 hotspots for a single channel, 9,990 fired inside
+    # the hour, the send queue filled and 1,996 messages were dropped, with
+    # every other channel's alerts delayed behind the backlog. The two presets
+    # responsible had swept `firms` in through a "select everything" type list
+    # and carried no filters at all; the presets that were fine each had a
+    # polygon geofilter holding the volume down to a region.
+    #
+    # So an unscoped hotspot subscription is not honoured. Enforced here, at
+    # the one point where a subscription is resolved, for two reasons: the
+    # poller asks the same question before it fetches, so FIRMS stops being
+    # fetched and clustered at all once nobody is left subscribed; and the
+    # rows that already name `firms` stop receiving it with no operator having
+    # to re-save them. The other half of the rule — that a catch-all must not
+    # choose the type in the first place — lives in bot.py's
+    # _OPT_IN_ONLY_TYPES.
+    _SCOPED_ONLY_ALERT_TYPES = {'firms'}
+
+    @staticmethod
+    def preset_has_geoscope(preset: Dict[str, Any]) -> bool:
+        """Does this preset confine itself to a region?
+
+        Reads the same `filters` shapes the dispatcher's geofilter gate does,
+        including the legacy un-wrapped `bbox` older presets still carry.
+        """
+        f = preset.get('filters') if isinstance(preset, dict) else None
+        if not isinstance(f, dict):
+            return False
+        return isinstance(f.get('geofilter'), dict) or isinstance(f.get('bbox'), dict)
+
+    @classmethod
+    def subscription_is_honoured(cls, preset: Dict[str, Any],
+                                 alert_type: str) -> bool:
+        """Will this preset actually receive this alert type?
+
+        True for everything except a _SCOPED_ONLY_ALERT_TYPES subscription
+        with no region on the preset. /setup asks this as well as the
+        dispatcher, so a subscription that is being refused isn't displayed as
+        a healthy row.
+        """
+        canon = alert_catalog.canonical(alert_type) or alert_type
+        if canon in cls._SCOPED_ONLY_ALERT_TYPES:
+            return cls.preset_has_geoscope(preset)
+        return True
+
     def get_presets_for_alert_type(self, alert_type: str) -> List[Dict[str, Any]]:
         """All presets subscribed to alert_type. Mute state NOT applied.
 
@@ -610,6 +671,9 @@ class Database:
 
         Overlap (&&) rather than contains (@>) so one query covers all
         spellings; the GIN index on alert_types serves both.
+
+        A type in _SCOPED_ONLY_ALERT_TYPES additionally needs the preset to
+        name a region — see the comment there.
         """
         self._require_postgres()
         keys = alert_catalog.accepted_keys(alert_type)
@@ -624,7 +688,32 @@ class Database:
         finally:
             conn.close()
         logger.debug(f"get_presets_for_alert_type {keys!r} -> {len(rows)} rows")
-        return [dict(row) for row in rows]
+        presets = [dict(row) for row in rows]
+
+        canon = alert_catalog.canonical(alert_type) or alert_type
+        if canon in self._SCOPED_ONLY_ALERT_TYPES:
+            scoped: List[Dict[str, Any]] = []
+            dropped: List[Any] = []
+            for p in presets:
+                if self.subscription_is_honoured(p, canon):
+                    scoped.append(p)
+                else:
+                    dropped.append(p['id'])
+            if dropped:
+                # Said once per change of the offending set, not once a
+                # minute: the poll asks this question every cycle.
+                note = (canon, tuple(sorted(dropped)))
+                if note != self._scoped_only_notice:
+                    self._scoped_only_notice = note
+                    logger.info(
+                        "%s: ignoring %d subscription(s) with no region — "
+                        "preset id(s) %s. A hotspot subscription must name a "
+                        "geofilter; add one on the dashboard or drop the type.",
+                        canon, len(dropped),
+                        ', '.join(str(i) for i in sorted(dropped)),
+                    )
+            presets = scoped
+        return presets
 
     def get_presets_for_pager(self) -> List[Dict[str, Any]]:
         """All presets with pager_enabled = TRUE."""

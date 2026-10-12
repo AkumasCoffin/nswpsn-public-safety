@@ -85,10 +85,24 @@ def safe_add_containers(view, group) -> int:
 # keys the dashboard offered. All three now read the one file.
 ALERT_TYPES = alert_catalog.LABELS
 
+# Alert types a catch-all selection must never sweep in — they only arrive by
+# being ticked deliberately. FIRMS is a satellite hotspot feed, not an incident
+# feed: on 2026-10-12 one poll queued 2,577 hotspots for a single channel
+# through a "select everything" preset, filled the send queue and left every
+# other channel's alerts up to 75 minutes behind. The type stays in the
+# per-source picker, so it can still be chosen on purpose; what changes is that
+# "Enable All" and a bare /alert no longer choose it for anyone. The other half
+# of the rule — an unscoped hotspot subscription is not honoured at all — lives
+# in Database.get_presets_for_alert_type.
+_OPT_IN_ONLY_TYPES = {'firms'}
+
 # Alert types shown in the generic /setup alerts dropdown + "Enable All".
 # Radio summary opts out in the catalog (generalPicker:false) because it has
 # its own dedicated setup flow (see SetupRadioSummarySubmenuView).
-_GENERAL_ALERT_TYPES = alert_catalog.general_picker_types()
+_GENERAL_ALERT_TYPES = {
+    k: v for k, v in alert_catalog.general_picker_types().items()
+    if k not in _OPT_IN_ONLY_TYPES
+}
 
 # Discord hard-caps a slash-command choice list AND a select menu at 25
 # options (and max_values at 25). ALERT_TYPES passed that when the
@@ -162,6 +176,22 @@ _SEVERITY_SCALES = {
     if alert_catalog.severity_tokens(k)
 }
 
+# Every alert type whose records arrive as a normalised emergency-service
+# GeoJSON Feature — title/status/location under `properties`, a point or
+# polygon under `geometry`. Derived from the catalog's feedShape, because the
+# hand-written tuples this replaces predated vicses, emv, esta and
+# nt_bushfires and the qld_warning→qfd_warning / wa_warning→dfes_warning
+# renames: those six types fell through to the generic branches, so a
+# keywords_include preset dropped every one of their alerts, keywords_exclude
+# excluded nothing, and a geofilter passed them whatever their location.
+_FEATURE_ALERT_TYPES = alert_catalog.keys_with_shape(
+    'geo_fire', 'geo_fire_warning', 'geo_act')
+
+# The above plus the traffic feeds, which are the same GeoJSON shape but carry
+# no severity or agency fields and so read differently for keywords.
+_GEO_POINT_ALERT_TYPES = _FEATURE_ALERT_TYPES | alert_catalog.keys_with_shape(
+    'geo_traffic')
+
 
 def _alert_text_haystack(alert_type: str, alert_data: dict) -> str:
     """Concatenate searchable text fields per alert_type for keyword matching."""
@@ -177,10 +207,12 @@ def _alert_text_haystack(alert_type: str, alert_data: dict) -> str:
             if s:
                 bits.append(s)
 
-    if alert_type in ('rfs', 'user_incident', 'cfa', 'deeca', 'qfd', 'dfes',
-                      'sa_cfs', 'sa_mfs', 'nt_fire', 'qld_warning',
-                      'wa_warning', 'act_ambulance'):
-        props = alert_data.get('properties') if alert_type != 'user_incident' else None
+    # A preset saved before a rename still holds the retired spelling, so fold
+    # to the canonical key before testing membership.
+    canon = alert_catalog.canonical(alert_type) or alert_type
+
+    if canon in _FEATURE_ALERT_TYPES or canon == 'user_incident':
+        props = alert_data.get('properties') if canon != 'user_incident' else None
         # RFS: properties.{title,description,location,councilArea,fireType,status}
         if isinstance(props, dict):
             for k in ('title', 'description', 'location', 'location_text',
@@ -189,33 +221,33 @@ def _alert_text_haystack(alert_type: str, alert_data: dict) -> str:
         else:
             for k in ('title', 'description', 'location'):
                 _push(alert_data.get(k))
-    elif alert_type and alert_type.startswith('bom_'):
+    elif canon and canon.startswith('bom_'):
         for k in ('title', 'description', 'area', 'category', 'severity'):
             _push(alert_data.get(k))
-    elif alert_type and alert_type.startswith('traffic_'):
+    elif canon and canon.startswith('traffic_'):
         props = alert_data.get('properties') or {}
         for k in ('title', 'headline', 'displayName', 'subtitle', 'roads',
                   'incidentType', 'otherAdvice', 'adviceA', 'adviceB',
                   'affectedDirection'):
             _push(props.get(k))
-    elif alert_type in ('wire_article', 'wire_fleet'):
+    elif canon in ('wire_article', 'wire_fleet'):
         for k in ('title', 'excerpt', 'callsign', 'agency', 'station',
                   'state', 'lga', 'suburb'):
             _push(alert_data.get(k))
         for a in (alert_data.get('agencies') or []):
             _push(a)
-    elif alert_type and (alert_type.startswith('endeavour_')
-                         or alert_type == 'ausgrid'
-                         or alert_type.startswith('essential_')):
+    elif canon and (canon.startswith('endeavour_')
+                    or canon == 'ausgrid'
+                    or canon.startswith('essential_')):
         for k in ('suburb', 'Suburb', 'streets', 'cause', 'status',
                   'outageType'):
             _push(alert_data.get(k))
-    elif alert_type == 'pager':
+    elif canon == 'pager':
         # alert_data here is the pager msg dict.
         for k in ('capcode', 'type', 'category', 'alias', 'agency',
                   'address', 'suburb', 'council', 'incident_id', 'raw'):
             _push(alert_data.get(k))
-    elif alert_type == 'radio_summary':
+    elif canon == 'radio_summary':
         # Radio summary content is multi-incident; flatten any string values.
         for k, v in (alert_data or {}).items():
             _push(v)
@@ -231,12 +263,14 @@ def _alert_lat_lng(alert_type: str, alert_data: dict):
     if not isinstance(alert_data, dict):
         return (None, None)
 
+    # Fold a retired spelling to its canonical key before branching — see
+    # _alert_text_haystack.
+    canon = alert_catalog.canonical(alert_type) or alert_type or ''
+
     # GeoJSON-style geometry.coordinates = [lng, lat] for rfs, traffic_*
-    # and the interstate fire feeds.
-    if alert_type in ('rfs', 'cfa', 'deeca', 'qfd', 'dfes', 'sa_cfs',
-                      'sa_mfs', 'nt_fire', 'qld_warning', 'wa_warning',
-                      'act_ambulance') \
-            or (alert_type or '').startswith('traffic_'):
+    # and the interstate fire feeds. The prefix test stays as the safety net
+    # for a traffic key that is live before it reaches the catalog.
+    if canon in _GEO_POINT_ALERT_TYPES or canon.startswith('traffic_'):
         geom = alert_data.get('geometry') or {}
         coords = geom.get('coordinates') if isinstance(geom, dict) else None
         if isinstance(coords, (list, tuple)) and len(coords) >= 1:
@@ -256,7 +290,7 @@ def _alert_lat_lng(alert_type: str, alert_data: dict):
 
     # FIRMS hotspots: coords live in properties.latitude/longitude, with a
     # snapped cluster_glat/glon fallback set by the clusterer.
-    if alert_type == 'firms':
+    if canon == 'firms':
         props = alert_data.get('properties') or {}
         lat = props.get('latitude')
         lng = props.get('longitude')
@@ -272,7 +306,7 @@ def _alert_lat_lng(alert_type: str, alert_data: dict):
         return (None, None)
 
     # User incidents store lat/lng at top level.
-    if alert_type == 'user_incident':
+    if canon == 'user_incident':
         try:
             lat = alert_data.get('lat')
             lng = alert_data.get('lng')
@@ -284,9 +318,9 @@ def _alert_lat_lng(alert_type: str, alert_data: dict):
 
     # Power outages use latitude/longitude (Endeavour/Essential) or
     # Latitude/Longitude (Ausgrid).
-    if ((alert_type or '').startswith('endeavour_')
-            or alert_type == 'ausgrid'
-            or (alert_type or '').startswith('essential_')):
+    if (canon.startswith('endeavour_')
+            or canon == 'ausgrid'
+            or canon.startswith('essential_')):
         lat = alert_data.get('latitude') or alert_data.get('Latitude')
         lng = alert_data.get('longitude') or alert_data.get('Longitude')
         try:
@@ -297,7 +331,7 @@ def _alert_lat_lng(alert_type: str, alert_data: dict):
         return (None, None)
 
     # Pager messages nest under coordinates.{lat,lon}.
-    if alert_type == 'pager':
+    if canon == 'pager':
         coords = alert_data.get('coordinates') or {}
         if isinstance(coords, dict):
             try:
@@ -629,9 +663,19 @@ class NSWPSNBot(commands.Bot):
         super().__init__(
             command_prefix='!',
             intents=intents,
-            help_command=None
+            help_command=None,
+            # Nothing the bot relays may ping on its own. Alert text is
+            # third-party copy — a feed title, an editor's incident
+            # description, a relayed pager address — and it lands in a
+            # TextDisplay, which Discord parses for mentions, so an
+            # "@everyone" typed into an incident would have mass-pinged every
+            # subscribed guild the bot can do that in. The bot's OWN role
+            # pings are re-granted per send, naming only the roles the
+            # matching presets asked for (see _send_one_message).
+            allowed_mentions=discord.AllowedMentions(
+                everyone=False, users=False, roles=False, replied_user=False),
         )
-        
+
         self.db = Database()
         self.poller = AlertPoller(API_BASE_URL, API_KEY, self.db)
         self.embed_builder = EmbedBuilder()
@@ -645,7 +689,15 @@ class NSWPSNBot(commands.Bot):
         self.message_queue = asyncio.Queue(maxsize=5000)
         self.rate_limit_delay = 0.5  # legacy; pacing is now handled by discord.py
         self.max_messages_per_batch = 100  # messages drained per tick (fanned out per channel)
-        
+        # How much of one batch a single alert_type may claim while another
+        # type is waiting. A FIRMS burst used to own every slot in the batch
+        # because the drain was pure FIFO; see _drain_fair_share.
+        self.max_batch_share_per_type = 25
+        # Rotates the round-robin's starting channel, so the tail of the
+        # channel list can't starve if there are ever more channels than one
+        # batch covers.
+        self._fair_share_cursor = 0
+
         # Track startup time - don't remove guild configs within first 60 seconds
         # This prevents race conditions during startup where guilds may briefly appear disconnected
         self._startup_time = datetime.now()
@@ -657,6 +709,11 @@ class NSWPSNBot(commands.Bot):
         # as channels get deleted/re-added.
         self._permission_error_channels: Dict[int, datetime] = {}
         self._permission_error_debounce_seconds = 300  # 5 minutes
+
+        # Set once the "no signing secret, refusing admin actions" explainer
+        # has been logged, so a misconfigured deployment says so loudly once
+        # instead of on every queued action.
+        self._unsigned_action_notice = False
 
     def _record_send_error(self, channel_id: int) -> bool:
         """Mark `channel_id` as having just errored. Returns True if this is
@@ -739,6 +796,7 @@ class NSWPSNBot(commands.Bot):
         self.poll_pager.start()
         self.process_message_queue.start()
         self.drain_bot_actions.start()
+        self.run_retention.start()
         
         # Sync commands globally
         synced = await self.tree.sync()
@@ -930,13 +988,30 @@ class NSWPSNBot(commands.Bot):
                 except (TypeError, ValueError):
                     reference = None
 
+            # The bot defaults to mentioning nothing (see NSWPSNBot.__init__),
+            # so a message that is MEANT to ping has to name its roles here.
+            # Only the roles the matching presets asked for are listed, which
+            # is also what keeps an "@everyone" in relayed text inert.
+            ping_ids = item.get('ping_role_ids') or []
+            if ping_ids:
+                mentions = discord.AllowedMentions(
+                    everyone=False, users=False, replied_user=False,
+                    roles=[discord.Object(id=int(r)) for r in ping_ids],
+                )
+            else:
+                mentions = discord.AllowedMentions(
+                    everyone=False, users=False, roles=False,
+                    replied_user=False)
+
             if view is not None:
                 # Components V2 (LayoutView) forbids `content` — role mentions
                 # live inside a TextDisplay in the view instead.
-                message = await channel.send(view=view, reference=reference)
+                message = await channel.send(view=view, reference=reference,
+                                             allowed_mentions=mentions)
             else:
                 message = await channel.send(content=content, embeds=embeds,
-                                             reference=reference)
+                                             reference=reference,
+                                             allowed_mentions=mentions)
 
             alert_type = item.get('alert_type')
             if alert_type:
@@ -1019,6 +1094,89 @@ class NSWPSNBot(commands.Bot):
             logger.error(f"Error closing poller session: {e}")
         await super().close()
 
+    def _drain_fair_share(self):
+        """Build this tick's batch ROUND-ROBIN across channels.
+
+        The queue is FIFO and the batch used to be its first 100 items, so
+        whichever channel sat at the front owned the whole batch. On
+        2026-10-12 one poll queued 2,577 FIRMS hotspots for a single channel:
+        every other channel's alerts — RFS, CFA, ambulance, 47 channels of
+        them — waited behind that backlog for up to 75 minutes, and 1,996
+        messages were eventually dropped as the queue overflowed.
+
+        So the queue is drained in full, bucketed per channel, and the batch
+        filled one item per channel per pass. A single alert_type may take
+        only `max_batch_share_per_type` of a batch while another type still
+        has items waiting; once nothing else can use the slots, the rest of
+        the batch is topped up from that type anyway, because a cap that
+        idles the sender buys nobody anything.
+
+        Whatever doesn't fit goes straight back on the queue, in per-channel
+        order: the queue stays the single backlog, so its size still reads
+        true in the log lines and `queue_message`'s drop-oldest valve still
+        applies. There is no await in here, so the drain and the re-queue are
+        atomic against the poll loops.
+        """
+        pending: Dict[int, List[Dict[str, Any]]] = {}
+        order: List[int] = []
+        while not self.message_queue.empty():
+            try:
+                item = self.message_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            cid = item['channel_id']
+            if cid not in pending:
+                pending[cid] = []
+                order.append(cid)
+            pending[cid].append(item)
+        if not order:
+            return []
+
+        start = self._fair_share_cursor % len(order)
+        self._fair_share_cursor += 1
+        order = order[start:] + order[:start]
+
+        limit = self.max_messages_per_batch
+        type_cap = max(1, int(self.max_batch_share_per_type))
+        cursor = {cid: 0 for cid in order}
+        per_type: Dict[str, int] = {}
+        batch: List[Dict[str, Any]] = []
+        held_by_cap = False
+
+        def _fill(respect_cap: bool):
+            nonlocal held_by_cap
+            progressed = True
+            while len(batch) < limit and progressed:
+                progressed = False
+                for cid in order:
+                    if len(batch) >= limit:
+                        break
+                    idx = cursor[cid]
+                    items = pending[cid]
+                    if idx >= len(items):
+                        continue
+                    item = items[idx]
+                    atype = item.get('alert_type') or 'alert'
+                    if respect_cap and per_type.get(atype, 0) >= type_cap:
+                        # Leave the cursor where it is — a channel's items
+                        # keep their poll order, so this type's next item
+                        # blocks the ones behind it rather than being skipped.
+                        held_by_cap = True
+                        continue
+                    cursor[cid] = idx + 1
+                    per_type[atype] = per_type.get(atype, 0) + 1
+                    batch.append(item)
+                    progressed = True
+
+        _fill(respect_cap=True)
+        if held_by_cap and len(batch) < limit:
+            _fill(respect_cap=False)
+
+        for cid in order:
+            for item in pending[cid][cursor[cid]:]:
+                self._requeue_message(item)
+        return batch
+
     @tasks.loop(seconds=1)
     async def process_message_queue(self):
         """Drain a batch from the queue and send it, fanning out per channel
@@ -1032,12 +1190,7 @@ class NSWPSNBot(commands.Bot):
         # wrap the whole body so a transient error can't silently kill the
         # queue drainer (mirrors poll_alerts / poll_pager / drain_bot_actions).
         try:
-            batch = []
-            while not self.message_queue.empty() and len(batch) < self.max_messages_per_batch:
-                try:
-                    batch.append(self.message_queue.get_nowait())
-                except asyncio.QueueEmpty:
-                    break
+            batch = self._drain_fair_share()
             if not batch:
                 return
 
@@ -1063,6 +1216,44 @@ class NSWPSNBot(commands.Bot):
     
     @process_message_queue.before_loop
     async def before_process_queue(self):
+        await self.wait_until_ready()
+
+    @tasks.loop(hours=24)
+    async def run_retention(self):
+        """Apply the documented retention windows to the bot's own database.
+
+        Every cleanup_* method below existed and none of them was called from
+        anywhere: the only historical caller was the /dev clear-seen command,
+        removed when the dashboard took over. So seen_alerts (every FIRMS
+        cluster of every pass, every traffic and outage id), seen_pager,
+        incident_messages, preset_fire_log, pending_bot_actions and
+        staff_notify_messages had grown since the bot was first deployed,
+        while the code comments and the backend's dashboard queries assumed a
+        7/14/30-day purge was happening.
+
+        The windows are each method's own default. Every step is guarded
+        individually: a failure on one table must not skip the rest, and must
+        not stop the loop — nothing restarts it.
+        """
+        loop = asyncio.get_event_loop()
+        steps = (
+            ('seen_alerts + seen_pager', self.db.cleanup_old_seen),
+            ('incident_messages', self.db.cleanup_old_incident_messages),
+            ('preset_fire_log', self.db.cleanup_preset_fire_log),
+            ('pending_bot_actions', self.db.cleanup_old_bot_actions),
+            ('staff_notify_messages', self.db.cleanup_old_staff_messages),
+        )
+        done = []
+        for label, fn in steps:
+            try:
+                await loop.run_in_executor(None, fn)
+                done.append(label)
+            except Exception as e:
+                logger.warning(f"retention: {label} cleanup failed: {e}")
+        logger.info(f"🧹 Retention pass complete — purged {', '.join(done) or 'nothing'}")
+
+    @run_retention.before_loop
+    async def before_run_retention(self):
         await self.wait_until_ready()
 
     # ------------------------------------------------------------------
@@ -1095,8 +1286,44 @@ class NSWPSNBot(commands.Bot):
         finally:
             conn.close()
 
+    async def _complete_bot_action_safely(self, action_id: int, *,
+                                          result: Optional[Dict[str, Any]] = None,
+                                          error: Optional[str] = None):
+        """Mark a drained action finished, swallowing DB errors.
+
+        drain_bot_actions is a @tasks.loop, and discord.ext.tasks only retries
+        a handful of network errors — a psycopg2 error or a PoolError raised
+        out of here would END the loop, and nothing restarts it, so staff
+        notifications, broadcasts, syncs and tests would queue up in silence.
+        A row we fail to complete stays 'running' and is reclaimed five
+        minutes later instead.
+        """
+        loop = asyncio.get_event_loop()
+        try:
+            await loop.run_in_executor(
+                None,
+                functools.partial(self.db.complete_bot_action, action_id,
+                                  result=result, error=error),
+            )
+        except Exception as e:
+            logger.error(
+                f"bot-action drain: could not mark id={action_id} complete: {e}"
+            )
+
     @tasks.loop(seconds=10)
     async def drain_bot_actions(self):
+        # Outer guard, same reasoning as _complete_bot_action_safely: the
+        # claim, the signature gate and the completion are all DB work, and an
+        # unhandled error out of any of them would stop this loop for good.
+        # The other three loops have carried this guard for a while; this one
+        # did not, so a single Postgres blip could silence the admin queue
+        # until someone noticed the dashboard had gone quiet.
+        try:
+            await self._drain_bot_actions_once()
+        except Exception as e:
+            logger.error(f"drain_bot_actions cycle error: {e}", exc_info=True)
+
+    async def _drain_bot_actions_once(self):
         loop = asyncio.get_event_loop()
         try:
             reclaimed = await loop.run_in_executor(None, self._reclaim_stale_bot_actions)
@@ -1120,35 +1347,48 @@ class NSWPSNBot(commands.Bot):
         # The backend signs each queue row with BOT_ACTION_SIGNING_SECRET.
         # Reject rows that didn't come from the backend so an attacker who
         # can merely INSERT into pending_bot_actions can't get unattended
-        # Discord actions. When the secret is unset we fail OPEN (rollout
-        # only) but log loudly.
+        # Discord actions. With no secret configured we now fail CLOSED: a
+        # queued action executes with no further authentication, so without
+        # the shared secret there is nothing to tell a backend insert from
+        # anyone else's. This used to fail open as a rollout accommodation;
+        # the secret is deployed on both sides, so an unsigned queue is a
+        # misconfiguration, not a migration state.
         signing_secret = os.getenv('BOT_ACTION_SIGNING_SECRET')
-        if signing_secret:
-            ok = self.db.verify_bot_action_sig(
-                signing_secret,
-                action['action'],
-                action.get('requested_by') or '',
-                action.get('params') or {},
-                action.get('sig'),
-            )
-            if not ok:
-                logger.warning(
-                    f"bot-action drain: REJECTED id={action_id} action={kind} "
-                    "— signature verification failed (missing or bad sig)"
+        if not signing_secret:
+            if not self._unsigned_action_notice:
+                self._unsigned_action_notice = True
+                logger.error(
+                    "BOT_ACTION_SIGNING_SECRET is not set — REFUSING every "
+                    "queued bot action. Set the same value in the backend's "
+                    ".env and this bot's .env (openssl rand -hex 32) and "
+                    "restart both; until then the dashboard's sync, test, "
+                    "broadcast and staff notifications will not run."
                 )
-                await loop.run_in_executor(
-                    None,
-                    lambda: self.db.complete_bot_action(
-                        action_id, error='signature verification failed'
-                    ),
-                )
-                return
-        else:
             logger.warning(
-                "bot-action signing DISABLED (set BOT_ACTION_SIGNING_SECRET "
-                "in both .env files) — executing unsigned action "
-                f"id={action_id} action={kind}"
+                f"bot-action drain: REFUSED id={action_id} action={kind} "
+                "— no signing secret configured"
             )
+            await self._complete_bot_action_safely(
+                action_id,
+                error='refused: BOT_ACTION_SIGNING_SECRET is not set on the bot',
+            )
+            return
+
+        ok = self.db.verify_bot_action_sig(
+            signing_secret,
+            action['action'],
+            action.get('requested_by') or '',
+            action.get('params') or {},
+            action.get('sig'),
+        )
+        if not ok:
+            logger.warning(
+                f"bot-action drain: REJECTED id={action_id} action={kind} "
+                "— signature verification failed (missing or bad sig)"
+            )
+            await self._complete_bot_action_safely(
+                action_id, error='signature verification failed')
+            return
 
         logger.info(f"bot-action drain: executing id={action_id} action={kind}")
         try:
@@ -1164,15 +1404,12 @@ class NSWPSNBot(commands.Bot):
                 result = await self._exec_action_staff_notify(params)
             else:
                 raise ValueError(f"unknown action: {kind}")
-            await loop.run_in_executor(
-                None, lambda: self.db.complete_bot_action(action_id, result=result),
-            )
+            await self._complete_bot_action_safely(action_id, result=result)
             logger.info(f"bot-action drain: id={action_id} ok")
         except Exception as e:
             logger.exception(f"bot-action drain: id={action_id} failed")
-            await loop.run_in_executor(
-                None, lambda: self.db.complete_bot_action(action_id, error=str(e)[:500]),
-            )
+            await self._complete_bot_action_safely(
+                action_id, error=str(e)[:500])
 
     @drain_bot_actions.before_loop
     async def before_drain_bot_actions(self):
@@ -1466,7 +1703,8 @@ class NSWPSNBot(commands.Bot):
                       alert_type: str = None, alert_id: str = None,
                       embeds: List[discord.Embed] = None,
                       view: Optional[discord.ui.View] = None,
-                      reply_to_message_id: int = None):
+                      reply_to_message_id: int = None,
+                      ping_role_ids: Optional[List[int]] = None):
         """Add a message to the queue for rate-limited sending.
 
         Pass one of: `embed` (single), `embeds` (list of up to 10), or `view`
@@ -1475,6 +1713,10 @@ class NSWPSNBot(commands.Bot):
         `reply_to_message_id` makes this message a REPLY to an earlier one —
         used so an incident's updates hang off the message that first reported
         it instead of scattering down the channel.
+
+        `ping_role_ids` are the roles this message is allowed to mention. The
+        bot mentions nothing by default, so a `<@&id>` rendered into the view
+        only actually pings when its id is listed here.
         """
         item = {
             'channel_id': channel_id,
@@ -1489,6 +1731,7 @@ class NSWPSNBot(commands.Bot):
             'alert_type': alert_type,
             'alert_id': alert_id,
             'reply_to_message_id': reply_to_message_id,
+            'ping_role_ids': list(ping_role_ids) if ping_role_ids else None,
         }
         if self.message_queue.full():
             logger.warning(f"Message queue full ({self.message_queue.maxsize}), dropping oldest message")
@@ -1569,6 +1812,18 @@ class NSWPSNBot(commands.Bot):
 
         Alerts still keep their poll-result order within a channel; they are
         simply queued one at a time, and the send queue paces them.
+
+        FIRMS is the one exception, for the opposite reason: a satellite
+        hotspot is not an incident — it has no status to update and nothing to
+        reply to — and one pass over a fire ground lights up hundreds of them.
+        A poll's hotspots for a channel are collapsed into a single digest,
+        built after the per-alert loop.
+
+        Each alert is queued as soon as its presets resolve, and every DB read
+        on the way is guarded. By the time we are called the poller has
+        already marked this batch as seen, so an alert dropped here is lost
+        for good: a failure must cost that one alert, or that one preset, and
+        never the remainder of the cycle.
         """
         if not new_alerts:
             return
@@ -1594,21 +1849,17 @@ class NSWPSNBot(commands.Bot):
                 )
             return channel_mute_cache[key]
 
-        # Per-channel bucket: channel_id -> {
-        #   'alerts': [{alert, preset, previous_message, ...}, ...],
-        #   'any_preset_id': int,
-        #   'role_ids_set': set(int),
-        #   'guild_id': int,
-        # }
-        buckets: Dict[int, Dict[str, Any]] = {}
+        # Subscriptions are read once per alert_type for the same reason the
+        # mute state is read once per guild: a poll carrying 2,577 hotspots
+        # asked the DB the same question 2,577 times.
+        preset_cache: Dict[str, List[Dict[str, Any]]] = {}
+
         fires: List[tuple] = []  # (preset_id, alert_type) — for preset_fire_log
-        # (channel_id, alert_id) pairs already bucketed — two presets in the
-        # SAME channel subscribed to the same alert type (a supported
-        # dashboard configuration) must not render the alert twice in one
-        # message. Fire-logging and role-ping unions still run per preset;
-        # only the container append is deduped. Mirrors the collapse the
-        # radio-summary dispatcher already does.
-        bucketed: set = set()
+        # The FIRMS accumulator: channel_id -> {
+        #   'hotspots': [alert_data, ...], 'preset_id': int,
+        #   'ping_ids': set(int),
+        # }
+        firms_buckets: Dict[int, Dict[str, Any]] = {}
 
         for alert in new_alerts:
             alert_type = alert.get('type')
@@ -1633,132 +1884,224 @@ class NSWPSNBot(commands.Bot):
                     )
                 continue
 
-            presets = await loop.run_in_executor(
-                None, self.db.get_presets_for_alert_type, alert_type
-            )
+            if alert_type in preset_cache:
+                presets = preset_cache[alert_type]
+            else:
+                try:
+                    presets = await loop.run_in_executor(
+                        None, self.db.get_presets_for_alert_type, alert_type
+                    )
+                except Exception:
+                    # One failed lookup costs this alert, not the cycle: the
+                    # rest of the batch is already marked seen and will never
+                    # come round again. Not cached, so the next alert of this
+                    # type gets its own attempt.
+                    logger.exception(
+                        "Preset lookup failed for %s alert %s — skipping it",
+                        alert_type, alert.get('id'),
+                    )
+                    continue
+                preset_cache[alert_type] = presets
             incident_guid, incident_status = self._alert_incident_keys(alert_type, alert_data)
 
+            # channel_id -> {'preset_id', 'ping_ids'}, for the presets that
+            # matched THIS alert. Keying by channel renders the alert once
+            # when two presets in the same channel both subscribe to its type
+            # — a supported dashboard configuration — while fire-logging
+            # still runs per preset. The ping set is per alert for the same
+            # reason: a set unioned across the whole poll pinged the traffic
+            # role for a fire and the fire role for a crash, and bypassed a
+            # per-type ping mute whenever the preset matched anything else.
+            targets: Dict[int, Dict[str, Any]] = {}
+
             for preset in presets:
-                guild_id = preset['guild_id']
-                channel_id = preset['channel_id']
-                guild_mute = await _get_guild_mute(guild_id)
-                channel_mute = await _get_channel_mute(guild_id, channel_id)
-                effective = Database.resolve_preset_effective_state(
-                    preset, alert_type, channel_mute, guild_mute
-                )
-                if not effective['enabled']:
+                # The whole evaluation sits in one guard — the mute reads,
+                # the filter gate and the role resolution — so a bad row or a
+                # dropped connection costs that preset alone.
+                try:
+                    channel_id = preset['channel_id']
+                    guild_mute = await _get_guild_mute(preset['guild_id'])
+                    channel_mute = await _get_channel_mute(
+                        preset['guild_id'], channel_id)
+                    effective = Database.resolve_preset_effective_state(
+                        preset, alert_type, channel_mute, guild_mute
+                    )
+                    if not effective['enabled']:
+                        continue
+                    # Per-preset filter gate (keywords / severity floor / bbox).
+                    if not preset_alert_matches(preset, alert_type, alert_data):
+                        continue
+                    # Role ids only when this preset's effective_ping is on;
+                    # _resolve_ping_role_ids also filters deleted roles.
+                    ping_ids = []
+                    if effective['enabled_ping']:
+                        ping_view = dict(preset)
+                        ping_view['enabled_ping'] = True
+                        ping_ids = self._resolve_ping_role_ids(ping_view)
+                except Exception:
+                    logger.exception(
+                        "Preset %s failed on %s alert %s — skipping that preset",
+                        preset.get('id'), alert_type, alert.get('id'),
+                    )
                     continue
-                # Per-preset filter gate (keywords / severity floor / bbox).
-                if not preset_alert_matches(preset, alert_type, alert_data):
-                    continue
+
                 fires.append((preset['id'], alert_type))
-
-                bucket = buckets.setdefault(channel_id, {
-                    'alerts': [],
-                    'any_preset_id': preset['id'],
-                    'role_ids_set': set(),
-                    'guild_id': guild_id,
+                target = targets.setdefault(channel_id, {
+                    'preset_id': preset['id'],
+                    'ping_ids': set(),
                 })
-                dedupe_key = (channel_id, alert.get('id'))
-                if dedupe_key not in bucketed:
-                    bucketed.add(dedupe_key)
+                target['ping_ids'].update(ping_ids)
 
-                    # Previous-message lookup for incident tracking (RFS / user_incident).
-                    # Use get_previous_incident_message so the link points to the
-                    # most recent prior update of THIS incident, not the very first
-                    # one — when an incident has 4-5 updates the "first" message
-                    # has scrolled far up the channel and looks random.
-                    previous_message = None
-                    reply_to_message_id = None
-                    if incident_guid:
+            if not targets:
+                continue
+
+            # Hotspots accumulate instead of sending — one digest per channel
+            # goes out below, however many arrived in this poll.
+            if alert_type == 'firms':
+                for channel_id, target in targets.items():
+                    bucket = firms_buckets.setdefault(channel_id, {
+                        'hotspots': [],
+                        'preset_id': target['preset_id'],
+                        'ping_ids': set(),
+                    })
+                    bucket['hotspots'].append(alert_data)
+                    bucket['ping_ids'] |= target['ping_ids']
+                continue
+
+            for channel_id, target in targets.items():
+                # Previous-message lookup for incident tracking (RFS /
+                # user_incident). Use get_previous_incident_message so the
+                # link points to the most recent prior update of THIS
+                # incident, not the very first one — when an incident has 4-5
+                # updates the "first" message has scrolled far up the channel
+                # and looks random. Replies, by contrast, hang off the FIRST
+                # report: chaining reply-to-reply would build a ladder that
+                # Discord renders one rung deep anyway, and the first message
+                # is the one people recognise as "that fire".
+                previous_message = None
+                reply_to_message_id = None
+                if incident_guid:
+                    try:
                         previous_message = await loop.run_in_executor(
                             None,
                             self.db.get_previous_incident_message,
                             incident_guid,
                             channel_id,
                         )
-                        # Replies hang off the FIRST report, not the previous
-                        # update. Chaining reply-to-reply would build a ladder
-                        # that Discord renders one rung deep anyway, and the
-                        # first message is the one people recognise as "that
-                        # fire".
                         reply_to_message_id = await loop.run_in_executor(
                             None,
                             self.db.get_incident_reply_target,
                             incident_guid,
                             channel_id,
                         )
+                    except Exception:
+                        # Degrade to a standalone post. The alert itself still
+                        # has to go out; losing the update link is the lesser
+                        # failure by a long way.
+                        logger.exception(
+                            "Incident-message lookup failed for %s in channel %s — "
+                            "posting it without the update link",
+                            incident_guid, channel_id,
+                        )
+                        previous_message = None
+                        reply_to_message_id = None
 
-                    bucket['alerts'].append({
-                        'alert': alert,
-                        'preset': preset,
-                        'previous_message': previous_message,
-                        'incident_guid': incident_guid,
-                        'incident_status': incident_status,
-                        'reply_to_message_id': reply_to_message_id,
-                    })
-                # Union role ids only when this preset's effective_ping is on;
-                # _resolve_ping_role_ids also filters deleted roles.
-                if effective['enabled_ping']:
-                    ping_view = dict(preset)
-                    ping_view['enabled_ping'] = True
-                    for rid in self._resolve_ping_role_ids(ping_view):
-                        bucket['role_ids_set'].add(rid)
-
-        # Build + queue ONE message per alert.
-        from embeds import chunk_containers_for_message
-
-        for channel_id, bucket in buckets.items():
-            # Role pings ride on every message now, not once per batch: each
-            # alert is its own notification, and a ping attached only to the
-            # first would leave the rest silent.
-            role_ids = sorted(bucket['role_ids_set'])
-            ping_text = ' '.join(f'<@&{rid}>' for rid in role_ids) if role_ids else None
-
-            for it in bucket['alerts']:
-                alert = it.get('alert') or {}
                 # Built inside a guard: one malformed alert must never raise
-                # out of the loop and drop every other alert for this channel.
+                # out of the loop and drop every other alert in the cycle.
                 try:
                     container = self.embed_builder.build_alert_container(
-                        alert, previous_message=it['previous_message'],
+                        alert, previous_message=previous_message,
                     )
                 except Exception:
                     logger.exception(
                         "Failed to build container for %s alert %s — skipping",
-                        alert.get('type'), alert.get('id'),
+                        alert_type, alert.get('id'),
                     )
                     continue
 
-                # Still chunked, for the rare single alert that overflows the
-                # character budget on its own.
-                groups = chunk_containers_for_message([container])
-                for i, group in enumerate(groups):
-                    view = discord.ui.LayoutView(timeout=None)
-                    if i == 0 and ping_text:
-                        view.add_item(discord.ui.TextDisplay(content=ping_text))
-                    if not safe_add_containers(view, group) and not (i == 0 and ping_text):
-                        continue  # container rejected — nothing to send
+                self._queue_alert_message(
+                    channel_id, [container],
+                    ping_ids=target['ping_ids'],
+                    preset_id=target['preset_id'],
+                    alert_type=alert_type or 'alert',
+                    alert_id=alert.get('id'),
+                    incident_guid=incident_guid,
+                    incident_status=incident_status,
+                    reply_to_message_id=reply_to_message_id,
+                )
 
-                    queue_kwargs = {
-                        'channel_id': channel_id,
-                        'view': view,
-                        'config_id': bucket['any_preset_id'],
-                        'config_type': 'alert',
-                        'alert_type': alert.get('type') or 'alert',
-                    }
-                    # Every incident-bearing alert now records its own message,
-                    # where the batch could only ever record its first. The
-                    # metadata rides on the first chunk: that is the message an
-                    # update should reply to.
-                    if i == 0 and it['incident_guid']:
-                        queue_kwargs['incident_guid'] = it['incident_guid']
-                        queue_kwargs['incident_status'] = it['incident_status']
-                        queue_kwargs['reply_to_message_id'] = it.get('reply_to_message_id')
-                    self.queue_message(**queue_kwargs)
+        for channel_id, bucket in firms_buckets.items():
+            hotspots = bucket['hotspots']
+            try:
+                if len(hotspots) == 1:
+                    container = self.embed_builder.build_firms_container(hotspots[0])
+                else:
+                    container = self.embed_builder.build_firms_digest_container(hotspots)
+            except Exception:
+                logger.exception(
+                    "Failed to build the FIRMS digest for channel %s (%d hotspot(s)) "
+                    "— skipping", channel_id, len(hotspots),
+                )
+                continue
+            if len(hotspots) > 1:
+                logger.info(
+                    f"🛰️ Collapsed {len(hotspots)} FIRMS hotspots into one "
+                    f"digest for channel {channel_id}"
+                )
+            self._queue_alert_message(
+                channel_id, [container],
+                ping_ids=bucket['ping_ids'],
+                preset_id=bucket['preset_id'],
+                alert_type='firms',
+                alert_id=f"firms_digest_{len(hotspots)}",
+            )
 
         if fires:
             await loop.run_in_executor(None, self.db.log_preset_fires, fires)
+
+    def _queue_alert_message(self, channel_id: int, containers: list, *,
+                             ping_ids=None, preset_id: Optional[int] = None,
+                             alert_type: str = 'alert',
+                             alert_id: Optional[str] = None,
+                             incident_guid: Optional[str] = None,
+                             incident_status: Optional[str] = None,
+                             reply_to_message_id: Optional[int] = None):
+        """Chunk `containers` into messages and queue them for one channel.
+
+        Role pings ride on the FIRST chunk — as mention text inside the view,
+        and as the matching allowed_mentions grant on the send, since the bot
+        itself is configured to mention nothing. The incident metadata rides
+        there too: the first chunk is the message an update should reply to.
+        """
+        from embeds import chunk_containers_for_message
+
+        role_ids = sorted(ping_ids or ())
+        ping_text = ' '.join(f'<@&{rid}>' for rid in role_ids) if role_ids else None
+        # Still chunked, for the rare single alert that overflows the
+        # character budget on its own.
+        for i, group in enumerate(chunk_containers_for_message(containers)):
+            view = discord.ui.LayoutView(timeout=None)
+            if i == 0 and ping_text:
+                view.add_item(discord.ui.TextDisplay(content=ping_text))
+            if not safe_add_containers(view, group) and not (i == 0 and ping_text):
+                continue  # container rejected — nothing to send
+            queue_kwargs = {
+                'channel_id': channel_id,
+                'view': view,
+                'config_id': preset_id,
+                'config_type': 'alert',
+                'alert_type': alert_type,
+                'alert_id': f"{alert_id}#{i}" if (alert_id and i) else alert_id,
+            }
+            if i == 0:
+                queue_kwargs['ping_role_ids'] = role_ids or None
+                # Every incident-bearing alert records its own message, where
+                # the old batch could only ever record its first.
+                if incident_guid:
+                    queue_kwargs['incident_guid'] = incident_guid
+                    queue_kwargs['incident_status'] = incident_status
+                    queue_kwargs['reply_to_message_id'] = reply_to_message_id
+            self.queue_message(**queue_kwargs)
 
     async def _dispatch_radio_summary(self, alert: dict):
         """Dispatch a radio_summary alert (already Components V2 via its own
@@ -1835,6 +2178,8 @@ class NSWPSNBot(commands.Bot):
                     config_type='alert',
                     alert_type='radio_summary',
                     alert_id=f"{alert.get('id')}#{i}" if i > 0 else alert.get('id'),
+                    # The bot mentions nothing unless the send says otherwise.
+                    ping_role_ids=role_ids if i == 0 else None,
                 )
 
         if fires:
@@ -1877,9 +2222,13 @@ class NSWPSNBot(commands.Bot):
             channel_id = preset['channel_id']
             guild_mute = await _get_guild_mute(guild_id)
             channel_mute = await _get_channel_mute(guild_id, channel_id)
-            # alert_type=None — per-type overrides don't apply to pager.
+            # 'pager' is the per-type override key /mute and /smute write for
+            # the pager scope, and the key /setup reads back when it shows the
+            # pager as silenced. Resolving with alert_type=None skipped the
+            # per-type tier entirely, so `/smute alert_type:pager` reported
+            # success, displayed as silenced, and kept posting and pinging.
             effective = Database.resolve_preset_effective_state(
-                preset, None, channel_mute, guild_mute
+                preset, 'pager', channel_mute, guild_mute
             )
             if not effective['enabled']:
                 continue
@@ -1959,6 +2308,8 @@ class NSWPSNBot(commands.Bot):
                     config_type='pager',
                     alert_type='pager',
                     alert_id=first_hash,
+                    # The bot mentions nothing unless the send says otherwise.
+                    ping_role_ids=role_ids if i == 0 else None,
                 )
 
         if fires:
@@ -1987,7 +2338,6 @@ bot = NSWPSNBot()
 
 # ==================== SLASH COMMANDS ====================
 
-@bot.tree.command(name="alert", description="Set up alerts for a channel")
 async def _alert_type_autocomplete(interaction: discord.Interaction, current: str):
     """Suggest alert types as the user types.
 
@@ -2006,6 +2356,7 @@ async def _alert_type_autocomplete(interaction: discord.Interaction, current: st
     return out
 
 
+@bot.tree.command(name="alert", description="Set up alerts for a channel")
 @app_commands.describe(
     channel="The channel to send alerts to",
     alert_type="The type of alert to receive (leave empty for ALL alerts)",
@@ -2028,11 +2379,17 @@ async def alert_command(
 
         # If no alert type specified, subscribe to ALL
         if alert_type is None:
+            # …except the types that only ever arrive by being asked for by
+            # name. This bare /alert is a catch-all, and a catch-all is
+            # exactly how two presets came to be subscribed to the FIRMS
+            # hotspot firehose without anyone choosing it.
+            all_types = [a for a in ALERT_TYPES if a not in _OPT_IN_ONLY_TYPES]
+
             def _sync_all():
                 # Add every alert_type to the channel's Default preset, and
                 # apply role_id (if provided) preset-wide.
                 roles_arg = [role_id] if role_id else None
-                for atype in ALERT_TYPES.keys():
+                for atype in all_types:
                     _default_preset_upsert(
                         bot.db, guild_id, channel.id,
                         add_alert_type=atype,
@@ -2048,7 +2405,7 @@ async def alert_command(
             )
             embed.add_field(
                 name="Alert Types",
-                value=f"{len(ALERT_TYPES)} types configured",
+                value=f"{len(all_types)} types configured",
                 inline=True
             )
             if role:
@@ -2846,6 +3203,10 @@ def _get_alert_configs_for_channel(guild_id: int, channel_id: int) -> List[Dict[
             rows.append({
                 '_preset_id': preset['id'],
                 '_preset_name': preset.get('name'),
+                # A subscription the dispatcher refuses — today only a
+                # hotspot type on a preset with no region — must not display
+                # as a healthy row.
+                '_unscoped': not Database.subscription_is_honoured(preset, atype),
                 'guild_id': guild_id,
                 'channel_id': channel_id,
                 'alert_type': atype,
@@ -2907,7 +3268,16 @@ def _format_alert_configs_for_channel(guild_id: int, channel_id: int) -> str:
         roles = _format_role_mentions(cfg)
         role_txt = f" · {roles}" if roles else ""
         icon = _status_icon(cfg)
-        parts.append(f"{icon} `{atype}` {name}{role_txt}")
+        # Name the owning preset when it isn't Default: the /setup picker only
+        # edits Default, so a row from a dashboard preset has to be
+        # distinguishable from one the picker will overwrite.
+        preset_name = cfg.get("_preset_name")
+        owner_txt = (f" · *{preset_name}*"
+                     if preset_name and preset_name != DEFAULT_PRESET_NAME else "")
+        # Subscribed but not delivered: say so here rather than leave the
+        # operator waiting for alerts that the dispatcher is refusing.
+        warn_txt = " · ⚠️ needs a region" if cfg.get("_unscoped") else ""
+        parts.append(f"{icon} `{atype}` {name}{role_txt}{owner_txt}{warn_txt}")
     return "\n".join(parts)[:1000]
 
 
@@ -3021,9 +3391,13 @@ class SetupHomeView(discord.ui.View):
         embed = discord.Embed(
             title="📢 Setup Alerts",
             description=(
-                f"Editing alert subscriptions for {self.channel.mention}\n\n"
+                f"Editing the **{DEFAULT_PRESET_NAME}** subscriptions for "
+                f"{self.channel.mention}\n\n"
                 f"*Select alert types from the dropdown, then click off the dropdown "
-                f"and press **Save**.*"
+                f"and press **Save**.*\n"
+                f"*Any other preset in this channel is listed below for "
+                f"reference only — it is managed on the dashboard and Save "
+                f"does not touch it.*"
             ),
             color=0x3498db,
         )
@@ -3034,17 +3408,42 @@ class SetupHomeView(discord.ui.View):
             inline=False,
         )
 
-        # Fetch the channel's existing alert types off-loop; the view
+        # Seed the picker from the DEFAULT preset alone, off-loop — the view
         # constructor must not touch the DB (it runs on the gateway loop).
+        #
+        # It used to be seeded from every preset in the channel while Save
+        # wrote the whole selection back to Default, so pressing Save without
+        # touching anything copied a filtered dashboard preset's types into
+        # the unfiltered Default — which then got every RFS/CFA alert
+        # statewide, with Default's role pings, and nothing the dashboard
+        # preset's geofilter could do about it.
+        #
+        # get_preset_by_name rather than _default_preset_for: a DB error here
+        # must fail the button, not quietly seed an empty picker that a later
+        # Save would write over the real subscriptions.
         def _existing_alert_types() -> List[str]:
-            cfgs = _get_alert_configs_for_channel(self.channel.guild.id, self.channel.id)
+            preset = bot.db.get_preset_by_name(
+                self.channel.guild.id, self.channel.id, DEFAULT_PRESET_NAME)
             # Only general alert types — radio_summary is managed in its
             # own submenu.
             return sorted([
-                c.get("alert_type") for c in cfgs
-                if c.get("alert_type") and c.get("alert_type") != 'radio_summary'
+                a for a in ((preset or {}).get('alert_types') or [])
+                if a and a != 'radio_summary'
             ])
-        existing_types = await loop.run_in_executor(None, _existing_alert_types)
+        try:
+            existing_types = await loop.run_in_executor(None, _existing_alert_types)
+        except Exception as e:
+            logger.error(
+                f"Setup Alerts: could not read the {DEFAULT_PRESET_NAME} preset "
+                f"for channel {self.channel.id}: {e}", exc_info=True,
+            )
+            await interaction.response.send_message(
+                "❌ Couldn't read this channel's current subscriptions, so the "
+                "editor would have shown the wrong ones. Nothing was changed — "
+                "try again in a moment.",
+                ephemeral=True,
+            )
+            return
 
         await _edit_or_send(
             interaction, embed=embed,

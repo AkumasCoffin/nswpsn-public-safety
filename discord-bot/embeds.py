@@ -120,6 +120,26 @@ def strip_html(text: str) -> str:
     return clean
 
 
+# @everyone, @here and <@…> / <@&…> as Discord parses them. Written out here
+# rather than taken from discord.utils so embeds.py stays importable against
+# the minimal discord stub the standalone tests inject.
+_MENTION_RE = re.compile(r'@(everyone|here|[!&]?[0-9]{17,20})')
+
+
+def safe_text(text: Any) -> str:
+    """Clean text that came from a person, for rendering into a TextDisplay.
+
+    Strips HTML as strip_html does, then breaks any mention in it with a
+    zero-width space. The real gate is allowed_mentions on the send (see
+    NSWPSNBot.__init__ and _send_one_message in bot.py) — this is so an
+    editor's "@everyone" in an incident title does not even LOOK like a ping
+    in someone else's server.
+    """
+    if not text:
+        return ''
+    return _MENTION_RE.sub('@​\\1', strip_html(text))
+
+
 def is_valid_value(value: Any) -> bool:
     """Check if a value is valid for display"""
     if value is None:
@@ -1675,6 +1695,113 @@ class EmbedBuilder:
         self._append_container_footer(container, footer_bits, source="NASA FIRMS")
         return container
 
+    def build_firms_digest_container(self, hotspots: List[Dict[str, Any]]):
+        """One card for every FIRMS hotspot a poll turned up for a channel.
+
+        A satellite pass over a fire ground lights up hundreds of grid cells,
+        and each one used to be its own message: 2,577 of them in a single
+        poll on 2026-10-12, which filled the send queue and left every other
+        channel's alerts behind the backlog. A hotspot is not an incident —
+        there is no status to update and nothing for a later message to reply
+        to — so collapsing them loses nothing a reader can act on.
+
+        What survives the collapse is what a reader actually needs: how many,
+        where (the bounding box and its centre), and the strongest few with
+        their own coordinates.
+        """
+        points = []       # (frp, lat, lon, detections, confidence)
+        detections = 0
+        satellites = []
+        latest = None
+        for h in hotspots or []:
+            props = (h or {}).get('properties') or {}
+            # Same fallback as build_firms_container: the clusterer's snapped
+            # grid cell stands in when the pixel's own coords are absent.
+            lat = props.get('latitude')
+            lon = props.get('longitude')
+            if lat is None:
+                lat = props.get('cluster_glat')
+            if lon is None:
+                lon = props.get('cluster_glon')
+            try:
+                lat = float(lat)
+                lon = float(lon)
+            except (TypeError, ValueError):
+                continue
+            try:
+                frp = float(props.get('cluster_max_frp', props.get('frp')) or 0)
+            except (TypeError, ValueError):
+                frp = 0.0
+            count = props.get('cluster_count', 1)
+            count = count if isinstance(count, int) and count > 0 else 1
+            detections += count
+            points.append((frp, lat, lon, count,
+                           str(props.get('confidence', '')).strip().lower()))
+            sat = props.get('satellite_tag') or props.get('satellite') or ''
+            if sat and sat not in satellites:
+                satellites.append(str(sat))
+            dt_acq = parse_timestamp_to_datetime(props.get('acq_datetime', ''))
+            if dt_acq and (latest is None or dt_acq > latest):
+                latest = dt_acq
+
+        color = self.COLORS.get('firms', 0xF97316)
+        container = discord.ui.Container(accent_colour=color)
+        container.add_item(discord.ui.TextDisplay(
+            content=f"### 🛰️ {len(hotspots):,} Fire Hotspots Detected"
+        ))
+        if not points:
+            # Nothing had usable coordinates — say so rather than render a
+            # card that looks broken.
+            container.add_item(discord.ui.TextDisplay(
+                content='_No usable coordinates in this batch of detections._'
+            ))
+            self._append_container_footer(container, [], source="NASA FIRMS")
+            return container
+
+        lats = [p[1] for p in points]
+        lons = [p[2] for p in points]
+        container.add_item(discord.ui.TextDisplay(content=self._clip_text(
+            f"📍 `{min(lats):.3f}…{max(lats):.3f}, "
+            f"{min(lons):.3f}…{max(lons):.3f}`"
+        )))
+
+        meta_bits = [f"{detections:,} detections"]
+        high = sum(1 for p in points if p[4] == 'high')
+        if high:
+            meta_bits.append(f"🔴 {high:,} high confidence")
+        if satellites:
+            meta_bits.append('🛰️ ' + ', '.join(satellites[:3]))
+        container.add_item(discord.ui.TextDisplay(
+            content=self._clip_text(' · '.join(meta_bits))
+        ))
+
+        # The strongest few, by fire radiative power — the ones worth looking
+        # at first if anyone goes looking.
+        strongest = sorted(points, key=lambda p: p[0], reverse=True)[:3]
+        if strongest and strongest[0][0] > 0:
+            lines = ["**Strongest**"]
+            for frp, lat, lon, count, _conf in strongest:
+                bits = [f"`{lat:.4f}, {lon:.4f}`"]
+                if frp > 0:
+                    bits.append(f"🔥 {frp:.0f} MW FRP")
+                if count > 1:
+                    bits.append(f"{count} px")
+                lines.append(' · '.join(bits))
+            container.add_item(discord.ui.TextDisplay(
+                content=self._clip_text('\n'.join(lines))
+            ))
+
+        footer_bits = []
+        if latest:
+            footer_bits.append(f"🕐 <t:{int(latest.timestamp())}:R>")
+        # Centre of the box, zoomed out far enough to hold the whole spread.
+        footer_bits.append("[🗺️ Map](%s)" % build_map_url(
+            (min(lats) + max(lats)) / 2, (min(lons) + max(lons)) / 2,
+            label="Fire Hotspots", layer="firms", zoom=9,
+        ))
+        self._append_container_footer(container, footer_bits, source="NASA FIRMS")
+        return container
+
     # ---- BOM ---------------------------------------------------
     def build_bom_container(self, data: Dict[str, Any]):
         """Components V2 container for BOM warnings."""
@@ -2179,18 +2306,25 @@ class EmbedBuilder:
     # ---- User incidents ----------------------------------------
     def build_user_incident_container(self, data: Dict[str, Any],
                                       previous_message: Dict[str, Any] = None):
-        """Components V2 container for user-submitted incidents."""
-        title = strip_html(data.get('title', 'User Incident'))
-        location = strip_html(data.get('location', ''))
-        description = strip_html(data.get('description', ''))
+        """Components V2 container for user-submitted incidents.
+
+        Every string here was typed by an editor, so it goes through
+        safe_text: an "@everyone" in a title would otherwise render as a real
+        mention in every subscribed server.
+        """
+        title = safe_text(data.get('title')) or 'User Incident'
+        location = safe_text(data.get('location', ''))
+        description = safe_text(data.get('description', ''))
+        # status and size are short enumerated values, left as they arrive so
+        # is_valid_value still sees their original types.
         status = data.get('status', 'Active')
         size = data.get('size', '')
 
         inc_type = data.get('type', '')
         if isinstance(inc_type, list):
-            type_display = ', '.join(inc_type)
+            type_display = ', '.join(safe_text(t) for t in inc_type if t)
         else:
-            type_display = str(inc_type) if inc_type else ''
+            type_display = safe_text(inc_type) if inc_type else ''
 
         agencies = data.get('responding_agencies', [])
         if isinstance(agencies, str):
@@ -2265,7 +2399,7 @@ class EmbedBuilder:
                     if key.lower() in str(agency).lower():
                         icon_for_agency = emoji + ' '
                         break
-                agency_list.append(f"{icon_for_agency}{agency}")
+                agency_list.append(f"{icon_for_agency}{safe_text(agency)}")
             container.add_item(discord.ui.TextDisplay(
                 content=self._clip_text(f"Responding: {' • '.join(agency_list)}")
             ))
@@ -2275,7 +2409,7 @@ class EmbedBuilder:
         if isinstance(units, str):
             units = [units]
         if isinstance(units, list):
-            unit_labels = [strip_html(str(u)) for u in units if u and str(u).strip()]
+            unit_labels = [safe_text(str(u)) for u in units if u and str(u).strip()]
             if unit_labels:
                 container.add_item(discord.ui.TextDisplay(
                     content=self._clip_text(f"🚒 **Units:** {', '.join(unit_labels)}")
@@ -2315,7 +2449,7 @@ class EmbedBuilder:
             log_lines = ["**📋 Incident Log**"]
             for log in sorted_logs[:5]:
                 log_ts = log.get('created_at', '')
-                log_msg = strip_html(log.get('message', ''))[:200]
+                log_msg = safe_text(log.get('message', ''))[:200]
                 if log_msg:
                     dt = parse_timestamp_to_datetime(log_ts)
                     time_str = f"<t:{int(dt.timestamp())}:t>" if dt else "Unknown time"
@@ -2343,17 +2477,22 @@ class EmbedBuilder:
 
     # ---- Pager -------------------------------------------------
     def build_pager_container(self, msg: Dict[str, Any]):
-        """Components V2 container for pager messages."""
+        """Components V2 container for pager messages.
+
+        The relayed fields go through safe_text for the same reason the user
+        incident's do: they are whatever came over the air and down the
+        Pagermon relay, and they are rendered outside the code block.
+        """
         capcode = msg.get('capcode', 'UNKNOWN')
         incident_id = msg.get('incident_id', '')
-        msg_type = msg.get('type', '')
-        category = msg.get('category', '')
-        alias = msg.get('alias', '')
-        agency = msg.get('agency', '')
-        address = msg.get('address', '')
-        suburb = msg.get('suburb', '')
-        council = msg.get('council', '')
-        postcode = msg.get('postcode', '')
+        msg_type = safe_text(msg.get('type', ''))
+        category = safe_text(msg.get('category', ''))
+        alias = safe_text(msg.get('alias', ''))
+        agency = safe_text(msg.get('agency', ''))
+        address = safe_text(msg.get('address', ''))
+        suburb = safe_text(msg.get('suburb', ''))
+        council = safe_text(msg.get('council', ''))
+        postcode = msg.get('postcode', '')  # numeric; left as it arrives
         coordinates = msg.get('coordinates')
         timestamp = msg.get('timestamp', '')
         raw = msg.get('raw', '')
