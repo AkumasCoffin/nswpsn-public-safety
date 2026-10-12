@@ -25,6 +25,7 @@ STAFF_NOTIFY_KINDS = {
     'new_node': ('New node', '\U0001F4E1', 0x22C55E),
     'ticket': ('Contact ticket', '\U0001F3AB', 0xEAB308),
     'siteSurvey': ('Site survey', '\U0001F4E1', 0x7DD3FC),
+    'api_key_request': ('API key request', '\U0001F511', 0x38BDF8),
 }
 _STAFF_STATUS_COLOR = {
     'approved': 0x22C55E,

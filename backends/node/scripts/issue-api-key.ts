@@ -1,6 +1,8 @@
 /**
- * Issue a named API key to a user. Owner tool, run on the server until the
- * panel grows a keys page.
+ * Issue a named API key to a user directly, skipping the request/approval
+ * flow (api/apiKeys.ts — users normally ask from their profile, staff approve
+ * on the staff page, and the user mints the key there). Owner tool, run on
+ * the server, for keys that need no review.
  *
  * Usage (from backends/node):
  *   npx tsx --env-file=../.env scripts/issue-api-key.ts --user <supabase uid> --name "<label>" [--rpm 120] [--expires 2027-01-01] [--scopes read]

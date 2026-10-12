@@ -81,6 +81,7 @@ import { requireApiKey } from './services/auth/apiKey.js';
 import { isFirstPartyOrigin } from './services/auth/firstParty.js';
 import { optionalSupabaseJwt } from './services/auth/supabaseJwt.js';
 import { sessionRouter } from './api/session.js';
+import { apiKeysRouter } from './api/apiKeys.js';
 import { log } from './lib/log.js';
 
 // Paths that should never appear in the request log even on
@@ -399,6 +400,7 @@ export function createApp() {
   app.route('/', staffNoticesRouter);
   app.route('/', referralsRouter);
   app.route('/', usersRouter);
+  app.route('/', apiKeysRouter);
   // Data-history archive reads (W6)
   app.route('/', dataHistoryRouter);
   // Aviation cameras + news RSS + summaries (W7)

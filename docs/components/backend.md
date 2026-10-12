@@ -290,12 +290,31 @@ to curl it fails; past its lifetime it fails; the page re-mints silently
 (`api-session.js`). Nothing is stored server-side.
 
 People who need scripted access get a **named API key** from the `api_keys`
-table (migration 120; issued with `scripts/issue-api-key.ts`, revoked with
-`scripts/revoke-api-key.ts`). Only the sha256 and a lookup prefix are stored.
+table (migration 120; the request flow below is the usual route, and
+`scripts/issue-api-key.ts` / `scripts/revoke-api-key.ts` are the server-side
+shortcuts). Only the sha256 and a lookup prefix are stored.
 A key carries scopes, its own per-minute limit, an optional expiry and a
 `revoked_at`. **Keys are refused from web pages**: a request presenting one
 with a browser `Origin` header is a 403, so a key cannot be used from another
 site, nor pasted into ours.
+
+Keys are normally **requested, not issued**. A logged-in user asks from their
+profile (`POST /api/api-keys/requests`, a name and a reason; one open request
+at a time — pending, or approved and not yet generated), which raises a staff
+Discord alert (`api_key_request`). Owner or staff approve or reject it on the
+staff page (Moderation → API keys; `/api/staff/api-keys/*`), and approval sets
+the per-minute limit and an optional expiry — but approval does not create the
+key. The **user** mints it (`POST /api/api-keys/requests/:id/claim`), so the
+plaintext is shown once to its owner and never to staff; nothing stores it.
+Until they do, staff can withdraw the approval (`…/withdraw`), and a grant
+whose expiry passes before it is generated lapses on its own. A user holds at
+most three active keys, lists and revokes their own from the profile, and
+staff list and revoke any key from the staff page. The caps are checked under
+a per-user advisory lock, with a partial unique index on pending requests as
+the backstop. The requests live in `api_key_requests` (migration 121); the
+routes are in `api/apiKeys.ts`.
+`scripts/issue-api-key.ts` remains the no-review path for a key minted on the
+server.
 
 The static `NSWPSN_API_KEY` remains for server-side callers that predate the
 above — the Discord bot and rdio's transcripts plugin — and is no longer
@@ -304,7 +323,7 @@ returned by `/api/config` or carried in `config.js`.
 | Caller | Credential | Where |
 |---|---|---|
 | Browser page | session token `bt1.…` from `POST /api/session/token` | `services/auth/browserToken.ts`, `api/session.ts` |
-| Script / CLI user | named key `ak_<prefix>_…` (DB, hashed), CLI-only | `services/auth/apiKeys.ts` |
+| Script / CLI user | named key `ak_<prefix>_…` (DB, hashed), CLI-only | `services/auth/apiKeys.ts`, `api/apiKeys.ts` |
 | Discord bot, rdio plugin | static `NSWPSN_API_KEY` | `services/auth/apiKey.ts` |
 | Logged-in user | Supabase JWT (HS256, `SUPABASE_JWT_SECRET`) | `services/auth/supabaseJwt.ts` |
 | Staff | role check on top of the JWT | `services/auth/roles.ts` |

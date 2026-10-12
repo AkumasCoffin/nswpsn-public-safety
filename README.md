@@ -40,7 +40,7 @@ Read these before you read the feature list. They are not temporary.
   A determined scraper can still script the mint from one address, through
   one rate-limited, logged choke point. Scripted access is meant to go through
   named API keys, which work from the command line and are refused from web
-  pages.
+  pages; a logged-in user requests one from their profile and staff approve it.
 - **Several layers are off unless configured.** NASA FIRMS hotspots, the
   transcription tier, ntfy pushes, The Wire's media storage, TfNSW vehicle
   positions and the Discord management dashboard are each gated on an

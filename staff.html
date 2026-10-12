@@ -3069,6 +3069,7 @@
           <div class="tab-dd-menu" id="requests-dd-menu" role="menu" aria-label="Moderation section">
             <button class="tab-dd-item active" role="menuitem" data-kind="signup" onclick="openRequestsView('signup')"><i class="fas fa-user-plus"></i> Signup requests</button>
             <button class="tab-dd-item" role="menuitem" data-kind="data" onclick="openRequestsView('data')"><i class="fas fa-table"></i> Data changes <span class="dd-count" id="dd-data-badge" style="display:none;"></span></button>
+            <button class="tab-dd-item" role="menuitem" data-kind="apikeys" id="dd-apikeys-item" onclick="openRequestsView('apikeys')"><i class="fas fa-key"></i> API keys <span class="dd-count" id="dd-apikeys-badge" style="display:none;"></span></button>
             <button class="tab-dd-item" role="menuitem" data-kind="approvals" onclick="openRequestsView('approvals')"><i class="fas fa-clock"></i> Wire approvals <span class="dd-count" id="dd-approvals-badge" style="display:none;"></span></button>
             <button class="tab-dd-item" role="menuitem" data-kind="takedowns" onclick="openRequestsView('takedowns')"><i class="fas fa-flag"></i> Wire takedowns <span class="dd-count" id="dd-takedowns-badge" style="display:none;"></span></button>
             <button class="tab-dd-item" role="menuitem" data-kind="restrictions" onclick="openRequestsView('restrictions')"><i class="fas fa-comment-slash"></i> Comment restrictions <span class="dd-count" id="dd-restrictions-badge" style="display:none;"></span></button>
@@ -3223,6 +3224,30 @@
             <button class="filter-btn" data-dcfilter="all" onclick="setDcFilter('all')">All</button>
           </div>
           <div id="datachanges-container">
+            <div class="loading"><i class="fas fa-spinner"></i></div>
+          </div>
+        </div>
+
+        <!-- API key requests + issued keys. Approval here does NOT mint a
+             key: the user generates it from their profile and sees the
+             plaintext once. Staff only ever see the prefix. -->
+        <div id="requests-apikeys-view" style="display:none;">
+          <p style="color:var(--text-soft); font-size:0.84rem; line-height:1.6; margin:0 0 0.8rem;">
+            A key is for scripts and the command line &mdash; the API refuses it from web pages.
+            Approving does not create the key: the requester generates it from their profile and
+            sees it exactly once; nothing here stores or shows it. One pending request per user, three active keys.
+          </p>
+          <div class="filter-bar">
+            <button class="filter-btn active" data-akfilter="pending" onclick="setAkFilter('pending')">Pending</button>
+            <button class="filter-btn" data-akfilter="approved" onclick="setAkFilter('approved')">Approved</button>
+            <button class="filter-btn" data-akfilter="rejected" onclick="setAkFilter('rejected')">Rejected</button>
+            <button class="filter-btn" data-akfilter="all" onclick="setAkFilter('all')">All</button>
+          </div>
+          <div id="apikeys-container">
+            <div class="loading"><i class="fas fa-spinner"></i></div>
+          </div>
+          <div class="dev-section-h" style="margin-top:1.6rem;">Issued keys</div>
+          <div id="apikeys-keys-container">
             <div class="loading"><i class="fas fa-spinner"></i></div>
           </div>
         </div>
@@ -15681,8 +15706,11 @@
       try { view = new URLSearchParams(location.search).get('view') || ''; } catch (e) { return; }
       if (!view) return;
       const tabs = userPermissions.tabs || {};
-      const requestViews = { signup: 1, data: 1, approvals: 1, takedowns: 1, restrictions: 1, notices: 1, discord: 1 };
+      const requestViews = { signup: 1, data: 1, apikeys: 1, approvals: 1, takedowns: 1, restrictions: 1, notices: 1, discord: 1 };
       if (requestViews[view]) {
+        // API keys carry their own flag (see applyPermissionRestrictions), so a
+        // wire/feeder manager's deep link must not open a view that only 403s.
+        if (view === 'apikeys' && !userPermissions.can_manage_users) return;
         if (tabs.requests) openRequestsView(view);
       } else if (view === 'users' || view === 'members') {
         if (tabs.users) openAuthView(view === 'members' ? 'members' : 'users');
@@ -15716,6 +15744,10 @@
       // not the same power, so the menu entry goes when the flag does.
       const ntItem = document.getElementById('dd-notices-item');
       if (ntItem) ntItem.style.display = userPermissions.can_send_notices ? '' : 'none';
+      // API keys are an account-level grant, so the entry follows the
+      // user-management flag rather than the generic Moderation one.
+      const akItem = document.getElementById('dd-apikeys-item');
+      if (akItem) akItem.style.display = userPermissions.can_manage_users ? '' : 'none';
 
       // View-only Nodes tab: when the viewer can't manage nodes (node_monitor),
       // flip the body into read-only mode so the CSS strips every mutating
@@ -15777,9 +15809,10 @@
     let _dcFilter = 'pending';
     let _reqKind = 'signup';
     function switchRequestsView(kind) {
-      const views = { signup: 'requests-signup-view', data: 'requests-datachanges-view', approvals: 'requests-approvals-view', takedowns: 'requests-takedowns-view', restrictions: 'requests-restrictions-view', notices: 'requests-notices-view', discord: 'requests-discord-view' };
+      const views = { signup: 'requests-signup-view', data: 'requests-datachanges-view', apikeys: 'requests-apikeys-view', approvals: 'requests-approvals-view', takedowns: 'requests-takedowns-view', restrictions: 'requests-restrictions-view', notices: 'requests-notices-view', discord: 'requests-discord-view' };
       Object.entries(views).forEach(([k, id]) => { const el = document.getElementById(id); if (el) el.style.display = (k === kind) ? 'block' : 'none'; });
       if (kind === 'data') loadDataChanges();
+      else if (kind === 'apikeys') loadApiKeysView();
       else if (kind === 'approvals') loadApprovals();
       else if (kind === 'takedowns') loadTakedowns();
       else if (kind === 'restrictions') loadRestrictions();
@@ -16372,6 +16405,7 @@
       ['new_node', 'New feeder nodes', 'A contributor creates a radio or pager node.'],
       ['ticket', 'Contact tickets', 'New tickets and user replies; closing a ticket edits the message in place.'],
       ['siteSurvey', 'Site surveys', 'A radio node finishes measuring the sites around it — how well it heard each one, and which were added.'],
+      ['api_key_request', 'API key requests', 'A user asks for a named API key; the decision edits the message in place.'],
     ];
     let _dnState = { guild_id: null, channels: {}, guilds: [], channelList: [], delivery: {} };
 
@@ -16646,6 +16680,199 @@
         showToast('Change ' + (action === 'approve' ? 'approved' : 'rejected'), 'success');
         loadDataChanges();
       } catch (e) { showToast(action + ' failed', 'error'); }
+    }
+
+    // --- API keys (Requests tab → "API keys") ---
+    // Two lists on one view: requests (filterable, decided here) and every
+    // issued key (revocable here). Staff never see a plaintext key — the
+    // backend returns it once, to the owner, at claim time.
+    let _akRequests = [], _akKeys = [];
+    let _akFilter = 'pending';
+    function setAkFilter(status) {
+      _akFilter = status;
+      document.querySelectorAll('[data-akfilter]').forEach(b => b.classList.toggle('active', b.dataset.akfilter === status));
+      loadApiKeyRequests();
+    }
+    function _akUpdateBadge(n) {
+      const b = document.getElementById('dd-apikeys-badge');
+      if (!b) return;
+      if (n && n > 0) { b.style.display = ''; b.textContent = n; }
+      else b.style.display = 'none';
+    }
+    async function _akRefreshBadge() {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/staff/api-keys/requests?status=pending`, { headers: { 'Authorization': await authHeader() } });
+        if (!res.ok) return;
+        const data = await res.json();
+        _akUpdateBadge(data.pendingCount);
+      } catch (e) { /* ignore */ }
+    }
+    function loadApiKeysView() {
+      loadApiKeyRequests();
+      loadApiKeysList();
+    }
+    async function loadApiKeyRequests() {
+      const el = document.getElementById('apikeys-container');
+      if (el) el.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i></div>';
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/staff/api-keys/requests?status=${encodeURIComponent(_akFilter)}`, { headers: { 'Authorization': await authHeader() } });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        _akRequests = data.requests || [];
+        _akUpdateBadge(data.pendingCount);
+        renderApiKeyRequests();
+      } catch (e) {
+        if (el) el.innerHTML = `<div class="empty-state"><i class="fas fa-exclamation-triangle"></i><p>Couldn't load API key requests.</p></div>`;
+      }
+    }
+    // Requester as a profile link, same as the ticket thread. userName can be
+    // null for an account that never finished its profile, so fall back to the id.
+    function _akOwnerLink(userId, userName) {
+      const id = userId || '';
+      return `<a href="profile?u=${encodeURIComponent(id)}" target="_blank" rel="noopener" style="color:inherit;">${escapeHtml(userName || id || 'unknown')}</a>`;
+    }
+    const _AK_INPUT_STYLE = 'background:rgba(2,6,23,0.5); border:1px solid var(--border-subtle); border-radius:6px; color:var(--text-main); padding:0.3rem 0.45rem; font-family:inherit; font-size:0.78rem;';
+    function renderApiKeyRequests() {
+      const el = document.getElementById('apikeys-container');
+      if (!el) return;
+      if (!_akRequests.length) {
+        el.innerHTML = `<div class="empty-state"><i class="fas fa-inbox"></i><p>No ${_akFilter === 'all' ? '' : escapeHtml(_akFilter)} API key requests.</p></div>`;
+        return;
+      }
+      el.innerHTML = _akRequests.map(r => {
+        const id = Number(r.id);
+        const when = r.createdAt ? new Date(r.createdAt).toLocaleString() : '';
+        let actions;
+        if (r.status === 'pending') {
+          // The decision inputs live on the card: the limit and expiry are
+          // per-key terms, not site settings, so they are chosen per request.
+          actions = `<div class="dc-actions" style="flex-wrap:wrap; align-items:center;">
+            <label style="font-size:0.74rem; color:var(--text-soft);">Limit / min <input type="number" id="ak-limit-${id}" value="120" min="1" max="6000" style="${_AK_INPUT_STYLE} width:5.5rem;"></label>
+            <label style="font-size:0.74rem; color:var(--text-soft);">Expires <input type="date" id="ak-exp-${id}" style="${_AK_INPUT_STYLE}"></label>
+            <label style="font-size:0.74rem; color:var(--text-soft); flex:1 1 14rem;">Note to user <input type="text" id="ak-note-${id}" maxlength="500" placeholder="optional" style="${_AK_INPUT_STYLE} width:100%; box-sizing:border-box;"></label>
+            <button class="btn btn-success btn-sm" onclick="akDecide(${id}, 'approve')"><i class="fas fa-check"></i> Approve</button>
+            <button class="btn btn-danger btn-sm" onclick="akDecide(${id}, 'reject')"><i class="fas fa-times"></i> Reject</button>
+          </div>`;
+        } else {
+          let line = escapeHtml(r.status);
+          if (r.reviewedByName) line += ' · by ' + escapeHtml(r.reviewedByName);
+          // An approval the user hasn't acted on is a standing permission to
+          // mint, so it can be taken back until the moment they generate it.
+          let withdraw = '';
+          if (r.status === 'approved') {
+            line += r.claimed
+              ? ' · generated ' + escapeHtml(r.claimedAt ? new Date(r.claimedAt).toLocaleString() : '')
+              : (r.lapsed ? ' · lapsed (expiry passed before it was generated)' : ' · not generated yet');
+            if (!r.claimed) {
+              withdraw = `<div class="dc-actions" style="flex-wrap:wrap; align-items:center;">
+                <label style="font-size:0.74rem; color:var(--text-soft); flex:1 1 14rem;">Note to user <input type="text" id="ak-note-${id}" maxlength="500" placeholder="optional" style="${_AK_INPUT_STYLE} width:100%; box-sizing:border-box;"></label>
+                <button class="btn btn-danger btn-sm" onclick="akDecide(${id}, 'withdraw')"><i class="fas fa-undo"></i> Withdraw approval</button>
+              </div>`;
+            }
+          }
+          actions = `<div class="dc-status ${escapeHtml(r.status)}">${line}</div>`
+            + (r.reviewNote ? `<div style="font-size:0.78rem; color:var(--text-soft); margin-top:0.2rem;">Note: ${escapeHtml(r.reviewNote)}</div>` : '')
+            + withdraw;
+        }
+        return `<div class="dc-card">
+          <div class="dc-head">
+            <span class="dc-agency">${escapeHtml(r.name)}</span>
+            <span class="dc-section">${_akOwnerLink(r.userId, r.userName)}</span>
+            <span class="dc-meta">${escapeHtml(when)}</span>
+          </div>
+          <div style="font-size:0.84rem; line-height:1.5; white-space:pre-wrap; word-break:break-word;">${escapeHtml(r.reason)}</div>
+          ${actions}
+        </div>`;
+      }).join('');
+    }
+    async function akDecide(id, action) {
+      const body = {};
+      if (action === 'approve') {
+        const lim = parseInt((document.getElementById(`ak-limit-${id}`) || {}).value, 10);
+        if (!(lim >= 1 && lim <= 6000)) { showToast('Limit must be 1–6000 per minute', 'error'); return; }
+        body.rateLimitPerMin = lim;
+        // A bare date means "through that day": send the end of it in the
+        // reviewer's local time (no trailing Z — an offset-less date-time
+        // parses as local). Midnight would expire the key a day early, and
+        // end-of-day UTC is the next morning here, so the table would show
+        // a date nobody picked.
+        const exp = (document.getElementById(`ak-exp-${id}`) || {}).value;
+        if (exp) body.expiresAt = new Date(exp + 'T23:59:59.999').toISOString();
+      }
+      const note = ((document.getElementById(`ak-note-${id}`) || {}).value || '').trim();
+      if (note) body.note = note;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/staff/api-keys/requests/${id}/${action}`, {
+          method: 'POST',
+          headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) { showToast(data.error || (action + ' failed'), 'error'); return; }
+        showToast(action === 'approve' ? 'Request approved — the user can now generate the key'
+          : action === 'withdraw' ? 'Approval withdrawn — the user is notified' : 'Request rejected', 'success');
+        loadApiKeyRequests();
+      } catch (e) { showToast(action + ' failed', 'error'); }
+    }
+    async function loadApiKeysList() {
+      const el = document.getElementById('apikeys-keys-container');
+      if (el) el.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i></div>';
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/staff/api-keys`, { headers: { 'Authorization': await authHeader() } });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        _akKeys = data.keys || [];
+        renderApiKeysList();
+      } catch (e) {
+        if (el) el.innerHTML = `<div class="empty-state"><i class="fas fa-exclamation-triangle"></i><p>Couldn't load issued keys.</p></div>`;
+      }
+    }
+    function renderApiKeysList() {
+      const el = document.getElementById('apikeys-keys-container');
+      if (!el) return;
+      if (!_akKeys.length) {
+        el.innerHTML = `<div class="empty-state"><i class="fas fa-key"></i><p>No keys have been generated yet.</p></div>`;
+        return;
+      }
+      const fmt = (iso) => iso ? new Date(iso).toLocaleString() : '';
+      const rows = _akKeys.map(k => {
+        // `active` is the server's word; an unrevoked key past its expiry is
+        // still inactive, and that is the case worth showing distinctly.
+        const expired = !k.revokedAt && k.expiresAt && new Date(k.expiresAt) <= new Date();
+        const badge = k.revokedAt ? '<span class="status-badge rejected">Revoked</span>'
+          : (expired || !k.active) ? '<span class="status-badge pending">Expired</span>'
+          : '<span class="status-badge approved">Active</span>';
+        const revoke = k.active && !k.revokedAt && !expired
+          ? `<button class="btn btn-danger btn-sm" onclick="akRevoke('${escapeHtml(k.prefix)}')"><i class="fas fa-ban"></i> Revoke</button>`
+          : '';
+        return `<tr>
+          <td style="font-family:ui-monospace, SFMono-Regular, Menlo, monospace;">${escapeHtml(k.prefix)}</td>
+          <td>${escapeHtml(k.name)}</td>
+          <td>${_akOwnerLink(k.userId, k.userName)}</td>
+          <td>${escapeHtml(k.rateLimitPerMin)}</td>
+          <td>${k.lastUsedAt ? escapeHtml(fmt(k.lastUsedAt)) : '<span class="nd-sub">never</span>'}</td>
+          <td>${k.expiresAt ? escapeHtml(fmt(k.expiresAt)) : '<span class="nd-sub">—</span>'}</td>
+          <td>${badge}</td>
+          <td>${revoke}</td>
+        </tr>`;
+      }).join('');
+      el.innerHTML = `<div style="overflow-x:auto;"><table class="nd-table">
+        <thead><tr><th>Prefix</th><th>Name</th><th>Owner</th><th>Limit/min</th><th>Last used</th><th>Expires</th><th>Status</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>`;
+    }
+    async function akRevoke(prefix) {
+      const ok = (typeof uiConfirm === 'function')
+        ? await uiConfirm('Revoke this key? The owner is notified and the key stops working immediately.', { title: 'Revoke API key', okText: 'Revoke' })
+        : confirm('Revoke this key? The owner is notified and the key stops working immediately.');
+      if (!ok) return;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/staff/api-keys/${encodeURIComponent(prefix)}/revoke`, { method: 'POST', headers: { 'Authorization': await authHeader() } });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) { showToast(data.error || 'Revoke failed', 'error'); return; }
+        showToast('Key revoked', 'success');
+        loadApiKeysList();
+      } catch (e) { showToast('Revoke failed', 'error'); }
     }
 
     // --- Wire takedowns (Requests tab → "Wire takedowns") ---
@@ -16968,6 +17195,8 @@
       _dcRefreshBadge();
       _tdRefreshBadge();
       _apRefreshBadge();
+      // Staff-gated on the server too; skipping it just avoids a 403 in the console.
+      if (userPermissions.can_manage_users) _akRefreshBadge();
       try {
         const response = await fetch(`${API_BASE_URL}/api/editor-requests`, {
           headers: {

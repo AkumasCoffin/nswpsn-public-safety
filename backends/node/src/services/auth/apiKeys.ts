@@ -7,8 +7,10 @@
  * per-node tokens (nodeToken.ts): the plaintext is shown once at creation and
  * is never derivable again. Keys belong to a user, carry scopes (only `read`
  * exists today), a per-minute rate limit, an optional expiry, and can be
- * revoked. Issuing and revoking is done by the owner from the server
- * (scripts/issue-api-key.ts, scripts/revoke-api-key.ts) until there is a UI.
+ * revoked. Keys are minted two ways: a user claims an approved request from
+ * their profile (api/apiKeys.ts — the user mints, so only they ever see the
+ * plaintext), or the owner issues one from the server
+ * (scripts/issue-api-key.ts, scripts/revoke-api-key.ts).
  *
  * These keys work from curl and from servers and are REFUSED from web pages:
  * the gate (apiKey.ts) rejects any request that presents one together with a
@@ -16,6 +18,7 @@
  * key pasted into a page is caught the first time it is used.
  */
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import type { Pool } from 'pg';
 import { getPool } from '../../db/pool.js';
 
 export const API_KEY_PREFIX = 'ak_';
@@ -62,9 +65,13 @@ export function looksLikeApiKey(s: string | undefined | null): boolean {
   return !!s && s.startsWith(API_KEY_PREFIX);
 }
 
+/** Anything that can run a parameterised query — the pool, or a client mid-transaction. */
+export type Queryable = Pick<Pool, 'query'>;
+
 /**
  * Mint a key. The plaintext is returned ONCE for the caller to hand over; only
- * the hash lands in the table.
+ * the hash lands in the table. Pass `q` to mint inside a caller's transaction
+ * (the claim flow links the key to its request atomically).
  */
 export async function createApiKey(opts: {
   userId: string;
@@ -72,12 +79,12 @@ export async function createApiKey(opts: {
   scopes?: string[];
   rateLimitPerMin?: number;
   expiresAt?: Date | null;
-}): Promise<{ plaintext: string; row: ApiKeyRow }> {
-  const pool = await getPool();
-  if (!pool) throw new Error('no database');
+}, q?: Queryable): Promise<{ plaintext: string; row: ApiKeyRow }> {
+  const runner: Queryable | null = q ?? (await getPool());
+  if (!runner) throw new Error('no database');
   const prefix = randomBytes(8).toString('base64url').replace(/[-_]/g, 'x').slice(0, LOOKUP_LEN);
   const plaintext = `${API_KEY_PREFIX}${prefix}_${randomBytes(SECRET_BYTES).toString('base64url')}`;
-  const res = await pool.query<ApiKeyRow>(
+  const res = await runner.query<ApiKeyRow>(
     `INSERT INTO api_keys (user_id, name, prefix, key_hash, scopes, rate_limit_per_min, expires_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING *`,

@@ -97,7 +97,10 @@ cp config.sample.js config.js
 It carries the Supabase project URL and anon key and the API base URL — and
 **no API key**. Pages authenticate with a short-lived browser session token
 from `api-session.js` (see below); the backend's `NSWPSN_API_KEY` is for
-server-side callers and must not be put in this file. `.htaccess` explicitly
+server-side callers and must not be put in this file. A logged-in user who
+needs scripted access requests a personal key from the "API keys" card in the
+profile modal (`auth-common.js`) instead — it is for curl and scripts, and the
+backend refuses it from any web page. `.htaccess` explicitly
 allows `config.js`, `auth-common.js`, `api-session.js` and `analytics.js` to
 be served while blocking most other paths.
 
@@ -182,6 +185,11 @@ requesting browser, so it is useless from curl, a scraper or a typed URL. Each
 page keeps its own `apiFetch`/`userHeaders` helper and reads the token from
 `AusApi`; logged-in users send their Supabase JWT instead, unchanged. Nothing
 on the public site reads a database directly.
+
+The profile modal (`auth-common.js`) also carries an **API keys** card where a
+logged-in user requests a personal key, generates it once staff approve (the
+plaintext is shown once and never again) and revokes it. A bell notification
+about a request links to `/#api-keys`, which opens that card.
 
 ```
 map.html  ──►  /api/rfs/incidents        (RFS fires)

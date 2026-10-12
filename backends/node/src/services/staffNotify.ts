@@ -45,7 +45,8 @@ export type StaffNotifyKind =
   | 'new_user'
   | 'new_node'
   | 'ticket'
-  | 'siteSurvey';
+  | 'siteSurvey'
+  | 'api_key_request';
 
 /** app_settings keys. One channel per kind, plus the guild they live in. */
 export const NOTIFY_GUILD_KEY = 'discord_notify_guild_id';
@@ -58,6 +59,8 @@ export const NOTIFY_CHANNEL_KEYS: Record<StaffNotifyKind, string> = {
   // Contact tickets get their OWN channel, distinct from signups/nodes.
   ticket: 'discord_notify_channel_ticket',
   siteSurvey: 'discord_notify_channel_site_survey',
+  // A user asks for a named API key; approve/reject edits the message in place.
+  api_key_request: 'discord_notify_channel_api_key',
 };
 
 /** Which staff view each kind deep-links to. */
@@ -69,6 +72,7 @@ const STAFF_VIEW: Record<StaffNotifyKind, string> = {
   new_node: 'nodes',
   ticket: 'tickets',
   siteSurvey: 'nodes',
+  api_key_request: 'apikeys',
 };
 
 function publicBase(): string {
