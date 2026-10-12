@@ -323,7 +323,7 @@ returned by `/api/config` or carried in `config.js`.
 | Caller | Credential | Where |
 |---|---|---|
 | Browser page | session token `bt1.…` from `POST /api/session/token` | `services/auth/browserToken.ts`, `api/session.ts` |
-| Script / CLI user | named key `ak_<prefix>_…` (DB, hashed), CLI-only | `services/auth/apiKeys.ts`, `api/apiKeys.ts` |
+| Script / CLI user | named key `ak_<prefix>_…` (DB, hashed), CLI-only, **GET on the data feeds only** | `services/auth/apiKeys.ts`, `api/apiKeys.ts` |
 | Discord bot, rdio plugin | static `NSWPSN_API_KEY` | `services/auth/apiKey.ts` |
 | Logged-in user | Supabase JWT (HS256, `SUPABASE_JWT_SECRET`) | `services/auth/supabaseJwt.ts` |
 | Staff | role check on top of the JWT | `services/auth/roles.ts` |
@@ -336,6 +336,33 @@ returned by `/api/config` or carried in `config.js`.
 `/api/node-ingest/` and `/api/node-enrol` are exempt from the key gate because
 they do their own token auth, and an enrolling agent has no credential of any
 kind yet.
+
+### A named key reaches the data feeds, and nothing else
+
+Passing the credential gate is not an authorisation decision — most routes have
+nothing but the gate, so "credentialed" used to mean "everything a signed-in
+page can see". For a key that was wrong: an audit of all 344 registered routes
+found one could read any account's complete role matrix
+(`/api/check-admin/:userId`), read anyone's profile, enumerate every live
+visitor session, walk the whole rdio call corpus with its transcripts and audio
+links, spend the server's paid what3words quota, post an unbounded takedown
+notice into the private staff Discord channel, inflate a contributor's view
+counts, and push 25 MB of audio at the GPU transcription backends.
+
+So the class is confined at the gate itself (`API_KEY_PATH_PREFIXES` in
+`services/auth/apiKey.ts`): a key may make a **GET or HEAD** and only to an
+upstream data feed — the emergency-service, traffic, transport, aviation, AIS,
+weather, power, camera, news and boundary routes, plus `/api/pager/` and
+`/api/radio/`. Anything else is `403 api_key_path_forbidden`, including every
+write. Refused requests still spend the key's per-minute budget, so scanning for
+an opening is not free.
+
+Deliberately NOT reachable with a key: profiles and accounts, user-submitted
+incidents, radio summaries and transcripts, site statistics, the cache and
+collection internals, and the archive history. Adding a prefix to that list
+widens what every existing key can read, so it is a decision, not a tidy-up.
+`apiKeyScopes` is recorded on each key but nothing reads it — the method and
+the path list are what hold the line today.
 
 **Roles live in the backend's own PostgreSQL, not in Supabase.** Supabase is
 authentication and identity only. Never propose row-level security on the

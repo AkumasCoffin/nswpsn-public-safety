@@ -327,7 +327,7 @@ function createProfileModal() {
 
       <div id="profile-apikeys-section" class="pf-card">
         <label style="display:block; color:#cbd5e1; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem; font-weight:600;">API keys</label>
-        <div style="color:#64748b; font-size:0.72rem; margin-bottom:0.7rem;">For scripts and the command line — a key is refused from web pages by design. Staff approve a request; you then generate the key here and see it exactly once (nothing stores it, staff never see it). One pending request at a time, up to 3 active keys.</div>
+        <div style="color:#64748b; font-size:0.72rem; margin-bottom:0.7rem;">For scripts and the command line — a key is refused from web pages by design. It can <strong>read the data feeds</strong> (RFS, traffic, transport, aircraft, vessels, weather, power, cameras, pager, radio sites) and nothing else: no account data, and no writes. Staff approve a request; you then generate the key here and see it exactly once (nothing stores it, staff never see it). One pending request at a time, up to 3 active keys.</div>
         <div id="profile-apikeys-body"></div>
         <div id="profile-apikeys-msg" style="margin-top:0.5rem; font-size:0.8rem; min-height:1.2em;"></div>
       </div>

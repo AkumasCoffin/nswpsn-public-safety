@@ -54,6 +54,82 @@ declare module 'hono' {
 }
 
 /**
+ * What a named API key may reach: the upstream data feeds, read-only.
+ *
+ * A key is a polling credential for somebody's script. It is NOT a login, and
+ * passing the credential gate was never meant to mean "everything a page can
+ * see" — but that is what it meant, because the gate is all most routes have.
+ * An audit of all 344 registered routes found a key could read the complete
+ * role matrix of any account (/api/check-admin/:userId), read anyone's profile,
+ * enumerate every live visitor session, walk the whole rdio call corpus with
+ * its transcripts and audio links, spend the server's paid what3words quota,
+ * post an unbounded takedown notice into the private staff Discord channel,
+ * inflate any contributor's view counts, and push 25 MB of audio at the GPU
+ * transcription backends — none of which is polling a data feed.
+ *
+ * So the class is confined here, at the one chokepoint, rather than by
+ * annotating sixty handlers: a key may only make a GET or HEAD, and only to a
+ * path on this list. Everything else is 403, including every write.
+ *
+ * The list is upstream sources — what the feeds publish — plus two the owner
+ * asked for by name. It deliberately does NOT include this site's own content
+ * or telemetry: no profiles or accounts, no user-submitted incidents, no radio
+ * summaries or transcripts, no site statistics, no cache or collection
+ * internals, no archive history.
+ *
+ * Public endpoints (PUBLIC_ENDPOINTS below) never reach this check — they take
+ * no credential from anyone — so nothing here is about hiding those.
+ */
+const API_KEY_PATH_PREFIXES: readonly string[] = [
+  // Emergency services, state by state.
+  '/api/rfs/',
+  '/api/act-ambulance/',
+  '/api/qld-fire/',
+  '/api/qld/',
+  '/api/nt-fire/',
+  '/api/sa-fire/',
+  '/api/vic-emergency/',
+  '/api/wa-emergency/',
+  '/api/firms/',
+  // Roads, transport, aviation, marine (AIS).
+  '/api/traffic/',
+  '/api/transport/',
+  '/api/adsb/',
+  '/api/aviation/',
+  '/api/marinetraffic/',
+  // Weather, fire danger, water.
+  '/api/weather/',
+  '/api/bom/',
+  '/api/beachsafe',
+  '/api/beachwatch',
+  // Power outages.
+  '/api/ausgrid/',
+  '/api/endeavour/',
+  '/api/essential/',
+  // Fire-tower cameras, news, reference geometry.
+  '/api/centralwatch/',
+  '/api/news/',
+  '/api/boundaries/',
+  // Pager traffic from the owner's own Pagermon relay, and the public radio
+  // site reference — both included at the owner's request.
+  '/api/pager/',
+  '/api/radio/',
+];
+
+/** Exact paths, for feeds whose route has no trailing segment. */
+const API_KEY_PATHS: ReadonlySet<string> = new Set([
+  '/api/beachsafe',
+  '/api/beachwatch',
+]);
+
+/** May a named key make this request? GET/HEAD on a data feed, nothing else. */
+function apiKeyMayRead(method: string, path: string): boolean {
+  if (method !== 'GET' && method !== 'HEAD') return false;
+  if (API_KEY_PATHS.has(path)) return true;
+  return API_KEY_PATH_PREFIXES.some((p) => path.startsWith(p));
+}
+
+/**
  * Constant-time string comparison. Guards against length mismatch first
  * (timingSafeEqual throws on unequal-length buffers); leaking the length
  * of the secret is not a meaningful side-channel here.
@@ -225,6 +301,19 @@ export const requireApiKey: MiddlewareHandler = async (c, next) => {
       return c.json(
         { error: 'rate_limited', message: `This key is limited to ${r.row.rate_limit_per_min} requests per minute` },
         429,
+      );
+    }
+    // Checked after the rate limit on purpose: hammering a refused path still
+    // spends the key's budget, so a scan cannot be free. See apiKeyMayRead.
+    if (!apiKeyMayRead(c.req.method, url.pathname)) {
+      return c.json(
+        {
+          error: 'api_key_path_forbidden',
+          message:
+            'API keys may only read the upstream data feeds (GET). ' +
+            'This path is not one of them.',
+        },
+        403,
       );
     }
     touchLastUsed(r.row);
