@@ -51,9 +51,15 @@ vi.mock('../../../src/services/wireSettings.js', () => ({
 }));
 
 const deleteR2 = vi.fn(async () => {});
+// Keys that something else already points at. The real query is covered in
+// services/wire.test.ts; here it decides "is this key the caller's to use".
+let inUseKeys: string[] = [];
 vi.mock('../../../src/services/wire.js', () => ({
   r2PublicUrl: (k: string) => `https://r2.example/${k}`,
   deleteR2Object: (k: string) => deleteR2(k),
+  deleteUnreferencedR2Object: (_pool: unknown, k: string) => deleteR2(k),
+  r2KeysInUse: async (_pool: unknown, keys: string[]) => keys.filter((k) => inUseKeys.includes(k)),
+  R2_IMAGE_PREFIX: 'wire/img/',
   viewerHash: () => 'vh-1',
   normaliseLicense: (v: unknown) => (v === 'display' || v === 'public' ? v : 'credit'),
   licenseLabel: (v: string) => (v === 'public' ? 'Public domain' : v === 'display' ? 'All rights reserved' : 'Credit required'),
@@ -81,7 +87,7 @@ const row = (over: Record<string, unknown> = {}) => ({
   production_year: 2020, crew_capacity: 4,
   radio_ids: { cab: ['1234567'], mobile: [] }, specs: { water_tank_l: 2000, cafs: true },
   license: 'credit', credit: null, rights_affirmed: true, watermark: false,
-  images: [{ key: 'wire/img1.webp', side: 'front' }], views: 3, status: 'published', review_note: null,
+  images: [{ key: 'wire/img/1.webp', side: 'front' }], views: 3, status: 'published', review_note: null,
   created_at: new Date('2026-09-01T00:00:00Z'), updated_at: new Date('2026-09-01T00:00:00Z'),
   ...over,
 });
@@ -96,6 +102,7 @@ const goodBody = {
 beforeEach(() => {
   calls = []; resultQueue = []; nextResult = { rows: [], rowCount: 0 };
   canFeedMock = true; moderatorMock = false; adminMock = false; wirePublicMock = true;
+  inUseKeys = [];
   deleteR2.mockClear();
 });
 
@@ -107,7 +114,7 @@ describe('fleet list', () => {
     const j = await res.json();
     expect(j.vehicles).toHaveLength(1);
     expect(j.vehicles[0].callsign).toBe('P 251');
-    expect(j.vehicles[0].image_url).toBe('https://r2.example/wire/img1.webp');
+    expect(j.vehicles[0].image_url).toBe('https://r2.example/wire/img/1.webp');
     expect(j.vehicles[0].images[0].side).toBe('front');
     expect(j.vehicles[0].images[0].key).toBeUndefined(); // list never leaks keys
     const sql = calls[0]!.sql;
@@ -120,6 +127,20 @@ describe('fleet list', () => {
     wirePublicMock = false; canFeedMock = false; moderatorMock = false;
     const res = await makeApp(null).request('/api/wire/fleet');
     expect(await res.json()).toEqual({ vehicles: [], visible: false });
+  });
+});
+
+describe('fleet feed: ?mine=1&deleted=1', () => {
+  it('cannot list soft-deleted vehicles without a signed-in caller', async () => {
+    // No uid means the public branch, where the deleted filter would
+    // otherwise still have been applied — listing every author's deletions.
+    resultQueue = [{ rows: [], rowCount: 0 }];
+    const res = await makeApp(null).request('/api/wire/fleet?mine=1&deleted=1');
+    expect(res.status).toBe(200);
+    const sql = calls.find((c) => c.sql.includes('FROM fleet_vehicles'))!.sql;
+    expect(sql).toContain('deleted_at IS NULL');
+    expect(sql).not.toContain('deleted_at IS NOT NULL');
+    expect(sql).toContain("status = 'published'");
   });
 });
 
@@ -185,7 +206,7 @@ describe('fleet detail', () => {
     expect(res.status).toBe(404);
     res = await makeApp('user-1').request('/api/wire/fleet/v1');
     expect(res.status).toBe(200);
-    expect((await res.json()).vehicle.images[0].key).toBe('wire/img1.webp'); // author gets keys
+    expect((await res.json()).vehicle.images[0].key).toBe('wire/img/1.webp'); // author gets keys
   });
 });
 
@@ -198,16 +219,67 @@ describe('fleet edit/delete', () => {
     expect(res.status).toBe(403);
 
     resultQueue = [
-      { rows: [{ author_id: 'user-1', images: [{ key: 'wire/old.webp', side: null }], status: 'published' }], rowCount: 1 },
+      { rows: [{ author_id: 'user-1', images: [{ key: 'wire/img/old.webp', side: null }], status: 'published' }], rowCount: 1 },
       { rows: [], rowCount: 1 }, // UPDATE
     ];
     res = await makeApp('user-1').request('/api/wire/fleet/v1', {
       method: 'PUT',
-      body: JSON.stringify({ ...goodBody, images: [{ key: 'wire/new.webp', side: 'front' }] }),
+      body: JSON.stringify({ ...goodBody, images: [{ key: 'wire/img/new.webp', side: 'front' }] }),
       headers: { 'Content-Type': 'application/json' },
     });
     expect(res.status).toBe(200);
-    expect(deleteR2).toHaveBeenCalledWith('wire/old.webp'); // dropped photo cleaned up
+    expect(deleteR2).toHaveBeenCalledWith('wire/img/old.webp'); // dropped photo cleaned up
+  });
+
+  it("refuses a photo key that belongs to someone else, on create and on edit", async () => {
+    // The attack this closes: list another author's photo (its key is readable
+    // from the public URL) as your own, then drop it in a later edit and the
+    // object is deleted out from under them.
+    inUseKeys = ['wire/img/victim.webp'];
+    const body = { ...goodBody, images: [{ key: 'wire/img/victim.webp', side: 'front' }] };
+    let res = await makeApp('user-1').request('/api/wire/fleet', {
+      method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' },
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/someone else/);
+
+    resultQueue = [
+      { rows: [{ author_id: 'user-1', images: [{ key: 'wire/img/old.webp', side: null }], status: 'published' }], rowCount: 1 },
+    ];
+    res = await makeApp('user-1').request('/api/wire/fleet/v1', {
+      method: 'PUT', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' },
+    });
+    expect(res.status).toBe(400);
+    expect(calls.some((c) => c.sql.includes('UPDATE fleet_vehicles'))).toBe(false);
+    expect(deleteR2).not.toHaveBeenCalled();
+  });
+
+  it('refuses a key that was not uploaded through the form', async () => {
+    const res = await makeApp('user-1').request('/api/wire/fleet', {
+      method: 'POST',
+      body: JSON.stringify({ ...goodBody, images: [{ key: 'wire/avatars/someone.webp', side: null }] }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/not uploaded/);
+  });
+
+  it('still lets an admin edit, keeping the author\'s existing photos', async () => {
+    // Ownership is the vehicle author's, not the caller's — otherwise an admin
+    // re-sending the author's keys would look like theft of those keys.
+    adminMock = true;
+    inUseKeys = ['wire/img/old.webp'];
+    resultQueue = [
+      { rows: [{ author_id: 'user-1', images: [{ key: 'wire/img/old.webp', side: null }], status: 'published' }], rowCount: 1 },
+      { rows: [], rowCount: 1 }, // UPDATE
+    ];
+    const res = await makeApp('staff-1').request('/api/wire/fleet/v1', {
+      method: 'PUT',
+      body: JSON.stringify({ ...goodBody, images: [{ key: 'wire/img/old.webp', side: null }] }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    expect(res.status).toBe(200);
+    expect(deleteR2).not.toHaveBeenCalled();
   });
 
   it('soft-deletes for the author (recoverable; the photo survives)', async () => {

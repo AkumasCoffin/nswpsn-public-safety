@@ -456,7 +456,8 @@ export function createApp() {
         'live-data',
         'data-history',
         'pager-hits',
-        'police-heatmap',
+        // 'police-heatmap' was advertised here after its routes were retired
+        // with the Waze ingest; the frontend's loaders are hard-guarded off.
         'discord-dashboard',
         'rdio-transcripts',
         'editor-requests',

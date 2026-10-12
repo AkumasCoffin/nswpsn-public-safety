@@ -13,7 +13,14 @@ import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { requireSupabaseJwt } from '../services/auth/supabaseJwt.js';
 import { invalidateUserRolesCache } from '../services/auth/roles.js';
-import { avatarUrl, createImageUploadUrl, r2Configured, readR2ObjectBytes, deleteR2Object } from '../services/wire.js';
+import {
+  avatarUrl,
+  createImageUploadUrl,
+  r2Configured,
+  readR2ObjectBytes,
+  deleteUnreferencedR2Object,
+  r2KeysInUse,
+} from '../services/wire.js';
 import { tagsFor } from '../services/userTags.js';
 import { notifyStaff } from '../services/staffNotify.js';
 import { notify } from '../services/wireComments.js';
@@ -106,7 +113,12 @@ async function authorStats(pool: Pool, userId: string): Promise<{ posts: number;
   }
 }
 
-profilesRouter.get('/api/profiles/:userId', async (c) => {
+// Constrained to the Supabase user-id shape on purpose. Hono matches in
+// registration order, so a bare ':userId' here swallowed the literal
+// /api/profiles/map-prefs and /api/profiles/watermark routes further down this
+// file: both answered 200 with the profile of a user called "map-prefs", which
+// read to the client as "no saved prefs" and "watermark isn't a PNG".
+profilesRouter.get('/api/profiles/:userId{[0-9a-fA-F-]{36}}', async (c) => {
   const pool = await getPool();
   if (!pool) return c.json(DB_UNAVAILABLE, 503);
   const userId = c.req.param('userId');
@@ -141,16 +153,24 @@ profilesRouter.put('/api/profiles', requireSupabaseJwt, async (c) => {
     // Must be a key we minted (under wire/avatars/) — never an arbitrary object.
     let avatarKey = typeof d['avatar_key'] === 'string' && d['avatar_key'] ? d['avatar_key'].slice(0, 200) : null;
     if (avatarKey && !avatarKey.startsWith('wire/avatars/')) avatarKey = null;
+    // The prefix alone said nothing about WHOSE avatar it is, and every avatar
+    // key is readable from the avatar_url this endpoint hands out. Someone
+    // else's object is refused rather than quietly ignored: claiming it would
+    // show their picture as yours, and clearing it afterwards deleted it.
+    if (avatarKey && (await r2KeysInUse(pool, [avatarKey], uid)).length > 0) {
+      return c.json({ error: 'that picture belongs to someone else' }, 400);
+    }
     // clear_avatar removes the custom picture (COALESCE alone can't: null
-    // means "keep"). The old R2 object is deleted best-effort.
+    // means "keep"). The old R2 object is deleted best-effort, AFTER the write
+    // so the reference check below sees the cleared row.
     const clearAvatar = d['clear_avatar'] === true;
+    let clearedKey: string | null = null;
     if (clearAvatar) {
       avatarKey = null;
       try {
         const prevKey = await pool.query<{ avatar_key: string | null }>(
           'SELECT avatar_key FROM user_profiles WHERE user_id = $1', [uid]);
-        const old = prevKey.rows[0]?.avatar_key;
-        if (old) deleteR2Object(old).catch(() => {});
+        clearedKey = prevKey.rows[0]?.avatar_key ?? null;
       } catch { /* the clear still proceeds */ }
     }
     // Discord avatar: prefer the verified JWT claim; fall back to a client-sent
@@ -169,6 +189,7 @@ profilesRouter.put('/api/profiles', requireSupabaseJwt, async (c) => {
        RETURNING *`,
       [uid, displayName, bio, avatarKey, discordAvatar, twitter, facebook, instagram, youtube, website, clearAvatar],
     );
+    if (clearedKey) deleteUnreferencedR2Object(pool, clearedKey).catch(() => {});
     return c.json({ success: true, profile: shapeProfile(uid, r.rows[0]) });
   } catch (err) {
     log.error({ err, uid }, 'profiles: update failed');
@@ -396,6 +417,11 @@ profilesRouter.put('/api/profiles/watermark', requireSupabaseJwt, async (c) => {
     let key = typeof body['key'] === 'string' ? body['key'].slice(0, 300) : null;
     // Only keys we minted -- never an arbitrary object path.
     if (key && !key.startsWith('wire/watermarks/')) key = null;
+    // ...and only one nothing else points at, for the same reason as the
+    // avatar above: setting then clearing someone else's key deleted it.
+    if (key && (await r2KeysInUse(pool, [key], uid)).length > 0) {
+      return c.json({ error: 'that watermark belongs to someone else' }, 400);
+    }
     const prev = await pool.query<{ watermark_key: string | null }>(
       'SELECT watermark_key FROM user_profiles WHERE user_id = $1', [uid]);
     await pool.query(
@@ -405,7 +431,7 @@ profilesRouter.put('/api/profiles/watermark', requireSupabaseJwt, async (c) => {
       [uid, key],
     );
     const old = prev.rows[0]?.watermark_key ?? null;
-    if (old && old !== key) deleteR2Object(old).catch(() => {});
+    if (old && old !== key) deleteUnreferencedR2Object(pool, old).catch(() => {});
     return c.json({ success: true, has_watermark: !!key });
   } catch (err) {
     log.error({ err, uid }, 'profiles: watermark save failed');

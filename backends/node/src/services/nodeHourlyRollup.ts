@@ -63,6 +63,24 @@ const REDERIVE_HOURS = 6;
 const CALL_GROUP =
   "(event_type LIKE 'CALL_GROUP%' OR event_type LIKE 'CALL_PATCH_GROUP%')";
 
+/**
+ * How far BEFORE the range each pass reads detail.
+ *
+ * A pass re-derives [from, to), and an hour's final derivation is the pass
+ * where that hour is the lowest in the range. Scanning detail only from `from`
+ * hides the earlier receptions of a call that began just before it: its
+ * earliest VISIBLE event then sits in `from`, CALL_HOUR files it there, and
+ * the previous pass — which could see the whole call — had already filed the
+ * same call in the hour before. That is the boundary double-count migration
+ * 085 removed, reintroduced by the scan range rather than by the bucketing.
+ *
+ * So detail is read an hour early and CALL_HOUR's own filter, not the scan
+ * range, decides which calls a pass owns. A group spans at most twice
+ * GROUP_WINDOW_SECONDS (nodeEvents.ts), so an hour is orders of magnitude
+ * more slack than a straddling call can need, and the extra hour is one more
+ * hour of an index scan the statement was doing anyway.
+ */
+const CALL_LOOKBACK = "interval '1 hour'";
 
 /**
  * The hour a CALL belongs to: the hour of its earliest event.
@@ -78,14 +96,25 @@ const CALL_GROUP =
  * rule that picks a call's home talkgroup should pick its hour, and id is the
  * tiebreak that makes both deterministic.
  *
+ * It also filters to the hours THIS PASS OWNS, which is why every consumer
+ * joins it as an inner join: a call whose earliest event predates the range
+ * belongs to an hour an earlier pass already filed, and this pass must leave
+ * it alone rather than count it again at its own lower boundary. See
+ * CALL_LOOKBACK.
+ *
  * Expects a preceding CTE named `ev` exposing id, received_at and
- * logical_call_id.
+ * logical_call_id, and the range as $1/$2.
  */
-const CALL_HOUR = `SELECT logical_call_id,
-                (array_agg(date_trunc('hour', received_at) ORDER BY id))[1] AS hour
-           FROM ev GROUP BY logical_call_id`;
+const CALL_HOUR = `SELECT * FROM (
+           SELECT logical_call_id,
+                  (array_agg(date_trunc('hour', received_at) ORDER BY id))[1] AS hour
+             FROM ev GROUP BY logical_call_id
+         ) c
+        WHERE c.hour >= $1::timestamptz AND c.hour < $2::timestamptz`;
 
 let timer: NodeJS.Timeout | null = null;
+/** The one-shot that waits for the next HH:00:30 before the interval starts. */
+let alignTimer: NodeJS.Timeout | null = null;
 let tickRunning = false;
 
 /**
@@ -138,7 +167,8 @@ async function rollupRange(
                 COALESCE(site_id, -1) AS site,
                 audio_bytes
            FROM node_radio_events
-          WHERE received_at >= $1::timestamptz AND received_at < $2::timestamptz
+          WHERE received_at >= $1::timestamptz - ${CALL_LOOKBACK}
+            AND received_at < $2::timestamptz
             AND ${CALL_GROUP}
        ), ch AS (
          ${CALL_HOUR}
@@ -191,6 +221,17 @@ async function rollupRange(
     // call belongs to each of its talkgroups; under the fleet-wide rn = 1 only
     // the lowest of them would count it and the rest would read zero. Summed
     // across a talkgroup's sites this equals the detail query exactly.
+    //
+    // logical_calls_site is a THIRD, once per (call, system, site), for the
+    // one question the other two cannot answer: how many calls did THIS SITE
+    // hear. The fleet-wide systems tree summed logical_calls per site, so
+    // every site in a simulcast group but the lowest read far below its real
+    // figure and contradicted both the node-scoped tree and the site
+    // drill-down, which count from raw events. Summed over the (system, site)
+    // rows the tree groups by, this equals COUNT(DISTINCT call) per site in
+    // the detail table. Talkgroup is deliberately NOT in the partition: a
+    // patched call is one call at the site, however many talkgroups carried
+    // it. See migration 123.
     await client.query(
       `WITH ev AS MATERIALIZED (
          SELECT id, received_at, logical_call_id, node_id,
@@ -200,7 +241,8 @@ async function rollupRange(
                 COALESCE(site_id, -1) AS site,
                 encrypted, recorded
            FROM node_radio_events
-          WHERE received_at >= $1::timestamptz AND received_at < $2::timestamptz
+          WHERE received_at >= $1::timestamptz - ${CALL_LOOKBACK}
+            AND received_at < $2::timestamptz
             AND ${CALL_GROUP}
        ), ch AS (
          ${CALL_HOUR}
@@ -222,21 +264,26 @@ async function rollupRange(
                 ROW_NUMBER() OVER (
                   PARTITION BY r.hour, r.logical_call_id, r.system, r.talkgroup
                   ORDER BY r.rfss, r.site, r.node_id
-                ) AS rn_tg
+                ) AS rn_tg,
+                ROW_NUMBER() OVER (
+                  PARTITION BY r.hour, r.logical_call_id, r.system, r.rfss, r.site
+                  ORDER BY r.talkgroup, r.node_id
+                ) AS rn_site
            FROM r
          WINDOW w AS (PARTITION BY r.hour, r.logical_call_id)
        )
        INSERT INTO node_radio_hourly_sys
          (hour, system, talkgroup, site_rfss, site_id,
           calls, logical_calls, receptions, encrypted_calls, recorded_calls,
-          logical_calls_tg)
+          logical_calls_tg, logical_calls_site)
        SELECT a.hour, a.system, a.talkgroup, a.rfss, a.site,
               COUNT(*)::int,
               (COUNT(*) FILTER (WHERE a.rn = 1))::int,
               COUNT(*)::int,
               (COUNT(*) FILTER (WHERE a.rn = 1 AND a.call_encrypted))::int,
               (COUNT(*) FILTER (WHERE a.rn = 1 AND a.call_recorded))::int,
-              (COUNT(*) FILTER (WHERE a.rn_tg = 1))::int
+              (COUNT(*) FILTER (WHERE a.rn_tg = 1))::int,
+              (COUNT(*) FILTER (WHERE a.rn_site = 1))::int
          FROM a
         GROUP BY a.hour, a.system, a.talkgroup, a.rfss, a.site`,
       [from.toISOString(), to.toISOString()],
@@ -268,16 +315,23 @@ async function rollupRange(
                 COALESCE(system, 0) AS system,
                 recorded, received_at
            FROM node_radio_events
-          WHERE received_at >= $1::timestamptz AND received_at < $2::timestamptz
+          WHERE received_at >= $1::timestamptz - ${CALL_LOOKBACK}
+            AND received_at < $2::timestamptz
             AND ${CALL_GROUP}
        ), tx AS (
-         -- One row per call: when it started, what talkgroup it started on,
-         -- and whether anything ever recorded it.
-         SELECT logical_call_id,
-                bool_or(recorded) AS rec,
-                (array_agg(talkgroup ORDER BY id))[1] AS home,
-                (array_agg(date_trunc('hour', received_at) ORDER BY id))[1] AS hour
-           FROM ev GROUP BY logical_call_id
+         -- One row per call this pass owns: when it started, what talkgroup it
+         -- started on, and whether anything ever recorded it. The hour filter
+         -- is CALL_HOUR's, spelled out because this one also needs home and
+         -- rec; everything downstream joins tx, so a call belonging to an
+         -- earlier hour drops out of the whole statement.
+         SELECT * FROM (
+           SELECT logical_call_id,
+                  bool_or(recorded) AS rec,
+                  (array_agg(talkgroup ORDER BY id))[1] AS home,
+                  (array_agg(date_trunc('hour', received_at) ORDER BY id))[1] AS hour
+             FROM ev GROUP BY logical_call_id
+         ) t
+        WHERE t.hour >= $1::timestamptz AND t.hour < $2::timestamptz
        ), expanded AS (
          SELECT logical_call_id, node_id, rfss, site, talkgroup AS tg FROM ev
          UNION ALL
@@ -335,7 +389,8 @@ async function rollupRange(
                 COALESCE(site_rfss, -1) AS rfss,
                 COALESCE(site_id, -1) AS site
            FROM node_radio_events
-          WHERE received_at >= $1::timestamptz AND received_at < $2::timestamptz
+          WHERE received_at >= $1::timestamptz - ${CALL_LOOKBACK}
+            AND received_at < $2::timestamptz
             AND ${CALL_GROUP} AND source_unit IS NOT NULL
        ), ch AS (
          ${CALL_HOUR}
@@ -457,28 +512,64 @@ export async function rollupHighWater(): Promise<Date | null> {
   }
 }
 
-/** Start the hourly rollup. Idempotent. */
+/** One tick, guarded against overlapping with the previous one. */
+async function tick(): Promise<void> {
+  if (tickRunning) return;
+  tickRunning = true;
+  try {
+    await rollupNodeHourlyOnce();
+  } finally {
+    tickRunning = false;
+  }
+}
+
+/**
+ * Start the hourly rollup. Idempotent.
+ *
+ * ALIGNED TO THE CLOCK, not to boot. The read path unions rollup rows below
+ * the derived seam with detail from the seam onwards (api/node-data.ts
+ * ROLLUP_EDGE), and that works wherever the seam is — but the detail half is
+ * the expensive one, and on a tick at boot-time + k hours the seam sat on
+ * average half an hour behind the clock, so every fleet-wide read paid for
+ * half an hour of detail it did not need to. Firing just after the hour turns
+ * means the hour that just closed is derived within a minute of closing.
+ *
+ * The 30s offset keeps the pass off the exact top of the hour, where the
+ * other hourly loops (cleanup, the event pruner) already are.
+ */
 export function startNodeHourlyRollup(intervalMs: number = ROLLUP_INTERVAL_MS): void {
-  if (timer) return;
-  // Shortly after boot, so a gap from downtime closes without waiting an hour
-  // — and, on the first deploy, so the backfill runs immediately.
-  setTimeout(() => void rollupNodeHourlyOnce(), 30_000).unref?.();
-  timer = setInterval(async () => {
-    if (tickRunning) return;
-    tickRunning = true;
-    try {
-      await rollupNodeHourlyOnce();
-    } finally {
-      tickRunning = false;
-    }
-  }, intervalMs);
+  if (timer || alignTimer) return;
+  // Shortly after boot, so a gap from downtime closes without waiting for the
+  // hour to turn — and, on the first deploy, so the backfill runs immediately.
+  setTimeout(() => void tick(), 30_000).unref?.();
+  // Then at HH:00:30. A non-default interval (tests) keeps the plain cadence:
+  // aligning to the hour would make a short interval meaningless.
+  if (intervalMs === ROLLUP_INTERVAL_MS) {
+    const now = Date.now();
+    const next = new Date(now);
+    next.setUTCMinutes(0, 30, 0);
+    if (next.getTime() <= now) next.setUTCHours(next.getUTCHours() + 1);
+    alignTimer = setTimeout(() => {
+      alignTimer = null;
+      void tick();
+      timer = setInterval(() => void tick(), intervalMs);
+      timer.unref?.();
+    }, next.getTime() - now);
+    alignTimer.unref?.();
+    return;
+  }
+  timer = setInterval(() => void tick(), intervalMs);
   timer.unref?.();
 }
 
 export function stopNodeHourlyRollup(): void {
+  if (alignTimer) {
+    clearTimeout(alignTimer);
+    alignTimer = null;
+  }
   if (timer) {
     clearInterval(timer);
     timer = null;
-    tickRunning = false;
   }
+  tickRunning = false;
 }

@@ -32,6 +32,7 @@ import { log } from '../lib/log.js';
 import { config } from '../config.js';
 import { getCachedDiscordName, queueDiscordResolve } from '../services/discordUsers.js';
 import { USER_TAGS, isKnownTag, grantTag, revokeTag, tagsFor, tagMap } from '../services/userTags.js';
+import { revokeApiKey } from '../services/auth/apiKeys.js';
 import {
   invalidateUserRolesCache,
   isPrivilegedRole,
@@ -483,10 +484,31 @@ usersRouter.delete('/api/users/:userId', requireRole(isOwner), async (c) => {
     // 039 dropped the old per-user feeder_tokens table), so deleting the nodes
     // removes them too — no separate token delete.
     const client = await pool.connect();
+    let revokedPrefixes: string[] = [];
     try {
       await client.query('BEGIN');
       await client.query('DELETE FROM user_roles WHERE user_id = $1', [userId]);
       await client.query('DELETE FROM nodes WHERE user_id = $1', [userId]);
+      // Their API keys outlive the account otherwise: resolveApiKey only asks
+      // whether the key is live, never whether its owner still exists, and an
+      // expiry is optional — so a deleted person kept scripted access to every
+      // key-gated route indefinitely.
+      const keys = await client.query<{ prefix: string }>(
+        `UPDATE api_keys SET revoked_at = now()
+          WHERE user_id = $1 AND revoked_at IS NULL RETURNING prefix`,
+        [userId],
+      );
+      revokedPrefixes = keys.rows.map((r) => r.prefix);
+      // An approved-but-unclaimed request is a key waiting to be minted, and
+      // the deleted account's JWT stays valid for up to an hour — long enough
+      // to claim it. Close anything still open.
+      await client.query(
+        `UPDATE api_key_requests
+            SET status = 'rejected', review_note = 'Account deleted',
+                reviewed_by = $2, reviewed_at = now()
+          WHERE user_id = $1 AND status IN ('pending', 'approved') AND claimed_at IS NULL`,
+        [userId, actingUserId],
+      );
       await client.query('COMMIT');
     } catch (err) {
       await client.query('ROLLBACK').catch(() => {});
@@ -499,7 +521,16 @@ usersRouter.delete('/api/users/:userId', requireRole(isOwner), async (c) => {
     }
 
     invalidateUserRolesCache(userId);
-    log.info({ userId, by: actingUserId }, 'Deleted user account');
+    // The rows are already revoked; this is what drops each prefix from the
+    // in-process resolve cache, which would otherwise keep answering "live"
+    // for up to its TTL.
+    for (const prefix of revokedPrefixes) {
+      await revokeApiKey(prefix).catch(() => {});
+    }
+    log.info(
+      { userId, by: actingUserId, keysRevoked: revokedPrefixes.length },
+      'Deleted user account',
+    );
     return c.json({ success: true, user_id: userId });
   } catch (err) {
     log.error({ err, userId }, 'Error deleting user');

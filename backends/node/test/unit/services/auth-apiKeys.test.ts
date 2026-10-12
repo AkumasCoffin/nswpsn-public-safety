@@ -113,3 +113,45 @@ describe('per-key rate limit', () => {
     expect(apiKeyRequestOk(row, t0 + 61_000)).toBe(true);
   });
 });
+
+/**
+ * The resolution cache is keyed by a caller-supplied prefix and the gate
+ * resolves before any rate limit runs, so an unauthenticated client sending a
+ * new random prefix per request used to add a permanent entry each time —
+ * every request a 403, the growth visible nowhere but the heap, until the
+ * process was OOM-killed.
+ */
+describe('resolve cache bounds', () => {
+  it('stays bounded under a flood of distinct unknown prefixes', async () => {
+    const { _apiKeyCacheSize } = await import('../../../src/services/auth/apiKeys.js');
+    queryMock.mockResolvedValue({ rows: [] });
+    for (let i = 0; i < 5_000; i += 1) {
+      const prefix = String(i).padStart(10, '0');
+      expect(await resolveApiKey(`ak_${prefix}_` + 'A'.repeat(32))).toEqual({
+        ok: false,
+        reason: 'bad_key',
+      });
+    }
+    expect(_apiKeyCacheSize()).toBeLessThanOrEqual(1_000);
+  });
+
+  it('expires an entry on a later write rather than holding it for good', async () => {
+    const { _apiKeyCacheSize } = await import('../../../src/services/auth/apiKeys.js');
+    const t0 = 1_800_000_000_000;
+    queryMock.mockResolvedValue({ rows: [] });
+    await resolveApiKey('ak_aaaaaaaaaa_' + 'A'.repeat(32), t0);
+    expect(_apiKeyCacheSize()).toBe(1);
+    // A minute later the first entry is past its TTL, so the second write
+    // sweeps it instead of leaving it to be pushed out by the cap.
+    await resolveApiKey('ak_bbbbbbbbbb_' + 'A'.repeat(32), t0 + 61_000);
+    expect(_apiKeyCacheSize()).toBe(1);
+  });
+
+  it('still answers a repeat miss from cache rather than re-querying', async () => {
+    const k = 'ak_cccccccccc_' + 'A'.repeat(32);
+    queryMock.mockResolvedValue({ rows: [] });
+    await resolveApiKey(k);
+    await resolveApiKey(k);
+    expect(queryMock).toHaveBeenCalledTimes(1);
+  });
+});

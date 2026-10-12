@@ -69,9 +69,12 @@ describe('browser session token', () => {
     expect(verifyBrowserToken('not-a-token', me)).toBe('bad');
   });
 
-  it('warns once when the secret is derived from the site key', () => {
+  // BROWSER_TOKEN_SECRET is now required by src/config.ts (the backend
+  // refuses to start without it), so there is no longer a path that derives
+  // the signing secret from the site key — and nothing to warn about.
+  it('signs from the configured secret, with nothing to warn about', () => {
     mintBrowserToken(me);
     mintBrowserToken(me);
-    expect(vi.mocked(log.warn)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(log.warn)).not.toHaveBeenCalled();
   });
 });

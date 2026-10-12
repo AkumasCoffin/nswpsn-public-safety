@@ -403,6 +403,10 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
     // pagination uses `total` to compute Math.ceil(total/limit) for
     // the page-jumper; with total=0 it can't navigate to later pages.
     const dataNowMs = Date.now();
+    // Families whose data query did not answer. Collected rather than
+    // swallowed, because a short page is not a smaller true answer — see the
+    // 503 below.
+    const failedFamilies: ArchiveTable[] = [];
     const dataPromise = Promise.all(
       plan.queries.map(async (q) => {
         const dKey = dataCacheKey(q.table, q.sql, q.params);
@@ -430,6 +434,7 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
           return rows;
         } catch (err) {
           log.error({ err, table: q.table }, 'data-history query failed');
+          failedFamilies.push(q.table);
           return [] as ArchiveQueryRow[];
         }
       }),
@@ -494,6 +499,38 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
       }),
     );
     const [results, counts] = await Promise.all([dataPromise, countPromise]);
+
+    // A family that did not answer makes the whole page unanswerable, so say
+    // so rather than serving what the others returned.
+    //
+    // The count query is genuinely best-effort — total=0 just means "not
+    // counted" and the frontend already treats it that way. The DATA query is
+    // not: merging the surviving families produces a page that looks complete,
+    // reports a `total` that still includes the missing family, and — worse —
+    // builds next_cursor from the last SURVIVING row. The next page seeks
+    // strictly past that boundary, so the records the failed family owed to
+    // this page are never served on any later page either. With one source it
+    // degrades to a bare empty 200, which reads as "nothing matched".
+    //
+    // Nothing in the cursor can repair that: the boundary is one (ts, id,
+    // family) triple, not a position per family, so there is no page to resume
+    // from. 503 is the retryable answer, and both callers already treat a
+    // non-200 as an error instead of as data.
+    if (failedFamilies.length > 0) {
+      const tables = [...new Set(failedFamilies)];
+      log.warn({ tables }, '/api/data/history: refusing a partial page');
+      return c.json(
+        {
+          error: 'partial_result',
+          message:
+            'One or more archive tables did not answer in time, so this page would ' +
+            'silently omit records. Retry, or narrow the window with hours/date_from.',
+          failed_tables: tables,
+        },
+        503,
+      );
+    }
+
     const total = counts.reduce((a, b) => a + b, 0);
 
     let merged: ArchiveQueryRow[];

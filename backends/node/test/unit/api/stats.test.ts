@@ -140,5 +140,21 @@ describe('stats router', () => {
     const sessions = body['sessions'] as Array<Record<string, unknown>>;
     expect(sessions).toHaveLength(1);
     expect(sessions[0]?.['is_data_page']).toBe(true);
+    // Never the visitor's address: this route is behind the general
+    // credential gate, so publishing it handed every caller the IP of
+    // everyone with the site open.
+    expect(sessions[0]).not.toHaveProperty('ip');
+    expect(JSON.stringify(body)).not.toContain('127.0.0.1');
+  });
+
+  it('GET /api/stats/archive/trigger is gone — it writes, so it is a POST', async () => {
+    // Every call wrote a stats_snapshots row and forced a flush, with no
+    // dedup and no role check: a loop inflated the table and every chart
+    // payload read back out of it.
+    const app = makeApp();
+    expect((await app.request('/api/stats/archive/trigger')).status).toBe(404);
+    // ...and the POST needs a role, which an unauthenticated caller lacks.
+    const res = await app.request('/api/stats/archive/trigger', { method: 'POST' });
+    expect(res.status).toBe(401);
   });
 });

@@ -34,19 +34,32 @@ const Schema = z.object({
     .enum(['dev', 'production', 'test'])
     .default(process.env['DEV_MODE'] === 'false' ? 'production' : 'dev'),
 
-  // The shared API key clients send via Authorization: Bearer / X-API-Key
-  // / ?api_key=. Same value the Python backend uses. /api/config returns
-  // it to the frontend so map.html etc. don't need it baked in.
+  // The shared static key, for the server-side callers that cannot hold a
+  // session token or a named key (the Discord bot, rdio's transcripts plugin).
+  // Accepted with no Origin limit and even as ?api_key=, so it is the most
+  // powerful credential the backend takes.
+  //
+  // REQUIRED, with NO default. It used to fall back to a literal, which meant
+  // the '.min(1) is required' check could never fire and a deploy whose .env
+  // forgot the variable silently ran on a credential published in this repo.
+  // Failing to boot is the only safe answer: there is nothing a default can
+  // be that an attacker does not also know.
   NSWPSN_API_KEY: z
-    .string()
-    .min(1, 'NSWPSN_API_KEY is required')
-    .default('nswpsn-live-2024-secure'),
+    .string({ error: 'NSWPSN_API_KEY is required — set it in backends/.env (there is no default)' })
+    .min(1, 'NSWPSN_API_KEY is required — set it in backends/.env (there is no default)'),
 
-  // Browser session tokens (services/auth/browserToken.ts): what a page
-  // holds instead of NSWPSN_API_KEY. The secret signs them; unset derives one
-  // from NSWPSN_API_KEY (with a boot warning) so a deploy can't lock the site
-  // out. TTL is the token lifetime; the mint budget is per address per 10 min.
-  BROWSER_TOKEN_SECRET: z.string().min(16).optional(),
+  // Browser session tokens (services/auth/browserToken.ts): what a page holds
+  // instead of NSWPSN_API_KEY. This secret signs them, so it is what stands
+  // between the public and a forged session token.
+  //
+  // REQUIRED, for the same reason as the key above: it used to be derived from
+  // NSWPSN_API_KEY when unset. That key is no longer served to browsers, but it
+  // still sits in every server-side consumer's config and in this repo's
+  // history, so deriving from it signed session tokens with a shared secret.
+  // TTL is the token lifetime; the mint budget is per address per 10 min.
+  BROWSER_TOKEN_SECRET: z
+    .string({ error: 'BROWSER_TOKEN_SECRET is required — generate one with `openssl rand -hex 32`' })
+    .min(16, 'BROWSER_TOKEN_SECRET must be at least 16 characters'),
   BROWSER_TOKEN_TTL_SECS: z.coerce.number().int().min(60).max(86_400).default(900),
   SESSION_MINT_PER_10MIN: z.coerce.number().int().positive().default(60),
 

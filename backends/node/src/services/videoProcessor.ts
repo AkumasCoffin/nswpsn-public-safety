@@ -11,8 +11,8 @@
  * Loop shape copies nodeEventsPruner.ts (module timer + re-entrancy guard +
  * start/stop, wired in index.ts). Job state lives on the wire_media row rather
  * than in a queue table — nothing in this backend persists in-flight work, so a
- * restart mid-transcode simply leaves the row 'pending' and the next sweep
- * redoes it. That is the whole durability story.
+ * restart mid-transcode leaves the row 'processing' with nobody holding it and
+ * the next sweep puts it back in the queue. That is the whole durability story.
  *
  * Failure is deliberately non-destructive: the ORIGINAL upload is only deleted
  * after the DB commit that points at the new object, so the worst outcome of a
@@ -22,11 +22,12 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { Pool } from 'pg';
 import { getWriterPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import {
-  deleteR2Object, downloadR2ToFile, newPosterKey, newVideoKey,
-  r2Configured, uploadFileToR2,
+  deleteR2Object, deleteUnreferencedR2Object, downloadR2ToFile, newPosterKey,
+  newVideoKey, r2Configured, uploadFileToR2,
 } from './wire.js';
 import { ffmpegAvailable, transcodeVideo } from './videoTranscode.js';
 
@@ -38,6 +39,17 @@ const MAX_PER_TICK = 3;
 
 let timer: NodeJS.Timeout | null = null;
 let tickRunning = false;
+/**
+ * The rows this process is holding right now.
+ *
+ * A claim lives on the row as process_state = 'processing', which is how the
+ * final write knows the row is still the one it claimed. The cost is that a
+ * worker killed mid-transcode leaves that marker behind with nobody to clear
+ * it, so a 'processing' row that ISN'T in here is a leftover and goes back in
+ * the queue (recoverStaleClaims). One worker per deployment — the pm2 app — is
+ * the assumption that makes that inference sound.
+ */
+const inFlight = new Set<string>();
 
 interface PendingRow {
   id: string;
@@ -125,7 +137,12 @@ async function processRow(row: PendingRow): Promise<boolean> {
 
     const pool = await getWriterPool();
     if (!pool) throw new Error('no writer pool');
-    await pool.query(
+    // Still the row we claimed? An article edit replaces every wire_media row
+    // of its post, so the row this transcode belongs to can be gone — and the
+    // row that took its place points at the RAW key, the one deleted below.
+    // Writing by id alone, then deleting unconditionally, is what lost the
+    // clip: the new row was left naming an object that no longer existed.
+    const upd = await pool.query(
       `UPDATE wire_media
           SET r2_key           = $2,
               poster_r2_key    = COALESCE($3, poster_r2_key),
@@ -135,15 +152,25 @@ async function processRow(row: PendingRow): Promise<boolean> {
               process_state    = 'done',
               process_error    = NULL,
               processed_at     = now()
-        WHERE id = $1`,
+        WHERE id = $1 AND process_state = 'processing'`,
       [row.id, newKey, newPosterKey_, meta.width, meta.height, meta.durationSeconds],
     );
+    if ((upd.rowCount ?? 0) === 0) {
+      // The post moved on while we were encoding. Our output is the orphan, not
+      // the upload — drop it and leave the clip to the next sweep (the edit
+      // re-queued it as 'pending').
+      log.info({ id: row.id }, 'video: row changed mid-transcode, discarding output');
+      await deleteR2Object(newKey);
+      if (newPosterKey_) await deleteR2Object(newPosterKey_);
+      return false;
+    }
 
     // Only now is the raw upload redundant. Before the commit above, deleting it
-    // would risk a row pointing at nothing.
-    await deleteR2Object(oldKey);
+    // would risk a row pointing at nothing — and it still has to be unreferenced,
+    // since one object can be shared (a re-inserted row, or image dedup).
+    await deleteUnreferencedR2Object(pool, oldKey);
     if (newPosterKey_ && oldPosterKey && oldPosterKey !== newPosterKey_) {
-      await deleteR2Object(oldPosterKey);
+      await deleteUnreferencedR2Object(pool, oldPosterKey);
     }
 
     log.info(
@@ -160,6 +187,24 @@ async function processRow(row: PendingRow): Promise<boolean> {
   }
 }
 
+/** Put back any claim left behind by a worker that stopped mid-transcode, so a
+ *  restart still redoes the clip rather than parking it as 'processing'. */
+async function recoverStaleClaims(pool: Pool): Promise<void> {
+  try {
+    const r = await pool.query(
+      `UPDATE wire_media SET process_state = 'pending'
+        WHERE kind = 'video' AND process_state = 'processing'
+          AND NOT (id = ANY($1::text[]))`,
+      [[...inFlight]],
+    );
+    if ((r.rowCount ?? 0) > 0) {
+      log.info({ rows: r.rowCount }, 'video: re-queued claims left by a stopped worker');
+    }
+  } catch (err) {
+    log.warn({ err: (err as Error)?.message }, 'video: stale claim recovery failed');
+  }
+}
+
 /**
  * One sweep. Claims rows one at a time with FOR UPDATE SKIP LOCKED so a second
  * process (should one ever exist) can't pick up the same clip.
@@ -168,6 +213,7 @@ export async function processPendingVideosOnce(): Promise<number> {
   if (!ffmpegAvailable() || !r2Configured()) return 0;
   const pool = await getWriterPool();
   if (!pool) return 0;
+  await recoverStaleClaims(pool);
 
   let done = 0;
   for (let i = 0; i < MAX_PER_TICK; i++) {
@@ -186,6 +232,17 @@ export async function processPendingVideosOnce(): Promise<number> {
         [MAX_ATTEMPTS],
       );
       row = r.rows[0] as PendingRow | undefined;
+      // Flip the claim to 'processing' inside the same transaction. The row
+      // carries the only job state there is, so this is what lets the write at
+      // the end of processRow() tell "my row, still mine" from "an edit
+      // replaced it with a fresh 'pending' row". A crash mid-transcode leaves
+      // 'processing' behind, which the sweep below recovers as stale.
+      if (row) {
+        await client.query(
+          `UPDATE wire_media SET process_state = 'processing' WHERE id = $1`,
+          [row.id],
+        );
+      }
       await client.query('COMMIT');
     } catch (err) {
       await client.query('ROLLBACK').catch(() => {});
@@ -196,7 +253,12 @@ export async function processPendingVideosOnce(): Promise<number> {
     }
 
     if (!row) break;
-    if (await processRow(row)) done++;
+    inFlight.add(row.id);
+    try {
+      if (await processRow(row)) done++;
+    } finally {
+      inFlight.delete(row.id);
+    }
   }
   return done;
 }

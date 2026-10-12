@@ -26,6 +26,11 @@ process.env['DISCORD_BOT_TOKEN'] = 'test-bot-token';
 process.env['PUBLIC_BASE_URL'] = 'http://api.test';
 process.env['DASHBOARD_FRONTEND_URL'] = 'http://dash.test';
 
+// The dashboard page's own origin. Non-GET /api/dashboard/* requires it: the
+// session cookie is SameSite=None, so the cookie alone doesn't say the request
+// came from our page (see the CSRF guard in api/dashboard.ts).
+const PAGE_ORIGIN = 'https://nswpsn.forcequit.xyz';
+
 interface QueryCall { sql: string; params?: unknown[] }
 const queryCalls: QueryCall[] = [];
 let queryQueue: Array<{ rows: unknown[]; rowCount?: number } | Error> = [];
@@ -208,7 +213,7 @@ describe('OAuth login + callback + logout', () => {
     const app = makeApp();
     const res = await app.request('/api/dashboard/auth/logout', {
       method: 'POST',
-      headers: { Cookie: cookie },
+      headers: { Cookie: cookie, Origin: PAGE_ORIGIN },
     });
     expect(res.status).toBe(204);
     const sc = res.headers.getSetCookie();
@@ -345,7 +350,7 @@ describe('Preset CRUD', () => {
     const app = makeApp();
     const res = await app.request('/api/dashboard/guilds/111/presets', {
       method: 'POST',
-      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      headers: { Cookie: cookie, 'Content-Type': 'application/json', Origin: PAGE_ORIGIN },
       body: JSON.stringify({ channel_id: '999', name: 'x' }),
     });
     expect(res.status).toBe(400);
@@ -362,7 +367,7 @@ describe('Preset CRUD', () => {
     const app = makeApp();
     const res = await app.request('/api/dashboard/guilds/111/presets', {
       method: 'POST',
-      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      headers: { Cookie: cookie, 'Content-Type': 'application/json', Origin: PAGE_ORIGIN },
       body: JSON.stringify({
         channel_id: '999',
         name: 'x',
@@ -393,7 +398,7 @@ describe('Preset CRUD', () => {
     const app = makeApp();
     const res = await app.request('/api/dashboard/guilds/111/presets', {
       method: 'POST',
-      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      headers: { Cookie: cookie, 'Content-Type': 'application/json', Origin: PAGE_ORIGIN },
       body: JSON.stringify({
         channel_id: '999', name: 'x', alert_types: ['qld_warning'],
       }),
@@ -413,7 +418,7 @@ describe('Preset CRUD', () => {
     const app = makeApp();
     const res = await app.request('/api/dashboard/guilds/111/presets/12345', {
       method: 'DELETE',
-      headers: { Cookie: cookie },
+      headers: { Cookie: cookie, Origin: PAGE_ORIGIN },
     });
     expect(res.status).toBe(404);
   });
@@ -450,10 +455,51 @@ describe('mute state', () => {
     const app = makeApp();
     const res = await app.request('/api/dashboard/guilds/111/mute-state/guild', {
       method: 'PUT',
-      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      headers: { Cookie: cookie, 'Content-Type': 'application/json', Origin: PAGE_ORIGIN },
       body: '{}',
     });
     expect(res.status).toBe(400);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CSRF.
+// ---------------------------------------------------------------------------
+describe('cross-site writes', () => {
+  it('refuses a POST from another site even with a valid session cookie', async () => {
+    // What this stops: a page on any other site auto-submitting a form (or a
+    // no-cors fetch) to run as the signed-in dashboard admin. The cookie is
+    // SameSite=None, so the browser does send it; the Origin is what differs.
+    const cookie = makeSessionCookie('admin-uid-1', { admin: true });
+    const app = makeApp();
+    const res = await app.request('/api/dashboard/admin/bot-actions', {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'text/plain', Origin: 'https://evil.example' },
+      body: JSON.stringify({ action: 'sync' }),
+    });
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: string }).error).toBe('bad_origin');
+    expect(queryCalls.some((q) => /insert into/i.test(q.sql))).toBe(false);
+  });
+
+  it('refuses a POST that identifies no origin at all', async () => {
+    const cookie = makeSessionCookie('admin-uid-1', { admin: true });
+    const app = makeApp();
+    const res = await app.request('/api/dashboard/admin/bot-actions', {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'sync' }),
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it('still allows a GET from anywhere — CORS decides who may read it', async () => {
+    const cookie = makeSessionCookie('999');
+    const app = makeApp();
+    const res = await app.request('/api/dashboard/me', {
+      headers: { Cookie: cookie, Origin: 'https://evil.example' },
+    });
+    expect(res.status).not.toBe(403);
   });
 });
 
@@ -527,7 +573,7 @@ describe('admin gate', () => {
     const app = makeApp();
     const res = await app.request('/api/dashboard/admin/bot-actions', {
       method: 'POST',
-      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      headers: { Cookie: cookie, 'Content-Type': 'application/json', Origin: PAGE_ORIGIN },
       body: JSON.stringify({ action: 'launch-the-missiles' }),
     });
     expect(res.status).toBe(400);
@@ -539,7 +585,7 @@ describe('admin gate', () => {
     const app = makeApp();
     const res = await app.request('/api/dashboard/admin/bot-actions', {
       method: 'POST',
-      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      headers: { Cookie: cookie, 'Content-Type': 'application/json', Origin: PAGE_ORIGIN },
       body: JSON.stringify({ action: 'sync' }),
     });
     expect(res.status).toBe(201);

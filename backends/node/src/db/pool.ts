@@ -41,6 +41,28 @@ export const READ_POOL_MAX = Math.max(2, Number(process.env['PG_POOL_MAX'] ?? '4
 const WRITER_POOL_MAX = Math.max(2, Number(process.env['PG_WRITER_POOL_MAX'] ?? '8') || 8);
 
 /**
+ * Give every client this pool hands out an 'error' listener.
+ *
+ * pg-pool attaches its own error listener only while a client is IDLE and
+ * removes it the moment pool.connect() checks the client out — and pg's Client
+ * emits 'error' when the connection ends unexpectedly, mid-query included. An
+ * 'error' emit with no listener throws, which index.ts turns into
+ * uncaughtException and exit(1): a Postgres restart or a reset between the VMs
+ * during an archive flush took the whole API down and lost the batch being
+ * written. The pool still discards the broken client on release (_queryable is
+ * false by then), so all this changes is whether we survive it; the query
+ * itself still rejects and its caller still handles that.
+ */
+function logClientErrors(pool: Pool, label: string): void {
+  pool.on('connect', (client) => {
+    client.on('error', (err) => {
+      // eslint-disable-next-line no-console
+      console.error(`pg ${label} client error:`, err);
+    });
+  });
+}
+
+/**
  * Read pool. Sized for concurrent /api/data/history requests (each
  * issues up to 10 queries — 5 families × {data, count}). Bumped from
  * 20 to 40 in the perf pass since two simultaneous logs.html loads
@@ -71,6 +93,7 @@ export async function getPool(): Promise<Pool | null> {
     // eslint-disable-next-line no-console
     console.error('pg pool error:', err);
   });
+  logClientErrors(_pool, 'read');
 
   return _pool;
 }
@@ -100,6 +123,7 @@ export async function getWriterPool(): Promise<Pool | null> {
     // eslint-disable-next-line no-console
     console.error('pg writer pool error:', err);
   });
+  logClientErrors(_writerPool, 'writer');
   return _writerPool;
 }
 

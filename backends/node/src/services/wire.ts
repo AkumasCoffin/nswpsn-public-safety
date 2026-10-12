@@ -7,6 +7,7 @@
  */
 import { fetch, FormData } from 'undici';
 import { createHash, randomUUID } from 'node:crypto';
+import type { Pool } from 'pg';
 import { config } from '../config.js';
 import { log } from '../lib/log.js';
 
@@ -285,6 +286,72 @@ export async function deleteR2Object(key: string): Promise<void> {
   } catch (err) {
     log.warn({ err, key }, 'wire: R2 delete failed (orphan left)');
   }
+}
+
+// ---- Key ownership ---------------------------------------------------------
+
+/** The prefixes our own presigners mint under. A key the caller is adding for
+ *  the first time has to be one of ours — not an avatar, not a watermark, not
+ *  an arbitrary path in the shared bucket. */
+export const R2_IMAGE_PREFIX = 'wire/img/';
+export const R2_VIDEO_PREFIX = 'wire/videos/';
+
+/**
+ * Which of `keys` something still points at.
+ *
+ * Object keys reach us from the client — the composer sends back the key it
+ * uploaded to, and an edit re-sends the keys the post already has — and the key
+ * itself says nothing about who uploaded it. Both questions that matters for
+ * are answered by what references it:
+ *
+ *  - "may this caller save this key?" — pass their id as `exceptOwnerId`, and
+ *    anything that comes back is someone else's object;
+ *  - "is this object safe to delete?" — pass null, and anything that comes back
+ *    is still in use by a row that would be left pointing at nothing.
+ *
+ * Every place a key is stored is covered: article media (whose owner is the
+ * parent article's author), fleet photos, and profile avatars + watermarks. A
+ * wire_media row whose parent article has gone counts as foreign — a key we
+ * can't attribute is not a key that's free.
+ */
+export async function r2KeysInUse(
+  pool: Pool,
+  keys: readonly string[],
+  exceptOwnerId: string | null = null,
+): Promise<string[]> {
+  const wanted = [...new Set(keys.filter((k) => !!k))];
+  if (wanted.length === 0) return [];
+  const r = await pool.query<{ key: string }>(
+    `WITH k(key) AS (SELECT unnest($1::text[]))
+     SELECT DISTINCT k.key FROM k
+      WHERE EXISTS (SELECT 1 FROM wire_media wm
+                      LEFT JOIN articles a ON a.id = wm.parent_id
+                     WHERE (wm.r2_key = k.key OR wm.poster_r2_key = k.key)
+                       AND ($2::text IS NULL OR a.author_id IS NULL OR a.author_id <> $2))
+         OR EXISTS (SELECT 1 FROM fleet_vehicles fv
+                     WHERE fv.images @> jsonb_build_array(jsonb_build_object('key', k.key))
+                       AND ($2::text IS NULL OR fv.author_id <> $2))
+         OR EXISTS (SELECT 1 FROM user_profiles up
+                     WHERE (up.avatar_key = k.key OR up.watermark_key = k.key)
+                       AND ($2::text IS NULL OR up.user_id <> $2))`,
+    [wanted, exceptOwnerId],
+  );
+  return r.rows.map((row) => row.key);
+}
+
+/** Delete a stored object only once nothing points at it any more. Call AFTER
+ *  the rows that referenced it are written, so this sees the new state. A
+ *  failed check leaves the object in place: an orphan costs storage, deleting
+ *  something still in use costs someone their media. */
+export async function deleteUnreferencedR2Object(pool: Pool, key: string): Promise<void> {
+  if (!key) return;
+  try {
+    if ((await r2KeysInUse(pool, [key])).length > 0) return;
+  } catch (err) {
+    log.warn({ err, key }, 'wire: R2 reference check failed (object kept)');
+    return;
+  }
+  await deleteR2Object(key);
 }
 
 /**

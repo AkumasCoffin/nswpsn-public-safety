@@ -306,6 +306,26 @@ describe('GET /api/node-data/systems (folder tree + node filter)', () => {
     });
   });
 
+  it('counts a site\'s calls with the per-SITE attribution, not the fleet-wide one', async () => {
+    // node_radio_hourly_sys.logical_calls attributes a call once FLEET-WIDE,
+    // so summing it per site credits a simulcast call to the lowest
+    // (system, talkgroup, rfss, site) only. Every other site in the group read
+    // far below its real figure — "12 / 5,000" calls against receptions — and
+    // contradicted both the node-scoped tree and the /api/node-data/site
+    // drill-down, which count every call heard at the site from raw events.
+    const calls = captureCalls();
+    const app = await setupApp();
+    const res = await app.request('/api/node-data/systems?window=7d');
+    expect(res.status).toBe(200);
+
+    const sites = calls.find((c) => c.sql.includes('GROUP BY system, rfss, site'));
+    expect(sites?.sql).toContain('logical_calls_site AS logical');
+    expect(sites?.sql).not.toContain('logical_calls AS logical');
+    // The live half already counts it per site, which is the figure the stored
+    // half now has to match.
+    expect(sites?.sql).toContain('COUNT(DISTINCT logical_call_id)::int');
+  });
+
   it('adds the node_id filter to both rollups when ?node= is set', async () => {
     const calls = captureCalls();
     const app = await setupApp();

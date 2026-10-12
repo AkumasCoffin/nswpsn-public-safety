@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { slugify, viewerHash, shapeMedia, normaliseLicense, licenseLabel, WIRE_LICENSES, r2TransformUrl, avatarUrl, ogImageUrl, type WireMediaRow } from '../../../src/services/wire.js';
+import { slugify, viewerHash, shapeMedia, normaliseLicense, licenseLabel, WIRE_LICENSES, r2TransformUrl, avatarUrl, ogImageUrl, r2KeysInUse, type WireMediaRow } from '../../../src/services/wire.js';
 
 function mediaRow(over: Partial<WireMediaRow>): WireMediaRow {
   return {
@@ -140,5 +140,44 @@ describe('wire.ogImageUrl', () => {
   it('passes through null', () => {
     expect(ogImageUrl(null)).toBeNull();
     expect(ogImageUrl('')).toBeNull();
+  });
+});
+
+describe('wire.r2KeysInUse', () => {
+  // Client-supplied keys are checked against what references them. One query,
+  // two jobs: "is this key the caller's to use" (pass their id) and "is the
+  // object safe to delete" (pass none).
+  function pool(rows: Array<{ key: string }>) {
+    const calls: Array<{ sql: string; params?: unknown[] }> = [];
+    return {
+      calls,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      p: { query: async (sql: string, params?: unknown[]) => { calls.push({ sql, params }); return { rows, rowCount: rows.length }; } } as any,
+    };
+  }
+
+  it('asks about every place a key can be stored', async () => {
+    const { p, calls } = pool([]);
+    expect(await r2KeysInUse(p, ['wire/img/a.webp'], 'me')).toEqual([]);
+    const sql = calls[0]!.sql;
+    expect(sql).toContain('wire_media');
+    expect(sql).toContain('fleet_vehicles');
+    expect(sql).toContain('user_profiles');
+    // Deduped, and the owner is the second parameter.
+    expect(calls[0]!.params).toEqual([['wire/img/a.webp'], 'me']);
+  });
+
+  it('dedupes keys and short-circuits an empty list', async () => {
+    const { p, calls } = pool([]);
+    expect(await r2KeysInUse(p, [], null)).toEqual([]);
+    expect(calls).toHaveLength(0);
+    await r2KeysInUse(p, ['k', 'k', ''], null);
+    expect(calls[0]!.params).toEqual([['k'], null]);
+  });
+
+  it('returns the keys that are taken', async () => {
+    const { p } = pool([{ key: 'wire/img/theirs.webp' }]);
+    expect(await r2KeysInUse(p, ['wire/img/theirs.webp'], 'me'))
+      .toEqual(['wire/img/theirs.webp']);
   });
 });

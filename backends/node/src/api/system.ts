@@ -40,6 +40,19 @@ import { log } from '../lib/log.js';
 
 export const systemRouter = new Hono();
 
+// Owner-only, all of it.
+//
+// These are operator tools that python left on an open GET: /api/cache/clear
+// forces every cache to refetch upstream, /api/debug/sessions listed the IP
+// and page_id of every open tab (and a page_id is enough to close someone
+// else's session), and the rest describe the inside of the process. The
+// credential gate in front of them is not a role check — any visitor's page
+// token or any self-registered account satisfies it — so the role check has to
+// be here. /api/admin/db/* below was already gated; this brings the debug
+// surface into line with it.
+systemRouter.use('/api/cache/clear', requireRole(isOwner));
+systemRouter.use('/api/debug/*', requireRole(isOwner));
+
 // /api/cache/clear — drop the various in-process caches we maintain on
 // the Node side. LiveStore stays (it's the source of truth for live
 // data) but the response-side caches reset. Mirrors python's blanket
@@ -82,7 +95,9 @@ systemRouter.get('/api/debug/sessions', (c) => {
     page_id: id,
     page_type: session.pageType,
     is_data_page: session.isDataPage,
-    ip: session.ip,
+    // Owner-gated above, but the address of every current visitor is still not
+    // something an operator view needs to read to answer "is collection
+    // active?" — which is what this is for.
     last_seen_seconds_ago: Math.floor((now - session.lastSeen) / 1000),
     session_age_seconds: Math.floor((now - session.openedAt) / 1000),
   }));

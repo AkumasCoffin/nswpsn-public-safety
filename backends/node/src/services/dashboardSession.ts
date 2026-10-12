@@ -177,6 +177,13 @@ interface CookieOpts {
 }
 
 export function buildSetCookie(name: string, value: string, opts: CookieOpts): string {
+  // SameSite=None in production because it has to be: dashboard.html is served
+  // from the site host and every call it makes to this API host is a
+  // cross-site request, so a Lax cookie would simply not be sent and nobody
+  // could sign in. That means the cookie alone cannot be treated as evidence
+  // that a state-changing request came from our page — the Origin /
+  // Sec-Fetch-Site guard on non-GET /api/dashboard/* (see api/dashboard.ts) is
+  // what provides that, and it must stay for as long as this says None.
   const sameSite = opts.secure ? 'None' : 'Lax';
   const parts = [
     `${name}=${value}`,

@@ -350,17 +350,25 @@ interface ComputedFacets {
  */
 /** Pull all alerts + jams from the bbox-keyed waze LiveStore snapshot,
  *  deduplicated by uuid/id. Mirrors store/wazeIngestCache.snapshot(). */
+/**
+ * Every dimension a facet slot carries, in one list.
+ *
+ * The two merge loops below each spelled their own out and both stopped at
+ * `severity`, so `state` was counted per table and then dropped on the way
+ * out: every type came back with `states: []`, logs.html hid its State
+ * dropdown, and the filter migration 082 added could not be used however well
+ * archive_*_latest.state was filled. A dimension added here now reaches the
+ * response without a second edit.
+ */
+const FACET_DIMENSIONS = ['category', 'subcategory', 'status', 'severity', 'state'] as const;
+
 function dimSlotFor(
   perTypeDims: DimMap,
   alertType: string,
 ): Record<string, Record<string, number>> {
-  return (perTypeDims[alertType] ??= {
-    category: {},
-    subcategory: {},
-    status: {},
-    severity: {},
-    state: {},
-  });
+  return (perTypeDims[alertType] ??= Object.fromEntries(
+    FACET_DIMENSIONS.map((d) => [d, {}]),
+  ) as Record<string, Record<string, number>>);
 }
 
 /** Full sync LiveStore walk — counts every registered source's current
@@ -627,7 +635,7 @@ async function archiveFacetsFromSidecar(windowHours: number): Promise<{
     }
     for (const [alertType, dims] of Object.entries(t.perTypeDims)) {
       const slot = dimSlotFor(perTypeDims, alertType);
-      for (const dimName of ['category', 'subcategory', 'status', 'severity'] as const) {
+      for (const dimName of FACET_DIMENSIONS) {
         const src = dims[dimName] ?? {};
         const dst = slot[dimName]!;
         for (const [val, n] of Object.entries(src)) {
@@ -836,13 +844,8 @@ function mergeFacets(a: ComputedFacets, b: ComputedFacets): ComputedFacets {
   const perTypeDims: DimMap = {};
   for (const map of [a.perTypeDims, b.perTypeDims]) {
     for (const [alertType, dims] of Object.entries(map)) {
-      const slot = (perTypeDims[alertType] ??= {
-        category: {},
-        subcategory: {},
-        status: {},
-        severity: {},
-      });
-      for (const dimName of ['category', 'subcategory', 'status', 'severity'] as const) {
+      const slot = dimSlotFor(perTypeDims, alertType);
+      for (const dimName of FACET_DIMENSIONS) {
         const src = dims[dimName] ?? {};
         const dst = slot[dimName]!;
         for (const [val, n] of Object.entries(src)) {

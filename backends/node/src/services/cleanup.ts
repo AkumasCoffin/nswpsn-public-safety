@@ -220,6 +220,42 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
       const expired = await findExpiredPartitions(client, cutoff);
       for (const p of expired) {
         try {
+          // 1a. Re-arm the still-live sidecar rows that are about to lose
+          // their only parent row.
+          //
+          // Write-time dedup (migration 018) stores a parent row only when
+          // data_hash changes, and latest_fetched_at points at that row. A
+          // record still in the feed but unchanged for longer than retention —
+          // a months-long roadwork, a far-ahead planned outage — therefore has
+          // its single parent row inside a partition this loop is dropping,
+          // while its sidecar row stays alive because last_seen_at keeps
+          // advancing. The hash still matches on every poll, so the writer
+          // never stores it again, and the unique=1 history query, which joins
+          // the sidecar to the parent on fetched_at = latest_fetched_at, finds
+          // nothing: the record disappears from logs.html while /filters, which
+          // reads the sidecar alone, still counts it.
+          //
+          // Clearing data_hash is the whole repair — lookupExistingHashes
+          // treats a NULL hash as "no comparison basis", so the next poll
+          // stores a parent row again and latest_fetched_at moves onto it.
+          // Deliberately BEFORE the drop: a failure here leaves the partition
+          // in place to be retried next pass, where dropping first would orphan
+          // the row for good.
+          const rearmed = await client.query(
+            `UPDATE ${p.parent}_latest
+                SET data_hash = NULL
+              WHERE data_hash IS NOT NULL
+                AND latest_fetched_at < $1::timestamptz
+                AND last_seen_at >= $2::timestamptz`,
+            [p.range_to, cutoff],
+          );
+          if ((rearmed.rowCount ?? 0) > 0) {
+            log.info(
+              { table: `${p.parent}_latest`, rows: rearmed.rowCount, partition: p.partition },
+              'cleanup: re-armed live records losing their stored row',
+            );
+          }
+
           // Count rows BEFORE drop so we can report deletion totals.
           const cnt = await client.query<{ n: string }>(
             `SELECT COUNT(*)::text AS n FROM ${p.partition}`,

@@ -127,12 +127,45 @@ export async function listApiKeys(userId?: string): Promise<ApiKeyRow[]> {
 // Resolution cache, keyed by prefix. Caches misses too: a key that is being
 // guessed or was just revoked should not cost a query per attempt.
 const RESOLVE_CACHE_TTL_MS = 60_000;
+/**
+ * Hard ceiling on cached prefixes.
+ *
+ * The prefix is caller-supplied and the gate resolves before any rate limit
+ * runs, so an unauthenticated client sending `ak_<10 random>_x` with a new
+ * prefix each time added a permanent entry per request. Every one of those
+ * requests is a 403, so the attack showed up nowhere but in the heap, and it
+ * grew until the process was OOM-killed. Live keys number in the dozens, so
+ * anything above that is misses — the cap holds them to a fixed cost without
+ * giving up the "a guessed key must not cost a query per attempt" property.
+ */
+const RESOLVE_CACHE_MAX = 1_000;
 const resolveCache = new Map<string, { ts: number; row: ApiKeyRow | null }>();
+
+/** Expire on write (as roles.ts does), then cap. Map is in insertion order, so
+ *  the cap drops the least-recently-written prefix. */
+function rememberResolve(prefix: string, ts: number, row: ApiKeyRow | null): void {
+  for (const [p, entry] of resolveCache) {
+    if (ts - entry.ts >= RESOLVE_CACHE_TTL_MS) resolveCache.delete(p);
+  }
+  // Re-insert rather than overwrite so a refreshed entry counts as the newest.
+  resolveCache.delete(prefix);
+  resolveCache.set(prefix, { ts, row });
+  while (resolveCache.size > RESOLVE_CACHE_MAX) {
+    const oldest = resolveCache.keys().next().value;
+    if (oldest === undefined) break;
+    resolveCache.delete(oldest);
+  }
+}
 
 export function _clearApiKeyCache(): void {
   resolveCache.clear();
   lastUsedTouch.clear();
   keyCounts.clear();
+}
+
+/** Test seam — assert the cache stays bounded under a flood of new prefixes. */
+export function _apiKeyCacheSize(): number {
+  return resolveCache.size;
 }
 
 export type ApiKeyResolve =
@@ -154,7 +187,7 @@ export async function resolveApiKey(plaintext: string, now = Date.now()): Promis
     if (!pool) return { ok: false, reason: 'unavailable' };
     const res = await pool.query<ApiKeyRow>(`SELECT * FROM api_keys WHERE prefix = $1`, [prefix]);
     row = res.rows[0] ?? null;
-    resolveCache.set(prefix, { ts: now, row });
+    rememberResolve(prefix, now, row);
   }
 
   if (!row || !safeEqual(supplied, row.key_hash)) return { ok: false, reason: 'bad_key' };

@@ -217,6 +217,20 @@ export type TalkgroupDefaults = z.infer<typeof TalkgroupDefaultsSchema>;
 
 const EMPTY_DEFAULTS: TalkgroupDefaults = {};
 
+/**
+ * Swatches saved from the agency colour wheel, newest first.
+ *
+ * Kept in the config rather than in a browser so the palette an operator
+ * builds up is the same for everyone editing, and survives the machine they
+ * built it on (column: color_palette, migration 122). Display only, like
+ * displayColor itself — it is never pushed to a node, and never folded into
+ * globalConfigVersion.
+ *
+ * One schema, used by the full form, the PATCH form and the read path, so the
+ * three cannot disagree on what a palette is.
+ */
+export const ColorPaletteSchema = z.array(z.string().max(9)).max(48);
+
 export const GlobalConfigSchema = z
   .object({
     agencies: z.array(AgencySchema).max(4096).default([]),
@@ -224,15 +238,8 @@ export const GlobalConfigSchema = z
     rdioTags: z.array(LooseObj).max(4096).default([]),
     sdrtrunkConfig: SdrtrunkConfigSchema.default(EMPTY_SDRTRUNK),
     defaults: TalkgroupDefaultsSchema.default(EMPTY_DEFAULTS),
-    /**
-     * Swatches saved from the agency colour wheel, newest first.
-     *
-     * Kept in the config rather than in a browser so the palette an operator
-     * builds up is the same for everyone editing, and survives the machine
-     * they built it on. Display only, like displayColor itself — it is never
-     * pushed to a node.
-     */
-    colorPalette: z.array(z.string().max(9)).max(48).default([]),
+    /** Agency colour-wheel swatches. See ColorPaletteSchema. */
+    colorPalette: ColorPaletteSchema.default([]),
   })
   .strict();
 export type GlobalConfigInput = z.infer<typeof GlobalConfigSchema>;
@@ -247,7 +254,7 @@ export const GlobalConfigPatchSchema = z
     rdioTags: z.array(LooseObj).max(4096),
     sdrtrunkConfig: SdrtrunkConfigSchema,
     defaults: TalkgroupDefaultsSchema,
-    colorPalette: z.array(z.string().max(9)).max(48),
+    colorPalette: ColorPaletteSchema,
   })
   .partial()
   .strict();
@@ -280,7 +287,11 @@ function canonicalize(value: unknown): unknown {
 
 /** sha256 over the content (not the version/metadata) so the version changes iff
  *  the actual config changes. Exposed so configMerge can fold it into a node's
- *  own config version. */
+ *  own config version.
+ *
+ *  colorPalette is deliberately absent: it is display-only and never reaches a
+ *  node, so folding it in would re-sync the whole fleet every time someone
+ *  picked a colour. */
 export function globalConfigVersion(c: {
   agencies: unknown;
   rdioGroups: unknown;
@@ -654,6 +665,8 @@ interface Row {
   sdrtrunk_config: unknown;
   // Fleet-wide talkgroup defaults (global alias colour + monitor priority).
   talkgroup_defaults: unknown;
+  // Agency colour-wheel swatches (migration 122). Display only.
+  color_palette: unknown;
   version: string;
   updated_at: string | null;
   updated_by: string | null;
@@ -723,12 +736,18 @@ function rowToConfig(r: Row): GlobalConfig {
   // rather than dragging the rest of the config down with it.
   const defaultsParsed = TalkgroupDefaultsSchema.safeParse(r.talkgroup_defaults ?? EMPTY_DEFAULTS);
   const defaults: TalkgroupDefaults = defaultsParsed.success ? defaultsParsed.data : EMPTY_DEFAULTS;
+  // The palette is parsed on its own too, and for the same reason: it is a
+  // display-only list of strings, and one bad swatch must not be able to drag
+  // the agencies down with it.
+  const paletteParsed = ColorPaletteSchema.safeParse(r.color_palette ?? []);
+  const colorPalette: string[] = paletteParsed.success ? paletteParsed.data : [];
   const parsed = GlobalConfigSchema.safeParse({
     agencies: agencies ?? [],
     rdioGroups: r.rdio_groups ?? [],
     rdioTags: r.rdio_tags ?? [],
     sdrtrunkConfig,
     defaults,
+    colorPalette,
   });
   let content: GlobalConfigInput;
   if (parsed.success) {
@@ -738,7 +757,12 @@ function rowToConfig(r: Row): GlobalConfig {
     // so one malformed agency would otherwise wipe (and then re-persist + fan out)
     // every agency/group/tag fleet-wide. Instead salvage the valid elements and
     // drop only the offenders, logging what was rejected so it's visible.
-    content = { ...salvageConfig(agencies ?? [], r.rdio_groups ?? [], r.rdio_tags ?? []), sdrtrunkConfig, defaults };
+    content = {
+      ...salvageConfig(agencies ?? [], r.rdio_groups ?? [], r.rdio_tags ?? []),
+      sdrtrunkConfig,
+      defaults,
+      colorPalette,
+    };
     log.error(
       { issues: parsed.error.issues.slice(0, 20), kept: content.agencies.length },
       'global config failed schema on read; salvaged valid elements (dropped offenders)',
@@ -775,7 +799,7 @@ export async function getGlobalConfig(): Promise<GlobalConfig> {
   const pool = await getPool();
   if (!pool) return { ...EMPTY, streamNames: presetStreamNames() };
   const res = await pool.query<Row>(
-    `SELECT agencies, sdrtrunk_aliases, rdio_systems, rdio_groups, rdio_tags, sdrtrunk_config, talkgroup_defaults, version, updated_at, updated_by
+    `SELECT agencies, sdrtrunk_aliases, rdio_systems, rdio_groups, rdio_tags, sdrtrunk_config, talkgroup_defaults, color_palette, version, updated_at, updated_by
        FROM feeder_global_config WHERE id = 1`,
   );
   const row = res.rows[0];
@@ -913,8 +937,8 @@ export async function saveGlobalConfig(
   }
   const res = await pool.query<Row>(
     `INSERT INTO feeder_global_config
-       (id, agencies, sdrtrunk_aliases, rdio_systems, rdio_groups, rdio_tags, sdrtrunk_config, talkgroup_defaults, version, updated_at, updated_by)
-     VALUES (1, $1, '[]'::jsonb, '[]'::jsonb, $2, $3, $4, $5, $6, now(), $7)
+       (id, agencies, sdrtrunk_aliases, rdio_systems, rdio_groups, rdio_tags, sdrtrunk_config, talkgroup_defaults, color_palette, version, updated_at, updated_by)
+     VALUES (1, $1, '[]'::jsonb, '[]'::jsonb, $2, $3, $4, $5, $6, $7, now(), $8)
      ON CONFLICT (id) DO UPDATE SET
        agencies           = EXCLUDED.agencies,
        sdrtrunk_aliases   = '[]'::jsonb,
@@ -923,16 +947,18 @@ export async function saveGlobalConfig(
        rdio_tags          = EXCLUDED.rdio_tags,
        sdrtrunk_config    = EXCLUDED.sdrtrunk_config,
        talkgroup_defaults = EXCLUDED.talkgroup_defaults,
+       color_palette      = EXCLUDED.color_palette,
        version            = EXCLUDED.version,
        updated_at         = now(),
        updated_by         = EXCLUDED.updated_by
-     RETURNING agencies, sdrtrunk_aliases, rdio_systems, rdio_groups, rdio_tags, sdrtrunk_config, talkgroup_defaults, version, updated_at, updated_by`,
+     RETURNING agencies, sdrtrunk_aliases, rdio_systems, rdio_groups, rdio_tags, sdrtrunk_config, talkgroup_defaults, color_palette, version, updated_at, updated_by`,
     [
       JSON.stringify(input.agencies),
       JSON.stringify(input.rdioGroups),
       JSON.stringify(input.rdioTags),
       JSON.stringify(input.sdrtrunkConfig ?? EMPTY_SDRTRUNK),
       JSON.stringify(input.defaults ?? EMPTY_DEFAULTS),
+      JSON.stringify(input.colorPalette ?? []),
       version,
       updatedBy,
     ],

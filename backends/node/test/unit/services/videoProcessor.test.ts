@@ -53,6 +53,12 @@ vi.mock('../../../src/services/wire.js', () => ({
   deleteR2Object: vi.fn(async (key: string) => {
     r2Ops.push(`delete:${key}`);
   }),
+  // The reference check itself is covered in services/wire.test.ts; here it
+  // stands in for "delete, having checked", so the ordering assertions read
+  // the same for both delete paths.
+  deleteUnreferencedR2Object: vi.fn(async (_pool: unknown, key: string) => {
+    r2Ops.push(`delete:${key}`);
+  }),
   newVideoKey: () => 'wire/videos/NEW.mp4',
   newPosterKey: () => 'wire/img/NEWPOSTER.jpg',
 }));
@@ -84,13 +90,19 @@ const PENDING_ROW = {
   parent_type: 'media_post', parent_id: 'p1',
 };
 
-/** Queue: claim → parent watermark lookup → update. Then an empty claim ends it. */
-function queueOneJob(parent: { watermark: boolean; author_name?: string | null }) {
+/** Queue: stale-claim recovery → claim → mark 'processing' → parent watermark
+ *  lookup → update. Then an empty claim ends the sweep. */
+function queueOneJob(
+  parent: { watermark: boolean; author_name?: string | null },
+  updRowCount = 1,
+) {
   resultQueue = [
-    { rows: [PENDING_ROW] },   // claim
-    { rows: [parent] },        // watermarkFor
-    { rows: [], rowCount: 1 }, // UPDATE ... process_state='done'
-    { rows: [] },              // next claim: nothing left
+    { rows: [], rowCount: 0 },  // recoverStaleClaims
+    { rows: [PENDING_ROW] },    // claim
+    { rows: [], rowCount: 1 },  // claim -> process_state='processing'
+    { rows: [parent] },         // watermarkFor
+    { rows: [], rowCount: updRowCount }, // UPDATE ... process_state='done'
+    { rows: [] },               // next claim: nothing left
   ];
 }
 
@@ -145,10 +157,50 @@ describe('videoProcessor worker', () => {
     expect(transcodeCalls[0]?.watermarkText).toBeNull();
   });
 
+  it('marks the row it claimed as processing, in the claim transaction', async () => {
+    queueOneJob({ watermark: false });
+    await processPendingVideosOnce();
+    const claimUpd = txCalls.find((c) => /process_state = 'processing'/.test(c.sql));
+    expect(claimUpd?.params?.[0]).toBe('m1');
+    // Inside the transaction that selected it, so a concurrent sweep can't
+    // claim the same clip between the SELECT and the UPDATE.
+    const order = txCalls.map((c) => c.sql.trim().slice(0, 6).toUpperCase());
+    expect(order[0]).toBe('BEGIN');
+    expect(order[order.indexOf('COMMIT') - 1]).toBe('UPDATE');
+  });
+
+  it('discards its own output when an edit replaced the row mid-transcode', async () => {
+    // The post was edited while ffmpeg ran: the claimed row is gone and the
+    // row that replaced it points at the RAW key. Deleting that would leave
+    // the new row naming an object that no longer exists.
+    queueOneJob({ watermark: false }, 0);
+    const n = await processPendingVideosOnce();
+    expect(n).toBe(0);
+    expect(r2Ops).toEqual([
+      'download:wire/videos/RAW.mp4',
+      'transcode',
+      'upload:wire/videos/NEW.mp4',
+      'upload:wire/img/NEWPOSTER.jpg',
+      'delete:wire/videos/NEW.mp4',
+      'delete:wire/img/NEWPOSTER.jpg',
+    ]);
+  });
+
+  it('re-queues a claim left behind by a worker that stopped', async () => {
+    resultQueue = [{ rows: [], rowCount: 2 }, { rows: [] }];
+    await processPendingVideosOnce();
+    const recover = calls.find((c) => /SET process_state = 'pending'/.test(c.sql));
+    expect(recover?.sql).toMatch(/process_state = 'processing'/);
+    // Nothing is in flight in this process, so nothing is exempt.
+    expect(recover?.params?.[0]).toEqual([]);
+  });
+
   it('leaves the original in place and increments attempts when ffmpeg fails', async () => {
     transcodeOk = false;
     resultQueue = [
+      { rows: [], rowCount: 0 },
       { rows: [PENDING_ROW] },
+      { rows: [], rowCount: 1 },
       { rows: [{ watermark: false }] },
       { rows: [], rowCount: 1 }, // recordFailure
       { rows: [] },
@@ -167,7 +219,9 @@ describe('videoProcessor worker', () => {
   it('does not delete anything when the upload of the result fails', async () => {
     uploadOk = false;
     resultQueue = [
+      { rows: [], rowCount: 0 },
       { rows: [PENDING_ROW] },
+      { rows: [], rowCount: 1 },
       { rows: [{ watermark: false }] },
       { rows: [], rowCount: 1 },
       { rows: [] },

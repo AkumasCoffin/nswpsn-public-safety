@@ -59,16 +59,21 @@ describe('radioListsFromRollup', () => {
     }
   });
 
-  it('splits the window at the top of the current hour, both ways', async () => {
+  it('splits the window where the rollup has got to, both ways', async () => {
     const { pool, seen } = poolOf();
     await radioListsFromRollup(pool, '30d');
 
     for (const sql of seen) {
-      // Whole hours from the buckets...
-      expect(sql).toContain("hour <  date_trunc('hour', now())");
-      // ...and the hour in progress from detail. Neither side may overlap the
-      // other or every list would double-count the live hour.
-      expect(sql).toContain("received_at >= date_trunc('hour', now())");
+      // Derived hours from the buckets, up to the seam rolled_up_to names...
+      expect(sql).toContain("hour >= date_trunc('hour', now()) - $1::interval");
+      expect(sql).toContain('FROM node_rollup_state');
+      // ...and everything from the seam onwards from detail. The two bounds
+      // are the same expression, so the halves can neither overlap (every list
+      // would double-count) nor leave a gap (an hour of traffic would vanish
+      // between a closing hour and the next rollup tick, which is what they
+      // used to do).
+      expect(sql).toContain('received_at >= COALESCE(');
+      expect(sql).toContain('rolled_up_to');
     }
   });
 

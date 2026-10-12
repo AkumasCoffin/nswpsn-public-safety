@@ -27,13 +27,14 @@ async function appWith(
   key?: string,
   relay?: { url: string; key: string },
   relayTimeoutMs = 30_000,
+  offsetMs = -1000,
 ) {
   vi.resetModules();
   vi.doMock('../../../src/config.js', () => ({
     config: {
       SCANNER_INGEST_KEY: key,
       SCANNER_INGEST_NAME: 'Scanner feed',
-      SCANNER_TIME_OFFSET_MS: -1000,
+      SCANNER_TIME_OFFSET_MS: offsetMs,
       RDIO_INTERNAL_URL: relay?.url,
       RDIO_INTERNAL_API_KEY: relay?.key,
       RELAY_TIMEOUT_MS: relayTimeoutMs,
@@ -212,10 +213,13 @@ describe('POST /api/scanner-ingest/api/call-transcript', () => {
     expect(res.status).toBe(400);
   });
 
-  it('relays with dateTime UNCHANGED and our own key', async () => {
-    // Central matches a transcript to its call on (system, talkgroup, dateTime).
-    // The call was relayed with the sender's own timestamp, so any rewrite here
-    // orphans every transcript.
+  it('relays with the SAME shift call-upload applied, and our own key', async () => {
+    // Central matches a transcript to its call on (system, talkgroup, dateTime)
+    // inside a 500ms window. call-upload relays the shifted timestamp, so a
+    // transcript carrying the sender's own time misses the stored call by the
+    // whole offset: accepted with a 200, held pending against an instant no
+    // call ever arrives at, and expired. Silent loss of the very transcripts
+    // the feature exists to collect.
     const fetchMock = vi.fn(() => Promise.resolve(new Response('ok', { status: 200 })));
     vi.stubGlobal('fetch', fetchMock);
     const app = await appWith('right-key', { url: 'http://rdio.internal', key: 'INTERNAL' });
@@ -225,9 +229,23 @@ describe('POST /api/scanner-ingest/api/call-transcript', () => {
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('http://rdio.internal/api/call-transcript');
     const sent = JSON.parse(init.body as string);
-    expect(sent.dateTime).toBe('2026-08-23T04:26:12Z');
+    expect(sent.dateTime).toBe('2026-08-23T04:26:11.000Z');
     expect(sent.key).toBe('INTERNAL');
     expect(sent.transcript).toBe('car 850 responding');
+    vi.unstubAllGlobals();
+  });
+
+  it('passes the sender\'s dateTime through byte-for-byte when the offset is 0', async () => {
+    // Offset 0 is verbatim passthrough on both routes — the one case where
+    // forwarding the sender's own string is the correct thing to do.
+    const fetchMock = vi.fn(() => Promise.resolve(new Response('ok', { status: 200 })));
+    vi.stubGlobal('fetch', fetchMock);
+    const app = await appWith(
+      'right-key', { url: 'http://rdio.internal', key: 'INTERNAL' }, 30_000, 0);
+    await app.request('/api/scanner-ingest/api/call-transcript', push(good));
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string).dateTime).toBe('2026-08-23T04:26:12Z');
     vi.unstubAllGlobals();
   });
 

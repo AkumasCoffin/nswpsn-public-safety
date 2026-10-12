@@ -88,8 +88,10 @@ npm run build
 # Build the node-agent binaries into the webroot downloads dir so volunteers
 # fetch the latest agent (see NODE_DOWNLOADS_BASE). Needs Go >= 1.26 — snap
 # installs it to /snap/bin. Non-fatal: if Go is missing the rest of the deploy
-# still runs (existing binaries just aren't refreshed). The big SDR-Trunk
-# runtime + rdio binary are placed in the same dir once, by hand.
+# still runs (existing binaries just aren't refreshed). The SDR-Trunk runtime
+# and the rdio binary are NOT built here — the manifest points at their own
+# GitHub release assets, which is why those two entries carry a hand-written
+# sha256 while the agents' are hashed from these files at serve time.
 AGENT_SRC="$REPO_ROOT/feeder-nodes/radio-node"
 PAGER_SRC="$REPO_ROOT/feeder-nodes/pager-node"
 ADSB_SRC="$REPO_ROOT/feeder-nodes/aircraft-node"

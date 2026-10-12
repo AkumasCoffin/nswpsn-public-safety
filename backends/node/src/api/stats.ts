@@ -39,6 +39,7 @@ import type { TrafficSnapshot, TrafficCamerasSnapshot } from '../sources/traffic
 import type { RfsSnapshot } from '../sources/rfs.js';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
+import { requireRole, isOwner } from '../services/auth/roles.js';
 import type { BomSnapshot } from '../sources/bom.js';
 import type { BeachsafeBeach } from '../sources/beach.js';
 
@@ -77,6 +78,10 @@ function unwrapSnapshotData(raw: unknown): Record<string, unknown> {
   return {};
 }
 
+/** One row per 5 minutes across the 7-day window the `hours` param caps at,
+ *  plus a little headroom. */
+const MAX_HISTORY_ROWS = 2200;
+
 statsRouter.get('/api/stats/history', async (c) => {
   const url = new URL(c.req.url);
   const hoursParam = url.searchParams.get('hours');
@@ -90,11 +95,19 @@ statsRouter.get('/api/stats/history', async (c) => {
   // Python schema: `timestamp BIGINT` ms epoch. See migration 009.
   const cutoffMs = Date.now() - hours * 3_600_000;
   try {
+    // Newest MAX_HISTORY_ROWS, re-sorted ascending for the chart. The window is
+    // capped at 7 days and the archiver writes one row per 5 minutes, so an
+    // honest request is inside the limit; what the limit stops is a response
+    // (and a parse, on a phone) that grows with every extra row in the table.
     const result = await pool.query<StatsHistoryRow>(
-      `SELECT "timestamp", data FROM stats_snapshots
-       WHERE "timestamp" >= $1
+      `SELECT "timestamp", data FROM (
+         SELECT "timestamp", data FROM stats_snapshots
+          WHERE "timestamp" >= $1
+          ORDER BY "timestamp" DESC
+          LIMIT $2
+       ) recent
        ORDER BY "timestamp" ASC`,
-      [cutoffMs],
+      [cutoffMs, MAX_HISTORY_ROWS],
     );
     return c.json(
       result.rows.map((r) => ({
@@ -495,7 +508,10 @@ statsRouter.get('/api/collection/status', (c) => {
     id: id.length > 8 ? `${id.slice(0, 8)}...` : id,
     page_type: session.pageType,
     is_data_page: session.isDataPage,
-    ip: session.ip,
+    // No `ip`, though python sent one. This route is behind the general
+    // credential gate — any page visitor's session token passes it — so the
+    // field handed every caller the address of everyone currently on the site.
+    // Nothing reads it; the counts are what the view is for.
     age_seconds: Math.floor((Date.now() - session.openedAt) / 1000),
   }));
   return c.json({
@@ -603,7 +619,12 @@ statsRouter.get('/api/stats/archive/status', async (c) => {
 // then drain the archive writer queue. Mirrors python's `archive_current_stats`
 // at external_api_proxy.py:6341, which also calls back into the snapshot
 // writer to populate the table /api/stats/history reads from.
-statsRouter.get('/api/stats/archive/trigger', async (c) => {
+//
+// POST + owner, where python had it on an ungated GET: every call writes a
+// full-stats row and forces a flush, with no dedup, so anything that could
+// reach it could inflate the snapshot table — and with it every chart payload
+// read back out of /api/stats/history — as fast as it could loop.
+statsRouter.post('/api/stats/archive/trigger', requireRole(isOwner), async (c) => {
   try {
     const wrote = await writeStatsSnapshot();
     const flushed = await archiveWriter.flush();

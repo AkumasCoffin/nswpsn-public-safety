@@ -768,6 +768,69 @@ describe('per-backend concurrency cap', () => {
   });
 });
 
+/**
+ * A queued call captured its candidate list when it arrived, so by the time a
+ * slot frees the backend it is handed may no longer be allowed to take work.
+ * That was the exact failure draining exists to prevent: every pc completion
+ * immediately started another transcription on pc, so pc's inFlight never
+ * reached 0 and the PC could never stop — and if the watcher gave up and
+ * stopped whisper anyway, those transcripts were lost for good.
+ */
+describe('a drain reaches work that is already queued', () => {
+  it('does not hand a freed slot on a draining backend to a waiter', async () => {
+    const { app, svc } = await setup(`pc=${PC}@1,vm=${VM}@1`);
+    await probeOnce(svc);
+
+    let releasePc!: () => void;
+    let releaseVm!: () => void;
+    pc.hold = new Promise<void>((r) => { releasePc = r; });
+    vm.hold = new Promise<void>((r) => { releaseVm = r; });
+    // Three calls, two slots: the third parks in the router with both
+    // backends on its candidate list.
+    const calls = Array.from({ length: 3 }, () =>
+      app.request('/api/whisper/v1/audio/transcriptions', post()));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(pc.hits).toBe(1);
+    expect(vm.hits).toBe(1);
+
+    svc.whisperSetDrain('pc', true);
+    releasePc();
+    await new Promise((r) => setTimeout(r, 10));
+    // pc took nothing new and actually went idle, which is the signal the
+    // PC's watcher waits for before stopping the service.
+    expect(pc.hits).toBe(1);
+    expect(svc.whisperStatus().backends[0]).toMatchObject({ name: 'pc', inFlight: 0 });
+
+    releaseVm();
+    await Promise.all(calls);
+    // The queued call still got transcribed — on the backend that may have it.
+    expect(vm.hits).toBe(2);
+    expect(pc.hits).toBe(1);
+  });
+
+  it('fails a queued call at once when the drain leaves nothing that can take it', async () => {
+    const { app, svc } = await setup(`pc=${PC}@1`);
+    await probeOnce(svc);
+
+    let releasePc!: () => void;
+    pc.hold = new Promise<void>((r) => { releasePc = r; });
+    const first = app.request('/api/whisper/v1/audio/transcriptions', post());
+    const queued = app.request('/api/whisper/v1/audio/transcriptions', post());
+    await new Promise((r) => setTimeout(r, 10));
+    expect(pc.hits).toBe(1);
+
+    // Nothing else can take it, so waiting out SLOT_WAIT_MS holds rdio's
+    // connection open for two minutes to no purpose.
+    svc.whisperSetDrain('pc', true);
+    const res = await queued;
+    expect(res.status).toBe(502);
+    expect(pc.hits).toBe(1);
+
+    releasePc();
+    await first;
+  });
+});
+
 describe('latency the panel can trust', () => {
   it('reports avg and p95 from the same population, so avg <= p95', async () => {
     const { app, svc } = await setup(`pc=${PC}`);

@@ -61,23 +61,42 @@ describe('/api/cache/clear', () => {
   it('returns ok and clears response-side caches', async () => {
     const { createApp } = await import('../../../src/server.js');
     const app = createApp();
-    const res = await app.request('/api/cache/clear', { headers: AUTH });
+    const res = await app.request('/api/cache/clear', { headers: await ownerHeaders() });
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
     expect(body['status']).toBe('ok');
   });
 });
 
-describe('/api/debug/sessions', () => {
-  it('returns the activity-mode shape', async () => {
+// The site key is handed to every visitor via /api/config and a page token is
+// mintable by any script that sends a first-party Origin, so the credential
+// gate these routes sit behind is not a role check. Owner-only, like
+// /api/admin/db/*.
+describe('operator routes are owner-only', () => {
+  it.each([
+    '/api/cache/clear',
+    '/api/debug/sessions',
+    '/api/debug/test-all',
+  ])('refuses %s to a key-only caller', async (path) => {
     const { createApp } = await import('../../../src/server.js');
     const app = createApp();
-    const res = await app.request('/api/debug/sessions', { headers: AUTH });
+    const res = await app.request(path, { headers: AUTH });
+    expect(res.status).toBe(401);
+  });
+});
+
+describe('/api/debug/sessions', () => {
+  it('returns the activity-mode shape, without any client IP', async () => {
+    const { createApp } = await import('../../../src/server.js');
+    const app = createApp();
+    const res = await app.request('/api/debug/sessions', { headers: await ownerHeaders() });
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
     expect(body['active_count']).toBeDefined();
     expect(body['data_page_count']).toBeDefined();
     expect(Array.isArray(body['sessions'])).toBe(true);
+    // Visitor addresses are not what "is collection active?" needs.
+    expect(JSON.stringify(body)).not.toContain('"ip"');
   });
 });
 
@@ -87,7 +106,7 @@ describe('/api/debug/heartbeat-test', () => {
     const app = createApp();
     const res = await app.request(
       '/api/debug/heartbeat-test?action=ping&page_id=abc-123&data_page=true',
-      { headers: AUTH },
+      { headers: await ownerHeaders() },
     );
     expect(res.status).toBe(200);
     const body = (await res.json()) as { received_params: Record<string, unknown> };
@@ -102,7 +121,7 @@ describe('/api/debug/ratelimit', () => {
   it('returns informational stub', async () => {
     const { createApp } = await import('../../../src/server.js');
     const app = createApp();
-    const res = await app.request('/api/debug/ratelimit', { headers: AUTH });
+    const res = await app.request('/api/debug/ratelimit', { headers: await ownerHeaders() });
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
     expect(body['is_limited']).toBe(false);
@@ -132,7 +151,7 @@ describe('/api/debug/traffic-raw', () => {
     });
     const { createApp } = await import('../../../src/server.js');
     const app = createApp();
-    const res = await app.request('/api/debug/traffic-raw', { headers: AUTH });
+    const res = await app.request('/api/debug/traffic-raw', { headers: await ownerHeaders() });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { sample: unknown[]; total: number };
     expect(body.total).toBe(1);
@@ -143,7 +162,7 @@ describe('/api/debug/traffic-raw', () => {
     fetchJsonMock.mockRejectedValueOnce(new Error('502'));
     const { createApp } = await import('../../../src/server.js');
     const app = createApp();
-    const res = await app.request('/api/debug/traffic-raw', { headers: AUTH });
+    const res = await app.request('/api/debug/traffic-raw', { headers: await ownerHeaders() });
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
     expect(body['total']).toBe(0);
@@ -155,7 +174,7 @@ describe('/api/debug/test-all', () => {
   it('reports keys-present and per-key liveness', async () => {
     const { createApp } = await import('../../../src/server.js');
     const app = createApp();
-    const res = await app.request('/api/debug/test-all', { headers: AUTH });
+    const res = await app.request('/api/debug/test-all', { headers: await ownerHeaders() });
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
     expect(body['backend']).toBe('node');

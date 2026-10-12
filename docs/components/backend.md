@@ -29,7 +29,7 @@ backends/node/
   src/store/archive.ts  ArchiveWriter — history, batched into PostgreSQL
   src/db/pool.ts        pg pool wrapper
   src/db/migrate.ts     migration runner
-  src/db/migrations/    119 numbered .sql files
+  src/db/migrations/    123 numbered .sql files
   src/lib/              logger, timezone, masks, relay-error formatting
   assets/               node-versions.json (agent manifest), rfs-zones.json
   scripts/deploy.sh     the deploy. The OWNER runs this. You do not
@@ -350,8 +350,20 @@ and exits if anything required is missing or malformed.
 `PORT` defaults to 3000. `NODE_ENV` defaults from the legacy `DEV_MODE` flag so
 one `.env` drives everything.
 
-Almost every variable is **optional**, and the pattern is consistent: an unset
-variable turns its feature off rather than breaking the server. Specifically —
+**Two variables are required and have no default, and the backend refuses to boot
+without either**: `NSWPSN_API_KEY`, the shared static key for the server-side
+callers that cannot hold a session token or a named key, and
+`BROWSER_TOKEN_SECRET`, which signs browser session tokens. Both used to fall
+back — the key to a literal, the secret to the key — and in both cases the
+fallback was a value published in this repository's history, so a deploy whose
+`.env` forgot the variable ran on a credential an attacker already has. Failing to
+boot is the only safe answer, because there is nothing a default can be that is
+not also public. `BROWSER_TOKEN_SECRET` must be at least 16 characters; generate
+one with `openssl rand -hex 32`.
+
+Beyond those two, almost every variable is **optional**, and the pattern is
+consistent: an unset variable turns its feature off rather than breaking the
+server. Specifically —
 
 - unset `DATABASE_URL`: the server still boots and `/api/health` answers;
 - unset `PAGERMON_URL`: the pager source registers and returns an empty
@@ -395,10 +407,12 @@ either; the backend substitutes them when it forwards.
 
 ## Database
 
-PostgreSQL, 119 numbered migrations in `src/db/migrations/`, applied by
+PostgreSQL, 123 numbered migrations in `src/db/migrations/`, applied by
 `src/db/migrate.ts` at boot and by `npm run migrate` before the restart on
 deploy. The runner is idempotent, so applying twice is a no-op. New schema is a
-new numbered file; never edit an applied one.
+new numbered file; never edit an applied one. The two most recent are `122`, a
+global colour palette, and `123`, a third per-site attribution on the radio
+hourly rollups.
 
 Three separate pools:
 

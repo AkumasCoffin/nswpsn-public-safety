@@ -39,7 +39,7 @@ Before changing anything, read [`../OPERATING-RULES.md`](../OPERATING-RULES.md).
            ▼                          ▼                     ▼
    static site (repo root)      Discord bot            PostgreSQL
    Leaflet, no build step       discord-bot/bot.py     (canonical store)
-   map · live · logs · wire     presets · dispatch     119 migrations
+   map · live · logs · wire     presets · dispatch     123 migrations
 ```
 
 Three things are **outside** the backend and must not be confused with it:
@@ -489,11 +489,18 @@ must not prevent the channel list from landing.
 by `/api/node-updates/manifest`, kind-aware: a pager node is served
 `pager-agent` as its `agent` component) at start, every 6h, and on
 `cmd{action:'update'}`. Download to `.pending`, sha256-verify, swap, restart. An
-empty sha256 means "nothing to do" — not an error.
+empty sha256 means "nothing to do" — not an error. The agent sha256 values
+committed in that file are empty and are **not** the ones served: the backend
+hashes whatever artifact is present in `<webroot>/downloads` when it serves the
+manifest, so only an artifact genuinely missing from that directory is skipped.
 
 **A Go agent change does not reach any node until its version is bumped in that
-manifest.** `scripts/deploy.sh` skips the Go rebuild entirely when the built
-binary already reports the manifest version.
+manifest, and bumping it is enough.** `scripts/deploy.sh` skips the Go rebuild
+entirely when the built binary already reports the manifest version, so the bump
+is what triggers the rebuild — and a running node then fetches, verifies and
+self-replaces on its next check. A version bump is a deploy to the live fleet,
+gated only by the global auto-update switch for the automatic passes. Details:
+[`components/forked-runtimes.md`](components/forked-runtimes.md#how-a-version-bump-reaches-a-running-node).
 
 **Live view.** A staff browser's WebSocket gets shaped node rows
 (`src/services/nodeLive.ts`). Those read from `src/services/nodeCallWindow.ts`, a
@@ -552,7 +559,7 @@ News and media posts, written in `wire-compose.html` and read at `wire.html`.
 
 | Store | Owner | Access |
 |---|---|---|
-| Backend PostgreSQL | AusAware | read/write. 119 numbered migrations in `src/db/migrations`, applied by `src/db/migrate.ts` at boot and by `npm run migrate` on deploy |
+| Backend PostgreSQL | AusAware | read/write. 123 numbered migrations in `src/db/migrations`, applied by `src/db/migrate.ts` at boot and by `npm run migrate` on deploy |
 | rdio-scanner PostgreSQL | central rdio-scanner | **read-only** via `RDIO_DATABASE_URL` (`src/services/rdio.ts`) |
 | Bot PostgreSQL | Discord bot | read via `BOT_DATA_DATABASE_URL` for the dashboard; the bot writes it |
 | Supabase | — | **authentication and identity only** |
@@ -585,13 +592,19 @@ What is genuinely gone:
   comment says it: *"Irreversible, and deliberately so — this is the last of the
   Waze data."*
 
-**The leftovers are extensive.** Four of them are live breakage — the frontend
-asks for routes that no longer exist:
+**The leftovers are extensive**, but the frontend is no longer among them: the
+site makes no Waze requests. `map.html` still *contains* the two loaders — the
+`fetch` of `/api/waze/police-heatmap` at `map.html:9528` and of
+`/api/waze/police` at `map.html:10903` — but both functions return immediately on
+a `WAZE_RETIRED = true` constant (`map.html:3863`), and the controls that used to
+call them are gone. The guard is at each function's first line on purpose, so
+that "the site makes no Waze requests" does not depend on an exhaustive reading
+of the call sites; clearing the constant and reverting the UI commit is what
+would bring the layer back.
 
-- `map.html:3827` and `map.html:9489` fetch `/api/waze/police-heatmap`
-- `map.html:10864` fetches `/api/waze/police`
-- `src/server.ts:453` still advertises `police-heatmap` in the root endpoint
-  catalogue
+One live misstatement does survive on the backend: `src/server.ts:459` still
+advertises `police-heatmap` in the root endpoint catalogue, for a route that does
+not exist.
 
 The rest is dead reference rather than breakage, and there is a lot of it —
 roughly 88 mentions across 16 non-migration files under `backends/node/src`.

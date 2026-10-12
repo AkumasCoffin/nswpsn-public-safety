@@ -844,6 +844,36 @@ export function outcomeSql(homeCol: string, encParam: string, progParam: string)
 }
 
 /**
+ * The seam between stored history and live detail: how far the hourly rollup
+ * has actually got.
+ *
+ * Every rollup read is two halves — rollup rows below the seam, detail rows at
+ * or above it — so the seam has to be a fact, not an assumption. It used to be
+ * assumed to be the top of the current hour, but the rollup job is not aligned
+ * to the clock: it runs 30s after boot and then every 60 minutes, so from HH:00
+ * until its next tick the hour that just closed was in NEITHER half. About an
+ * hour of traffic silently left every fleet-wide tile, top list, systems tree
+ * and talkgroup table, and came back when the tick landed — totals dipping and
+ * recovering once an hour, and disagreeing with the node-scoped detail path
+ * that reads no rollup at all.
+ *
+ * `rolled_up_to` is exclusive (migration 080: every hour STRICTLY BEFORE it is
+ * derived), which is exactly what a `hour < seam` / `received_at >= seam` pair
+ * wants.
+ *
+ * COALESCE because the state row can be missing and `rolled_up_to` is NULL
+ * until the first pass: the seam then falls back to the top of the hour, the
+ * behaviour the caller's detail fallback already copes with, rather than
+ * comparing against NULL and reporting zero of everything.
+ *
+ * LEAST because the rollup deliberately never derives the hour in progress; if
+ * the stored value were ever ahead of it, detail still has to cover that hour.
+ */
+const ROLLUP_EDGE = `COALESCE(
+  (SELECT LEAST(rolled_up_to, date_trunc('hour', now())) FROM node_rollup_state WHERE id),
+  date_trunc('hour', now()))`;
+
+/**
  * The tiles, summed from node_radio_hourly_rx plus the hour in progress.
  *
  * The rollup holds one row per (completed hour, home talkgroup) — tens of rows
@@ -852,12 +882,12 @@ export function outcomeSql(homeCol: string, encParam: string, progParam: string)
  * the detail query is not slow, it is just enormous, and its cost is linear in
  * the window (measured at ~1.7s per day).
  *
- * WINDOW EDGES. The rollup is bucketed, so the window is whole hours back from
- * the top of the current hour, and the current partial hour is unioned from
- * detail. That makes the span slightly longer than the literal interval — a
- * "24h" view covers 24 whole hours plus however far into this one we are —
- * which is steadier than a sliding edge that reshuffles the first bucket on
- * every poll.
+ * WINDOW EDGES. The rollup is bucketed, so the window starts at a whole hour
+ * back from the top of the current hour, and everything from the rollup's seam
+ * (ROLLUP_EDGE) onwards is unioned from detail. That makes the span slightly
+ * longer than the literal interval — a "24h" view covers 24 whole hours plus
+ * however far past the seam we are — which is steadier than a sliding edge
+ * that reshuffles the first bucket on every poll.
  *
  * A call that straddles the boundary is counted twice: the rollup attributed
  * the whole call to the hour it STARTED in, and the partial-hour scan sees its
@@ -896,15 +926,16 @@ export async function radioTotalsFromRollup(
          WHERE NOT (${isEnc}) AND NOT (${isNoTgid})), 0)::int   AS ingested
      FROM node_radio_hourly_rx
     WHERE hour >= date_trunc('hour', now()) - $1::interval
-      AND hour <  date_trunc('hour', now())${encFilter}`,
+      AND hour <  ${ROLLUP_EDGE}${encFilter}`,
     [iv, encTgIds, progTgIds],
   );
 
-  // The hour in progress, which the rollup deliberately never builds — it
-  // would have to recompute it on every pass. One hour is ~6k rows.
+  // Everything the rollup has not derived yet — the hour in progress, which it
+  // deliberately never builds, plus any closed hour still waiting for the next
+  // tick. One hour is ~6k rows.
   const partial = await pool.query<Record<string, unknown>>(
     radioReceptionsSql(
-      `received_at >= date_trunc('hour', now()) AND ${CALL_GROUP}`,
+      `received_at >= ${ROLLUP_EDGE} AND ${CALL_GROUP}`,
       '$1',
       '$2',
       hideEnc,
@@ -964,16 +995,17 @@ export interface RadioLists {
 }
 
 /**
- * The window a rollup read covers, and the live hour it does not.
+ * The window a rollup read covers, and the live tail it does not.
  *
- * The rollups are bucketed, so a window is whole hours back from the top of
- * the current hour and the hour in progress is unioned from detail — the same
- * edges radioTotalsFromRollup uses, and for the same reason: a sliding edge
- * would reshuffle the first bucket on every poll.
+ * The rollups are bucketed, so a window starts a whole number of hours back
+ * from the top of the current hour and everything from the rollup's seam
+ * onwards is unioned from detail — the same edges radioTotalsFromRollup uses,
+ * and for the same reason: a sliding edge would reshuffle the first bucket on
+ * every poll. See ROLLUP_EDGE for why the seam is read rather than assumed.
  */
 const ROLLUP_HOURS = `hour >= date_trunc('hour', now()) - $1::interval
-                    AND hour <  date_trunc('hour', now())`;
-const LIVE_HOUR = `received_at >= date_trunc('hour', now())`;
+                    AND hour <  ${ROLLUP_EDGE}`;
+const LIVE_HOUR = `received_at >= ${ROLLUP_EDGE}`;
 
 /**
  * The five lists, from the hourly rollups plus the hour in progress.
@@ -1098,8 +1130,17 @@ export async function radioListsFromRollup(
          FROM r GROUP BY unit ORDER BY receptions DESC LIMIT 15`,
     ),
     () => q<{ bucket: Date; n: unknown }>(
-      // The live hour's contribution is deduped to the same tuple the rollup
+      // The live tail's contribution is deduped to the same tuple the rollup
       // stores, so the last bar is measured the way every bar before it was.
+      //
+      // It is drawn on the bucket containing now(), not on the bucket of each
+      // reception. In steady state the seam IS the top of the current hour —
+      // the rollup tick is aligned to it — so the two are the same thing. In
+      // the seconds after an hour closes, or while a cold-start backfill is
+      // still running, the tail can reach further back and its receptions ride
+      // the current bar: a momentarily fat last bar, where bucketing the
+      // deduped set by its own time would mean carrying a per-call hour
+      // through the DISTINCT and changing what a reception is.
       `WITH r AS (
          SELECT date_trunc('${bucket}', hour) AS bucket, calls AS n
            FROM node_radio_hourly WHERE ${ROLLUP_HOURS}
@@ -2646,9 +2687,15 @@ nodeDataRouter.get(
             params,
           ),
           pool.query<SiteRow>(
+            // logical_calls_site, NOT logical_calls: the latter attributes a
+            // call once FLEET-WIDE, so summing it per site credits a simulcast
+            // call to the lowest site only and every other site in the group
+            // reads far below its real figure — contradicting both the
+            // node-scoped tree below and the /api/node-data/site drill-down,
+            // which count every call heard at the site. See migration 123.
             `WITH r AS (
                SELECT system, site_rfss AS rfss, site_id AS site,
-                      calls, logical_calls AS logical, hour AS last_seen
+                      calls, logical_calls_site AS logical, hour AS last_seen
                  FROM node_radio_hourly_sys
                 WHERE ${ROLLUP_HOURS} AND system <> 0 AND site_rfss <> -1 AND site_id <> -1
                UNION ALL

@@ -82,6 +82,23 @@ function parseCallDateTime(raw: string | null): Date | null {
 }
 
 /**
+ * The instant central rdio will hold for this call: the sender's own timestamp
+ * shifted by SCANNER_TIME_OFFSET_MS, in rdio's own unit of whole epoch
+ * seconds.
+ *
+ * BOTH halves of the downstream protocol have to agree on it. call-upload
+ * relays the shifted value, so a transcript pushed with the sender's
+ * unshifted time misses the stored call by the entire offset — and central's
+ * transcript plugin matches inside a 500ms window (Calls.GetIdByKey), so the
+ * default 1s shift never matched at all. The push was accepted with a 200,
+ * held pending against an instant no call would ever arrive at, and expired.
+ * One helper, so the two routes cannot drift apart again.
+ */
+function alignedCallSeconds(startedAt: Date): number {
+  return Math.floor((startedAt.getTime() + config.SCANNER_TIME_OFFSET_MS) / 1000);
+}
+
+/**
  * The nodes row every event must reference (node_radio_events.node_id is NOT
  * NULL and foreign-keyed). The contributor never sees or touches it — it is
  * created on the first upload and exists so the feed has somewhere to hang:
@@ -197,7 +214,7 @@ scannerIngestRouter.post('/api/scanner-ingest/api/call-upload', async (c) => {
 
   // The aligned timestamp, in rdio's own unit (whole epoch seconds). The offset
   // is a whole second so this stays integral.
-  const alignedSecs = Math.floor((startedAt.getTime() + config.SCANNER_TIME_OFFSET_MS) / 1000);
+  const alignedSecs = alignedCallSeconds(startedAt);
 
   // -----------------------------------------------------------------------
   // Diagnostic: dump exactly what the sender put on the wire, before we touch
@@ -397,6 +414,17 @@ scannerIngestRouter.post('/api/scanner-ingest/api/call-transcript', async (c) =>
   if (!/^\d{4}-\d{2}-\d{2}T/.test(dateTime)) {
     return c.json({ error: 'invalid dateTime' }, 400);
   }
+  const sentAt = parseCallDateTime(dateTime);
+  if (!sentAt) return c.json({ error: 'invalid dateTime' }, 400);
+
+  // Shift the transcript's dateTime exactly as call-upload shifted the call's,
+  // so it names the instant central actually stored. With the offset at 0 the
+  // relay is verbatim passthrough on both routes, which is the only case the
+  // old "passed through UNCHANGED" comment was ever right about.
+  const relayedDateTime =
+    config.SCANNER_TIME_OFFSET_MS === 0
+      ? dateTime
+      : new Date(alignedCallSeconds(sentAt) * 1000).toISOString();
 
   const transcript = typeof body['transcript'] === 'string' ? body['transcript'] : '';
   if (!transcript.trim()) return c.json({ ok: true, forwarded: false, reason: 'empty' });
@@ -407,6 +435,8 @@ scannerIngestRouter.post('/api/scanner-ingest/api/call-transcript', async (c) =>
         system: body['system'],
         talkgroup: body['talkgroup'],
         dateTime,
+        relayedDateTime,
+        offsetMs: config.SCANNER_TIME_OFFSET_MS,
         chars: transcript.length,
       },
       'scanner ingest: transcript received',
@@ -425,14 +455,14 @@ scannerIngestRouter.post('/api/scanner-ingest/api/call-transcript', async (c) =>
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       signal: AbortSignal.timeout(config.RELAY_TIMEOUT_MS),
-      // dateTime is passed through UNCHANGED. Central matches the transcript to
-      // a stored call on (system, talkgroup, dateTime), and the call itself was
-      // relayed with the sender's own timestamp, so rewriting it here would
-      // orphan every transcript.
+      // dateTime carries the SAME shift call-upload applied. Central matches a
+      // transcript to a stored call on (system, talkgroup, dateTime) inside a
+      // 500ms window, so it has to name the instant central stored, not the
+      // instant the sender's clock read.
       body: JSON.stringify({
         system: body['system'],
         talkgroup: body['talkgroup'],
-        dateTime,
+        dateTime: relayedDateTime,
         transcript,
         key: internalKey,
       }),

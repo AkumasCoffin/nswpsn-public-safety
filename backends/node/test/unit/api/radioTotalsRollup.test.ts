@@ -93,19 +93,28 @@ describe('radioTotalsFromRollup', () => {
     expect(t!.not_recorded).toBeGreaterThanOrEqual(0);
   });
 
-  it('asks the rollup for whole hours and the detail for the live one', async () => {
+  it('splits the window where the rollup has actually got to, not at the hour', async () => {
+    // The seam used to be assumed to be the top of the current hour. The
+    // rollup job is not aligned to the clock, so between HH:00 and its next
+    // tick the hour that just closed was in NEITHER half and about an hour of
+    // traffic vanished from the tiles, returning when the tick landed.
     const { pool, query } = poolOf(ZERO, ZERO);
     await radioTotalsFromRollup(pool, '30d', [1], [2], false);
 
     const rollupSql = String(query.mock.calls[0]![0]);
     expect(rollupSql).toContain('node_radio_hourly_rx');
-    // Bucketed, so the edges are whole hours: everything up to the top of the
-    // current hour comes from the rollup...
-    expect(rollupSql).toContain("hour <  date_trunc('hour', now())");
-    // ...and the remainder from detail.
+    // The window still STARTS on a whole hour — a sliding edge would reshuffle
+    // the first bucket on every poll...
+    expect(rollupSql).toContain("hour >= date_trunc('hour', now()) - $1::interval");
+    // ...but it ends where rolled_up_to says it ends.
+    expect(rollupSql).toContain('rolled_up_to');
+    expect(rollupSql).toContain('FROM node_rollup_state');
+    // ...and detail picks up from exactly there, so the halves meet whatever
+    // the rollup has derived.
     const partialSql = String(query.mock.calls[1]![0]);
     expect(partialSql).toContain('node_radio_events');
-    expect(partialSql).toContain("received_at >= date_trunc('hour', now())");
+    expect(partialSql).toContain('received_at >= COALESCE(');
+    expect(partialSql).toContain('rolled_up_to');
     expect(query.mock.calls[0]![1]).toEqual(['30 days', [1], [2]]);
   });
 

@@ -21,6 +21,7 @@
  */
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { createHash } from 'node:crypto';
 import { log } from '../lib/log.js';
 import { requireRole, canManageNodes, canViewNodeData, isOwner } from '../services/auth/roles.js';
 import {
@@ -76,6 +77,37 @@ import { mintNodeToken, _clearNodeTokenCache } from '../services/auth/nodeToken.
 export const nodesRouter = new Hono();
 
 /**
+ * A fingerprint of the STORED config_override, for compare-and-set on PATCH.
+ *
+ * Not `nodes.config_version`: that is the version the AGENT last reported
+ * applying, it is null until a node has connected, and it lags a push — so it
+ * says nothing about whether the row a client edited is still the row in the
+ * table. This does.
+ *
+ * Plain JSON.stringify is enough, with no canonical key ordering, because both
+ * sides of every comparison are computed this way from the same jsonb column,
+ * and Postgres normalises jsonb key order on storage. It is never compared
+ * against a hash anybody else computed.
+ */
+function configOverrideVersion(override: unknown): string {
+  return createHash('sha256')
+    .update(JSON.stringify(override ?? {}))
+    .digest('hex')
+    .slice(0, 16);
+}
+
+/** Channel identities (name, or frequency when unnamed) in a config override. */
+function channelKeys(override: unknown): string[] {
+  const channels = (override as { channels?: unknown } | null | undefined)?.channels;
+  if (!Array.isArray(channels)) return [];
+  return channels.map((ch) => {
+    const c = ch as Record<string, unknown>;
+    const name = String(c['name'] ?? '').trim().toLowerCase();
+    return name || `hz:${String(c['frequency'] ?? '')}`;
+  });
+}
+
+/**
  * Map a DB NodeRow to a clean camelCase JSON shape, merging the live
  * hub status (online / last status frame / when it arrived) on top.
  */
@@ -94,6 +126,9 @@ function toApi(node: NodeRow, usernames?: Map<string, string>, surveying?: Map<s
     enabled: node.enabled,
     feedEnabled: node.feed_enabled,
     configOverride: node.config_override,
+    // Hand the client the version of the override it is about to edit, so a
+    // PATCH can prove which one it was built from. See configOverrideVersion.
+    configOverrideVersion: configOverrideVersion(node.config_override),
     configVersion: node.config_version,
     agentVersion: node.agent_version,
     sdrtrunkVersion: node.sdrtrunk_version,
@@ -148,6 +183,13 @@ const PatchSchema = z.object({
   // Validated against the same schema configMerge consumes so staff can't
   // persist an override that would later break the config build.
   config_override: ConfigOverrideSchema.optional(),
+  /**
+   * The `configOverrideVersion` the client read before editing. Optional, and
+   * when sent the write is a compare-and-set: a 409 rather than a blind
+   * replace if the stored override moved underneath the editor. See the PATCH
+   * handler for what moves it.
+   */
+  config_override_version: z.string().max(64).optional(),
   notes: z.string().max(4000).optional(),
 });
 
@@ -455,12 +497,65 @@ nodesRouter.patch('/api/nodes/:id', requireRole(canManageNodes), async (c) => {
     if (!parsed.success) {
       return c.json({ error: 'invalid body', details: parsed.error.issues }, 400);
     }
+    const { config_override_version: sentVersion, ...rest } = parsed.data;
     const patch: NodePatch = {
-      ...parsed.data,
+      ...rest,
       config_override: parsed.data.config_override as
         | Record<string, unknown>
         | undefined,
     };
+
+    // A config_override PATCH is a whole-document replace, and the document
+    // can move underneath the editor: appendWinnerChannels adds a site
+    // survey's winning channels server-side, under FOR UPDATE, while the
+    // drawer that started the survey stays open for the 45 minutes it runs.
+    // The next tuner tweak or channel save from that drawer then PATCHes the
+    // PRE-survey channel list back, pushConfigToNode stops those channels on
+    // the node, and staff are told "Config saved" while the survey record
+    // still says N added.
+    //
+    // So a client may prove which version it edited, and a mismatch is a 409
+    // carrying the current document to rebuild from. The check is a read then
+    // a write rather than one statement, because the comparison is a hash SQL
+    // cannot compute; the window that leaves is the milliseconds between two
+    // queries, against the window it closes, which is tens of minutes.
+    //
+    // A PATCH that sends no version is still accepted — the staff drawer does
+    // not send one yet — but what it would discard is logged, so the loss
+    // stops being invisible.
+    if (patch.config_override !== undefined) {
+      const stored = await getNode(id);
+      if (!stored) return c.json({ error: 'node not found' }, 404);
+      const storedVersion = configOverrideVersion(stored.config_override);
+      if (sentVersion !== undefined && sentVersion !== storedVersion) {
+        log.warn(
+          { id, sent: sentVersion, stored: storedVersion },
+          'node PATCH rejected: config_override changed since the client read it',
+        );
+        return c.json(
+          {
+            error: 'config_changed',
+            message:
+              "This node's configuration changed since you loaded it — a site survey " +
+              'may have added channels. Reload the node and apply your change again.',
+            configOverride: stored.config_override,
+            configOverrideVersion: storedVersion,
+          },
+          409,
+        );
+      }
+      if (sentVersion === undefined) {
+        const incoming = new Set(channelKeys(patch.config_override));
+        const dropped = channelKeys(stored.config_override).filter((k) => !incoming.has(k));
+        if (dropped.length > 0) {
+          log.warn(
+            { id, dropped, version: storedVersion },
+            'node PATCH drops stored channels and carried no config_override_version',
+          );
+        }
+      }
+    }
+
     const updated = await updateNode(id, patch);
     if (!updated) return c.json({ error: 'node not found' }, 404);
     // enabled (capture on/off), feed_enabled (upload on/off), and config_override

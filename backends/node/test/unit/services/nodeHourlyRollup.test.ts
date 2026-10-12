@@ -132,6 +132,49 @@ describe('rollupNodeHourlyOnce', () => {
     }
   });
 
+  it('reads detail from before the range, so a call straddling its lower edge is filed once', async () => {
+    // Bucketing by the call's first event is only half the answer. Each hour
+    // gets its FINAL derivation in the pass where it is the lowest hour in the
+    // range, and a scan starting at that boundary cannot see the receptions a
+    // call had in the hour before it. Its earliest VISIBLE event then sits in
+    // the boundary hour and the call is filed there too — while the previous
+    // pass, which could see the whole call, had already filed it in the hour
+    // before. Both rows survive, because each pass only DELETEs its own range.
+    armCursor('2026-08-24T10:00:00.000Z');
+    await rollupNodeHourlyOnce(new Date('2026-08-24T11:30:00.000Z'));
+
+    for (const table of [
+      'INSERT INTO node_radio_hourly\n',
+      'INSERT INTO node_radio_hourly_sys',
+      'INSERT INTO node_radio_hourly_rx',
+      'INSERT INTO node_radio_hourly_unit',
+    ]) {
+      const sql = ran(table)[0] ?? '';
+      // The scan reaches an hour behind the range, so the call's true first
+      // event is always in it.
+      expect(sql).toContain("received_at >= $1::timestamptz - interval '1 hour'");
+      // And the CALL's hour, not the scan window, decides which pass files it.
+      expect(sql).toMatch(/(\w+)\.hour >= \$1::timestamptz AND \1\.hour < \$2::timestamptz/);
+      // Inner joins, so the filter really does drop a call this pass does not
+      // own rather than leaving it with a null hour.
+      expect(sql).toMatch(/\bJOIN (ch|tx t) USING \(logical_call_id\)/);
+      expect(sql).not.toContain('LEFT JOIN ch');
+    }
+
+    // The DELETE range is untouched: widening it would erase an hour this pass
+    // no longer rebuilds.
+    for (const del of [
+      'DELETE FROM node_radio_hourly ',
+      'DELETE FROM node_radio_hourly_sys',
+      'DELETE FROM node_radio_hourly_rx',
+      'DELETE FROM node_radio_hourly_unit',
+    ]) {
+      expect(ran(del)[0] ?? '').toContain(
+        'hour >= $1::timestamptz AND hour < $2::timestamptz',
+      );
+    }
+  });
+
   it('counts a radio the way the card does, and keeps its alias', async () => {
     armCursor('2026-08-24T10:00:00.000Z');
     await rollupNodeHourlyOnce(new Date('2026-08-24T11:30:00.000Z'));
@@ -161,6 +204,23 @@ describe('rollupNodeHourlyOnce', () => {
     // talkgroup but the lowest would read zero.
     expect(sys).toContain('PARTITION BY r.hour, r.logical_call_id, r.system, r.talkgroup');
     expect(sys).toContain('(COUNT(*) FILTER (WHERE a.rn_tg = 1))::int');
+  });
+
+  it('attributes a THIRD time per site, so the systems tree can count one', async () => {
+    armCursor('2026-08-24T10:00:00.000Z');
+    await rollupNodeHourlyOnce(new Date('2026-08-24T11:30:00.000Z'));
+
+    const sys = ran('INSERT INTO node_radio_hourly_sys')[0] ?? '';
+    // "How many calls did THIS SITE hear" is a question neither of the other
+    // two answers: the fleet-wide attribution credits a simulcast call to the
+    // lowest site only, and the talkgroup one counts a patched call once per
+    // talkgroup. Summed over a site's rows this equals COUNT(DISTINCT call)
+    // per site in the detail table, which is what the drill-down shows.
+    expect(sys).toContain(
+      'PARTITION BY r.hour, r.logical_call_id, r.system, r.rfss, r.site',
+    );
+    expect(sys).toContain('(COUNT(*) FILTER (WHERE a.rn_site = 1))::int');
+    expect(sys).toContain('logical_calls_tg, logical_calls_site');
   });
 
   it('attributes each call to ONE row, so the site rows still sum correctly', async () => {

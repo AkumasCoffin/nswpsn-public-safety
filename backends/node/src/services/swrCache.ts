@@ -21,6 +21,10 @@ import { log } from '../lib/log.js';
 interface CacheEntry<T> {
   value: T;
   storedAt: number;
+  /** The caller's own stale window, from the get/refresh that stored this
+   *  value. An entry is only aged out once BOTH this and the cache's own age
+   *  bound have passed — see MAX_ENTRY_AGE_MS. */
+  staleMs: number;
 }
 
 export interface SwrOptions<T> {
@@ -50,8 +54,14 @@ const DEFAULT_MAX_ENTRIES = 500;
  * bound turns "bounded by entry count" into "bounded by recent traffic", which
  * is what the cap was meant to express.
  *
- * Well past any caller's `stale` window (minutes), so this only ever collects
- * entries that are dead to SWR anyway.
+ * It is a FLOOR, not a ceiling. It was applied as the latter, so every caller
+ * whose own windows were longer than it — the Planespotters photo cache at 24h
+ * fresh / 7d stale, the AnyTrip shape, line and stop caches — lost its entries
+ * after 15 minutes: no fresh hit, no stale fallback, a blocking upstream fetch
+ * every quarter hour against a rate-limited API, and a thrown error where the
+ * design promised the week-old value. An entry now survives until both this
+ * and its own stale deadline have passed, so this only ever collects entries
+ * that are already dead to SWR, which is what it was always meant to say.
  */
 const MAX_ENTRY_AGE_MS = 15 * 60_000;
 
@@ -68,12 +78,16 @@ export class SwrCache<T> {
     this.maxAgeMs = Math.max(1000, maxAgeMs);
   }
 
-  /** Drop entries older than maxAgeMs. Cheap: Map is in write order, so this
-   *  stops at the first entry still within the window. */
+  /** Drop entries past both the cache's age bound and their own stale window.
+   *  Walks the whole map rather than stopping at the first survivor: with a
+   *  per-entry deadline the Map's write order no longer implies deadline
+   *  order, so an early exit would strand dead entries behind a long-lived
+   *  one. Bounded by maxEntries, so it is a few hundred iterations at worst. */
   private evictAged(now: number): void {
     for (const [key, entry] of this.entries) {
-      if (now - entry.storedAt <= this.maxAgeMs) break;
-      this.entries.delete(key);
+      if (now - entry.storedAt > Math.max(this.maxAgeMs, entry.staleMs)) {
+        this.entries.delete(key);
+      }
     }
   }
 
@@ -138,7 +152,7 @@ export class SwrCache<T> {
         // least-recently-written key, then store.
         this.entries.delete(key);
         const storedAt = Date.now();
-        this.entries.set(key, { value: v, storedAt });
+        this.entries.set(key, { value: v, storedAt, staleMs: Math.max(0, opts.stale) });
         // Age first, then the count cap as a backstop for a burst.
         this.evictAged(storedAt);
         while (this.entries.size > this.maxEntries) {

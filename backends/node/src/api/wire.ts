@@ -42,7 +42,10 @@ import {
   deleteCfImage,
   r2Configured,
   createVideoUploadUrl,
-  deleteR2Object,
+  deleteUnreferencedR2Object,
+  r2KeysInUse,
+  R2_IMAGE_PREFIX,
+  R2_VIDEO_PREFIX,
   r2PublicUrl,
   avatarUrl,
   ogImageUrl,
@@ -205,6 +208,9 @@ interface MediaItem {
   width: number | null;
   height: number | null;
   bytes: number | null;
+  /** Set only by carryProcessedMedia, for an item the post already had: the
+   *  processing state to keep rather than deriving a fresh one. */
+  process_state?: string | null;
 }
 
 /** Validate + normalise the media array. Returns items in display order plus
@@ -260,6 +266,73 @@ function validateMedia(raw: unknown, cfg: EntityCfg): { items: MediaItem[]; unit
   return { items, units };
 }
 
+/**
+ * Carry across what the composer doesn't send back on an edit.
+ *
+ * A PUT replaces a post's wire_media rows wholesale, so everything the server
+ * derived rather than received was being thrown away: a video that had already
+ * been through ffmpeg went back to 'pending' and was re-encoded (another
+ * generation of quality, another burned-in watermark) on every typo fix, and
+ * its poster, width, height and duration vanished with it — permanently if
+ * ffmpeg wasn't available to cut a new one.
+ *
+ * Matched on r2_key, which IS the identity of a stored object: the same key
+ * means the same media, whatever else the body changed around it. A clip still
+ * mid-transcode goes back in as 'pending' rather than 'processing' — the worker
+ * that holds it will find its row gone and discard its output (see
+ * services/videoProcessor.ts), so the queue has to pick the clip up again.
+ */
+function carryProcessedMedia(items: MediaItem[], existing: readonly WireMediaRow[]): void {
+  const byKey = new Map<string, WireMediaRow>();
+  for (const row of existing) if (row.r2_key) byKey.set(row.r2_key, row);
+  for (const m of items) {
+    const was = m.r2_key ? byKey.get(m.r2_key) : undefined;
+    if (!was) continue;
+    m.process_state = was.process_state === 'processing' ? 'pending' : (was.process_state ?? null);
+    m.poster_r2_key = m.poster_r2_key ?? was.poster_r2_key;
+    m.poster_cf_image_id = m.poster_cf_image_id ?? was.poster_cf_image_id;
+    m.width = m.width ?? was.width;
+    m.height = m.height ?? was.height;
+    m.duration_seconds = m.duration_seconds ?? was.duration_seconds;
+    m.hash = m.hash ?? was.hash ?? null;
+  }
+}
+
+/**
+ * Vet the storage keys a post is ADDING.
+ *
+ * Keys come off the request body, and every published object's key is readable
+ * from its public URL — so without this an author could attach someone else's
+ * photo, video, avatar or watermark to a post of their own, and dropping it
+ * again in a later edit would delete that object out of the shared bucket. A
+ * new key has to be one of our own presigned paths with nothing else pointing
+ * at it; keys the post already has are left alone so old posts stay editable.
+ */
+async function rejectForeignMedia(
+  pool: Pool,
+  items: MediaItem[],
+  had: readonly string[],
+  ownerId: string,
+): Promise<string | null> {
+  const existing = new Set(had);
+  const added: string[] = [];
+  for (const m of items) {
+    const checks: Array<[string | null, string]> = [
+      [m.r2_key, m.kind === 'video' ? R2_VIDEO_PREFIX : R2_IMAGE_PREFIX],
+      // A poster is an image whichever kind of item it belongs to.
+      [m.poster_r2_key, R2_IMAGE_PREFIX],
+    ];
+    for (const [key, prefix] of checks) {
+      if (!key || existing.has(key)) continue;
+      if (!key.startsWith(prefix)) return 'that file was not uploaded through this page';
+      added.push(key);
+    }
+  }
+  if (added.length === 0) return null;
+  const taken = await r2KeysInUse(pool, added, ownerId);
+  return taken.length > 0 ? 'one of those files belongs to someone else' : null;
+}
+
 async function insertMediaRows(client: PoolClient, cfg: EntityCfg, parentId: string, items: MediaItem[]): Promise<void> {
   for (let i = 0; i < items.length; i++) {
     const m = items[i]!;
@@ -273,7 +346,10 @@ async function insertMediaRows(client: PoolClient, cfg: EntityCfg, parentId: str
         // Videos queue for the ffmpeg pass (watermark + bitrate normalisation +
         // metadata strip + poster). Images are already optimised client-side,
         // and if ffmpeg isn't available the clip is simply served as uploaded.
-        m.kind === 'video' && ffmpegAvailable() ? 'pending' : null],
+        // An item the post already had keeps the state it had reached.
+        m.process_state !== undefined
+          ? m.process_state
+          : m.kind === 'video' && ffmpegAvailable() ? 'pending' : null],
     );
   }
 }
@@ -598,12 +674,6 @@ async function editCountFor(pool: Pool, parentType: string, parentId: string): P
   }
 }
 
-/** Storage identities of a post's current attachments, for the edit diff. */
-async function mediaKeysFor(pool: Pool, parentType: string, parentId: string): Promise<string[]> {
-  const map = await fetchMediaFor(pool, parentType, [parentId]);
-  return (map.get(parentId) ?? []).map(mediaKeyOf).filter(Boolean);
-}
-
 function deriveUnits(media: WireMediaRow[]): string[] {
   return [...new Set(media.map((m) => m.unit).filter((u): u is string => !!u))];
 }
@@ -841,8 +911,10 @@ const listArticlesHandler = async (c: any) => {
     const vals: unknown[] = [];
     const where: string[] = [];
     // ?deleted=1 (with mine) lists the author's posts awaiting purge — the
-    // profile's Pending-deletion area. Everything else excludes them.
-    const wantDeleted = mine && url.searchParams.get('deleted') === '1';
+    // profile's Pending-deletion area. Everything else excludes them. It needs
+    // the uid: without one the request falls through to the public branch,
+    // which would then have listed every author's soft-deleted posts.
+    const wantDeleted = mine && !!uid && url.searchParams.get('deleted') === '1';
     where.push(wantDeleted ? 'a.deleted_at IS NOT NULL' : 'a.deleted_at IS NULL');
     if (mine && uid) {
       // Author's own posts — including pending/rejected/draft — but NOT content
@@ -1048,6 +1120,8 @@ wireRouter.post('/api/wire/articles', requireRole(canFeedMedia), async (c) => {
     if (wantPublish && !loc.region) return c.json({ error: 'a location (state and LGA) is required' }, 400);
     const mv = validateMedia(data['media'], ARTICLE);
     if ('error' in mv) return c.json({ error: mv.error }, 400);
+    const badMedia = await rejectForeignMedia(pool, mv.items, [], authorId);
+    if (badMedia) return c.json({ error: badMedia }, 400);
     if (await findDuplicateImageHash(pool, mv.items, null)) {
       return c.json({ error: DUPLICATE_IMAGE_MSG, code: 'duplicate_image' }, 409);
     }
@@ -1132,12 +1206,21 @@ wireRouter.put('/api/wire/articles/:id', async (c) => {
     if (!title) return c.json({ error: 'title is required' }, 400);
     const excerpt = typeof data['excerpt'] === 'string' ? data['excerpt'].slice(0, 600) : '';
     const body = typeof data['body'] === 'string' ? data['body'].slice(0, 100_000) : '';
-    // Pre-moderation: a moderator's "publish" goes live; a contributor's
-    // "publish" becomes 'pending' review (unless the article is already public,
-    // in which case their edits stay live). Drafts stay drafts.
+    // Pre-moderation, by the SAME rule as create: approval switched off, or a
+    // moderator publishing, goes live; a contributor's "publish" becomes
+    // 'pending' review (unless the article is already public, in which case
+    // their edits stay live). Drafts stay drafts.
+    //
+    // This used to look at isAdmin alone, which meant the common path — save a
+    // draft, publish it later — ignored both the wire_approval_required toggle
+    // and wire:manager, so posts queued for review that nothing required.
     let status: string;
-    if (data['status'] === 'published') status = isAdmin ? 'published' : (prev.status === 'published' ? 'published' : 'pending');
-    else status = 'draft';
+    if (data['status'] === 'published') {
+      const publishesDirectly = isAdmin
+        || !(await wireApprovalRequired(pool))
+        || (await canModerateWire(uid));
+      status = publishesDirectly || prev.status === 'published' ? 'published' : 'pending';
+    } else status = 'draft';
     // A soft-removed article can't be re-published by its author — only a
     // moderator (canModerateWire ⊇ canManageUsers) may restore it.
     if (prev.status === 'removed' && !isAdmin) status = 'removed';
@@ -1155,6 +1238,17 @@ wireRouter.put('/api/wire/articles/:id', async (c) => {
     if (data['status'] === 'published' && !loc.region) return c.json({ error: 'a location (state and LGA) is required' }, 400);
     const mv = validateMedia(data['media'], ARTICLE);
     if ('error' in mv) return c.json({ error: mv.error }, 400);
+    // The rows about to be replaced: what the post may keep without proving
+    // ownership again, and what the composer doesn't send back but must not
+    // lose. One read, used for both and for the cleanup diff below.
+    const oldMedia = (await fetchMediaFor(pool, 'article', [id])).get(id) ?? [];
+    // Ownership follows the article's author: an admin editing someone's post
+    // re-sends that author's keys, which are theirs, not the admin's.
+    const badMedia = await rejectForeignMedia(
+      pool, mv.items, oldMedia.flatMap((m) => [m.r2_key, m.poster_r2_key]).filter(Boolean) as string[],
+      prev.author_id);
+    if (badMedia) return c.json({ error: badMedia }, 400);
+    carryProcessedMedia(mv.items, oldMedia);
     if (await findDuplicateImageHash(pool, mv.items, id)) {
       return c.json({ error: DUPLICATE_IMAGE_MSG, code: 'duplicate_image' }, 409);
     }
@@ -1166,8 +1260,10 @@ wireRouter.put('/api/wire/articles/:id', async (c) => {
     const setPublished = status === 'published' && !prev.published_at ? ', published_at = now()' : '';
     const affirmSet = data['rights_affirmed'] === true ? ', rights_affirmed = true' : '';
 
-    const oldImageIds = await imageIdsFor(pool, 'article', id);
-    const oldR2Keys = await r2KeysFor(pool, 'article', id);
+    const oldImageIds = oldMedia
+      .flatMap((m) => [m.cf_image_id, m.poster_cf_image_id]).filter(Boolean) as string[];
+    const oldR2Keys = oldMedia
+      .flatMap((m) => [m.r2_key, m.poster_r2_key]).filter(Boolean) as string[];
     // Snapshot BEFORE the update — cheap, and only used when the post is public.
     const beforeSnap: EditSnapshot = prev.status === 'published' ? {
       title: prev.title, excerpt: prev.excerpt, body: prev.body,
@@ -1177,7 +1273,7 @@ wireRouter.put('/api/wire/articles/:id', async (c) => {
       watermark: prev.watermark === true,
       coAuthors: Array.isArray(prev.co_authors) ? prev.co_authors : [],
       parentArticleId: prev.parent_article_id,
-      mediaKeys: await mediaKeysFor(pool, 'article', id),
+      mediaKeys: oldMedia.map(mediaKeyOf).filter(Boolean),
     } : {};
     const client = await pool.connect();
     try {
@@ -1214,7 +1310,24 @@ wireRouter.put('/api/wire/articles/:id', async (c) => {
     const keptIds = new Set(mv.items.flatMap((m) => [m.cf_image_id, m.poster_cf_image_id]).filter(Boolean) as string[]);
     for (const old of oldImageIds) if (!keptIds.has(old)) await deleteCfImage(old);
     const keptKeys = new Set(mv.items.flatMap((m) => [m.r2_key, m.poster_r2_key]).filter(Boolean) as string[]);
-    for (const old of oldR2Keys) if (!keptKeys.has(old)) await safeDeleteR2(pool, old);
+    for (const old of oldR2Keys) if (!keptKeys.has(old)) await deleteUnreferencedR2Object(pool, old);
+    // A submission for review has to announce itself, exactly as a create
+    // does. Without this, publishing a saved draft (the usual way a post goes
+    // out) sat in the queue until somebody happened to open the staff page.
+    if (status === 'pending' && prev.status !== 'pending') {
+      notifyStaff(pool, {
+        kind: 'wire_approval',
+        event: 'new',
+        ref: `article:${id}`,
+        title: title || 'Untitled article',
+        subtitle: 'Article awaiting approval',
+        fields: [
+          { name: 'Author', value: currentUserName(c) },
+          { name: 'Slug', value: slug },
+          { name: 'Units', value: (mv.units || []).join(', ') },
+        ],
+      });
+    }
     return c.json({ success: true, slug });
   } catch (err) {
     log.error({ err, id }, 'wire: update article failed');
@@ -1458,14 +1571,6 @@ async function imageIdsFor(pool: Pool, parentType: string, parentId: string): Pr
   return ids;
 }
 
-/** Delete an R2 object only if no wire_media row still references it — dedup can
- * share one object across posts. Call AFTER the owning rows are deleted. */
-async function safeDeleteR2(pool: Pool, key: string): Promise<void> {
-  if (!key) return;
-  const r = await pool.query('SELECT 1 FROM wire_media WHERE r2_key = $1 OR poster_r2_key = $1 LIMIT 1', [key]);
-  if (r.rowCount === 0) await deleteR2Object(key);
-}
-
 async function r2KeysFor(pool: Pool, parentType: string, parentId: string): Promise<string[]> {
   const r = await pool.query<{ r2_key: string | null; poster_r2_key: string | null }>(
     'SELECT r2_key, poster_r2_key FROM wire_media WHERE parent_type=$1 AND parent_id=$2',
@@ -1632,7 +1737,7 @@ wireRouter.post('/api/wire/takedowns/:id/uphold', requireRole(canModerateWire), 
       const r2keys = await r2KeysFor(pool, row.target_type, row.target_id);
       await pool.query('DELETE FROM wire_media WHERE parent_type=$1 AND parent_id=$2', [row.target_type, row.target_id]);
       for (const iid of imgIds) await deleteCfImage(iid);
-      for (const k of r2keys) await safeDeleteR2(pool, k);
+      for (const k of r2keys) await deleteUnreferencedR2Object(pool, k);
     } catch (e) {
       log.warn({ e, id }, 'wire: takedown media purge failed (bytes may remain)');
     }

@@ -155,3 +155,39 @@ describe('prewarmAll', () => {
     expect(heldSource.fetch).toHaveBeenCalledOnce();
   });
 });
+
+/**
+ * The gridded weather sources are tile metadata, not incidents. Their
+ * snapshot is a WeatherManifest — timestep axes, variable lists, tile paths —
+ * which is neither a FeatureCollection nor an array, so defaultArchiveItems
+ * wrote the whole manifest as ONE row with no source_id on every poll, with
+ * nothing to dedup against: ~430 multi-KB rows a day showing up in history
+ * and the facet rollups as bogus weather_* sources with no title or position.
+ */
+describe('archive skip list', () => {
+  const manifest = { generatedAt: 1, timesteps: ['t0', 't1'], vars: ['temp'] };
+  const weatherSource = (name: string) => ({
+    name,
+    family: 'misc' as const,
+    intervalMs: 60_000,
+    fetch: vi.fn(async () => manifest),
+  });
+
+  it('serves the weather manifests live but never archives them', async () => {
+    activeSources = [
+      weatherSource('weather_grid'),
+      weatherSource('weather_marine'),
+      weatherSource('weather_flood'),
+      weatherSource('weather_air'),
+    ];
+    await prewarmAll(2_000);
+    expect(liveStoreSet).toHaveBeenCalledTimes(4);
+    expect(archiveWriterPush).not.toHaveBeenCalled();
+  });
+
+  it('still archives a source that is not on the list', async () => {
+    activeSources = [okSource];
+    await prewarmAll(2_000);
+    expect(archiveWriterPush).toHaveBeenCalled();
+  });
+});
