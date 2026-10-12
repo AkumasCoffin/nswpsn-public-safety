@@ -53,9 +53,15 @@ describe('rollupNodeHourlyOnce', () => {
     await rollupNodeHourlyOnce(new Date('2026-08-24T11:30:00.000Z'));
 
     // The upper bound is the top of the current hour, never 11:30: an hour
-    // summarised while still running would need summarising again.
-    const p = paramsOf('INSERT INTO node_radio_hourly\n');
-    expect(p[1]).toBe('2026-08-24T11:00:00.000Z');
+    // summarised while still running would need summarising again. Asserted
+    // across every batch, because the re-derive window is now covered in
+    // several of them and it is the LAST one that reaches the boundary.
+    const uppers = clientQuery.mock.calls
+      .filter((c) => String(c[0]).includes('INSERT INTO node_radio_hourly\n'))
+      .map((c) => String((c[1] as unknown[])[1]));
+    expect(uppers.length).toBeGreaterThan(0);
+    expect(uppers.at(-1)).toBe('2026-08-24T11:00:00.000Z');
+    for (const u of uppers) expect(u <= '2026-08-24T11:00:00.000Z').toBe(true);
   });
 
   it('re-derives the recent past, not just the hours it has never seen', async () => {
@@ -261,13 +267,34 @@ describe('rollupNodeHourlyOnce', () => {
     expect(commit).toBeGreaterThan(state);
   });
 
-  it('batches a cold start rather than rebuilding a month in one transaction', async () => {
+  it('batches a cold start, and stops before it monopolises the database', async () => {
     armCursor(null); // never run
     const hours = await rollupNodeHourlyOnce(new Date('2026-08-24T11:30:00.000Z'));
 
-    expect(hours).toBe(24 * 31);
-    // 31 days at 24h per batch — one COMMIT each, not one giant transaction.
-    expect(sqls().filter((s) => s === 'COMMIT')).toHaveLength(31);
+    // A month of catch-up is covered a few batches per tick, each its own
+    // transaction — 8 batches of 6 hours. The old loop ran until it caught up,
+    // which against a slow database meant one tick holding a writer connection
+    // for hours; and at 24 hours a batch not one of them could finish inside
+    // the writer pool's statement timeout, so the first failed and the cursor
+    // never moved at all.
+    expect(hours).toBe(48);
+    expect(sqls().filter((s) => s === 'COMMIT')).toHaveLength(8);
+    // Each batch raises the timeout for its own transaction only.
+    expect(ran('SET LOCAL statement_timeout')).toHaveLength(8);
+  });
+
+  it('resumes from where the previous tick stopped', async () => {
+    // The cursor the first tick committed is where the next one picks up, so
+    // capping the work per tick delays the rebuild without losing any of it.
+    armCursor('2026-08-24T00:00:00.000Z');
+    await rollupNodeHourlyOnce(new Date('2026-08-24T11:30:00.000Z'));
+    // The FIRST commit can sit at or behind the armed cursor — a pass re-derives
+    // the recent past before it moves on — so the one that matters is the last.
+    const committed = clientQuery.mock.calls
+      .filter((c) => String(c[0]).includes('UPDATE node_rollup_state'))
+      .map((c) => String((c[1] as unknown[])[0]));
+    expect(committed.length).toBeGreaterThan(1);
+    expect(committed.at(-1)).toBe('2026-08-24T11:00:00.000Z');
   });
 
   it('never throws, and releases the connection, when the rebuild fails', async () => {

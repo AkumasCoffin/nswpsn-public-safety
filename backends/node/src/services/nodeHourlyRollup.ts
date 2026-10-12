@@ -42,11 +42,43 @@ const ROLLUP_INTERVAL_MS = 60 * 60_000; // hourly
 const MAX_BACKFILL_HOURS = 24 * 31;
 
 /**
- * Hours per statement. One hour is ~6k detail rows here; batching keeps each
- * transaction short so a cold-start backfill of ~750 hours cannot hold a long
- * write lock or bloat a single transaction.
+ * Hours per statement.
+ *
+ * This was 24, which is fine for the steady hourly tick (it only ever covers
+ * the lookback plus the hour just closed) but not for a catch-up, where every
+ * batch is a full slice of the detail table through three window functions.
+ * On the Postgres VM as it stands a plain indexed COUNT over one day of detail
+ * — about 184k rows — takes ~35s, so a 24-hour batch could not finish inside
+ * the writer pool's 60s statement_timeout and the first one failed every pass:
+ * the cursor never moved and a month of history stayed unbuilt. Six hours is
+ * small enough to finish comfortably, and only a catch-up pays for the extra
+ * round trips.
  */
-const BATCH_HOURS = 24;
+const BATCH_HOURS = 6;
+
+/**
+ * How long one batch's statements may run, overriding the writer pool's 60s
+ * default for this transaction only.
+ *
+ * A rollup batch is a background re-derive, not a request: it is allowed to be
+ * slow, and the alternative is the silent stall described above. Bounded rather
+ * than disabled so a pathological plan still gives up instead of holding a
+ * connection all day. Precedent: cleanup.ts and indexBuilder.ts do the same for
+ * their own long statements.
+ */
+const BATCH_STATEMENT_TIMEOUT_MS = 300_000;
+
+/**
+ * Batches one tick will run before leaving the rest to the next one.
+ *
+ * The loop used to run until it caught up, which after a cursor rewind meant a
+ * single tick holding a writer connection against a slow database for hours,
+ * competing with live ingest. Each batch commits its own cursor advance, so
+ * stopping early loses nothing: the next tick resumes where this one stopped.
+ * At 6 hours a batch this is two days of history per tick, so even a month-long
+ * rebuild is done inside a day without ever monopolising the database.
+ */
+const MAX_BATCHES_PER_TICK = 8;
 
 /**
  * How far back each pass re-derives, on top of the hours it has never seen.
@@ -145,6 +177,9 @@ async function rollupRange(
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    // Transaction-scoped, so it needs no RESET and cannot leak to the next
+    // user of this pooled connection. See BATCH_STATEMENT_TIMEOUT_MS.
+    await client.query(`SET LOCAL statement_timeout = ${BATCH_STATEMENT_TIMEOUT_MS}`);
 
     // Per-node volume. `calls` is that node's receptions; `logical_calls` is
     // the distinct calls THAT NODE heard.
@@ -473,16 +508,24 @@ export async function rollupNodeHourlyOnce(now: Date = new Date()): Promise<numb
     }
 
     let hours = 0;
-    while (cursor < upTo) {
+    let batches = 0;
+    while (cursor < upTo && batches < MAX_BATCHES_PER_TICK) {
       const next = new Date(
         Math.min(cursor.getTime() + BATCH_HOURS * 3_600_000, upTo.getTime()),
       );
       await rollupRange(pool, cursor, next);
       hours += Math.round((next.getTime() - cursor.getTime()) / 3_600_000);
       cursor = next;
+      batches += 1;
     }
+    const behindHours = Math.max(0, Math.round((upTo.getTime() - cursor.getTime()) / 3_600_000));
     if (hours > 0) {
-      log.info({ hours, upTo: upTo.toISOString() }, 'node hourly rollup: rebuilt');
+      log.info(
+        { hours, batches, behindHours, upTo: upTo.toISOString() },
+        behindHours > 0
+          ? 'node hourly rollup: rebuilt a batch, more to go'
+          : 'node hourly rollup: rebuilt',
+      );
     }
     return hours;
   } catch (err) {
