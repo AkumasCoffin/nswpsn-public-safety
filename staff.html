@@ -96,10 +96,14 @@
       top: 0;
       z-index: 50;
       display: flex;
-      justify-content: space-between;
+      flex-wrap: wrap;
       align-items: center;
-      gap: 1rem;
-      margin: 0 -2rem 1.75rem;
+      gap: 0.75rem 1.25rem;
+      /* Bleeds into the container's side padding, but never past it. That
+         padding is clamp(1rem, 3vw, 3rem), so a flat -2rem overshot it between
+         ~769px and ~1,066px (where 3vw < 2rem) and the page scrolled sideways
+         by a few pixels. min() is -2rem above that range, exactly as before. */
+      margin: 0 calc(-1 * min(2rem, 3vw)) 1.75rem;
       padding: 1rem 2rem;
       background: rgba(6, 10, 21, 0.82);
       backdrop-filter: blur(10px);
@@ -123,26 +127,78 @@
 
     .header h1 span { color: var(--brand); }
 
-    .role-chip {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.4rem;
-      padding: 0.3rem 0.7rem;
-      border-radius: 999px;
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid var(--border-subtle);
-      color: var(--text-soft);
-      font-size: 0.75rem;
-      font-weight: 500;
-      white-space: nowrap;
-    }
-
     .header-actions {
       display: flex;
       gap: 0.6rem;
       align-items: center;
       flex-shrink: 0;
+      margin-left: auto;         /* pinned right, whether or not the tabs share the row */
     }
+    /* Not enough room for title, tabs and actions on one row (staffFitHeader
+       decides by measuring): title and actions keep the top row, and the tab
+       bar — last in this order — wraps onto a row of its own beneath them. */
+    .header.header--stacked .header-title { order: 1; }
+    .header.header--stacked .header-actions { order: 2; }
+    .header.header--stacked .tab-nav { order: 3; }
+
+    /* === Account menu ==================================================
+       The main site's sidebar avatar control (auth-common.js), rebuilt here
+       because this page cannot load that file: both declare a top-level `sb`
+       and their own doLogout(), which collide across classic scripts. Same
+       look and the same three entries, so the two read as one control. */
+    .acct { position: relative; display: inline-flex; }
+    .acct-btn { padding: 0; background: none; border: 0; border-radius: 50%; cursor: pointer; flex-shrink: 0; }
+    .acct-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .acct-avatar {
+      width: 40px; height: 40px;
+      border-radius: 50%;
+      display: grid; place-items: center;
+      overflow: hidden;
+      background: rgba(249, 115, 22, 0.2);
+      color: var(--brand);
+      font-weight: 700; font-size: 1rem;
+      border: 2px solid rgba(148, 163, 184, 0.25);
+      transition: border-color 0.15s;
+    }
+    .acct-btn:hover .acct-avatar,
+    .acct-btn[aria-expanded="true"] .acct-avatar { border-color: var(--accent-border); }
+    .acct-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .acct-menu {
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 0;
+      z-index: 60;
+      min-width: 230px;
+      padding: 0.35rem;
+      background: #1e293b;
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      border-radius: 10px;
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+    }
+    .acct-who {
+      padding: 0.45rem 0.7rem 0.55rem;
+      margin-bottom: 0.3rem;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+      font-size: 0.78rem;
+      color: var(--text-soft);
+      max-width: 280px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .acct-who strong { color: var(--text-primary); font-weight: 600; }
+    .acct-item {
+      display: flex; align-items: center; gap: 0.6rem;
+      width: 100%;
+      padding: 0.55rem 0.7rem;
+      background: none; border: 0; border-radius: 7px;
+      color: #e2e8f0;
+      font-family: inherit; font-size: 0.83rem;
+      text-align: left; text-decoration: none;
+      cursor: pointer;
+    }
+    .acct-item i { width: 16px; text-align: center; color: #94a3b8; }
+    .acct-item:hover, .acct-item:focus-visible { background: rgba(148, 163, 184, 0.1); outline: none; }
+    .acct-item.danger, .acct-item.danger i { color: #fca5a5; }
+    .acct-item.danger:hover, .acct-item.danger:focus-visible { background: rgba(239, 68, 68, 0.12); }
 
     /* === Buttons — slate base, sky interactive, semantic tints ======== */
     .btn {
@@ -1900,10 +1956,11 @@
     }
 
     /* === Tabs — segmented pill nav ==================================== */
+    /* Lives inside the sticky header bar (see the .header rules), so it brings
+       no margin of its own — the header's gap spaces it. */
     .tab-nav {
       display: inline-flex;
       gap: 0.25rem;
-      margin-bottom: 1.75rem;
       background: rgba(255, 255, 255, 0.04);
       border: 1px solid var(--border-subtle);
       border-radius: 12px;
@@ -2927,9 +2984,16 @@
         padding: 0.85rem 1rem;
         flex-wrap: wrap;
         gap: 0.6rem;
+        /* Not sticky on phones. The header carries the tab bar now, and on a
+           phone that wraps to three rows: pinned, it would hold ~250px — a
+           quarter of the screen — for good. It scrolls away instead, and
+           nd2SyncHeaderH publishes a 0 offset so the drill-down crumb bar docks
+           at the very top. relative (not static) keeps it the stacking context
+           its dropdowns layer in. */
+        position: relative;
       }
-      /* The title is nowrap, so at 1.35rem it and the role chip alone ate a
-         phone's width and shoved the buttons off. */
+      /* The title is nowrap, so at 1.35rem it alone ate most of a phone's
+         width and shoved the buttons off. */
       .header h1 { font-size: 1.1rem; }
       .header-actions { flex-wrap: wrap; flex-shrink: 1; width: 100%; }
       .header-actions .btn { flex: 1 1 auto; justify-content: center; }
@@ -3063,23 +3127,15 @@
 
   <div id="main-content" style="display: none;">
     <div class="container">
+      <!-- The header bar carries the tab nav between the wordmark and the
+           account controls. Whether all three fit on one row is MEASURED
+           (staffFitHeader), not a breakpoint: the tab bar's width moves with
+           its badges, so when it does not fit it drops to a full-width row
+           of its own, still inside the bar. -->
       <div class="header">
         <div class="header-title">
           <h1>Forcequit <span>Admin</span></h1>
-          <span class="role-chip" id="role-chip" style="display: none;"></span>
         </div>
-        <div class="header-actions">
-          <button class="btn btn-secondary" onclick="refreshAll()">
-            <i class="fas fa-sync-alt"></i> Refresh
-          </button>
-          <a href="map" class="btn btn-secondary">
-            <i class="fas fa-map"></i> Map
-          </a>
-          <button class="btn btn-danger" onclick="doLogout()">
-            <i class="fas fa-sign-out-alt"></i> Logout
-          </button>
-        </div>
-      </div>
 
       <!-- Tab Navigation -->
       <div class="tab-nav">
@@ -3132,6 +3188,36 @@
           <i class="fas fa-ticket"></i> Tickets
           <span class="badge" id="tickets-badge" style="display:none;">0</span>
         </button>
+      </div>
+
+        <div class="header-actions">
+          <button class="btn btn-secondary" onclick="refreshAll()">
+            <i class="fas fa-sync-alt"></i> Refresh
+          </button>
+          <a href="map" class="btn btn-secondary">
+            <i class="fas fa-map"></i> Map
+          </a>
+          <!-- Account menu: the main site's sidebar avatar control, in place
+               of the old Logout button. Logout lives inside it. -->
+          <div class="acct">
+            <button type="button" class="acct-btn" id="staff-acct-btn" onclick="toggleStaffAcctMenu(event)"
+                    aria-label="Account menu" aria-haspopup="menu" aria-expanded="false" title="Account">
+              <span class="acct-avatar" id="staff-acct-avatar"></span>
+            </button>
+            <div class="acct-menu" id="staff-acct-menu" role="menu" aria-label="Account" hidden>
+              <div class="acct-who">Signed in as <strong id="staff-acct-name">—</strong></div>
+              <a class="acct-item" role="menuitem" href="./#profile">
+                <i class="fas fa-user-cog"></i> Profile &amp; Account Settings
+              </a>
+              <a class="acct-item" role="menuitem" href="contact">
+                <i class="fas fa-envelope"></i> Contact &amp; Support
+              </a>
+              <button type="button" class="acct-item danger" role="menuitem" onclick="closeStaffAcctMenu(); doLogout();">
+                <i class="fas fa-sign-out-alt"></i> Logout
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- Tickets tab (contact tickets — owner + support role) -->
@@ -15775,7 +15861,7 @@
           can_manage_nodes: canManageNodes,
           can_send_notices: canSendNotices,
           can_assign_privileged_roles: !!result.can_assign_privileged_roles,
-          // Canonical role list — drives the role chip next to the wordmark.
+          // Canonical role list, as the backend returned it.
           roles: Array.isArray(result.roles) ? result.roles : [],
           tabs: tabs,
         };
@@ -15793,6 +15879,10 @@
       // Authenticated
       document.getElementById('login-overlay').style.display = 'none';
       document.getElementById('main-content').style.display = 'block';
+      staffRenderAccount(session);
+      // Measurable only now that the header is displayed, and with the tabs
+      // this viewer's roles allow already shown or hidden.
+      staffFitHeader();
 
       // Only fetch the requests list when the viewer can actually open
       // that tab — a dev-only user's /api/editor-requests call would just
@@ -15895,21 +15985,9 @@
           nd2SetView(rememberedView);
         }
       }
-
-      // Role chip next to the wordmark — shows the viewer's own role mix,
-      // labelled from the canonical role list the backend returned.
-      const myRoles = (userPermissions.roles || []).filter(r => r && r !== 'authed');
-      const roleBits = myRoles.map(r => {
-        const info = ROLE_LABELS[r];
-        return info ? `${roleIcon(r)} ${escapeHtml(info.label)}` : escapeHtml(r);
-      });
-      const chip = document.getElementById('role-chip');
-      if (chip) {
-        // roleBits contain <i> icon markup (labels are escaped above), so this
-        // must be innerHTML — textContent would print the tags literally.
-        chip.innerHTML = roleBits.join(' · ') || 'Authenticated';
-        chip.style.display = '';
-      }
+      // (The role chip that sat beside the wordmark is gone: the header bar
+      // carries the tab nav now, and the roles are visible where they are
+      // managed, on the Auth tab.)
     }
     
     // --- Agency data-change requests (Requests tab → "Data changes") ---
@@ -18452,7 +18530,101 @@
       await sb.auth.signOut();
       window.location.reload();
     }
-    
+
+    // ---- Account menu (header avatar) ---------------------------------
+    // Mirrors the main site's sidebar control in auth-common.js: same name
+    // precedence, same avatar source, same entries. Profile settings live on
+    // the main site (the profile modal is auth-common's), reached through its
+    // #profile deep link.
+    function staffRenderAccount(session) {
+      const meta = (session && session.user && session.user.user_metadata) || {};
+      const name = meta.display_name || meta.full_name || meta.name || meta.user_name || 'Account';
+      const av = document.getElementById('staff-acct-avatar');
+      if (av) {
+        av.textContent = '';
+        const url = meta.custom_avatar_url || meta.avatar_url;
+        if (typeof url === 'string' && /^https?:\/\//i.test(url)) {
+          const img = document.createElement('img');
+          img.src = url;
+          img.alt = '';
+          // A dead avatar URL falls back to the initial rather than a broken image.
+          img.onerror = () => { av.textContent = name.charAt(0).toUpperCase(); };
+          av.appendChild(img);
+        } else {
+          av.textContent = name.charAt(0).toUpperCase();
+        }
+      }
+      const who = document.getElementById('staff-acct-name');
+      if (who) who.textContent = name;
+      const btn = document.getElementById('staff-acct-btn');
+      if (btn) btn.title = name;
+    }
+    function toggleStaffAcctMenu(e) {
+      if (e) e.stopPropagation();
+      const menu = document.getElementById('staff-acct-menu');
+      if (!menu) return;
+      if (menu.hidden) {
+        menu.hidden = false;
+        document.getElementById('staff-acct-btn')?.setAttribute('aria-expanded', 'true');
+      } else {
+        closeStaffAcctMenu();
+      }
+    }
+    function closeStaffAcctMenu() {
+      const menu = document.getElementById('staff-acct-menu');
+      if (menu) menu.hidden = true;
+      document.getElementById('staff-acct-btn')?.setAttribute('aria-expanded', 'false');
+    }
+    // One permanent outside-click closer (the toggle stops its own propagation).
+    document.addEventListener('click', (ev) => {
+      if (!ev.target.closest('#staff-acct-menu') && !ev.target.closest('#staff-acct-btn')) {
+        closeStaffAcctMenu();
+      }
+    });
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') closeStaffAcctMenu();
+    });
+
+    // ---- Header row fit ------------------------------------------------
+    // Title, tab bar and actions share one row when they fit; otherwise the
+    // header goes --stacked and the tab bar takes a row of its own under the
+    // other two. Measured rather than a breakpoint because the bar's width is
+    // not fixed: the pending/ticket badges and the Dev status pill come and go,
+    // and which tabs show at all depends on the viewer's roles.
+    function staffFitHeader() {
+      const h = document.querySelector('#main-content .header');
+      if (!h || !h.offsetParent) return;          // not shown yet (pre-login)
+      h.classList.remove('header--stacked');
+      const items = [...h.children].filter(el => el.offsetParent !== null);
+      // With align-items:center, items on one line overlap vertically, so any
+      // item starting at or below the shortest item's bottom has wrapped.
+      const lineBottom = Math.min(...items.map(el => el.offsetTop + el.offsetHeight));
+      if (items.some(el => el.offsetTop >= lineBottom)) h.classList.add('header--stacked');
+      // The header's height may just have changed; the drill-down crumb bar
+      // docks under it, so publish the new height now rather than on the
+      // next resize or scroll.
+      nd2SyncHeaderH();
+    }
+    let _staffFitQueued = 0;
+    function staffQueueFitHeader() {
+      if (_staffFitQueued) return;
+      _staffFitQueued = requestAnimationFrame(() => { _staffFitQueued = 0; staffFitHeader(); });
+    }
+    window.addEventListener('resize', staffQueueFitHeader);
+    document.fonts?.ready?.then(staffQueueFitHeader);
+    // Badges, the Dev pill and role-gated tabs all change the bar's width
+    // without a resize. The observer watches the tab bar only, so the class
+    // staffFitHeader toggles on the header itself can never re-trigger it.
+    {
+      const nav = document.querySelector('#main-content .tab-nav');
+      if (nav && 'MutationObserver' in window) {
+        new MutationObserver(staffQueueFitHeader).observe(nav, {
+          subtree: true, childList: true, characterData: true, attributes: true,
+          attributeFilter: ['style', 'class', 'hidden'],
+        });
+      }
+    }
+
     // Close modal on click outside
     document.getElementById('approve-modal').addEventListener('click', (e) => {
       if (e.target === document.getElementById('approve-modal')) {
@@ -18566,7 +18738,10 @@
 
     function nd2SyncHeaderH() {
       const h = document.querySelector('.header');
-      const hh = h ? h.offsetHeight : 68;
+      // Where the header isn't pinned (phones — see the 768px .header rule)
+      // nothing sits under it as the page scrolls, so the offset is 0.
+      const pinned = !!h && getComputedStyle(h).position === 'sticky';
+      const hh = h ? (pinned ? h.offsetHeight : 0) : 68;
       const root = document.documentElement.style;
       root.setProperty('--nd2-header-h', hh + 'px');
       // (This used to also publish --nd2-thead-top for the table headers. They
@@ -18575,8 +18750,9 @@
     }
     window.addEventListener('resize', nd2SyncHeaderH);
     window.addEventListener('load', nd2SyncHeaderH);
-    // The header can change height after load (the role chip arrives after
-    // auth, and it wraps), so re-measure cheaply — one rAF per scroll burst.
+    // The header can change height after load (its tab bar's badges come and
+    // go, and the bar can drop to a row of its own), so re-measure cheaply —
+    // one rAF per scroll burst.
     window.addEventListener('scroll', () => {
       if (nd2SyncHeaderH._q) return;
       nd2SyncHeaderH._q = requestAnimationFrame(() => { nd2SyncHeaderH._q = 0; nd2SyncHeaderH(); });

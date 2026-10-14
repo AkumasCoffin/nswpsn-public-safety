@@ -1104,20 +1104,24 @@ function copyTextFrom(el, btn) {
 let _apiKeyReveal = null;
 
 // "/#api-keys" (the bell's approval notice) opens the profile at the API keys
-// card. The hash is dropped first so neither a reload nor a later auth event
+// card; "/#profile" (the staff page's account menu — staff.html cannot load
+// this file, so it has no profile modal of its own) opens it at the top. The
+// hash is dropped first so neither a reload nor a later auth event
 // (TOKEN_REFRESHED also runs checkAuthState) reopens it. Wired to hashchange
 // as well as to checkAuthState: from the home page the bell link differs
 // from the current URL only in its fragment, so the browser never reloads
 // and only hashchange fires.
-function openApiKeysDeepLink() {
-  if (location.hash !== '#api-keys') return;
+function openProfileDeepLink() {
+  const hash = location.hash;
+  if (hash !== '#api-keys' && hash !== '#profile') return;
   history.replaceState(null, '', location.pathname + location.search);
   if (typeof closeNotifPanel === 'function') closeNotifPanel();
   openProfileModal().then(() => {
+    if (hash !== '#api-keys') return;
     document.getElementById('profile-apikeys-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
 }
-window.addEventListener('hashchange', openApiKeysDeepLink);
+window.addEventListener('hashchange', openProfileDeepLink);
 
 function apiKeyDate(iso) {
   const d = new Date(iso);
@@ -1589,7 +1593,7 @@ async function checkAuthState() {
     refreshNotifBadge();
     startNotifPolling();
 
-    openApiKeysDeepLink();
+    openProfileDeepLink();
 
     // Fetch roles with retry logic
     const fetchRolesWithRetry = async (retries = 2) => {
