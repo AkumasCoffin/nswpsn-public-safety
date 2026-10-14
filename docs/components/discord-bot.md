@@ -141,6 +141,30 @@ retires existing unscoped rows with no operator re-saving them — and
 `_OPT_IN_ONLY_TYPES` in `bot.py` keeps a catch-all picker ("Enable All", the
 generic `/setup` dropdown) from choosing the type in the first place.
 
+**`shark_report` is in both sets too**, added on the same principle before
+rather than after an incident. It is a national feed of coastal events —
+roughly 25 a day, 56% of them a tagged shark passing a listening station — and
+a channel almost always wants one stretch of coast. Unscoped it is
+mostly-elsewhere noise.
+
+That second half only works if the dispatcher can read the alert's
+coordinates, and this is the trap: **`preset_has_geoscope` checks that a
+geofilter key exists, not that it can ever match.** A scoped-only type whose
+location `_alert_lat_lng` cannot find would satisfy the gate and then pass
+every geofilter unconditionally — exactly inverting the rule. So any type added
+to `_SCOPED_ONLY_ALERT_TYPES` must also have a working branch in
+`_alert_lat_lng`; shark reports get one by carrying the `geo_point` feed shape,
+which puts them in `_GEO_POINT_ALERT_TYPES`.
+
+Shark reports stay a **single** type with the seven report categories exposed
+as subtype filters, rather than one type per category: the provider picker caps
+at 25 options, and this keeps the split per-preset. `_alert_subtype_token`
+returns the category, which lands in the archive's `category` column — so
+`_SUBTYPE_FIELDS_DEFAULT` already covers it and the dashboard needs no entry.
+Note also that the feed's endpoint serves a 48-hour window by default because
+`seen_alerts` is pruned at 7 days: a type whose records outlive their dedup
+rows re-alerts.
+
 Per-channel fan-out in `process_message_queue` is concurrent on purpose. It used
 to be serial, and one slow or rate-limited channel then blocked every other —
 which is how a burst overflowed the queue. discord.py still enforces Discord's

@@ -202,11 +202,24 @@ map.html  ──►  /api/rfs/incidents        (RFS fires)
           ──►  /api/transport/*          (public transport)
           ──►  /api/radio/grn-sites      (repeater site geography — 18474)
           ──►  /api/radio/monitored-sites  (repeater "Monitoring" badges — 18451)
+          ──►  /api/dorsal/reports?hours=168  (SharkSmart layer)
           ──►  /api/incidents            (community-added)
 
 live.html ──►  per-source counts, /api/summaries/latest, /api/news/rss,
                /api/stats/history, /api/heartbeat
 ```
+
+**SharkSmart is its own layer, not a beach feed, and that is deliberate.**
+Beachwatch and BeachSafe both describe the standing state of a beach and merge
+into one pin per beach (`_allMergedBeaches`, with `hasBeachwatch` /
+`hasBeachSafe` flags on a single record). A shark report is a timestamped
+*event* at a place — four sightings at one beach in a week are four things that
+happened — so it could not join that merge without being flattened. It has its
+own `sharkLayer`, button and panel. Receiver detections (a tagged shark passing
+a listening station) are 56% of the feed's volume and start switched **off**;
+everything else starts on. The layer requests `?hours=168` explicitly because
+the endpoint's own default is 48 hours, which exists for the Discord bot's
+dedup window rather than for the map.
 
 **The repeater layer is two endpoints, and neither one carries a reception.**
 `/api/radio/grn-sites` is the *geography* — the GRN site list, served from the

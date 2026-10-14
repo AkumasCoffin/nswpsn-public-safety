@@ -142,10 +142,10 @@ Discord bot consumes continuously whether or not anyone has the site open.
 Failures increment a counter, get backoff (`src/sources/shared/backoff.ts`), and
 feed `src/services/sourceHealth.ts`.
 
-### The 36 registered sources
+### The 37 registered sources
 
-38 sources are declared; two of them do not register by default, so a running
-backend holds **36**.
+39 sources are declared; two of them do not register by default, so a running
+backend holds **37**.
 
 | Source | Family | Interval |
 |---|---|---|
@@ -171,6 +171,7 @@ backend holds **36**.
 | `traffic_roadwork`, `traffic_flood`, `traffic_fire`, `traffic_majorevent`, `traffic_alpine`, `traffic_lga` | traffic | 5m |
 | `traffic_works` | traffic | 5m |
 | `weather_radar` | misc | 5m |
+| `dorsal_reports` | misc | 5m |
 | `beachwatch`, `beachsafe` | misc | 10m |
 | `firms_hotspots` | misc | 15m |
 | `weather_current` | misc | 30m |
@@ -195,6 +196,47 @@ against the others on id, coordinate and street-plus-suburb.
 `apiSource`, restores groups that vanish between polls, and archives each
 record under the type its category implies instead of into a single bucket.
 `src/services/sourceHealth.ts:45` labels it "LiveTraffic — works & ACT".
+
+#### `dorsal_reports` writes once per report, not once per poll
+
+`src/sources/dorsal.ts` is the only source whose `archiveItems` keeps state,
+and the reason is worth knowing before anyone "simplifies" it.
+
+The archive parents are append-only (`src/store/archive.ts` `insertChunk`), so
+the normal contract is that every poll re-archives everything currently in the
+snapshot and readers collapse the repeats with `DISTINCT ON` or `unique=1`.
+That is right for an incident feed, where the repeats *are* the history of a
+changing record. Dorsal is not that: a report is published once and almost
+never edited, and the snapshot holds a rolling 14 days. Re-archiving it every
+five minutes would be roughly **49,000 rows a day for a feed that produces
+25** — on a database whose `node_radio_events` indexes we have already had to
+go and reclaim 2.4 GB from.
+
+So a report is written exactly once, the first time the process sees its id,
+and only if it falls inside the last 7 days. Two consequences:
+
+- **The seen-set is seeded from `archive_misc_latest` on the first poll.** That
+  is what makes the cold-start pass a 7-day *backfill* on an empty database and
+  a no-op on every deploy restart afterwards. If the seed query fails the
+  source still starts; the cost is one duplicated window, which readers already
+  collapse.
+- **Sidecar `last_seen_at` stops advancing immediately**, because nothing
+  re-touches the row. Cleanup prunes it on the normal `DATA_RETENTION_DAYS`
+  schedule like any other archived record, which is the intended behaviour, not
+  a bug to fix.
+
+Two things upstream exposes that this source deliberately does not take.
+`/api/public/surfspot/search` embeds the owning account's email,
+`resetPasscode` and Facebook id in every record — it is never called. And
+`report/list` carries reporter display names on community submissions; the
+`account` object is dropped at normalisation and provenance is carried as the
+upstream `official` flag instead. A unit test asserts the name never reaches a
+row.
+
+The route defaults to a **48-hour** window. That is not a performance choice:
+the Discord bot polls it bare and de-duplicates against `seen_alerts`, which
+its retention job prunes at 7 days, so a longer default would re-fire every
+report on day eight. The map asks for `?hours=168` explicitly.
 
 ### Not in the registry
 
@@ -352,8 +394,8 @@ counts, and push 25 MB of audio at the GPU transcription backends.
 So the class is confined at the gate itself (`API_KEY_PATH_PREFIXES` in
 `services/auth/apiKey.ts`): a key may make a **GET or HEAD** and only to an
 upstream data feed — the emergency-service, traffic, transport, aviation, AIS,
-weather, power, camera, news and boundary routes, plus `/api/pager/` and
-`/api/radio/`. Anything else is `403 api_key_path_forbidden`, including every
+weather, power, camera, news, shark-report and boundary routes, plus
+`/api/pager/` and `/api/radio/`. Anything else is `403 api_key_path_forbidden`, including every
 write. Refused requests still spend the key's per-minute budget, so scanning for
 an opening is not free.
 
