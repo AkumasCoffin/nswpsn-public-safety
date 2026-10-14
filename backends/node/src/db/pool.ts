@@ -81,6 +81,20 @@ export async function getPool(): Promise<Pool | null> {
     // Each new connection gets a default statement_timeout. Individual
     // queries can override with SET LOCAL inside a transaction.
     statement_timeout: 30_000,
+    // JIT off for every read connection. Postgres JIT-compiles a statement
+    // once its ESTIMATED cost passes jit_above_cost — and on this workload the
+    // estimate is the problem: subqueries, COUNT(DISTINCT) over composite
+    // keys and range predicates the planner cannot see all inflate it. The
+    // staff overview's totals query was the measured case: ~1.5M rows
+    // estimated, ~7.5k actual, and 824ms of a 906ms run spent compiling
+    // expressions for ~80ms of work. That one is fixed at the source
+    // (node-data.ts ROLLUP_EDGE_EXPR), but the raw drill-down queries have
+    // the same shape, and on a 2-vCPU database host compile time is CPU stolen
+    // from everything else. Reads here are short; JIT does not pay for itself.
+    //
+    // Not on the writer pool: the hourly rollup builds are genuinely large
+    // and run off the request path, where JIT can earn its keep.
+    options: '-c jit=off',
     // Cap how long a connection sits idle before pg recycles it. Keeps
     // long-lived processes from accumulating zombie sessions.
     idleTimeoutMillis: 60_000,
