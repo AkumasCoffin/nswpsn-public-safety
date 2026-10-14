@@ -5233,14 +5233,36 @@
     // no pill row of its own, so no view LIST, just the one name.
     const _nd2AllViews = [...ND2_RADIO_VIEWS, ...ND2_PAGER_VIEWS, ...ND2_ADSB_VIEWS, 'transcripts'];
 
+    // Refreshes asked for in the same tick collapse into ONE, which loads
+    // whatever view is current when it runs.
+    //
+    // A reload into the Data tab used to load three times: switchTab('data')
+    // refreshed the default Overview, restoring the remembered mode refreshed
+    // that mode's first view, and restoring the remembered view refreshed
+    // again — three requests, two of them for views nobody was looking at,
+    // and Overview the dearest of all. The restore runs synchronously, so a
+    // microtask lands after all three have set their state.
+    let _nd2RefreshQueued = false;
+    function nd2QueueRefresh() {
+      if (_nd2RefreshQueued) return;
+      _nd2RefreshQueued = true;
+      queueMicrotask(() => {
+        _nd2RefreshQueued = false;
+        nd2Refresh();
+      });
+    }
+
     function nd2StartPolling() {
       // Reflect the persisted hide-encrypted choice on the control itself —
       // the checkbox defaults to unchecked in markup, and the state is read
       // from localStorage, so without this the two disagree on first paint.
       const encBox = document.getElementById('nd2-hide-enc');
       if (encBox) encBox.checked = nd2HideEnc();
-      nd2LoadNodeList();
-      nd2Refresh();
+      // No /api/nodes fetch here any more. Its only consumer was the #nd2-node
+      // scope selector, which has been permanently hidden since the Nodes tab
+      // drill-down replaced it, and the endpoint makes an uncached Supabase
+      // admin call for the user list — on every single entry to this tab.
+      nd2QueueRefresh();
       // Entering the tab ON the Live view has to start Live's own machinery.
       // nd2SetView is the only other place that does, and it returns early when
       // the view is already what's being set — which it is when the remembered
@@ -5253,44 +5275,59 @@
         void nd2StartLiveWs();
       }
       if (_nd2Timer) return;
-      _nd2Timer = setInterval(() => {
-        // Refresh only the active view, and never yank a table out from under
-        // someone who has paged deeper in (only auto-refresh on the first page).
-        switch (nd2.view) {
-          case 'overview': nd2LoadOverview(); break;
-          case 'aliases': if (nd2.alias.offset === 0) nd2LoadAliases(); break;
-          // Top-level (fleet-wide) Talkgroups — NOT the systems sub-tab of the
-          // same name, which is handled inside case 'systems' below.
-          case 'talkgroups': if (nd2.tg.offset === 0) nd2LoadTalkgroups(); break;
-          case 'systems':
-            if (nd2.sys.level === 'list') nd2LoadSystems();
-            else {
-              // Refresh only the active sub-tab; guard paged tabs to page 0 so
-              // an auto-refresh can't yank the user back off page 3. Same
-              // handling at both levels — the tabs exist on each.
-              const tab = nd2ActiveTab();
-              if (tab === 'talkgroups') { if (nd2.tg.offset === 0) nd2LoadTalkgroups(); }
-              else if (tab === 'radios') { if (nd2.rad.offset === 0) nd2LoadRadios(); }
-              else if (nd2.sys.level === 'site') nd2LoadSite();
-              else nd2LoadSystem();
-            }
-            break;
-          case 'nodes':
-            if (nd2.nodes.level === 'detail') nd2NodeRefresh();
-            else nd2LoadNodes();
-            break;
-          case 'events': if (nd2.evOffset === 0) nd2LoadEvents(); break;
-          case 'poverview': nd2LoadPagerOverview(); break;
-          case 'aoverview': nd2LoadAdsbOverview(); break;
-          case 'anodes':
-            if (nd2.anodes.level === 'detail') nd2AdsbNodeRefresh();
-            else nd2LoadAdsbOverview();
-            break;
-          case 'transcripts': nd2LoadTranscripts(); break;
-          case 'capcodes': if (nd2.capLevel === 'list' && nd2.cap.offset === 0) nd2LoadCapcodes(); break;
-        }
-      }, _nd2IntervalMs);
+      _nd2Timer = setInterval(nd2PollTick, _nd2IntervalMs);
     }
+
+    // One auto-refresh. Skipped while the browser tab is hidden: every tick
+    // rebuilds a view server-side (the overview's cache lives 20s, under this
+    // 30s period, so a poll is never a cache hit), and the logs showed a
+    // backgrounded staff tab still costing the database a full overview build
+    // a minute — Chrome's throttle slows the timer, it does not stop it.
+    // The visibilitychange handler below catches up the moment it is looked at.
+    function nd2PollTick() {
+      if (document.hidden) return;
+      // Refresh only the active view, and never yank a table out from under
+      // someone who has paged deeper in (only auto-refresh on the first page).
+      switch (nd2.view) {
+        case 'overview': nd2LoadOverview(); break;
+        case 'aliases': if (nd2.alias.offset === 0) nd2LoadAliases(); break;
+        // Top-level (fleet-wide) Talkgroups — NOT the systems sub-tab of the
+        // same name, which is handled inside case 'systems' below.
+        case 'talkgroups': if (nd2.tg.offset === 0) nd2LoadTalkgroups(); break;
+        case 'systems':
+          if (nd2.sys.level === 'list') nd2LoadSystems();
+          else {
+            // Refresh only the active sub-tab; guard paged tabs to page 0 so
+            // an auto-refresh can't yank the user back off page 3. Same
+            // handling at both levels — the tabs exist on each.
+            const tab = nd2ActiveTab();
+            if (tab === 'talkgroups') { if (nd2.tg.offset === 0) nd2LoadTalkgroups(); }
+            else if (tab === 'radios') { if (nd2.rad.offset === 0) nd2LoadRadios(); }
+            else if (nd2.sys.level === 'site') nd2LoadSite();
+            else nd2LoadSystem();
+          }
+          break;
+        case 'nodes':
+          if (nd2.nodes.level === 'detail') nd2NodeRefresh();
+          else nd2LoadNodes();
+          break;
+        case 'events': if (nd2.evOffset === 0) nd2LoadEvents(); break;
+        case 'poverview': nd2LoadPagerOverview(); break;
+        case 'aoverview': nd2LoadAdsbOverview(); break;
+        case 'anodes':
+          if (nd2.anodes.level === 'detail') nd2AdsbNodeRefresh();
+          else nd2LoadAdsbOverview();
+          break;
+        case 'transcripts': nd2LoadTranscripts(); break;
+        case 'capcodes': if (nd2.capLevel === 'list' && nd2.cap.offset === 0) nd2LoadCapcodes(); break;
+      }
+    }
+    // Back in view: run the tick it skipped straight away rather than leave
+    // up to 30s of stale figures on screen. _nd2Timer is only set while the
+    // Data tab is open, so this does nothing elsewhere on the page.
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && _nd2Timer) nd2PollTick();
+    });
 
     function nd2StopPolling() {
       if (_nd2Timer) {
@@ -5323,7 +5360,10 @@
           else await nd2LoadNodes();
           break;
         case 'aliases': await nd2LoadAliases(); break;
-        case 'events': await Promise.all([nd2LoadOverview(), nd2LoadEvents()]); break;
+        // Events only. It used to fetch the overview alongside, which the
+        // Events panel never reads — the dearest request on the tab, paid on
+        // every Events load for nothing.
+        case 'events': await nd2LoadEvents(); break;
         case 'poverview': await nd2LoadPagerOverview(); break;
         case 'aoverview': await nd2LoadAdsbOverview(); break;
         case 'anodes':
@@ -5458,7 +5498,7 @@
       if (view === 'capcodes') { nd2CapShow('list'); }
       if (view === 'live') { nd2StartLiveTimer(); void nd2StartLiveWs(); }
       else { nd2StopLiveTimer(); nd2StopLiveWs(); }
-      nd2Refresh();
+      nd2QueueRefresh();   // coalesced: a reload's restore calls this twice in a row
     }
 
     // The 'All' window pill exists only where the backend supports window=all:
@@ -5508,30 +5548,9 @@
     }
 
     // --- Per-node scope selector (Radio mode) ----------------------------
-    // Fetch the registered node list once per Data-tab entry and fill the
-    // global #nd2-node <select> (radio nodes). Failures leave it at "All nodes".
-    async function nd2LoadNodeList() {
-      try {
-        const res = await fetch(`${API_BASE_URL}/api/nodes`, { headers: { 'Authorization': await authHeader() } });
-        if (!res.ok) return;
-        const data = await res.json();
-        nd2.nodeList = data.nodes || [];
-        nd2PopulateNodeScope();
-      } catch (e) { /* selector stays "All nodes" */ }
-    }
-    function nd2PopulateNodeScope() {
-      const sel = document.getElementById('nd2-node');
-      if (!sel) return;
-      // Anything that contributes radio traffic can scope this tab. A scanner
-      // feed does, so excluding it made its calls unreachable from the scope
-      // selector even though every panel below honours the scope fine.
-      const nodes = (nd2.nodeList || []).filter(n => n.kind === 'radio' || n.kind === 'scanner');
-      sel.innerHTML = '<option value="">All nodes</option>' + nodes.map(n =>
-        `<option value="${escapeHtml(String(n.id))}">${escapeHtml(n.name || String(n.id))}</option>`).join('');
-      // Preserve the current scope if that node still exists; else reset to All.
-      if (nd2.node && [...sel.options].some(o => o.value === nd2.node)) sel.value = nd2.node;
-      else { sel.value = ''; nd2.node = ''; }
-    }
+    // The #nd2-node <select> is permanently hidden (the Nodes tab drill-down
+    // replaced it) and no longer fetches a node list to fill itself — see
+    // nd2StartPolling. Scope is set through nd2.node by the drill-down.
     function nd2SetNode(val) {
       const v = val || '';
       if (nd2.node === v) return;
@@ -5572,7 +5591,16 @@
     // page watching it. The guard is here rather than at the timer because
     // the Refresh button calls this too, and a second manual copy helps
     // just as little as a second automatic one.
-    let _nd2OverviewInflight = false;
+    //
+    // But only the SAME request is dropped. The guard used to drop every call
+    // while one was in flight, so changing the window (or Hide encrypted)
+    // during a slow load did nothing: the old request landed, its data was
+    // painted under the new pill, and the right figures only arrived on the
+    // next 30s tick. Now a call with different parameters is remembered and
+    // run as soon as the current one lands, and an answer for parameters the
+    // page no longer wants is never painted.
+    let _nd2OverviewInflight = false;   // the in-flight request's params, or false
+    let _nd2OverviewQueued = false;     // a different request arrived meanwhile
 
 
     // --- Data > Transcripts (whisper dashboard) -----------------------------
@@ -5724,33 +5752,58 @@
       });
     }
 
+    /** The overview request the page wants right now, as URL params. */
+    function nd2OverviewParams() {
+      const params = new URLSearchParams({ window: nd2.window, scope: nd2.scope });
+      if (nd2.node) params.set('node', nd2.node);
+      // Hide encrypted has to reach the TOTALS, not just the lists. Without
+      // it the tiles stayed whole-network figures whichever way the switch
+      // was set, so the headline contradicted every list under it.
+      if (nd2HideEnc()) params.set('enc', 'hide');
+      return params;
+    }
+
     async function nd2LoadOverview() {
-      if (_nd2OverviewInflight) return;
-      _nd2OverviewInflight = true;
+      const params = nd2OverviewParams();
+      const key = params.toString();
+      if (_nd2OverviewInflight !== false) {
+        if (key !== _nd2OverviewInflight) _nd2OverviewQueued = true;
+        return;
+      }
+      _nd2OverviewInflight = key;
+      // Whether this answer is still for what the page shows when it lands.
+      let current = true;
       try {
-        const params = new URLSearchParams({ window: nd2.window, scope: nd2.scope });
-        if (nd2.node) params.set('node', nd2.node);
-        // Hide encrypted has to reach the TOTALS, not just the lists. Without
-        // it the tiles stayed whole-network figures whichever way the switch
-        // was set, so the headline contradicted every list under it.
-        if (nd2HideEnc()) params.set('enc', 'hide');
         const res = await fetch(`${API_BASE_URL}/api/node-data/overview?${params}`, {
           headers: { 'Authorization': await authHeader() }
         });
         if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status });
-        nd2.overview = await res.json();
-        nd2.loadedOnce = true;
-        nd2ClearError();
+        const body = await res.json();
+        current = key === nd2OverviewParams().toString();
+        if (current) {
+          nd2.overview = body;
+          nd2.loadedOnce = true;
+          nd2ClearError();
+        }
       } catch (e) {
-        console.error('Error loading node-data overview:', e);
-        nd2.overview = null;
-        nd2ShowError(e.status, e.message);
+        current = key === nd2OverviewParams().toString();
+        if (current) {
+          console.error('Error loading node-data overview:', e);
+          nd2.overview = null;
+          nd2ShowError(e.status, e.message);
+        }
       } finally {
         // finally, not after the catch: an early return or a throw from the
-        // render calls below would otherwise leave the flag stuck true and
+        // render calls below would otherwise leave the flag stuck set and
         // the view frozen for the rest of the session.
         _nd2OverviewInflight = false;
       }
+      if (_nd2OverviewQueued) {
+        // The settings changed under this request; fetch what is wanted now.
+        _nd2OverviewQueued = false;
+        return nd2LoadOverview();
+      }
+      if (!current) return;
       nd2RenderStats();
       nd2RenderChart();
       nd2RenderTops();
@@ -7062,7 +7115,7 @@
         case 'overview': await nd2LoadOverview(); break;
         case 'systems': await nd2LoadSystemsView(); break;
         case 'live': await nd2LoadLive(); break;
-        case 'events': await Promise.all([nd2LoadOverview(), nd2LoadEvents()]); break;
+        case 'events': await nd2LoadEvents(); break;   // not the overview; see nd2Refresh
         case 'talkgroups': await nd2LoadTalkgroups(); break;
         case 'aliases': await nd2LoadAliases(); break;
       }
