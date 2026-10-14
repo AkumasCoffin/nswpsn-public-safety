@@ -500,6 +500,15 @@ Three separate pools:
 (`timestamp without time zone`), because rdio stores UTC values in a naive column
 and `pg` would otherwise parse them in the Node process's local timezone.
 
+**The main read pool runs with JIT off** (`options: '-c jit=off'` in
+`db/pool.ts`). Postgres JIT-compiles a statement when its *estimated* cost passes
+`jit_above_cost`, and on this workload the estimate is what goes wrong —
+subqueries, composite `COUNT(DISTINCT)`s and range predicates the planner cannot
+see. The measured case was the staff overview: 824 ms of a 906 ms query spent
+compiling for ~80 ms of work. On a 2-vCPU host, compile time is taken from
+everything else. The writer pool keeps JIT, because the hourly rollup builds are
+genuinely large and run off the request path.
+
 ### node_radio_events: the one table whose storage needs watching
 
 Every reception the radio nodes report lands here — 5.6 M rows on a 30-day
@@ -542,6 +551,31 @@ Three things to know before touching it:
 dead tuples before autovacuum would fire and simply idled below the threshold for
 days at a time. These are deliberate per-table overrides — not leftovers to tidy
 away.
+
+### Rollup reads: the seam has to be visible to the planner
+
+Every fleet-wide staff Data read (overview tiles and lists, systems, talkgroups)
+is two halves: the hourly rollup tables below a seam, and raw
+`node_radio_events` from the seam onwards. The seam is where the rollup has got
+to (`node_rollup_state.rolled_up_to`, capped at the current hour).
+
+It used to be a scalar subquery pasted into every statement, and that was the
+single largest cost on the Data tab. Postgres cannot see a subquery's value at
+plan time, so it guessed a third of the table for the live hour — 1.49 M rows
+against ~7.5 k — and the inflated cost triggered JIT. Measured on prod, same
+rows: **906 ms as a subquery, 19 ms with the value visible**. That was ~75% of
+every warm overview poll.
+
+So handlers now call `resolveRollupEdge()` once per request, on the database's
+clock, and pass the result to `rollupEdgeSql()`, which renders a `timestamptz`
+literal. `radioTotalsFromRollup` and `radioListsFromRollup` take the seam as a
+**required** argument, so no new caller can quietly bring the subquery back. A
+bind parameter would plan as well; the literal keeps every call site's parameter
+numbering unchanged.
+
+The other half of the Data tab's slowness is storage, not SQL. The first open
+after the cache has gone cold took 23.8 s, and a cold 30-day read 17.7 s,
+against 60–157 ms warm. Index bloat on this table makes that worse.
 
 ### Removed, so you do not go looking
 
