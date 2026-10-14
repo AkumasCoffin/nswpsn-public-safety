@@ -571,7 +571,7 @@ async function tick(): Promise<void> {
  *
  * ALIGNED TO THE CLOCK, not to boot. The read path unions rollup rows below
  * the derived seam with detail from the seam onwards (api/node-data.ts
- * ROLLUP_EDGE), and that works wherever the seam is — but the detail half is
+ * ROLLUP_EDGE_EXPR / resolveRollupEdge), and that works wherever the seam is — but the detail half is
  * the expensive one, and on a tick at boot-time + k hours the seam sat on
  * average half an hour behind the clock, so every fleet-wide read paid for
  * half an hour of detail it did not need to. Firing just after the hour turns

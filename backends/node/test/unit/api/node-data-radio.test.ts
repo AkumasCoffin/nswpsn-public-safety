@@ -15,8 +15,29 @@ import { Hono } from 'hono';
 
 const queryMock = vi.fn();
 
+// The rollup seam (resolveRollupEdge) is one infrastructure read that every
+// fleet-wide rollup build makes before its real queries. Postgres always
+// answers `SELECT <expr>` with exactly one row; the per-test mocks below route
+// by SQL and answer anything unrecognised with NO rows, which would make every
+// handler throw on the seam. So the pool answers the seam itself, as the
+// database would, and hands everything else to the test's mock — which never
+// sees it, so the call counts and orderings asserted below are unchanged.
+const SEAM = new Date('2026-10-14T06:00:00.000Z');
+/** Counts seam reads, which the test's own queryMock never sees. */
+const seamReads = vi.fn();
+
 vi.mock('../../../src/db/pool.js', () => ({
-  getPool: vi.fn(() => Promise.resolve({ query: queryMock })),
+  getPool: vi.fn(() =>
+    Promise.resolve({
+      query: (sql: string, params?: unknown[]) => {
+        if (String(sql).includes('FROM node_rollup_state')) {
+          seamReads();
+          return Promise.resolve({ rows: [{ edge: SEAM }] });
+        }
+        return queryMock(sql, params);
+      },
+    }),
+  ),
   closePool: vi.fn(),
 }));
 
@@ -66,6 +87,7 @@ function captureCalls(): Call[] {
 
 beforeEach(async () => {
   queryMock.mockReset();
+  seamReads.mockReset();
   // The talkgroup page is cached per query string, and these tests reuse
   // query strings with different mocks behind them.
   (await import('../../../src/api/node-data.js'))._resetTalkgroupsCache();
@@ -684,8 +706,12 @@ describe('CALL_GROUP filter (talkgroup voice calls only)', () => {
     queryMock.mockImplementation((sql: string) => {
       seen.push(sql);
       if (sql.includes('FROM nodes')) return { rows: [] };
+      // The tiles: completed hours from the rollup, plus the live hour.
+      if (sql.includes('node_radio_hourly_rx')) {
+        return { rows: [{ received: 2, transmissions: 1, ingested: 1 }] };
+      }
       if (sql.includes('AS received') && sql.includes('node_radio_events')) {
-        return { rows: [{ received: 2 }] };
+        return { rows: [{ received: 1, transmissions: 1, ingested: 1 }] };
       }
       return { rows: [] };
     });
@@ -701,6 +727,17 @@ describe('CALL_GROUP filter (talkgroup voice calls only)', () => {
     expect(seen.some((s) => s.includes('node_radio_hourly_sys'))).toBe(true);
     expect(seen.some((s) => s.includes('node_radio_hourly_unit'))).toBe(true);
 
+    // The tiles come from the rollup too. They used not to: the raw totals
+    // thunk was gated on wantRadio alone, so every fleet-wide `all` ran
+    // radioReceptionsSql over 30 days of detail — past the statement timeout
+    // at the measured ~1.7s a day — while the comment above it said otherwise.
+    expect(seen.some((s) => s.includes('node_radio_hourly_rx'))).toBe(true);
+    expect(
+      seen.some((s) => s.includes('AS received') && s.includes("interval '30 days'")),
+    ).toBe(false);
+    // Rollup hours (2) plus the live hour (1).
+    expect(body.totals.receptionsReceived).toBe(3);
+
     // What has NOT changed: every read of the detail table is gated on
     // CALL_GROUP, so data and signalling are still never counted as calls.
     const radioReads = seen.filter((s) => s.includes('node_radio_events'));
@@ -710,7 +747,35 @@ describe('CALL_GROUP filter (talkgroup voice calls only)', () => {
     // And radio all-time is still 30-day all-time: the rollups are derived
     // from a table pruned at 30 days, so moving to them buys speed, not reach.
     expect(body.radioWindowCapped).toBe(true);
-    expect(body.totals.receptionsReceived).toBe(2);
+  });
+
+  it('/overview reads the rollup seam ONCE per build, and never inside a statement', async () => {
+    // Every fleet-wide build makes five list statements and two totals
+    // statements against the rollups. The seam used to be a subquery pasted
+    // into each; the planner could not see its value, guessed a third of the
+    // table for the live hour, and JIT-compiled the result — ~824ms of the
+    // ~900ms the totals took, on every poll. It is now read once and inlined.
+    const seen: string[] = [];
+    queryMock.mockImplementation((sql: string) => {
+      seen.push(sql);
+      return { rows: [] };
+    });
+    const app = await setupApp();
+    await app.request('/api/node-data/overview?window=7d&scope=radio');
+    expect(seamReads).toHaveBeenCalledTimes(1);
+    expect(seen.some((s) => s.includes('node_rollup_state'))).toBe(false);
+    const rollupReads = seen.filter((s) => s.includes('node_radio_hourly'));
+    expect(rollupReads.length).toBeGreaterThan(0);
+    for (const s of rollupReads) {
+      expect(s).toContain("'2026-10-14T06:00:00.000Z'::timestamptz");
+    }
+  });
+
+  it('/overview scoped to a node reads no seam — it reads no rollup', async () => {
+    queryMock.mockImplementation(() => ({ rows: [] }));
+    const app = await setupApp();
+    await app.request('/api/node-data/overview?window=7d&scope=radio&node=n1');
+    expect(seamReads).not.toHaveBeenCalled();
   });
 });
 

@@ -21,6 +21,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { radioListsFromRollup } from '../../../src/api/node-data.js';
 
+/** The seam the handler resolved, as resolveRollupEdge() would return it. */
+const EDGE = new Date('2026-10-14T06:00:00.000Z');
+const EDGE_SQL = "'2026-10-14T06:00:00.000Z'::timestamptz";
+
 /** Route each of the five statements by the table it reads. */
 function poolOf(rows: Record<string, unknown[]> = {}) {
   const seen: string[] = [];
@@ -46,7 +50,7 @@ describe('radioListsFromRollup', () => {
     // separately would drop a radio quiet all window but busy right now — or,
     // worse, keep it and drop one that is genuinely top-15.
     const { pool, seen } = poolOf();
-    await radioListsFromRollup(pool, '7d');
+    await radioListsFromRollup(pool, '7d', EDGE);
 
     for (const table of ['node_radio_hourly_sys', 'node_radio_hourly_unit', 'node_radio_hourly']) {
       const sql = stmt(seen, table);
@@ -59,27 +63,40 @@ describe('radioListsFromRollup', () => {
     }
   });
 
-  it('splits the window where the rollup has got to, both ways', async () => {
+  it('splits the window at the seam it was given, both ways', async () => {
     const { pool, seen } = poolOf();
-    await radioListsFromRollup(pool, '30d');
+    await radioListsFromRollup(pool, '30d', EDGE);
 
     for (const sql of seen) {
-      // Derived hours from the buckets, up to the seam rolled_up_to names...
+      // Derived hours from the buckets, up to the seam...
       expect(sql).toContain("hour >= date_trunc('hour', now()) - $1::interval");
-      expect(sql).toContain('FROM node_rollup_state');
+      expect(sql).toContain(`hour < ${EDGE_SQL}`);
       // ...and everything from the seam onwards from detail. The two bounds
-      // are the same expression, so the halves can neither overlap (every list
+      // are the same value, so the halves can neither overlap (every list
       // would double-count) nor leave a gap (an hour of traffic would vanish
       // between a closing hour and the next rollup tick, which is what they
       // used to do).
-      expect(sql).toContain('received_at >= COALESCE(');
-      expect(sql).toContain('rolled_up_to');
+      expect(sql).toContain(`received_at >= ${EDGE_SQL}`);
+    }
+  });
+
+  it('never reads the seam inside the statement', async () => {
+    // It used to be a scalar subquery on node_rollup_state. The planner cannot
+    // see a subquery's value, guessed a third of the table for the live hour
+    // (~1.5M rows against ~7.5k), and the inflated cost made Postgres
+    // JIT-compile each list — 20-50ms apiece on prod, for nothing. The handler
+    // now resolves the seam once and hands it in as a literal.
+    const { pool, seen } = poolOf();
+    await radioListsFromRollup(pool, '24h', EDGE);
+    for (const sql of seen) {
+      expect(sql).not.toContain('node_rollup_state');
+      expect(sql).not.toContain('rolled_up_to');
     }
   });
 
   it('asks for the interval the window names', async () => {
     const { pool, query } = poolOf();
-    await radioListsFromRollup(pool, '7d');
+    await radioListsFromRollup(pool, '7d', EDGE);
     for (const call of query.mock.calls) expect(call[1]).toEqual(['7 days']);
   });
 
@@ -88,7 +105,7 @@ describe('radioListsFromRollup', () => {
     // 30 days. Asking for more would scan empty range and imply reach the page
     // does not have; radioWindowCapped tells the client the same thing.
     const { pool, query, seen } = poolOf();
-    await radioListsFromRollup(pool, 'all');
+    await radioListsFromRollup(pool, 'all', EDGE);
     for (const call of query.mock.calls) expect(call[1]).toEqual(['30 days']);
     // ...and its chart is per-day, matching the detail path it replaces.
     expect(stmt(seen, 'node_radio_hourly WHERE')).toContain("date_trunc('day'");
@@ -99,7 +116,7 @@ describe('radioListsFromRollup', () => {
     // them in the rollup would freeze today's answer into stored history, so a
     // widened band could never reclassify the past.
     const { pool, seen } = poolOf();
-    await radioListsFromRollup(pool, '24h');
+    await radioListsFromRollup(pool, '24h', EDGE);
     expect(stmt(seen, 'node_radio_hourly_sys')).toContain('talkgroup BETWEEN');
     expect(stmt(seen, 'node_radio_hourly_unit')).toContain('source_unit BETWEEN');
   });
@@ -110,7 +127,7 @@ describe('radioListsFromRollup', () => {
     // lowest talkgroup and leave the others reading zero.
     const sql = (() => {
       const { pool, seen } = poolOf();
-      return radioListsFromRollup(pool, '24h').then(() => stmt(seen, 'node_radio_hourly_sys'));
+      return radioListsFromRollup(pool, '24h', EDGE).then(() => stmt(seen, 'node_radio_hourly_sys'));
     })();
     expect(await sql).toContain('logical_calls_tg AS logical');
   });
@@ -125,7 +142,7 @@ describe('radioListsFromRollup', () => {
       series: [{ bucket: new Date('2026-08-24T10:00:00Z'), n: 4 }],
       perNode: [{ node_id: 'n1', calls: 12, bytes: '345' }],
     });
-    const r = await radioListsFromRollup(pool, '24h');
+    const r = await radioListsFromRollup(pool, '24h', EDGE);
     expect(r).not.toBeNull();
     expect(r!.topTg[0]!.talkgroup).toBe(10101);
     expect(r!.topSites[0]!.site_id).toBe(85);
@@ -138,7 +155,7 @@ describe('radioListsFromRollup', () => {
     // 0 is the sentinel a NOT NULL primary key column needs. Left as 0 the
     // card renders a system called 0 where it used to render an em dash.
     const { pool, seen } = poolOf();
-    await radioListsFromRollup(pool, '24h');
+    await radioListsFromRollup(pool, '24h', EDGE);
     expect(stmt(seen, 'node_radio_hourly_sys')).toContain('NULLIF(system, 0) AS system');
   });
 });

@@ -868,10 +868,58 @@ export function outcomeSql(homeCol: string, encParam: string, progParam: string)
  *
  * LEAST because the rollup deliberately never derives the hour in progress; if
  * the stored value were ever ahead of it, detail still has to cover that hour.
+ *
+ * RESOLVED ONCE PER REQUEST, THEN INLINED AS A LITERAL. This expression used to
+ * be pasted into every rollup read as a scalar subquery, and that was the single
+ * largest cost on the staff Data tab. A subquery's value is unknown when the
+ * statement is planned, so Postgres fell back to its default guess for
+ * `received_at >= ?` — a third of the table, ~1.5M rows, against the ~7.5k the
+ * live hour actually holds. The inflated cost tipped the plan over
+ * jit_above_cost, and the overview's totals query then spent ~824 ms
+ * JIT-compiling expressions for ~80 ms of real work. Measured on prod, same
+ * data, same rows: 906 ms as a subquery, 19 ms with the value visible. That was
+ * ~75% of every warm overview poll, and the same subquery sat in the live half
+ * of every list, systems and talkgroups read.
+ *
+ * So the handler calls resolveRollupEdge() once — a one-row read evaluated on
+ * the DATABASE clock, so skew between the app and DB hosts cannot open a gap —
+ * and every statement gets rollupEdgeSql(edge), a literal the planner can
+ * estimate. A bind parameter would plan just as well; the literal is used so
+ * that parameter numbering at every call site stays put. It also means both
+ * halves of a read now share ONE seam, where each statement used to evaluate
+ * its own subquery and two of them could straddle an hourly tick.
+ *
+ * Do not fold this back into the SQL to save the round trip: the round trip is
+ * ~1.5 ms, and the subquery is what cost the 800.
  */
-const ROLLUP_EDGE = `COALESCE(
+const ROLLUP_EDGE_EXPR = `COALESCE(
   (SELECT LEAST(rolled_up_to, date_trunc('hour', now())) FROM node_rollup_state WHERE id),
   date_trunc('hour', now()))`;
+
+/** Read the seam once. See ROLLUP_EDGE_EXPR for why it is not a subquery. */
+export async function resolveRollupEdge(pool: Pick<Pool, 'query'>): Promise<Date> {
+  const r = await pool.query<{ edge: Date | string | null }>(
+    `SELECT ${ROLLUP_EDGE_EXPR} AS edge`,
+  );
+  const raw = r.rows[0]?.edge;
+  const edge = raw instanceof Date ? raw : raw != null ? new Date(raw) : null;
+  // COALESCE guarantees a value, so this only fires if the query itself is
+  // broken — and an Invalid Date would otherwise throw from toISOString() deep
+  // inside a query builder, far from the cause.
+  if (!edge || Number.isNaN(edge.getTime())) {
+    throw new Error('node-data: could not resolve the rollup seam');
+  }
+  return edge;
+}
+
+/**
+ * The seam as SQL. Injection-safe by construction: the text is
+ * Date#toISOString() output — a fixed ISO-8601 format — of a Date built from
+ * our own database's answer, never from request input.
+ */
+export function rollupEdgeSql(edge: Date): string {
+  return `'${edge.toISOString()}'::timestamptz`;
+}
 
 /**
  * The tiles, summed from node_radio_hourly_rx plus the hour in progress.
@@ -884,7 +932,7 @@ const ROLLUP_EDGE = `COALESCE(
  *
  * WINDOW EDGES. The rollup is bucketed, so the window starts at a whole hour
  * back from the top of the current hour, and everything from the rollup's seam
- * (ROLLUP_EDGE) onwards is unioned from detail. That makes the span slightly
+ * (`edge`, see ROLLUP_EDGE_EXPR) onwards is unioned from detail. That makes the span slightly
  * longer than the literal interval — a "24h" view covers 24 whole hours plus
  * however far past the seam we are — which is steadier than a sliding edge
  * that reshuffles the first bucket on every poll.
@@ -897,6 +945,8 @@ const ROLLUP_EDGE = `COALESCE(
  * deliberately: an anti-join against the previous hour would cost more than
  * the error.
  *
+ * `edge` is the seam from resolveRollupEdge(); both halves split on it.
+ *
  * Returns null when it cannot answer, and the caller falls back to detail.
  */
 export async function radioTotalsFromRollup(
@@ -905,8 +955,10 @@ export async function radioTotalsFromRollup(
   encTgIds: number[],
   progTgIds: number[],
   hideEnc: boolean,
+  edge: Date,
 ): Promise<RadioTotals | null> {
   const iv = WINDOW_INTERVAL[window];
+  const seam = rollupEdgeSql(edge);
   const { isEnc, isNoTgid } = outcomeSql('home_talkgroup', '$2', '$3');
   // Hiding encrypted traffic drops those calls from every figure rather than
   // zeroing one tile, so the buckets still partition `received` — the same
@@ -926,7 +978,7 @@ export async function radioTotalsFromRollup(
          WHERE NOT (${isEnc}) AND NOT (${isNoTgid})), 0)::int   AS ingested
      FROM node_radio_hourly_rx
     WHERE hour >= date_trunc('hour', now()) - $1::interval
-      AND hour <  ${ROLLUP_EDGE}${encFilter}`,
+      AND hour <  ${seam}${encFilter}`,
     [iv, encTgIds, progTgIds],
   );
 
@@ -935,7 +987,7 @@ export async function radioTotalsFromRollup(
   // tick. One hour is ~6k rows.
   const partial = await pool.query<Record<string, unknown>>(
     radioReceptionsSql(
-      `received_at >= ${ROLLUP_EDGE} AND ${CALL_GROUP}`,
+      `received_at >= ${seam} AND ${CALL_GROUP}`,
       '$1',
       '$2',
       hideEnc,
@@ -1001,11 +1053,12 @@ export interface RadioLists {
  * from the top of the current hour and everything from the rollup's seam
  * onwards is unioned from detail — the same edges radioTotalsFromRollup uses,
  * and for the same reason: a sliding edge would reshuffle the first bucket on
- * every poll. See ROLLUP_EDGE for why the seam is read rather than assumed.
+ * every poll. See ROLLUP_EDGE_EXPR for why the seam is read rather than
+ * assumed, and why it arrives as a literal rather than a subquery.
  */
-const ROLLUP_HOURS = `hour >= date_trunc('hour', now()) - $1::interval
-                    AND hour <  ${ROLLUP_EDGE}`;
-const LIVE_HOUR = `received_at >= ${ROLLUP_EDGE}`;
+const rollupHours = (seam: string) =>
+  `hour >= date_trunc('hour', now()) - $1::interval AND hour < ${seam}`;
+const liveHour = (seam: string) => `received_at >= ${seam}`;
 
 /**
  * The five lists, from the hourly rollups plus the hour in progress.
@@ -1041,17 +1094,23 @@ const LIVE_HOUR = `received_at >= ${ROLLUP_EDGE}`;
  * The live-hour boundary double-counts a straddling call exactly as
  * radioTotalsFromRollup documents — once, at the single live edge.
  *
+ * `edge` is the seam from resolveRollupEdge(); all five split on it.
+ *
  * Returns null when it cannot answer, and the caller falls back to detail.
  */
 export async function radioListsFromRollup(
   pool: Pool,
   window: Windows,
+  edge: Date,
 ): Promise<RadioLists | null> {
   // window=all radio is already capped to the detail table's 30-day retention
   // (radioWindowCapped says so on the response), and the rollup backfills 31
   // days, so `all` is the 30-day window with daily buckets.
   const iv = window === 'all' ? '30 days' : WINDOW_INTERVAL[window];
   const bucket = window === 'all' ? 'day' : 'hour';
+  const seam = rollupEdgeSql(edge);
+  const ROLLUP_HOURS = rollupHours(seam);
+  const LIVE_HOUR = liveHour(seam);
   const tgBand = tgValid();
   const q = <R extends Record<string, unknown>>(sql: string) =>
     pool.query<R>(sql, [iv]);
@@ -1300,8 +1359,12 @@ nodeDataRouter.get(
       // the exact detail path, exactly as the tiles do (radioTotalsFromRollup
       // says why: the rollups attribute a call once across the whole fleet, so
       // filtering their rows by node undercounts rather than narrows).
-      const rollupLists =
-        wantRadio && nodeId === null ? await radioListsFromRollup(pool, window) : null;
+      //
+      // The seam is read ONCE for every rollup statement in this build, lists
+      // and totals alike — see ROLLUP_EDGE_EXPR. A node-scoped build reads no
+      // rollup, so it skips the read.
+      const edge = wantRadio && nodeId === null ? await resolveRollupEdge(pool) : null;
+      const rollupLists = edge ? await radioListsFromRollup(pool, window, edge) : null;
       if (rollupLists) {
         perNodeRadioRows = rollupLists.perNode;
         topTgRows = rollupLists.topTg;
@@ -1321,8 +1384,16 @@ nodeDataRouter.get(
         //
         // What is left here is the RADIO FALLBACK: the exact detail queries,
         // run when the rollups cannot answer — today that means a node-scoped
-        // request. Fleet-wide, radioTotalsFromRollup and radioListsFromRollup
-        // have already answered above and these thunks are skipped.
+        // request. Fleet-wide, radioListsFromRollup answered the lists above
+        // and radioTotalsFromRollup answers the tiles just below, so these
+        // thunks are skipped.
+        //
+        // The tiles were the exception for a while: this comment already said
+        // they came from the rollup, but the totals thunk was gated only on
+        // wantRadio, so every fleet-wide `all` ran radioReceptionsSql over 30
+        // days of raw events — ~1.7s a day by the measurement in
+        // radioTotalsFromRollup's notes, far past the 30s statement timeout.
+        // `all` is the 30-day window for radio, so it asks the rollup for 30d.
         //
         // (This block used to carry a warning that the rollups "bucket EVERY
         // ingested event (data/signaling included)". That was true of the
@@ -1340,9 +1411,13 @@ nodeDataRouter.get(
         // (radioWindowCapped already tells the client) and lets the range
         // index do its job.
         const nAllFloor = `received_at >= now() - interval '30 days' AND `;
+        const rollupTotalsAll = edge
+          ? await radioTotalsFromRollup(pool, '30d', encTgIds, progTgIds, hideEnc, edge)
+          : null;
+        if (rollupTotalsAll) pt.mark('totals-rollup');
         const [radioTotQ, pagerTotQ, pnR, pnP, tg, un, si, sr, sp] =
           await inFlightLimit(OVERVIEW_CONCURRENCY, [
-            () => wantRadio
+            () => wantRadio && !rollupTotalsAll
               ? pool.query<{
                   received: unknown;
                   transmissions: unknown;
@@ -1353,10 +1428,9 @@ nodeDataRouter.get(
                   dropped_patch: unknown;
                   dropped_site: unknown;
                 }>(
-                  // Every bucket rides along on this one scan. window=all radio
-                  // already reads node_radio_events (the hourly rollups have no
-                  // event_type and would count signaling as voice), so the rows
-                  // are being walked anyway and the extra FILTERs are free.
+                  // Node-scoped only (fleet-wide `all` took the rollup above).
+                  // Every bucket rides along on this one scan — they are all
+                  // FILTERs over rows already being walked.
                   radioReceptionsSql(
                     `${nAllFloor}${CALL_GROUP}${nAllAnd}`,
                     `$${nAllParams.length + 1}`,
@@ -1459,14 +1533,16 @@ nodeDataRouter.get(
                 )
               : null,
           ]);
-        receptionsReceived = num(radioTotQ?.rows[0]?.received);
-        transmissions = num(radioTotQ?.rows[0]?.transmissions);
-        receptionsIngested = num(radioTotQ?.rows[0]?.ingested);
-        droppedNoTgid = num(radioTotQ?.rows[0]?.no_tgid);
-        droppedEnc = num(radioTotQ?.rows[0]?.enc);
-        droppedNotRecorded = num(radioTotQ?.rows[0]?.not_recorded);
-        droppedPatch = num(radioTotQ?.rows[0]?.dropped_patch);
-        droppedSite = num(radioTotQ?.rows[0]?.dropped_site);
+        // The rollup answered, or the detail query did — as in the windowed path.
+        const rtAll = rollupTotalsAll ?? radioTotQ?.rows[0];
+        receptionsReceived = num(rtAll?.received);
+        transmissions = num(rtAll?.transmissions);
+        receptionsIngested = num(rtAll?.ingested);
+        droppedNoTgid = num(rtAll?.no_tgid);
+        droppedEnc = num(rtAll?.enc);
+        droppedNotRecorded = num(rtAll?.not_recorded);
+        droppedPatch = num(rtAll?.dropped_patch);
+        droppedSite = num(rtAll?.dropped_site);
         pages = num(pagerTotQ?.rows[0]?.raw);
         pagesLogical = num(pagerTotQ?.rows[0]?.logical);
         if (!rollupLists) perNodeRadioRows = pnR?.rows ?? [];
@@ -1495,10 +1571,9 @@ nodeDataRouter.get(
         // across the whole fleet — filtering those rows by node would silently
         // undercount rather than narrow. The node selector is a drill-down, so
         // it keeps the exact path.
-        const rollupTotals =
-          wantRadio && nodeId === null
-            ? await radioTotalsFromRollup(pool, window, encTgIds, progTgIds, hideEnc)
-            : null;
+        const rollupTotals = edge
+          ? await radioTotalsFromRollup(pool, window, encTgIds, progTgIds, hideEnc, edge)
+          : null;
         if (rollupTotals) pt.mark('totals-rollup');
         const [rTot, pTot, pnR, pnP, tg, un, si, sr, sp] = await inFlightLimit(OVERVIEW_CONCURRENCY, [
           () => wantRadio && !rollupTotals
@@ -2653,6 +2728,10 @@ nodeDataRouter.get(
       // there — honest, rather than a scan that cannot finish. WACN and label
       // come from systemIdentity.
       const rollupSystems = async (): Promise<[{ rows: SystemRow[] }, { rows: SiteRow[] }]> => {
+        // One seam for both statements, as a literal — see ROLLUP_EDGE_EXPR.
+        const seam = rollupEdgeSql(await resolveRollupEdge(pool));
+        const ROLLUP_HOURS = rollupHours(seam);
+        const LIVE_HOUR = liveHour(seam);
         const [sys, sites] = await Promise.all([
           pool.query<Omit<SystemRow, 'wacn' | 'name' | 'radios'>>(
             `WITH r AS (
@@ -3432,6 +3511,11 @@ nodeDataRouter.get(
       // live hour counts encrypted LOGICAL calls to match the rollup's
       // encrypted_calls, so the sum is in one unit.
       const rollupTalkgroups = async (): Promise<[{ rows: { n: unknown }[] }, { rows: PageRow[] }]> => {
+        // One seam for the count and the page, as a literal — see
+        // ROLLUP_EDGE_EXPR.
+        const seam = rollupEdgeSql(await resolveRollupEdge(pool));
+        const ROLLUP_HOURS = rollupHours(seam);
+        const LIVE_HOUR = liveHour(seam);
         const rowConds: string[] = [];
         const rp: unknown[] = [WINDOW_INTERVAL[window]];
         if (system !== null) {
