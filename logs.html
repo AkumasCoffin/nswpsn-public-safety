@@ -2243,6 +2243,7 @@
             closure: ['Beach closed', '#f59e0b'],
             advisory: ['Warning', '#fbbf24'],
             sighting: ['Sighting', '#2dd4bf'],
+            drone: ['Drone sighting', '#38bdf8'],
             tagging: ['Tag & release', '#8b5cf6'],
             carcass: ['Carcass', '#94a3b8'],
             detection: ['Receiver detection', '#64748b'],
@@ -2254,11 +2255,10 @@
           if (species && species !== 'Unknown') {
             extraInfo += `<span class="lg-badge-o" style="--badge:#5eead4">${escapeHtml(species)}</span>`;
           }
-          // Dorsal HQ relaying DPIRD receivers / SLS / the Westpac helicopter,
-          // versus a member of the public. A reader should be able to tell.
-          extraInfo += data.official
-            ? `<span class="lg-badge-o" style="--badge:#22d3ee">Official</span>`
-            : `<span class="lg-badge-o" style="--badge:#94a3b8">Community</span>`;
+          // No Official/Community badge: Dorsal's `official` flag marks who
+          // posted the report, not that anyone verified it, and a badge saying
+          // Official reads as confirmation we cannot stand behind. The flag
+          // stays in the archived row for anyone querying it directly.
           let details = [];
           if (typeof data.shark_length_m === 'number') {
             details.push(`<span class="lg-dim"><i class="fas fa-ruler-horizontal"></i> ${escapeHtml(String(data.shark_length_m))} m</span>`);
@@ -4081,6 +4081,7 @@
           closure: ['fa-ban', '#f59e0b'],
           advisory: ['fa-circle-exclamation', '#fbbf24'],
           sighting: ['fa-fish-fins', '#2dd4bf'],
+          drone: ['fa-video', '#38bdf8'],
           tagging: ['fa-tag', '#8b5cf6'],
           carcass: ['fa-skull', '#94a3b8'],
           detection: ['fa-tower-broadcast', '#64748b'],

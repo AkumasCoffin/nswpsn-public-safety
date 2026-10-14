@@ -3075,11 +3075,12 @@
         <div class="mobile-drag-handle"></div>
         <h4><i class="fa-solid fa-fish-fins" style="color:#2dd4bf;"></i> SharkSmart</h4>
         <label><input type="checkbox" id="chk-shark-sighting" checked onchange="onSharkFilterChange()"><span class="filter-dot" style="background:#2dd4bf;"></span> Sightings</label>
-        <label><input type="checkbox" id="chk-shark-incident" checked onchange="onSharkFilterChange()"><span class="filter-dot" style="background:#ef4444;"></span> Bites &amp; bumps</label>
-        <label><input type="checkbox" id="chk-shark-closure" checked onchange="onSharkFilterChange()"><span class="filter-dot" style="background:#f59e0b;"></span> Beach closures</label>
+        <label><input type="checkbox" id="chk-shark-drone" checked onchange="onSharkFilterChange()"><span class="filter-dot" style="background:#38bdf8;"></span> Drone sightings</label>
+        <label><input type="checkbox" id="chk-shark-incident" onchange="onSharkFilterChange()"><span class="filter-dot" style="background:#ef4444;"></span> Bites &amp; bumps</label>
+        <label><input type="checkbox" id="chk-shark-closure" onchange="onSharkFilterChange()"><span class="filter-dot" style="background:#f59e0b;"></span> Beach closures</label>
         <label><input type="checkbox" id="chk-shark-advisory" checked onchange="onSharkFilterChange()"><span class="filter-dot" style="background:#fbbf24;"></span> Warnings</label>
         <label><input type="checkbox" id="chk-shark-tagging" checked onchange="onSharkFilterChange()"><span class="filter-dot" style="background:#8b5cf6;"></span> Tag &amp; release</label>
-        <label><input type="checkbox" id="chk-shark-carcass" checked onchange="onSharkFilterChange()"><span class="filter-dot" style="background:#94a3b8;"></span> Carcasses</label>
+        <label><input type="checkbox" id="chk-shark-carcass" onchange="onSharkFilterChange()"><span class="filter-dot" style="background:#94a3b8;"></span> Carcasses</label>
         <label><input type="checkbox" id="chk-shark-detection" onchange="onSharkFilterChange()"><span class="filter-dot" style="background:#64748b;"></span> Receiver detections</label>
       </div>
 
@@ -9736,13 +9737,14 @@ function initPagerHoursFromStorage() {
       closure:   { label: 'Beach closures',      icon: 'fa-ban',                  color: '#f59e0b', rgb: '245,158,11' },
       advisory:  { label: 'Warnings',            icon: 'fa-circle-exclamation',   color: '#fbbf24', rgb: '251,191,36' },
       sighting:  { label: 'Sightings',           icon: 'fa-fish-fins',            color: '#2dd4bf', rgb: '45,212,191' },
+      drone:     { label: 'Drone sightings',     icon: 'fa-video',                color: '#38bdf8', rgb: '56,189,248' },
       tagging:   { label: 'Tag & release',       icon: 'fa-tag',                  color: '#8b5cf6', rgb: '139,92,246' },
       carcass:   { label: 'Carcasses',           icon: 'fa-skull',                color: '#94a3b8', rgb: '148,163,184' },
       detection: { label: 'Receiver detections', icon: 'fa-tower-broadcast',      color: '#64748b', rgb: '100,116,139' },
     };
     // Order the panel, the floating pills and the legend all read in.
     const SHARK_CATEGORY_ORDER = [
-      'sighting', 'incident', 'closure', 'advisory', 'tagging', 'carcass', 'detection',
+      'sighting', 'drone', 'incident', 'closure', 'advisory', 'tagging', 'carcass', 'detection',
     ];
 
     function toggleSharkSmartPanel() {
@@ -9814,16 +9816,16 @@ function initPagerHoursFromStorage() {
 
     function buildSharkTooltipContent(r) {
       const cfg = SHARK_CATEGORIES[r.category] || SHARK_CATEGORIES.sighting;
-      // Official = posted by Dorsal HQ (DPIRD receivers, Surf Life Saving,
-      // the Westpac helicopter). Everything else is a public submission, and
-      // the tooltip says which so a reader can weigh it.
-      const pillBg = r.official ? '#0e7490' : '#475569';
+      // No OFFICIAL/COMMUNITY pill. Dorsal's `official` flag only means the
+      // report was posted by their own account rather than by a member of the
+      // public — it is not a verification, and a badge reading OFFICIAL on a
+      // layer named SharkSmart reads as government confirmation. The flag is
+      // still carried in the feed for anyone who wants to weigh it.
       const header = _ttHeader(
         `fa-solid ${cfg.icon}`,
         r.species && r.species !== 'Unknown' ? r.species : 'Shark report',
         cfg.color,
-        pillBg, '#e2e8f0',
-        r.official ? 'OFFICIAL' : 'COMMUNITY',
+        '', '', '',
       );
 
       let body = '';
