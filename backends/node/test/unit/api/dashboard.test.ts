@@ -92,7 +92,13 @@ function makeApp() {
 
 function makeSessionCookie(uid: string, opts: { admin?: boolean; guilds?: unknown[] } = {}) {
   const sid = sessionMod.newSid();
-  const exp = Math.floor(Date.now() / 1000) + 600;
+  // A full TTL from now, exactly as the OAuth callback mints it. Not an
+  // arbitrary short window: loadSession derives "when was this last stamped"
+  // from exp, so a session whose exp is only minutes away looks ~30 days old
+  // and triggers the sliding renewal — which would fire an unexpected
+  // dash_sessions write into the mocked query queue and desync every
+  // assertion after it.
+  const exp = Math.floor(Date.now() / 1000) + sessionMod.DASH_SESSION_TTL_SECS;
   sessionMod._getSessionsForTests().set(sid, {
     uid: opts.admin ? 'admin-uid-1' : uid,
     username: 'tester',
@@ -218,6 +224,60 @@ describe('OAuth login + callback + logout', () => {
     expect(res.status).toBe(204);
     const sc = res.headers.getSetCookie();
     expect(sc.some((s) => s.includes('nswpsn_dash_sess='))).toBe(true);
+  });
+
+  // The browser's cookie carries its own copy of exp and loadSession rejects
+  // on THAT, so sliding the server-side row without re-issuing the cookie
+  // would renew nothing — the row would live 30 days while the browser kept
+  // presenting a cookie that expires on the old clock.
+  function seedSession(sid: string, exp: number) {
+    sessionMod._getSessionsForTests().set(sid, {
+      uid: '42',
+      username: 'tester',
+      avatar: null,
+      access_token: 'fake-at',
+      token_type: 'Bearer',
+      refresh_token: null,
+      guilds: [{ id: '111', name: 'Test Guild', icon: null, permissions: '8', owner: false }],
+      gfresh: Math.floor(Date.now() / 1000),
+      iat: Math.floor(Date.now() / 1000),
+      exp,
+    } as never);
+    const secret = sessionMod.getSessionSecret()!;
+    return `nswpsn_dash_sess=${sessionMod.makeCookie({ sid, exp }, secret)}`;
+  }
+
+  it('re-issues the session cookie when the sliding window renews', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    // Last stamped two days ago — past the one-day renew threshold.
+    const cookie = seedSession(
+      sessionMod.newSid(),
+      now - 2 * 86_400 + sessionMod.DASH_SESSION_TTL_SECS,
+    );
+    const app = makeApp();
+    const res = await app.request('/api/dashboard/me', { headers: { Cookie: cookie } });
+
+    expect(res.status).toBe(200);
+    expect(
+      res.headers.getSetCookie().some((s) => s.startsWith('nswpsn_dash_sess=')),
+    ).toBe(true);
+  });
+
+  it('does not re-issue the cookie for a session inside the renew threshold', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    // Stamped an hour ago — the throttle should leave it alone, so an open
+    // dashboard does not ship a Set-Cookie on every single request.
+    const cookie = seedSession(
+      sessionMod.newSid(),
+      now - 3600 + sessionMod.DASH_SESSION_TTL_SECS,
+    );
+    const app = makeApp();
+    const res = await app.request('/api/dashboard/me', { headers: { Cookie: cookie } });
+
+    expect(res.status).toBe(200);
+    expect(
+      res.headers.getSetCookie().some((s) => s.startsWith('nswpsn_dash_sess=')),
+    ).toBe(false);
   });
 });
 

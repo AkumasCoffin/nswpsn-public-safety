@@ -31,7 +31,30 @@ import { botGet } from './discordApi.js';
 // --- Constants (mirror python lines 16131-16138) -----------------------------
 export const DASH_SESSION_COOKIE = 'nswpsn_dash_sess';
 export const DASH_OAUTH_COOKIE = 'nswpsn_dash_oauth';
-export const DASH_SESSION_TTL_SECS = 24 * 60 * 60; // 24h
+/**
+ * Dashboard session lifetime, and the sliding-window rule that goes with it.
+ *
+ * This used to be a flat 24h with no renewal: `getSession` checked `exp` and
+ * never moved it, so a session died a day after login however actively it was
+ * being used. Anyone who opened the dashboard less than daily — which is most
+ * people, it is not a page you sit on — hit the Discord login screen on
+ * literally every visit. That reads as "it forgot me again", not as a
+ * security policy.
+ *
+ * Now the window is 30 days and renews on use, so an active session is
+ * effectively permanent and an abandoned one still expires. The renewal is
+ * throttled: an extension is only written once the session is more than
+ * RENEW_AFTER old, so a burst of dashboard requests costs one DB write a day,
+ * not one per request.
+ *
+ * The trade-off is deliberate. A stolen cookie stays useful for longer, which
+ * is bounded by the cookie being HttpOnly + Secure, by `logout` dropping the
+ * server-side row (so revocation is immediate and does not wait for exp), and
+ * by the Origin/Sec-Fetch-Site gate on every state-changing request.
+ */
+export const DASH_SESSION_TTL_SECS = 30 * 24 * 60 * 60; // 30d
+/** Only extend a session once it is older than this — throttles the write. */
+export const DASH_SESSION_RENEW_AFTER_SECS = 24 * 60 * 60; // 1d
 export const DASH_OAUTH_STATE_TTL_SECS = 10 * 60; // 10m
 export const DASH_GUILD_REFRESH_INTERVAL_SECS = 10 * 60;
 // Cookie domain — host-only by default (no Domain attribute), so the
@@ -70,6 +93,11 @@ export interface DashSession {
   // Runtime-only; never persisted. Set by loadSession so downstream code
   // can refer back to the sid.
   _sid?: string;
+  // Runtime-only. Set by loadSession when it slid `exp` forward, so the
+  // caller knows it must re-issue the cookie — the cookie carries its own
+  // copy of exp and is rejected on it, so extending the server-side row
+  // alone would still log the user out on the old cookie's clock.
+  _renewedExp?: number;
 }
 
 export interface OAuthStatePayload {
@@ -459,7 +487,26 @@ export async function loadSession(
   if (!session) return null;
   // Surface sid + bump last_seen (in-memory only, like python).
   session._sid = sid;
-  session.last_seen = Math.floor(Date.now() / 1000);
+  const now = Math.floor(Date.now() / 1000);
+  session.last_seen = now;
+
+  // Slide the window. The last renewal time is implicit in exp — a session
+  // was last stamped at `exp - TTL` — so this needs no extra stored field,
+  // and sessions issued under the old 24h TTL simply renew on their next
+  // request (their derived stamp is far enough back to qualify).
+  //
+  // Throttled to one write per RENEW_AFTER so an open dashboard polling the
+  // API does not write a row per request. NOT putSession(): that bumps
+  // dashboard_users.login_count, and a renewal is not a login.
+  const lastStamped = session.exp - DASH_SESSION_TTL_SECS;
+  if (now - lastStamped >= DASH_SESSION_RENEW_AFTER_SECS) {
+    session.exp = now + DASH_SESSION_TTL_SECS;
+    session._renewedExp = session.exp;
+    SESSIONS.set(sid, session);
+    // Fire-and-forget: a failed write just leaves the old expiry in the DB
+    // and gets another chance on the next request.
+    void persistSession(sid, session);
+  }
   return session;
 }
 

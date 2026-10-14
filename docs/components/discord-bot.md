@@ -284,6 +284,39 @@ and triggers.
 The backend reads this same database through `BOT_DATA_DATABASE_URL` to serve the
 dashboard, on its own pool, closed separately at shutdown.
 
+### The dashboard login is not the website login
+
+They are two independent systems that both happen to use Discord, and this
+surprises people, so: the website authenticates through **Supabase**, with
+Discord as one OAuth provider among several, and keeps a JWT in the browser.
+`dashboard.html` runs its **own** Discord OAuth app and keeps a signed
+`nswpsn_dash_sess` cookie on the API host plus a row in `dash_sessions`.
+Neither knows the other exists, so signing in to the site grants nothing on the
+dashboard.
+
+That cannot simply be bridged. The dashboard asks Discord for scope `identify
+guilds`, and the guild list *is* the dashboard — it is how it knows which
+servers you may configure. Supabase's Discord login does not request `guilds`,
+so even sharing an identity would still leave a Discord round-trip to collect
+the scope, and Supabase provider tokens are not refreshed. Closing this gap
+means changing the scope the whole site asks for, and re-consent for every
+existing account.
+
+**Sessions slide.** `DASH_SESSION_TTL_SECS` is 30 days and `loadSession`
+extends it on use, throttled by `DASH_SESSION_RENEW_AFTER_SECS` (1 day) so an
+open dashboard writes one row a day rather than one per request. It was a flat
+24h with no renewal, which signed people out a day after login however much
+they used it — if you opened the dashboard less than daily you re-authenticated
+on literally every visit.
+
+Two things make this work that are easy to break. The renewal must **re-issue
+the cookie**, because the cookie carries its own copy of `exp` and
+`loadSession` rejects on that one; extending only the server-side row renews
+nothing. And the renewal must not go through `putSession`, which bumps
+`dashboard_users.login_count` — a renewal is not a login. The last-renewal time
+is derived from `exp - TTL` rather than stored, which is also what quietly
+migrates sessions issued under the old 24h TTL.
+
 ## Identifying itself
 
 The bot sends `User-Agent: AusAwareBot/…` and `X-Client-Type: discord-bot` on

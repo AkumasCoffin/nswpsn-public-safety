@@ -221,6 +221,20 @@ async function requireSession(c: Context): Promise<DashSession | Response> {
   if (!session) {
     return dashErr(c, 'invalid_session', 'Sign in via /api/dashboard/auth/login.', 401);
   }
+  // loadSession slid the server-side expiry forward; the cookie carries its
+  // own copy of exp and loadSession rejects on THAT, so without re-issuing it
+  // here the sliding window would do nothing — the row would live for 30 days
+  // while the browser kept presenting a cookie that expires on the old clock.
+  if (session._renewedExp && session._sid) {
+    const secret = getSessionSecret();
+    if (secret) {
+      const refreshed = makeCookie(
+        { sid: session._sid, exp: session._renewedExp } as SessionCookiePayload,
+        secret,
+      );
+      setSignedCookie(c, DASH_SESSION_COOKIE, refreshed, DASH_SESSION_TTL_SECS);
+    }
+  }
   return session;
 }
 
