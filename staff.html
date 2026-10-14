@@ -7762,10 +7762,12 @@
     }
 
     // --- Radios view -----------------------------------------------------
-    // --- Radio aliases (over-the-air) --------------------------------------
-    // Some radios transmit a text name alongside their id. Deduped to one row
-    // per radio, and deliberately unwindowed: the alias is durable identity, so
-    // the radio you are trying to identify is often one that has gone quiet.
+    // --- Units --------------------------------------------------------------
+    // Every radio heard in the window, one row per radio, with the
+    // over-the-air alias where it has transmitted one. (Functions keep their
+    // "alias" names from when this listed only those radios.) OTA, Unit and
+    // First heard are lifetime identity; Times heard and Last heard are the
+    // window.
     let _nd2AliasDebounce = null;
     function nd2AliasInputChanged() {
       clearTimeout(_nd2AliasDebounce);
@@ -7797,8 +7799,8 @@
       void nd2FillAgencySelects();
       nd2SyncSortHeads('alias', nd2.alias);
       const params = new URLSearchParams({
-        // Windowed like the other received tables — which radios named
-        // themselves in this period, not every radio that ever has.
+        // Windowed like the other received tables — which radios were heard
+        // in this period, not every radio that ever has been.
         window: nd2.window,
         sort: nd2.alias.sort,
         dir: nd2.alias.dir,
@@ -7819,7 +7821,7 @@
         if (!rows.length) {
           body.innerHTML = `<tr><td colspan="7" class="nd2-empty">${
             (nd2.alias.q || nd2.alias.agency)
-              ? 'No radios match.' : 'No radio has transmitted an alias yet.'
+              ? 'No radios match.' : 'No radios heard in this window.'
           }</td></tr>`;
         } else {
           body.innerHTML = rows.map(r => `

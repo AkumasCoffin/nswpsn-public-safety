@@ -5220,16 +5220,15 @@ async function siteChanMgrHolds(
 // ---------------------------------------------------------------------------
 // GET /api/node-data/radio-aliases?q=&sort=lastSeen|timesSeen|radio&limit=&offset=
 //
-// Radios that transmitted an over-the-air alias, ONE ROW PER RADIO. Reads
-// node_radio_aliases rather than the event detail: aliases are durable
-// identity, the detail table is pruned at 30 days, and deduping 400k event
-// rows to a few hundred radios on every request would be wasteful.
+// The Units tab: every radio heard, ONE ROW PER RADIO, with the over-the-air
+// alias (node_radio_aliases) where it has sent one. The path keeps its old
+// name from when it listed only those radios.
 //
 // WINDOWED on traffic, like every other "what was received" table — this
 // answers "which radios were heard this period", not "what is programmed"
 // (Global settings owns that). Fleet-wide windows read the hourly per-radio
-// rollup; only a node scope reads detail. The alias row itself is still kept
-// forever, so `window=all` restores the full history.
+// rollup; only a node scope reads detail. `window=all` is the rollup's whole
+// history, which outlives the 30-day detail table.
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 // GET /api/node-data/agencies
@@ -5278,10 +5277,8 @@ nodeDataRouter.get('/api/node-data/radio-aliases', requireRole(canViewNodeData),
     const limit = Math.max(1, Math.min(200, Number(url.searchParams.get('limit') ?? 100) || 100));
     const offset = Math.max(0, Number(url.searchParams.get('offset') ?? 0) || 0);
 
-    // Agency / "has a configured alias" live in the config, not this table, so
-    // they resolve to a unit-id set the same way /radios does. Every row here
-    // has an OTA by definition (that is what the table records), so there is no
-    // has=ota filter to apply.
+    // Agency / "has a configured alias" live in the config, not the event
+    // tables, so they resolve to a unit-id set the same way /radios does.
     const agencyFilter = (url.searchParams.get('agency') ?? '').trim();
     const hasFilter = url.searchParams.get('has');
     const radioDisp = await radioDisplay();
@@ -5296,8 +5293,8 @@ nodeDataRouter.get('/api/node-data/radio-aliases', requireRole(canViewNodeData),
       params.push(`%${qRaw.toLowerCase().replace(/^0+(?=\d)/, '')}%`);
       conds.push(
         `(lower(a.alias) LIKE $${params.length - 1}` +
-          ` OR a.radio_id::text LIKE $${params.length - 1}` +
-          ` OR a.radio_id::text LIKE $${params.length})`,
+          ` OR h.radio_id::text LIKE $${params.length - 1}` +
+          ` OR h.radio_id::text LIKE $${params.length})`,
       );
     }
     if (agencyFilter || hasFilter === 'alias') {
@@ -5309,22 +5306,21 @@ nodeDataRouter.get('/api/node-data/radio-aliases', requireRole(canViewNodeData),
         ids = [...radioDisp.labels.keys()];
       }
       params.push(ids);
-      conds.push(`a.radio_id = ANY($${params.length}::bigint[])`);
+      conds.push(`h.radio_id = ANY($${params.length}::bigint[])`);
     }
+    // EVERY RADIO HEARD, not only the ones that transmitted an alias. This was
+    // an aliases page (node_radio_aliases, ~8 % of radios: 570 of 6,970 heard
+    // over 7 days), and the tab showing it is called Units — so most units were
+    // simply missing. Rows now come from traffic, and the OTA column is filled
+    // where the radio has sent one.
+    //
     // WINDOW SEMANTICS — identity is durable, traffic is not:
     //
-    //   OTA / configured Alias / First heard -> lifetime, NEVER windowed. Once a
+    //   OTA / configured Unit / First heard -> lifetime, NEVER windowed. Once a
     //     radio has told us its name that stays true, so a radio heard 2 days
     //     ago still shows an OTA it transmitted 10 days ago.
-    //   Times heard / Last heard             -> the selected window only.
-    //   Row membership                       -> radios HEARD in the window,
-    //     which is NOT the same as radios whose ALIAS was heard in the window.
-    //     Filtering on node_radio_aliases.last_seen (as this used to) dropped
-    //     exactly that case: an active radio vanished from the list because its
-    //     last announcement fell outside the window.
-    //
-    // window=all needs no join — the alias table's own lifetime counters ARE the
-    // all-time answer, and skipping the events scan keeps that case cheap.
+    //   Times heard / Last heard            -> the selected window only.
+    //   Row membership                      -> radios HEARD in the window.
     //
     // "Heard" means what the Units card and the Radios list mean by it: the
     // radio made a voice call (CALL_GROUP), and Times heard counts RECEPTIONS —
@@ -5336,17 +5332,17 @@ nodeDataRouter.get('/api/node-data/radio-aliases', requireRole(canViewNodeData),
     const RECEPTION = `COUNT(DISTINCT (logical_call_id, node_id,
                          COALESCE(site_rfss, -1), COALESCE(site_id, -1), talkgroup))::int`;
     // Node scope. Membership is "which radios did THIS node hear", so it
-    // restricts the join, never the lifetime identity columns — a radio scoped
-    // to one node still shows the alias it announced anywhere.
+    // restricts the traffic, never the lifetime identity columns — a radio
+    // scoped to one node still shows the alias it announced anywhere.
     const aliasNodeId = qpNode(url);
-    let heardJoin = '';
-    // INNER join throughout: no traffic in the window means not listed, but a
-    // radio WITH traffic keeps its lifetime alias columns.
+    // `h`: one row per radio heard — radio_id, first_heard (lifetime),
+    // heard_last and heard_times (the window).
+    let heard: string;
     if (aliasNodeId) {
       // The rollup attributes each reception fleet-wide with no node column, so
-      // a node scope reads detail. It needs the join even at window=all, which
-      // otherwise skips it and would answer fleet-wide. The call predicate also
-      // lets it use idx_nre_node_time_calls.
+      // a node scope reads detail (the call predicate lets it use
+      // idx_nre_node_time_calls). First heard is still the fleet-wide lifetime
+      // figure, from the rollup's whole history.
       const heardConds = [RID_VALID, CALL_GROUP];
       if (!lifetime) {
         params.push(iv);
@@ -5354,48 +5350,66 @@ nodeDataRouter.get('/api/node-data/radio-aliases', requireRole(canViewNodeData),
       }
       params.push(aliasNodeId);
       heardConds.push(`node_id = $${params.length}`);
-      heardJoin = `JOIN (
-             SELECT source_unit AS radio_id,
-                    MAX(received_at) AS heard_last,
-                    ${RECEPTION} AS heard_times
-               FROM node_radio_events
-              WHERE ${heardConds.join(' AND ')}
-              GROUP BY source_unit
-           ) h ON h.radio_id = a.radio_id`;
-    } else if (!lifetime) {
-      // Fleet-wide: the hourly per-radio rollup plus the hour in progress. This
-      // used to read the whole window from detail on every request, and on
+      heard = `(
+             SELECT n.radio_id, LEAST(f.first_heard, n.first_in) AS first_heard,
+                    n.heard_last, n.heard_times
+               FROM (
+                 SELECT source_unit AS radio_id, MIN(received_at) AS first_in,
+                        MAX(received_at) AS heard_last, ${RECEPTION} AS heard_times
+                   FROM node_radio_events
+                  WHERE ${heardConds.join(' AND ')}
+                  GROUP BY source_unit
+               ) n
+               LEFT JOIN (
+                 SELECT source_unit AS radio_id, MIN(hour) AS first_heard
+                   FROM node_radio_hourly_unit WHERE ${RID_VALID}
+                  GROUP BY source_unit
+               ) f USING (radio_id)
+           ) h`;
+    } else {
+      // Fleet-wide: the hourly per-radio rollup plus the hour in progress, in
+      // ONE pass over the rollup — its whole history for First heard, FILTERed
+      // to the window for the traffic columns. Measured on production at
+      // 115-155 ms for every window, All included (the table is ~27 MB).
+      //
+      // This used to read the whole window from detail on every request, and on
       // production that never finished — 109 s for 24h, 74 s for 7d, against a
       // 30 s timeout — because rows newer than the last vacuum are each checked
-      // against the heap in radio-id order (see migration 125). The rollup
-      // answers every window in well under a second.
+      // against the heap in radio-id order (see migration 125).
       //
       // last_heard is NULL on rows rolled up before migration 125; the hour is
       // the fallback, so "Last heard" rounds down for those until they age out.
-      params.push(iv);
+      let since = `'-infinity'::timestamptz`;
+      if (!lifetime) {
+        params.push(iv);
+        since = `date_trunc('hour', now()) - $${params.length}::interval`;
+      }
       const seam = rollupEdgeSql(await resolveRollupEdge(pool));
-      heardJoin = `JOIN (
-             SELECT unit AS radio_id, MAX(heard) AS heard_last, SUM(n)::int AS heard_times
+      heard = `(
+             SELECT radio_id, MIN(first_heard) AS first_heard,
+                    MAX(heard_last) AS heard_last, SUM(heard_times)::int AS heard_times
                FROM (
-                 SELECT source_unit AS unit, COALESCE(last_heard, hour) AS heard, receptions AS n
+                 SELECT source_unit AS radio_id, MIN(hour) AS first_heard,
+                        MAX(COALESCE(last_heard, hour)) FILTER (WHERE hour >= ${since}) AS heard_last,
+                        SUM(receptions) FILTER (WHERE hour >= ${since}) AS heard_times
                    FROM node_radio_hourly_unit
-                  WHERE hour >= date_trunc('hour', now()) - $${params.length}::interval
-                    AND hour < ${seam} AND ${RID_VALID}
+                  WHERE hour < ${seam} AND ${RID_VALID}
+                  GROUP BY source_unit
                  UNION ALL
-                 SELECT source_unit, MAX(received_at), ${RECEPTION}
+                 SELECT source_unit, MIN(received_at), MAX(received_at), ${RECEPTION}
                    FROM node_radio_events
                   WHERE ${liveHour(seam)} AND ${CALL_GROUP} AND ${RID_VALID}
                   GROUP BY source_unit
                ) r
-              GROUP BY unit
-           ) h ON h.radio_id = a.radio_id`;
+              GROUP BY radio_id
+             HAVING SUM(heard_times) > 0
+           ) h`;
     }
-    // ONE ROW PER RADIO. The table is keyed (system, radio_id), and a radio
-    // heard before its system was decoded is filed under system 0 as well as
-    // its real one — 1,458 rows for 1,024 radios on production — so reading it
-    // directly listed those radios twice with identical figures. Collapse first:
-    // the newest alias, the real system over 0, and lifetime figures across
-    // both rows.
+    // ONE ROW PER RADIO. The alias table is keyed (system, radio_id), and a
+    // radio heard before its system was decoded is filed under system 0 as well
+    // as its real one — 1,458 rows for 1,024 radios on production — so joining
+    // it directly listed those radios twice. Collapse first: the newest alias,
+    // the real system over 0, the earliest first sighting.
     //
     // Rows recorded before the ingest guard can hold the radio's own id as its
     // "alias" — the decoder echoes the id when a radio sends no talker alias.
@@ -5405,45 +5419,45 @@ nodeDataRouter.get('/api/node-data/radio-aliases', requireRole(canViewNodeData),
            SELECT radio_id,
                   (array_agg(system ORDER BY (system = 0), last_seen DESC))[1] AS system,
                   (array_agg(alias ORDER BY last_seen DESC))[1] AS alias,
-                  MIN(first_seen) AS first_seen,
-                  MAX(last_seen) AS last_seen,
-                  SUM(times_seen)::int AS times_seen
+                  MIN(first_seen) AS first_seen
              FROM node_radio_aliases
             WHERE alias <> radio_id::text
             GROUP BY radio_id
          ) a`;
+    const from = `${heard} LEFT JOIN ${aliasesByRadio} ON a.radio_id = h.radio_id`;
     const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
-    const heardLast = lifetime ? 'a.last_seen' : 'h.heard_last';
-    const heardTimes = lifetime ? 'a.times_seen' : 'h.heard_times';
+    // LEAST ignores NULLs, so a radio with no alias row takes the rollup's.
+    const firstHeard = 'LEAST(a.first_seen, h.first_heard)';
     // Clickable headings: each column the table renders maps to an expression,
     // and `dir` flips it. radio_id is the tie-breaker so paging is stable.
-    // (`ota` is this table's own alias column — the configured Alias and Agency
+    // (`ota` is the alias table's column — the configured Unit and Agency
     // columns come from the config and are sorted client-side on the page.)
+    // Unnamed radios sort after named ones either way round on OTA.
     const orderExpr = ({
-      lastSeen: heardLast,
-      firstSeen: 'a.first_seen',
-      timesSeen: heardTimes,
-      radio: 'a.radio_id',
+      lastSeen: 'h.heard_last',
+      firstSeen: firstHeard,
+      timesSeen: 'h.heard_times',
+      radio: 'h.radio_id',
       ota: 'lower(a.alias)',
     } as const)[sort];
-    const orderBy = `${orderExpr} ${dir}, a.radio_id ASC`;
+    const orderBy = `${orderExpr} ${dir} NULLS LAST, h.radio_id ASC`;
 
     const totalRes = await pool.query<{ n: string }>(
-      `SELECT count(*)::int AS n FROM ${aliasesByRadio} ${heardJoin} ${where}`,
+      `SELECT count(*)::int AS n FROM ${from} ${where}`,
       params,
     );
     params.push(limit, offset);
     const rows = await pool.query<{
-      system: number;
+      system: number | null;
       radio_id: number;
-      alias: string;
+      alias: string | null;
       first_seen: Date;
       last_seen: Date;
       times_seen: number;
     }>(
-      `SELECT a.system, a.radio_id, a.alias, a.first_seen,
-              ${heardLast} AS last_seen, ${heardTimes} AS times_seen
-         FROM ${aliasesByRadio} ${heardJoin} ${where}
+      `SELECT a.system, h.radio_id, a.alias, ${firstHeard} AS first_seen,
+              h.heard_last AS last_seen, h.heard_times AS times_seen
+         FROM ${from} ${where}
         ORDER BY ${orderBy}
         LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params,
@@ -5456,9 +5470,9 @@ nodeDataRouter.get('/api/node-data/radio-aliases', requireRole(canViewNodeData),
       rows: rows.rows.map((r) => ({
         system: r.system,
         radio: r.radio_id,
-        // This table IS the OTA history (node_radio_aliases records what each
-        // radio transmitted), so `ota` is the stored alias; `alias` is the
-        // separate configured unit label. A radio can have both.
+        // `ota` is what the radio transmitted (node_radio_aliases), null when it
+        // never has; `alias` is the separate configured unit label. A radio can
+        // have both, either, or neither.
         ota: r.alias,
         alias: radioDisp.labels.get(r.radio_id) ?? null,
         // Radios have no talkgroup, so the agency (and its colour) come from
