@@ -353,6 +353,7 @@ const SOURCE_LABELS: Record<string, string> = {
   firms_hotspots: 'NASA FIRMS hotspots',
   adsb_aircraft: 'ADS-B aircraft',
   user_incidents: 'User reports',
+  dorsal_reports: 'Dorsal Watch shark reports',
 };
 
 function sourceLabel(name: string): string {

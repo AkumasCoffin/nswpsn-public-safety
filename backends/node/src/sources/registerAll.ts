@@ -24,6 +24,7 @@ import registerQldFire from './qldFire.js';
 import registerVicEmergency from './vicEmergency.js';
 import registerWaEmergency from './waEmergency.js';
 import registerSaFire from './saFire.js';
+import registerDorsal from './dorsal.js';
 
 export function registerAllSources(): void {
   registerRfs();
@@ -47,4 +48,5 @@ export function registerAllSources(): void {
   registerVicEmergency();
   registerWaEmergency();
   registerSaFire();
+  registerDorsal();
 }

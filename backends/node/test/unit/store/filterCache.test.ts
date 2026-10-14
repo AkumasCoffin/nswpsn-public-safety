@@ -37,11 +37,15 @@ describe('filterCache', () => {
 
   it('returns the full provider list when LiveStore is empty', () => {
     const facets = getFilterFacetsLive();
-    // 16 providers: the seven fire agencies (rfs, nt_fire, qfd, vic,
+    // 17 providers: the seven fire agencies (rfs, nt_fire, qfd, vic,
     // dfes, sacfs, samfs) plus bom, livetraffic, endeavour, ausgrid,
-    // essential, pager, user, rdio, actas. Waze was retired with its
-    // ingest.
-    expect(facets.providers).toHaveLength(16);
+    // essential, pager, user, rdio, actas, dorsal. Waze was retired with
+    // its ingest.
+    expect(facets.providers).toHaveLength(17);
+    // Pin the newest one by key as well as by count — a provider missing
+    // from PROVIDER_ORDER is silently dropped from the list rather than
+    // erroring, which is exactly the failure this count is here to catch.
+    expect(facets.providers.map((p) => p.key)).toContain('dorsal');
     for (const p of facets.providers) {
       expect(p.count).toBe(0);
     }

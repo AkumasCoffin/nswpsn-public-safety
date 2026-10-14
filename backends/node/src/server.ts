@@ -19,6 +19,7 @@ import { actAmbulanceRouter } from './api/act-ambulance.js';
 import { bomRouter } from './api/bom.js';
 import { trafficRouter } from './api/traffic.js';
 import { beachRouter } from './api/beach.js';
+import { dorsalRouter } from './api/dorsal.js';
 import { weatherRouter } from './api/weather.js';
 import { pagerRouter } from './api/pager.js';
 import { firmsRouter } from './api/firms.js';
@@ -377,6 +378,7 @@ export function createApp() {
   app.route('/', bomRouter);
   app.route('/', trafficRouter);
   app.route('/', beachRouter);
+  app.route('/', dorsalRouter);
   app.route('/', weatherRouter);
   app.route('/', pagerRouter);
   app.route('/', firmsRouter);
@@ -473,6 +475,7 @@ export function createApp() {
           '/api/essential/{outages,planned,future}',
           '/api/beachwatch',
           '/api/beachsafe',
+          '/api/dorsal/reports',
           '/api/aviation/cameras',
           '/api/centralwatch/cameras',
           '/api/news/rss',

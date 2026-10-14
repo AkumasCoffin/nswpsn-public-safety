@@ -51,6 +51,9 @@ const SOURCE_THRESHOLDS: Record<string, ThresholdEntry> = {
   // FIRMS NRT updates every few hours; loose thresholds match its cadence.
   firms_hotspots:    { soft: 3600, hard: 10800, label: 'NASA FIRMS hotspots' },
   act_ambulance:     { soft: 600,  hard: 1800, label: 'ACT Ambulance responses' },
+  // ~24 reports a day nationally, polled every 5 min — a quiet stretch is
+  // normal, so the thresholds are about staleness of the feed, not of events.
+  dorsal_reports:    { soft: 900,  hard: 2700, label: 'Dorsal Watch shark reports' },
 };
 
 // Reference / static data sources that are polled for the live map but

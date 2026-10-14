@@ -397,6 +397,14 @@ const Schema = z.object({
     .default('false')
     .transform((s) => s === 'true'),
 
+  // Kill switch for the Dorsal Watch shark-report feed. When true the source
+  // still registers but serves an empty snapshot, so /api/dorsal/reports and
+  // the beaches map layer go quiet without a redeploy.
+  DORSAL_DISABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((s) => s === 'true'),
+
   // Kill switch for the AnyTrip public-transport proxy. When true both
   // /api/transport/* endpoints return empty snapshots and never hit
   // upstream. Escape hatch if AnyTrip blocks us or the (unofficial)

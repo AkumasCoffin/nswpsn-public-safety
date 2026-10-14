@@ -70,6 +70,7 @@ const RAW_SOURCE_TO_ALERT_TYPE: Record<string, string> = {
   waze_police: 'waze_police',
   waze_roadwork: 'waze_roadwork',
   pager: 'pager',
+  dorsal: 'shark_report',
   // LiveStore keys (the Node poller's source name) → alert_type. Without
   // these, the filter facet computation walks liveStore.keys() and
   // returns 0 for RFS, BoM, traffic_incidents because their LiveStore
@@ -78,6 +79,7 @@ const RAW_SOURCE_TO_ALERT_TYPE: Record<string, string> = {
   rfs_incidents: 'rfs',
   bom_warnings: 'bom_land',
   traffic_incidents: 'traffic_incident',
+  dorsal_reports: 'shark_report',
 };
 
 const ALERT_TYPE_PROVIDER: Record<string, [string, string]> = {
@@ -120,6 +122,7 @@ const ALERT_TYPE_PROVIDER: Record<string, [string, string]> = {
   user_incident: ['user', 'User Incidents'],
   radio_summary: ['rdio', 'Hourly Summaries'],
   act_ambulance: ['actas', 'Responses'],
+  shark_report: ['dorsal', 'Shark Reports'],
 };
 
 const PROVIDER_DISPLAY: Record<string, { name: string; icon: string; color: string }> = {
@@ -149,6 +152,8 @@ const PROVIDER_DISPLAY: Record<string, { name: string; icon: string; color: stri
   user: { name: 'User Submissions', icon: 'user', color: '#a855f7' },
   rdio: { name: 'Radio Scanner', icon: 'radio', color: '#10b981' },
   actas: { name: 'ACT Ambulance Service', icon: 'truck-medical', color: '#ec4899' },
+  // Cyan matches the beaches layer this feed is shown on.
+  dorsal: { name: 'Dorsal Watch', icon: 'fish-fins', color: '#06b6d4' },
 };
 
 const PROVIDER_ORDER = [
@@ -168,6 +173,7 @@ const PROVIDER_ORDER = [
   'user',
   'rdio',
   'actas',
+  'dorsal',
 ];
 
 const PROVIDER_TYPE_ORDER: Record<string, string[]> = {

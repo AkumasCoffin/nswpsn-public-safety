@@ -80,6 +80,7 @@ const SOURCE_TO_FAMILY: Record<string, ArchiveTable> = {
   beachsafe: 'archive_misc',
   beachsafe_details: 'archive_misc',
   beachwatch: 'archive_misc',
+  dorsal: 'archive_misc',
   weather: 'archive_misc',
   weather_current: 'archive_misc',
   weather_radar: 'archive_misc',

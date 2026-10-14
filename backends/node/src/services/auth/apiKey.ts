@@ -102,6 +102,7 @@ const API_KEY_PATH_PREFIXES: readonly string[] = [
   '/api/bom/',
   '/api/beachsafe',
   '/api/beachwatch',
+  '/api/dorsal/',
   // Power outages.
   '/api/ausgrid/',
   '/api/endeavour/',
