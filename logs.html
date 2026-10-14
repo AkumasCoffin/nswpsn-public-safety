@@ -2069,7 +2069,12 @@
       let html = '';
       currentPageResults.forEach((item, idx) => {
         const data = item.data || {};
-        const icon = getSourceIcon(item.source, data.fireType || item.subcategory);
+        // Shark rows file the species in subcategory and the kind of report
+        // in category, and it's the kind of report the icon should show.
+        const icon = getSourceIcon(
+          item.source,
+          item.source === 'dorsal' ? (data.category || item.category) : (data.fireType || item.subcategory),
+        );
         const sourceName = formatSourceName(item.source);
         // Title fallback chain. The backend's formatted `title` only
         // gets populated for sources whose archiveItems extractor sets
@@ -2231,6 +2236,40 @@
           let details = [];
           if (suburb) details.push(`<span class="lg-tint" style="--c:#f9a8d4"><i class="fas fa-location-dot"></i> ${escapeHtml(suburb)}</span>`);
           if (called) details.push(`<span class="lg-dim"><i class="fas fa-phone"></i> ${escapeHtml(called)}</span>`);
+          if (details.length) extraDetails = details.join(' · ');
+        } else if (item.source === 'dorsal') {
+          const SHARK_CAT_LABELS = {
+            incident: ['Bite / bump', '#ef4444'],
+            closure: ['Beach closed', '#f59e0b'],
+            advisory: ['Warning', '#fbbf24'],
+            sighting: ['Sighting', '#2dd4bf'],
+            tagging: ['Tag & release', '#8b5cf6'],
+            carcass: ['Carcass', '#94a3b8'],
+            detection: ['Receiver detection', '#64748b'],
+          };
+          const cat = String(data.category || item.category || '').toLowerCase();
+          const [catLabel, catColor] = SHARK_CAT_LABELS[cat] || SHARK_CAT_LABELS.sighting;
+          extraInfo += `<span class="lg-badge" style="--badge:${catColor}">${escapeHtml(catLabel)}</span>`;
+          const species = data.species || item.subcategory || '';
+          if (species && species !== 'Unknown') {
+            extraInfo += `<span class="lg-badge-o" style="--badge:#5eead4">${escapeHtml(species)}</span>`;
+          }
+          // Dorsal HQ relaying DPIRD receivers / SLS / the Westpac helicopter,
+          // versus a member of the public. A reader should be able to tell.
+          extraInfo += data.official
+            ? `<span class="lg-badge-o" style="--badge:#22d3ee">Official</span>`
+            : `<span class="lg-badge-o" style="--badge:#94a3b8">Community</span>`;
+          let details = [];
+          if (typeof data.shark_length_m === 'number') {
+            details.push(`<span class="lg-dim"><i class="fas fa-ruler-horizontal"></i> ${escapeHtml(String(data.shark_length_m))} m</span>`);
+          }
+          if (typeof data.distance_from_shore_m === 'number') {
+            details.push(`<span class="lg-dim"><i class="fas fa-water"></i> ${escapeHtml(String(data.distance_from_shore_m))} m from shore</span>`);
+          }
+          if (data.zone) details.push(`<span class="lg-dim"><i class="fas fa-map"></i> ${escapeHtml(data.zone)}</span>`);
+          if (data.comment) {
+            details.push(`<span class="lg-tint lg-quote" style="--c:#99f6e4">"${escapeHtml(data.comment)}"</span>`);
+          }
           if (details.length) extraDetails = details.join(' · ');
         } else if (item.source === 'pager') {
           const agency = data.agency || item.category || '';
@@ -3468,7 +3507,8 @@
         'act_ambulance': 'ACT Ambulance',
         'traffic_alpine': 'Alpine',
         'traffic_lga': 'Council Roads',
-        'traffic_works': 'Roadwork & Works'
+        'traffic_works': 'Roadwork & Works',
+        'dorsal': 'Shark Reports'
       };
       return names[source] || source;
     }
@@ -3547,7 +3587,8 @@
         'act_ambulance': { primary: '#ec4899', secondary: '#f472b6' },
         'traffic_alpine': { primary: '#7dd3fc', secondary: '#bae6fd' },
         'traffic_lga': { primary: '#a3e635', secondary: '#bef264' },
-        'traffic_works': { primary: '#fb923c', secondary: '#fdba74' }
+        'traffic_works': { primary: '#fb923c', secondary: '#fdba74' },
+        'dorsal': { primary: '#2dd4bf', secondary: '#5eead4' }
       };
       return colors[source] || { primary: '#64748b', secondary: '#94a3b8' };
     }
@@ -4030,6 +4071,24 @@
         if (sub.includes('light')) return '<i class="fas fa-car-side" style="color:#eab308"></i>';
       }
       
+      // Shark reports: the icon is the kind of report, not the species — a
+      // bite and a receiver ping are the same animal and very different
+      // events. `subcategory` here is the report category, passed by the
+      // caller instead of the species it normally sends.
+      if (source === 'dorsal') {
+        const sharkIcons = {
+          incident: ['fa-triangle-exclamation', '#ef4444'],
+          closure: ['fa-ban', '#f59e0b'],
+          advisory: ['fa-circle-exclamation', '#fbbf24'],
+          sighting: ['fa-fish-fins', '#2dd4bf'],
+          tagging: ['fa-tag', '#8b5cf6'],
+          carcass: ['fa-skull', '#94a3b8'],
+          detection: ['fa-tower-broadcast', '#64748b'],
+        };
+        const [ic, col] = sharkIcons[String(subcategory || '').toLowerCase()] || sharkIcons.sighting;
+        return `<i class="fa-solid ${ic}" style="color:${col}"></i>`;
+      }
+
       const icons = {
         'rfs': '<i class="fas fa-fire" style="color:#ef4444"></i>',
         'user_incident': '<i class="fas fa-user" style="color:#a855f7"></i>',
