@@ -616,7 +616,7 @@
     /* Transcription card. Reuses .nd-ready for the state chips so a whisper
        backend and a feeder node read the same way at a glance. */
     .wh-card { margin: 0 0 1rem; padding: 0.75rem 0.9rem; border-radius: 8px;
-      background: var(--accent-soft); border: 1px solid var(--border); }
+      background: var(--accent-soft); border: 1px solid var(--border-subtle); }
     .wh-head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
       font-size: 0.8rem; font-weight: 600; margin-bottom: 0.6rem; }
     .wh-head .wh-sub { margin-left: auto; font-weight: 400; font-size: 0.7rem; color: var(--text-soft); }
@@ -806,6 +806,10 @@
     }
     .nd-input:focus { outline: none; border-color: var(--accent-border); }
     .nd-input-sm { width: 64px; }
+    /* The agency filters size to their longest agency name, capped. They had
+       an inline max-width of 190px that did nothing — .nd-input's fixed 92px
+       width won, so "All agencies" and every agency name were cut off. */
+    select.nd-input[data-nd2-agency] { width: auto; max-width: 190px; }
     /* A <select> using .nd-input otherwise keeps the platform's chrome — a
        light popup with a system arrow, which reads as a foreign control on a
        dark page. Drop the native appearance, draw our own caret, and set the
@@ -1718,15 +1722,9 @@
     .empty-state i { font-size: 2.5rem; margin-bottom: 1rem; opacity: 0.4; display: block; }
 
     /* === Modals ======================================================== */
-    .nd2-agency {
-      background: rgba(56, 189, 248, 0.12);
-      border-color: rgba(56, 189, 248, 0.32);
-      color: #7dd3fc;
-    }
-
     .nd2-linkbtn {
       background: none; border: 0; cursor: pointer; padding: 0 0 0 .35rem;
-      color: var(--text-secondary); opacity: .55; font-size: .82em;
+      color: var(--text-soft); opacity: .55; font-size: .82em;
     }
     .nd2-linkbtn:hover { color: var(--accent); opacity: 1; }
 
@@ -2184,8 +2182,8 @@
       border: 1px solid var(--border-subtle);
       border-radius: 999px;
       padding: 0.2rem;
+      position: relative;        /* the glider below is positioned against this */
     }
-    .nd2-seg { position: relative; }
     .nd2-seg .filter-btn {
       border: none;
       padding: 0.35rem 0.95rem;
@@ -2368,19 +2366,23 @@
       border: 1px solid var(--border-subtle);
       border-radius: 12px;
       overflow-x: auto;
-      /* NOT `visible`: a visible cross-axis is forced to `auto`, which makes
-         this a scroll container and kills page-level sticky for the header row
-         below. `clip` doesn't create a scroll container, so the thead can stick
-         to the page while the table still scrolls sideways. */
+      /* This IS a scroll container, whatever the y value. `clip` only avoids
+         creating one when the other axis is visible or clip too; with
+         overflow-x: auto the spec computes clip to hidden. So page-level sticky
+         for the header row cannot work here — sideways scrolling and a header
+         that sticks to the page are mutually exclusive in CSS. */
       overflow-y: clip;
       -webkit-overflow-scrolling: touch;
     }
-    /* The header row docks under the page header (and the crumb bar when one is
-       showing) so it stays readable while the rows scroll behind it. Opaque
-       background + a shadowed bottom border, or scrolled rows show through. */
+    /* top: 0, not the page header's height. Because the wrap above is the
+       sticky element's scroll container, an offset here is measured from the
+       top of the WRAP, not the viewport — the header row used to be pushed
+       ~68px+ down into the table, sitting on top of its first rows, on every
+       Events, Talkgroups, Units, Nodes and system/site table. It does not
+       stick to the page (see above); it sits where a header belongs. */
     .nd2-table-wrap .nd-table thead th {
       position: sticky;
-      top: var(--nd2-thead-top, 68px);
+      top: 0;
       z-index: 12;
       background: var(--bg-card);
       box-shadow: inset 0 -1px 0 var(--border-subtle);
@@ -2512,6 +2514,15 @@
       color: var(--text-soft);
       margin: 0.06rem 0.2rem 0.06rem 0;
       white-space: nowrap;
+    }
+    /* Agency chips are sky, not the grey every other chip is. This rule used to
+       be a bare .nd2-agency sitting under the Modals heading: same specificity
+       as .nd2-chip but earlier in the file, so .nd2-chip won and every agency
+       chip rendered grey. The compound selector outranks it on purpose. */
+    .nd2-chip.nd2-agency {
+      background: rgba(56, 189, 248, 0.12);
+      border-color: rgba(56, 189, 248, 0.32);
+      color: #7dd3fc;
     }
     /* Deep P25 site metadata (site-view parity).
        .nd2-card itself has no padding — tables are meant to run edge to edge,
@@ -2806,6 +2817,11 @@
        carries no margin of its own, so without this they sit flush and read as
        one long table. Separates the pair rather than trailing the second. */
     #nd2-view-live .nd2-card + .nd2-card { margin-top: 1.5rem; }
+    /* The live tables' column minimums add up to ~1,220px, and .nd2-card clips.
+       Phones were rescued by the 768px .nd-table rule; between that and ~1,300px
+       the right-hand columns were simply cut off and unreachable. Their hosts
+       scroll instead. These mini tables have no sticky header to lose. */
+    #nd2-live-ch, #nd2-live-calls { overflow-x: auto; }
 
     /* Per-node scope selector (sits at the right of the window pill row). */
     .nd2-node-ctl {
@@ -2823,9 +2839,12 @@
       font-size: 0.8rem;
       padding: 0.4rem 0.55rem;
     }
-    /* Hide-encrypted switch sits beside the node selector; only the FIRST
-       control in the row takes the margin-left:auto that pushes the pair right. */
-    .nd2-enc-ctl { margin-left: 0.9rem; cursor: pointer; user-select: none; }
+    /* Hide-encrypted is the right-hand control in the window row. It used to
+       sit beside the node selector and leave margin-left:auto to it, but that
+       selector has been permanently hidden since the Nodes drill-down replaced
+       it, so nothing pushed the switch right any more. It takes the auto
+       margin itself now (the 768px rule below still zeroes it on phones). */
+    .nd2-enc-ctl { margin-left: auto; cursor: pointer; user-select: none; }
     .nd2-enc-ctl input { accent-color: var(--accent, #60a5fa); cursor: pointer; }
 
     /* Systems folder tree (system = folder, site = nested file row). */
@@ -2892,6 +2911,11 @@
     @media (max-width: 768px) {
       .nd2-tree-counts { gap: 0.55rem; font-size: 0.68rem; }
       .nd2-node-ctl { margin-left: 0; }
+      /* The pill bars don't wrap (they are one capsule), and the Radio bar is
+         ~590px of seven pills — on a phone it pushed the whole page sideways.
+         It scrolls inside itself instead. Phones only: wider screens fit it,
+         and a scroll container is not worth having where nothing scrolls. */
+      .nd2-seg { max-width: 100%; overflow-x: auto; }
     }
 
     /* === Responsive ==================================================== */
@@ -2937,9 +2961,8 @@
         display: block; overflow-x: auto; -webkit-overflow-scrolling: touch;
       }
       /* ...except the ones already scrolling inside .nd2-table-wrap. Making
-         those display:block nests a second scroller inside the first and
-         drops the sticky header row — the wrapper carries overflow-y:clip
-         precisely so thead can stick to the page while rows scroll. */
+         those display:block nests a second scroller inside the first, which
+         the wrapper's own overflow-x already makes unnecessary. */
       .nd2-table-wrap .nd-table { display: table; overflow: visible; }
 
       /* Several of these boxes carry an inline style="min-width:NNNpx", which
@@ -3795,7 +3818,7 @@
                      the same catalogue the pills take their colour from — so an
                      option can never name an agency no row could match. -->
                 <select class="nd-input" id="nd2-tg-agency" data-nd2-agency
-                        style="max-width: 190px;" aria-label="Filter talkgroups by agency"
+                        aria-label="Filter talkgroups by agency"
                         onchange="nd2TgSetAgency(this.value)">
                   <option value="">All agencies</option>
                 </select>
@@ -3842,7 +3865,7 @@
                   <input type="text" id="nd2-rad-q" placeholder="RID" inputmode="numeric" oninput="nd2RadInputChanged()">
                 </div>
                 <select class="nd-input" id="nd2-rad-agency" data-nd2-agency
-                        style="max-width: 190px;" aria-label="Filter radios by agency"
+                        aria-label="Filter radios by agency"
                         onchange="nd2RadSetAgency(this.value)">
                   <option value="">All agencies</option>
                 </select>
@@ -4030,7 +4053,7 @@
                        oninput="nd2AliasInputChanged()" />
               </div>
               <select class="nd-input" id="nd2-alias-agency" data-nd2-agency
-                      style="max-width: 190px;" aria-label="Filter units by agency"
+                      aria-label="Filter units by agency"
                       onchange="nd2AliasSetAgency(this.value)">
                 <option value="">All agencies</option>
               </select>
@@ -18546,17 +18569,14 @@
       const hh = h ? h.offsetHeight : 68;
       const root = document.documentElement.style;
       root.setProperty('--nd2-header-h', hh + 'px');
-      // Table headers dock BELOW the crumb bar when one is on screen, else
-      // straight under the page header. Measured rather than assumed so a
-      // wrapped crumb bar can't hide the first row of a table.
-      const crumb = [...document.querySelectorAll('.nd2-crumbbar')]
-        .find(el => el.offsetParent !== null);
-      root.setProperty('--nd2-thead-top', (hh + (crumb ? crumb.offsetHeight : 0)) + 'px');
+      // (This used to also publish --nd2-thead-top for the table headers. They
+      // sit inside a horizontal scroller, so a page-relative offset only ever
+      // pushed them down over their own rows — see .nd2-table-wrap.)
     }
     window.addEventListener('resize', nd2SyncHeaderH);
     window.addEventListener('load', nd2SyncHeaderH);
-    // The crumb bar appears/disappears as you drill in and out, so re-measure
-    // after any render that could have changed it.
+    // The header can change height after load (the role chip arrives after
+    // auth, and it wraps), so re-measure cheaply — one rAF per scroll burst.
     window.addEventListener('scroll', () => {
       if (nd2SyncHeaderH._q) return;
       nd2SyncHeaderH._q = requestAnimationFrame(() => { nd2SyncHeaderH._q = 0; nd2SyncHeaderH(); });
