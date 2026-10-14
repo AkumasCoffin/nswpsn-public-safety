@@ -31,6 +31,26 @@
  * sampled, some of them full names. `account` is dropped on the floor here;
  * provenance is carried as the upstream `official` flag instead, which is all
  * anything downstream needs.
+ *
+ * THE REST OF THEIR API, so nobody has to re-derive it from main.min.js. Base
+ * is https://www.dorsalwatch.com/api.
+ *   POST /public/report/list                      what we poll
+ *        /public/report/<id>                      one report
+ *        /public/countries                        id, name, lengthMetric,
+ *                                                 distanceMetric  <- units are
+ *                                                 a property of the COUNTRY,
+ *                                                 not the report: AU and
+ *                                                 Réunion are metric, USA and
+ *                                                 Hawaii are feet/yards
+ *        /public/<countryId>/states               AU: 1 QLD, 2 NSW, 3 SA,
+ *                                                 4 TAS, 5 VIC, 6 WA
+ *        /public/surfspot/zone/<country>/<state>/<token>   zone list
+ *        /image/<media.filename>/<n>              bucketed resizer; the
+ *                                                 media.cdn* fields are better
+ *        /surfspot/search                         *** DO NOT CALL *** — the
+ *                                                 account-data leak above
+ * Nothing here is needed today: the report feed already carries the state and
+ * zone names as strings, and we derive the archive's state from coordinates.
  */
 import { fetchJson } from './shared/http.js';
 import { config } from '../config.js';
@@ -67,6 +87,7 @@ export const DORSAL_ARCHIVE_SOURCE = 'dorsal';
 export type DorsalCategory =
   | 'detection'
   | 'sighting'
+  | 'drone'
   | 'incident'
   | 'tagging'
   | 'closure'
@@ -82,6 +103,12 @@ export type DorsalCategory =
  */
 const ENCOUNTER_CATEGORY: Record<string, DorsalCategory> = {
   'receiver tag': 'detection',
+  // Drone is its own category, not a plain sighting. It is the second most
+  // common encounter upstream (37 of 181 over a sample week, ~20%), and a
+  // lifeguard drone overflight is a different kind of claim from someone on
+  // the sand saying they saw something — folding the two together made the
+  // drone flights invisible as a group and unfilterable on their own.
+  drone: 'drone',
   'tag and release': 'tagging',
   'caught & released': 'tagging',
   bite: 'incident',
@@ -195,6 +222,18 @@ function asString(v: unknown): string {
  * and anything non-finite as absent rather than coercing to 0 — a shark "0 m
  * from shore" reads as a fact, and it isn't one.
  */
+/**
+ * Shark length / distance from shore, as metres.
+ *
+ * The unit is NOT carried on the report — it is a property of the report's
+ * country, from /api/public/countries: Australia is {lengthMetric: 'm',
+ * distanceMetric: 'm'}, but Hawaii and USA are {'f', 'y'} — feet and yards.
+ * Calling these metres is therefore only correct because the AU bounding-box
+ * filter has already dropped every overseas report (28 of 4000 sampled, in
+ * Hawaii and California). If that filter is ever widened, this function must
+ * take the country and convert, or the map will under-report a 10-foot shark
+ * as 10 metres. Réunion is metric; USA/Hawaii are not.
+ */
 function asMetres(v: unknown): number | null {
   const s = asString(v).trim();
   if (s === '' || s.toUpperCase() === 'N/A') return null;
@@ -225,14 +264,29 @@ export function speciesFor(raw: string): string {
 }
 
 /** First usable photo, hotlinked from their CDN — never proxied or rehosted. */
+/**
+ * Hotlink the smallest usable variant, never the original.
+ *
+ * `media` carries cdnSmall / cdnMedium / cdnLarge / cdnOrigin. Measured over
+ * 1000 reports (only 10 carry a photo at all): cdnSmall and cdnOrigin are
+ * populated 10/10, cdnMedium 1/10 and cdnLarge 0/10 — so medium and large are
+ * tried but cannot be relied on. cdnSmall is ~250px wide at 12-17 KB against
+ * 36-58 KB for the origin, and the tooltip renders the image in a ~260px box,
+ * so the origin is pure waste on someone else's CDN. (Their own /api/image/
+ * <filename>/<n> resizer is bucketed rather than exact — 50 and 200 both
+ * return the same 250px rendition — so these fields are the better handle.)
+ */
 function firstPhotoUrl(v: unknown): string | null {
   if (!Array.isArray(v)) return null;
   for (const p of v) {
     if (!p || typeof p !== 'object') continue;
     const media = (p as Record<string, unknown>)['media'];
     if (!media || typeof media !== 'object') continue;
-    const origin = (media as Record<string, unknown>)['cdnOrigin'];
-    if (typeof origin === 'string' && origin.startsWith('https://')) return origin;
+    const m = media as Record<string, unknown>;
+    for (const field of ['cdnSmall', 'cdnMedium', 'cdnLarge', 'cdnOrigin']) {
+      const url = m[field];
+      if (typeof url === 'string' && url.startsWith('https://')) return url;
+    }
   }
   return null;
 }
@@ -434,7 +488,12 @@ export function dorsalArchiveItems(
       lng: f.geometry.coordinates[0],
       category: p.category,
       subcategory: p.species || null,
-      data: { ...p },
+      // lat/lng are repeated INSIDE data on purpose. The row's own lat/lng
+      // columns are not what derives archive_*_latest.state — stateForRow()
+      // reads the coordinate back out of the data JSON (lat/lng, latitude/
+      // longitude, lon). Without these two keys every shark row lands with
+      // state NULL and the logs page's state filter never matches one.
+      data: { ...p, lat: f.geometry.coordinates[1], lng: f.geometry.coordinates[0] },
     });
   }
   return out;

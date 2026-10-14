@@ -192,7 +192,10 @@ describe('dorsal.categoryFor', () => {
     expect(categoryFor('Water Evacuated')).toBe('closure');
     expect(categoryFor('General Warning')).toBe('advisory');
     expect(categoryFor('Whale Carcass')).toBe('carcass');
-    expect(categoryFor('Drone')).toBe('sighting');
+    // Drone is its own category; the Westpac helicopter deliberately is not,
+    // so a change to one does not silently move the other.
+    expect(categoryFor('Drone')).toBe('drone');
+    expect(categoryFor('drone')).toBe('drone');
     expect(categoryFor('Westpac Heli')).toBe('sighting');
   });
 
@@ -308,6 +311,20 @@ describe('dorsal.dorsalArchiveItems', () => {
     expect(row.subcategory).toBe('Bull Shark');
     expect((row.data as { title: string }).title).toContain('Bull Shark');
     expect(JSON.stringify(row)).not.toContain('Kerianne');
+  });
+
+  it('repeats the coordinate inside data so the row resolves a state', async () => {
+    // archive_*_latest.state comes from stateForRow(row.data), which reads
+    // lat/lng out of the JSON — NOT from the row's own lat/lng columns. Shipped
+    // without these and all 181 backfilled rows landed state NULL, so the logs
+    // page state filter matched none of them. Assert on stateForRow itself
+    // rather than the keys, so the contract is pinned to the real consumer.
+    const { fetchDorsal, dorsalArchiveItems } = await freshModule();
+    const { stateForRow } = await import('../../../src/lib/stateMask.js');
+    fetchJsonMock.mockResolvedValueOnce(upstream([report({ id: 7 })]));
+    const row = dorsalArchiveItems(await fetchDorsal(), 1_700_000_000, 'dorsal')[0]!;
+
+    expect(stateForRow(row.data)).toBe('NSW');
   });
 
   it('returns nothing for a snapshot that is empty or the wrong shape', async () => {
