@@ -632,7 +632,11 @@ class Database:
     # to re-save them. The other half of the rule — that a catch-all must not
     # choose the type in the first place — lives in bot.py's
     # _OPT_IN_ONLY_TYPES.
-    _SCOPED_ONLY_ALERT_TYPES = {'firms'}
+    # Shark reports are here on the same principle, before rather than after
+    # an incident: a national feed of coastal events where a channel almost
+    # always cares about one stretch of coast. Unscoped it is ~25 a day of
+    # mostly-elsewhere; scoped to a region it is the handful that matter.
+    _SCOPED_ONLY_ALERT_TYPES = {'firms', 'shark_report'}
 
     @staticmethod
     def preset_has_geoscope(preset: Dict[str, Any]) -> bool:

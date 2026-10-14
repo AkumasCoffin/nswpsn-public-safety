@@ -1497,6 +1497,8 @@ class EmbedBuilder:
             return self.build_wire_fleet_container(data)
         elif alert_type == 'user_incident':
             return self.build_user_incident_container(data, previous_message=previous_message)
+        elif alert_type == 'shark_report':
+            return self.build_shark_container(data)
         else:
             return self.build_generic_container(data, alert_type)
 
@@ -2564,6 +2566,78 @@ class EmbedBuilder:
                 footer_bits.append(f"[🗺️ Map]({map_url})")
         self._append_container_footer(container, footer_bits, source="Pagermon (self-hosted)")
         return container
+
+    # ---- Shark reports (Dorsal Watch) --------------------------
+    #
+    # One feed, seven kinds of event, and the gap between them is the whole
+    # point: a bite and a tagged shark drifting past a listening station are
+    # the same animal and nothing like the same news. The accent colour and
+    # the headline carry that distinction, because the card is read at a
+    # glance in a channel that also carries fires and outages.
+    _SHARK_CATEGORIES = {
+        'incident':  ('🚨 Shark incident',    0xEF4444),
+        'closure':   ('⛔ Beach closed',      0xF59E0B),
+        'advisory':  ('⚠️ Shark warning',     0xFBBF24),
+        'sighting':  ('🦈 Shark sighting',    0x2DD4BF),
+        'tagging':   ('🏷️ Tag and release',   0x8B5CF6),
+        'carcass':   ('💀 Carcass reported',  0x94A3B8),
+        'detection': ('📡 Tagged shark detected', 0x64748B),
+    }
+
+    def build_shark_container(self, data: Dict[str, Any]):
+        """Components V2 container for a Dorsal Watch shark report."""
+        data = data or {}
+        props = data.get('properties') or {}
+
+        category = str(props.get('category') or 'sighting').lower()
+        headline, color = self._SHARK_CATEGORIES.get(
+            category, self._SHARK_CATEGORIES['sighting'])
+
+        location = strip_html(str(props.get('location') or '')).strip()
+        species = strip_html(str(props.get('species') or '')).strip()
+        title = location or species or 'Shark report'
+
+        fields = []
+        if species and species.lower() != 'unknown':
+            fields.append(('Species', species))
+        length = props.get('shark_length_m')
+        if isinstance(length, (int, float)):
+            fields.append(('Length', f"{length} m"))
+        distance = props.get('distance_from_shore_m')
+        if isinstance(distance, (int, float)):
+            fields.append(('From shore', f"{distance} m"))
+        where = ' · '.join(x for x in (props.get('zone'), props.get('state')) if x)
+        if where:
+            fields.append(('Area', where))
+        # Dorsal HQ relaying DPIRD receivers / Surf Life Saving / the Westpac
+        # helicopter, versus a member of the public. Different kinds of claim.
+        fields.append(('Reported by', props.get('provenance') or 'Unknown'))
+        encounter = strip_html(str(props.get('encounter') or '')).strip()
+        if encounter:
+            fields.append(('Method', encounter))
+
+        footer_bits = []
+        unix = props.get('reported_at_unix')
+        if isinstance(unix, (int, float)) and unix > 0:
+            footer_bits.append(f"<t:{int(unix)}:R>")
+        geom = data.get('geometry') or {}
+        coords = geom.get('coordinates') if isinstance(geom, dict) else None
+        if isinstance(coords, (list, tuple)) and len(coords) >= 2:
+            lon, lat = coords[0], coords[1]
+            if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
+                footer_bits.append(
+                    f"[🗺️ Map]({build_map_url(lat, lon, label=title, layer='sharksmart')})")
+
+        return self._card(
+            icon=self.ICONS.get('shark_report', '🦈'),
+            title=title,
+            color=color,
+            headline=headline,
+            fields=fields,
+            body=str(props.get('comment') or ''),
+            source='Dorsal Watch',
+            footer_bits=footer_bits,
+        )
 
     # ---- Generic fallback --------------------------------------
     def build_generic_container(self, data: Dict[str, Any], alert_type: str):

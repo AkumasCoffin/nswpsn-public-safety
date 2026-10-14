@@ -129,6 +129,7 @@ _Generated from `shared/alert-catalog.json` by `gen_readme_alert_types.py` — d
 | Radio Scanner | `radio_summary` | Radio Scanner | Radio Summary |
 | The Wire | `wire_article` | The Wire | Wire Articles _(not yet live)_ |
 | The Wire | `wire_fleet` | The Wire | Wire Fleet Additions _(not yet live)_ |
+| Dorsal Watch | `shark_report` | Dorsal Watch | Shark Reports |
 
 <!-- END GENERATED ALERT TYPES -->
 

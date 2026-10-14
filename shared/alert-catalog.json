@@ -71,7 +71,8 @@
     { "key": "essential",   "label": "Essential Energy",       "icon": "bolt",          "color": "#06b6d4" },
     { "key": "user",        "label": "User Submissions",       "icon": "user",          "color": "#a855f7" },
     { "key": "rdio",        "label": "Radio Scanner",          "icon": "radio",         "color": "#10b981" },
-    { "key": "wire",        "label": "The Wire",               "icon": "newspaper",     "color": "#f97316" }
+    { "key": "wire",        "label": "The Wire",               "icon": "newspaper",     "color": "#f97316" },
+    { "key": "dorsal",      "label": "Dorsal Watch",           "icon": "fish-fins",     "color": "#2dd4bf" }
   ],
 
   "types": [
@@ -349,6 +350,14 @@
       "archiveSource": null, "endpoint": "/api/wire/fleet?limit=30", "itemsPath": "vehicles",
       "soon": true,
       "color": "#14b8a6", "icon": "🚒", "severityScale": null, "subtypeAware": false
+    },
+
+    {
+      "key": "shark_report", "provider": "dorsal", "label": "Shark Reports", "botLabel": "Shark Reports",
+      "agency": "DORSAL", "agencyLabel": "Dorsal Watch",
+      "feedShape": "geo_point",
+      "archiveSource": "dorsal", "endpoint": "/api/dorsal/reports", "itemsPath": "features",
+      "color": "#2dd4bf", "icon": "🦈", "severityScale": null, "subtypeAware": true
     }
   ]
 }

@@ -94,7 +94,11 @@ ALERT_TYPES = alert_catalog.LABELS
 # "Enable All" and a bare /alert no longer choose it for anyone. The other half
 # of the rule — an unscoped hotspot subscription is not honoured at all — lives
 # in Database.get_presets_for_alert_type.
-_OPT_IN_ONLY_TYPES = {'firms'}
+# Shark reports join it for the same reason at a smaller scale: roughly 25 a
+# day nationally, 56% of which are a tagged shark swimming past a listening
+# station. That is a feed somebody chooses, not one a "select everything"
+# preset should pour into a channel that wanted fires and outages.
+_OPT_IN_ONLY_TYPES = {'firms', 'shark_report'}
 
 # Alert types shown in the generic /setup alerts dropdown + "Enable All".
 # Radio summary opts out in the catalog (generalPicker:false) because it has
@@ -189,8 +193,14 @@ _FEATURE_ALERT_TYPES = alert_catalog.keys_with_shape(
 
 # The above plus the traffic feeds, which are the same GeoJSON shape but carry
 # no severity or agency fields and so read differently for keywords.
+#
+# geo_point (shark reports) MUST be in here, and it is not cosmetic:
+# preset_has_geoscope only checks that a geofilter key exists, so a
+# scoped-only type whose coordinates cannot be read would satisfy the gate
+# and then pass every geofilter unconditionally — the opposite of what
+# requiring a region is for.
 _GEO_POINT_ALERT_TYPES = _FEATURE_ALERT_TYPES | alert_catalog.keys_with_shape(
-    'geo_traffic')
+    'geo_traffic', 'geo_point')
 
 
 def _alert_text_haystack(alert_type: str, alert_data: dict) -> str:
@@ -229,6 +239,14 @@ def _alert_text_haystack(alert_type: str, alert_data: dict) -> str:
         for k in ('title', 'headline', 'displayName', 'subtitle', 'roads',
                   'incidentType', 'otherAdvice', 'adviceA', 'adviceB',
                   'affectedDirection'):
+            _push(props.get(k))
+    elif canon == 'shark_report':
+        # GeoJSON like the feature types, but its own field names — falling
+        # through to the generic branch would flatten the geometry dict and
+        # match nothing a keyword filter could usefully name.
+        props = alert_data.get('properties') or {}
+        for k in ('title', 'species', 'encounter', 'category', 'location',
+                  'zone', 'state', 'provenance', 'comment'):
             _push(props.get(k))
     elif canon in ('wire_article', 'wire_fleet'):
         for k in ('title', 'excerpt', 'callsign', 'agency', 'station',
@@ -400,6 +418,13 @@ def _alert_subtype_token(alert_type: str, alert_data: dict):
     if alert_type == 'user_incident':
         raw = alert_data.get('category') or alert_data.get('type')
         return (str(raw or '').strip()) or None
+    if alert_type == 'shark_report':
+        # The normalised report category — sighting / detection / incident /
+        # closure / advisory / tagging / carcass. This is the dimension worth
+        # filtering on: species is interesting, but "only tell me about bites
+        # and closures" is the subscription people actually want.
+        props = alert_data.get('properties') or {}
+        return (str(props.get('category') or '').strip()) or None
     return None
 
 

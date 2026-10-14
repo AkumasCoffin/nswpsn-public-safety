@@ -199,6 +199,17 @@ class AlertPoller:
             # (which bump updated_at, never the id) can never re-alert.
             return f"{alert_type}_{item.get('id', '')}"
 
+        elif alert_type == 'shark_report':
+            # Upstream's own report id, which is stable — 4000 sampled, 4000
+            # distinct. Keyed on the id ALONE, deliberately: Dorsal can edit a
+            # report (there is an "Updated report" encounter type), and a
+            # corrected species is not a second shark. The id must also stay
+            # stable for longer than the feed window, or a report still being
+            # served when seen_alerts prunes at 7 days would re-fire — which
+            # is why the endpoint's default window is 48 hours.
+            props = item.get('properties', {})
+            return f"shark_{props.get('report_id', '')}"
+
         elif alert_type == 'user_incident':
             # User incidents from Supabase - use incident ID + latest log ID for update tracking
             incident_id = item.get('id', '')
@@ -292,6 +303,19 @@ class AlertPoller:
                                 return _aware(datetime.fromisoformat(s.replace('Z', '+00:00')))
                             except ValueError:
                                 pass
+
+            elif alert_type == 'shark_report':
+                # When the shark was seen, not when we noticed. The backend
+                # normalises upstream's epoch-ms into both an ISO string and
+                # epoch seconds; prefer the seconds, which cannot be
+                # misparsed, and keep the ISO as the fallback.
+                props = item.get('properties', {})
+                unix = props.get('reported_at_unix')
+                if isinstance(unix, (int, float)) and unix > 0:
+                    return datetime.fromtimestamp(unix, tz=timezone.utc)
+                ts = props.get('reported_at') or ''
+                if ts:
+                    return _aware(datetime.fromisoformat(str(ts).replace('Z', '+00:00')))
 
             elif alert_type == 'wire_article':
                 # First-publish time — stamped once server-side; edits bump
