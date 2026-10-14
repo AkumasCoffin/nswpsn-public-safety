@@ -340,7 +340,6 @@
       "agency": "AUSAWARE", "agencyLabel": "The Wire",
       "feedShape": "wire",
       "archiveSource": null, "endpoint": "/api/wire/articles?limit=30", "itemsPath": "articles",
-      "soon": true,
       "color": "#f59e0b", "icon": "📰", "severityScale": null, "subtypeAware": false
     },
     {
@@ -348,7 +347,6 @@
       "agency": "AUSAWARE", "agencyLabel": "The Wire",
       "feedShape": "wire",
       "archiveSource": null, "endpoint": "/api/wire/fleet?limit=30", "itemsPath": "vehicles",
-      "soon": true,
       "color": "#14b8a6", "icon": "🚒", "severityScale": null, "subtypeAware": false
     },
 

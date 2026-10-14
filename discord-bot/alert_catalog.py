@@ -183,7 +183,9 @@ def general_picker_types() -> Dict[str, str]:
 
     Radio summary opts out via generalPicker:false — it has its own setup flow.
     `soon` types are excluded for the same reason the dashboard excludes them:
-    The Wire has not launched, so it must not be enableable yet.
+    a type that is not live yet must not be enableable. No type carries the
+    flag today (The Wire's two dropped it when The Wire went public); the
+    mechanism stays for the next feed that ships ahead of its backend.
     """
     return {
         t['key']: t['botLabel']
@@ -200,11 +202,12 @@ def providers_with_types(include_soon: bool = False,
                          general_only: bool = True) -> List[Dict[str, Any]]:
     """Providers that have at least one selectable type, in catalog order.
 
-    The defaults suit the SUBSCRIPTION picker: no `soon` types (The Wire has
-    not launched) and no generalPicker:false types (radio summary has its own
-    setup flow). The roles picker passes both off — assigning a ping role to a
-    type is not the same as subscribing to it, and roles were assignable for
-    radio summary and the Wire types before this was grouped by provider.
+    The defaults suit the SUBSCRIPTION picker: no `soon` types (none today —
+    see general_picker_types) and no generalPicker:false types (radio summary
+    has its own setup flow). The roles picker passes both off — assigning a
+    ping role to a type is not the same as subscribing to it, and roles were
+    assignable for radio summary and the Wire types before this was grouped by
+    provider.
     """
     out = []
     for p in PROVIDERS:

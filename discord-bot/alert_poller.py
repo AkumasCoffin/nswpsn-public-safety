@@ -41,10 +41,13 @@ class AlertPoller:
         #   - The interstate feeds are all RFS-shaped GeoJSON, refreshed
         #     upstream every 2 min (NT: 5 min) — the 60s cycle just sees an
         #     unchanged snapshot on the off-beats; seen-dedup absorbs it.
-        #   - 'wire_article'/'wire_fleet' poll The Wire's public lists. While
-        #     The Wire is not live the backend answers visible:false (an API
-        #     key alone carries no user session) and check_alerts skips them
-        #     WITHOUT consuming the bootstrap — see the gate there.
+        #   - 'wire_article'/'wire_fleet' poll The Wire's public lists. The
+        #     Wire went public (app_settings.wire_public) and both types left
+        #     the catalog's `soon` state, so they are subscribable now. The
+        #     visible:false gate in check_alerts stays regardless: wire_public
+        #     is an owner toggle that can go back off, and an API key alone
+        #     carries no user session, so "not readable" must keep meaning
+        #     "skip without consuming the bootstrap" rather than "no posts".
         #   - 'firms' returns thousands of satellite fire pixels; _extract_items
         #     collapses them into ~100m clusters per pass (see _cluster_firms).
         # Endpoint per alert type, from shared/alert-catalog.json. Types with
