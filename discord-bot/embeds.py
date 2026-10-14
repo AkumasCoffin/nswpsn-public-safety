@@ -2579,6 +2579,7 @@ class EmbedBuilder:
         'closure':   ('⛔ Beach closed',      0xF59E0B),
         'advisory':  ('⚠️ Shark warning',     0xFBBF24),
         'sighting':  ('🦈 Shark sighting',    0x2DD4BF),
+        'drone':     ('🚁 Drone sighting',    0x38BDF8),
         'tagging':   ('🏷️ Tag and release',   0x8B5CF6),
         'carcass':   ('💀 Carcass reported',  0x94A3B8),
         'detection': ('📡 Tagged shark detected', 0x64748B),
@@ -2609,9 +2610,10 @@ class EmbedBuilder:
         where = ' · '.join(x for x in (props.get('zone'), props.get('state')) if x)
         if where:
             fields.append(('Area', where))
-        # Dorsal HQ relaying DPIRD receivers / Surf Life Saving / the Westpac
-        # helicopter, versus a member of the public. Different kinds of claim.
-        fields.append(('Reported by', props.get('provenance') or 'Unknown'))
+        # No 'Reported by Official' field. Dorsal's `official` flag says the
+        # report was posted by their account rather than by the public; it is
+        # not a verification, and the word Official in an alert reads as one.
+        # 'Method' below carries the useful part — receiver, drone, helicopter.
         encounter = strip_html(str(props.get('encounter') or '')).strip()
         if encounter:
             fields.append(('Method', encounter))
