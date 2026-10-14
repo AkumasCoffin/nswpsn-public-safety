@@ -215,11 +215,27 @@ into one pin per beach (`_allMergedBeaches`, with `hasBeachwatch` /
 `hasBeachSafe` flags on a single record). A shark report is a timestamped
 *event* at a place — four sightings at one beach in a week are four things that
 happened — so it could not join that merge without being flattened. It has its
-own `sharkLayer`, button and panel. Receiver detections (a tagged shark passing
-a listening station) are 56% of the feed's volume and start switched **off**;
-everything else starts on. The layer requests `?hours=168` explicitly because
-the endpoint's own default is 48 hours, which exists for the Discord bot's
-dedup window rather than for the map.
+own `sharkLayer`, button and panel. Only **Sightings, Drone sightings, Warnings
+and Tag & release** start switched on — receiver detections (a tagged shark
+passing a listening station) are 56% of the feed's volume and would swamp the
+rest, and bites, closures and carcasses are deliberately opt-in rather than
+pushed at a reader who only wanted to know whether the drone saw anything.
+
+Drone is its own category rather than a kind of sighting. It is the second most
+common encounter upstream (~20% of reports), and a lifeguard drone overflight is
+a different claim from someone on the sand saying they saw a shape; folding them
+together left the drone flights unfilterable and invisible as a group.
+
+Nothing in the layer carries an OFFICIAL badge. Dorsal's `official` flag only
+records that the report was posted by their own account rather than by a member
+of the public — it is not a verification, and on a layer called SharkSmart a
+badge reading OFFICIAL is read as government confirmation. The flag stays in the
+feed and the archived row; it is the *display* that was removed, in the map
+tooltip, the logs row and the Discord card alike.
+
+The layer requests `?hours=168` explicitly because the endpoint's own default is
+48 hours, which exists for the Discord bot's dedup window rather than for the
+map.
 
 **The repeater layer is two endpoints, and neither one carries a reception.**
 `/api/radio/grn-sites` is the *geography* — the GRN site list, served from the
