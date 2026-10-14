@@ -194,6 +194,10 @@ describe('rollupNodeHourlyOnce', () => {
     expect(sql).toContain('e.source_alias <> e.source_unit::text');
     // The band predicate is NOT applied here — it is a read-time question.
     expect(sql).not.toContain('BETWEEN 100000');
+    // The exact time it was last heard in the hour (migration 125), which the
+    // Aliases list's "Last heard" reads instead of rounding to the hour.
+    expect(sql).toContain('MAX(e.received_at) AS last_heard');
+    expect(sql).toContain('(hour, source_unit, receptions, alias, last_heard)');
   });
 
   it('attributes calls twice on the per-site table, once per call and once per talkgroup', async () => {

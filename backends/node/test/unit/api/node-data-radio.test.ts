@@ -837,3 +837,85 @@ describe('overview response cache', () => {
     }
   });
 });
+
+describe('GET /api/node-data/radio-aliases', () => {
+  // Each request runs a count and a page over the same join, so the join is
+  // asserted on both.
+  const aliasQueries = (calls: Call[]) => calls.filter((c) => c.sql.includes('FROM node_radio_aliases'));
+
+  it('answers a fleet-wide window from the hourly rollup plus the live hour', async () => {
+    // It used to read the whole window from node_radio_events on every request:
+    // 109 s for 24h and 74 s for 7d on production, against a 30 s timeout.
+    const calls = captureCalls();
+    const app = await setupApp();
+    const res = await app.request('/api/node-data/radio-aliases?window=7d');
+    expect(res.status).toBe(200);
+    const qs = aliasQueries(calls);
+    expect(qs).toHaveLength(2);
+    for (const q of qs) {
+      expect(q.sql).toContain('FROM node_radio_hourly_unit');
+      // Exact last-heard where the rollup has it, the hour where it predates 125.
+      expect(q.sql).toContain('COALESCE(last_heard, hour)');
+      // The window is bounded by the seam as a literal, never a subquery.
+      expect(q.sql).toContain(`hour < '${SEAM.toISOString()}'::timestamptz`);
+      expect(q.sql).not.toContain('FROM node_rollup_state');
+      // Detail is read for the live hour only — no window scan.
+      expect(q.sql).toContain(`received_at >= '${SEAM.toISOString()}'::timestamptz`);
+      expect(q.sql).not.toContain('received_at >= now()');
+      expect(q.params).toContain('7 days');
+    }
+    expect(seamReads).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts receptions of voice calls, as the Units card does', async () => {
+    const calls = captureCalls();
+    const app = await setupApp();
+    await app.request('/api/node-data/radio-aliases?window=24h');
+    const [count] = aliasQueries(calls);
+    expect(count?.sql).toContain('SUM(n)::int AS heard_times');
+    expect(count?.sql).toContain("event_type LIKE 'CALL_GROUP%'");
+    expect(count?.sql).toContain('COUNT(DISTINCT (logical_call_id, node_id');
+    expect(count?.sql).not.toContain('COUNT(*)::int AS heard_times');
+    expect(count?.params).toContain('24 hours');
+  });
+
+  it('reads detail when scoped to a node, which the rollup cannot answer', async () => {
+    const calls = captureCalls();
+    const app = await setupApp();
+    const res = await app.request('/api/node-data/radio-aliases?window=24h&node=node-1');
+    expect(res.status).toBe(200);
+    for (const q of aliasQueries(calls)) {
+      expect(q.sql).not.toContain('node_radio_hourly_unit');
+      expect(q.sql).toContain('FROM node_radio_events');
+      expect(q.sql).toMatch(/node_id = \$\d+/);
+      // The call predicate matches idx_nre_node_time_calls.
+      expect(q.sql).toContain("event_type LIKE 'CALL_GROUP%'");
+      expect(q.params).toContain('node-1');
+    }
+    expect(seamReads).not.toHaveBeenCalled();
+  });
+
+  it('lists each radio once, though the table keys it per system', async () => {
+    // A radio filed under system 0 and its real system was listed twice.
+    const calls = captureCalls();
+    const app = await setupApp();
+    await app.request('/api/node-data/radio-aliases?window=7d');
+    for (const q of aliasQueries(calls)) {
+      expect(q.sql).toContain('GROUP BY radio_id');
+      // Echoed ids are dropped BEFORE the collapse, so one can't win as the alias.
+      expect(q.sql).toMatch(/WHERE alias <> radio_id::text\s+GROUP BY radio_id/);
+      expect(q.sql).toContain('ORDER BY (system = 0), last_seen DESC');
+    }
+  });
+
+  it('skips the join entirely for window=all', async () => {
+    const calls = captureCalls();
+    const app = await setupApp();
+    await app.request('/api/node-data/radio-aliases?window=all');
+    for (const q of aliasQueries(calls)) {
+      expect(q.sql).not.toContain('node_radio_events');
+      expect(q.sql).not.toContain('node_radio_hourly_unit');
+    }
+    expect(seamReads).not.toHaveBeenCalled();
+  });
+});

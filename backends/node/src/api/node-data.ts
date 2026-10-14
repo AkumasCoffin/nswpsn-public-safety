@@ -5225,10 +5225,11 @@ async function siteChanMgrHolds(
 // identity, the detail table is pruned at 30 days, and deduping 400k event
 // rows to a few hundred radios on every request would be wasteful.
 //
-// WINDOWED on last_seen, like every other "what was received" table — this
+// WINDOWED on traffic, like every other "what was received" table — this
 // answers "which radios were heard this period", not "what is programmed"
-// (Global settings owns that). The alias row itself is still kept forever, so
-// `window=all` restores the full history.
+// (Global settings owns that). Fleet-wide windows read the hourly per-radio
+// rollup; only a node scope reads detail. The alias row itself is still kept
+// forever, so `window=all` restores the full history.
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 // GET /api/node-data/agencies
@@ -5324,42 +5325,93 @@ nodeDataRouter.get('/api/node-data/radio-aliases', requireRole(canViewNodeData),
     //
     // window=all needs no join — the alias table's own lifetime counters ARE the
     // all-time answer, and skipping the events scan keeps that case cheap.
+    //
+    // "Heard" means what the Units card and the Radios list mean by it: the
+    // radio made a voice call (CALL_GROUP), and Times heard counts RECEPTIONS —
+    // the deduped (call, node, rfss, site, talkgroup) tuple — not event rows,
+    // which vce emits twice per receipt (GRANT and CALL).
     const windowRaw = (url.searchParams.get('window') ?? '').toLowerCase();
     const lifetime = windowRaw === 'all';
+    const iv = WINDOW_INTERVAL[(['24h', '7d', '30d'] as const).find((w) => w === windowRaw) ?? '7d'];
+    const RECEPTION = `COUNT(DISTINCT (logical_call_id, node_id,
+                         COALESCE(site_rfss, -1), COALESCE(site_id, -1), talkgroup))::int`;
     // Node scope. Membership is "which radios did THIS node hear", so it
     // restricts the join, never the lifetime identity columns — a radio scoped
     // to one node still shows the alias it announced anywhere.
     const aliasNodeId = qpNode(url);
     let heardJoin = '';
-    // A node scope needs the events join even at window=all, which otherwise
-    // skips it entirely and would answer fleet-wide.
-    if (!lifetime || aliasNodeId) {
-      const heardConds = [RID_VALID];
+    // INNER join throughout: no traffic in the window means not listed, but a
+    // radio WITH traffic keeps its lifetime alias columns.
+    if (aliasNodeId) {
+      // The rollup attributes each reception fleet-wide with no node column, so
+      // a node scope reads detail. It needs the join even at window=all, which
+      // otherwise skips it and would answer fleet-wide. The call predicate also
+      // lets it use idx_nre_node_time_calls.
+      const heardConds = [RID_VALID, CALL_GROUP];
       if (!lifetime) {
-        const iv =
-          WINDOW_INTERVAL[(['24h', '7d', '30d'] as const).find((w) => w === windowRaw) ?? '7d'];
         params.push(iv);
         heardConds.push(`received_at >= now() - $${params.length}::interval`);
       }
-      if (aliasNodeId) {
-        params.push(aliasNodeId);
-        heardConds.push(`node_id = $${params.length}`);
-      }
-      // INNER join: no traffic in the window means not listed, but a radio WITH
-      // traffic keeps its lifetime alias columns.
+      params.push(aliasNodeId);
+      heardConds.push(`node_id = $${params.length}`);
       heardJoin = `JOIN (
              SELECT source_unit AS radio_id,
                     MAX(received_at) AS heard_last,
-                    COUNT(*)::int AS heard_times
+                    ${RECEPTION} AS heard_times
                FROM node_radio_events
               WHERE ${heardConds.join(' AND ')}
               GROUP BY source_unit
            ) h ON h.radio_id = a.radio_id`;
+    } else if (!lifetime) {
+      // Fleet-wide: the hourly per-radio rollup plus the hour in progress. This
+      // used to read the whole window from detail on every request, and on
+      // production that never finished — 109 s for 24h, 74 s for 7d, against a
+      // 30 s timeout — because rows newer than the last vacuum are each checked
+      // against the heap in radio-id order (see migration 125). The rollup
+      // answers every window in well under a second.
+      //
+      // last_heard is NULL on rows rolled up before migration 125; the hour is
+      // the fallback, so "Last heard" rounds down for those until they age out.
+      params.push(iv);
+      const seam = rollupEdgeSql(await resolveRollupEdge(pool));
+      heardJoin = `JOIN (
+             SELECT unit AS radio_id, MAX(heard) AS heard_last, SUM(n)::int AS heard_times
+               FROM (
+                 SELECT source_unit AS unit, COALESCE(last_heard, hour) AS heard, receptions AS n
+                   FROM node_radio_hourly_unit
+                  WHERE hour >= date_trunc('hour', now()) - $${params.length}::interval
+                    AND hour < ${seam} AND ${RID_VALID}
+                 UNION ALL
+                 SELECT source_unit, MAX(received_at), ${RECEPTION}
+                   FROM node_radio_events
+                  WHERE ${liveHour(seam)} AND ${CALL_GROUP} AND ${RID_VALID}
+                  GROUP BY source_unit
+               ) r
+              GROUP BY unit
+           ) h ON h.radio_id = a.radio_id`;
     }
+    // ONE ROW PER RADIO. The table is keyed (system, radio_id), and a radio
+    // heard before its system was decoded is filed under system 0 as well as
+    // its real one — 1,458 rows for 1,024 radios on production — so reading it
+    // directly listed those radios twice with identical figures. Collapse first:
+    // the newest alias, the real system over 0, and lifetime figures across
+    // both rows.
+    //
     // Rows recorded before the ingest guard can hold the radio's own id as its
     // "alias" — the decoder echoes the id when a radio sends no talker alias.
-    // That is not a name, so the row is not an alias row.
-    conds.push('a.alias <> a.radio_id::text');
+    // That is not a name, so the row is not an alias row, and it is dropped
+    // before the collapse so it can never stand in for the real name.
+    const aliasesByRadio = `(
+           SELECT radio_id,
+                  (array_agg(system ORDER BY (system = 0), last_seen DESC))[1] AS system,
+                  (array_agg(alias ORDER BY last_seen DESC))[1] AS alias,
+                  MIN(first_seen) AS first_seen,
+                  MAX(last_seen) AS last_seen,
+                  SUM(times_seen)::int AS times_seen
+             FROM node_radio_aliases
+            WHERE alias <> radio_id::text
+            GROUP BY radio_id
+         ) a`;
     const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
     const heardLast = lifetime ? 'a.last_seen' : 'h.heard_last';
     const heardTimes = lifetime ? 'a.times_seen' : 'h.heard_times';
@@ -5377,7 +5429,7 @@ nodeDataRouter.get('/api/node-data/radio-aliases', requireRole(canViewNodeData),
     const orderBy = `${orderExpr} ${dir}, a.radio_id ASC`;
 
     const totalRes = await pool.query<{ n: string }>(
-      `SELECT count(*)::int AS n FROM node_radio_aliases a ${heardJoin} ${where}`,
+      `SELECT count(*)::int AS n FROM ${aliasesByRadio} ${heardJoin} ${where}`,
       params,
     );
     params.push(limit, offset);
@@ -5391,7 +5443,7 @@ nodeDataRouter.get('/api/node-data/radio-aliases', requireRole(canViewNodeData),
     }>(
       `SELECT a.system, a.radio_id, a.alias, a.first_seen,
               ${heardLast} AS last_seen, ${heardTimes} AS times_seen
-         FROM node_radio_aliases a ${heardJoin} ${where}
+         FROM ${aliasesByRadio} ${heardJoin} ${where}
         ORDER BY ${orderBy}
         LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params,

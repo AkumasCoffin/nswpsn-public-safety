@@ -435,19 +435,22 @@ async function rollupRange(
            FROM ev e JOIN ch USING (logical_call_id)
        ), al AS (
          -- The alias the detail query picks: most recent, skipping the ones
-         -- that only echo the RID back as text.
+         -- that only echo the RID back as text. last_heard (migration 125) is
+         -- the Aliases list's "Last heard", which the hour alone would round
+         -- down.
          SELECT ch.hour, e.source_unit,
                 (array_agg(e.source_alias ORDER BY e.received_at DESC)
                    FILTER (WHERE e.source_alias IS NOT NULL
-                             AND e.source_alias <> e.source_unit::text))[1] AS alias
+                             AND e.source_alias <> e.source_unit::text))[1] AS alias,
+                MAX(e.received_at) AS last_heard
            FROM ev e JOIN ch USING (logical_call_id)
           GROUP BY 1, 2
        )
-       INSERT INTO node_radio_hourly_unit (hour, source_unit, receptions, alias)
-       SELECT rx.hour, rx.source_unit, COUNT(*)::int, al.alias
+       INSERT INTO node_radio_hourly_unit (hour, source_unit, receptions, alias, last_heard)
+       SELECT rx.hour, rx.source_unit, COUNT(*)::int, al.alias, al.last_heard
          FROM rx
          LEFT JOIN al ON al.hour = rx.hour AND al.source_unit = rx.source_unit
-        GROUP BY rx.hour, rx.source_unit, al.alias`,
+        GROUP BY rx.hour, rx.source_unit, al.alias, al.last_heard`,
       [from.toISOString(), to.toISOString()],
     );
 
