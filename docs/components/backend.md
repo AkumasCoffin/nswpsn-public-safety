@@ -555,7 +555,7 @@ away.
 ### Rollup reads: the seam has to be visible to the planner
 
 Every fleet-wide staff Data read (overview tiles and lists, systems, talkgroups,
-the Aliases list) is two halves: the hourly rollup tables below a seam, and raw
+the Units list) is two halves: the hourly rollup tables below a seam, and raw
 `node_radio_events` from the seam onwards. The seam is where the rollup has got
 to (`node_rollup_state.rolled_up_to`, capped at the current hour).
 
@@ -578,13 +578,15 @@ after the cache has gone cold took 23.8 s, and a cold 30-day read 17.7 s,
 against 60–157 ms warm. Index bloat on this table makes that worse.
 
 **Do not read a whole window of `node_radio_events` on a staff request.** The
-Aliases list (`/api/node-data/radio-aliases`) did, grouping every event in the
+Units list (`/api/node-data/radio-aliases`) did, grouping every event in the
 window by radio, and on prod it never finished: 109 s for 24h and 74 s for 7d
 against the 30 s timeout. Only ~4–7 k pages came off disk. The rest was
 visibility checks: rows newer than the last vacuum are checked against the heap
 one by one, in index (radio-id) order, at ~26 ms a random read on this storage.
-It now reads `node_radio_hourly_unit` like the overview's top-radios list (10–190 ms
-for every window). Migration `125` added `last_heard` to that table so "Last
+It now reads `node_radio_hourly_unit` like the overview's top-radios list, in one
+pass over its whole history (~27 MB): 80–200 ms for every window, All included.
+That also made it list every radio heard rather than only the ~8 % that
+transmitted an over-the-air alias — the endpoint keeps its old name. Migration `125` added `last_heard` to that table so "Last
 heard" stays exact; rows rolled up before it fall back to the hour. Only a
 node-scoped request still reads detail, because the rollup has no node column.
 
