@@ -1253,6 +1253,7 @@
     .btn-toggle.active#btn-floods { border: 1px solid #06b6d4; color: #67e8f9; }
     .btn-toggle.active#btn-cameras { border: 1px solid #8b5cf6; color: #c4b5fd; }
     .btn-toggle.active#btn-beachwatch { border: 1px solid #06b6d4; color: #67e8f9; }
+    .btn-toggle.active#btn-sharksmart { border: 1px solid #2dd4bf; color: #5eead4; }
     .btn-toggle.active#btn-firms { border: 1px solid #f97316; color: #fdba74; }
 
     /* Floating per-layer filter sidebar (desktop only). Each enabled
@@ -2922,6 +2923,7 @@
         <button id="btn-floods" class="btn-toggle" onclick="toggleMapLayer('floods')" title="Floods"><i class="fa-solid fa-water" style="color:#06b6d4;"></i><span>Floods</span></button>
         <button id="btn-cameras" class="btn-toggle" onclick="toggleCamerasPanel()" title="Cameras"><i class="fa-solid fa-video" style="color:#8b5cf6;"></i><span>Cameras</span></button>
         <button id="btn-beachwatch" class="btn-toggle" onclick="toggleBeachesPanel()" title="Beaches"><i class="fa-solid fa-umbrella-beach" style="color:#06b6d4;"></i><span>Beaches</span></button>
+        <button id="btn-sharksmart" class="btn-toggle" onclick="toggleSharkSmartPanel()" title="Shark sightings and tagged-shark detections"><i class="fa-solid fa-fish-fins" style="color:#2dd4bf;"></i><span>SharkSmart</span></button>
         <button id="btn-weather" class="btn-toggle" onclick="toggleWeatherPanel()" title="Weather"><i class="fa-solid fa-cloud-sun" style="color:#38bdf8;"></i><span>Weather</span></button>
         <button id="btn-firms" class="btn-toggle" onclick="toggleMapLayer('firms')" title="Satellite fire hotspots"><i class="fa-solid fa-satellite" style="color:#f97316;"></i><span>Hotspots</span></button>
         <button id="btn-nswpsn" class="btn-toggle" onclick="toggleMapLayer('nswpsn')" title="NSW PSN repeaters"><i class="fa-solid fa-tower-broadcast" style="color:#14b8a6;"></i><span>Repeaters</span></button>
@@ -3063,6 +3065,22 @@
         <h4><i class="fa-solid fa-umbrella-beach"></i> Beaches</h4>
         <label><input type="checkbox" id="chk-beachwatch" checked onchange="onBeachFilterChange()"><span class="filter-dot" style="background:#22c55e;"></span> Beachwatch (Water Quality)</label>
         <label><input type="checkbox" id="chk-beachsafe" checked onchange="onBeachFilterChange()"><span class="filter-dot" style="background:#3b82f6;"></span> BeachSafe (Patrol / Hazards)</label>
+      </div>
+
+      <!-- SharkSmart Filter Panel — shark reports from Dorsal Watch. Receiver
+           detections start OFF: they are 56% of all volume (a tagged shark
+           swimming past a listening station, ~14 a day) and would otherwise
+           bury the sightings people are actually looking for. -->
+      <div class="filter-panel" id="sharksmart-panel">
+        <div class="mobile-drag-handle"></div>
+        <h4><i class="fa-solid fa-fish-fins" style="color:#2dd4bf;"></i> SharkSmart</h4>
+        <label><input type="checkbox" id="chk-shark-sighting" checked onchange="onSharkFilterChange()"><span class="filter-dot" style="background:#2dd4bf;"></span> Sightings</label>
+        <label><input type="checkbox" id="chk-shark-incident" checked onchange="onSharkFilterChange()"><span class="filter-dot" style="background:#ef4444;"></span> Bites &amp; bumps</label>
+        <label><input type="checkbox" id="chk-shark-closure" checked onchange="onSharkFilterChange()"><span class="filter-dot" style="background:#f59e0b;"></span> Beach closures</label>
+        <label><input type="checkbox" id="chk-shark-advisory" checked onchange="onSharkFilterChange()"><span class="filter-dot" style="background:#fbbf24;"></span> Warnings</label>
+        <label><input type="checkbox" id="chk-shark-tagging" checked onchange="onSharkFilterChange()"><span class="filter-dot" style="background:#8b5cf6;"></span> Tag &amp; release</label>
+        <label><input type="checkbox" id="chk-shark-carcass" checked onchange="onSharkFilterChange()"><span class="filter-dot" style="background:#94a3b8;"></span> Carcasses</label>
+        <label><input type="checkbox" id="chk-shark-detection" onchange="onSharkFilterChange()"><span class="filter-dot" style="background:#64748b;"></span> Receiver detections</label>
       </div>
 
       <!-- AIS Ships Filter Panel — keyed off btn-ais. Identical pattern
@@ -3295,6 +3313,7 @@
       { panel: 'police-panel', btn: 'btn-police' },
       { panel: 'cameras-panel', btn: 'btn-cameras' },
       { panel: 'beaches-panel', btn: 'btn-beachwatch' },
+      { panel: 'sharksmart-panel', btn: 'btn-sharksmart' },
       { panel: 'weather-panel', btn: 'btn-weather' },
       { panel: 'ais-panel', btn: 'btn-ais' }
     ];
@@ -3741,6 +3760,14 @@
             }
           }
 
+          // Special handling for SharkSmart — opens the panel. Delegated to
+          // the toggle rather than reproduced inline, so the deep link can't
+          // drift from what the button does (filter button, loader, stacking).
+          if (layer === 'sharksmart') {
+            const panel = document.getElementById('sharksmart-panel');
+            if (panel && !panel.classList.contains('open')) toggleSharkSmartPanel();
+          }
+
           // Special handling for incidents (traffic) — opens the hazards panel
           if (layer === 'incidents') {
             const panel = document.getElementById('hazards-panel');
@@ -3918,6 +3945,8 @@
       // Beaches
       beachwatch: { data: null, timestamp: 0 },
       beachsafe: { data: null, timestamp: 0 },
+      // Shark reports (Dorsal Watch) — its own layer, not a beach feed
+      dorsal_reports: { data: null, timestamp: 0 },
       // Weather
       weather_current: { data: null, timestamp: 0 },
       // Power outages (Endeavour + Essential Energy have lat/lon)
@@ -4169,6 +4198,10 @@
     // pick up its filters and culling.
     const weatherLayer = L.layerGroup();
     const beachwatchLayer = L.layerGroup();
+    // Shark reports. Its own layer rather than a beaches sub-feed: these are
+    // timestamped events at a beach, not the standing state of one, so they
+    // can't merge into the one-pin-per-beach model beachwatchLayer uses.
+    const sharkLayer = L.layerGroup();
     // ---------- AIS (vessel positions) ----------
     // MarineTraffic provides vessel data; CORS blocks direct browser fetch so
     // this hits a backend proxy at PROXY_BASE that re-fetches the upstream URL.
@@ -9691,11 +9724,206 @@ function initPagerHoursFromStorage() {
         createBeachMarker(beach, showBeachwatch, showBeachsafe);
       });
     }
-    
+
+    // ---------- SharkSmart (Dorsal Watch shark reports) ----------
+    // Icon says what the thing is, colour says how it is going — the same
+    // convention the rest of the map uses. Receiver detections are the
+    // routine case and are deliberately the dullest pin on the layer.
+    // `rgb` is the same colour as "R,G,B" — _ttSection builds its rgba()
+    // tint from it, so the tooltip panel matches the pin.
+    const SHARK_CATEGORIES = {
+      incident:  { label: 'Bites & bumps',       icon: 'fa-triangle-exclamation', color: '#ef4444', rgb: '239,68,68' },
+      closure:   { label: 'Beach closures',      icon: 'fa-ban',                  color: '#f59e0b', rgb: '245,158,11' },
+      advisory:  { label: 'Warnings',            icon: 'fa-circle-exclamation',   color: '#fbbf24', rgb: '251,191,36' },
+      sighting:  { label: 'Sightings',           icon: 'fa-fish-fins',            color: '#2dd4bf', rgb: '45,212,191' },
+      tagging:   { label: 'Tag & release',       icon: 'fa-tag',                  color: '#8b5cf6', rgb: '139,92,246' },
+      carcass:   { label: 'Carcasses',           icon: 'fa-skull',                color: '#94a3b8', rgb: '148,163,184' },
+      detection: { label: 'Receiver detections', icon: 'fa-tower-broadcast',      color: '#64748b', rgb: '100,116,139' },
+    };
+    // Order the panel, the floating pills and the legend all read in.
+    const SHARK_CATEGORY_ORDER = [
+      'sighting', 'incident', 'closure', 'advisory', 'tagging', 'carcass', 'detection',
+    ];
+
+    function toggleSharkSmartPanel() {
+      const panel = document.getElementById('sharksmart-panel');
+      const btn = document.getElementById('btn-sharksmart');
+      const isOpen = panel.classList.contains('open');
+      if (!isOpen) { showFiltersSidebarToast(); if (typeof umami !== 'undefined') umami.track('map-layer-toggle', { layer: 'sharksmart' }); }
+      if (isOpen) {
+        panel.classList.remove('open');
+        btn.classList.remove('active');
+        map.removeLayer(sharkLayer);
+        removeFilterButton('sharksmart');
+      } else {
+        panel.classList.add('open');
+        btn.classList.add('active');
+        map.addLayer(sharkLayer);
+        if (sharkLayer.getLayers().length === 0) loadSharkSmartData();
+        addFilterButton('sharksmart');
+      }
+      updateFilterPanelPositions();
+      updateSettingsBackdrop();
+    }
+
+    let _allSharkReports = [];
+
+    function sharkCategoryEnabled(cat) {
+      const el = document.getElementById(`chk-shark-${cat}`);
+      // Unknown categories (a new encounter type upstream normalises to
+      // 'sighting' today) follow the sightings checkbox rather than vanishing.
+      if (!el) return document.getElementById('chk-shark-sighting')?.checked ?? true;
+      return el.checked;
+    }
+
+    function onSharkFilterChange() {
+      renderSharkMarkers();
+    }
+
+    function renderSharkMarkers() {
+      sharkLayer.clearLayers();
+      _allSharkReports.forEach(report => {
+        if (!sharkCategoryEnabled(report.category)) return;
+        createSharkMarker(report);
+      });
+    }
+
+    function createSharkMarker(r) {
+      const cfg = SHARK_CATEGORIES[r.category] || SHARK_CATEGORIES.sighting;
+      const icon = L.divIcon({
+        className: 'custom-pin shark-pin',
+        html: `<div style="
+          background: linear-gradient(135deg, ${cfg.color}, ${cfg.color}cc);
+          width: 28px; height: 28px; border-radius: 50%;
+          border: 3px solid #fff;
+          box-shadow: 0 2px 8px ${cfg.color}80, 0 0 12px ${cfg.color}40;
+          display: flex; align-items: center; justify-content: center;
+          font-size: 13px; color: #fff;
+        "><i class="fa-solid ${cfg.icon}"></i></div>`,
+        iconSize: [28, 28],
+        iconAnchor: [14, 14],
+      });
+      L.marker([r.lat, r.lon], { icon })
+        .addTo(sharkLayer)
+        .bindTooltip(buildSharkTooltipContent(r), {
+          direction: 'top',
+          offset: [0, -16],
+          opacity: 0.95,
+        });
+    }
+
+    function buildSharkTooltipContent(r) {
+      const cfg = SHARK_CATEGORIES[r.category] || SHARK_CATEGORIES.sighting;
+      // Official = posted by Dorsal HQ (DPIRD receivers, Surf Life Saving,
+      // the Westpac helicopter). Everything else is a public submission, and
+      // the tooltip says which so a reader can weigh it.
+      const pillBg = r.official ? '#0e7490' : '#475569';
+      const header = _ttHeader(
+        `fa-solid ${cfg.icon}`,
+        r.species && r.species !== 'Unknown' ? r.species : 'Shark report',
+        cfg.color,
+        pillBg, '#e2e8f0',
+        r.official ? 'OFFICIAL' : 'COMMUNITY',
+      );
+
+      let body = '';
+
+      const tiles = [];
+      tiles.push(_ttTile('Type', cfg.label, cfg.color));
+      if (r.sharkLength != null) tiles.push(_ttTile('Length', `${r.sharkLength} m`, '#e2e8f0'));
+      if (r.distanceFromShore != null) {
+        tiles.push(_ttTile('From shore', `${r.distanceFromShore} m`, '#e2e8f0'));
+      }
+      body += _ttSection('Report', cfg.color, cfg.rgb,
+        `<div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); gap:4px;">${tiles.join('')}</div>`);
+
+      const whenAgo = formatAgo(r.reportedAt);
+      const whenAbs = (() => {
+        const d = new Date(r.reportedAt);
+        return isNaN(d.getTime()) ? '' : d.toLocaleString('en-AU', { timeZone: 'Australia/Sydney' });
+      })();
+      const place = [r.location, r.zone, r.state].filter(Boolean).join(' · ');
+      let loc = '';
+      if (place) loc += `<div style="color:#e2e8f0; font-size:12px;">${escapeHtml(place)}</div>`;
+      if (whenAbs) {
+        loc += `<div style="color:#94a3b8; font-size:11px; margin-top:2px;">${escapeHtml(whenAbs)}`
+          + (whenAgo ? ` <span style="color:#64748b;">(${escapeHtml(whenAgo)})</span>` : '')
+          + `</div>`;
+      }
+      if (loc) body += _ttSection('Where & when', '#38bdf8', '56,189,248', loc);
+
+      if (r.comment) {
+        // Upstream comments run to 1200 characters and are free text from
+        // the public — escaped, and clipped so one essay can't fill the map.
+        const text = r.comment.length > 420 ? `${r.comment.slice(0, 420)}…` : r.comment;
+        body += _ttSection('Detail', '#cbd5e1', '203,213,225',
+          `<div style="color:#cbd5e1; font-size:11.5px; white-space:pre-wrap;">${escapeHtml(text)}</div>`);
+      }
+
+      if (r.photoUrl) {
+        body += `<div style="margin-bottom:8px;"><img src="${safeUrl(r.photoUrl)}" alt="" `
+          + `style="width:100%; max-height:150px; object-fit:cover; border-radius:6px;" loading="lazy"></div>`;
+      }
+
+      body += `<div style="color:#64748b; font-size:10px; letter-spacing:0.3px;">`
+        + `Source: Dorsal Watch${r.encounter ? ` · ${escapeHtml(r.encounter)}` : ''}</div>`;
+
+      return _ttWrap(header, body);
+    }
+
+    async function loadSharkSmartData() {
+      try {
+        const cached = layerCache.dorsal_reports;
+        const fresh = cached.data && (Date.now() - cached.timestamp) < LAYER_CACHE_TTL;
+        let geo;
+        if (fresh) {
+          geo = cached.data;
+        } else {
+          // 7 days. The endpoint defaults to 48h for the Discord bot's sake;
+          // the map asks for its own window explicitly.
+          const res = await apiFetch(`${PROXY_BASE}/api/dorsal/reports?hours=168`);
+          geo = await res.json();
+          layerCache.dorsal_reports = { data: geo, timestamp: Date.now() };
+        }
+
+        const features = Array.isArray(geo?.features) ? geo.features : [];
+        _allSharkReports = features.map(f => {
+          const p = f?.properties || {};
+          const c = f?.geometry?.coordinates;
+          if (!Array.isArray(c) || c.length < 2) return null;
+          const lon = Number(c[0]);
+          const lat = Number(c[1]);
+          if (!isFinite(lat) || !isFinite(lon)) return null;
+          return {
+            id: p.report_id,
+            lat, lon,
+            category: p.category || 'sighting',
+            encounter: p.encounter || '',
+            species: p.species || 'Unknown',
+            sharkLength: typeof p.shark_length_m === 'number' ? p.shark_length_m : null,
+            distanceFromShore:
+              typeof p.distance_from_shore_m === 'number' ? p.distance_from_shore_m : null,
+            location: p.location || '',
+            zone: p.zone || '',
+            state: p.state || '',
+            reportedAt: p.reported_at || '',
+            official: p.official === true,
+            comment: p.comment || '',
+            photoUrl: typeof p.photo_url === 'string' ? p.photo_url : null,
+          };
+        }).filter(Boolean);
+
+        renderSharkMarkers();
+      } catch (e) {
+        console.error('SharkSmart layer failed to load:', e);
+      }
+    }
+
+
     // Stack open filter panels vertically (desktop only)
     function updateFilterPanelPositions() {
       if (window.innerWidth <= 900) return; // Mobile uses bottom-sheet CSS
-      const panels = ['pager-panel', 'outages-panel', 'beaches-panel', 'hazards-panel', 'police-panel', 'cameras-panel', 'weather-panel'];
+      const panels = ['pager-panel', 'outages-panel', 'beaches-panel', 'sharksmart-panel', 'hazards-panel', 'police-panel', 'cameras-panel', 'weather-panel'];
       let bottomOffset = 80; // Start above map type controls
       
       panels.forEach(panelId => {
@@ -12392,6 +12620,35 @@ function initPagerHoursFromStorage() {
             ${_ffPill(bw, 'Beachwatch (water quality)', "toggleBeachPill('beachwatch')")}
             ${_ffPill(bs, 'BeachSafe (patrol + hazards)', "toggleBeachPill('beachsafe')")}
           </div>
+        `;
+      },
+    };
+
+    // SharkSmart (shark reports — sightings, closures, receiver detections).
+    window.toggleSharkPill = function (cat) {
+      const chkId = `chk-shark-${cat}`;
+      const cur = document.getElementById(chkId)?.checked ?? true;
+      _ffSetCheckbox(chkId, !cur);
+      onSharkFilterChange();
+      refreshActiveFilterPanel();
+    };
+    FILTER_REGISTRY.sharksmart = {
+      icon: 'fa-fish-fins',
+      label: 'SharkSmart',
+      color: '#2dd4bf',
+      render() {
+        // Coloured pills rather than plain ones: the pin colours are the
+        // legend this layer would otherwise need.
+        const pills = SHARK_CATEGORY_ORDER.map((cat) => {
+          const cfg = SHARK_CATEGORIES[cat];
+          const on = document.getElementById(`chk-shark-${cat}`)?.checked ?? false;
+          const glyph = `<i class="fa-solid ${cfg.icon}" style="font-size:11px;"></i>`;
+          return _ffPillColored(on, cfg.color, glyph, cfg.label, `toggleSharkPill('${cat}')`);
+        }).join('');
+        return `
+          <h4><i class="fa-solid fa-fish-fins" style="color:#2dd4bf;"></i> SharkSmart</h4>
+          <div class="ff-section-label">Report type</div>
+          <div class="floating-filter-pills">${pills}</div>
         `;
       },
     };
@@ -20693,6 +20950,7 @@ function initPagerHoursFromStorage() {
           { key: 'aviation_cameras', url: '/api/aviation/cameras' },
           { key: 'beachwatch', url: '/api/beachwatch' },
           { key: 'beachsafe', url: '/api/beachsafe' },
+          { key: 'dorsal_reports', url: '/api/dorsal/reports?hours=168' },
           { key: 'weather_current', url: '/api/weather/current' },
           { key: 'endeavour_current', url: '/api/endeavour/current' },
           { key: 'endeavour_maintenance', url: '/api/endeavour/maintenance' },
@@ -20795,6 +21053,7 @@ function initPagerHoursFromStorage() {
       if (map.hasLayer(floodsLayer)) redrawTasks.push(loadFloodsData());
       if (map.hasLayer(camerasLayer)) redrawTasks.push(loadCamerasData());
       if (map.hasLayer(beachwatchLayer)) redrawTasks.push(loadBeachwatchData());
+      if (map.hasLayer(sharkLayer)) redrawTasks.push(loadSharkSmartData());
       if (map.hasLayer(weatherLayer)) redrawTasks.push(loadWeatherData());
       if (map.hasLayer(outagesLayer)) redrawTasks.push(loadOutageData());
       // AIS vessels — refresh from the backend's prefetched cache so
@@ -21472,6 +21731,7 @@ function initPagerHoursFromStorage() {
           police: typeof policeLayer !== 'undefined' ? policeLayer : null,
           cameras: typeof camerasLayer !== 'undefined' ? camerasLayer : null,
           beaches: typeof beachwatchLayer !== 'undefined' ? beachwatchLayer : null,
+          sharksmart: typeof sharkLayer !== 'undefined' ? sharkLayer : null,
           outages: typeof outagesLayer !== 'undefined' ? outagesLayer : null,
           weather: typeof weatherLayer !== 'undefined' ? weatherLayer : null,
           pager: typeof pagerLayer !== 'undefined' ? pagerLayer : null,
