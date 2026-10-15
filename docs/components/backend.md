@@ -555,7 +555,8 @@ away.
 ### Rollup reads: the seam has to be visible to the planner
 
 Every fleet-wide staff Data read (overview tiles and lists, systems, talkgroups,
-the Units list) is two halves: the hourly rollup tables below a seam, and raw
+the Units list, the system and site drill-downs and their Radios list) is two
+halves: the hourly rollup tables below a seam, and raw
 `node_radio_events` from the seam onwards. The seam is where the rollup has got
 to (`node_rollup_state.rolled_up_to`, capped at the current hour).
 
@@ -589,6 +590,46 @@ That also made it list every radio heard rather than only the ~8 % that
 transmitted an over-the-air alias — the endpoint keeps its old name. Migration `125` added `last_heard` to that table so "Last
 heard" stays exact; rows rolled up before it fall back to the hour. Only a
 node-scoped request still reads detail, because the rollup has no node column.
+
+The system and site drill-downs (`/api/node-data/system`, `/site`), the Radios
+list inside them (`/radios`) and the talkgroup list's per-row top site / node
+did the same, and timed out the same way: a 7-day site is ~116k rows over ~40k
+heap pages, fast when cached (66–232 ms per query) and past 30 s when not.
+Migration `126` added `node_radio_hourly_heard`: one row per (hour, node,
+system, site, talkgroup, radio), each reception filed under the one radio that
+keyed it, so its receptions sum to `node_radio_hourly_sys`'s exactly (checked on
+prod: 58 of 58 hour×site groups equal). It also added `encrypted_calls_site` /
+`recorded_calls_site` to `node_radio_hourly_sys`: the fleet-wide pair credits a
+simulcast call to its lowest site, which on one prod range read 3,374 encrypted
+calls across the sites against 7,114 per site. `heard` is pruned at 32 days —
+nothing reads it past the drill-downs' 30. Fleet-wide drill-downs read
+`drillSources` / `drillFromRollup`; node-scoped ones keep their raw queries.
+Their `calls` is receptions, as everywhere else on the tab, not stored rows,
+which counted a grant and its call twice.
+
+**Backfilling a rollup without moving the seam.** Migrations 081/084/085/123
+rebuilt history by rewinding `rolled_up_to` — which is also the seam, so every
+Data view fell back to a month of raw detail until the catch-up finished (and
+after 123 it stalled). `node_rollup_state.rederive_below` is a second cursor
+that walks DOWN: each tick, after the forward pass has had first call on the
+batches, the job re-derives the hours just below it, newest first, and lowers
+it in the same transaction. It stops three hours above the oldest detail row —
+re-deriving an hour the pruner has half-deleted would replace its rows with a
+fraction of them — and clears itself. Use it for the next new rollup column:
+set `rederive_below = rolled_up_to` in the migration and leave the seam alone.
+Until it passes an hour, that hour reads as before (NULL / no rows), newest
+windows first.
+
+**Decode errors are not sites.** A corrupted control-channel decode attributes
+a reception to a site or system that does not exist, and SDR-Trunk keeps every
+site id a channel has ever decoded in that channel's site list, re-sending it
+every minute. So a single reception listed NSWPSN's Braidwood RD twice (R1 S244,
+named after the real S100's channel) and a 30-day window grew a "system 2201".
+The Systems tree and the system drill-down list a site or system only once it
+has been heard in `SITE_MIN_HOURS` (2) distinct hours of the window — the
+phantom was heard in 1 hour over 30 days, the quietest real site in 54 — and
+the drill-down lists one site per (node, channel) from snapshots: the one with
+traffic, or for a quiet channel the one whose control frequency it decoded.
 
 ### Removed, so you do not go looking
 

@@ -262,8 +262,10 @@ start their own group. The ±5s window is not arbitrary: it is SDR-Trunk's own
 `CrossSiteCallDeduplicator.SAME_CALL_WINDOW_MILLISECONDS`.
 
 Each write lands a detail row (30-day retention —
-`src/services/nodeEventsPruner.ts`) and rolls into permanent hourly buckets
-(`node_radio_hourly`, `node_radio_hourly_sys`) in the same transaction.
+`src/services/nodeEventsPruner.ts`). The hourly rollups are not written here: an
+hourly job (`src/services/nodeHourlyRollup.ts`) derives each completed hour from
+the detail rows into `node_radio_hourly`, `_sys`, `_rx`, `_unit` (kept) and
+`_heard` (kept 32 days), which is what the staff Data tab reads.
 
 Every `record*` and `mark*` function is fire-safe: a failure is logged and
 swallowed. Capture must never affect the relay path.
