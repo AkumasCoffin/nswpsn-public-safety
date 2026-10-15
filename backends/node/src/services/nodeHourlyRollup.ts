@@ -163,17 +163,50 @@ function currentHourStart(now: Date): Date {
 }
 
 /**
- * Recompute [from, to) into both rollup tables.
+ * How long node_radio_hourly_heard is kept (migration 126).
  *
- * Both statements DELETE the range first, so calling this twice over the same
+ * It exists for the system and site drill-downs, whose longest window is 30
+ * days, and nothing else reads it. Two days of slack past that so a 30-day
+ * window never reaches a pruned hour, whatever the clocks do.
+ */
+const HEARD_RETENTION_HOURS = 24 * 32;
+
+/**
+ * Which cursor a range moves, and how far past it the detail scan reaches.
+ *
+ * `advance` is the forward pass: rolled_up_to — which is also the read path's
+ * seam — moves up to `to`, and the scan stops at `to` as it always has. A call
+ * that straddles `to` is completed by the next pass, which re-derives the same
+ * hour with REDERIVE_HOURS of slack after it.
+ *
+ * `rederive` is the backward walk (migration 126): rederive_below moves down to
+ * `from`, and rolled_up_to is left alone so the seam does not move. No later
+ * pass will revisit the top hour of this range, so the scan reaches a further
+ * CALL_LOOKBACK past `to` to see the end of any call that started inside it —
+ * the same events that hour's final forward derivation saw. CALL_HOUR still
+ * decides ownership, so a call starting after `to` is not counted here.
+ * `last` clears the cursor instead, once the walk reaches the oldest hour the
+ * detail table still holds in full.
+ */
+type RangeMode = { kind: 'advance' } | { kind: 'rederive'; last: boolean };
+
+/**
+ * Recompute [from, to) into every rollup table.
+ *
+ * Every statement DELETEs the range first, so calling this twice over the same
  * range leaves the same rows. `-1` is the sentinel for an unknown site, which
  * is what the table's primary key needs in place of a NULL.
+ *
+ * $1/$2 are the range the pass OWNS; $3 is how far the detail scan reaches.
  */
 async function rollupRange(
   pool: NonNullable<Awaited<ReturnType<typeof getWriterPool>>>,
   from: Date,
   to: Date,
+  mode: RangeMode = { kind: 'advance' },
 ): Promise<void> {
+  const scanTo = mode.kind === 'rederive' ? new Date(to.getTime() + 3_600_000) : to;
+  const range = [from.toISOString(), to.toISOString(), scanTo.toISOString()];
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -203,7 +236,7 @@ async function rollupRange(
                 audio_bytes
            FROM node_radio_events
           WHERE received_at >= $1::timestamptz - ${CALL_LOOKBACK}
-            AND received_at < $2::timestamptz
+            AND received_at < $3::timestamptz
             AND ${CALL_GROUP}
        ), ch AS (
          ${CALL_HOUR}
@@ -221,7 +254,7 @@ async function rollupRange(
               COUNT(DISTINCT r.logical_call_id)::int
          FROM r
         GROUP BY r.hour, r.node_id, r.system, r.talkgroup`,
-      [from.toISOString(), to.toISOString()],
+      range,
     );
 
     // Network-wide volume.
@@ -267,6 +300,12 @@ async function rollupRange(
     // the detail table. Talkgroup is deliberately NOT in the partition: a
     // patched call is one call at the site, however many talkgroups carried
     // it. See migration 123.
+    //
+    // encrypted_calls_site / recorded_calls_site count the same per-site
+    // attribution's calls that were encrypted / recorded, for the site
+    // drill-down's tiles (migration 126). The fleet-wide pair credits a
+    // simulcast call to its lowest site only, so a site total built from them
+    // reads near zero at every other site in the group.
     await client.query(
       `WITH ev AS MATERIALIZED (
          SELECT id, received_at, logical_call_id, node_id,
@@ -277,7 +316,7 @@ async function rollupRange(
                 encrypted, recorded
            FROM node_radio_events
           WHERE received_at >= $1::timestamptz - ${CALL_LOOKBACK}
-            AND received_at < $2::timestamptz
+            AND received_at < $3::timestamptz
             AND ${CALL_GROUP}
        ), ch AS (
          ${CALL_HOUR}
@@ -310,7 +349,8 @@ async function rollupRange(
        INSERT INTO node_radio_hourly_sys
          (hour, system, talkgroup, site_rfss, site_id,
           calls, logical_calls, receptions, encrypted_calls, recorded_calls,
-          logical_calls_tg, logical_calls_site)
+          logical_calls_tg, logical_calls_site,
+          encrypted_calls_site, recorded_calls_site)
        SELECT a.hour, a.system, a.talkgroup, a.rfss, a.site,
               COUNT(*)::int,
               (COUNT(*) FILTER (WHERE a.rn = 1))::int,
@@ -318,10 +358,12 @@ async function rollupRange(
               (COUNT(*) FILTER (WHERE a.rn = 1 AND a.call_encrypted))::int,
               (COUNT(*) FILTER (WHERE a.rn = 1 AND a.call_recorded))::int,
               (COUNT(*) FILTER (WHERE a.rn_tg = 1))::int,
-              (COUNT(*) FILTER (WHERE a.rn_site = 1))::int
+              (COUNT(*) FILTER (WHERE a.rn_site = 1))::int,
+              (COUNT(*) FILTER (WHERE a.rn_site = 1 AND a.call_encrypted))::int,
+              (COUNT(*) FILTER (WHERE a.rn_site = 1 AND a.call_recorded))::int
          FROM a
         GROUP BY a.hour, a.system, a.talkgroup, a.rfss, a.site`,
-      [from.toISOString(), to.toISOString()],
+      range,
     );
 
     // The overview's eight tiles, at the grain they are actually asked for.
@@ -351,7 +393,7 @@ async function rollupRange(
                 recorded, received_at
            FROM node_radio_events
           WHERE received_at >= $1::timestamptz - ${CALL_LOOKBACK}
-            AND received_at < $2::timestamptz
+            AND received_at < $3::timestamptz
             AND ${CALL_GROUP}
        ), tx AS (
          -- One row per call this pass owns: when it started, what talkgroup it
@@ -398,7 +440,7 @@ async function rollupRange(
               COALESCE(c.transmissions, 0), COALESCE(c.recorded, 0)
          FROM rx
          LEFT JOIN calls c ON c.hour = rx.hour AND c.home IS NOT DISTINCT FROM rx.home`,
-      [from.toISOString(), to.toISOString()],
+      range,
     );
 
     // Top radios, at the grain the card asks for.
@@ -425,7 +467,7 @@ async function rollupRange(
                 COALESCE(site_id, -1) AS site
            FROM node_radio_events
           WHERE received_at >= $1::timestamptz - ${CALL_LOOKBACK}
-            AND received_at < $2::timestamptz
+            AND received_at < $3::timestamptz
             AND ${CALL_GROUP} AND source_unit IS NOT NULL
        ), ch AS (
          ${CALL_HOUR}
@@ -451,13 +493,67 @@ async function rollupRange(
          FROM rx
          LEFT JOIN al ON al.hour = rx.hour AND al.source_unit = rx.source_unit
         GROUP BY rx.hour, rx.source_unit, al.alias, al.last_heard`,
-      [from.toISOString(), to.toISOString()],
+      range,
     );
 
+    // Who heard what, where — the system and site drill-downs (migration 126).
+    //
+    // rx is node_radio_hourly_sys's grain exactly: one row per reception
+    // (call, node, system, site, talkgroup). Each is then filed under ONE
+    // radio, the first that keyed it by id, or 0 when none decoded, so that
+    // summing receptions over any set of rows gives the same figure the
+    // per-site table does. Counting a reception once per radio that appears in
+    // it, as node_radio_hourly_unit does, would make a node's or a site's sum
+    // exceed its receptions whenever a grant and its call disagree.
+    //
+    // No RID band filter, for the same reason as node_radio_hourly_unit.
     await client.query(
-      `UPDATE node_rollup_state SET rolled_up_to = $1::timestamptz, updated_at = now() WHERE id`,
-      [to.toISOString()],
+      `DELETE FROM node_radio_hourly_heard WHERE hour >= $1::timestamptz AND hour < $2::timestamptz`,
+      [from.toISOString(), to.toISOString()],
     );
+    await client.query(
+      `WITH ev AS MATERIALIZED (
+         SELECT id, received_at, logical_call_id, node_id, source_unit,
+                COALESCE(system, 0) AS system,
+                COALESCE(talkgroup, 0) AS talkgroup,
+                COALESCE(site_rfss, -1) AS rfss,
+                COALESCE(site_id, -1) AS site
+           FROM node_radio_events
+          WHERE received_at >= $1::timestamptz - ${CALL_LOOKBACK}
+            AND received_at < $3::timestamptz
+            AND ${CALL_GROUP}
+       ), ch AS (
+         ${CALL_HOUR}
+       ), rx AS (
+         SELECT ch.hour, e.node_id, e.system, e.rfss, e.site, e.talkgroup,
+                COALESCE((array_agg(e.source_unit ORDER BY e.id)
+                            FILTER (WHERE e.source_unit IS NOT NULL))[1], 0) AS source_unit,
+                MAX(e.received_at) AS last_heard
+           FROM ev e JOIN ch USING (logical_call_id)
+          GROUP BY ch.hour, e.logical_call_id, e.node_id, e.system, e.rfss, e.site, e.talkgroup
+       )
+       INSERT INTO node_radio_hourly_heard
+         (hour, node_id, system, site_rfss, site_id, talkgroup, source_unit, receptions, last_heard)
+       SELECT hour, node_id, system, rfss, site, talkgroup, source_unit,
+              COUNT(*)::int, MAX(last_heard)
+         FROM rx
+        GROUP BY hour, node_id, system, rfss, site, talkgroup, source_unit`,
+      range,
+    );
+
+    // The cursor this range moves, in the same transaction as the rows it
+    // vouches for — see RangeMode.
+    if (mode.kind === 'advance') {
+      await client.query(
+        `UPDATE node_rollup_state SET rolled_up_to = $1::timestamptz, updated_at = now() WHERE id`,
+        [to.toISOString()],
+      );
+    } else {
+      await client.query(
+        `UPDATE node_rollup_state SET rederive_below = $1::timestamptz, updated_at = now() WHERE id`,
+        [mode.last ? null : from.toISOString()],
+      );
+    }
     await client.query('COMMIT');
   } catch (err) {
     try {
@@ -483,13 +579,12 @@ export async function rollupNodeHourlyOnce(now: Date = new Date()): Promise<numb
     if (!pool) return 0;
 
     const upTo = currentHourStart(now);
-    const state = await pool.query<{ rolled_up_to: Date | null }>(
-      `SELECT rolled_up_to FROM node_rollup_state WHERE id`,
+    const state = await pool.query<{ rolled_up_to: Date | null; rederive_below?: Date | null }>(
+      `SELECT rolled_up_to, rederive_below FROM node_rollup_state WHERE id`,
     );
     const earliest = new Date(upTo.getTime() - MAX_BACKFILL_HOURS * 3_600_000);
     const stored = state.rows[0]?.rolled_up_to ?? null;
     let cursor: Date = stored === null || stored < earliest ? earliest : stored;
-    if (cursor >= upTo) return 0;
 
     // Re-derive a few hours BEHIND the cursor as well as ahead of it.
     //
@@ -503,7 +598,10 @@ export async function rollupNodeHourlyOnce(now: Date = new Date()): Promise<numb
     //
     // DELETE-then-INSERT per hour makes re-running free of consequence, so the
     // cheapest correct answer is simply to redo the recent past every pass.
-    if (stored !== null) {
+    //
+    // Not when the cursor already sits at the current hour: there is nothing
+    // new, and the tick that got it there redid the recent past.
+    if (stored !== null && cursor < upTo) {
       const redoFrom = new Date(
         Math.max(earliest.getTime(), cursor.getTime() - REDERIVE_HOURS * 3_600_000),
       );
@@ -530,11 +628,89 @@ export async function rollupNodeHourlyOnce(now: Date = new Date()): Promise<numb
           : 'node hourly rollup: rebuilt',
       );
     }
-    return hours;
+
+    // The forward pass has first call on the tick's batches: a seam that falls
+    // behind slows every staff read, and a history rebuild slows none.
+    const rederived = await rederiveBackwards(
+      pool,
+      state.rows[0]?.rederive_below ?? null,
+      MAX_BATCHES_PER_TICK - batches,
+    );
+    await pruneHeard(pool, upTo);
+    return hours + rederived;
   } catch (err) {
     log.warn({ err: (err as Error).message }, 'node hourly rollup: failed');
     return 0;
   }
+}
+
+/**
+ * Walk rederive_below down towards the oldest complete hour of detail,
+ * re-deriving as it goes (migration 126). Returns the hours re-derived.
+ *
+ * Newest first, so the windows the staff page reads most become whole first:
+ * 24 h after one tick, 30 d within about a day at the batches a tick has spare.
+ *
+ * THE FLOOR. An hour may only be re-derived while its detail is complete, and
+ * the pruner deletes detail from the bottom. Re-deriving a half-pruned hour
+ * would DELETE its correct rows and INSERT a fraction of them — permanently,
+ * since the detail is gone. The hour holding the oldest row is partial by
+ * definition; each range also reads an hour of lookback below itself; and the
+ * pruner can take another hour while the walk runs. Hence oldest hour + 3.
+ */
+async function rederiveBackwards(
+  pool: NonNullable<Awaited<ReturnType<typeof getWriterPool>>>,
+  below: Date | null,
+  budget: number,
+): Promise<number> {
+  if (below === null || budget <= 0) return 0;
+  const f = await pool.query<{ floor: Date | string | null }>(
+    `SELECT date_trunc('hour', MIN(received_at)) + interval '3 hours' AS floor
+       FROM node_radio_events
+      WHERE ${CALL_GROUP}`,
+  );
+  const rawFloor = f.rows[0]?.floor ?? null;
+  const floor = rawFloor === null ? null : new Date(rawFloor).getTime();
+  let to = new Date(below).getTime();
+  let hours = 0;
+  let done = false;
+  for (let b = 0; b < budget && !done; b++) {
+    if (floor === null || to <= floor) {
+      // Nothing left that the detail can vouch for. Cleared on its own: there
+      // is no range to carry it.
+      await pool.query(
+        `UPDATE node_rollup_state SET rederive_below = NULL, updated_at = now() WHERE id`,
+      );
+      done = true;
+      break;
+    }
+    const from = Math.max(to - BATCH_HOURS * 3_600_000, floor);
+    done = from <= floor;
+    await rollupRange(pool, new Date(from), new Date(to), { kind: 'rederive', last: done });
+    hours += Math.round((to - from) / 3_600_000);
+    to = from;
+  }
+  if (hours > 0 || done) {
+    log.info(
+      { hours, below: done ? null : new Date(to).toISOString() },
+      done ? 'node hourly rollup: history re-derived' : 'node hourly rollup: re-deriving history',
+    );
+  }
+  return hours;
+}
+
+/**
+ * Drop node_radio_hourly_heard rows past HEARD_RETENTION_HOURS. A tick's worth
+ * of rows (~800) each time, so it needs no batching.
+ */
+async function pruneHeard(
+  pool: NonNullable<Awaited<ReturnType<typeof getWriterPool>>>,
+  upTo: Date,
+): Promise<void> {
+  await pool.query(
+    `DELETE FROM node_radio_hourly_heard WHERE hour < $1::timestamptz`,
+    [new Date(upTo.getTime() - HEARD_RETENTION_HOURS * 3_600_000).toISOString()],
+  );
 }
 
 /**
