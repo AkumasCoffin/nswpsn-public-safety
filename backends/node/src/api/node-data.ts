@@ -2518,6 +2518,462 @@ async function scopedRadioDetail(
   };
 }
 
+/**
+ * A site or system has to be heard in at least this many distinct hours of
+ * the window before the Systems tree and the system drill-down list it.
+ *
+ * A corrupted control-channel decode attributes a reception to a site or
+ * system that does not exist, and the tree listed it like any other: on
+ * 2026-10-15 a single reception on 9 Oct gave NSWPSN a second "Braidwood RD"
+ * (R1 S244 — the Braidwood channel's site list keeps every id it has ever
+ * decoded, so the phantom borrowed the real site's name) and, over 30 days, a
+ * one-reception "system 2201" at Marulan. Over 30 days that phantom was heard
+ * in 1 hour; the quietest real site, Gibberagee, in 54. A burst of bad decodes
+ * stays inside one hour, and a site anyone is monitoring is heard in more than
+ * one, so two separates them without a volume threshold that a quiet window
+ * would trip.
+ */
+const SITE_MIN_HOURS = 2;
+
+/** One system, or one site of it: the scope of a system or site drill-down. */
+interface DrillScope {
+  system: number;
+  rfss: number | null;
+  site: number | null;
+}
+
+/**
+ * GROUPING(node_id, talkgroup, site_rfss, site_id) for each set
+ * drillFromRollup asks for: a bit per column, set when it is rolled UP.
+ */
+const HEARD_NODE = 7; //        (node_id)
+const HEARD_NODE_TG = 3; //     (node_id, talkgroup)
+const HEARD_NODE_SITE = 4; //   (node_id, rfss, site)
+const HEARD_TG = 11; //         (talkgroup)
+const HEARD_SITE = 12; //       (rfss, site)
+
+type HeardGroup = {
+  g: number;
+  node_id: string | null;
+  talkgroup: number | null;
+  rfss: number | null;
+  site: number | null;
+  calls: unknown;
+  last_seen: Date;
+};
+
+/**
+ * node_radio_hourly_heard over the window, plus the hour in progress from
+ * detail grouped to the same grain — (hour, node, system, site, talkgroup,
+ * radio) with receptions and last_heard — and `where` applied to both halves.
+ *
+ * The live half files each reception under the one radio that keyed it, as
+ * the rollup does (see nodeHourlyRollup.ts), so the two halves sum alike.
+ * `where` sees the rollup's column names and its sentinels (0 for no system,
+ * talkgroup or radio; -1 for no site), and is applied after that grouping, so
+ * a radio filter picks receptions by their filed radio in both halves.
+ *
+ * Expects $1 to be the window interval (rollupHours).
+ */
+function heardWindowSql(seam: string, where: string): string {
+  return `
+    SELECT hour, node_id, system, site_rfss, site_id, talkgroup, source_unit,
+           receptions, last_heard
+      FROM node_radio_hourly_heard
+     WHERE ${rollupHours(seam)} AND ${where}
+    UNION ALL
+    SELECT hour, node_id, system, site_rfss, site_id, talkgroup, source_unit,
+           COUNT(*)::int, MAX(last_heard)
+      FROM (
+        SELECT date_trunc('hour', MIN(received_at)) AS hour, node_id,
+               COALESCE(system, 0) AS system,
+               COALESCE(site_rfss, -1) AS site_rfss,
+               COALESCE(site_id, -1) AS site_id,
+               COALESCE(talkgroup, 0) AS talkgroup,
+               COALESCE((array_agg(source_unit ORDER BY id)
+                           FILTER (WHERE source_unit IS NOT NULL))[1], 0) AS source_unit,
+               MAX(received_at) AS last_heard
+          FROM node_radio_events
+         WHERE ${liveHour(seam)} AND ${CALL_GROUP}
+         GROUP BY logical_call_id, node_id, 3, 4, 5, 6
+      ) rx
+     WHERE ${where}
+     GROUP BY 1, 2, 3, 4, 5, 6, 7`;
+}
+
+/**
+ * A drill-down's rows at the two rollup grains, over the window: hourly rollup
+ * rows below the seam plus the hour in progress from detail, grouped to the
+ * same grain — the pattern every fleet-wide read on this page uses, with the
+ * same window edges (see rollupHours).
+ *
+ * `sys` is node_radio_hourly_sys's grain, (hour, talkgroup, site). `logical`,
+ * `enc` and `rec` take the per-SITE attribution for a site and the fleet-wide
+ * one for a system, which is what makes each of them sum to that scope's
+ * distinct calls; `logical_tg` is the per-talkgroup one for the top-talkgroups
+ * card. NULLs in the per-site pair (hours migration 126 has not re-derived yet)
+ * drop out of SUM.
+ *
+ * `heard` is heardWindowSql's, (hour, node, system, site, talkgroup, radio).
+ *
+ * Params: $1 the window interval, $2 the system, then $3/$4 rfss/site for a
+ * site. The node-scoped drill-downs never come here: node_radio_hourly_sys has
+ * no node, and the (node, time) index keeps their raw path cheap.
+ */
+function drillSources(scope: DrillScope, window: DetailWindow, edge: Date): {
+  params: unknown[];
+  sys: string;
+  heard: string;
+} {
+  const params: unknown[] = [WINDOW_INTERVAL[window], scope.system];
+  let where = 'system = $2';
+  const atSite = scope.rfss !== null && scope.site !== null;
+  if (atSite) {
+    params.push(scope.rfss, scope.site);
+    where += ' AND site_rfss = $3 AND site_id = $4';
+  }
+  const seam = rollupEdgeSql(edge);
+  const [logical, enc, rec] = atSite
+    ? ['logical_calls_site', 'encrypted_calls_site', 'recorded_calls_site']
+    : ['logical_calls', 'encrypted_calls', 'recorded_calls'];
+  const sys = `
+    SELECT hour, talkgroup, site_rfss AS rfss, site_id AS site, receptions,
+           ${logical} AS logical,
+           ${atSite ? 'logical_calls_site' : 'logical_calls_tg'} AS logical_tg,
+           logical_calls_site AS logical_site,
+           ${enc} AS enc, ${rec} AS rec
+      FROM node_radio_hourly_sys
+     WHERE ${rollupHours(seam)} AND ${where}
+    UNION ALL
+    SELECT date_trunc('hour', received_at), COALESCE(talkgroup, 0),
+           COALESCE(site_rfss, -1), COALESCE(site_id, -1),
+           COUNT(DISTINCT (logical_call_id, node_id))::int,
+           COUNT(DISTINCT logical_call_id)::int,
+           COUNT(DISTINCT logical_call_id)::int,
+           COUNT(DISTINCT logical_call_id)::int,
+           (COUNT(DISTINCT logical_call_id) FILTER (WHERE encrypted))::int,
+           (COUNT(DISTINCT logical_call_id) FILTER (WHERE recorded))::int
+      FROM node_radio_events
+     WHERE ${liveHour(seam)} AND ${CALL_GROUP} AND ${where}
+     GROUP BY 1, 2, 3, 4`;
+  return { params, sys, heard: heardWindowSql(seam, where) };
+}
+
+/**
+ * scopedRadioDetail's answer from the rollups, for a fleet-wide system or site
+ * drill-down (migration 126).
+ *
+ * The raw version grouped every reception in the window five ways at once. On
+ * production a 7-day site was ~116k rows over ~40k heap pages and the page
+ * timed out at 30 s whenever they were not already cached; a system is six
+ * times that. Here the window is a few thousand rollup rows a day.
+ *
+ * Two deliberate differences from the raw figures, both towards the rest of
+ * the page: `calls` is RECEPTIONS (one per call, node, site and talkgroup) as
+ * the Systems tree and every other rollup read count them, not stored rows,
+ * which counted a grant and its call twice; and the per-site top talkgroup is
+ * chosen on the same receptions.
+ *
+ * Also returns the heard grouping sets, from which the callers build their
+ * receiving-nodes tables and exact per-site "last seen".
+ */
+async function drillFromRollup(
+  pool: Pool,
+  src: ReturnType<typeof drillSources>,
+): Promise<{ detail: ScopedDetail; groups: HeardGroup[] }> {
+  const cat = await talkgroupCatalog();
+  const ota = await radioOtaAliases(pool);
+  const [totQ, tgQ, srQ, groupsQ, radQ] = await Promise.all([
+    pool.query<{
+      calls: unknown;
+      logical: unknown;
+      enc: unknown;
+      rec: unknown;
+      talkgroups: unknown;
+      sites: unknown;
+    }>(
+      `WITH s AS (${src.sys})
+       SELECT COALESCE(SUM(receptions), 0)::int AS calls,
+              COALESCE(SUM(logical), 0)::int AS logical,
+              COALESCE(SUM(enc), 0)::int AS enc,
+              COALESCE(SUM(rec), 0)::int AS rec,
+              (COUNT(DISTINCT talkgroup) FILTER (WHERE ${TG_VALID}))::int AS talkgroups,
+              (SELECT COUNT(*) FROM (
+                 SELECT 1 FROM s WHERE rfss <> -1 AND site <> -1
+                  GROUP BY rfss, site HAVING COUNT(DISTINCT hour) >= ${SITE_MIN_HOURS}
+               ) q)::int AS sites
+         FROM s`,
+      src.params,
+    ),
+    pool.query<{ talkgroup: number; calls: unknown; logical: unknown; enc: unknown; last_seen: Date }>(
+      `WITH s AS (${src.sys})
+       SELECT talkgroup,
+              SUM(receptions)::int AS calls,
+              SUM(logical_tg)::int AS logical,
+              COALESCE(SUM(enc), 0)::int AS enc,
+              MAX(hour) AS last_seen
+         FROM s
+        WHERE ${TG_VALID}
+        GROUP BY talkgroup
+        ORDER BY calls DESC, talkgroup ASC
+        LIMIT 20`,
+      src.params,
+    ),
+    pool.query<{ hour: Date; calls: unknown }>(
+      `WITH s AS (${src.sys})
+       SELECT hour, SUM(receptions)::int AS calls FROM s GROUP BY 1 ORDER BY 1`,
+      src.params,
+    ),
+    // One pass for every per-node and per-site figure the callers need.
+    pool.query<HeardGroup>(
+      `WITH h AS (${src.heard})
+       SELECT GROUPING(node_id, talkgroup, site_rfss, site_id)::int AS g,
+              node_id, talkgroup, site_rfss AS rfss, site_id AS site,
+              SUM(receptions)::int AS calls,
+              MAX(last_heard) AS last_seen
+         FROM h
+        GROUP BY GROUPING SETS (
+          (node_id), (node_id, talkgroup), (node_id, site_rfss, site_id),
+          (talkgroup), (site_rfss, site_id))`,
+      src.params,
+    ),
+    // COUNT(*) OVER () is taken after grouping and before LIMIT: every radio.
+    pool.query<{ radio: number; calls: unknown; last_seen: Date; radios: unknown }>(
+      `WITH h AS (${src.heard})
+       SELECT source_unit AS radio,
+              SUM(receptions)::int AS calls,
+              MAX(last_heard) AS last_seen,
+              COUNT(*) OVER ()::int AS radios
+         FROM h
+        WHERE ${RID_VALID}
+        GROUP BY source_unit
+        ORDER BY calls DESC, radio ASC
+        LIMIT 20`,
+      src.params,
+    ),
+  ]);
+  const groups = groupsQ.rows;
+  // The rollup knows the hour; the heard table knows the moment.
+  const tgLastHeard = new Map<number, Date>();
+  for (const r of groups) {
+    if (r.g === HEARD_TG && r.talkgroup !== null) tgLastHeard.set(r.talkgroup, r.last_seen);
+  }
+  const t = totQ.rows[0];
+  return {
+    groups,
+    detail: {
+      totals: {
+        calls: num(t?.calls),
+        logicalCalls: num(t?.logical),
+        encryptedCalls: num(t?.enc),
+        recordedCalls: num(t?.rec),
+        talkgroups: num(t?.talkgroups),
+        radios: num(radQ.rows[0]?.radios),
+        sites: num(t?.sites),
+        nodes: groups.filter((r) => r.g === HEARD_NODE).length,
+      },
+      topTalkgroups: tgQ.rows.map((r) => ({
+        talkgroup: r.talkgroup,
+        label: cat.labels.get(r.talkgroup) ?? null,
+        agency: cat.agencies.get(r.talkgroup) ?? null,
+        color: cat.colors.get(r.talkgroup) ?? null,
+        calls: num(r.calls),
+        logicalCalls: num(r.logical),
+        encryptedCalls: num(r.enc),
+        lastSeen: iso(tgLastHeard.get(r.talkgroup) ?? r.last_seen),
+      })),
+      topRadios: radQ.rows.map((r) => ({
+        radio: r.radio,
+        // Lifetime OTA, as scopedRadioDetail; the rollup keeps no per-window one.
+        ota: ota.get(r.radio) ?? null,
+        alias: cat.unitLabels.get(r.radio) ?? null,
+        agency: cat.unitAgencies.get(r.radio) ?? null,
+        color: cat.unitColors.get(r.radio) ?? null,
+        calls: num(r.calls),
+        lastSeen: iso(r.last_seen),
+      })),
+      series: srQ.rows.map((r) => ({ hour: iso(r.hour), calls: num(r.calls) })),
+    },
+  };
+}
+
+/** A receiving-nodes table row, in the shape both drill-downs render. */
+type DrillNodeRow = {
+  id: string;
+  name: string | null;
+  kind: string | null;
+  sites: unknown;
+  calls: unknown;
+  last_seen: Date;
+  top_tg: number | null;
+  top_tg_calls: unknown;
+};
+
+/**
+ * The receiving-nodes table from the heard grouping sets. `listed` limits the
+ * per-node site tally to the sites the drill-down actually lists, so a node is
+ * not credited with a phantom site the list has dropped (see SITE_MIN_HOURS).
+ */
+async function drillNodes(
+  pool: Pool,
+  groups: HeardGroup[],
+  listed: Set<string> | null,
+): Promise<DrillNodeRow[]> {
+  const rows = new Map<string, DrillNodeRow>();
+  for (const r of groups) {
+    if (r.g !== HEARD_NODE || r.node_id === null) continue;
+    rows.set(r.node_id, {
+      id: r.node_id, name: null, kind: null, sites: 0,
+      calls: num(r.calls), last_seen: r.last_seen, top_tg: null, top_tg_calls: null,
+    });
+  }
+  for (const r of groups) {
+    const row = r.node_id !== null ? rows.get(r.node_id) : undefined;
+    if (!row) continue;
+    if (r.g === HEARD_NODE_TG && r.talkgroup !== null && r.talkgroup !== 0) {
+      // Calls DESC, then the lower talkgroup — the raw query's tie-break.
+      const calls = num(r.calls);
+      const best = row.top_tg_calls === null ? -1 : num(row.top_tg_calls);
+      if (calls > best || (calls === best && row.top_tg !== null && r.talkgroup < row.top_tg)) {
+        row.top_tg = r.talkgroup;
+        row.top_tg_calls = calls;
+      }
+    } else if (r.g === HEARD_NODE_SITE && r.rfss !== null && r.site !== null
+      && r.rfss !== -1 && r.site !== -1 && (listed === null || listed.has(`${r.rfss}:${r.site}`))) {
+      row.sites = num(row.sites) + 1;
+    }
+  }
+  if (rows.size > 0) {
+    const nn = await pool.query<{ id: string; name: string | null; kind: string | null }>(
+      `SELECT id, name, kind FROM nodes WHERE id = ANY($1::text[])`,
+      [[...rows.keys()]],
+    );
+    for (const n of nn.rows) {
+      const row = rows.get(n.id);
+      if (row) { row.name = n.name; row.kind = n.kind; }
+    }
+  }
+  return [...rows.values()].sort((a, b) => num(b.calls) - num(a.calls) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+/** One site's traffic in a system drill-down, from either path. */
+type SiteTraffic = {
+  rfss: number;
+  site: number;
+  nac: number | null;
+  calls: unknown;
+  logical: unknown;
+  hours: unknown;
+  last_seen: Date;
+  top_tg: number | null;
+  top_tg_calls: unknown;
+};
+
+/** A node_site_snapshots row, as the system drill-down reads them. */
+type SiteSnapshot = {
+  node_id: string;
+  wacn: number | null;
+  rfss: number;
+  site: number;
+  nac: number | null;
+  channel_name: string | null;
+  control_frequency_mhz: number | null;
+  channel_count: number | null;
+  neighbor_count: number | null;
+  received_at: Date;
+  in_window: boolean;
+};
+
+/**
+ * The system drill-down's site list: sites with traffic, plus sites a node is
+ * monitoring that carried none.
+ *
+ * Traffic answers "what was heard here", and only once a site clears
+ * SITE_MIN_HOURS. Snapshots answer "this node is watching this site", which is
+ * the only way a quiet site shows at all — but SDR-Trunk keeps every site id a
+ * channel has ever decoded, corrupted ones included, and re-sends them all
+ * every minute. Braidwood RD's channel reports S100 (its site) and S244, S193,
+ * S186 and S109 (decode errors), all fresh, and the list showed it five times.
+ *
+ * A channel monitors ONE site. So per (node, channel): if any of its sites is
+ * listed from traffic, that is the real one and the rest go; if none is, the
+ * channel is quiet and contributes the one it is most sure of — the site whose
+ * control frequency it has decoded, then the most recent.
+ */
+function systemSiteList(
+  traffic: SiteTraffic[],
+  snapshots: SiteSnapshot[],
+  opts: { wacn: number | null; nodeId: string | null },
+): Array<{
+  rfss: number;
+  site: number;
+  nac: number | null;
+  calls: unknown;
+  logical: unknown;
+  last_seen: Date;
+  top_tg: number | null;
+  top_tg_calls: unknown;
+  channel_name: string | null;
+  control_frequency_mhz: number | null;
+  channel_count: number | null;
+  neighbor_count: number | null;
+}> {
+  const key = (rfss: number, site: number) => `${rfss}:${site}`;
+  const byKey = new Map(traffic.map((t) => [key(t.rfss, t.site), t]));
+  const listed = new Map<string, SiteTraffic | null>();
+  for (const t of traffic) if (num(t.hours) >= SITE_MIN_HOURS) listed.set(key(t.rfss, t.site), t);
+
+  // Newest snapshot per site, across nodes and channels: the deep metadata.
+  const meta = new Map<string, SiteSnapshot>();
+  for (const s of snapshots) {
+    const k = key(s.rfss, s.site);
+    const cur = meta.get(k);
+    if (!cur || new Date(s.received_at) > new Date(cur.received_at)) meta.set(k, s);
+  }
+
+  const channels = new Map<string, SiteSnapshot[]>();
+  for (const s of snapshots) {
+    if (s.channel_name === null) continue;
+    if (opts.nodeId !== null && s.node_id !== opts.nodeId) continue;
+    if (opts.wacn !== null && s.wacn !== null && s.wacn !== opts.wacn) continue;
+    const ck = `${s.node_id}\u0000${s.channel_name}`;
+    channels.set(ck, [...(channels.get(ck) ?? []), s]);
+  }
+  for (const sites of channels.values()) {
+    if (sites.some((s) => listed.has(key(s.rfss, s.site)))) continue;
+    const watching = sites.filter((s) => s.in_window);
+    if (!watching.length) continue;
+    watching.sort((a, b) =>
+      Number(b.control_frequency_mhz !== null) - Number(a.control_frequency_mhz !== null)
+      || new Date(b.received_at).getTime() - new Date(a.received_at).getTime());
+    const pick = watching[0]!;
+    const k = key(pick.rfss, pick.site);
+    // A quiet site keeps whatever little traffic it did have.
+    if (!listed.has(k)) listed.set(k, byKey.get(k) ?? null);
+  }
+
+  return [...listed.entries()]
+    .map(([k, t]) => {
+      const [rfss, site] = k.split(':').map(Number) as [number, number];
+      const m = meta.get(k) ?? null;
+      return {
+        rfss,
+        site,
+        nac: t?.nac ?? m?.nac ?? null,
+        calls: t?.calls ?? 0,
+        logical: t?.logical ?? 0,
+        last_seen: t?.last_seen ?? m!.received_at,
+        top_tg: t?.top_tg ?? null,
+        top_tg_calls: t?.top_tg_calls ?? null,
+        channel_name: m?.channel_name ?? null,
+        control_frequency_mhz: m?.control_frequency_mhz ?? null,
+        channel_count: m?.channel_count ?? null,
+        neighbor_count: m?.neighbor_count ?? null,
+      };
+    })
+    .sort((a, b) => num(b.calls) - num(a.calls) || a.rfss - b.rfss || a.site - b.site);
+}
+
 // ---------------------------------------------------------------------------
 // Feeder-facing per-node summary — a LIGHT slice of the Data page, scoped to
 // one node the contributor owns. Backs GET /api/feeder/nodes/:id/stats so a
@@ -2705,6 +3161,8 @@ nodeDataRouter.get(
         sites: unknown;
         talkgroups: unknown;
         radios: unknown;
+        /** Distinct hours heard in the window — see SITE_MIN_HOURS. */
+        hours: unknown;
         first_seen: Date;
         last_seen: Date;
       };
@@ -2714,6 +3172,7 @@ nodeDataRouter.get(
         site: number;
         calls: unknown;
         logical: unknown;
+        hours: unknown;
         last_seen: Date;
       };
 
@@ -2757,6 +3216,7 @@ nodeDataRouter.get(
                     (COUNT(DISTINCT (site_rfss, site_id))
                        FILTER (WHERE site_rfss <> -1 AND site_id <> -1))::int AS sites,
                     (COUNT(DISTINCT talkgroup) FILTER (WHERE ${TG_VALID}))::int AS talkgroups,
+                    COUNT(DISTINCT date_trunc('hour', last_seen))::int AS hours,
                     MIN(first_seen) AS first_seen,
                     MAX(last_seen) AS last_seen
                FROM r
@@ -2786,7 +3246,9 @@ nodeDataRouter.get(
                 GROUP BY 1, 2, 3
              )
              SELECT system, rfss, site,
-                    SUM(calls)::int AS calls, SUM(logical)::int AS logical, MAX(last_seen) AS last_seen
+                    SUM(calls)::int AS calls, SUM(logical)::int AS logical,
+                    COUNT(DISTINCT date_trunc('hour', last_seen))::int AS hours,
+                    MAX(last_seen) AS last_seen
                FROM r
               GROUP BY system, rfss, site
               ORDER BY system, calls DESC, rfss ASC, site ASC`,
@@ -2821,6 +3283,7 @@ nodeDataRouter.get(
                      FILTER (WHERE site_rfss IS NOT NULL AND site_id IS NOT NULL))::int AS sites,
                   (COUNT(DISTINCT talkgroup) FILTER (WHERE ${TG_VALID}))::int AS talkgroups,
                   (COUNT(DISTINCT source_unit) FILTER (WHERE ${RID_VALID}))::int AS radios,
+                  COUNT(DISTINCT date_trunc('hour', received_at))::int AS hours,
                   MIN(received_at) AS first_seen,
                   MAX(received_at) AS last_seen
              FROM node_radio_events
@@ -2838,6 +3301,7 @@ nodeDataRouter.get(
           `SELECT system, site_rfss AS rfss, site_id AS site,
                   COUNT(*)::int AS calls,
                   COUNT(DISTINCT logical_call_id)::int AS logical,
+                  COUNT(DISTINCT date_trunc('hour', received_at))::int AS hours,
                   MAX(received_at) AS last_seen
              FROM node_radio_events
             WHERE received_at >= now() - $1::interval
@@ -2856,12 +3320,15 @@ nodeDataRouter.get(
       ]);
 
       // Bucket the per-site rows under their system id (reusing the shared
-      // siteNames() resolver for the friendly channel name).
+      // siteNames() resolver for the friendly channel name). A site or system
+      // heard in fewer than SITE_MIN_HOURS hours is a decode error, not a
+      // second copy of a real one, and is left out — counts included.
       const sitesBySystem = new Map<
         number,
         Array<{ rfss: number; site: number; name: string | null; calls: number; logicalCalls: number; lastSeen: string }>
       >();
       for (const r of sitesRes.rows) {
+        if (num(r.hours) < SITE_MIN_HOURS) continue;
         const arr = sitesBySystem.get(r.system) ?? [];
         arr.push({
           rfss: r.rfss,
@@ -2877,15 +3344,16 @@ nodeDataRouter.get(
       return c.json({
         window,
         node: nodeId,
-        systems: res.rows.map((r) => ({
+        systems: res.rows.filter((r) => num(r.hours) >= SITE_MIN_HOURS).map((r) => ({
           wacn: r.wacn,
           system: r.system,
           name: r.name ?? null,
           calls: num(r.calls),
           logicalCalls: num(r.logical),
           encryptedCalls: num(r.enc),
-          // Numeric DISTINCT-site tally for the folder counts …
-          siteCount: num(r.sites),
+          // Site tally for the folder counts: the sites it lists, so a phantom
+          // dropped above is not still counted …
+          siteCount: r.system != null ? sitesBySystem.get(r.system)?.length ?? 0 : num(r.sites),
           talkgroups: num(r.talkgroups),
           // null on fleet-wide views: no rollup carries radios.
           radios: r.radios === null ? null : num(r.radios),
@@ -2938,193 +3406,214 @@ nodeDataRouter.get(
         (wacnIdx !== null ? ` AND ${p}wacn = $${wacnIdx}` : '') +
         (nodeIdx !== null ? ` AND ${p}node_id = $${nodeIdx}` : '');
 
-      // Hide-encrypted must reach the per-site "top talkgroup" lateral, or a
-      // site's headline talkgroup stays an ENC one while the talkgroup list
-      // excludes it. Inlined as validated integers — this lateral shares the
-      // handler's parameter list and appending to it would renumber the scope.
-      let siteEncSql = '';
+      // Hide-encrypted must reach the per-site "top talkgroup", or a site's
+      // headline talkgroup stays an ENC one while the talkgroup list excludes
+      // it. Inlined as validated integers: the statements share parameter
+      // lists that appending to would renumber.
+      let encIds = '';
       if (url.searchParams.get('enc') === 'hide') {
         const safeEnc = (await encryptedTalkgroupIds()).filter((id) => Number.isSafeInteger(id));
-        if (safeEnc.length) siteEncSql = `AND e.talkgroup <> ALL(ARRAY[${safeEnc.join(',')}]::int[])`;
+        if (safeEnc.length) encIds = `ARRAY[${safeEnc.join(',')}]::int[]`;
       }
 
-      // Same scope against node_site_snapshots, whose system column is
-      // `system_id`. Snapshots are UPSERTed per (node, system, rfss, site)
-      // every ~60s, so received_at tracks "still being monitored" and the
-      // window filter carries the same meaning it does for events.
-      const snapScope = (p: string) =>
-        `${p}received_at >= now() - $1::interval AND ${p}system_id = $2` +
-        (wacnIdx !== null ? ` AND ${p}wacn = $${wacnIdx}` : '') +
-        (nodeIdx !== null ? ` AND ${p}node_id = $${nodeIdx}` : '');
+      // Every snapshot this system has, for both paths: the site list merges
+      // them with traffic in JS (systemSiteList), which is where a quiet site
+      // is told apart from a decode error. Snapshots are UPSERTed per (node,
+      // system, rfss, site) every ~60s, so received_at inside the window means
+      // "still being monitored". A few dozen rows.
+      const snapQ = pool.query<SiteSnapshot>(
+        `SELECT node_id, wacn, rfss, site_id AS site, nac, channel_name,
+                control_frequency_mhz,
+                jsonb_array_length(channels) AS channel_count,
+                jsonb_array_length(neighbors) AS neighbor_count,
+                received_at,
+                received_at >= now() - $2::interval AS in_window
+           FROM node_site_snapshots
+          WHERE system_id = $1`,
+        [system, WINDOW_INTERVAL[window]],
+      );
+      // Awaited below. This only stops a throw on the way there from leaving
+      // its rejection unhandled, which would take the process down.
+      snapQ.catch(() => undefined);
 
-      const [detail, sitesQ, sysNodesQ, nameQ] = await Promise.all([
-        scopedRadioDetail(pool, scope, params),
-        pool.query<{
-          rfss: number;
-          site: number;
-          nac: number | null;
-          calls: unknown;
-          logical: unknown;
-          last_seen: Date;
-          top_tg: number | null;
-          top_tg_calls: unknown;
-          channel_name: string | null;
-          control_frequency_mhz: number | null;
-          channel_count: number | null;
-          neighbor_count: number | null;
-        }>(
-          // meta: deep-metadata enrichment (migration 047) — the latest
-          // node_site_snapshots row for this (system, rfss, site) across
-          // nodes, so each site in the drill-down carries its control freq +
-          // channel/neighbor counts alongside the event-derived call rollup.
-          `SELECT s.rfss, s.site, s.nac, s.calls, s.logical, s.last_seen,
-                  tt.talkgroup AS top_tg, tt.calls AS top_tg_calls,
-                  meta.channel_name,
-                  meta.control_frequency_mhz,
-                  meta.channel_count, meta.neighbor_count
-             FROM (
-               -- Sites come from BOTH sources, because they answer different
-               -- questions. node_radio_events only knows a site once someone
-               -- keys up on it, so a site being decoded perfectly but carrying
-               -- no group call in the window was invisible here — a quiet site
-               -- looked identical to one that was never monitored at all.
-               -- node_site_snapshots is SDR-Trunk's own view and is refreshed
-               -- every ~60s regardless of traffic, so it is the authority on
-               -- "this node is watching this site"; the events side supplies
-               -- the call rollup. channel_name IS NOT NULL keeps this to sites
-               -- the node actually has a channel for, excluding the many
-               -- neighbour sites SDR-Trunk learns about from control broadcasts.
-               SELECT COALESCE(ev.rfss, sn.rfss)          AS rfss,
-                      COALESCE(ev.site, sn.site)          AS site,
-                      COALESCE(ev.nac, sn.nac)            AS nac,
-                      COALESCE(ev.calls, 0)               AS calls,
-                      COALESCE(ev.logical, 0)             AS logical,
-                      COALESCE(ev.last_seen, sn.last_seen) AS last_seen
+      let detail: ScopedDetail;
+      let traffic: SiteTraffic[];
+      let sysNodes: DrillNodeRow[];
+      let name: string | null;
+      let snapshots: SiteSnapshot[];
+      if (nodeId === null) {
+        // Fleet-wide: the rollups plus the hour in progress (drillFromRollup).
+        // The raw version below grouped every reception of the system in the
+        // window, which at 7 days on this storage did not finish in 30 s.
+        const src = drillSources({ system, rfss: null, site: null }, window, await resolveRollupEdge(pool));
+        const [drill, trafficQ, snapRes, ids] = await Promise.all([
+          drillFromRollup(pool, src),
+          pool.query<SiteTraffic>(
+            // Per-site calls are the per-SITE attribution (see migration 123),
+            // and the top talkgroup is chosen on receptions, like the rest.
+            `WITH s AS (${src.sys}),
+             st AS (
+               SELECT rfss, site,
+                      SUM(receptions)::int AS calls,
+                      SUM(logical_site)::int AS logical,
+                      COUNT(DISTINCT hour)::int AS hours,
+                      MAX(hour) AS last_seen
+                 FROM s
+                WHERE rfss <> -1 AND site <> -1
+                GROUP BY rfss, site
+             ), tt AS (
+               SELECT DISTINCT ON (rfss, site) rfss, site, talkgroup, calls
                  FROM (
-                   SELECT site_rfss AS rfss, site_id AS site,
-                          MAX(site_nac) AS nac,
-                          COUNT(*)::int AS calls,
-                          COUNT(DISTINCT logical_call_id)::int AS logical,
-                          MAX(received_at) AS last_seen
-                     FROM node_radio_events
-                    WHERE ${scope('')} AND ${CALL_GROUP}
-                      AND site_rfss IS NOT NULL AND site_id IS NOT NULL
-                    GROUP BY site_rfss, site_id
-                 ) ev
-                 FULL OUTER JOIN (
-                   SELECT rfss, site_id AS site,
-                          MAX(nac) AS nac,
-                          MAX(received_at) AS last_seen
-                     FROM node_site_snapshots
-                    WHERE ${snapScope('')} AND channel_name IS NOT NULL
-                    GROUP BY rfss, site_id
-                 ) sn ON sn.rfss = ev.rfss AND sn.site = ev.site
-             ) s
-             LEFT JOIN LATERAL (
-               SELECT e.talkgroup, COUNT(*)::int AS calls
-                 FROM node_radio_events e
-                WHERE ${scope('e.')} AND e.site_rfss = s.rfss AND e.site_id = s.site
-                  AND ${callGroup('e.')} AND ${await tgValidConfigured('e.')}
-                  ${siteEncSql}
-                GROUP BY e.talkgroup
-                ORDER BY calls DESC, e.talkgroup ASC
-                LIMIT 1
-             ) tt ON true
-             LEFT JOIN LATERAL (
-               SELECT m.channel_name,
-                      m.control_frequency_mhz,
-                      jsonb_array_length(m.channels) AS channel_count,
-                      jsonb_array_length(m.neighbors) AS neighbor_count
-                 FROM node_site_snapshots m
-                WHERE m.system_id = $2 AND m.rfss = s.rfss AND m.site_id = s.site
-                ORDER BY m.received_at DESC
-                LIMIT 1
-             ) meta ON true
-            ORDER BY s.calls DESC, s.rfss ASC, s.site ASC`,
-          params,
-        ),
-        // Which feeder nodes cover this system, and how much of it each one
-        // carries. Deliberately the same shape as the sites rollup above and
-        // rendered as the same table: the two answer the mirror-image question
-        // — a site is WHERE the traffic was transmitted from, a node is WHO
-        // received it — and a system is only as covered as its nodes make it.
-        //
-        // Unlike sites there is no snapshot half to full-outer-join: a node
-        // that heard nothing in the window has nothing to report here, and the
-        // Nodes tab is where a silent node belongs.
-        pool.query<{
-          id: string;
-          name: string | null;
-          kind: string | null;
-          sites: unknown;
-          calls: unknown;
-          last_seen: Date;
-          top_tg: number | null;
-          top_tg_calls: unknown;
-        }>(
-// ONE pass over the window, and no COUNT(DISTINCT).
-             //
-             // The obvious shape — group by node, count sites with
-             // COUNT(DISTINCT (rfss, site)), pick the top talkgroup with a
-             // LATERAL — is three different ways of being slow at once. The
-             // LATERAL re-scans the window once per node; a COUNT(DISTINCT)
-             // forces a serial sort of every row in the window and blocks
-             // parallel aggregation entirely; and a DISTINCT over a ROW type is
-             // the dearest form of it.
-             //
-             // GROUPING SETS answers all three from a single scan: totals per
-             // node, per (node, talkgroup) for the top one, and per (node, site)
-             // so the site tally is a plain count of groups. Measured on a live
-             // 24h window: 303ms against 939ms.
-             `WITH g AS (
-                SELECT e.node_id,
-                       e.talkgroup,
-                       e.site_rfss,
-                       e.site_id,
-                       COUNT(*)::int AS c,
-                       MAX(e.received_at) AS last_seen,
-                       GROUPING(e.talkgroup) AS gt,
-                       GROUPING(e.site_rfss) AS gs
-                  FROM node_radio_events e
-                 WHERE ${scope('e.')} AND ${callGroup('e.')}
-                 GROUP BY GROUPING SETS (
-                   (e.node_id),
-                   (e.node_id, e.talkgroup),
-                   (e.node_id, e.site_rfss, e.site_id))
-              )
-              SELECT tot.node_id AS id, n.name, n.kind,
-                     COALESCE(st.sites, 0) AS sites,
-                     tot.c AS calls, tot.last_seen,
-                     tg.talkgroup AS top_tg, tg.c AS top_tg_calls
-                FROM (SELECT node_id, c, last_seen FROM g WHERE gt = 1 AND gs = 1) tot
-                -- Carried so the drill-down opens with the tabs this kind can
-                -- actually fill (a scanner has no sites and no live view).
-                LEFT JOIN nodes n ON n.id = tot.node_id
-                LEFT JOIN (
-                  SELECT node_id, COUNT(*)::int AS sites
-                    FROM g
-                   WHERE gs = 0 AND site_rfss IS NOT NULL AND site_id IS NOT NULL
-                   GROUP BY node_id
-                ) st ON st.node_id = tot.node_id
-                LEFT JOIN (
-                  SELECT DISTINCT ON (node_id) node_id, talkgroup, c
-                    FROM g
-                   WHERE gt = 0 AND talkgroup IS NOT NULL
-                   ORDER BY node_id, c DESC, talkgroup ASC
-                ) tg ON tg.node_id = tot.node_id
-               ORDER BY tot.c DESC, tot.node_id ASC`,
-          params,
-        ),
-        // Friendly system name for the drill-down heading (most-recent
-        // non-null system_label within the scope); null when none seen.
-        pool.query<{ name: string | null }>(
-          `SELECT (array_agg(system_label ORDER BY received_at DESC)
-                     FILTER (WHERE system_label IS NOT NULL))[1] AS name
-             FROM node_radio_events
-            WHERE ${scope('')} AND ${CALL_GROUP}`,
-          params,
-        ),
-      ]);
+                   SELECT rfss, site, talkgroup, SUM(receptions)::int AS calls
+                     FROM s
+                    WHERE rfss <> -1 AND site <> -1 AND ${await tgValidConfigured()}${
+                      encIds ? ` AND talkgroup <> ALL(${encIds})` : ''}
+                    GROUP BY rfss, site, talkgroup
+                 ) x
+                ORDER BY rfss, site, calls DESC, talkgroup ASC
+             )
+             SELECT st.rfss, st.site, NULL::int AS nac, st.calls, st.logical, st.hours,
+                    st.last_seen, tt.talkgroup AS top_tg, tt.calls AS top_tg_calls
+               FROM st LEFT JOIN tt USING (rfss, site)`,
+            src.params,
+          ),
+          snapQ,
+          systemIdentity(pool, [system]),
+        ]);
+        detail = drill.detail;
+        snapshots = snapRes.rows;
+        // The rollup knows the hour; the heard table knows the moment.
+        const siteLast = new Map<string, Date>();
+        for (const g of drill.groups) {
+          if (g.g === HEARD_SITE) siteLast.set(`${g.rfss}:${g.site}`, g.last_seen);
+        }
+        traffic = trafficQ.rows.map((t) => ({ ...t, last_seen: siteLast.get(`${t.rfss}:${t.site}`) ?? t.last_seen }));
+        const listed = new Set(
+          systemSiteList(traffic, snapshots, { wacn, nodeId: null }).map((s) => `${s.rfss}:${s.site}`),
+        );
+        sysNodes = await drillNodes(pool, drill.groups, listed);
+        name = ids.get(system)?.name ?? null;
+      } else {
+        // Node-scoped: raw detail, which the (node, time) index keeps cheap.
+        const [rawDetail, trafficQ, sysNodesQ, nameQ, snapRes] = await Promise.all([
+          scopedRadioDetail(pool, scope, params),
+          pool.query<SiteTraffic>(
+            `SELECT s.rfss, s.site, s.nac, s.calls, s.logical, s.hours, s.last_seen,
+                    tt.talkgroup AS top_tg, tt.calls AS top_tg_calls
+               FROM (
+                 SELECT site_rfss AS rfss, site_id AS site,
+                        MAX(site_nac) AS nac,
+                        COUNT(*)::int AS calls,
+                        COUNT(DISTINCT logical_call_id)::int AS logical,
+                        COUNT(DISTINCT date_trunc('hour', received_at))::int AS hours,
+                        MAX(received_at) AS last_seen
+                   FROM node_radio_events
+                  WHERE ${scope('')} AND ${CALL_GROUP}
+                    AND site_rfss IS NOT NULL AND site_id IS NOT NULL
+                  GROUP BY site_rfss, site_id
+               ) s
+               LEFT JOIN LATERAL (
+                 SELECT e.talkgroup, COUNT(*)::int AS calls
+                   FROM node_radio_events e
+                  WHERE ${scope('e.')} AND e.site_rfss = s.rfss AND e.site_id = s.site
+                    AND ${callGroup('e.')} AND ${await tgValidConfigured('e.')}
+                    ${encIds ? `AND e.talkgroup <> ALL(${encIds})` : ''}
+                  GROUP BY e.talkgroup
+                  ORDER BY calls DESC, e.talkgroup ASC
+                  LIMIT 1
+               ) tt ON true`,
+            params,
+          ),
+          // Which feeder nodes cover this system, and how much of it each one
+          // carries. Deliberately the same shape as the sites rollup above and
+          // rendered as the same table: the two answer the mirror-image question
+          // — a site is WHERE the traffic was transmitted from, a node is WHO
+          // received it — and a system is only as covered as its nodes make it.
+          //
+          // Unlike sites there is no snapshot half to full-outer-join: a node
+          // that heard nothing in the window has nothing to report here, and the
+          // Nodes tab is where a silent node belongs.
+          pool.query<{
+            id: string;
+            name: string | null;
+            kind: string | null;
+            sites: unknown;
+            calls: unknown;
+            last_seen: Date;
+            top_tg: number | null;
+            top_tg_calls: unknown;
+          }>(
+  // ONE pass over the window, and no COUNT(DISTINCT).
+               //
+               // The obvious shape — group by node, count sites with
+               // COUNT(DISTINCT (rfss, site)), pick the top talkgroup with a
+               // LATERAL — is three different ways of being slow at once. The
+               // LATERAL re-scans the window once per node; a COUNT(DISTINCT)
+               // forces a serial sort of every row in the window and blocks
+               // parallel aggregation entirely; and a DISTINCT over a ROW type is
+               // the dearest form of it.
+               //
+               // GROUPING SETS answers all three from a single scan: totals per
+               // node, per (node, talkgroup) for the top one, and per (node, site)
+               // so the site tally is a plain count of groups. Measured on a live
+               // 24h window: 303ms against 939ms.
+               `WITH g AS (
+                  SELECT e.node_id,
+                         e.talkgroup,
+                         e.site_rfss,
+                         e.site_id,
+                         COUNT(*)::int AS c,
+                         MAX(e.received_at) AS last_seen,
+                         GROUPING(e.talkgroup) AS gt,
+                         GROUPING(e.site_rfss) AS gs
+                    FROM node_radio_events e
+                   WHERE ${scope('e.')} AND ${callGroup('e.')}
+                   GROUP BY GROUPING SETS (
+                     (e.node_id),
+                     (e.node_id, e.talkgroup),
+                     (e.node_id, e.site_rfss, e.site_id))
+                )
+                SELECT tot.node_id AS id, n.name, n.kind,
+                       COALESCE(st.sites, 0) AS sites,
+                       tot.c AS calls, tot.last_seen,
+                       tg.talkgroup AS top_tg, tg.c AS top_tg_calls
+                  FROM (SELECT node_id, c, last_seen FROM g WHERE gt = 1 AND gs = 1) tot
+                  -- Carried so the drill-down opens with the tabs this kind can
+                  -- actually fill (a scanner has no sites and no live view).
+                  LEFT JOIN nodes n ON n.id = tot.node_id
+                  LEFT JOIN (
+                    SELECT node_id, COUNT(*)::int AS sites
+                      FROM g
+                     WHERE gs = 0 AND site_rfss IS NOT NULL AND site_id IS NOT NULL
+                     GROUP BY node_id
+                  ) st ON st.node_id = tot.node_id
+                  LEFT JOIN (
+                    SELECT DISTINCT ON (node_id) node_id, talkgroup, c
+                      FROM g
+                     WHERE gt = 0 AND talkgroup IS NOT NULL
+                     ORDER BY node_id, c DESC, talkgroup ASC
+                  ) tg ON tg.node_id = tot.node_id
+                 ORDER BY tot.c DESC, tot.node_id ASC`,
+            params,
+          ),
+          // Friendly system name for the drill-down heading (most-recent
+          // non-null system_label within the scope); null when none seen.
+          pool.query<{ name: string | null }>(
+            `SELECT (array_agg(system_label ORDER BY received_at DESC)
+                       FILTER (WHERE system_label IS NOT NULL))[1] AS name
+               FROM node_radio_events
+              WHERE ${scope('')} AND ${CALL_GROUP}`,
+            params,
+          ),
+          snapQ,
+        ]);
+        detail = rawDetail;
+        traffic = trafficQ.rows;
+        snapshots = snapRes.rows;
+        sysNodes = sysNodesQ.rows;
+        name = nameQ.rows[0]?.name ?? null;
+      }
+      const sites = systemSiteList(traffic, snapshots, { wacn, nodeId });
 
       // Cached (~60s) — same map scopedRadioDetail used for its own lists.
       const tgLabels = await talkgroupLabels();
@@ -3132,9 +3621,9 @@ nodeDataRouter.get(
         window,
         system,
         wacn,
-        name: nameQ.rows[0]?.name ?? null,
+        name,
         totals: detail.totals,
-        sites: sitesQ.rows.map((r) => ({
+        sites: sites.map((r) => ({
           rfss: r.rfss,
           site: r.site,
           name: r.channel_name ?? null,
@@ -3156,7 +3645,7 @@ nodeDataRouter.get(
           channelCount: r.channel_count ?? null,
           neighborCount: r.neighbor_count ?? null,
         })),
-        nodes: sysNodesQ.rows.map((r) => ({
+        nodes: sysNodes.map((r) => ({
           id: r.id,
           name: r.name,
           kind: r.kind ?? 'radio',
@@ -3219,89 +3708,110 @@ nodeDataRouter.get(
         ` AND ${p}site_rfss = $3 AND ${p}site_id = $4` +
         (nodeIdx !== null ? ` AND ${p}node_id = $${nodeIdx}` : '');
 
-      const [detail, nodesQ, metaQ] = await Promise.all([
-        scopedRadioDetail(pool, scope, params),
-        // Which feeder nodes receive this site. Carries the same columns as
-        // the system-level nodes rollup so both render as one table; the site
-        // count is dropped because at this level it is always one.
-        pool.query<{
-          id: string;
-          name: string | null;
-          kind: string | null;
-          calls: unknown;
-          last_seen: Date;
-          top_tg: number | null;
-          top_tg_calls: unknown;
-        }>(
-          // GROUPING SETS, the same shape the system-level nodes rollup uses
-          // and for the same reason: the LATERAL this replaces re-scanned the
-          // window once per node to find its top talkgroup, and the
-          // COUNT(DISTINCT) forced a serial sort of every row. One pass gives
-          // both — totals per node, and per (node, talkgroup) for the top one.
-          `WITH g AS (
-             SELECT e.node_id,
-                    e.talkgroup,
-                    COUNT(*)::int AS c,
-                    MAX(e.received_at) AS last_seen,
-                    GROUPING(e.talkgroup) AS gt
-               FROM node_radio_events e
-              WHERE ${scope('e.')} AND ${callGroup('e.')}
-              GROUP BY GROUPING SETS ((e.node_id), (e.node_id, e.talkgroup))
-           )
-           SELECT tot.node_id AS id, n.name, n.kind,
-                  tot.c AS calls, tot.last_seen,
-                  tg.talkgroup AS top_tg, tg.c AS top_tg_calls
-             FROM (SELECT node_id, c, last_seen FROM g WHERE gt = 1) tot
-             LEFT JOIN nodes n ON n.id = tot.node_id
-             LEFT JOIN (
-               SELECT DISTINCT ON (node_id) node_id, talkgroup, c
-                 FROM g
-                WHERE gt = 0 AND talkgroup IS NOT NULL
-                ORDER BY node_id, c DESC, talkgroup ASC
-             ) tg ON tg.node_id = tot.node_id
-            ORDER BY tot.c DESC, tot.node_id ASC`,
-          params,
-        ),
-        // Deep P25 site metadata (migration 047): the latest node_site_snapshots
-        // row for this (systemId, rfss, site) across nodes. Null until a node
-        // forwards site snapshots — the drill-down renders an empty state then.
-        pool.query<{
-          guid: string | null;
-          system_name: string | null;
-          wacn: number | null;
-          nac: number | null;
-          lra: number | null;
-          channel_name: string | null;
-          control_frequency_mhz: number | null;
-          control_lcn: string | null;
-          affiliated_radio_count: number | null;
-          observation_count: number | null;
-          site_first_seen_ms: string | null;
-          site_last_seen_ms: string | null;
-          status: unknown;
-          channels: unknown;
-          neighbors: unknown;
-          bands: unknown;
-          patches: unknown;
-          quality: unknown;
-          received_at: Date;
-        }>(
-          // NOTE: its own params — this query never references the $1 window
-          // interval, and Postgres rejects a statement with an unused untyped
-          // parameter ("could not determine data type of parameter $1", 42P18).
-          `SELECT guid, system_name, wacn, nac, lra, channel_name,
-                  control_frequency_mhz, control_lcn, affiliated_radio_count,
-                  observation_count, site_first_seen_ms, site_last_seen_ms,
-                  status, channels, neighbors, bands, patches, quality, received_at
-             FROM node_site_snapshots
-            WHERE system_id = $1 AND rfss = $2 AND site_id = $3
-            ORDER BY received_at DESC
-            LIMIT 1`,
-          [system, rfss, site],
-        ),
-      ]);
+      // Deep P25 site metadata (migration 047): the latest node_site_snapshots
+      // row for this (systemId, rfss, site) across nodes. Null until a node
+      // forwards site snapshots — the drill-down renders an empty state then.
+      const metaQ = pool.query<{
+        guid: string | null;
+        system_name: string | null;
+        wacn: number | null;
+        nac: number | null;
+        lra: number | null;
+        channel_name: string | null;
+        control_frequency_mhz: number | null;
+        control_lcn: string | null;
+        affiliated_radio_count: number | null;
+        observation_count: number | null;
+        site_first_seen_ms: string | null;
+        site_last_seen_ms: string | null;
+        status: unknown;
+        channels: unknown;
+        neighbors: unknown;
+        bands: unknown;
+        patches: unknown;
+        quality: unknown;
+        received_at: Date;
+      }>(
+        // NOTE: its own params — this query never references the $1 window
+        // interval, and Postgres rejects a statement with an unused untyped
+        // parameter ("could not determine data type of parameter $1", 42P18).
+        `SELECT guid, system_name, wacn, nac, lra, channel_name,
+                control_frequency_mhz, control_lcn, affiliated_radio_count,
+                observation_count, site_first_seen_ms, site_last_seen_ms,
+                status, channels, neighbors, bands, patches, quality, received_at
+           FROM node_site_snapshots
+          WHERE system_id = $1 AND rfss = $2 AND site_id = $3
+          ORDER BY received_at DESC
+          LIMIT 1`,
+        [system, rfss, site],
+      );
+      // Awaited below. This only stops a throw on the way there from leaving
+      // its rejection unhandled, which would take the process down.
+      metaQ.catch(() => undefined);
 
-      const m = metaQ.rows[0] ?? null;
+      let detail: ScopedDetail;
+      let siteNodes: Array<Omit<DrillNodeRow, 'sites'>>;
+      if (nodeId === null) {
+        // Fleet-wide: the rollups plus the hour in progress (drillFromRollup).
+        // The raw version timed out at 30 s on production for a 7-day site:
+        // ~116k rows over ~40k heap pages, five queries at once, cold.
+        const drill = await drillFromRollup(
+          pool,
+          drillSources({ system, rfss, site }, window, await resolveRollupEdge(pool)),
+        );
+        detail = drill.detail;
+        siteNodes = await drillNodes(pool, drill.groups, null);
+      } else {
+        // Node-scoped: raw detail, which the (node, time) index keeps cheap.
+        const [rawDetail, nodesQ] = await Promise.all([
+          scopedRadioDetail(pool, scope, params),
+          // Which feeder nodes receive this site. Carries the same columns as
+          // the system-level nodes rollup so both render as one table; the site
+          // count is dropped because at this level it is always one.
+          pool.query<{
+            id: string;
+            name: string | null;
+            kind: string | null;
+            calls: unknown;
+            last_seen: Date;
+            top_tg: number | null;
+            top_tg_calls: unknown;
+          }>(
+            // GROUPING SETS, the same shape the system-level nodes rollup uses
+            // and for the same reason: the LATERAL this replaces re-scanned the
+            // window once per node to find its top talkgroup, and the
+            // COUNT(DISTINCT) forced a serial sort of every row. One pass gives
+            // both — totals per node, and per (node, talkgroup) for the top one.
+            `WITH g AS (
+               SELECT e.node_id,
+                      e.talkgroup,
+                      COUNT(*)::int AS c,
+                      MAX(e.received_at) AS last_seen,
+                      GROUPING(e.talkgroup) AS gt
+                 FROM node_radio_events e
+                WHERE ${scope('e.')} AND ${callGroup('e.')}
+                GROUP BY GROUPING SETS ((e.node_id), (e.node_id, e.talkgroup))
+             )
+             SELECT tot.node_id AS id, n.name, n.kind,
+                    tot.c AS calls, tot.last_seen,
+                    tg.talkgroup AS top_tg, tg.c AS top_tg_calls
+               FROM (SELECT node_id, c, last_seen FROM g WHERE gt = 1) tot
+               LEFT JOIN nodes n ON n.id = tot.node_id
+               LEFT JOIN (
+                 SELECT DISTINCT ON (node_id) node_id, talkgroup, c
+                   FROM g
+                  WHERE gt = 0 AND talkgroup IS NOT NULL
+                  ORDER BY node_id, c DESC, talkgroup ASC
+               ) tg ON tg.node_id = tot.node_id
+              ORDER BY tot.c DESC, tot.node_id ASC`,
+            params,
+          ),
+        ]);
+        detail = rawDetail;
+        siteNodes = nodesQ.rows;
+      }
+
+      const m = (await metaQ).rows[0] ?? null;
       const meta = m
         ? {
             guid: m.guid,
@@ -3339,7 +3849,7 @@ nodeDataRouter.get(
         topTalkgroups: detail.topTalkgroups,
         topRadios: detail.topRadios,
         series: detail.series,
-        nodes: nodesQ.rows.map((r) => ({
+        nodes: siteNodes.map((r) => ({
           id: r.id,
           name: r.name,
           kind: r.kind ?? 'radio',
@@ -3510,10 +4020,13 @@ nodeDataRouter.get(
       // (range, prefix, encrypted list, agency) apply once, on the union. The
       // live hour counts encrypted LOGICAL calls to match the rollup's
       // encrypted_calls, so the sum is in one unit.
+      // Kept for the page's enrichment below, so the whole request reads one.
+      let tgSeam: string | null = null;
       const rollupTalkgroups = async (): Promise<[{ rows: { n: unknown }[] }, { rows: PageRow[] }]> => {
         // One seam for the count and the page, as a literal — see
         // ROLLUP_EDGE_EXPR.
         const seam = rollupEdgeSql(await resolveRollupEdge(pool));
+        tgSeam = seam;
         const ROLLUP_HOURS = rollupHours(seam);
         const LIVE_HOUR = liveHour(seam);
         const rowConds: string[] = [];
@@ -3687,6 +4200,15 @@ nodeDataRouter.get(
         // talkgroup, 1.4-2.1 s for a page. Grouping by (key, site, node) in a
         // single scan reads each row once; the three answers fall out of the
         // groups.
+        //
+        // Fleet-wide, even that one scan is a window of detail — 3.3 s of a
+        // 3.4 s request on production, and the 30 s timeouts when cold — so it
+        // reads node_radio_hourly_heard plus the hour in progress instead, on
+        // the list's own seam. Its counts are receptions, like the list's.
+        // Node-scoped lists have no seam and keep the raw scan.
+        const heardConds = ['talkgroup = ANY($4::int[])'];
+        // With no node in scope, latParams holds exactly rfss, site: $5, $6.
+        if (scope.rfss !== null) heardConds.push('site_rfss = $5 AND site_id = $6');
         const enrich = await pool.query<{
           ord: number;
           site_rfss: number | null;
@@ -3695,7 +4217,21 @@ nodeDataRouter.get(
           calls: unknown;
           last_at: Date | string;
         }>(
-          `SELECT k.ord::int AS ord,
+          nodeId === null && tgSeam !== null
+            ? `WITH h AS (${heardWindowSql(tgSeam, heardConds.join(' AND '))})
+               SELECT k.ord::int AS ord,
+                      NULLIF(h.site_rfss, -1) AS site_rfss,
+                      NULLIF(h.site_id, -1) AS site_id,
+                      h.node_id,
+                      SUM(h.receptions)::int AS calls,
+                      MAX(h.last_heard) AS last_at
+                 FROM unnest($2::int[], $3::int[], $4::int[])
+                      WITH ORDINALITY AS k(wacn, system, talkgroup, ord)
+                 JOIN h
+                   ON h.talkgroup = k.talkgroup
+                  AND h.system = COALESCE(k.system, 0)
+                GROUP BY k.ord, h.site_rfss, h.site_id, h.node_id`
+            : `SELECT k.ord::int AS ord,
                   e.site_rfss, e.site_id, e.node_id,
                   COUNT(*)::int AS calls,
                   MAX(e.received_at) AS last_at
@@ -3892,6 +4428,7 @@ nodeDataRouter.get(
       // filter as a plain WHERE. Both together = the intersection.
       const agencyFilter = (url.searchParams.get('agency') ?? '').trim();
       const hasFilter = url.searchParams.get('has'); // 'ota' | 'alias' | null
+      let unitIds: number[] | null = null;
       if (agencyFilter || hasFilter === 'alias') {
         const disp = await radioDisplay();
         let ids: number[] = [];
@@ -3902,6 +4439,7 @@ nodeDataRouter.get(
           ids = [...disp.labels.keys()];
         }
         // An empty set must match nothing, not everything.
+        unitIds = ids;
         params.push(ids);
         conds.push(`source_unit = ANY($${params.length}::bigint[])`);
       }
@@ -3930,43 +4468,16 @@ nodeDataRouter.get(
       pageParams.push(offset);
       const offIdx = pageParams.length;
 
-      const [countQ, pageQ] = await Promise.all([
-        pool.query<{ n: unknown }>(
-          namedOnly
-            ? `SELECT COUNT(*)::int AS n FROM (
-                 SELECT 1 FROM node_radio_events WHERE ${where}
-                  GROUP BY wacn, system, source_unit ${having}) t`
-            : `SELECT COUNT(DISTINCT (wacn, system, source_unit))::int AS n
-                 FROM node_radio_events WHERE ${where}`,
-          params,
-        ),
-        pool.query<{
-          wacn: number | null;
-          system: number | null;
-          radio: number;
-          alias: string | null;
-          calls: unknown;
-          last_seen: Date;
-        }>(
-          // alias: the most-recent non-null OTA/talker alias for this radio
-          // (source_alias from vce); null when none was ever captured.
-          `SELECT wacn, system, source_unit AS radio,
-                  (array_agg(source_alias ORDER BY received_at DESC)
-                     FILTER (WHERE source_alias IS NOT NULL AND source_alias <> source_unit::text))[1] AS alias,
-                  COUNT(*)::int AS calls,
-                  MAX(received_at) AS last_seen
-             FROM node_radio_events
-            WHERE ${where}
-            GROUP BY wacn, system, source_unit
-            ${having}
-            ORDER BY ${orderCol} ${dir}${orderNulls}, radio ASC
-            LIMIT $${limIdx} OFFSET $${offIdx}`,
-          pageParams,
-        ),
-      ]);
-      const total = num(countQ.rows[0]?.n);
-      const page = pageQ.rows;
-
+      type RadioRow = {
+        wacn: number | null;
+        system: number | null;
+        radio: number;
+        alias: string | null;
+        calls: unknown;
+        last_seen: Date;
+      };
+      let total: number;
+      let page: RadioRow[];
       const extras = new Map<
         number,
         {
@@ -3976,129 +4487,347 @@ nodeDataRouter.get(
           topTalkgroups: Array<{ talkgroup: number; calls: number }>;
         }
       >();
-      // Scope for the per-key laterals below. Own param array ($1 interval,
-      // $2-$4 the page's keys), so optional filters append from $5.
-      const latParams: unknown[] = [];
-      const latAdd = (v: unknown): string => {
-        latParams.push(v);
-        return `$${latParams.length + 4}`;
-      };
-      // Hide-encrypted has to reach the per-radio "top talkgroups" lateral too,
-      // or an always-encrypted talkgroup keeps showing inside a row while being
-      // excluded from the talkgroup list itself. Inlined as validated integers
-      // because this lateral's parameter numbering is offset by the page keys.
-      let radEncSql = '';
-      if (url.searchParams.get('enc') === 'hide') {
-        const safeEnc = (await encryptedTalkgroupIds()).filter((id) => Number.isSafeInteger(id));
-        if (safeEnc.length) radEncSql = `AND e.talkgroup <> ALL(ARRAY[${safeEnc.join(',')}]::int[])`;
-      }
-      let nodeLat = '';
-      if (nodeId !== null) nodeLat += ` AND e.node_id = ${latAdd(nodeId)}`;
-      if (scope.rfss !== null) {
-        nodeLat += ` AND e.site_rfss = ${latAdd(scope.rfss)} AND e.site_id = ${latAdd(scope.site)}`;
-      }
-      if (page.length > 0) {
-        const enrich = await pool.query<{
-          ord: number;
-          last_rfss: number | null;
-          last_site: number | null;
-          top_rfss: number | null;
-          top_site: number | null;
-          top_site_calls: unknown;
-          top_node_id: string | null;
-          top_node_name: string | null;
-          top_node_calls: unknown;
-          top_tgs: Array<{ talkgroup: number; calls: number }>;
-        }>(
-          `SELECT k.ord::int AS ord,
-                  ls.rfss AS last_rfss, ls.site AS last_site,
-                  ts.rfss AS top_rfss, ts.site AS top_site, ts.calls AS top_site_calls,
-                  tn.node_id AS top_node_id, n.name AS top_node_name, tn.calls AS top_node_calls,
-                  tg.tgs AS top_tgs
-             FROM unnest($2::int[], $3::int[], $4::int[])
-                  WITH ORDINALITY AS k(wacn, system, radio, ord)
-             LEFT JOIN LATERAL (
-               SELECT e.site_rfss AS rfss, e.site_id AS site
-                 FROM node_radio_events e
-                WHERE e.received_at >= now() - $1::interval
-                  AND e.wacn IS NOT DISTINCT FROM k.wacn
-                  AND e.system IS NOT DISTINCT FROM k.system
-                  AND e.source_unit = k.radio${nodeLat}
-                  AND ${callGroup('e.')}
-                  AND e.site_rfss IS NOT NULL AND e.site_id IS NOT NULL
-                ORDER BY e.received_at DESC
-                LIMIT 1
-             ) ls ON true
-             LEFT JOIN LATERAL (
-               SELECT e.site_rfss AS rfss, e.site_id AS site, COUNT(*)::int AS calls
-                 FROM node_radio_events e
-                WHERE e.received_at >= now() - $1::interval
-                  AND e.wacn IS NOT DISTINCT FROM k.wacn
-                  AND e.system IS NOT DISTINCT FROM k.system
-                  AND e.source_unit = k.radio${nodeLat}
-                  AND ${callGroup('e.')}
-                  AND e.site_rfss IS NOT NULL AND e.site_id IS NOT NULL
-                GROUP BY e.site_rfss, e.site_id
-                ORDER BY calls DESC, rfss ASC, site ASC
-                LIMIT 1
-             ) ts ON true
-             LEFT JOIN LATERAL (
-               SELECT e.node_id, COUNT(*)::int AS calls
-                 FROM node_radio_events e
-                WHERE e.received_at >= now() - $1::interval
-                  AND e.wacn IS NOT DISTINCT FROM k.wacn
-                  AND e.system IS NOT DISTINCT FROM k.system
-                  AND e.source_unit = k.radio${nodeLat}
-                  AND ${callGroup('e.')}
-                GROUP BY e.node_id
-                ORDER BY calls DESC, e.node_id ASC
-                LIMIT 1
-             ) tn ON true
-             LEFT JOIN LATERAL (
-               SELECT COALESCE(
-                        jsonb_agg(jsonb_build_object('talkgroup', t.talkgroup, 'calls', t.calls)
-                                  ORDER BY t.calls DESC, t.talkgroup ASC),
-                        '[]'::jsonb) AS tgs
-                 FROM (
-                   SELECT e.talkgroup, COUNT(*)::int AS calls
-                     FROM node_radio_events e
-                    WHERE e.received_at >= now() - $1::interval
-                      AND e.wacn IS NOT DISTINCT FROM k.wacn
-                      AND e.system IS NOT DISTINCT FROM k.system
-                      AND e.source_unit = k.radio${nodeLat}
-                  AND ${callGroup('e.')}
-                      AND ${await tgValidConfigured('e.')}
-                      ${radEncSql}
-                    GROUP BY e.talkgroup
-                    ORDER BY calls DESC, e.talkgroup ASC
-                    LIMIT 3
-                 ) t
-             ) tg ON true
-             LEFT JOIN nodes n ON n.id = tn.node_id`,
-          [
-            WINDOW_INTERVAL[window],
-            page.map((r) => r.wacn),
-            page.map((r) => r.system),
-            page.map((r) => r.radio),
-            ...latParams,
-          ],
-        );
-        for (const r of enrich.rows) {
-          extras.set(num(r.ord), {
-            lastSite:
-              r.last_rfss !== null && r.last_site !== null
-                ? { rfss: r.last_rfss, site: r.last_site }
-                : null,
-            topSite:
-              r.top_rfss !== null && r.top_site !== null
-                ? { rfss: r.top_rfss, site: r.top_site, calls: num(r.top_site_calls) }
-                : null,
-            topNode:
-              r.top_node_id !== null
-                ? { id: r.top_node_id, name: r.top_node_name, calls: num(r.top_node_calls) }
-                : null,
-            topTalkgroups: Array.isArray(r.top_tgs) ? r.top_tgs : [],
+
+      if (nodeId === null) {
+        // Fleet-wide (every Radios list inside a system or site drill-down):
+        // node_radio_hourly_heard plus the hour in progress (migration 126).
+        // The raw version grouped every reception of the system in the window
+        // and then ran four laterals per radio on the page; at 7 days that is
+        // the scan that timed out the drill-downs themselves.
+        //
+        // Two differences, both towards the rest of the page: `calls` is
+        // receptions, as every rollup read counts them; and the OTA used to
+        // sort and to filter named radios is the radio's LIFETIME alias, the
+        // one the row has always displayed, rather than one sent in-window.
+        const seam = rollupEdgeSql(await resolveRollupEdge(pool));
+        const rp: unknown[] = [WINDOW_INTERVAL[window]];
+        const rowConds: string[] = [];
+        if (system !== null) {
+          rp.push(system);
+          rowConds.push(`system = $${rp.length}`);
+        }
+        if (scope.rfss !== null) {
+          rp.push(scope.rfss);
+          rowConds.push(`site_rfss = $${rp.length}`);
+          rp.push(scope.site);
+          rowConds.push(`site_id = $${rp.length}`);
+        }
+        const unitConds: string[] = [RID_VALID];
+        if (qRaw) {
+          rp.push(`${qRaw}%`);
+          unitConds.push(`source_unit::text LIKE $${rp.length}`);
+        }
+        if (unitIds !== null) {
+          rp.push(unitIds);
+          unitConds.push(`source_unit = ANY($${rp.length}::bigint[])`);
+        }
+        const h = heardWindowSql(seam, [...rowConds, ...unitConds].join(' AND '));
+        // One row per radio, lifetime OTA joined on: collapsed per radio as
+        // the Units list does, echoed ids dropped first.
+        const grouped = `(SELECT system, source_unit AS radio,
+                                SUM(receptions)::int AS calls, MAX(last_heard) AS last_seen
+                           FROM h GROUP BY system, source_unit) g
+                   LEFT JOIN (SELECT radio_id, (array_agg(alias ORDER BY last_seen DESC))[1] AS alias
+                                FROM node_radio_aliases
+                               WHERE alias <> radio_id::text
+                               GROUP BY radio_id) a ON a.radio_id = g.radio${
+                     namedOnly ? ' WHERE a.alias IS NOT NULL' : ''}`;
+        const rollupOrder = ({
+          calls: 'g.calls',
+          lastSeen: 'g.last_seen',
+          radio: 'g.radio',
+          ota: 'a.alias',
+        } as const)[sort];
+        const [countQ, pageQ] = await Promise.all([
+          pool.query<{ n: unknown }>(`WITH h AS (${h}) SELECT COUNT(*)::int AS n FROM ${grouped}`, rp),
+          pool.query<RadioRow>(
+            `WITH h AS (${h})
+             SELECT NULL::int AS wacn, NULLIF(g.system, 0) AS system, g.radio, a.alias,
+                    g.calls, g.last_seen
+               FROM ${grouped}
+              ORDER BY ${rollupOrder} ${dir}${orderNulls}, g.radio ASC
+              LIMIT $${rp.length + 1} OFFSET $${rp.length + 2}`,
+            [...rp, limit, offset],
+          ),
+        ]);
+        total = num(countQ.rows[0]?.n);
+        page = pageQ.rows;
+        const ids = await systemIdentity(
+          pool, [...new Set(page.map((r) => r.system).filter((x): x is number => x !== null))]);
+        for (const r of page) r.wacn = r.system !== null ? ids.get(r.system)?.wacn ?? null : null;
+
+        if (page.length > 0) {
+          // ONE grouped pass over the page's radios, reduced in JS: last site
+          // by time, top site / node / talkgroups by receptions. Same scope as
+          // the list, so a site-level page reports that site's figures.
+          const ep: unknown[] = [WINDOW_INTERVAL[window]];
+          const eConds: string[] = [];
+          if (system !== null) {
+            ep.push(system);
+            eConds.push(`system = $${ep.length}`);
+          }
+          if (scope.rfss !== null) {
+            ep.push(scope.rfss);
+            eConds.push(`site_rfss = $${ep.length}`);
+            ep.push(scope.site);
+            eConds.push(`site_id = $${ep.length}`);
+          }
+          ep.push(page.map((r) => r.radio));
+          eConds.push(`source_unit = ANY($${ep.length}::int[])`);
+          // Hide-encrypted reaches the per-radio top talkgroups, as in the raw
+          // path. Validated integers, inlined.
+          let encIds = '';
+          if (url.searchParams.get('enc') === 'hide') {
+            const safeEnc = (await encryptedTalkgroupIds()).filter((id) => Number.isSafeInteger(id));
+            if (safeEnc.length) encIds = `ARRAY[${safeEnc.join(',')}]::int[]`;
+          }
+          const enrich = await pool.query<{
+            system: number;
+            radio: number;
+            node_id: string;
+            talkgroup: number;
+            rfss: number;
+            site: number;
+            calls: unknown;
+            last_at: Date | string;
+            tg_ok: boolean;
+          }>(
+            `WITH h AS (${heardWindowSql(seam, eConds.join(' AND '))})
+             SELECT system, source_unit AS radio, node_id, talkgroup,
+                    site_rfss AS rfss, site_id AS site,
+                    SUM(receptions)::int AS calls, MAX(last_heard) AS last_at,
+                    (${await tgValidConfigured()}${encIds ? ` AND talkgroup <> ALL(${encIds})` : ''}) AS tg_ok
+               FROM h
+              GROUP BY system, source_unit, node_id, talkgroup, site_rfss, site_id`,
+            ep,
+          );
+          type Acc = {
+            lastAt: number;
+            lastSite: { rfss: number; site: number } | null;
+            sites: Map<string, { rfss: number; site: number; calls: number }>;
+            nodes: Map<string, number>;
+            tgs: Map<number, number>;
+          };
+          const acc = new Map<string, Acc>();
+          for (const r of enrich.rows) {
+            const k = `${r.system}:${r.radio}`;
+            let a = acc.get(k);
+            if (!a) {
+              a = { lastAt: -Infinity, lastSite: null, sites: new Map(), nodes: new Map(), tgs: new Map() };
+              acc.set(k, a);
+            }
+            const calls = num(r.calls);
+            if (r.rfss !== -1 && r.site !== -1) {
+              const sk = `${r.rfss}/${r.site}`;
+              const s = a.sites.get(sk) ?? { rfss: r.rfss, site: r.site, calls: 0 };
+              s.calls += calls;
+              a.sites.set(sk, s);
+              const at = new Date(r.last_at).getTime();
+              if (at > a.lastAt) {
+                a.lastAt = at;
+                a.lastSite = { rfss: r.rfss, site: r.site };
+              }
+            }
+            a.nodes.set(r.node_id, (a.nodes.get(r.node_id) ?? 0) + calls);
+            if (r.tg_ok && r.talkgroup !== 0) a.tgs.set(r.talkgroup, (a.tgs.get(r.talkgroup) ?? 0) + calls);
+          }
+          const nodeIds = new Set<string>();
+          for (const a of acc.values()) for (const id of a.nodes.keys()) nodeIds.add(id);
+          const nodeNames = new Map<string, string | null>();
+          if (nodeIds.size > 0) {
+            const nn = await pool.query<{ id: string; name: string | null }>(
+              `SELECT id, name FROM nodes WHERE id = ANY($1::text[])`,
+              [[...nodeIds]],
+            );
+            for (const r of nn.rows) nodeNames.set(r.id, r.name);
+          }
+          page.forEach((r, i) => {
+            const a = acc.get(`${r.system ?? 0}:${r.radio}`);
+            if (!a) return;
+            // Ties break as the laterals did: calls DESC, then the lower id.
+            let topSite: { rfss: number; site: number; calls: number } | null = null;
+            for (const s of a.sites.values()) {
+              if (!topSite || s.calls > topSite.calls
+                || (s.calls === topSite.calls
+                  && (s.rfss < topSite.rfss || (s.rfss === topSite.rfss && s.site < topSite.site)))) {
+                topSite = s;
+              }
+            }
+            let topNode: { id: string; name: string | null; calls: number } | null = null;
+            for (const [id, calls] of a.nodes) {
+              if (!topNode || calls > topNode.calls || (calls === topNode.calls && id < topNode.id)) {
+                topNode = { id, name: nodeNames.get(id) ?? null, calls };
+              }
+            }
+            const topTalkgroups = [...a.tgs]
+              .map(([talkgroup, calls]) => ({ talkgroup, calls }))
+              .sort((x, y) => y.calls - x.calls || x.talkgroup - y.talkgroup)
+              .slice(0, 3);
+            extras.set(i + 1, { lastSite: a.lastSite, topSite, topNode, topTalkgroups });
           });
+        }
+      } else {
+        const [countQ, pageQ] = await Promise.all([
+          pool.query<{ n: unknown }>(
+            namedOnly
+              ? `SELECT COUNT(*)::int AS n FROM (
+                   SELECT 1 FROM node_radio_events WHERE ${where}
+                    GROUP BY wacn, system, source_unit ${having}) t`
+              : `SELECT COUNT(DISTINCT (wacn, system, source_unit))::int AS n
+                   FROM node_radio_events WHERE ${where}`,
+            params,
+          ),
+          pool.query<{
+            wacn: number | null;
+            system: number | null;
+            radio: number;
+            alias: string | null;
+            calls: unknown;
+            last_seen: Date;
+          }>(
+            // alias: the most-recent non-null OTA/talker alias for this radio
+            // (source_alias from vce); null when none was ever captured.
+            `SELECT wacn, system, source_unit AS radio,
+                    (array_agg(source_alias ORDER BY received_at DESC)
+                       FILTER (WHERE source_alias IS NOT NULL AND source_alias <> source_unit::text))[1] AS alias,
+                    COUNT(*)::int AS calls,
+                    MAX(received_at) AS last_seen
+               FROM node_radio_events
+              WHERE ${where}
+              GROUP BY wacn, system, source_unit
+              ${having}
+              ORDER BY ${orderCol} ${dir}${orderNulls}, radio ASC
+              LIMIT $${limIdx} OFFSET $${offIdx}`,
+            pageParams,
+          ),
+        ]);
+        total = num(countQ.rows[0]?.n);
+        page = pageQ.rows;
+
+        // Scope for the per-key laterals below. Own param array ($1 interval,
+        // $2-$4 the page's keys), so optional filters append from $5.
+        const latParams: unknown[] = [];
+        const latAdd = (v: unknown): string => {
+          latParams.push(v);
+          return `$${latParams.length + 4}`;
+        };
+        // Hide-encrypted has to reach the per-radio "top talkgroups" lateral too,
+        // or an always-encrypted talkgroup keeps showing inside a row while being
+        // excluded from the talkgroup list itself. Inlined as validated integers
+        // because this lateral's parameter numbering is offset by the page keys.
+        let radEncSql = '';
+        if (url.searchParams.get('enc') === 'hide') {
+          const safeEnc = (await encryptedTalkgroupIds()).filter((id) => Number.isSafeInteger(id));
+          if (safeEnc.length) radEncSql = `AND e.talkgroup <> ALL(ARRAY[${safeEnc.join(',')}]::int[])`;
+        }
+        let nodeLat = '';
+        if (nodeId !== null) nodeLat += ` AND e.node_id = ${latAdd(nodeId)}`;
+        if (scope.rfss !== null) {
+          nodeLat += ` AND e.site_rfss = ${latAdd(scope.rfss)} AND e.site_id = ${latAdd(scope.site)}`;
+        }
+        if (page.length > 0) {
+          const enrich = await pool.query<{
+            ord: number;
+            last_rfss: number | null;
+            last_site: number | null;
+            top_rfss: number | null;
+            top_site: number | null;
+            top_site_calls: unknown;
+            top_node_id: string | null;
+            top_node_name: string | null;
+            top_node_calls: unknown;
+            top_tgs: Array<{ talkgroup: number; calls: number }>;
+          }>(
+            `SELECT k.ord::int AS ord,
+                    ls.rfss AS last_rfss, ls.site AS last_site,
+                    ts.rfss AS top_rfss, ts.site AS top_site, ts.calls AS top_site_calls,
+                    tn.node_id AS top_node_id, n.name AS top_node_name, tn.calls AS top_node_calls,
+                    tg.tgs AS top_tgs
+               FROM unnest($2::int[], $3::int[], $4::int[])
+                    WITH ORDINALITY AS k(wacn, system, radio, ord)
+               LEFT JOIN LATERAL (
+                 SELECT e.site_rfss AS rfss, e.site_id AS site
+                   FROM node_radio_events e
+                  WHERE e.received_at >= now() - $1::interval
+                    AND e.wacn IS NOT DISTINCT FROM k.wacn
+                    AND e.system IS NOT DISTINCT FROM k.system
+                    AND e.source_unit = k.radio${nodeLat}
+                    AND ${callGroup('e.')}
+                    AND e.site_rfss IS NOT NULL AND e.site_id IS NOT NULL
+                  ORDER BY e.received_at DESC
+                  LIMIT 1
+               ) ls ON true
+               LEFT JOIN LATERAL (
+                 SELECT e.site_rfss AS rfss, e.site_id AS site, COUNT(*)::int AS calls
+                   FROM node_radio_events e
+                  WHERE e.received_at >= now() - $1::interval
+                    AND e.wacn IS NOT DISTINCT FROM k.wacn
+                    AND e.system IS NOT DISTINCT FROM k.system
+                    AND e.source_unit = k.radio${nodeLat}
+                    AND ${callGroup('e.')}
+                    AND e.site_rfss IS NOT NULL AND e.site_id IS NOT NULL
+                  GROUP BY e.site_rfss, e.site_id
+                  ORDER BY calls DESC, rfss ASC, site ASC
+                  LIMIT 1
+               ) ts ON true
+               LEFT JOIN LATERAL (
+                 SELECT e.node_id, COUNT(*)::int AS calls
+                   FROM node_radio_events e
+                  WHERE e.received_at >= now() - $1::interval
+                    AND e.wacn IS NOT DISTINCT FROM k.wacn
+                    AND e.system IS NOT DISTINCT FROM k.system
+                    AND e.source_unit = k.radio${nodeLat}
+                    AND ${callGroup('e.')}
+                  GROUP BY e.node_id
+                  ORDER BY calls DESC, e.node_id ASC
+                  LIMIT 1
+               ) tn ON true
+               LEFT JOIN LATERAL (
+                 SELECT COALESCE(
+                          jsonb_agg(jsonb_build_object('talkgroup', t.talkgroup, 'calls', t.calls)
+                                    ORDER BY t.calls DESC, t.talkgroup ASC),
+                          '[]'::jsonb) AS tgs
+                   FROM (
+                     SELECT e.talkgroup, COUNT(*)::int AS calls
+                       FROM node_radio_events e
+                      WHERE e.received_at >= now() - $1::interval
+                        AND e.wacn IS NOT DISTINCT FROM k.wacn
+                        AND e.system IS NOT DISTINCT FROM k.system
+                        AND e.source_unit = k.radio${nodeLat}
+                    AND ${callGroup('e.')}
+                        AND ${await tgValidConfigured('e.')}
+                        ${radEncSql}
+                      GROUP BY e.talkgroup
+                      ORDER BY calls DESC, e.talkgroup ASC
+                      LIMIT 3
+                   ) t
+               ) tg ON true
+               LEFT JOIN nodes n ON n.id = tn.node_id`,
+            [
+              WINDOW_INTERVAL[window],
+              page.map((r) => r.wacn),
+              page.map((r) => r.system),
+              page.map((r) => r.radio),
+              ...latParams,
+            ],
+          );
+          for (const r of enrich.rows) {
+            extras.set(num(r.ord), {
+              lastSite:
+                r.last_rfss !== null && r.last_site !== null
+                  ? { rfss: r.last_rfss, site: r.last_site }
+                  : null,
+              topSite:
+                r.top_rfss !== null && r.top_site !== null
+                  ? { rfss: r.top_rfss, site: r.top_site, calls: num(r.top_site_calls) }
+                  : null,
+              topNode:
+                r.top_node_id !== null
+                  ? { id: r.top_node_id, name: r.top_node_name, calls: num(r.top_node_calls) }
+                  : null,
+              topTalkgroups: Array.isArray(r.top_tgs) ? r.top_tgs : [],
+            });
+          }
         }
       }
 
