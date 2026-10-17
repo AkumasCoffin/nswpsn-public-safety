@@ -8214,7 +8214,7 @@
           },
         };
         if (noteEl && bands.length) {
-          noteEl.textContent += ' · yellow = auto-stopped · red = not decoding';
+          noteEl.textContent += ' · yellow = auto-disabled · red = not decoding';
         }
 
         // Category axis with pre-formatted labels — Chart.js has no date
@@ -8390,6 +8390,32 @@
       }));
     }
 
+    /** The Live State cell. The node's automatic channel manager outranks the
+     *  raw state: a channel it stopped is not just STOPPED (nobody chose that,
+     *  and it comes back by itself once it recovers), and one it is retesting
+     *  is not an ordinary start. Same colours as the node drawer. */
+    function nd2LiveStateCell(c) {
+      const m = c.manager;
+      const hhmm = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      if (m && m.state === 'probing') {
+        const tip = 'The node is testing whether this channel has recovered: start it, wait for lock, '
+          + 'then check decode. It stays on if decode has recovered, otherwise it is disabled again.';
+        return `<span class="nd-state probing" title="${escapeHtml(tip)}">Testing</span>`;
+      }
+      if (m && m.state === 'autoStopped') {
+        const due = m.nextProbeAtMs != null && m.nextProbeAtMs <= Date.now();
+        const tip = [`Disabled automatically by the node${m.sinceMs ? ' at ' + hhmm(m.sinceMs) : ''}${m.reason ? ': ' + m.reason : ''}.`];
+        if (m.lastProbePct != null) tip.push(`Last test decoded ${Math.round(m.lastProbePct)}%.`);
+        tip.push(m.nextProbeAtMs == null ? 'It is retested on a schedule.'
+          : due ? 'A test is due; the node runs one channel at a time.'
+          : `Next test ~${hhmm(m.nextProbeAtMs)}.`);
+        const next = m.nextProbeAtMs == null ? ''
+          : ` <span class="nd-sub">${due ? 'test due' : 'next test ' + hhmm(m.nextProbeAtMs)}</span>`;
+        return `<span class="nd-state auto" title="${escapeHtml(tip.join(' '))}">Auto-disabled</span>${next}`;
+      }
+      return `<span class="nd2-chip">${escapeHtml(String(c.state || '—'))}</span>`;
+    }
+
     /** Merge every node's slice, apply the node + hide-ENC filters, render. */
     function nd2RenderLive() {
       const chHost = document.getElementById('nd2-live-ch');
@@ -8433,11 +8459,19 @@
       // except for being seconds stale, which is the whole thing this view is
       // judged on.
       const pushing = _nd2LiveWs && _nd2LiveWs.readyState === WebSocket.OPEN;
+      const autoOff = chs.filter(c => c.manager && c.manager.state === 'autoStopped').length;
+      const testing = chs.filter(c => c.manager && c.manager.state === 'probing').length;
       const meta = document.getElementById('nd2-live-meta');
       if (meta) {
         meta.innerHTML = `${chs.length} channel(s) · ${nodes} node(s) online `
           + (surveying
             ? `<span class="nd2-chip" title="A site survey is running: ${surveying} temporary test channel(s) are hidden. Open the node to watch it."><i class="fas fa-magnifying-glass-location"></i> ${surveying} surveying</span> `
+            : '')
+          + (autoOff
+            ? `<span class="nd2-chip" title="Stopped automatically by their node for poor decode, and retested on a schedule"><i class="fas fa-power-off"></i> ${autoOff} auto-disabled</span> `
+            : '')
+          + (testing
+            ? `<span class="nd2-chip" title="Being retested by their node right now"><i class="fas fa-vial"></i> ${testing} testing</span> `
             : '')
           + (pushing
             ? `<span class="nd2-chip nd2-live-on" title="Pushed over the staff WebSocket — updates the moment a node reports"><i class="fas fa-bolt"></i> live</span>`
@@ -8452,11 +8486,16 @@
         chs.map(c => [
           // No "CC" chip: the card is Control channels, so tagging every row
           // as one carries no information. The EXCEPTION is worth marking —
-          // a non-control channel appearing here is a surprise, so it says so.
+          // a channel here carrying a call is a surprise, so it says so. Only
+          // one actually carrying a call: a stopped channel, or one still
+          // hunting for its control channel, is not locked either, and
+          // calling those "traffic" said something untrue.
           `<span class="nd-strong">${escapeHtml(String(c.name || '—'))}</span>` +
-            (c.control === true ? '' : ' <span class="nd2-chip nd2-live-off">traffic</span>'),
+            (c.control !== true && c.processing === true
+              && _ND_LIVE_ACTIVE.has(String(c.state || '').toUpperCase())
+              ? ' <span class="nd2-chip nd2-live-off">traffic</span>' : ''),
           escapeHtml(String(c.site || '—')),
-          `<span class="nd2-chip">${escapeHtml(String(c.state || '—'))}</span>`,
+          nd2LiveStateCell(c),
           c.frequency != null ? (Number(c.frequency) / 1e6).toFixed(4) + ' MHz' : '—',
           nd2DecodePct(c.syncPercent),
           c.signalDbfs != null ? Number(c.signalDbfs).toFixed(1) + ' dBFS' : '—',
@@ -12904,14 +12943,14 @@
       // (the channel is still processing; only the encrypted-call surface is hidden).
       if (!_ndShowEnc && st === 'ENCRYPTED' && !isControl) st = 'IDLE';
       // Automatic channel management overrides the resting states: a channel
-      // the manager stopped is "Auto-stopped" (not a mysterious offline), and
-      // one it is mid-retest on is "Probing".
+      // the manager stopped is "Auto-disabled" (not a mysterious offline), and
+      // one it is mid-retest on is "Testing". Same words as the Live table.
       const mgrRow = _ndMgrRow(live);
       const mgrStopped = !!(mgrRow && mgrRow.state === 'autoStopped') && live.processing !== true;
       const mgrProbing = !!(mgrRow && mgrRow.state === 'probing');
       let cls, label;
-      if (mgrProbing) { cls = 'probing'; label = 'Probing'; }
-      else if (mgrStopped) { cls = 'auto'; label = 'Auto-stopped'; }
+      if (mgrProbing) { cls = 'probing'; label = 'Testing'; }
+      else if (mgrStopped) { cls = 'auto'; label = 'Auto-disabled'; }
       else if (isControl) { cls = 'control'; label = 'Control'; }
       else if (st === 'ENCRYPTED') { cls = 'enc'; label = 'Encrypted'; }
       else if (st === 'ERROR') { cls = 'error'; label = 'Error'; }
@@ -12939,9 +12978,9 @@
       if (mgrStopped) {
         const next = mgrRow.nextProbeAtMs ? new Date(mgrRow.nextProbeAtMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null;
         const why = mgrRow.reason || 'decode below 60% for 10 min / 40% for 5 min';
-        stateTitle = `Stopped automatically — ${why}. Retested after 10 min, then every 30${next ? ' (next ~' + next + ')' : ''}.`;
+        stateTitle = `Disabled automatically — ${why}. Tested after 10 min, then every 30${next ? ' (next ~' + next + ')' : ''}.`;
       } else if (mgrProbing) {
-        stateTitle = 'Auto-management is retesting this channel (start → lock → decode check, about a minute).';
+        stateTitle = 'Auto-management is testing this channel (start → lock → decode check, about a minute).';
       }
       return `<div class="nd-ch-livecol"><span class="nd-state ${cls}"${stateTitle ? ` title="${escapeHtml(stateTitle)}"` : ''}>${escapeHtml(label)}</span>${_ndQualityHtml(live)}${btn}</div>${ft}`;
     }
