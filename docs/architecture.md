@@ -244,6 +244,13 @@ instance, so cutting a node's feed is toggling its `enabled` flag in the staff
 panel — not juggling rdio keys. The node never holds that credential. The same
 applies to the pager path and `PAGERMON_INGEST_API_KEY`.
 
+NSW Police Force talkgroups (10450–10485, 11701–11708, 12001–12275,
+12501–12515; `isNswPfTalkgroup`) are acknowledged and **not** forwarded. The
+force is encrypted, so an upload on one is a call whose encryption the decoder
+missed and its audio is noise. Central rdio has none of these talkgroups and used
+to answer 200 and discard them, which the relay read as delivery and flagged the
+reception recorded. They are neither counted nor flagged now.
+
 ### 6. The backend records the reception
 
 `src/services/nodeEvents.ts` writes `node_radio_events`.

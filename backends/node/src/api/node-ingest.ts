@@ -110,6 +110,31 @@ function parsePatchMembers(raw: string | null): number[] {
   return out;
 }
 
+/**
+ * NSW Police Force talkgroups, inclusive ranges. Their calls are never relayed
+ * into central rdio.
+ *
+ * The force is encrypted end to end, so there is never audio to hear. Its
+ * agency is configured encrypted, which pushes no rdio system or talkgroups to
+ * the nodes (globalConfig.ts), yet a node still uploads one now and then — a
+ * call whose encryption the decoder missed, recorded as noise (about 50 a day
+ * on 12502 alone, October 2026). Central rdio has none of these talkgroups
+ * either, so it answered each upload 200 and threw the call away, and the
+ * relay, taking the 200 as delivery, flagged it recorded. The relay is the one
+ * place every node's uploads pass through, so they stop here.
+ */
+const NSWPF_TALKGROUP_RANGES: ReadonlyArray<readonly [number, number]> = [
+  [10450, 10485],
+  [11701, 11708],
+  [12001, 12275],
+  [12501, 12515],
+];
+
+export function isNswPfTalkgroup(talkgroup: number | null): boolean {
+  if (talkgroup === null) return false;
+  return NSWPF_TALKGROUP_RANGES.some(([lo, hi]) => talkgroup >= lo && talkgroup <= hi);
+}
+
 /** First STRING value of a multipart field parsed with { all: true }
  *  (repeated keys arrive as arrays; files are skipped). */
 function formFirstString(form: BodyData<{ all: true }>, name: string): string | null {
@@ -249,7 +274,17 @@ nodeIngestRouter.post('/api/node-ingest/call-upload', async (c) => {
     }
   };
 
-  // 6b. Feed gate. A node is enabled (decoding, streaming spectrum/status) but
+  // 6b. NSW PF talkgroups never reach central rdio (see isNswPfTalkgroup).
+  //     Acked, so the agent's queue drains instead of retrying a call that can
+  //     never be delivered. Not counted and not stamped recorded: no audio went
+  //     anywhere, and `recorded` means audio exists in central rdio.
+  const talkgroup = safeInt(formFirstString(form, 'talkgroup'));
+  if (isNswPfTalkgroup(talkgroup)) {
+    log.info(`node relay: NSW PF talkgroup ${talkgroup}, not forwarded node=${node.id.slice(0, 8)}`);
+    return c.json({ ok: true, fed: false, dropped: 'nswpf talkgroup' });
+  }
+
+  // 6c. Feed gate. A node is enabled (decoding, streaming spectrum/status) but
   //     its feed to the central rdio is a separate switch that starts OFF. When
   //     the feed is off, accept + COUNT the call (so reception shows in the
   //     node's per-node stats) but do NOT forward it, and ack so the agent's
