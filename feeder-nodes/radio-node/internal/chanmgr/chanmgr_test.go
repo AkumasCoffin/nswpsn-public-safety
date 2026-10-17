@@ -736,6 +736,11 @@ func TestProbeFailKeepsStopped(t *testing.T) {
 	if e == nil || e.state != stAutoStopped || e.lastProbePct != 22 {
 		t.Fatalf("bad post-probe state: %+v", e)
 	}
+	// The reason staff read names the bar the test was judged against (60%),
+	// not the dead-air threshold it used to quote.
+	if !strings.Contains(e.reason, "22%") || !strings.Contains(e.reason, "below 60%") {
+		t.Fatalf("want the measured decode and the 60%% bar in the reason, got %q", e.reason)
+	}
 }
 
 func TestFirstProbeIsEarlyThenSlows(t *testing.T) {

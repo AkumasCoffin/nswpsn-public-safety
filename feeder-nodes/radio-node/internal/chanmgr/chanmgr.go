@@ -751,7 +751,10 @@ func (m *Manager) probe(ctx context.Context, name string, id int) {
 	}
 	log.Printf("chanmgr: probe [%s] FAILED — median decode %.0f%% still below %.0f%%; next retry in %s", name, best, lowThresholdPct, probeInterval)
 	m.logEvent(name, "probeFail", fmt.Sprintf("test failed — median decode %.0f%% still below %.0f%%; retry in %s", best, lowThresholdPct, probeInterval))
-	finish(best, false, "probe failed: still below 40%")
+	// The bar a retest must clear is lowThresholdPct, so name that one. This
+	// text is the reason staff read on an auto-disabled channel; it said 40%
+	// (the dead-air threshold) while the test was being judged against 60%.
+	finish(best, false, fmt.Sprintf("probe failed: median decode %.0f%%, still below %.0f%%", best, lowThresholdPct))
 }
 
 // medianPct is the middle of the measured probe samples, or -1 when there were
