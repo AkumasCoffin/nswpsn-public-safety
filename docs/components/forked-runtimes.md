@@ -84,7 +84,7 @@ The agent compares three numeric parts. `6.14.1-beta.7` therefore reads as
 |---|---|---|
 | `sdrtrunk` | `0.7.17` | the committed digests for `windows-amd64` and `linux-amd64` — the artifact is a GitHub release asset, so there is no local file to hash |
 | `rdio` | `6.14.1-beta.7` | the committed digests for `windows-amd64` and `linux-amd64`, same reason |
-| `agent` | `0.2.40` | computed at serve time from the `linux-amd64`, `linux-arm64` and `windows-amd64` binaries the deploy cross-builds into `<webroot>/downloads`. The committed values are empty and are never what is served |
+| `agent` | `0.2.41` | computed at serve time from the `linux-amd64`, `linux-arm64` and `windows-amd64` binaries the deploy cross-builds into `<webroot>/downloads`. The committed values are empty and are never what is served |
 | `pager-agent` | `0.1.23` | the same, for the two Linux builds |
 | `adsb-agent` | `0.1.13` | the same, for the two Linux builds |
 

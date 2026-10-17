@@ -1,7 +1,7 @@
 {
   "_comment": "Node self-update + component manifest. Everything is served as static files off the site webroot (NODE_DOWNLOADS_BASE, default https://nswpsn.forcequit.xyz/downloads). Deploy builds the agent binaries there; the SDR-Trunk runtime (from the feature/node-control branch) and the rdio binary come from their own GitHub release assets, which is why those two need a hand-written sha256 here. The agents' sha256 values stay EMPTY in this file on purpose: the backend hashes whatever binary is present in the downloads dir at serve time (api/node-updates.ts), so what a node is served is never empty. An entry really served empty is one whose artifact nobody has published, and the agent skips it. Bumping a version here is therefore a DEPLOY to the online fleet, not a note for the next fresh install.",
   "agent": {
-    "version": "0.2.40",
+    "version": "0.2.41",
     "urls": {
       "windows-amd64": "https://nswpsn.forcequit.xyz/downloads/nodeagent-windows-amd64.exe",
       "linux-amd64": "https://nswpsn.forcequit.xyz/downloads/nodeagent-linux-amd64",
