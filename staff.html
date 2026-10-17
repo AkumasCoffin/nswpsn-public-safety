@@ -2868,6 +2868,12 @@
       border-color: rgba(245, 158, 11, 0.35);
     }
     .nd2-live-on i, .nd2-live-off i { margin-right: 0.25rem; font-size: 0.62rem; }
+    /* Live Control channels: a channel locked onto its control channel. */
+    .nd2-ch-locked {
+      background: rgba(34, 197, 94, 0.14);
+      color: #4ade80;
+      border-color: rgba(34, 197, 94, 0.35);
+    }
 
 
     /* Live view: two stacked cards (channels, then active calls). .nd2-card
@@ -8332,35 +8338,60 @@
      * separately — left ungrouped, one call fills the table with near-identical
      * rows and hides how many other calls are actually up.
      *
-     * Key is talkgroup + calling unit, NOT frequency or site: those are exactly
-     * the fields that differ between receptions of the same call. No time
-     * component is needed because everything here is in progress right now.
+     * Key is the talkgroup, NOT frequency, site or calling unit. Frequency and
+     * site are exactly the fields that differ between receptions of the same
+     * call. The calling unit used to be in the key too, and that split one
+     * conversation into two rows at every change of speaker: each over is a
+     * fresh grant, often on another channel or timeslot, so the last speaker's
+     * over is still being reported (held for its 1s grant age-out, or by a node
+     * that has not caught up) while the next one is already up. A trunked
+     * talkgroup carries one speaker at a time, so a second calling unit on it
+     * is the over that just finished, and the row names whoever is speaking
+     * now (see nd2MergeLiveCall). No time component is needed because
+     * everything here is in progress right now.
      */
     function nd2LinkLiveCalls(calls) {
       const byCall = new Map();
       for (const c of (calls || [])) {
-        // With neither a talkgroup nor a calling unit there is nothing to match
-        // on, and every such reception used to key to the same literal "?|?" —
-        // collapsing genuinely different unidentified calls, across all nodes,
-        // into a single row. Fall back to the channel, which at least keeps
-        // separate calls separate; the cost is that one call heard by two nodes
-        // may show twice, which is the honest failure of the two.
-        const key = (c.talkgroup == null && c.from == null)
-          ? `?|${c.name || ''}|${c.timeslot == null ? '' : c.timeslot}|${c.node || ''}`
-          : `${c.talkgroup == null ? '?' : c.talkgroup}|${c.from == null ? '?' : c.from}`;
-        const prev = byCall.get(key);
-        if (!prev) {
-          byCall.set(key, { ...c, sites: new Set(), nodes: new Map() });
-        }
-        const row = byCall.get(key);
-        // A call is over only once EVERY node that heard it says so: while any
-        // site still has it, it is still on air.
-        row.ended = row.ended !== false && c.ended === true;
+        // With no talkgroup the calling unit is the next best thing to match on.
+        // With neither there is nothing, and every such reception used to key
+        // to the same literal "?|?" — collapsing genuinely different
+        // unidentified calls, across all nodes, into a single row. Fall back to
+        // the channel, which at least keeps separate calls separate; the cost
+        // is that one call heard by two nodes may show twice, which is the
+        // honest failure of the two.
+        const key = c.talkgroup != null ? `tg|${c.talkgroup}`
+          : c.from != null ? `from|${c.from}`
+          : `?|${c.name || ''}|${c.timeslot == null ? '' : c.timeslot}|${c.node || ''}`;
+        let group = byCall.get(key);
+        if (!group) byCall.set(key, (group = []));
+        group.push(c);
+      }
+      return [...byCall.values()].map(nd2MergeLiveCall);
+    }
+
+    /** One row from every reception of one call. The speaker is the CURRENT
+     *  one: a reception still up beats one held after it ended, then the over
+     *  that started last. Aliases come only from receptions of that same
+     *  speaker — taking another unit's would put the wrong name on the row. */
+    function nd2MergeLiveCall(group) {
+      const newer = (a, b) => {
+        const upA = a.ended !== true, upB = b.ended !== true;
+        if (upA !== upB) return upA;
+        return String(a.startedAt || '') > String(b.startedAt || '');
+      };
+      const now = group.reduce((best, c) => (newer(c, best) ? c : best));
+      const speaker = String(now.from ?? '');
+      const row = { ...now, sites: new Set(), nodes: new Map(), syncPercent: null, signalDbfs: null };
+      // A call is over only once EVERY node that heard it says so: while any
+      // site still has it, it is still on air. A reconstruction only if nobody
+      // actually heard it.
+      row.ended = group.every(c => c.ended === true);
+      row.synthetic = group.every(c => c.synthetic === true);
+      for (const c of group) {
         if (c.endedAt && (!row.endedAt || c.endedAt > row.endedAt)) row.endedAt = c.endedAt;
         if (c.startedAt && (!row.startedAt || c.startedAt < row.startedAt)) row.startedAt = c.startedAt;
         if (Number(c.durationMs) > Number(row.durationMs ?? -1)) row.durationMs = c.durationMs;
-        // A call anyone actually heard is not a reconstruction.
-        if (c.synthetic !== true) row.synthetic = false;
         if (c.site) row.sites.add(String(c.site));
         // Keep the node NAME alongside the id — a merged call needs to name every
         // node that heard it, not just count them.
@@ -8372,22 +8403,24 @@
           row.syncPercent = c.syncPercent;
           row.signalDbfs = c.signalDbfs;
         }
-        // Any reception that resolved an alias supplies it for the whole call.
-        row.talkerAlias = row.talkerAlias || c.talkerAlias;
-        row.fromAlias = row.fromAlias || c.fromAlias;
+        // Any reception of the same speaker that resolved an alias supplies it.
+        if (String(c.from ?? '') === speaker) {
+          row.talkerAlias = row.talkerAlias || c.talkerAlias;
+          row.fromAlias = row.fromAlias || c.fromAlias;
+        }
         row.talkgroupLabel = row.talkgroupLabel || c.talkgroupLabel;
         // An over-the-air patch is a property of the TRANSMISSION, so any node
         // that named its members speaks for the merged row.
         row.patch = row.patch || c.patch;
         row.agency = row.agency || c.agency;
       }
-      return [...byCall.values()].map(r => ({
-        ...r,
-        siteCount: r.sites.size,
-        siteList: [...r.sites],
-        nodeCount: r.nodes.size,
-        nodeList: [...r.nodes].map(([id, name]) => ({ id, name })),
-      }));
+      return {
+        ...row,
+        siteCount: row.sites.size,
+        siteList: [...row.sites],
+        nodeCount: row.nodes.size,
+        nodeList: [...row.nodes].map(([id, name]) => ({ id, name })),
+      };
     }
 
     /** The Live State cell. The node's automatic channel manager outranks the
@@ -8413,7 +8446,12 @@
           : ` <span class="nd-sub">${due ? 'test due' : 'next test ' + hhmm(m.nextProbeAtMs)}</span>`;
         return `<span class="nd-state auto" title="${escapeHtml(tip.join(' '))}">Auto-disabled</span>${next}`;
       }
-      return `<span class="nd2-chip">${escapeHtml(String(c.state || '—'))}</span>`;
+      // Green once the channel has actually locked onto its control channel —
+      // the resting state this card exists to confirm. Anything else (hunting,
+      // stopped, an error) stays neutral.
+      const locked = c.control === true || String(c.state || '').toUpperCase() === 'CONTROL';
+      return `<span class="nd2-chip${locked ? ' nd2-ch-locked' : ''}"${locked ? ' title="Locked onto the control channel"' : ''}>`
+        + `${escapeHtml(String(c.state || '—'))}</span>`;
     }
 
     /** Merge every node's slice, apply the node + hide-ENC filters, render. */
