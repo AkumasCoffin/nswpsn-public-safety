@@ -304,7 +304,11 @@ reverted for churning whole nodes:
   touched — and the no-lock rule above is gated on the same evidence, so neither
   tier can reach them.
 - **Every decision is logged loudly**, and the full manager state rides the
-  status frame so staff can see exactly what it is doing and why.
+  status frame so staff can see exactly what it is doing and why. The node
+  drawer and the fleet Live table both read it (`nodeLive.ts` attaches a
+  channel's `manager` row while it is auto-stopped or mid-test), so a channel
+  the manager stopped shows as **Auto-disabled** with its next test time, and a
+  retest as **Testing**, rather than as a plain STOPPED or start.
 - It **pauses** while a site survey runs, and idles by itself on a runtime that
   predates the suppression API.
 

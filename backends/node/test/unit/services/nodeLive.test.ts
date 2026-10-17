@@ -181,6 +181,68 @@ describe('shapeNodeLive: a call inherits what vce never tells it', () => {
   });
 });
 
+describe('shapeNodeLive: the channel manager speaks for the channels it manages', () => {
+  // Without this a channel the agent's manager stopped read as a plain
+  // STOPPED, and the Live table tagged it "traffic" because it was not locked.
+  const stopped = { name: 'Marulan', site: 'Marulan', state: 'STOPPED', control: false, processing: false };
+  const withManager = (channels: unknown[], mgr: Record<string, unknown>) => ({
+    channels,
+    activeCalls: [],
+    channelManager: { enabled: true, supported: true, channels: mgr, log: [] },
+  });
+
+  it('marks a channel the manager stopped, with its test schedule', async () => {
+    const slice = await shape(withManager([stopped], {
+      // The agent keys on the TRIMMED name; vce names can carry spaces.
+      Marulan: {
+        state: 'autoStopped', reason: 'probe failed: no lock',
+        sinceMs: 1_000, lastProbeAtMs: 2_000, nextProbeAtMs: 3_000, lastProbePct: 31,
+      },
+    }));
+    expect(slice?.channels[0]!['manager']).toEqual({
+      state: 'autoStopped', reason: 'probe failed: no lock',
+      sinceMs: 1_000, nextProbeAtMs: 3_000, lastProbePct: 31,
+    });
+  });
+
+  it('matches the manager row on the trimmed channel name', async () => {
+    const slice = await shape(withManager([{ ...stopped, name: 'Marulan ' }], {
+      Marulan: { state: 'autoStopped', sinceMs: 1_000, nextProbeAtMs: 3_000 },
+    }));
+    expect((slice?.channels[0]!['manager'] as { state: string }).state).toBe('autoStopped');
+    // No test has run yet, so there is no verdict to report.
+    expect((slice?.channels[0]!['manager'] as { lastProbePct: unknown }).lastProbePct).toBeNull();
+  });
+
+  it('marks a channel mid-test, running or not', async () => {
+    const slice = await shape(withManager([{ ...stopped, state: 'CONTROL', control: true, processing: true }], {
+      Marulan: { state: 'probing', sinceMs: 1_000, nextProbeAtMs: 3_000 },
+    }));
+    expect((slice?.channels[0]!['manager'] as { state: string }).state).toBe('probing');
+  });
+
+  it('drops an auto-stop once someone else has the channel running again', async () => {
+    // An operator start or a config reload; the manager releases it next pass.
+    const slice = await shape(withManager([{ ...stopped, state: 'CONTROL', control: true, processing: true }], {
+      Marulan: { state: 'autoStopped', sinceMs: 1_000 },
+    }));
+    expect(slice?.channels[0]!['manager']).toBeNull();
+  });
+
+  it('carries nothing for a channel the manager is only watching, or not managing', async () => {
+    const slice = await shape(withManager([stopped, { ...stopped, name: 'Vincentia' }], {
+      Marulan: { state: 'lowWatch', sinceMs: 1_000 },
+    }));
+    expect(slice?.channels[0]!['manager']).toBeNull();
+    expect(slice?.channels[1]!['manager']).toBeNull();
+  });
+
+  it('tolerates a status with no channel manager at all', async () => {
+    const slice = await shape(STATUS);
+    expect(slice?.channels[0]!['manager']).toBeNull();
+  });
+});
+
 describe('shapeNodeLive: rows from the call window', () => {
   async function shapeWithWindow(windowCalls: unknown[]) {
     vi.resetModules();
