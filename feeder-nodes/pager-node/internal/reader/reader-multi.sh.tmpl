@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Dongle: librtlsdr index {{.DeviceIndex}}, USB serial {{.Serial}} (recorded for
+# diagnosis only — see reader.go for why -d is given the index, not the serial).
+#
+# This dongle receives {{len .Channels}} frequencies at the same time:
+{{- range .Channels}}
+#   {{.Label}} {{.FreqMHz}} MHz{{end}}
+#
+# rtl_fm demodulates one frequency (several -f flags only make it scan), so
+# rtl_sdr hands over the raw I/Q around {{.CentreHz}} Hz at {{.SampleRate}} S/s
+# instead, and the agent's own "channelize" command splits it into one 22050 Hz
+# FM audio stream per frequency: the same audio rtl_fm -s 22050 -E dc produced
+# (see internal/channelize). Each stream feeds its own multimon-ng through a
+# process substitution, and every decoded line is POSTed to the loopback relay
+# under that frequency's label, exactly as the single-frequency reader does.
+#   rtl_sdr: -g fixed gain (OMITTED when empty -> hardware AGC / auto gain),
+#            -p per-dongle ppm (measured at startup, or a manual override).
+#   multimon-ng: -b1 (1-bit BCH error correction), -c (drop empty), -f alpha
+#            (alphanumeric output), -t raw /dev/stdin.
+# When AudioURL is set (staff pressed "Listen"), that one frequency's PCM is
+# tee'd to the loopback relay's /audio endpoint, as in the single reader.
+post() {
+  while IFS= read -r line; do
+    curl -s --max-time 5 '{{.RelayURL}}' \
+      --data-binary "$line" \
+      -H "X-Pager-Source: $1" \
+      -H "X-Pager-Freq: $2" >/dev/null || true
+  done
+}
+rtl_sdr -d {{.DeviceIndex}}{{if .Gain}} -g {{.Gain}}{{end}} -p {{.PPM}} -f {{.CentreHz}} -s {{.SampleRate}} - \
+ | '{{.Exe}}' channelize {{.SampleRate}} {{.CentreHz}}{{range .Channels}} \
+     {{.Hz}} >({{if .Audio}}tee --output-error=warn >(curl -s -X POST -T - --max-time 86400 '{{$.AudioURL}}' -H 'X-Pager-Source: {{.Label}}' 2>/dev/null || true) | {{end}}multimon-ng -b1 -c {{$.ProtoArgs}} -f alpha -t raw /dev/stdin | post '{{.Label}}' '{{.FreqMHz}}'){{end}}

@@ -396,7 +396,8 @@ review.
 The radio-adjacent feed that *does* produce pins is pager:
 
 ```
-POCSAG page → pager node (rtl_fm | multimon-ng → internal/pagerdecode)
+POCSAG page → pager node (rtl_fm | multimon-ng, or rtl_sdr | channelize | multimon-ng
+              when one SDR carries several frequencies → internal/pagerdecode)
             → POST /api/node-ingest/pager-upload
             → central Pagermon
             → src/sources/pager.ts polls PAGERMON_URL every 60s

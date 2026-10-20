@@ -5,25 +5,23 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/AkumasCoffin/nswpsn-node/pager-node/internal/agentcfg"
+	"github.com/AkumasCoffin/nswpsn-node/pager-node/internal/channelize"
 	"github.com/AkumasCoffin/nswpsn-node/pager-node/internal/pagersdr"
 	"github.com/AkumasCoffin/nswpsn-node/pager-node/internal/reader"
 	"github.com/AkumasCoffin/nswpsn-node/pager-node/internal/supervise"
 	"github.com/AkumasCoffin/nswpsn-node/pager-node/internal/wsclient"
 )
 
-// maxReaders caps the number of concurrent readers. The locked frequency plan is
-// at most two (NSW RFS + Fire & Rescue NSW), so extra dongles beyond two are
-// idle spares.
-const maxReaders = 2
-
 // defaultPagerFrequencies is the locked frequency plan used until a configPush
-// supplies one, in priority order (1 SDR -> first only; 2+ -> first two).
+// supplies one, in priority order. A dongle per frequency when there are enough;
+// otherwise they share (see channelize.Assign).
 var defaultPagerFrequencies = []wsclient.PagerFrequency{
 	{Label: "NSWRFS", MHz: 148.5875}, // NSW Rural Fire Service
 	{Label: "FRNSW", MHz: 148.9875},  // Fire & Rescue NSW
@@ -61,9 +59,15 @@ const maxPlausiblePPM = 100
 
 // readerManager owns the pager reader components. It detects the attached SDRs
 // once, then (re)computes the reader set from a frequency plan whenever a config
-// is applied: it writes each reader.sh (pinned to a dongle by serial), and runs
-// them under a supervisor. captureEnabled=false stops the readers (they are
-// registered disabled) while keeping the agent connected.
+// is applied: it writes one reader.sh per dongle in use (pinned to it by
+// serial), and runs them under a supervisor. captureEnabled=false stops the
+// readers (they are registered disabled) while keeping the agent connected.
+//
+// A dongle carrying one frequency runs the plain rtl_fm reader, component
+// "reader:<label>". One carrying several runs the channelize reader, component
+// "reader:<label>+<label>...". Either way the heartbeat reports one
+// "reader:<label>" per FREQUENCY, so the staff drawer, Listen and Restart keep
+// working per frequency (see Status and Restart).
 //
 // Because the supervisor's component set is fixed at construction, a config
 // change rebuilds it: the current supervisor's sub-context is cancelled (killing
@@ -91,6 +95,13 @@ type readerManager struct {
 	rescanning bool
 	lastCfg    wsclient.PagerConfig // the config the readers are built from
 	audioLabel string               // reader label currently tapped for browser audio ("" = none)
+	// compOf maps each running frequency's label to the supervisor component
+	// that carries it (several labels share one when they share a dongle).
+	compOf map[string]string
+	// exe is this agent binary, whose "channelize" command a multi-frequency
+	// reader runs. Empty when it could not be resolved, which limits every
+	// dongle to one frequency.
+	exe string
 }
 
 // newReaderManager detects + de-duplicates the attached SDR serials (best-effort;
@@ -107,9 +118,25 @@ func newReaderManager(rootCtx context.Context, dataDir, relayAddr string) *reade
 		// Sensible default until the first configPush / Apply, so a Rescan before
 		// any config still (re)starts readers rather than leaving them disabled.
 		lastCfg: wsclient.PagerConfig{CaptureEnabled: true, FeedEnabled: true},
+		exe:     agentExe(),
 	}
 	m.devices = detectDevices()
 	return m
+}
+
+// agentExe resolves this binary's real path for the reader scripts to call.
+// A self-update replaces the file at the same path and re-execs, so the path
+// stays good across updates.
+func agentExe() string {
+	exe, err := os.Executable()
+	if err != nil {
+		log.Printf("readers: cannot resolve the agent's own path (%v); each dongle will carry one frequency", err)
+		return ""
+	}
+	if real, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = real
+	}
+	return exe
 }
 
 // detectDevices enumerates the SDRs and ensures distinct serials, logging and
@@ -237,43 +264,114 @@ func (m *readerManager) applyLocked() error {
 		log.Printf("readers: ppm override in effect: %d (applied to all readers)", *cfg.Ppm)
 	}
 
-	// Reader count: one per available dongle, capped by the frequency plan and the
-	// two-frequency ceiling. 1 SDR -> first frequency only; 2+ -> first two.
-	n := min(len(m.devices), min(len(freqs), maxReaders))
+	// Which dongle carries which frequencies: one each while there are enough
+	// dongles, sharing (and so splitting) only when frequencies outnumber them.
+	hz := make([]int64, len(freqs))
+	labels := make([]string, len(freqs))
+	usedLabel := map[string]bool{}
+	for i, f := range freqs {
+		hz[i] = channelize.HzFromMHz(f.MHz)
+		labels[i] = sanitizeLabel(f.Label, i)
+		if usedLabel[labels[i]] {
+			// Two entries with one label would collide as components.
+			labels[i] = fmt.Sprintf("%s_%d", labels[i], i+1)
+		}
+		usedLabel[labels[i]] = true
+	}
+	groups, unplaced := channelize.Assign(hz, len(m.devices))
+	if m.exe == "" {
+		// Without our own path there is no channelize: keep each dongle's
+		// priority frequency and report the rest as unplaced.
+		for g := range groups {
+			if groups[g].Multi() {
+				unplaced = append(unplaced, groups[g].Members[1:]...)
+				groups[g] = channelize.Group{Members: groups[g].Members[:1]}
+			}
+		}
+	}
+	for _, i := range unplaced {
+		log.Printf("readers: %s (%.4f MHz) is NOT being received: no dongle can take it (%d attached)", labels[i], freqs[i].MHz, len(m.devices))
+	}
 
 	if !cfg.CaptureEnabled {
-		log.Printf("readers: capture disabled; %d reader(s) will be registered but stopped", n)
+		log.Printf("readers: capture disabled; %d reader(s) will be registered but stopped", len(groups))
 	}
 	if !cfg.FeedEnabled {
 		log.Printf("readers: feed disabled by config (backend feed-gates the forward); readers still capture")
 	}
 
-	comps := make(map[string]agentcfg.ComponentCfg, n)
-	for i := 0; i < n; i++ {
-		label := sanitizeLabel(freqs[i].Label, i)
-		dev := m.devices[i]
+	comps := make(map[string]agentcfg.ComponentCfg, len(groups))
+	compOf := make(map[string]string, len(freqs))
+	scripts := make(map[string]bool, len(groups))
+	for gi, g := range groups {
+		dev := m.devices[gi]
 		ppm := dev.PPM
 		if cfg.Ppm != nil {
 			ppm = *cfg.Ppm
 		}
-		// Tap this reader's audio to the loopback relay only while staff are
-		// monitoring THIS label (browser "Listen"); others get no tee (no overhead).
-		audioURL := ""
-		if m.audioLabel != "" && m.audioLabel == label {
-			audioURL = m.audioURL
+
+		var name, scriptPath string
+		var err error
+		if !g.Multi() {
+			i := g.Members[0]
+			label := labels[i]
+			// Tap this reader's audio to the loopback relay only while staff are
+			// monitoring THIS label (browser "Listen"); others get no tee (no overhead).
+			audioURL := ""
+			if m.audioLabel != "" && m.audioLabel == label {
+				audioURL = m.audioURL
+			}
+			scriptPath, err = reader.Write(m.readersDir, label, freqs[i].MHz, dev.Index, dev.Serial, ppm, gain, protocols, m.relayURL, audioURL)
+			if err != nil {
+				return fmt.Errorf("write reader script for %s: %w", label, err)
+			}
+			name = "reader:" + label
+			compOf[label] = name
+			log.Printf("readers: %s -> %.4f MHz on SDR index=%d serial=%q ppm=%d gain=%q audio=%t (%s)", label, freqs[i].MHz, dev.Index, dev.Serial, ppm, gain, audioURL != "", scriptPath)
+		} else {
+			chans := make([]reader.Channel, len(g.Members))
+			names := make([]string, len(g.Members))
+			desc := make([]string, len(g.Members))
+			for k, i := range g.Members {
+				chans[k] = reader.Channel{Label: labels[i], FreqMHz: freqs[i].MHz, Audio: m.audioLabel != "" && m.audioLabel == labels[i]}
+				names[k] = labels[i]
+				desc[k] = fmt.Sprintf("%s %.4f", labels[i], freqs[i].MHz)
+			}
+			group := strings.Join(names, "+")
+			scriptPath, err = reader.WriteGroup(m.readersDir, reader.Group{
+				Name:        group,
+				DeviceIndex: dev.Index,
+				Serial:      dev.Serial,
+				CentreHz:    g.CentreHz,
+				SampleRate:  g.SampleRate,
+				PPM:         ppm,
+				Gain:        gain,
+				Protocols:   protocols,
+				Channels:    chans,
+				RelayURL:    m.relayURL,
+				AudioURL:    m.audioURL,
+				Exe:         m.exe,
+			})
+			if err != nil {
+				return fmt.Errorf("write reader script for %s: %w", group, err)
+			}
+			name = "reader:" + group
+			for _, l := range names {
+				compOf[l] = name
+			}
+			log.Printf("readers: %s MHz share SDR index=%d serial=%q (centre %.4f MHz, %d S/s) ppm=%d gain=%q audio=%q (%s)",
+				strings.Join(desc, " + "), dev.Index, dev.Serial, float64(g.CentreHz)/1e6, g.SampleRate, ppm, gain, m.audioLabel, scriptPath)
 		}
-		scriptPath, err := reader.Write(m.readersDir, label, freqs[i].MHz, dev.Index, dev.Serial, ppm, gain, protocols, m.relayURL, audioURL)
-		if err != nil {
-			return fmt.Errorf("write reader script for %s: %w", label, err)
-		}
-		log.Printf("readers: %s -> %.4f MHz on SDR index=%d serial=%q ppm=%d gain=%q audio=%t (%s)", label, freqs[i].MHz, dev.Index, dev.Serial, ppm, gain, audioURL != "", scriptPath)
-		comps["reader:"+label] = agentcfg.ComponentCfg{
+		scripts[filepath.Base(scriptPath)] = true
+		comps[name] = agentcfg.ComponentCfg{
 			Enabled: cfg.CaptureEnabled,
 			Command: "bash",
 			Args:    []string{scriptPath},
 		}
 	}
 
+	m.compOf = compOf
+	m.removeOldScripts(scripts)
 	m.rebuild(comps)
 	return nil
 }
@@ -367,15 +465,41 @@ func (m *readerManager) AudioStop() error {
 	return m.applyCurrent()
 }
 
-// Restart restarts a single named reader component (e.g. "reader:NSWRFS").
+// Restart restarts the reader carrying a frequency (e.g. "reader:NSWRFS"). When
+// that frequency shares a dongle, the whole dongle's reader restarts, taking its
+// other frequencies with it for the couple of seconds that takes.
 func (m *readerManager) Restart(component string) error {
 	m.mu.Lock()
 	sup := m.sup
+	if comp, ok := m.compOf[strings.TrimPrefix(component, "reader:")]; ok {
+		component = comp
+	}
 	m.mu.Unlock()
 	if sup == nil {
 		return fmt.Errorf("no readers running")
 	}
 	return sup.Restart(component)
+}
+
+// removeOldScripts deletes reader scripts this rebuild no longer uses (a
+// frequency that moved onto a shared dongle leaves its old reader-<label>.sh
+// behind), so the readers directory only ever shows what is running. A script
+// still executing is unaffected: bash holds it open, and the rebuild kills it
+// next anyway.
+func (m *readerManager) removeOldScripts(keep map[string]bool) {
+	entries, err := os.ReadDir(m.readersDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		n := e.Name()
+		if e.IsDir() || keep[n] || !strings.HasPrefix(n, "reader-") || !strings.HasSuffix(n, ".sh") {
+			continue
+		}
+		if err := os.Remove(filepath.Join(m.readersDir, n)); err != nil {
+			log.Printf("readers: could not remove old script %s: %v", n, err)
+		}
+	}
 }
 
 // SupportedGains returns the SDR's supported tuner-gain steps (dB) for the staff
@@ -390,21 +514,24 @@ func (m *readerManager) SupportedGains() []float64 {
 	return nil
 }
 
-// Status returns the reader component states normalized to "running"/"stopped"
-// for the heartbeat.
+// Status returns one "reader:<label>" per frequency being received, normalized
+// to "running"/"stopped", for the heartbeat. Frequencies sharing a dongle report
+// that dongle's reader state, since they live and die together.
 func (m *readerManager) Status() map[string]string {
 	m.mu.Lock()
 	sup := m.sup
+	compOf := m.compOf
 	m.mu.Unlock()
 	out := map[string]string{}
 	if sup == nil {
 		return out
 	}
-	for name, st := range sup.Status() {
-		if st == supervise.StatusRunning {
-			out[name] = "running"
+	states := sup.Status()
+	for label, comp := range compOf {
+		if states[comp] == supervise.StatusRunning {
+			out["reader:"+label] = "running"
 		} else {
-			out[name] = "stopped"
+			out["reader:"+label] = "stopped"
 		}
 	}
 	return out

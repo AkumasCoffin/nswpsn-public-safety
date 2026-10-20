@@ -1,6 +1,7 @@
 // Command nodeagent-pager is the pager feeder node agent. It detects RTL-SDR
-// dongles, renders a per-frequency reader.sh (rtl_fm | multimon-ng | curl) for
-// each, supervises them, runs a localhost HTTP listener that receives the decoded
+// dongles, renders a reader.sh for each (rtl_fm | multimon-ng | curl for one
+// frequency, or rtl_sdr | channelize | one multimon-ng per frequency when a
+// dongle carries several), supervises them, runs a localhost HTTP listener that receives the decoded
 // POCSAG lines, buffers normalized messages to a disk queue, drains them to the
 // backend relay, and maintains a control WebSocket to the backend.
 //
@@ -13,6 +14,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"context"
@@ -24,6 +26,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -33,6 +36,7 @@ import (
 	"github.com/AkumasCoffin/nswpsn-node/pager-node/internal/enrol"
 
 	"github.com/AkumasCoffin/nswpsn-node/pager-node/internal/agentcfg"
+	"github.com/AkumasCoffin/nswpsn-node/pager-node/internal/channelize"
 	"github.com/AkumasCoffin/nswpsn-node/pager-node/internal/queue"
 	"github.com/AkumasCoffin/nswpsn-node/pager-node/internal/relay"
 	"github.com/AkumasCoffin/nswpsn-node/pager-node/internal/supervise"
@@ -71,11 +75,64 @@ func main() {
 			log.Fatalf("%s: %v", cmd, err)
 		}
 		fmt.Printf("%s: ok (service %q)\n", cmd, serviceName)
+	case "channelize":
+		os.Exit(runChannelize(args[1:]))
 	default:
 		fmt.Printf("unknown command %q\n", cmd)
 		fmt.Println("usage: nodeagent-pager [--config <path>] <run|version|install|uninstall|start|stop>")
 		os.Exit(2)
 	}
+}
+
+// runChannelize is the middle of a multi-frequency reader.sh, between rtl_sdr
+// and one multimon-ng per frequency (see internal/channelize):
+//
+//	channelize <sampleRate> <centreHz> <chanHz> <outPath> [<chanHz> <outPath> ...]
+//
+// It reads rtl_sdr's I/Q on stdin and writes each channel's 22050 Hz audio to
+// its outPath, which the script fills with a bash process substitution
+// (/dev/fd/N). It lives in the agent binary so a node needs nothing installed
+// beyond what the plain reader already uses, and it updates with the agent.
+func runChannelize(args []string) int {
+	log.SetPrefix("[channelize] ")
+	if len(args) < 4 || len(args)%2 != 0 {
+		log.Printf("usage: nodeagent-pager channelize <sampleRate> <centreHz> <chanHz> <outPath> [<chanHz> <outPath> ...]")
+		return 2
+	}
+	rate, err := strconv.Atoi(args[0])
+	if err != nil {
+		log.Printf("bad sample rate %q: %v", args[0], err)
+		return 2
+	}
+	centre, err := strconv.ParseInt(args[1], 10, 64)
+	if err != nil {
+		log.Printf("bad centre frequency %q: %v", args[1], err)
+		return 2
+	}
+	var chans []int64
+	var outs []io.Writer
+	for i := 2; i < len(args); i += 2 {
+		hz, err := strconv.ParseInt(args[i], 10, 64)
+		if err != nil {
+			log.Printf("bad channel frequency %q: %v", args[i], err)
+			return 2
+		}
+		f, err := os.OpenFile(args[i+1], os.O_WRONLY, 0)
+		if err != nil {
+			log.Printf("open output for %d Hz: %v", hz, err)
+			return 1
+		}
+		defer f.Close()
+		chans = append(chans, hz)
+		outs = append(outs, f)
+	}
+	log.Printf("splitting %d channel(s) around %.4f MHz at %d S/s", len(chans), float64(centre)/1e6, rate)
+	if err := channelize.Run(bufio.NewReaderSize(os.Stdin, 1<<20), rate, centre, chans, outs); err != nil {
+		log.Printf("stopped: %v", err)
+		return 1
+	}
+	log.Printf("input ended")
+	return 0
 }
 
 // extractConfigFlag pulls out "--config <path>" / "--config=path" from args,
