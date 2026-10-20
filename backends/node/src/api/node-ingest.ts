@@ -24,6 +24,7 @@ import { Hono } from 'hono';
 import type { BodyData } from 'hono/utils/body';
 import { z } from 'zod';
 import { config } from '../config.js';
+import { BLOCKED_CAPCODES, isPagerTimeCode, pagerNoiseReason } from '../services/pagerFilter.js';
 import { log } from '../lib/log.js';
 import { describeRelayError } from '../lib/relayError.js';
 import { resolveNodeToken } from '../services/auth/nodeToken.js';
@@ -807,66 +808,9 @@ const MAX_PAGER_BYTES = 256 * 1024;
 // second of budget, so a drain stays smooth rather than gulping the minute.
 const PAGER_BATCH_MAX = 25;
 
-// Capcodes to drop entirely (non-message data/encoded transmitters), the
-// union of built-in defaults and the PAGER_BLOCKED_CAPCODES env. Defaults
-// exist because these are properties of the NSW networks this deployment
-// listens to, not of any one install:
-//   1850000 — FRNSW network idle/keepalive, one page every ~65s around the
-//             clock, empty body. The empty-body guard below also drops it;
-//             blocking the capcode keeps it out even if the payload varies.
-const DEFAULT_BLOCKED_CAPCODES = ['1850000'];
-const BLOCKED_CAPCODES = new Set(
-  [
-    ...DEFAULT_BLOCKED_CAPCODES,
-    ...(config.PAGER_BLOCKED_CAPCODES || '').split(','),
-  ]
-    .map((s) => s.trim())
-    .filter(Boolean),
-);
-
-/**
- * Why a decoded page is noise rather than a message, or null when it is real.
- *
- * 'empty' — tone-only pages (a valid reception, but bodyless; Pagermon
- * rejects them outright, and one at the head of a node's disk queue wedged it
- * for days — see the relay guards). 'too short' — POCSAG bit-error garbage:
- * corrupted decodes land on random capcodes with one- or two-character
- * bodies ("r", "lj", ";", "=m", all live examples). No genuine page on these
- * networks is two characters; the shortest real traffic (a clock tick) is
- * four digits and has its own filter.
- */
-export function pagerNoiseReason(message: string): 'empty' | 'too short' | null {
-  const t = (message || '').trim();
-  if (t.length === 0) return 'empty';
-  if (t.length <= 2) return 'too short';
-  return null;
-}
-
-/**
- * A page whose whole body is a time of day — `0018`, `2342`, `2111`.
- *
- * FRNSW transmitters send these as a clock tick, once every few minutes, and
- * they arrived in volume the moment the FRNSW capcodes were added: they were
- * half of every window of the feed. There is no incident in them, no capcode
- * to address them to, and nothing downstream can do anything with one.
- *
- * Matched by SHAPE rather than by capcode, because the capcode carrying them
- * is an implementation detail of whichever transmitter is ticking and a new
- * one would start the noise again. Requiring a valid HH:MM — hours under 24,
- * minutes under 60 — is what keeps a genuine four-digit body (a turnout
- * number, a brigade code) out of the filter; `9999` is not a time and is not
- * dropped.
- *
- * Deliberately NOT checked against the message's own timestamp. The tick runs
- * a minute or two behind what stamps it (21:37 carrying `2136`), and a clock
- * comparison would be a second thing to get wrong for no gain: a bare time of
- * day is content-free whether or not it agrees with the clock.
- */
-const PAGER_TIME_CODE_RE = /^([01]\d|2[0-3])[0-5]\d$/;
-
-export function isPagerTimeCode(message: string): boolean {
-  return PAGER_TIME_CODE_RE.test((message || '').trim());
-}
+// What gets filtered (blocked capcodes, empty/garbage bodies, FRNSW clock
+// ticks) lives in services/pagerFilter.ts, because the staff Data tab splits
+// stored pages by the same rules.
 
 // Two rate limits, because one was conflating two different things and the
 // conflation lost real traffic. A node draining a large disk backlog (seen at

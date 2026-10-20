@@ -44,6 +44,12 @@ import { learnedAliasMap } from '../services/capcodeAliasSync.js';
 import { requireRole, canViewNodeData } from '../services/auth/roles.js';
 import { hub } from '../services/nodes/hub.js';
 import {
+  blockedCapcodeList,
+  pagerFilterReasonSql,
+  PAGER_FILTER_REASONS,
+  type PagerFilterReason,
+} from '../services/pagerFilter.js';
+import {
   adsbAuthFailures,
   nodeAdsbObservedRange,
   nodeAdsbObservedRangeKm,
@@ -4886,7 +4892,73 @@ nodeDataRouter.get(
 // id) treats a not-yet-stamped row as its own group. Capcodes are labelled at
 // read time from the capcodeAliases() reference map (display-only), matched on
 // the normalised capcode so zero-padding differences don't split a page.
+//
+// Every stored page is either traffic or FILTERED: what the relay keeps out of
+// Pagermon (services/pagerFilter.ts). On the NSW networks nine stored pages in
+// ten are filtered — one encoded-data capcode alone sends ~1,300 a day — so
+// every figure here counts traffic only, and the filtered pages are listed by
+// /pager-filtered on their own. The rules are re-applied in SQL rather than
+// read from a stored flag, so the split follows the current rules across the
+// whole 30 days. Every query binds blockedCapcodeList() as $2.
 // ===========================================================================
+
+/** iso() for a column that can be empty: a node that heard nothing has no
+ *  last-heard time, and iso() would hand the client the string "null". */
+function isoOrNull(v: unknown): string | null {
+  return v instanceof Date ? v.toISOString() : null;
+}
+
+/** SQL predicate: this node_pager_events row is traffic, not filtered. */
+function pagerKept(alias = ''): string {
+  return `${pagerFilterReasonSql('$2', alias)} IS NULL`;
+}
+
+type CapcodeAliasMap = Map<string, { alias: string; agency: string | null }>;
+
+function capcodeLabel(aliases: CapcodeAliasMap, capcode: string) {
+  const a = aliases.get(normalizeCapcode(capcode)) ?? null;
+  return { alias: a?.alias ?? null, agency: a?.agency ?? null };
+}
+
+/** The pager tables' shared paging params: limit 1..100 (default 50), offset ≥ 0. */
+function pagerPaging(url: URL, defLimit = 50): { limit: number; offset: number } {
+  return {
+    limit: Math.max(1, Math.min(100, Number(url.searchParams.get('limit') ?? defLimit) || defLimit)),
+    offset: Math.max(0, Number(url.searchParams.get('offset') ?? 0) || 0),
+  };
+}
+
+/** Hourly traffic pages over the window, zero-filled. Without the zeros a
+ *  quiet night is a straight line from the last page before it to the first
+ *  page after, which reads as steady traffic. */
+async function pagerHourlySeries(
+  pool: Pool,
+  interval: string,
+  nodeId?: string,
+): Promise<Array<{ hour: string | null; pages: number }>> {
+  const params: unknown[] = [interval, blockedCapcodeList()];
+  let nodeCond = '';
+  if (nodeId) {
+    params.push(nodeId);
+    nodeCond = `AND node_id = $${params.length}`;
+  }
+  const res = await pool.query<{ hour: Date; pages: unknown }>(
+    `SELECT h.hour, COALESCE(c.pages, 0)::int AS pages
+       FROM generate_series(date_trunc('hour', now() - $1::interval),
+                            date_trunc('hour', now()), interval '1 hour') AS h(hour)
+       LEFT JOIN (
+         SELECT date_trunc('hour', received_at) AS hour,
+                COUNT(DISTINCT COALESCE(logical_id, id)) AS pages
+           FROM node_pager_events
+          WHERE received_at >= now() - $1::interval
+            AND ${pagerKept()} ${nodeCond}
+          GROUP BY 1
+       ) c ON c.hour = h.hour
+      ORDER BY h.hour`,
+    params,
+  );
+  return res.rows.map((r) => ({ hour: isoOrNull(r.hour), pages: num(r.pages) }));
+}
 
 /** topNode-per-capcode lateral, shared by pager-overview and capcodes. */
 async function pagerTopNodeByCapcode(
@@ -4903,18 +4975,19 @@ async function pagerTopNodeByCapcode(
     pages: unknown;
   }>(
     `SELECT k.capcode, tn.node_id, n.name, tn.pages
-       FROM unnest($2::text[]) AS k(capcode)
+       FROM unnest($3::text[]) AS k(capcode)
        LEFT JOIN LATERAL (
          SELECT e.node_id, COUNT(*)::int AS pages
            FROM node_pager_events e
           WHERE e.received_at >= now() - $1::interval
             AND e.capcode = k.capcode
+            AND ${pagerKept('e')}
           GROUP BY e.node_id
           ORDER BY pages DESC, e.node_id ASC
           LIMIT 1
        ) tn ON true
        LEFT JOIN nodes n ON n.id = tn.node_id`,
-    [interval, capcodes],
+    [interval, blockedCapcodeList(), capcodes],
   );
   for (const r of res.rows) {
     if (r.node_id !== null) {
@@ -4924,9 +4997,109 @@ async function pagerTopNodeByCapcode(
   return out;
 }
 
+/** Copies of one message no further apart than this are one page as sent.
+ *  RFS sends a job to each capcode in turn — brigade, captain, duty officer —
+ *  seconds apart, so per capcode it reads as three identical pages; a re-page
+ *  minutes later is a new row. */
+const PAGE_GROUP_GAP_S = 60;
+
+type PagerPageGroup = {
+  at: string | null;
+  message: string | null;
+  freqMhz: number | null;
+  capcodes: Array<{ capcode: string; alias: string | null; agency: string | null }>;
+  nodes: Array<{ id: string; name: string | null }>;
+  receptions: number;
+};
+
+/**
+ * Traffic pages newest first, one row per page AS SENT: the same message to
+ * several capcodes, heard by several nodes, within PAGE_GROUP_GAP_S of the
+ * copy before it. The per-capcode browser (/capcode) still shows each capcode
+ * on its own.
+ *
+ * Grouping chains on the gap to the PREVIOUS copy rather than bucketing by
+ * time, so a page sent at 12:00:59 and 12:01:01 is not split on the minute.
+ * `total` rides on the page itself (COUNT OVER the grouped rows), so a page
+ * past the end reports 0 — the tables only ever step one page at a time.
+ */
+async function pagerPageGroups(
+  pool: Pool,
+  aliases: CapcodeAliasMap,
+  opts: { interval: string; nodeId?: string; q?: string; limit: number; offset: number },
+): Promise<{ total: number; pages: PagerPageGroup[] }> {
+  const params: unknown[] = [opts.interval, blockedCapcodeList()];
+  const conds = ['e.received_at >= now() - $1::interval', pagerKept('e')];
+  if (opts.nodeId) {
+    params.push(opts.nodeId);
+    conds.push(`e.node_id = $${params.length}`);
+  }
+  if (opts.q) {
+    params.push(opts.q.toLowerCase());
+    conds.push(`strpos(lower(e.message), $${params.length}) > 0`);
+  }
+  params.push(opts.limit);
+  const limIdx = params.length;
+  params.push(opts.offset);
+  const offIdx = params.length;
+
+  const res = await pool.query<{
+    at: Date;
+    message: string | null;
+    freq_mhz: number | null;
+    receptions: number;
+    capcodes: string[];
+    nodes: Array<{ id: string; name: string | null }>;
+    total: unknown;
+  }>(
+    `WITH k AS (
+       SELECT e.id, e.node_id, e.received_at, e.capcode, e.message, e.message_hash, e.freq_mhz
+         FROM node_pager_events e
+        WHERE ${conds.join(' AND ')}
+     ), s AS (
+       SELECT k.*,
+              CASE WHEN k.received_at - lag(k.received_at) OVER w
+                        <= interval '${PAGE_GROUP_GAP_S} seconds'
+                   THEN 0 ELSE 1 END AS brk
+         FROM k
+       WINDOW w AS (PARTITION BY k.message_hash ORDER BY k.received_at, k.id)
+     ), g AS (
+       SELECT s.*,
+              SUM(s.brk) OVER (PARTITION BY s.message_hash ORDER BY s.received_at, s.id) AS grp
+         FROM s
+     )
+     SELECT MIN(g.received_at)         AS at,
+            MIN(g.message)             AS message,
+            MIN(g.freq_mhz)::float8    AS freq_mhz,
+            COUNT(*)::int              AS receptions,
+            array_agg(DISTINCT g.capcode) AS capcodes,
+            jsonb_agg(DISTINCT jsonb_build_object('id', g.node_id, 'name', n.name)) AS nodes,
+            COUNT(*) OVER ()::int      AS total
+       FROM g
+       LEFT JOIN nodes n ON n.id = g.node_id
+      GROUP BY g.message_hash, g.grp
+      ORDER BY at DESC
+      LIMIT $${limIdx} OFFSET $${offIdx}`,
+    params,
+  );
+
+  return {
+    total: num(res.rows[0]?.total),
+    pages: res.rows.map((r) => ({
+      at: isoOrNull(r.at),
+      message: r.message,
+      freqMhz: r.freq_mhz,
+      capcodes: (r.capcodes ?? []).map((capcode) => ({ capcode, ...capcodeLabel(aliases, capcode) })),
+      nodes: r.nodes ?? [],
+      receptions: num(r.receptions),
+    })),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // GET /api/node-data/pager-overview?window=24h|7d|30d
-//   Totals, top capcodes (with their busiest node), top nodes, hourly series.
+//   Traffic totals, how much was filtered (by reason), top capcodes (with
+//   their busiest node), top nodes, hourly series and the latest pages.
 // ---------------------------------------------------------------------------
 nodeDataRouter.get(
   '/api/node-data/pager-overview',
@@ -4938,43 +5111,55 @@ nodeDataRouter.get(
       const url = new URL(c.req.url);
       const window = detailWindow(url);
       const interval = WINDOW_INTERVAL[window];
+      const base = [interval, blockedCapcodeList()];
+      const aliases = await capcodeAliasLookup(pool);
 
-      const [totalsQ, topCapsQ, topNodesQ, seriesQ] = await Promise.all([
+      const [totalsQ, filteredQ, topCapsQ, topNodesQ, series, recent] = await Promise.all([
+        // Active nodes counts every reception, filtered or not: a node hearing
+        // only the encoded-data capcode is still on air and still reporting.
         pool.query<{ pages: unknown; logical: unknown; nodes: unknown; capcodes: unknown }>(
-          `SELECT COUNT(*)::int AS pages,
-                  COUNT(DISTINCT COALESCE(logical_id, id))::int AS logical,
-                  COUNT(DISTINCT node_id)::int AS nodes,
-                  COUNT(DISTINCT capcode)::int AS capcodes
-             FROM node_pager_events
-            WHERE received_at >= now() - $1::interval`,
-          [interval],
+          `SELECT COUNT(*) FILTER (WHERE kept)::int                 AS pages,
+                  COUNT(DISTINCT g) FILTER (WHERE kept)::int        AS logical,
+                  COUNT(DISTINCT node_id)::int                      AS nodes,
+                  COUNT(DISTINCT capcode) FILTER (WHERE kept)::int  AS capcodes
+             FROM (SELECT node_id, capcode, COALESCE(logical_id, id) AS g,
+                          ${pagerKept()} AS kept
+                     FROM node_pager_events
+                    WHERE received_at >= now() - $1::interval) e`,
+          base,
+        ),
+        pool.query<{ reason: string; n: unknown }>(
+          `SELECT reason, COUNT(DISTINCT g)::int AS n
+             FROM (SELECT COALESCE(logical_id, id) AS g,
+                          ${pagerFilterReasonSql('$2')} AS reason
+                     FROM node_pager_events
+                    WHERE received_at >= now() - $1::interval) f
+            WHERE reason IS NOT NULL
+            GROUP BY reason`,
+          base,
         ),
         pool.query<{ capcode: string; pages: unknown; last_seen: Date }>(
-          `SELECT capcode, COUNT(*)::int AS pages, MAX(received_at) AS last_seen
+          `SELECT capcode, COUNT(DISTINCT COALESCE(logical_id, id))::int AS pages,
+                  MAX(received_at) AS last_seen
              FROM node_pager_events
-            WHERE received_at >= now() - $1::interval
+            WHERE received_at >= now() - $1::interval AND ${pagerKept()}
             GROUP BY capcode
             ORDER BY pages DESC, capcode ASC
-            LIMIT 15`,
-          [interval],
+            LIMIT 10`,
+          base,
         ),
         pool.query<{ node_id: string; name: string | null; pages: unknown }>(
           `SELECT e.node_id, n.name, COUNT(*)::int AS pages
              FROM node_pager_events e
              JOIN nodes n ON n.id = e.node_id
-            WHERE e.received_at >= now() - $1::interval
+            WHERE e.received_at >= now() - $1::interval AND ${pagerKept('e')}
             GROUP BY e.node_id, n.name
             ORDER BY pages DESC, e.node_id ASC
             LIMIT 15`,
-          [interval],
+          base,
         ),
-        pool.query<{ hour: Date; pages: unknown }>(
-          `SELECT date_trunc('hour', received_at) AS hour, COUNT(*)::int AS pages
-             FROM node_pager_events
-            WHERE received_at >= now() - $1::interval
-            GROUP BY 1 ORDER BY 1`,
-          [interval],
-        ),
+        pagerHourlySeries(pool, interval),
+        pagerPageGroups(pool, aliases, { interval, limit: 8, offset: 0 }),
       ]);
 
       const topNodeByCap = await pagerTopNodeByCapcode(
@@ -4982,8 +5167,8 @@ nodeDataRouter.get(
         interval,
         topCapsQ.rows.map((r) => r.capcode),
       );
-      const aliases = await capcodeAliasLookup(pool);
       const t = totalsQ.rows[0];
+      const byReason = Object.fromEntries(filteredQ.rows.map((r) => [r.reason, num(r.n)]));
 
       return c.json({
         window,
@@ -4993,23 +5178,24 @@ nodeDataRouter.get(
           activeNodes: num(t?.nodes),
           capcodes: num(t?.capcodes),
         },
-        topCapcodes: topCapsQ.rows.map((r) => {
-          const a = aliases.get(normalizeCapcode(r.capcode)) ?? null;
-          return {
-            capcode: r.capcode,
-            alias: a?.alias ?? null,
-            agency: a?.agency ?? null,
-            pages: num(r.pages),
-            lastSeen: iso(r.last_seen),
-            topNode: topNodeByCap.get(r.capcode) ?? null,
-          };
-        }),
+        filtered: {
+          pages: Object.values(byReason).reduce((a, b) => a + b, 0),
+          byReason,
+        },
+        topCapcodes: topCapsQ.rows.map((r) => ({
+          capcode: r.capcode,
+          ...capcodeLabel(aliases, r.capcode),
+          pages: num(r.pages),
+          lastSeen: isoOrNull(r.last_seen),
+          topNode: topNodeByCap.get(r.capcode) ?? null,
+        })),
         topNodes: topNodesQ.rows.map((r) => ({
           nodeId: r.node_id,
           name: r.name,
           pages: num(r.pages),
         })),
-        series: seriesQ.rows.map((r) => ({ hour: iso(r.hour), pages: num(r.pages) })),
+        series,
+        recent: recent.pages,
       });
     } catch (err) {
       log.error({ err }, '/api/node-data/pager-overview error');
@@ -5019,11 +5205,172 @@ nodeDataRouter.get(
 );
 
 // ---------------------------------------------------------------------------
+// GET /api/node-data/pager-pages?window=&q=<text>&nodeId=&limit=50(≤100)&offset=0
+//
+// The traffic page log: one row per page as sent (see pagerPageGroups), newest
+// first. `q` is a case-insensitive substring of the message.
+// ---------------------------------------------------------------------------
+nodeDataRouter.get(
+  '/api/node-data/pager-pages',
+  requireRole(canViewNodeData),
+  async (c) => {
+    try {
+      const pool = await getPool();
+      if (!pool) return c.json({ error: 'database unavailable' }, 503);
+      const url = new URL(c.req.url);
+      const window = detailWindow(url);
+      const { limit, offset } = pagerPaging(url);
+      const q = (url.searchParams.get('q') ?? '').trim().slice(0, 200);
+      const nodeId = (url.searchParams.get('nodeId') ?? '').trim();
+
+      const aliases = await capcodeAliasLookup(pool);
+      const res = await pagerPageGroups(pool, aliases, {
+        interval: WINDOW_INTERVAL[window],
+        ...(nodeId ? { nodeId } : {}),
+        ...(q ? { q } : {}),
+        limit,
+        offset,
+      });
+      return c.json({ window, total: res.total, limit, offset, pages: res.pages });
+    } catch (err) {
+      log.error({ err }, '/api/node-data/pager-pages error');
+      return c.json({ error: 'failed to load pages' }, 500);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// GET /api/node-data/pager-filtered?window=&reason=&limit=50(≤100)&offset=0
+//
+// The pages the relay keeps out of Pagermon, and out of every other pager
+// view here. `byReason` and `byCapcode` cover the whole window whatever
+// `reason` is set to, so the filter pills can show what each would hold; the
+// message list (grouped by logical_id, like /capcode) honours it.
+// ---------------------------------------------------------------------------
+nodeDataRouter.get(
+  '/api/node-data/pager-filtered',
+  requireRole(canViewNodeData),
+  async (c) => {
+    try {
+      const pool = await getPool();
+      if (!pool) return c.json({ error: 'database unavailable' }, 503);
+      const url = new URL(c.req.url);
+      const window = detailWindow(url);
+      const interval = WINDOW_INTERVAL[window];
+      const { limit, offset } = pagerPaging(url);
+      const reasonRaw = (url.searchParams.get('reason') ?? '').trim();
+      if (reasonRaw && !PAGER_FILTER_REASONS.includes(reasonRaw as PagerFilterReason)) {
+        return c.json({ error: `reason must be one of: ${PAGER_FILTER_REASONS.join(', ')}` }, 400);
+      }
+
+      // The reason is computed once per row, in a CTE, and everything below
+      // reads it from there.
+      const filteredCte = `WITH f AS (
+         SELECT e.*, ${pagerFilterReasonSql('$2', 'e')} AS reason
+           FROM node_pager_events e
+          WHERE e.received_at >= now() - $1::interval
+       )`;
+      const listParams: unknown[] = [interval, blockedCapcodeList()];
+      let reasonCond = '';
+      if (reasonRaw) {
+        listParams.push(reasonRaw);
+        reasonCond = `AND f.reason = $${listParams.length}`;
+      }
+      listParams.push(limit);
+      const limIdx = listParams.length;
+      listParams.push(offset);
+      const offIdx = listParams.length;
+
+      const [byReasonQ, byCapQ, listQ] = await Promise.all([
+        pool.query<{ reason: string; n: unknown }>(
+          `${filteredCte}
+           SELECT reason, COUNT(DISTINCT COALESCE(logical_id, id))::int AS n
+             FROM f WHERE reason IS NOT NULL
+            GROUP BY reason`,
+          [interval, blockedCapcodeList()],
+        ),
+        pool.query<{ capcode: string; reason: string; pages: unknown; last_seen: Date }>(
+          `${filteredCte}
+           SELECT capcode, reason,
+                  COUNT(DISTINCT COALESCE(logical_id, id))::int AS pages,
+                  MAX(received_at) AS last_seen
+             FROM f WHERE reason IS NOT NULL
+            GROUP BY capcode, reason
+            ORDER BY pages DESC, capcode ASC
+            LIMIT 10`,
+          [interval, blockedCapcodeList()],
+        ),
+        pool.query<{
+          at: Date;
+          capcode: string;
+          reason: string;
+          message: string | null;
+          freq_mhz: number | null;
+          receptions: number;
+          nodes: Array<{ id: string; name: string | null }>;
+        }>(
+          `${filteredCte}
+           SELECT MIN(f.received_at)      AS at,
+                  f.capcode,
+                  f.reason,
+                  MIN(f.message)          AS message,
+                  MIN(f.freq_mhz)::float8 AS freq_mhz,
+                  COUNT(*)::int           AS receptions,
+                  jsonb_agg(DISTINCT jsonb_build_object('id', f.node_id, 'name', n.name)) AS nodes
+             FROM f
+             LEFT JOIN nodes n ON n.id = f.node_id
+            WHERE f.reason IS NOT NULL ${reasonCond}
+            GROUP BY COALESCE(f.logical_id, f.id), f.capcode, f.reason
+            ORDER BY at DESC
+            LIMIT $${limIdx} OFFSET $${offIdx}`,
+          listParams,
+        ),
+      ]);
+
+      const aliases = await capcodeAliasLookup(pool);
+      const byReason = Object.fromEntries(byReasonQ.rows.map((r) => [r.reason, num(r.n)]));
+      const all = Object.values(byReason).reduce((a, b) => a + b, 0);
+
+      return c.json({
+        window,
+        reasons: PAGER_FILTER_REASONS,
+        byReason,
+        total: reasonRaw ? (byReason[reasonRaw] ?? 0) : all,
+        limit,
+        offset,
+        byCapcode: byCapQ.rows.map((r) => ({
+          capcode: r.capcode,
+          ...capcodeLabel(aliases, r.capcode),
+          reason: r.reason,
+          pages: num(r.pages),
+          lastSeen: isoOrNull(r.last_seen),
+        })),
+        messages: listQ.rows.map((r) => ({
+          at: isoOrNull(r.at),
+          capcode: r.capcode,
+          ...capcodeLabel(aliases, r.capcode),
+          reason: r.reason,
+          message: r.message,
+          freqMhz: r.freq_mhz,
+          receptions: num(r.receptions),
+          nodes: r.nodes ?? [],
+        })),
+      });
+    } catch (err) {
+      log.error({ err }, '/api/node-data/pager-filtered error');
+      return c.json({ error: 'failed to load filtered pages' }, 500);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
 // GET /api/node-data/capcodes
 //   ?window=&q=<opt capcode prefix>&sort=pages|lastSeen&limit=50(≤100)&offset=0
 //
-// Paged per-capcode rollup. Grouping + pagination first, then topNode resolves
-// per returned capcode via lateral — same shape as the talkgroups endpoint.
+// Paged per-capcode rollup of traffic pages. Grouping + pagination first, then
+// topNode resolves per returned capcode via lateral — same shape as the
+// talkgroups endpoint. A capcode whose every page is filtered (a blocked
+// capcode, the clock tick) is not listed; /pager-filtered has those.
 // ---------------------------------------------------------------------------
 nodeDataRouter.get(
   '/api/node-data/capcodes',
@@ -5041,11 +5388,10 @@ nodeDataRouter.get(
       }
       const sortRaw = url.searchParams.get('sort') ?? 'pages';
       const sort = (['pages', 'lastSeen'] as const).find((s) => s === sortRaw) ?? 'pages';
-      const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit') ?? 50) || 50));
-      const offset = Math.max(0, Number(url.searchParams.get('offset') ?? 0) || 0);
+      const { limit, offset } = pagerPaging(url);
 
-      const params: unknown[] = [interval];
-      const conds = ['received_at >= now() - $1::interval'];
+      const params: unknown[] = [interval, blockedCapcodeList()];
+      const conds = ['received_at >= now() - $1::interval', pagerKept()];
       if (qRaw) {
         params.push(`${qRaw}%`);
         conds.push(`capcode LIKE $${params.length}`);
@@ -5066,7 +5412,8 @@ nodeDataRouter.get(
           params,
         ),
         pool.query<{ capcode: string; pages: unknown; last_seen: Date }>(
-          `SELECT capcode, COUNT(*)::int AS pages, MAX(received_at) AS last_seen
+          `SELECT capcode, COUNT(DISTINCT COALESCE(logical_id, id))::int AS pages,
+                  MAX(received_at) AS last_seen
              FROM node_pager_events
             WHERE ${where}
             GROUP BY capcode
@@ -5089,17 +5436,13 @@ nodeDataRouter.get(
         total,
         limit,
         offset,
-        capcodes: page.map((r) => {
-          const a = aliases.get(normalizeCapcode(r.capcode)) ?? null;
-          return {
-            capcode: r.capcode,
-            alias: a?.alias ?? null,
-            agency: a?.agency ?? null,
-            pages: num(r.pages),
-            lastSeen: iso(r.last_seen),
-            topNode: topNodeByCap.get(r.capcode) ?? null,
-          };
-        }),
+        capcodes: page.map((r) => ({
+          capcode: r.capcode,
+          ...capcodeLabel(aliases, r.capcode),
+          pages: num(r.pages),
+          lastSeen: isoOrNull(r.last_seen),
+          topNode: topNodeByCap.get(r.capcode) ?? null,
+        })),
       });
     } catch (err) {
       log.error({ err }, '/api/node-data/capcodes error');
@@ -5111,9 +5454,9 @@ nodeDataRouter.get(
 // ---------------------------------------------------------------------------
 // GET /api/node-data/capcode?capcode=<exact>&window=&limit=50(≤100)&offset=0
 //
-// Message browser for one capcode. Grouped by logical_id (COALESCE(logical_id,
-// id)) so each distinct page shows once with its reception count + node chips,
-// newest first.
+// Message browser for one capcode's traffic. Grouped by logical_id
+// (COALESCE(logical_id, id)) so each distinct page shows once with its
+// reception count + node chips, newest first.
 // ---------------------------------------------------------------------------
 nodeDataRouter.get(
   '/api/node-data/capcode',
@@ -5127,15 +5470,16 @@ nodeDataRouter.get(
       const interval = WINDOW_INTERVAL[window];
       const capcode = (url.searchParams.get('capcode') ?? '').trim();
       if (!capcode) return c.json({ error: 'capcode is required' }, 400);
-      const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit') ?? 50) || 50));
-      const offset = Math.max(0, Number(url.searchParams.get('offset') ?? 0) || 0);
+      const { limit, offset } = pagerPaging(url);
+      const blocked = blockedCapcodeList();
 
       const [countQ, pageQ] = await Promise.all([
         pool.query<{ n: unknown }>(
           `SELECT COUNT(DISTINCT COALESCE(logical_id, id))::int AS n
              FROM node_pager_events
-            WHERE received_at >= now() - $1::interval AND capcode = $2`,
-          [interval, capcode],
+            WHERE received_at >= now() - $1::interval AND capcode = $3
+              AND ${pagerKept()}`,
+          [interval, blocked, capcode],
         ),
         pool.query<{
           at: Date;
@@ -5151,23 +5495,23 @@ nodeDataRouter.get(
                   jsonb_agg(DISTINCT jsonb_build_object('id', e.node_id, 'name', n.name)) AS nodes
              FROM node_pager_events e
              JOIN nodes n ON n.id = e.node_id
-            WHERE e.received_at >= now() - $1::interval AND e.capcode = $2
+            WHERE e.received_at >= now() - $1::interval AND e.capcode = $3
+              AND ${pagerKept('e')}
             GROUP BY COALESCE(e.logical_id, e.id)
             ORDER BY at DESC
-            LIMIT $3 OFFSET $4`,
-          [interval, capcode, limit, offset],
+            LIMIT $4 OFFSET $5`,
+          [interval, blocked, capcode, limit, offset],
         ),
       ]);
 
       const total = num(countQ.rows[0]?.n);
-      const a = (await capcodeAliasLookup(pool)).get(normalizeCapcode(capcode)) ?? null;
+      const label = capcodeLabel(await capcodeAliasLookup(pool), capcode);
       return c.json({
         total,
         capcode,
-        alias: a?.alias ?? null,
-        agency: a?.agency ?? null,
+        ...label,
         messages: pageQ.rows.map((r) => ({
-          at: iso(r.at),
+          at: isoOrNull(r.at),
           message: r.message,
           freqMhz: r.freq_mhz,
           nodes: r.nodes,
@@ -5182,18 +5526,118 @@ nodeDataRouter.get(
 );
 
 // ---------------------------------------------------------------------------
+// GET /api/node-data/pager-nodes?window=
+//
+// Every pager node with its traffic for the window and its readers right now.
+// The node list is the left side of the join, as on the ADS-B fleet view: a
+// node that has heard nothing is exactly the one worth seeing.
+//
+//   unique — pages ONLY this node heard: its real coverage contribution. A
+//            node with many pages and ~0 unique duplicates another; one with
+//            few pages but high unique covers a gap.
+// ---------------------------------------------------------------------------
+nodeDataRouter.get(
+  '/api/node-data/pager-nodes',
+  requireRole(canViewNodeData),
+  async (c) => {
+    try {
+      const pool = await getPool();
+      if (!pool) return c.json({ error: 'database unavailable' }, 503);
+      const url = new URL(c.req.url);
+      const window = detailWindow(url);
+      const interval = WINDOW_INTERVAL[window];
+
+      const res = await pool.query<{
+        id: string;
+        name: string | null;
+        state: string | null;
+        lga: string | null;
+        enabled: boolean;
+        feed_enabled: boolean;
+        pages: unknown;
+        receptions: unknown;
+        capcodes: unknown;
+        filtered: unknown;
+        unique_pages: unknown;
+        last_heard: Date | null;
+      }>(
+        `WITH e AS (
+           SELECT node_id, received_at, capcode, COALESCE(logical_id, id) AS g,
+                  ${pagerKept()} AS kept
+             FROM node_pager_events
+            WHERE received_at >= now() - $1::interval
+         ), solo AS (
+           SELECT node_id, COUNT(*)::int AS n
+             FROM (SELECT g, MIN(node_id) AS node_id
+                     FROM e WHERE kept
+                    GROUP BY g
+                   HAVING COUNT(DISTINCT node_id) = 1) one
+            GROUP BY node_id
+         )
+         SELECT n.id, n.name, n.state, n.lga, n.enabled, n.feed_enabled,
+                COUNT(DISTINCT e.g) FILTER (WHERE e.kept)::int     AS pages,
+                COUNT(e.g) FILTER (WHERE e.kept)::int              AS receptions,
+                COUNT(DISTINCT e.capcode) FILTER (WHERE e.kept)::int AS capcodes,
+                COUNT(DISTINCT e.g) FILTER (WHERE NOT e.kept)::int AS filtered,
+                COALESCE(MAX(solo.n), 0)::int                      AS unique_pages,
+                MAX(e.received_at)                                 AS last_heard
+           FROM nodes n
+           LEFT JOIN e    ON e.node_id = n.id
+           LEFT JOIN solo ON solo.node_id = n.id
+          WHERE n.kind = 'pager'
+          GROUP BY n.id, n.name, n.state, n.lga, n.enabled, n.feed_enabled
+          ORDER BY pages DESC, n.name ASC`,
+        [interval, blockedCapcodeList()],
+      );
+
+      return c.json({
+        window,
+        nodes: res.rows.map((r) => {
+          const comps = hub.liveStatus(r.id).status?.components ?? {};
+          return {
+            id: r.id,
+            name: r.name,
+            state: r.state,
+            lga: r.lga,
+            enabled: r.enabled,
+            feedEnabled: r.feed_enabled,
+            online: hub.isOnline(r.id),
+            // One per frequency ("reader:NSWRFS"), whether or not frequencies
+            // share an SDR — the agent reports them that way.
+            readers: Object.entries(comps)
+              .filter(([k]) => k.startsWith('reader:'))
+              .map(([k, v]) => ({ label: k.slice('reader:'.length), running: /run/i.test(String(v)) })),
+            pages: num(r.pages),
+            receptions: num(r.receptions),
+            capcodes: num(r.capcodes),
+            filtered: num(r.filtered),
+            unique: num(r.unique_pages),
+            lastHeard: isoOrNull(r.last_heard),
+          };
+        }),
+      });
+    } catch (err) {
+      log.error({ err }, '/api/node-data/pager-nodes error');
+      return c.json({ error: 'failed to load pager nodes' }, 500);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
 // GET /api/node-data/pager-node?nodeId=&window=&limit=&offset=
 //
 // Per-node pager drill-down: what THIS node is hearing. Answers the operational
 // question the aggregate view can't — is a node deaf, or just duplicating what
 // another already hears?
 //
-//   totals    — pages/receptions/capcodes for this node, plus `unique`: pages
-//               ONLY this node heard in the window (its real coverage
-//               contribution) and lastHeard.
+//   totals    — traffic pages/receptions/capcodes for this node, `unique`:
+//               pages ONLY this node heard in the window (its real coverage
+//               contribution), `filtered`, and lastHeard — which counts
+//               filtered pages too, because a node hearing only the clock
+//               tick is still on air.
 //   topCapcodes — busiest capcodes on this node (alias-resolved).
 //   series    — hourly page counts, same shape as the overview chart.
-//   recent    — latest pages with message text, newest first (paged).
+//   recent    — this node's pages as sent (see pagerPageGroups), paged.
 // ---------------------------------------------------------------------------
 nodeDataRouter.get(
   '/api/node-data/pager-node',
@@ -5207,111 +5651,82 @@ nodeDataRouter.get(
       const interval = WINDOW_INTERVAL[window];
       const nodeId = (url.searchParams.get('nodeId') ?? '').trim();
       if (!nodeId) return c.json({ error: 'nodeId is required' }, 400);
-      const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit') ?? 50) || 50));
-      const offset = Math.max(0, Number(url.searchParams.get('offset') ?? 0) || 0);
+      const { limit, offset } = pagerPaging(url, 25);
+      const blocked = blockedCapcodeList();
+      const aliases = await capcodeAliasLookup(pool);
 
-      const [nodeQ, totalsQ, uniqueQ, topCapsQ, seriesQ, recentQ, recentCountQ] = await Promise.all([
-        pool.query<{ id: string; name: string | null; kind: string | null }>(
-          'SELECT id, name, kind FROM nodes WHERE id = $1',
+      const [nodeQ, totalsQ, uniqueQ, topCapsQ, series, recent] = await Promise.all([
+        pool.query<{ id: string; name: string | null; kind: string | null; state: string | null; lga: string | null }>(
+          'SELECT id, name, kind, state, lga FROM nodes WHERE id = $1',
           [nodeId],
         ),
-        pool.query<{ pages: unknown; receptions: unknown; capcodes: unknown; last_heard: unknown }>(
-          `SELECT COUNT(DISTINCT COALESCE(logical_id, id))::int AS pages,
-                  COUNT(*)::int                                 AS receptions,
-                  COUNT(DISTINCT capcode)::int                  AS capcodes,
-                  MAX(received_at)                              AS last_heard
-             FROM node_pager_events
-            WHERE received_at >= now() - $1::interval AND node_id = $2`,
-          [interval, nodeId],
+        pool.query<{ pages: unknown; receptions: unknown; capcodes: unknown; filtered: unknown; last_heard: unknown }>(
+          `SELECT COUNT(DISTINCT g) FILTER (WHERE kept)::int       AS pages,
+                  COUNT(*) FILTER (WHERE kept)::int                AS receptions,
+                  COUNT(DISTINCT capcode) FILTER (WHERE kept)::int AS capcodes,
+                  COUNT(DISTINCT g) FILTER (WHERE NOT kept)::int   AS filtered,
+                  MAX(received_at)                                 AS last_heard
+             FROM (SELECT capcode, received_at, COALESCE(logical_id, id) AS g,
+                          ${pagerKept()} AS kept
+                     FROM node_pager_events
+                    WHERE received_at >= now() - $1::interval AND node_id = $3) e`,
+          [interval, blocked, nodeId],
         ),
         // Pages in the window whose logical group was heard by ONLY this node.
         pool.query<{ n: unknown }>(
           `SELECT COUNT(*)::int AS n FROM (
              SELECT COALESCE(logical_id, id) AS g
                FROM node_pager_events
-              WHERE received_at >= now() - $1::interval
+              WHERE received_at >= now() - $1::interval AND ${pagerKept()}
               GROUP BY 1
              HAVING COUNT(DISTINCT node_id) = 1
-                AND MIN(node_id) = $2
+                AND MIN(node_id) = $3
            ) t`,
-          [interval, nodeId],
+          [interval, blocked, nodeId],
         ),
         pool.query<{ capcode: string; pages: unknown; last_seen: unknown }>(
           `SELECT capcode,
                   COUNT(DISTINCT COALESCE(logical_id, id))::int AS pages,
                   MAX(received_at)                              AS last_seen
              FROM node_pager_events
-            WHERE received_at >= now() - $1::interval AND node_id = $2
+            WHERE received_at >= now() - $1::interval AND node_id = $3 AND ${pagerKept()}
             GROUP BY capcode
             ORDER BY pages DESC, last_seen DESC
-            LIMIT 20`,
-          [interval, nodeId],
+            LIMIT 15`,
+          [interval, blocked, nodeId],
         ),
-        pool.query<{ hour: unknown; pages: unknown }>(
-          `SELECT date_trunc('hour', received_at) AS hour,
-                  COUNT(DISTINCT COALESCE(logical_id, id))::int AS pages
-             FROM node_pager_events
-            WHERE received_at >= now() - $1::interval AND node_id = $2
-            GROUP BY 1 ORDER BY 1`,
-          [interval, nodeId],
-        ),
-        pool.query<{ at: unknown; capcode: string; message: string | null; freq_mhz: unknown }>(
-          `SELECT received_at AS at, capcode, message, freq_mhz
-             FROM node_pager_events
-            WHERE received_at >= now() - $1::interval AND node_id = $2
-            ORDER BY received_at DESC
-            LIMIT $3 OFFSET $4`,
-          [interval, nodeId, limit, offset],
-        ),
-        pool.query<{ n: unknown }>(
-          `SELECT COUNT(*)::int AS n FROM node_pager_events
-            WHERE received_at >= now() - $1::interval AND node_id = $2`,
-          [interval, nodeId],
-        ),
+        pagerHourlySeries(pool, interval, nodeId),
+        pagerPageGroups(pool, aliases, { interval, nodeId, limit, offset }),
       ]);
 
-      const aliases = await capcodeAliasLookup(pool);
-      const withAlias = (capcode: string) => {
-        const a = aliases.get(normalizeCapcode(capcode)) ?? null;
-        return { alias: a?.alias ?? null, agency: a?.agency ?? null };
-      };
       const t = totalsQ.rows[0];
       // The nodes row only supplies a display name and kind — every figure
       // below is computed from node_pager_events. A node that is producing
       // events but has no registry row (deleted, or never registered) is still
       // perfectly inspectable, so this used to 404 exactly the nodes the list
       // had just shown traffic for: the drill-down was unreachable for them.
-      const node = nodeQ.rows[0] ?? { id: nodeId, name: null, kind: null };
+      const node = nodeQ.rows[0] ?? { id: nodeId, name: null, kind: null, state: null, lga: null };
 
       return c.json({
         window,
-        node: { id: node.id, name: node.name, kind: node.kind },
+        node: { id: node.id, name: node.name, kind: node.kind, state: node.state, lga: node.lga },
+        online: hub.isOnline(nodeId),
         totals: {
           pages: num(t?.pages),
           receptions: num(t?.receptions),
           capcodes: num(t?.capcodes),
           unique: num(uniqueQ.rows[0]?.n),
-          lastHeard: iso(t?.last_heard),
+          filtered: num(t?.filtered),
+          lastHeard: isoOrNull(t?.last_heard),
         },
         topCapcodes: topCapsQ.rows.map((r) => ({
           capcode: r.capcode,
-          ...withAlias(r.capcode),
+          ...capcodeLabel(aliases, r.capcode),
           pages: num(r.pages),
-          lastSeen: iso(r.last_seen),
+          lastSeen: isoOrNull(r.last_seen),
         })),
-        series: seriesQ.rows.map((r) => ({ hour: iso(r.hour), pages: num(r.pages) })),
-        recent: {
-          total: num(recentCountQ.rows[0]?.n),
-          limit,
-          offset,
-          messages: recentQ.rows.map((r) => ({
-            at: iso(r.at),
-            capcode: r.capcode,
-            ...withAlias(r.capcode),
-            message: r.message,
-            freqMhz: r.freq_mhz,
-          })),
-        },
+        series,
+        recent: { total: recent.total, limit, offset, pages: recent.pages },
       });
     } catch (err) {
       log.error({ err }, '/api/node-data/pager-node error');

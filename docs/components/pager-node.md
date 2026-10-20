@@ -298,12 +298,29 @@ DB value nor an env pair is set, `pager-upload` returns 503.
 `PAGERMON_URL` is a **different thing** — the read path the backend polls to draw
 pages on the map. Do not confuse the two.
 
-### Blocked capcodes
+### What the relay filters
 
-Some capcodes are non-message transmitters that fire encoded or binary data
-frames rather than readable pages — FRNSW capcode `521839` emits roughly one
-base64 frame a minute. `PAGER_BLOCKED_CAPCODES` (default `521839`) drops them
-before the Pagermon forward **and** before the staff drawer buffer.
+Not every decode is a page. The relay keeps four kinds out of Pagermon, checked
+in this order (`backends/node/src/services/pagerFilter.ts`):
+
+| Reason | What it is |
+|---|---|
+| `blocked capcode` | A non-message transmitter. FRNSW capcode `521839` sends a base64 data frame about once a minute; `1850000` is an FRNSW keepalive. `PAGER_BLOCKED_CAPCODES` (default `521839`) adds to the built-in `1850000`. |
+| `empty message` | A tone-only page, no body. Pagermon rejects these outright. |
+| `noise` | One or two characters: POCSAG bit errors landing on random capcodes. |
+| `time code` | A bare `HHMM`, the FRNSW clock tick. |
+
+A filtered page is still acked, so the node deletes it from its queue, still
+stored in `node_pager_events`, and still shown in the staff drawer's message
+list, dimmed and labelled.
+
+They are most of the traffic: on the NSW networks about nine stored pages in
+ten are filtered, almost all of them `521839`. So the staff Data tab's pager
+views count traffic only and list the filtered pages in a **Filtered** view of
+their own. They apply the same rules in SQL (`pagerFilterReasonSql`) rather
+than reading a stored flag, so changing `PAGER_BLOCKED_CAPCODES` moves a
+capcode's past pages too. The tests hold the SQL and the relay's JS to the
+same cases.
 
 ## The control WebSocket
 
