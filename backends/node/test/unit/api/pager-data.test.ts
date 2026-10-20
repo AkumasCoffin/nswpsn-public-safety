@@ -64,7 +64,7 @@ beforeEach(() => {
 });
 
 describe('GET /api/node-data/pager-overview', () => {
-  it('returns traffic totals, the filtered split, top lists, series and latest pages', async () => {
+  it('returns traffic totals, the filtered split, top capcodes, series and latest pages', async () => {
     queryMock.mockImplementation((sql: string) => {
       if (sql.includes('WITH k AS')) {
         return {
@@ -96,9 +96,6 @@ describe('GET /api/node-data/pager-overview', () => {
           ],
         };
       }
-      if (sql.includes('GROUP BY e.node_id, n.name')) {
-        return { rows: [{ node_id: 'n1', name: 'Newcastle', pages: 18 }] };
-      }
       if (sql.includes('generate_series')) {
         return { rows: [{ hour: new Date(1_700_000_000_000), pages: 4 }] };
       }
@@ -125,8 +122,8 @@ describe('GET /api/node-data/pager-overview', () => {
     expect(caps[1]?.['alias']).toBeNull();
     expect(caps[1]?.['topNode']).toBeNull();
 
-    const nodes = body['topNodes'] as Array<Record<string, unknown>>;
-    expect(nodes[0]).toEqual({ nodeId: 'n1', name: 'Newcastle', pages: 18 });
+    // Per-node figures belong to /pager-nodes, not the overview.
+    expect(body).not.toHaveProperty('topNodes');
 
     const series = body['series'] as Array<Record<string, unknown>>;
     expect(series[0]?.['pages']).toBe(4);

@@ -2401,12 +2401,9 @@
     .nd2-pmsg { display: block; min-width: 16rem; max-width: 46rem; white-space: normal; overflow-wrap: anywhere; line-height: 1.4; }
     /* Filtered bodies are mostly base64 frames: read as data, not text. */
     .nd2-pmsg-raw { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 0.7rem; color: var(--text-soft); }
+    .nd2-capnum { font-variant-numeric: tabular-nums; white-space: nowrap; }
     .nd2-chips { display: flex; flex-wrap: wrap; gap: 0.25rem; }
     .nd2-chips .nd2-chip { margin: 0; }
-    /* Main list beside a narrower summary column; one column when narrow. */
-    .nd2-split { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 1rem; align-items: start; margin-bottom: 1.75rem; }
-    .nd2-stack { display: grid; gap: 1rem; align-content: start; }
-    @media (max-width: 1100px) { .nd2-split { grid-template-columns: minmax(0, 1fr); } }
     /* .nd2-card clips, so a table inside one scrolls here instead of losing columns. */
     .nd2-xscroll { overflow-x: auto; }
     .nd2-stat-link { cursor: pointer; transition: border-color 0.15s; }
@@ -4318,24 +4315,18 @@
             <div class="nd2-empty" id="nd2-pov-chart-empty" style="display: none;">No pages in this window yet.</div>
           </div>
 
-          <div class="nd2-split">
-            <div class="nd2-card">
-              <div class="nd2-card-h">
-                <i class="fas fa-list"></i> <span>Latest pages</span>
-                <span class="nd2-note"><a href="#" class="nd2-node-link" onclick="nd2SetView('ppages'); return false;">All pages</a></span>
-              </div>
-              <div class="nd2-xscroll" id="nd2-pov-recent"><div class="nd2-empty">Loading…</div></div>
+          <!-- Messages get the full width; per-node figures live in the Nodes view. -->
+          <div class="nd2-card nd2-detail-gap">
+            <div class="nd2-card-h">
+              <i class="fas fa-list"></i> <span>Latest pages</span>
+              <span class="nd2-note"><a href="#" class="nd2-node-link" onclick="nd2SetView('ppages'); return false;">All pages</a></span>
             </div>
-            <div class="nd2-stack">
-              <div class="nd2-card">
-                <div class="nd2-card-h"><i class="fas fa-hashtag"></i> <span>Top capcodes</span></div>
-                <div class="nd2-xscroll" id="nd2-pov-top-caps"><div class="nd2-empty">—</div></div>
-              </div>
-              <div class="nd2-card">
-                <div class="nd2-card-h"><i class="fas fa-server"></i> <span>Nodes</span><span class="nd2-note">pages heard</span></div>
-                <div class="nd2-xscroll" id="nd2-pov-top-nodes"><div class="nd2-empty">—</div></div>
-              </div>
-            </div>
+            <div class="nd2-xscroll" id="nd2-pov-recent"><div class="nd2-empty">Loading…</div></div>
+          </div>
+          <div class="nd2-card nd2-detail-gap">
+            <div class="nd2-card-h"><i class="fas fa-hashtag"></i> <span>Top capcodes</span>
+              <span class="nd2-note"><a href="#" class="nd2-node-link" onclick="nd2SetView('capcodes'); return false;">All capcodes</a></span></div>
+            <div class="nd2-xscroll" id="nd2-pov-top-caps"><div class="nd2-empty">—</div></div>
           </div>
         </div>
 
@@ -4393,33 +4384,32 @@
               </div>
               <div class="nd2-empty" id="nd2-pnode-chart-empty" style="display: none;">Nothing heard in this window.</div>
             </div>
-            <div class="nd2-split">
-              <div>
-                <div class="nd2-table-wrap">
-                  <table class="nd-table">
-                    <thead>
-                      <tr><th>Time</th><th>Service</th><th>Message</th><th>Capcodes</th></tr>
-                    </thead>
-                    <tbody id="nd2-pnr-body">
-                      <tr><td colspan="4" class="nd2-empty">Loading…</td></tr>
-                    </tbody>
-                  </table>
-                </div>
-                <div class="nd2-pgr">
-                  <button class="btn btn-secondary btn-sm" id="nd2-pnr-prev" onclick="nd2PagerNodePage(-1)" disabled>
-                    <i class="fas fa-chevron-left"></i> Prev
-                  </button>
-                  <button class="btn btn-secondary btn-sm" id="nd2-pnr-next" onclick="nd2PagerNodePage(1)" disabled>
-                    Next <i class="fas fa-chevron-right"></i>
-                  </button>
-                  <div class="filter-spacer"></div>
-                  <span id="nd2-pnr-count"></span>
-                </div>
+            <div class="nd2-detail-gap">
+              <div class="nd2-table-wrap">
+                <table class="nd-table">
+                  <thead>
+                    <tr><th>Time</th><th>Service</th><th>Message</th><th>Capcodes</th></tr>
+                  </thead>
+                  <tbody id="nd2-pnr-body">
+                    <tr><td colspan="4" class="nd2-empty">Loading…</td></tr>
+                  </tbody>
+                </table>
               </div>
-              <div class="nd2-card">
-                <div class="nd2-card-h"><i class="fas fa-hashtag"></i> <span>Top capcodes</span></div>
-                <div class="nd2-xscroll" id="nd2-pnode-caps"><div class="nd2-empty">—</div></div>
+              <div class="nd2-pgr">
+                <button class="btn btn-secondary btn-sm" id="nd2-pnr-prev" onclick="nd2PagerNodePage(-1)" disabled>
+                  <i class="fas fa-chevron-left"></i> Prev
+                </button>
+                <button class="btn btn-secondary btn-sm" id="nd2-pnr-next" onclick="nd2PagerNodePage(1)" disabled>
+                  Next <i class="fas fa-chevron-right"></i>
+                </button>
+                <div class="filter-spacer"></div>
+                <span id="nd2-pnr-count"></span>
               </div>
+            </div>
+            <div class="nd2-card nd2-detail-gap">
+              <div class="nd2-card-h"><i class="fas fa-hashtag"></i> <span>Top capcodes</span>
+                <span class="nd2-note">on this node</span></div>
+              <div class="nd2-xscroll" id="nd2-pnode-caps"><div class="nd2-empty">—</div></div>
             </div>
           </div>
         </div>
@@ -4432,34 +4422,32 @@
           <p class="nd2-lede">Pages the relay keeps out of Pagermon: capcodes that only send encoded data,
             the Fire &amp; Rescue NSW clock tick, and one- or two-character decode errors. They are kept for
             30 days like every page, and left out of the other pager views.</p>
-          <div class="nd2-split">
-            <div>
-              <div class="nd2-table-wrap">
-                <table class="nd-table">
-                  <thead>
-                    <tr><th>Time</th><th>Capcode</th><th>Reason</th><th>Message</th><th>Nodes</th></tr>
-                  </thead>
-                  <tbody id="nd2-pf-body">
-                    <tr><td colspan="5" class="nd2-empty">Loading…</td></tr>
-                  </tbody>
-                </table>
-              </div>
-              <div class="nd2-pgr">
-                <button class="btn btn-secondary btn-sm" id="nd2-pf-prev" onclick="nd2PfPage(-1)" disabled>
-                  <i class="fas fa-chevron-left"></i> Prev
-                </button>
-                <button class="btn btn-secondary btn-sm" id="nd2-pf-next" onclick="nd2PfPage(1)" disabled>
-                  Next <i class="fas fa-chevron-right"></i>
-                </button>
-                <div class="filter-spacer"></div>
-                <span id="nd2-pf-count"></span>
-              </div>
+          <div class="nd2-detail-gap">
+            <div class="nd2-table-wrap">
+              <table class="nd-table">
+                <thead>
+                  <tr><th>Time</th><th>Capcode</th><th>Label</th><th>Reason</th><th>Message</th><th>Nodes</th></tr>
+                </thead>
+                <tbody id="nd2-pf-body">
+                  <tr><td colspan="6" class="nd2-empty">Loading…</td></tr>
+                </tbody>
+              </table>
             </div>
-            <div class="nd2-card">
-              <div class="nd2-card-h"><i class="fas fa-hashtag"></i> <span>By capcode</span>
-                <span class="nd2-note">whole window</span></div>
-              <div class="nd2-xscroll" id="nd2-pf-caps"><div class="nd2-empty">—</div></div>
+            <div class="nd2-pgr">
+              <button class="btn btn-secondary btn-sm" id="nd2-pf-prev" onclick="nd2PfPage(-1)" disabled>
+                <i class="fas fa-chevron-left"></i> Prev
+              </button>
+              <button class="btn btn-secondary btn-sm" id="nd2-pf-next" onclick="nd2PfPage(1)" disabled>
+                Next <i class="fas fa-chevron-right"></i>
+              </button>
+              <div class="filter-spacer"></div>
+              <span id="nd2-pf-count"></span>
             </div>
+          </div>
+          <div class="nd2-card nd2-detail-gap">
+            <div class="nd2-card-h"><i class="fas fa-hashtag"></i> <span>By capcode</span>
+              <span class="nd2-note">whole window</span></div>
+            <div class="nd2-xscroll" id="nd2-pf-caps"><div class="nd2-empty">—</div></div>
           </div>
         </div>
 
@@ -4482,13 +4470,14 @@
                 <thead>
                   <tr>
                     <th>Capcode</th>
-                    <th class="nd2-num">Pages</th>
-                    <th>Last seen</th>
+                    <th>Label</th>
                     <th>Top node</th>
+                    <th>Last seen</th>
+                    <th class="nd2-num">Pages</th>
                   </tr>
                 </thead>
                 <tbody id="nd2-cap-body">
-                  <tr><td colspan="4" class="nd2-empty">Loading…</td></tr>
+                  <tr><td colspan="5" class="nd2-empty">Loading…</td></tr>
                 </tbody>
               </table>
             </div>
@@ -8828,16 +8817,16 @@
     // Overview reads /pager-overview; Capcodes drills list → messages via the
     // same breadcrumb/back pattern the Systems view uses.
 
-    // Render a capcode as its resolved alias with the raw number secondary,
-    // e.g. "Gresford Brigade RFS 10627"; falls back to the bare capcode.
-    function nd2CapCell(o) {
-      if (!o) return '—';
-      const cap = escapeHtml(String(o.capcode));
-      if (o.alias) {
-        const ag = o.agency ? ` <span class="nd-sub">${escapeHtml(String(o.agency))}</span>` : '';
-        return `<span class="nd-strong">${escapeHtml(String(o.alias))}</span>${ag} <span class="nd-sub">${cap}</span>`;
-      }
-      return `<span class="nd-strong">${cap}</span>`;
+    // A capcode table gives the number and its label a column each, so either
+    // can be scanned down: nd2CapNum → "10627", nd2CapLabel → "Gresford
+    // Brigade RFS" (the alias, its agency secondary; "—" when none resolves).
+    function nd2CapNum(o) {
+      return o ? `<span class="nd-strong nd2-capnum">${escapeHtml(String(o.capcode))}</span>` : '—';
+    }
+    function nd2CapLabel(o) {
+      if (!o || !o.alias) return '<span class="nd-sub">—</span>';
+      const ag = o.agency ? ` <span class="nd-sub">${escapeHtml(String(o.agency))}</span>` : '';
+      return `<span class="nd-strong">${escapeHtml(String(o.alias))}</span>${ag}`;
     }
     function nd2PagerNodeChip(o) {
       return o ? `<span class="nd2-chip">${escapeHtml(o.name || String(o.id))}</span>` +
@@ -9905,14 +9894,18 @@
           `<div class="stat-card"${extra || ''}><div class="stat-value" style="color:${colour};">${value}</div>`
           + `<div class="stat-label">${escapeHtml(label)}</div>`
           + `<div class="nd2-stat-sub">${escapeHtml(sub)}</div></div>`;
+        // A tile that opens the view holding its detail.
+        const opens = (view, what) =>
+          ` class="stat-card nd2-stat-link" role="button" tabindex="0" title="${what}"`
+          + ` onclick="nd2SetView('${view}')" onkeydown="if(event.key==='Enter')nd2SetView('${view}')"`;
         tilesEl.innerHTML = [
           tile(nd2Num(t.pagesLogical), 'Pages', ND2_PAGER_COLOR,
             t.pages > t.pagesLogical ? `${nd2Num(t.pages)} receptions across nodes` : 'filtered pages not counted'),
           tile(nd2Num(t.capcodes), 'Capcodes', 'var(--text-primary)', 'paged in this window'),
-          tile(nd2Num(t.activeNodes), 'Nodes', 'var(--success)', 'reporting in this window'),
+          tile(nd2Num(t.activeNodes), 'Nodes', 'var(--success)', 'reporting in this window',
+            opens('pnodes', 'Show the pager nodes')),
           tile(nd2Num(f.pages), 'Filtered', 'var(--text-soft)', why || 'nothing filtered',
-            ` class="stat-card nd2-stat-link" role="button" tabindex="0" title="Show the filtered pages"`
-            + ` onclick="nd2SetView('pfiltered')" onkeydown="if(event.key==='Enter')nd2SetView('pfiltered')"`),
+            opens('pfiltered', 'Show the filtered pages')),
         ].join('');
       }
 
@@ -9927,33 +9920,20 @@
           : '<div class="nd2-empty">No pages in this window yet.</div>';
       }
 
+      // Full width, so it carries what the Capcodes view does; the count stays
+      // on the right edge, away from "Last seen" (a bare "12 13h ago" misreads).
       const caps = (ov && ov.topCapcodes) || [];
       const capsEl = document.getElementById('nd2-pov-top-caps');
       if (capsEl) {
         capsEl.innerHTML = nd2MiniTable(
-          [{ label: 'Capcode' }, { label: 'Pages', num: true }],
-          caps.map(c => [nd2CapCell(c), nd2Num(c.pages)]),
+          [{ label: 'Capcode' }, { label: 'Label' }, { label: 'Top node' }, { label: 'Last seen' }, { label: 'Pages', num: true }],
+          caps.map(c => [nd2CapNum(c), nd2CapLabel(c), nd2PagerNodeChip(c.topNode), nd2LastSeen(c.lastSeen), nd2Num(c.pages)]),
           () => 'nd2-rowlink');
         capsEl.onclick = (e) => {
           const tr = e.target.closest('tbody tr');
           if (!tr || !capsEl.contains(tr)) return;
           const c = caps[tr.sectionRowIndex];
           if (c) nd2OpenCapcodeMessages(c.capcode, c.alias, c.agency);
-        };
-      }
-
-      const nodes = (ov && ov.topNodes) || [];
-      const nodesEl = document.getElementById('nd2-pov-top-nodes');
-      if (nodesEl) {
-        nodesEl.innerHTML = nd2MiniTable(
-          [{ label: 'Node' }, { label: 'Pages', num: true }],
-          nodes.map(n => [escapeHtml(n.name || String(n.nodeId)), nd2Num(n.pages)]),
-          () => 'nd2-rowlink');
-        nodesEl.onclick = (e) => {
-          const tr = e.target.closest('tbody tr');
-          if (!tr || !nodesEl.contains(tr)) return;
-          const n = nodes[tr.sectionRowIndex];
-          if (n) nd2OpenPagerNode(n.nodeId, n.name);
         };
       }
     }
@@ -10145,8 +10125,8 @@
       const caps = d.topCapcodes || [];
       if (capsEl) {
         capsEl.innerHTML = nd2MiniTable(
-          [{ label: 'Capcode' }, { label: 'Pages', num: true }],
-          caps.map(c => [nd2CapCell(c), nd2Num(c.pages)]),
+          [{ label: 'Capcode' }, { label: 'Label' }, { label: 'Last seen' }, { label: 'Pages', num: true }],
+          caps.map(c => [nd2CapNum(c), nd2CapLabel(c), nd2LastSeen(c.lastSeen), nd2Num(c.pages)]),
           () => 'nd2-rowlink');
         capsEl.onclick = (e) => {
           const tr = e.target.closest('tbody tr');
@@ -10186,7 +10166,7 @@
       let d;
       try {
         d = await nd2Fetch(`/api/node-data/pager-filtered?${params}`);
-      } catch (e) { nd2TableMsg('nd2-pf-body', 5, e); nd2.pf.total = 0; nd2PageBtns('pf', nd2.pf, 0); return; }
+      } catch (e) { nd2TableMsg('nd2-pf-body', 6, e); nd2.pf.total = 0; nd2PageBtns('pf', nd2.pf, 0); return; }
       if (seq !== nd2.reqSeq) return;
 
       // Reason pills carry their counts, so the choice shows what it holds.
@@ -10206,8 +10186,8 @@
       const capsEl = document.getElementById('nd2-pf-caps');
       if (capsEl) {
         capsEl.innerHTML = nd2MiniTable(
-          [{ label: 'Capcode' }, { label: 'Reason' }, { label: 'Pages', num: true }],
-          (d.byCapcode || []).map(c => [nd2CapCell(c),
+          [{ label: 'Capcode' }, { label: 'Label' }, { label: 'Reason' }, { label: 'Pages', num: true }],
+          (d.byCapcode || []).map(c => [nd2CapNum(c), nd2CapLabel(c),
             `<span class="nd-sub">${escapeHtml(nd2PagerReasonLabel(c.reason))}</span>`, nd2Num(c.pages)]));
       }
 
@@ -10216,12 +10196,13 @@
       document.getElementById('nd2-pf-body').innerHTML = rows.length
         ? rows.map(m => `<tr>
             <td>${nd2TimeCell(m.at)}</td>
-            <td>${nd2CapCell(m)}</td>
+            <td>${nd2CapNum(m)}</td>
+            <td>${nd2CapLabel(m)}</td>
             <td><span class="nd-sub">${escapeHtml(nd2PagerReasonLabel(m.reason))}</span></td>
             <td><span class="nd2-pmsg nd2-pmsg-raw">${escapeHtml(m.message || '') || '<span class="nd-sub">(empty)</span>'}</span></td>
             <td>${nd2PagerNodeChips(m.nodes)}</td>
           </tr>`).join('')
-        : '<tr><td colspan="5" class="nd2-empty">Nothing filtered in this window.</td></tr>';
+        : '<tr><td colspan="6" class="nd2-empty">Nothing filtered in this window.</td></tr>';
       nd2PageBtns('pf', nd2.pf, rows.length);
     }
 
@@ -10365,16 +10346,17 @@
         const rows = data.capcodes || [];
         nd2.cap.rows = rows;   // for row-click open (avoids escaping in inline handlers)
         const body = document.getElementById('nd2-cap-body');
-        if (!rows.length) { body.innerHTML = '<tr><td colspan="4" class="nd2-empty">No capcodes match.</td></tr>'; }
+        if (!rows.length) { body.innerHTML = '<tr><td colspan="5" class="nd2-empty">No capcodes match.</td></tr>'; }
         else body.innerHTML = rows.map((c, i) => `
           <tr class="nd2-rowlink" onclick="nd2OpenCapcode(${i})" title="View messages for this capcode">
-            <td>${nd2CapCell(c)}</td>
-            <td class="nd2-num">${nd2Num(c.pages)}</td>
-            <td>${nd2LastSeen(c.lastSeen)}</td>
+            <td>${nd2CapNum(c)}</td>
+            <td>${nd2CapLabel(c)}</td>
             <td>${nd2PagerNodeChip(c.topNode)}</td>
+            <td>${nd2LastSeen(c.lastSeen)}</td>
+            <td class="nd2-num">${nd2Num(c.pages)}</td>
           </tr>`).join('');
         nd2PageBtns('cap', nd2.cap, rows.length);
-      } catch (e) { nd2TableMsg('nd2-cap-body', 4, e); nd2.cap.total = 0; nd2PageBtns('cap', nd2.cap, 0); }
+      } catch (e) { nd2TableMsg('nd2-cap-body', 5, e); nd2.cap.total = 0; nd2PageBtns('cap', nd2.cap, 0); }
     }
 
     function nd2OpenCapcode(i) {

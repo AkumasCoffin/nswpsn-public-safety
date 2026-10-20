@@ -5099,7 +5099,8 @@ async function pagerPageGroups(
 // ---------------------------------------------------------------------------
 // GET /api/node-data/pager-overview?window=24h|7d|30d
 //   Traffic totals, how much was filtered (by reason), top capcodes (with
-//   their busiest node), top nodes, hourly series and the latest pages.
+//   their busiest node), hourly series and the latest pages. Per-node
+//   figures are the Nodes view's job (/pager-nodes).
 // ---------------------------------------------------------------------------
 nodeDataRouter.get(
   '/api/node-data/pager-overview',
@@ -5114,7 +5115,7 @@ nodeDataRouter.get(
       const base = [interval, blockedCapcodeList()];
       const aliases = await capcodeAliasLookup(pool);
 
-      const [totalsQ, filteredQ, topCapsQ, topNodesQ, series, recent] = await Promise.all([
+      const [totalsQ, filteredQ, topCapsQ, series, recent] = await Promise.all([
         // Active nodes counts every reception, filtered or not: a node hearing
         // only the encoded-data capcode is still on air and still reporting.
         pool.query<{ pages: unknown; logical: unknown; nodes: unknown; capcodes: unknown }>(
@@ -5148,16 +5149,6 @@ nodeDataRouter.get(
             LIMIT 10`,
           base,
         ),
-        pool.query<{ node_id: string; name: string | null; pages: unknown }>(
-          `SELECT e.node_id, n.name, COUNT(*)::int AS pages
-             FROM node_pager_events e
-             JOIN nodes n ON n.id = e.node_id
-            WHERE e.received_at >= now() - $1::interval AND ${pagerKept('e')}
-            GROUP BY e.node_id, n.name
-            ORDER BY pages DESC, e.node_id ASC
-            LIMIT 15`,
-          base,
-        ),
         pagerHourlySeries(pool, interval),
         pagerPageGroups(pool, aliases, { interval, limit: 8, offset: 0 }),
       ]);
@@ -5188,11 +5179,6 @@ nodeDataRouter.get(
           pages: num(r.pages),
           lastSeen: isoOrNull(r.last_seen),
           topNode: topNodeByCap.get(r.capcode) ?? null,
-        })),
-        topNodes: topNodesQ.rows.map((r) => ({
-          nodeId: r.node_id,
-          name: r.name,
-          pages: num(r.pages),
         })),
         series,
         recent: recent.pages,
