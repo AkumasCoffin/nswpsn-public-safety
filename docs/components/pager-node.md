@@ -144,8 +144,8 @@ is normally **one reader on dongle 0**:
   (too far from the others, or past `MaxChannelsPerDongle` = 8). Dongles beyond
   that stay idle, however many are plugged in.
 - A frequency no dongle can take is **not received**, and the agent logs it by
-  name. The priority order (the staff drawer's "Priority frequency") decides
-  what keeps its place.
+  name. The plan's order decides what keeps its place; there is no per-node
+  choice, since one dongle takes the whole plan.
 - If the agent cannot resolve its own path it has no `channelize`, and falls back
   to one frequency per dongle.
 

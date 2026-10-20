@@ -12055,11 +12055,11 @@
       const qd = (st && typeof st.queueDepth === 'number') ? st.queueDepth : null;
       // The status frame names a reader by agency only (component key
       // "reader:FRNSW"), so the MHz has to come from the node's STATE plan.
-      // pagerPrimaryOptions IS that plan, backend-supplied — so a plan change
+      // pagerFrequencies IS that plan, backend-supplied — so a plan change
       // (FRNSW moving to 148.9625) shows up here with nothing else to edit,
       // and a QLD node shows its own frequency rather than NSW's.
       const freqByLabel = new Map(
-        (Array.isArray(nFresh.pagerPrimaryOptions) ? nFresh.pagerPrimaryOptions : [])
+        (Array.isArray(nFresh.pagerFrequencies) ? nFresh.pagerFrequencies : [])
           .filter(o => o && o.label != null && typeof o.mhz === 'number')
           .map(o => [String(o.label), o.mhz]));
 
@@ -12083,17 +12083,6 @@
         }).join('');
       }
 
-      // Priority frequency (persisted): sent first in the plan. The pager agent
-      // fits every plan frequency it can onto the node's SDRs, sharing one SDR
-      // when they outnumber the dongles, so this only decides what keeps its
-      // place when they cannot all be received. (Older pager agents ran only
-      // this one on a single SDR.) The valid choices come from the node's
-      // STATE's frequency plan (pagerPrimaryOptions, backend-supplied) — never
-      // hardcoded here.
-      const primaryOpts = (Array.isArray(nFresh.pagerPrimaryOptions) && nFresh.pagerPrimaryOptions.length)
-        ? nFresh.pagerPrimaryOptions
-        : [{ label: 'NSWRFS', mhz: 148.5875 }, { label: 'FRNSW', mhz: 148.9625 }];
-      const primary = primaryOpts.some(o => o.label === nFresh.pagerPrimary) ? nFresh.pagerPrimary : primaryOpts[0].label;
       const gainVal = (nFresh.pagerGain == null) ? '' : String(nFresh.pagerGain);
       const ppmVal = (nFresh.pagerPpm == null) ? '' : String(nFresh.pagerPpm);
       // Supported gain steps the agent reports for this SDR (dB) → a dropdown of
@@ -12104,7 +12093,7 @@
       // unconditional innerHTML rebuild snaps an open <select> shut and wipes a
       // half-typed field mid-tune, so skip when nothing shown here changed.
       const sig = JSON.stringify([online, readers.map(r => r.label + ':' + r.state),
-        _ndAudioLabel, msgs, qd, primary, gainVal, ppmVal, gains, primaryOpts]);
+        _ndAudioLabel, msgs, qd, gainVal, ppmVal, gains, [...freqByLabel]]);
       if (sig === _ndReadersSig) return;
       _ndReadersSig = sig;
 
@@ -12125,12 +12114,6 @@
       }
 
       el.innerHTML = `
-        <div class="nd-switch-row" style="margin-bottom:0.7rem;">
-          <span title="Received first. One SDR takes every frequency in the plan it can fit at once; this one keeps its place when they cannot all be received. Older pager agents receive only this one on a single SDR.">Priority frequency</span>
-          ${primaryOpts.length > 1 ? `<select class="nd-write-input" onchange="_ndSetPagerPrimary(this.value, this)" style="background:rgba(255,255,255,0.05); color:var(--text-primary,#e2e8f0); border:1px solid var(--border-subtle,#334155); border-radius:6px; padding:0.25rem 0.4rem; font-size:0.8rem;">
-            ${primaryOpts.map(o => `<option value="${escapeHtml(o.label)}" ${o.label === primary ? 'selected' : ''}>${escapeHtml(o.label)} (${o.mhz})</option>`).join('')}
-          </select>` : `<span>${escapeHtml(primaryOpts[0].label)} (${primaryOpts[0].mhz})</span>`}
-        </div>
         <div class="nd-switch-row" style="margin-bottom:0.5rem;">
           <span title="Tuner gain for all readers. Default = agent default (49.6); Auto = hardware AGC; or pick a supported step.">Gain (dB)</span>
           ${gainControl}
@@ -12148,28 +12131,6 @@
           <span>messages <strong>${msgs}</strong> · last 10 min</span>
           ${qd != null ? `<span>queue <strong>${qd}</strong></span>` : ''}
         </div>`;
-    }
-
-    // Staff: set the pager node's priority frequency (persisted + live).
-    async function _ndSetPagerPrimary(primary, el) {
-      // Switching frequency swaps the reader label, so any running audio monitor
-      // no longer matches — stop it so the UI/tap don't get stranded.
-      if (_ndAudioLabel != null) _ndAudioStop();
-      if (el) el.disabled = true;
-      try {
-        const res = await fetch(`${API_BASE_URL}/api/nodes/${_ndNodeId}/pager-primary`, {
-          method: 'PUT',
-          headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json' },
-          body: JSON.stringify({ primary }),
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        showToast(`Priority frequency set to ${primary}.`, 'success');
-        await loadNodes();
-      } catch (e) {
-        showToast(`Could not change frequency: ${e.message}`, 'error');
-      } finally {
-        if (el) el.disabled = false;
-      }
     }
 
     // ABS LGA names per state for the location modal's LGA dropdown (our own

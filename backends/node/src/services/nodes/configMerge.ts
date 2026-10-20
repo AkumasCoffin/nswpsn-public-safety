@@ -173,9 +173,8 @@ export interface ConfigPayload {
 // The pager agent receives every frequency that fits on one SDR at once
 // (internal/channelize), using another SDR only for one that does not, so the
 // order only decides what keeps its place when they cannot all be received.
-// Older pager agents ran only the FIRST frequency on a single SDR. Which one is
-// first is a per-node preference (config_override.pagerPrimary), defaulting to
-// the plan's first entry.
+// There is no per-node choice: one SDR takes the whole plan. (A
+// config_override.pagerPrimary left by the old staff picker is ignored.)
 const PAGER_PLANS: Record<string, PagerFreq[]> = {
   NSW: [
     { label: 'NSWRFS', mhz: 148.5875 },
@@ -192,27 +191,9 @@ export function pagerPlanFor(state?: string | null): PagerFreq[] {
   return PAGER_PLANS[(state ?? '').trim().toUpperCase()] ?? PAGER_PLANS['NSW']!;
 }
 
-/** The valid pagerPrimary labels for a state (for API validation + the staff
- *  select — with MHz so the UI never duplicates the frequency table). */
-export function pagerPrimaryOptionsFor(state?: string | null): PagerFreq[] {
-  return pagerPlanFor(state);
-}
-
-/** The per-node primary (single-SDR) frequency label — read from the persisted
- *  config_override so it survives restarts/updates. An override only counts
- *  when it belongs to the node's state's plan (a stale FRNSW on a node moved
- *  to QLD harmlessly falls back); default is the plan's first entry. */
-export function pagerPrimaryOf(node: NodeRow): string {
-  const co = (node.config_override ?? {}) as Record<string, unknown>;
-  const plan = pagerPlanFor(node.state);
-  const wanted = co['pagerPrimary'];
-  if (typeof wanted === 'string' && plan.some((f) => f.label === wanted)) return wanted;
-  return plan[0]!.label;
-}
-
 /** The per-node tuner-gain override ("auto" or a number-as-string, dB), or
  *  undefined when unset (agent uses its default). Read from config_override so
- *  it persists across restarts/updates alongside the primary frequency. */
+ *  it persists across restarts/updates. */
 export function pagerGainOf(node: NodeRow): string | undefined {
   const co = (node.config_override ?? {}) as Record<string, unknown>;
   const g = co['pagerGain'];
@@ -228,22 +209,12 @@ export function pagerPpmOf(node: NodeRow): number | undefined {
   return typeof p === 'number' && Number.isFinite(p) ? p : undefined;
 }
 
-/** Frequencies in priority order for this node: its state's plan with the
- *  chosen primary first. */
-function pagerFrequencies(node: NodeRow): PagerFreq[] {
-  const plan = pagerPlanFor(node.state);
-  const primary = pagerPrimaryOf(node);
-  const first = plan.find((f) => f.label === primary);
-  const rest = plan.filter((f) => f.label !== primary);
-  return first ? [first, ...rest] : [...plan];
-}
-
 /** Build the lean config payload a PAGER node receives. No presets/rdio/SDR-Trunk
  *  doc, no Pagermon key — just capture/feed + the frequency plan, all hashed into
  *  configVersion so a toggle re-syncs the node. */
 function buildPagerPayload(node: NodeRow): ConfigPayload {
   const pager: PagerConfig = {
-    frequencies: pagerFrequencies(node),
+    frequencies: [...pagerPlanFor(node.state)],
     protocols: PAGER_PROTOCOLS,
   };
   // Only attach overrides when set, so nodes without them keep their previous

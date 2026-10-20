@@ -44,14 +44,22 @@ describe('buildConfigPayload (pager)', () => {
     expect(p.configVersion).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it('QLD node gets the single QFES frequency, regardless of any primary override', async () => {
+  it('QLD node gets the single QFES frequency', async () => {
     const qld = await buildConfigPayload(pagerNode({ state: 'QLD' }));
     expect(qld.pager!.frequencies).toEqual([{ label: 'QFES', mhz: 148.6375 }]);
-    // A stale NSW override (node moved states) must not resurrect NSW freqs.
-    const stale = await buildConfigPayload(
-      pagerNode({ state: 'QLD', config_override: { pagerPrimary: 'FRNSW' } }),
-    );
-    expect(stale.pager!.frequencies).toEqual([{ label: 'QFES', mhz: 148.6375 }]);
+  });
+
+  it('ignores a pagerPrimary left by the old staff picker', async () => {
+    // One SDR takes the whole plan, so there is no frequency to prefer. A
+    // stored choice must neither reorder the plan nor re-push the node.
+    const plain = await buildConfigPayload(pagerNode());
+    for (const pagerPrimary of ['FRNSW', 'NSWRFS']) {
+      const stale = await buildConfigPayload(pagerNode({ config_override: { pagerPrimary } }));
+      expect(stale.pager!.frequencies.map((f) => f.label)).toEqual(['NSWRFS', 'FRNSW']);
+      expect(stale.configVersion).toEqual(plain.configVersion);
+    }
+    const qld = await buildConfigPayload(pagerNode({ state: 'QLD', config_override: { pagerPrimary: 'FRNSW' } }));
+    expect(qld.pager!.frequencies).toEqual([{ label: 'QFES', mhz: 148.6375 }]);
   });
 
   it('null/unknown state falls back to the NSW plan (pre-097 rows keep working)', async () => {

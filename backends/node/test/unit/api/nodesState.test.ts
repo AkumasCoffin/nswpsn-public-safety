@@ -1,7 +1,6 @@
 /**
  * Per-state pager node routes on the staff nodes router:
  *   - POST /api/nodes            — per-kind location rule (radio: zone; pager: state+lga)
- *   - PUT  /api/nodes/:id/pager-primary — label must belong to the node's STATE's plan
  *   - PUT  /api/nodes/:id/state  — move a pager node between states (re-pushes config)
  *   - PATCH /api/nodes/:id       — compare-and-set on config_override
  *
@@ -48,7 +47,6 @@ vi.mock('../../../src/services/nodes/registry.js', async (orig) => {
     getNode: vi.fn(async () => nodeRow()),
     updateNode: vi.fn(async () => nodeRow()),
     setNodeLocation: vi.fn(async () => nodeRow()),
-    setPagerPrimary: vi.fn(async () => nodeRow()),
     createNode: vi.fn(async () => nodeRow()),
     countNodesForUser: vi.fn(async () => 0),
   };
@@ -121,30 +119,17 @@ beforeEach(() => {
   vi.mocked(registry.updateNode).mockClear().mockResolvedValue(nodeRow());
   vi.mocked(log.warn).mockClear();
   vi.mocked(registry.setNodeLocation).mockClear();
-  vi.mocked(registry.setPagerPrimary).mockClear();
   vi.mocked(registry.createNode).mockClear();
   vi.mocked(configPush.pushConfigToNode).mockClear();
 });
 
-describe('PUT /api/nodes/:id/pager-primary (per-state labels)', () => {
-  it('accepts a label from the node state plan', async () => {
-    const res = await put('/api/nodes/node-1/pager-primary', { primary: 'FRNSW' });
-    expect(res.status).toBe(200);
-    expect(registry.setPagerPrimary).toHaveBeenCalledWith('node-1', 'FRNSW');
-  });
-
-  it('rejects a label outside the node state plan (FRNSW on a QLD node)', async () => {
+describe('GET /api/nodes/:id (pager)', () => {
+  it("hands the staff drawer the node's state plan", async () => {
     vi.mocked(registry.getNode).mockResolvedValue(nodeRow({ state: 'QLD' }));
-    const res = await put('/api/nodes/node-1/pager-primary', { primary: 'FRNSW' });
-    expect(res.status).toBe(400);
-    expect((await res.json()).error).toContain('QLD');
-    expect(registry.setPagerPrimary).not.toHaveBeenCalled();
-  });
-
-  it('accepts QFES on a QLD node', async () => {
-    vi.mocked(registry.getNode).mockResolvedValue(nodeRow({ state: 'QLD' }));
-    const res = await put('/api/nodes/node-1/pager-primary', { primary: 'QFES' });
-    expect(res.status).toBe(200);
+    const res = await makeApp().request('/api/nodes/node-1');
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body['pagerFrequencies']).toEqual([{ label: 'QFES', mhz: 148.6375 }]);
+    expect(body).not.toHaveProperty('pagerPrimary');
   });
 });
 

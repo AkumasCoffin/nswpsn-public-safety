@@ -426,32 +426,9 @@ export async function setNodeLocation(
 }
 
 /**
- * Set a pager node's single-SDR primary frequency preference, merged into the
- * JSONB config_override (so it persists across restarts/updates and other
- * override keys are untouched). Guarded to kind='pager'. Returns the updated
- * row. Label validity (against the node's STATE's plan) is the API layer's job.
- */
-export async function setPagerPrimary(
-  id: string,
-  primary: string,
-): Promise<NodeRow | null> {
-  const pool = await getPool();
-  if (!pool) return null;
-  const res = await pool.query<NodeRow>(
-    `UPDATE nodes
-       SET config_override = COALESCE(config_override, '{}'::jsonb)
-                             || jsonb_build_object('pagerPrimary', $2::text)
-     WHERE id = $1 AND kind = 'pager'
-     RETURNING ${NODE_COLS}`,
-    [id, primary],
-  );
-  return res.rows[0] ?? null;
-}
-
-/**
  * Set (or clear) a pager node's tuner-gain / ppm overrides, merged into the
  * JSONB config_override so they persist across restarts/updates and don't touch
- * other keys (e.g. pagerPrimary). Pass a value to set it, `null` to clear it,
+ * other keys. Pass a value to set it, `null` to clear it,
  * or `undefined` to leave that key untouched. Guarded to kind='pager'.
  */
 export async function setPagerTuning(

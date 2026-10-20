@@ -29,7 +29,6 @@ import {
   getNode,
   createNode,
   rotateNodeToken,
-  setPagerPrimary,
   setPagerTuning,
   setAdsbTuning,
   setNodeLocation,
@@ -54,10 +53,9 @@ import { getUsernameMap, getUsername } from './users.js';
 import { ConfigOverrideSchema } from '../services/nodes/configSchema.js';
 import {
   buildConfigPayload,
-  pagerPrimaryOf,
   pagerGainOf,
   pagerPpmOf,
-  pagerPrimaryOptionsFor,
+  pagerPlanFor,
   adsbGainOf,
   adsbPpmOf,
 } from '../services/nodes/configMerge.js';
@@ -152,11 +150,9 @@ function toApi(node: NodeRow, usernames?: Map<string, string>, surveying?: Map<s
     // Rolling 10-min relayed count — radio calls forwarded / pager messages
     // forwarded to Pagermon. Used by the staff activity chips.
     messagesLast10m: hub.uploadsInWindow(node.id),
-    // Pager single-SDR primary frequency preference (persisted).
-    pagerPrimary: node.kind === 'pager' ? pagerPrimaryOf(node) : null,
-    // The valid primary choices for THIS node's state ({label, mhz}[]) so the
-    // staff UI renders the right options without duplicating the plan table.
-    pagerPrimaryOptions: node.kind === 'pager' ? pagerPrimaryOptionsFor(node.state) : null,
+    // THIS node's state's frequency plan ({label, mhz}[]), so the staff UI can
+    // show each reader's frequency without duplicating the plan table.
+    pagerFrequencies: node.kind === 'pager' ? pagerPlanFor(node.state) : null,
     // Pager tuner overrides (persisted); null when unset (agent uses defaults).
     pagerGain: node.kind === 'pager' ? pagerGainOf(node) ?? null : null,
     pagerPpm: node.kind === 'pager' ? pagerPpmOf(node) ?? null : null,
@@ -581,39 +577,12 @@ nodesRouter.patch('/api/nodes/:id', requireRole(canManageNodes), async (c) => {
 });
 
 // ---------------------------------------------------------------------------
-// PUT /api/nodes/:id/pager-primary — staff set a pager node's single-SDR
-// primary frequency. Valid labels come from the node's STATE's plan (NSW:
-// NSWRFS default / FRNSW; QLD: QFES). Persisted + pushed live.
-// ---------------------------------------------------------------------------
-const PagerPrimarySchema = z.object({ primary: z.string().min(1).max(32) });
-nodesRouter.put('/api/nodes/:id/pager-primary', requireRole(canManageNodes), async (c) => {
-  const id = c.req.param('id');
-  try {
-    const node = await getNode(id);
-    if (!node) return c.json({ error: 'node not found' }, 404);
-    if (node.kind !== 'pager') return c.json({ error: 'not a pager node' }, 400);
-    const parsed = PagerPrimarySchema.safeParse(await c.req.json().catch(() => ({})));
-    if (!parsed.success) return c.json({ error: 'invalid primary' }, 400);
-    if (!pagerPrimaryOptionsFor(node.state).some((f) => f.label === parsed.data.primary)) {
-      return c.json({ error: `invalid primary for state ${node.state ?? 'NSW'}` }, 400);
-    }
-    const updated = await setPagerPrimary(id, parsed.data.primary);
-    if (!updated) return c.json({ error: 'update failed' }, 500);
-    await pushConfigToNode(id).catch(() => {}); // apply live if online
-    return c.json(toApi(updated));
-  } catch (err) {
-    log.error({ err, id }, 'Error setting pager primary');
-    return c.json({ error: 'Failed to set primary frequency' }, 500);
-  }
-});
-
-// ---------------------------------------------------------------------------
 // PUT /api/nodes/:id/pager-tuning — staff set a pager node's tuner-gain / ppm
 // overrides (applied to all readers). Persisted + pushed live. Each field is
 // optional: send a value to set it, null to clear (revert to agent default),
 // or omit to leave it unchanged. gain: 0–60 dB or "auto" (hardware AGC);
 // ppm: -200..200. Both are stored as config_override keys, so they survive
-// restarts/updates the same way the primary frequency does.
+// restarts/updates.
 // ---------------------------------------------------------------------------
 const PagerTuningSchema = z
   .object({
@@ -703,8 +672,7 @@ nodesRouter.put('/api/nodes/:id/adsb-tuning', requireRole(canManageNodes), async
 // PUT /api/nodes/:id/state — staff move a pager node to another Australian
 // state (+ its LGA tag). The state selects both the Pagermon the relay
 // forwards into and the frequency plan, so the config is re-pushed live; the
-// antenna pin is left untouched. A stale pagerPrimary from the old state needs
-// no clearing — pagerPrimaryOf falls back to the new state's default.
+// antenna pin is left untouched.
 // ---------------------------------------------------------------------------
 const NodeStateSchema = z.object({
   state: z.enum(AU_STATES as unknown as [string, ...string[]]),
