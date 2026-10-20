@@ -103,6 +103,9 @@ type readerManager struct {
 	// compOf maps each running frequency's label to the supervisor component
 	// that carries it (several labels share one when they share a dongle).
 	compOf map[string]string
+	// restartedAt is when each reader component last restarted on request,
+	// so a burst of requests for one shared reader restarts it once.
+	restartedAt map[string]time.Time
 	// exe is this agent binary, whose "channelize" command a multi-frequency
 	// reader runs. Empty when it could not be resolved, which limits every
 	// dongle to one frequency.
@@ -520,6 +523,13 @@ func (m *readerManager) AudioStop() error {
 	return m.applyCurrent()
 }
 
+// restartCoalesce is how long a reader that has just been restarted ignores a
+// further request to restart it. Frequencies sharing a dongle share a reader,
+// and the staff panel's "Restart decoder" sends one request per frequency:
+// without this the shared reader restarted once per frequency, each restart
+// killing the one before it while rtl_sdr was still opening the dongle.
+const restartCoalesce = 5 * time.Second
+
 // Restart restarts the reader carrying a frequency (e.g. "reader:NSWRFS"). When
 // that frequency shares a dongle, the whole dongle's reader restarts, taking its
 // other frequencies with it for the couple of seconds that takes.
@@ -529,11 +539,25 @@ func (m *readerManager) Restart(component string) error {
 	if comp, ok := m.compOf[strings.TrimPrefix(component, "reader:")]; ok {
 		component = comp
 	}
+	if last, ok := m.restartedAt[component]; ok && time.Since(last) < restartCoalesce {
+		m.mu.Unlock()
+		log.Printf("readers: %s restarted %s ago, not restarting it again", component, time.Since(last).Round(time.Millisecond))
+		return nil
+	}
 	m.mu.Unlock()
 	if sup == nil {
 		return fmt.Errorf("no readers running")
 	}
-	return sup.Restart(component)
+	if err := sup.Restart(component); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	if m.restartedAt == nil {
+		m.restartedAt = map[string]time.Time{}
+	}
+	m.restartedAt[component] = time.Now()
+	m.mu.Unlock()
+	return nil
 }
 
 // removeOldScripts deletes reader scripts this rebuild no longer uses (a

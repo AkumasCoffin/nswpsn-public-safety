@@ -195,6 +195,33 @@ func TestRestartFindsTheSharedReader(t *testing.T) {
 	}
 }
 
+// "Restart decoder" asks once per frequency. When the frequencies share a
+// reader, only the first request may restart it: a second restart would kill
+// the first while rtl_sdr is still opening the dongle.
+func TestRestartOfASharedReaderIsCoalesced(t *testing.T) {
+	m := testManager(t)
+	m.exe = testExe
+	if err := m.Apply(nswPair("v1")); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	// As if "reader:NSWRFS" had just been restarted.
+	m.mu.Lock()
+	m.restartedAt = map[string]time.Time{"reader:NSWRFS+FRNSW": time.Now()}
+	m.mu.Unlock()
+	// Capture is off, so a restart that reaches the supervisor fails "disabled";
+	// no error means the request stopped short of it.
+	if err := m.Restart("reader:FRNSW"); err != nil {
+		t.Fatalf("the shared reader was restarted again: %v", err)
+	}
+
+	m.mu.Lock()
+	m.restartedAt["reader:NSWRFS+FRNSW"] = time.Now().Add(-restartCoalesce - time.Second)
+	m.mu.Unlock()
+	if err := m.Restart("reader:FRNSW"); err == nil || !strings.Contains(err.Error(), "is disabled") {
+		t.Fatalf("a later request must reach the reader again, got %v", err)
+	}
+}
+
 // Without its own path the agent cannot run channelize, so it falls back to
 // the old behaviour: one frequency per dongle, priority first.
 func TestNoAgentPathFallsBackToOneFrequencyPerDongle(t *testing.T) {
