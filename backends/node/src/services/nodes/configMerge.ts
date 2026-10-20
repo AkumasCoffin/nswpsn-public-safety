@@ -93,9 +93,9 @@ export interface TunerSettings {
   type?: string;
 }
 
-/** One paging frequency a pager node scans, in priority order. The agent runs
- *  one reader per frequency up to the number of SDRs detected (1 SDR → the
- *  first only; 2 → both). */
+/** One paging frequency a pager node scans, in priority order. The agent
+ *  receives every frequency that fits off one SDR at once (both NSW
+ *  frequencies do), so a pager node needs a single SDR. */
 export interface PagerFreq {
   label: string;
   mhz: number;

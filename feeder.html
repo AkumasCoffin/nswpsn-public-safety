@@ -2207,7 +2207,7 @@
             </div>`).join('')
         : `<span class="node-chip">agent coming soon for this type</span>`;
       const hint = kind === 'pager'
-        ? `<p>Run it on your Linux box (Raspberry Pi or PC) with your RTL-SDR dongle(s) plugged in — it installs rtl-sdr + multimon-ng, auto-detects your SDRs and starts decoding. Your node's key is baked in, nothing to copy.</p>`
+        ? `<p>Run it on your Linux box (Raspberry Pi or PC) with your RTL-SDR dongle plugged in. One dongle is all a pager node needs: it receives every pager frequency for your state at once. The installer sets up rtl-sdr + multimon-ng, finds the dongle and starts decoding. Your node's key is baked in, nothing to copy.</p>`
         : `<p>Download the installer and run it — your node's key is already baked in, nothing to copy.</p>`;
       const el = document.createElement('div');
       el.id = 'token-modal';

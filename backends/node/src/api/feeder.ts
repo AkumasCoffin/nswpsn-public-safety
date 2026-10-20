@@ -450,9 +450,10 @@ function linuxInstaller(enrolCode: string, kind: string): string {
 // ---- Linux PAGER node installer (rtl_fm | multimon-ng POCSAG → Pagermon) -----
 // Linux/amd64+arm64 only. Installs rtl-sdr + multimon-ng, the pager agent binary
 // (served as nodeagent-pager-linux-<arch>), udev rules + the RTL kernel-module
-// blacklist, and a systemd unit. The agent auto-detects RTL dongles, assigns
-// distinct EEPROM serials ONLY when they collide, and runs one POCSAG reader per
-// frequency (1 SDR → NSW RFS; 2 → also Fire & Rescue NSW).
+// blacklist, and a systemd unit. A pager node needs ONE RTL dongle: the agent
+// receives every frequency in the state's plan off it at once (both NSW RFS and
+// Fire & Rescue NSW), leaves any spare dongle idle, and only assigns distinct
+// EEPROM serials when they collide AND more than one dongle is in use.
 function pagerLinuxInstaller(enrolCode: string): string {
   const T = shSingleQuote(enrolCode);
   const S = shSingleQuote(SERVER_URL);
@@ -474,7 +475,7 @@ function pagerLinuxInstaller(enrolCode: string): string {
     `  *) echo "unsupported architecture: $(uname -m) (pager nodes are amd64/arm64)" >&2; exit 1;;`,
     `esac`,
     ``,
-    `# Decode toolchain: rtl-sdr (rtl_fm, rtl_test, rtl_eeprom) + multimon-ng.`,
+    `# Decode toolchain: rtl-sdr (rtl_fm, rtl_sdr, rtl_test, rtl_eeprom) + multimon-ng.`,
     `echo "Installing rtl-sdr + multimon-ng..."`,
     `if command -v apt-get >/dev/null 2>&1; then`,
     `  export DEBIAN_FRONTEND=noninteractive`,
@@ -522,8 +523,8 @@ function pagerLinuxInstaller(enrolCode: string): string {
     `# Loopback relay the local readers POST decoded POCSAG lines to; the agent`,
     `# parses + relays them to the backend, which forwards to central Pagermon.`,
     `relay_addr: "127.0.0.1:17390"`,
-    `# Frequencies + POCSAG rates come from the backend config push; the agent`,
-    `# auto-detects SDRs and runs one reader per frequency (1 SDR = NSW RFS only).`,
+    `# Frequencies + POCSAG rates come from the backend config push. One SDR is`,
+    `# all a pager node needs: the agent receives every frequency in the plan at once.`,
     `YAML`,
     `chown -R nswpsn-node:nswpsn-node /etc/nswpsn-node`,
     `chmod 0750 /etc/nswpsn-node && chmod 0640 /etc/nswpsn-node/agent.yaml`,
