@@ -55,7 +55,7 @@ import {
   buildConfigPayload,
   pagerGainOf,
   pagerPpmOf,
-  pagerPlanFor,
+  pagerPlanWithServicesFor,
   adsbGainOf,
   adsbPpmOf,
 } from '../services/nodes/configMerge.js';
@@ -150,9 +150,9 @@ function toApi(node: NodeRow, usernames?: Map<string, string>, surveying?: Map<s
     // Rolling 10-min relayed count — radio calls forwarded / pager messages
     // forwarded to Pagermon. Used by the staff activity chips.
     messagesLast10m: hub.uploadsInWindow(node.id),
-    // THIS node's state's frequency plan ({label, mhz}[]), so the staff UI can
-    // show each reader's frequency without duplicating the plan table.
-    pagerFrequencies: node.kind === 'pager' ? pagerPlanFor(node.state) : null,
+    // THIS node's state's frequency plan ({label, mhz, service}[]), so the
+    // staff UI lists the frequencies without duplicating the plan table.
+    pagerFrequencies: node.kind === 'pager' ? pagerPlanWithServicesFor(node.state) : null,
     // Pager tuner overrides (persisted); null when unset (agent uses defaults).
     pagerGain: node.kind === 'pager' ? pagerGainOf(node) ?? null : null,
     pagerPpm: node.kind === 'pager' ? pagerPpmOf(node) ?? null : null,

@@ -103,7 +103,8 @@ function feederNodeView(n: NodeRow, surveying?: Map<string, number>) {
   const isAdsb = n.kind === 'adsb';
 
   // Pager nodes have no SDR-Trunk channels/tuners: their "up/decoding" signal is
-  // how many POCSAG readers are running (reported as components "reader:<label>").
+  // how many frequencies are being received. The agent reports one component
+  // per frequency ("reader:<label>"), even when they share one SDR's reader.
   const readersUp = st?.components
     ? Object.entries(st.components).filter(
         ([k, v]) => k.startsWith('reader') && String(v).toLowerCase().includes('run'),

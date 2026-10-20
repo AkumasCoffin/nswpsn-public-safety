@@ -128,7 +128,9 @@ describe('GET /api/nodes/:id (pager)', () => {
     vi.mocked(registry.getNode).mockResolvedValue(nodeRow({ state: 'QLD' }));
     const res = await makeApp().request('/api/nodes/node-1');
     const body = (await res.json()) as Record<string, unknown>;
-    expect(body['pagerFrequencies']).toEqual([{ label: 'QFES', mhz: 148.6375 }]);
+    expect(body['pagerFrequencies']).toEqual([
+      { label: 'QFES', mhz: 148.6375, service: 'Queensland Fire Department' },
+    ]);
     expect(body).not.toHaveProperty('pagerPrimary');
   });
 });

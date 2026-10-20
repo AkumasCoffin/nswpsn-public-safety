@@ -1082,7 +1082,9 @@
         if (isPager) {
           const msgs = Number(node.messagesLast10m ?? node.callsLast10m ?? 0);
           parts.push(`<b>${msgs}</b> message${msgs === 1 ? '' : 's'} · last 10 min`);
-          if (typeof node.readersUp === 'number') parts.push(`<b>${node.readersUp}</b> reader${node.readersUp === 1 ? '' : 's'} running`);
+          // readersUp counts frequencies (one per "reader:<label>"), not
+          // reader processes: one SDR receives every frequency in the plan.
+          if (typeof node.readersUp === 'number') parts.push(`receiving <b>${node.readersUp}</b> frequenc${node.readersUp === 1 ? 'y' : 'ies'}`);
         } else if (isAdsb) {
           // Snapshots, not calls: an ADS-B node uploads its whole aircraft
           // table every 5 seconds, so ~120 in ten minutes is the healthy

@@ -184,11 +184,29 @@ const PAGER_PLANS: Record<string, PagerFreq[]> = {
 };
 const PAGER_PROTOCOLS = ['POCSAG512', 'POCSAG1200', 'POCSAG2400'];
 
+// Who pages on each plan frequency, for the staff panel. Kept out of the plan
+// itself: the plan is what the agent receives and what configVersion hashes,
+// and a display name is no reason to re-push every node.
+const PAGER_SERVICES: Record<string, string> = {
+  NSWRFS: 'NSW Rural Fire Service',
+  FRNSW: 'Fire & Rescue NSW',
+  // The label predates the 2024 split of QFES; its fire services are now the
+  // Queensland Fire Department.
+  QFES: 'Queensland Fire Department',
+};
+
 /** The frequency plan for a node's state. NSW for null/unknown — every
  *  pre-097 node is a NSW deployment (the migration backfills them, but a
  *  DB-less test row or a raced read must not change a node's plan). */
 export function pagerPlanFor(state?: string | null): PagerFreq[] {
   return PAGER_PLANS[(state ?? '').trim().toUpperCase()] ?? PAGER_PLANS['NSW']!;
+}
+
+/** The state's plan with who pages on each frequency, for display only. */
+export function pagerPlanWithServicesFor(
+  state?: string | null,
+): Array<PagerFreq & { service: string | null }> {
+  return pagerPlanFor(state).map((f) => ({ ...f, service: PAGER_SERVICES[f.label] ?? null }));
 }
 
 /** The per-node tuner-gain override ("auto" or a number-as-string, dB), or

@@ -199,11 +199,13 @@ node needs nothing installed beyond what the plain reader uses, and it updates
 with the agent. If any channel's `multimon-ng` dies, `channelize` exits and the
 supervisor restarts the whole reader.
 
-In the staff drawer nothing changes shape: the heartbeat still reports one
-`reader:<label>` per frequency (the shared component is
-`reader:<label>+<label>`), Listen taps that one frequency's audio, and Restart
-on any of them restarts the dongle's reader, so its other frequencies drop for
-the same couple of seconds.
+The heartbeat still reports one `reader:<label>` per frequency (the shared
+component is `reader:<label>+<label>`). The staff drawer's **Frequencies** panel
+lists the node's plan (service, frequency, Listen for each) with the decoder's
+state shown once, because the frequencies on a dongle live and die together.
+Listen taps that one frequency's audio, which restarts the dongle's reader for a
+couple of seconds. "Restart decoder" asks once per frequency, and the agent
+restarts a shared reader only once for the burst (`restartCoalesce`, 5 s).
 
 How it was verified: unit tests synthesise two FSK transmitters keyed at the same
 time and check every bit comes out on the right channel and none on the other
