@@ -12076,16 +12076,20 @@
             <td>${escapeHtml(r.label)}${freqByLabel.has(r.label) ? ` <span class="nd-sub">${freqByLabel.get(r.label).toFixed(4)} MHz</span>` : ''}</td>
             <td class="${running ? 'r-run' : 'r-stop'}">${running ? 'running' : 'stopped'}${listening ? ' <span style="color:var(--accent,#38bdf8);font-weight:600;"><i class="fas fa-headphones"></i> monitoring</span>' : ''}</td>
             <td style="text-align:right; white-space:nowrap;">
-              <button class="btn ${listening ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="_ndAudioToggle('${jsArg(r.label)}')" title="${listening ? 'Stop audio monitor' : 'Listen to this reader for tuning (restarts it ~2s)'}"><i class="fas fa-${listening ? 'stop' : 'headphones'}"></i></button>
-              <button class="btn btn-secondary btn-sm nd-write" onclick="_ndRestart('${jsArg(r.comp)}')" title="Restart this reader"><i class="fas fa-rotate"></i></button>
+              <button class="btn ${listening ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="_ndAudioToggle('${jsArg(r.label)}')" title="${listening ? 'Stop audio monitor' : 'Listen to this frequency for tuning (restarts its SDR\'s reader ~2s, along with any frequency sharing that SDR)'}"><i class="fas fa-${listening ? 'stop' : 'headphones'}"></i></button>
+              <button class="btn btn-secondary btn-sm nd-write" onclick="_ndRestart('${jsArg(r.comp)}')" title="Restart this reader (any frequency sharing its SDR restarts with it)"><i class="fas fa-rotate"></i></button>
             </td>
           </tr>`;
         }).join('');
       }
 
-      // Single-SDR primary frequency (persisted; 2 SDRs run both regardless).
-      // The valid choices come from the node's STATE's frequency plan
-      // (pagerPrimaryOptions, backend-supplied) — never hardcoded here.
+      // Priority frequency (persisted): sent first in the plan. The pager agent
+      // fits every plan frequency it can onto the node's SDRs, sharing one SDR
+      // when they outnumber the dongles, so this only decides what keeps its
+      // place when they cannot all be received. (Older pager agents ran only
+      // this one on a single SDR.) The valid choices come from the node's
+      // STATE's frequency plan (pagerPrimaryOptions, backend-supplied) — never
+      // hardcoded here.
       const primaryOpts = (Array.isArray(nFresh.pagerPrimaryOptions) && nFresh.pagerPrimaryOptions.length)
         ? nFresh.pagerPrimaryOptions
         : [{ label: 'NSWRFS', mhz: 148.5875 }, { label: 'FRNSW', mhz: 148.9625 }];
@@ -12122,7 +12126,7 @@
 
       el.innerHTML = `
         <div class="nd-switch-row" style="margin-bottom:0.7rem;">
-          <span>Single-SDR frequency</span>
+          <span title="Received first. One SDR takes every frequency in the plan it can fit at once; this one keeps its place when they cannot all be received. Older pager agents receive only this one on a single SDR.">Priority frequency</span>
           ${primaryOpts.length > 1 ? `<select class="nd-write-input" onchange="_ndSetPagerPrimary(this.value, this)" style="background:rgba(255,255,255,0.05); color:var(--text-primary,#e2e8f0); border:1px solid var(--border-subtle,#334155); border-radius:6px; padding:0.25rem 0.4rem; font-size:0.8rem;">
             ${primaryOpts.map(o => `<option value="${escapeHtml(o.label)}" ${o.label === primary ? 'selected' : ''}>${escapeHtml(o.label)} (${o.mhz})</option>`).join('')}
           </select>` : `<span>${escapeHtml(primaryOpts[0].label)} (${primaryOpts[0].mhz})</span>`}
@@ -12146,7 +12150,7 @@
         </div>`;
     }
 
-    // Staff: set the pager node's single-SDR primary frequency (persisted + live).
+    // Staff: set the pager node's priority frequency (persisted + live).
     async function _ndSetPagerPrimary(primary, el) {
       // Switching frequency swaps the reader label, so any running audio monitor
       // no longer matches — stop it so the UI/tap don't get stranded.
@@ -12159,7 +12163,7 @@
           body: JSON.stringify({ primary }),
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        showToast(`Single-SDR frequency set to ${primary}.`, 'success');
+        showToast(`Priority frequency set to ${primary}.`, 'success');
         await loadNodes();
       } catch (e) {
         showToast(`Could not change frequency: ${e.message}`, 'error');

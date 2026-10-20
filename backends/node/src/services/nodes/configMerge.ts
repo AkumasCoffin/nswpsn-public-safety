@@ -169,10 +169,13 @@ export interface ConfigPayload {
 }
 
 // Fixed pager plans (decided with the operator), one per Australian state —
-// selected by the node's `state` column. Each list is sent in PRIORITY ORDER:
-// with a single SDR the agent runs only the FIRST frequency; with two SDRs it
-// runs the first two. Which one is first is a per-node preference
-// (config_override.pagerPrimary), defaulting to the plan's first entry.
+// selected by the node's `state` column. Each list is sent in PRIORITY ORDER.
+// The pager agent gives each frequency its own SDR while it has enough, and
+// otherwise receives several on one SDR at once (internal/channelize), so the
+// order only decides what keeps its place when they cannot all be received.
+// Older pager agents ran only the FIRST frequency on a single SDR. Which one is
+// first is a per-node preference (config_override.pagerPrimary), defaulting to
+// the plan's first entry.
 const PAGER_PLANS: Record<string, PagerFreq[]> = {
   NSW: [
     { label: 'NSWRFS', mhz: 148.5875 },
