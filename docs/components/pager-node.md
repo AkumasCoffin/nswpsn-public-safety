@@ -129,7 +129,7 @@ arrive from a server config push.
 | Label | Frequency | Service |
 |---|---|---|
 | `NSWRFS` | 148.5875 MHz | NSW Rural Fire Service |
-| `FRNSW` | 148.9875 MHz | Fire & Rescue NSW |
+| `FRNSW` | 148.9625 MHz | Fire & Rescue NSW |
 
 The backend pushes each state's plan (`PAGER_PLANS` in
 `backends/node/src/services/nodes/configMerge.ts`), which overrides this default.

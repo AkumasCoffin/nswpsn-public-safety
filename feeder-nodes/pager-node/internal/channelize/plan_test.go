@@ -59,7 +59,8 @@ func TestOneDongleTakesBothNSWFrequencies(t *testing.T) {
 	}
 	checkGroup(t, freqs, g)
 
-	// The older FRNSW frequency, 400 kHz from RFS, fits the same way.
+	// A pair 400 kHz apart (148.9875, which some other setups use) fits the
+	// same way.
 	freqs = []int64{nswRFS, HzFromMHz(148.9875)}
 	groups, unplaced = Assign(freqs, 1, MaxChannelsPerDongle)
 	if len(unplaced) != 0 || len(groups) != 1 || len(groups[0].Members) != 2 {

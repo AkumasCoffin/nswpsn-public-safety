@@ -24,7 +24,7 @@ import (
 // fit (see channelize.Assign).
 var defaultPagerFrequencies = []wsclient.PagerFrequency{
 	{Label: "NSWRFS", MHz: 148.5875}, // NSW Rural Fire Service
-	{Label: "FRNSW", MHz: 148.9875},  // Fire & Rescue NSW
+	{Label: "FRNSW", MHz: 148.9625},  // Fire & Rescue NSW
 }
 
 // defaultPagerProtocols is the locked POCSAG demodulator set.
