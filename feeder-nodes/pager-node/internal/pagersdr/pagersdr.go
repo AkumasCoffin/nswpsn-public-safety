@@ -30,6 +30,9 @@ type Device struct {
 	Serial string    // USB serial ("SN:" from rtl_test); may be blank on unprogrammed clones
 	PPM    int       // measured sample-clock error (rtl_test -p); 0 if unmeasured
 	Gains  []float64 // supported tuner-gain steps (dB) parsed from rtl_test; nil if unknown
+	// PPMMeasured is set when a measurement was attempted at the last detect.
+	// A spare dongle the frequency plan does not use is left unmeasured.
+	PPMMeasured bool
 }
 
 const (

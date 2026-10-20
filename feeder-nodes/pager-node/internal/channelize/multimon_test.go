@@ -105,7 +105,7 @@ func TestBothFrequenciesDecodeThroughMultimon(t *testing.T) {
 		rfsCap, frCap   = 1234560, 1654321 // addresses are 21 bits: at most 2097151
 		rfsText, frText = "RFS TEST PAGE ALPHA1", "FRNSW TEST PAGE BRVO"
 	)
-	groups, _ := Assign([]int64{nswRFS, nswFRNSW}, 1)
+	groups, _ := Assign([]int64{nswRFS, nswFRNSW}, 1, MaxChannelsPerDongle)
 	g := groups[0]
 
 	// POCSAG sends a 1 as the lower frequency; synth sends a 1 as the upper,

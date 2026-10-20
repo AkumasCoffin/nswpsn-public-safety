@@ -20,7 +20,6 @@ package channelize
 
 import (
 	"math"
-	"sort"
 )
 
 // OutputRate is the audio sample rate every channel is delivered at: what
@@ -98,36 +97,27 @@ type Group struct {
 // Multi reports whether the group needs splitting (more than one frequency).
 func (g Group) Multi() bool { return len(g.Members) > 1 }
 
-// Assign spreads freqsHz (in priority order) across the given number of
-// dongles and returns one Group per dongle used, in dongle order, plus the
-// indices of any frequency that found no dongle.
+// Assign packs freqsHz (in priority order) onto as few dongles as possible
+// and returns one Group per dongle used, in dongle order, plus the indices of
+// any frequency that found no dongle.
 //
-// A dongle per frequency is preferred whenever there are enough of them, so a
-// node that already had one dongle per frequency keeps exactly the readers it
-// had. Frequencies only share a dongle when they outnumber the dongles. Then
-// they are packed first-fit in priority order, so the first frequency is
-// always placed, and spare dongles are handed back out by splitting the
-// largest group, so no dongle sits idle while another carries three
-// frequencies.
-func Assign(freqsHz []int64, dongles int) (groups []Group, unplaced []int) {
-	if dongles <= 0 {
-		for i := range freqsHz {
-			unplaced = append(unplaced, i)
-		}
-		return nil, unplaced
-	}
-	if len(freqsHz) <= dongles {
-		for i := range freqsHz {
-			groups = append(groups, Group{Members: []int{i}})
-		}
-		return groups, nil
-	}
-
+// One dongle carries every frequency it can fit, so a node normally runs a
+// single reader however many dongles are plugged in, and spare dongles stay
+// idle. A further dongle is only taken for a frequency that fits on none
+// already in use (too far from the others, or past perDongle). Frequencies
+// are placed first-fit in priority order, so the first one is always placed,
+// and when the dongles run out it is the lowest-priority ones that go
+// unreceived.
+//
+// perDongle caps the frequencies on one dongle; it is at most
+// MaxChannelsPerDongle, and 1 means no sharing (no channelize available).
+func Assign(freqsHz []int64, dongles, perDongle int) (groups []Group, unplaced []int) {
+	perDongle = max(1, min(perDongle, MaxChannelsPerDongle))
 	var packs [][]int
 	for i := range freqsHz {
 		placed := false
 		for g := range packs {
-			if len(packs[g]) >= MaxChannelsPerDongle {
+			if len(packs[g]) >= perDongle {
 				continue
 			}
 			if _, _, ok := fit(freqsOf(freqsHz, append(append([]int(nil), packs[g]...), i))); ok {
@@ -136,34 +126,13 @@ func Assign(freqsHz []int64, dongles int) (groups []Group, unplaced []int) {
 				break
 			}
 		}
-		if !placed {
+		switch {
+		case placed:
+		case len(packs) < dongles:
 			packs = append(packs, []int{i})
+		default:
+			unplaced = append(unplaced, i)
 		}
-	}
-
-	// Hand idle dongles a frequency each, taken from the most crowded group.
-	// A subset of a group that fits always fits, so splitting never breaks one.
-	for len(packs) < dongles {
-		biggest := -1
-		for g := range packs {
-			if len(packs[g]) > 1 && (biggest < 0 || len(packs[g]) > len(packs[biggest])) {
-				biggest = g
-			}
-		}
-		if biggest < 0 {
-			break
-		}
-		last := packs[biggest][len(packs[biggest])-1]
-		packs[biggest] = packs[biggest][:len(packs[biggest])-1]
-		packs = append(packs, []int{last})
-	}
-
-	if len(packs) > dongles {
-		for _, p := range packs[dongles:] {
-			unplaced = append(unplaced, p...)
-		}
-		sort.Ints(unplaced)
-		packs = packs[:dongles]
 	}
 
 	for _, p := range packs {

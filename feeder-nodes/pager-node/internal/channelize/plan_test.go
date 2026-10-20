@@ -45,7 +45,7 @@ func checkGroup(t *testing.T, freqs []int64, g Group) {
 // The case this exists for: one dongle, both NSW pager frequencies, at once.
 func TestOneDongleTakesBothNSWFrequencies(t *testing.T) {
 	freqs := []int64{nswRFS, nswFRNSW}
-	groups, unplaced := Assign(freqs, 1)
+	groups, unplaced := Assign(freqs, 1, MaxChannelsPerDongle)
 	if len(unplaced) != 0 || len(groups) != 1 {
 		t.Fatalf("want both on the one dongle, got groups=%+v unplaced=%v", groups, unplaced)
 	}
@@ -61,49 +61,77 @@ func TestOneDongleTakesBothNSWFrequencies(t *testing.T) {
 
 	// The older FRNSW frequency, 400 kHz from RFS, fits the same way.
 	freqs = []int64{nswRFS, HzFromMHz(148.9875)}
-	groups, unplaced = Assign(freqs, 1)
+	groups, unplaced = Assign(freqs, 1, MaxChannelsPerDongle)
 	if len(unplaced) != 0 || len(groups) != 1 || len(groups[0].Members) != 2 {
 		t.Fatalf("148.9875 should share the dongle too: groups=%+v unplaced=%v", groups, unplaced)
 	}
 	checkGroup(t, freqs, groups[0])
 }
 
-// A node that already has a dongle per frequency keeps exactly what it had:
-// one rtl_fm reader per dongle, no splitting.
-func TestEnoughDonglesKeepsOneReaderEach(t *testing.T) {
+// One reader is all a node needs: extra dongles stay idle rather than each
+// taking a frequency.
+func TestExtraDonglesStayIdle(t *testing.T) {
 	freqs := []int64{nswRFS, nswFRNSW}
-	for _, dongles := range []int{2, 3} {
-		groups, unplaced := Assign(freqs, dongles)
-		if len(unplaced) != 0 || len(groups) != 2 {
-			t.Fatalf("%d dongles: want 2 single groups, got %+v unplaced=%v", dongles, groups, unplaced)
+	for _, dongles := range []int{2, 3, 5} {
+		groups, unplaced := Assign(freqs, dongles, MaxChannelsPerDongle)
+		if len(unplaced) != 0 || len(groups) != 1 || !slices.Equal(groups[0].Members, []int{0, 1}) {
+			t.Fatalf("%d dongles: want both on the first dongle alone, got %+v unplaced=%v", dongles, groups, unplaced)
 		}
-		for i, g := range groups {
-			if g.Multi() || g.Members[0] != i {
-				t.Fatalf("%d dongles: group %d should be frequency %d alone, got %+v", dongles, i, i, g)
-			}
-			checkGroup(t, freqs, g)
-		}
+	}
+	// Three close frequencies on two dongles: still one reader.
+	freqs = []int64{nswRFS, nswFRNSW, HzFromMHz(148.7)}
+	groups, unplaced := Assign(freqs, 2, MaxChannelsPerDongle)
+	if len(unplaced) != 0 || len(groups) != 1 || len(groups[0].Members) != 3 {
+		t.Fatalf("want all three on one dongle, got %+v unplaced=%v", groups, unplaced)
+	}
+	checkGroup(t, freqs, groups[0])
+}
+
+// A single frequency keeps the plain rtl_fm reader.
+func TestOneFrequencyStaysOnRtlFm(t *testing.T) {
+	groups, unplaced := Assign([]int64{HzFromMHz(148.6375)}, 2, MaxChannelsPerDongle)
+	if len(unplaced) != 0 || len(groups) != 1 || groups[0].Multi() {
+		t.Fatalf("want one single-frequency group, got %+v unplaced=%v", groups, unplaced)
+	}
+	checkGroup(t, nil, groups[0])
+}
+
+// A second dongle is taken only for a frequency the first cannot fit.
+func TestTooFarApartTakesASecondDongle(t *testing.T) {
+	freqs := []int64{nswRFS, HzFromMHz(152.0)}
+
+	groups, unplaced := Assign(freqs, 1, MaxChannelsPerDongle)
+	if len(groups) != 1 || !slices.Equal(groups[0].Members, []int{0}) {
+		t.Fatalf("one dongle: want the priority frequency alone, got %+v", groups)
+	}
+	if !slices.Equal(unplaced, []int{1}) {
+		t.Fatalf("one dongle: want 152 MHz reported unplaced, got %v", unplaced)
+	}
+
+	groups, unplaced = Assign(freqs, 2, MaxChannelsPerDongle)
+	if len(unplaced) != 0 || len(groups) != 2 ||
+		!slices.Equal(groups[0].Members, []int{0}) || !slices.Equal(groups[1].Members, []int{1}) {
+		t.Fatalf("two dongles: want one each, got %+v unplaced=%v", groups, unplaced)
 	}
 }
 
-// Frequencies too far apart for one dongle: the first (priority) frequency is
-// placed, and the one that cannot share is reported rather than dropped
-// silently.
-func TestTooFarApartForOneDongle(t *testing.T) {
-	freqs := []int64{nswRFS, HzFromMHz(152.0)}
-	groups, unplaced := Assign(freqs, 1)
-	if len(groups) != 1 || !slices.Equal(groups[0].Members, []int{0}) {
-		t.Fatalf("want the priority frequency alone on the dongle, got %+v", groups)
+// When a frequency fits nowhere, the ones after it that do fit still go on.
+func TestALaterFrequencyThatFitsIsStillPlaced(t *testing.T) {
+	freqs := []int64{nswRFS, HzFromMHz(152.0), nswFRNSW}
+	groups, unplaced := Assign(freqs, 1, MaxChannelsPerDongle)
+	if len(groups) != 1 || !slices.Equal(groups[0].Members, []int{0, 2}) {
+		t.Fatalf("want RFS and FRNSW sharing the dongle, got %+v", groups)
 	}
 	if !slices.Equal(unplaced, []int{1}) {
-		t.Fatalf("want 152 MHz reported unplaced, got %v", unplaced)
+		t.Fatalf("want only 152 MHz left out, got %v", unplaced)
 	}
+	checkGroup(t, freqs, groups[0])
 }
 
 // A wide pair still shares a dongle, at a higher sample rate.
 func TestWideSpanPicksAHigherRate(t *testing.T) {
 	freqs := []int64{HzFromMHz(148.0), HzFromMHz(149.5)}
-	groups, unplaced := Assign(freqs, 1)
+	groups, unplaced := Assign(freqs, 1, MaxChannelsPerDongle)
 	if len(unplaced) != 0 || len(groups) != 1 || !groups[0].Multi() {
 		t.Fatalf("1.5 MHz apart should still share: groups=%+v unplaced=%v", groups, unplaced)
 	}
@@ -113,24 +141,22 @@ func TestWideSpanPicksAHigherRate(t *testing.T) {
 	checkGroup(t, freqs, groups[0])
 }
 
-// More frequencies than dongles: pack, then hand the spare dongle work rather
-// than leave it idle.
-func TestSpareDonglesAreUsed(t *testing.T) {
-	freqs := []int64{nswRFS, nswFRNSW, HzFromMHz(148.7)}
-	groups, unplaced := Assign(freqs, 2)
-	if len(unplaced) != 0 || len(groups) != 2 {
-		t.Fatalf("want 3 frequencies on 2 dongles, got %+v unplaced=%v", groups, unplaced)
+// With no channelize to split with (perDongle 1), it is one frequency per
+// dongle, as the agent always was.
+func TestNoSharingMeansOneFrequencyPerDongle(t *testing.T) {
+	freqs := []int64{nswRFS, nswFRNSW}
+	groups, unplaced := Assign(freqs, 2, 1)
+	if len(unplaced) != 0 || len(groups) != 2 || groups[0].Multi() || groups[1].Multi() {
+		t.Fatalf("want one each, got %+v unplaced=%v", groups, unplaced)
 	}
-	if !slices.Equal(groups[0].Members, []int{0, 1}) || !slices.Equal(groups[1].Members, []int{2}) {
-		t.Fatalf("want [0 1] + [2], got %v + %v", groups[0].Members, groups[1].Members)
-	}
-	for _, g := range groups {
-		checkGroup(t, freqs, g)
+	groups, unplaced = Assign(freqs, 1, 1)
+	if len(groups) != 1 || groups[0].Members[0] != 0 || !slices.Equal(unplaced, []int{1}) {
+		t.Fatalf("want the priority frequency only, got %+v unplaced=%v", groups, unplaced)
 	}
 }
 
 func TestNoDonglesPlacesNothing(t *testing.T) {
-	groups, unplaced := Assign([]int64{nswRFS, nswFRNSW}, 0)
+	groups, unplaced := Assign([]int64{nswRFS, nswFRNSW}, 0, MaxChannelsPerDongle)
 	if len(groups) != 0 || !slices.Equal(unplaced, []int{0, 1}) {
 		t.Fatalf("want nothing placed, got %+v unplaced=%v", groups, unplaced)
 	}
@@ -141,7 +167,7 @@ func TestChannelCapPerDongle(t *testing.T) {
 	for i := range MaxChannelsPerDongle + 2 {
 		freqs = append(freqs, HzFromMHz(148.0)+int64(i)*60_000)
 	}
-	groups, unplaced := Assign(freqs, 1)
+	groups, unplaced := Assign(freqs, 1, MaxChannelsPerDongle)
 	if len(groups) != 1 || len(groups[0].Members) != MaxChannelsPerDongle {
 		t.Fatalf("want the dongle capped at %d channels, got %+v", MaxChannelsPerDongle, groups)
 	}
@@ -149,31 +175,54 @@ func TestChannelCapPerDongle(t *testing.T) {
 		t.Fatalf("want the 2 over the cap reported, got %v", unplaced)
 	}
 	checkGroup(t, freqs, groups[0])
+
+	// A second dongle takes the overflow.
+	groups, unplaced = Assign(freqs, 2, MaxChannelsPerDongle)
+	if len(unplaced) != 0 || len(groups) != 2 || len(groups[1].Members) != 2 {
+		t.Fatalf("want the overflow on the second dongle, got %+v unplaced=%v", groups, unplaced)
+	}
 }
 
-// Whatever the frequencies, every group obeys the guards and every frequency
-// is accounted for exactly once.
+// Whatever the frequencies, every group obeys the guards, every frequency is
+// accounted for exactly once, and no dongle is opened for a frequency an
+// earlier one could have taken.
 func TestAssignInvariants(t *testing.T) {
 	r := rand.New(rand.NewPCG(1, 2))
 	for trial := range 2000 {
 		n := 1 + r.IntN(6)
 		dongles := r.IntN(4)
+		perDongle := 1 + r.IntN(MaxChannelsPerDongle)
 		freqs := make([]int64, n)
 		for i := range freqs {
 			freqs[i] = HzFromMHz(147.5) + int64(r.IntN(3_000))*1_000
 		}
-		groups, unplaced := Assign(freqs, dongles)
+		groups, unplaced := Assign(freqs, dongles, perDongle)
 		if len(groups) > dongles {
 			t.Fatalf("trial %d: %d groups for %d dongles", trial, len(groups), dongles)
 		}
 		seen := map[int]int{}
-		for _, g := range groups {
-			if len(g.Members) == 0 || len(g.Members) > MaxChannelsPerDongle {
-				t.Fatalf("trial %d: group size %d", trial, len(g.Members))
+		for k, g := range groups {
+			if len(g.Members) == 0 || len(g.Members) > perDongle {
+				t.Fatalf("trial %d: group size %d (cap %d)", trial, len(g.Members), perDongle)
 			}
 			checkGroup(t, freqs, g)
 			for _, m := range g.Members {
 				seen[m]++
+			}
+			// First-fit: this group's first frequency fit none before it.
+			first := g.Members[0]
+			for _, earlier := range groups[:k] {
+				var prefix []int
+				for _, m := range earlier.Members {
+					if m < first {
+						prefix = append(prefix, m)
+					}
+				}
+				if len(prefix) < perDongle {
+					if _, _, ok := fit(freqsOf(freqs, append(prefix, first))); ok {
+						t.Fatalf("trial %d: frequency %d opened dongle %d but fit an earlier one", trial, first, k)
+					}
+				}
 			}
 		}
 		for _, u := range unplaced {

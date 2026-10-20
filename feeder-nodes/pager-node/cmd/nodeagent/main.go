@@ -348,9 +348,6 @@ func runAgent(ctx context.Context, configPath string) error {
 		log.Printf("update: manifest reachable (agent channel v%q)", manifest.Agent.Version)
 	}
 
-	// Reader manager: detect SDRs, de-dup serials, and start readers from the
-	// frequency plan. It owns its own supervisor and is (re)driven by configPush.
-	readerMgr := newReaderManager(ctx, cfg.DataDir, cfg.RelayAddr)
 	// Replay the LAST applied config on boot so the node resumes the frequency it
 	// was actually running (e.g. a Fire & Rescue primary) rather than the default
 	// NSW-RFS-first order. The backend won't re-push when the reported version
@@ -364,6 +361,10 @@ func runAgent(ctx context.Context, configPath string) error {
 	} else {
 		log.Printf("readers: no persisted config; starting on default frequency plan until backend pushes")
 	}
+
+	// Reader manager: detect SDRs, prepare the ones the boot plan uses, and start
+	// readers from it. It owns its own supervisor and is (re)driven by configPush.
+	readerMgr := newReaderManager(ctx, cfg.DataDir, cfg.RelayAddr, boot)
 	if err := readerMgr.Apply(boot); err != nil {
 		log.Printf("readers: initial apply failed: %v", err)
 	}

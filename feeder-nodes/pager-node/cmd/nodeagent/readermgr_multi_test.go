@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/AkumasCoffin/nswpsn-node/pager-node/internal/pagersdr"
 	"github.com/AkumasCoffin/nswpsn-node/pager-node/internal/wsclient"
@@ -92,23 +93,64 @@ func TestOneDongleRunsBothFrequencies(t *testing.T) {
 	}
 }
 
-// A node with a dongle per frequency keeps the plain rtl_fm reader on each,
-// exactly as before.
-func TestTwoDonglesKeepOneReaderEach(t *testing.T) {
+// One reader file is all a node needs: with a second dongle plugged in, both
+// frequencies still go on the first and the spare stays idle.
+func TestASecondDongleStaysIdle(t *testing.T) {
 	m := testManager(t)
 	m.exe = testExe
 	m.devices = []pagersdr.Device{{Index: 0, Serial: "00000001"}, {Index: 1, Serial: "00000002"}}
 	if err := m.Apply(nswPair("v1")); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
-	if rfs := readScript(t, m, "reader-NSWRFS.sh"); !strings.Contains(rfs, "rtl_fm -d 0 ") || !strings.Contains(rfs, "148.5875M") {
-		t.Fatalf("RFS should stay on dongle 0 with rtl_fm:\n%s", rfs)
+	names := scriptNames(t, m)
+	if len(names) != 1 || names[0] != "reader-NSWRFS+FRNSW.sh" {
+		t.Fatalf("want one reader for both frequencies, got %v", names)
 	}
-	if fr := readScript(t, m, "reader-FRNSW.sh"); !strings.Contains(fr, "rtl_fm -d 1 ") || !strings.Contains(fr, "148.9625M") {
-		t.Fatalf("FRNSW should stay on dongle 1 with rtl_fm:\n%s", fr)
+	if script := readScript(t, m, names[0]); !strings.Contains(script, "rtl_sdr -d 0 ") || strings.Contains(script, "-d 1 ") {
+		t.Fatalf("the reader belongs on dongle 0:\n%s", script)
+	}
+}
+
+// A frequency the first dongle cannot fit is the only thing that takes a
+// second one; lose that dongle and it goes unreceived, its old script gone.
+func TestFarFrequencyTakesTheSecondDongle(t *testing.T) {
+	m := testManager(t)
+	m.exe = testExe
+	m.devices = []pagersdr.Device{{Index: 0, Serial: "00000001"}, {Index: 1, Serial: "00000002"}}
+	cfg := wsclient.PagerConfig{
+		ConfigVersion: "v1",
+		FeedEnabled:   true,
+		Frequencies: []wsclient.PagerFrequency{
+			{Label: "NSWRFS", MHz: 148.5875},
+			{Label: "FAR", MHz: 152.0},
+			{Label: "FRNSW", MHz: 148.9625},
+		},
+	}
+	if err := m.Apply(cfg); err != nil {
+		t.Fatalf("apply: %v", err)
 	}
 	if names := scriptNames(t, m); len(names) != 2 {
-		t.Fatalf("want two reader scripts, got %v", names)
+		t.Fatalf("want two readers, got %v", names)
+	}
+	if shared := readScript(t, m, "reader-NSWRFS+FRNSW.sh"); !strings.Contains(shared, "rtl_sdr -d 0 ") {
+		t.Fatalf("RFS and FRNSW belong together on dongle 0:\n%s", shared)
+	}
+	if far := readScript(t, m, "reader-FAR.sh"); !strings.Contains(far, "rtl_fm -d 1 ") || !strings.Contains(far, "152M") {
+		t.Fatalf("152 MHz belongs alone on dongle 1:\n%s", far)
+	}
+
+	m.mu.Lock()
+	m.devices = m.devices[:1]
+	err := m.applyLocked()
+	m.mu.Unlock()
+	if err != nil {
+		t.Fatalf("re-apply: %v", err)
+	}
+	if names := scriptNames(t, m); len(names) != 1 || names[0] != "reader-NSWRFS+FRNSW.sh" {
+		t.Fatalf("want only the shared reader left, got %v", names)
+	}
+	if st := m.Status(); st["reader:FAR"] != "" {
+		t.Fatalf("a frequency with no dongle must not be reported as a reader: %v", st)
 	}
 }
 
@@ -153,39 +195,94 @@ func TestRestartFindsTheSharedReader(t *testing.T) {
 	}
 }
 
-// Losing a dongle (a rescan finds one fewer) folds both frequencies onto the
-// one left, and the old per-frequency scripts are cleared away.
-func TestLosingADongleSharesTheOneLeft(t *testing.T) {
-	m := testManager(t)
-	m.exe = testExe
-	m.devices = []pagersdr.Device{{Index: 0, Serial: "00000001"}, {Index: 1, Serial: "00000002"}}
-	if err := m.Apply(nswPair("v1")); err != nil {
-		t.Fatalf("apply: %v", err)
-	}
-	m.mu.Lock()
-	m.devices = m.devices[:1]
-	err := m.applyLocked()
-	m.mu.Unlock()
-	if err != nil {
-		t.Fatalf("re-apply: %v", err)
-	}
-	if names := scriptNames(t, m); len(names) != 1 || names[0] != "reader-NSWRFS+FRNSW.sh" {
-		t.Fatalf("want only the shared script left, got %v", names)
-	}
-}
-
 // Without its own path the agent cannot run channelize, so it falls back to
-// the old behaviour: the priority frequency only.
-func TestNoAgentPathFallsBackToOneFrequency(t *testing.T) {
+// the old behaviour: one frequency per dongle, priority first.
+func TestNoAgentPathFallsBackToOneFrequencyPerDongle(t *testing.T) {
 	m := testManager(t)
 	m.exe = ""
 	if err := m.Apply(nswPair("v1")); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	if names := scriptNames(t, m); len(names) != 1 || names[0] != "reader-NSWRFS.sh" {
-		t.Fatalf("want only the RFS rtl_fm reader, got %v", names)
+		t.Fatalf("one dongle: want only the RFS rtl_fm reader, got %v", names)
 	}
 	if st := m.Status(); len(st) != 1 || st["reader:NSWRFS"] == "" {
-		t.Fatalf("want only RFS reported, got %v", st)
+		t.Fatalf("one dongle: want only RFS reported, got %v", st)
+	}
+
+	m.mu.Lock()
+	m.devices = append(m.devices, pagersdr.Device{Index: 1, Serial: "00000002"})
+	err := m.applyLocked()
+	m.mu.Unlock()
+	if err != nil {
+		t.Fatalf("re-apply: %v", err)
+	}
+	if names := scriptNames(t, m); len(names) != 2 {
+		t.Fatalf("two dongles: want an rtl_fm reader each, got %v", names)
+	}
+}
+
+// stubSDRs swaps the hardware calls for fakes and records what detection did.
+type sdrCalls struct {
+	ensured  bool
+	measured []int
+}
+
+func stubSDRs(t *testing.T, devs []pagersdr.Device) *sdrCalls {
+	t.Helper()
+	calls := &sdrCalls{}
+	oldDetect, oldEnsure, oldMeasure := sdrDetect, sdrEnsureDistinct, sdrMeasurePPM
+	t.Cleanup(func() { sdrDetect, sdrEnsureDistinct, sdrMeasurePPM = oldDetect, oldEnsure, oldMeasure })
+	sdrDetect = func() ([]pagersdr.Device, error) {
+		return append([]pagersdr.Device(nil), devs...), nil
+	}
+	sdrEnsureDistinct = func(d []pagersdr.Device) ([]pagersdr.Device, error) {
+		calls.ensured = true
+		return d, nil
+	}
+	sdrMeasurePPM = func(index int, _ time.Duration) (int, error) {
+		calls.measured = append(calls.measured, index)
+		return 7, nil
+	}
+	return calls
+}
+
+// Two dongles with the factory serial, and a plan that fits on one: the spare
+// is neither measured (a minute of deafness per boot) nor has its EEPROM
+// rewritten (a permanent change it does not need).
+func TestDetectionLeavesTheSpareAlone(t *testing.T) {
+	calls := stubSDRs(t, []pagersdr.Device{{Index: 0, Serial: "00000001"}, {Index: 1, Serial: "00000001"}})
+	m := testManager(t)
+	m.exe = testExe
+	m.lastCfg = nswPair("v1")
+
+	devs := detectDevices(m.donglesNeeded)
+	if calls.ensured {
+		t.Fatal("serials were reprogrammed for a plan that uses one dongle")
+	}
+	if len(calls.measured) != 1 || calls.measured[0] != 0 {
+		t.Fatalf("want only dongle 0 measured, got %v", calls.measured)
+	}
+	if !devs[0].PPMMeasured || devs[0].PPM != 7 || devs[1].PPMMeasured {
+		t.Fatalf("want dongle 0 measured (ppm 7) and dongle 1 untouched, got %+v", devs)
+	}
+}
+
+// A plan that needs both dongles prepares both, as before.
+func TestDetectionPreparesEveryDongleInUse(t *testing.T) {
+	calls := stubSDRs(t, []pagersdr.Device{{Index: 0, Serial: "00000001"}, {Index: 1, Serial: "00000001"}})
+	m := testManager(t)
+	m.exe = testExe
+	m.lastCfg = wsclient.PagerConfig{Frequencies: []wsclient.PagerFrequency{
+		{Label: "NSWRFS", MHz: 148.5875},
+		{Label: "FAR", MHz: 152.0},
+	}}
+
+	detectDevices(m.donglesNeeded)
+	if !calls.ensured {
+		t.Fatal("two dongles in use need distinct serials")
+	}
+	if len(calls.measured) != 2 {
+		t.Fatalf("want both dongles measured, got %v", calls.measured)
 	}
 }

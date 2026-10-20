@@ -118,7 +118,7 @@ func bitErrors(audio []int16, baud float64, bits []int, skip int) float64 {
 // time, and each channel's audio carries its own transmitter's bits and not
 // the other's.
 func TestTwoChannelsAtOnce(t *testing.T) {
-	groups, _ := Assign([]int64{nswRFS, nswFRNSW}, 1)
+	groups, _ := Assign([]int64{nswRFS, nswFRNSW}, 1, MaxChannelsPerDongle)
 	g := groups[0]
 	rfs := fsk{hz: nswRFS, baud: 1200, devHz: 4500, amp: 0.35, bits: randomBits(1, 1200)}
 	fr := fsk{hz: nswFRNSW, baud: 1200, devHz: 4500, amp: 0.35, bits: randomBits(2, 1200)}
@@ -143,7 +143,7 @@ func TestTwoChannelsAtOnce(t *testing.T) {
 
 // Every POCSAG speed survives, side by side.
 func TestAllBaudRates(t *testing.T) {
-	groups, _ := Assign([]int64{nswRFS, nswFRNSW}, 1)
+	groups, _ := Assign([]int64{nswRFS, nswFRNSW}, 1, MaxChannelsPerDongle)
 	g := groups[0]
 	slow := fsk{hz: nswRFS, baud: 512, devHz: 4500, amp: 0.35, bits: randomBits(3, 512)}
 	fast := fsk{hz: nswFRNSW, baud: 2400, devHz: 4500, amp: 0.35, bits: randomBits(4, 2400)}
@@ -162,7 +162,7 @@ func TestAllBaudRates(t *testing.T) {
 // side of a zero-crossing slicer; the DC blocker takes the offset out and the
 // bits slice cleanly again.
 func TestMistunedDongleStillDecodes(t *testing.T) {
-	groups, _ := Assign([]int64{nswRFS, nswFRNSW}, 1)
+	groups, _ := Assign([]int64{nswRFS, nswFRNSW}, 1, MaxChannelsPerDongle)
 	g := groups[0]
 	// 5 kHz is ~34 ppm at 148 MHz: more than the 4.5 kHz deviation.
 	rfs := fsk{hz: nswRFS, baud: 1200, devHz: 4500, amp: 0.35, mistune: 5000, bits: randomBits(5, 1200)}
@@ -175,7 +175,7 @@ func TestMistunedDongleStillDecodes(t *testing.T) {
 
 // A strong transmitter on the next 25 kHz channel must not swamp ours.
 func TestAdjacentChannelIsRejected(t *testing.T) {
-	groups, _ := Assign([]int64{nswRFS, nswFRNSW}, 1)
+	groups, _ := Assign([]int64{nswRFS, nswFRNSW}, 1, MaxChannelsPerDongle)
 	g := groups[0]
 	ours := fsk{hz: nswFRNSW, baud: 1200, devHz: 4500, amp: 0.2, bits: randomBits(6, 1200)}
 	next := fsk{hz: nswFRNSW + 25_000, baud: 1200, devHz: 4500, amp: 0.6, bits: randomBits(7, 1200)}
@@ -190,7 +190,7 @@ func TestAdjacentChannelIsRejected(t *testing.T) {
 // output sample: filter and oscillator state carry across reads, and an odd
 // byte split between two reads is reassembled.
 func TestReadSizesDoNotChangeTheAudio(t *testing.T) {
-	groups, _ := Assign([]int64{nswRFS, nswFRNSW}, 1)
+	groups, _ := Assign([]int64{nswRFS, nswFRNSW}, 1, MaxChannelsPerDongle)
 	g := groups[0]
 	rfs := fsk{hz: nswRFS, baud: 1200, devHz: 4500, amp: 0.35, bits: randomBits(8, 360)}
 	in := synth(g.SampleRate, g.CentreHz, 0.3, 0.02, rfs)
@@ -232,7 +232,7 @@ func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("broken p
 // A channel whose multimon-ng has died must stop the reader, so the
 // supervisor restarts the whole pipeline rather than decode on without it.
 func TestDeadOutputStopsTheRun(t *testing.T) {
-	groups, _ := Assign([]int64{nswRFS, nswFRNSW}, 1)
+	groups, _ := Assign([]int64{nswRFS, nswFRNSW}, 1, MaxChannelsPerDongle)
 	g := groups[0]
 	in := synth(g.SampleRate, g.CentreHz, 0.2, 0.02)
 	err := Run(bytes.NewReader(in), g.SampleRate, g.CentreHz,
@@ -289,7 +289,7 @@ func TestFilterResponse(t *testing.T) {
 // How much I/Q a core gets through. rtl_sdr delivers 1,058,400 S/s for the
 // NSW pair, so the run must comfortably beat that.
 func BenchmarkTwoChannels(b *testing.B) {
-	groups, _ := Assign([]int64{nswRFS, nswFRNSW}, 1)
+	groups, _ := Assign([]int64{nswRFS, nswFRNSW}, 1, MaxChannelsPerDongle)
 	g := groups[0]
 	in := synth(g.SampleRate, g.CentreHz, 0.5, 0.02,
 		fsk{hz: nswRFS, baud: 1200, devHz: 4500, amp: 0.35, bits: randomBits(9, 600)})

@@ -20,8 +20,8 @@ import (
 )
 
 // defaultPagerFrequencies is the locked frequency plan used until a configPush
-// supplies one, in priority order. A dongle per frequency when there are enough;
-// otherwise they share (see channelize.Assign).
+// supplies one, in priority order. One dongle carries every frequency it can
+// fit (see channelize.Assign).
 var defaultPagerFrequencies = []wsclient.PagerFrequency{
 	{Label: "NSWRFS", MHz: 148.5875}, // NSW Rural Fire Service
 	{Label: "FRNSW", MHz: 148.9875},  // Fire & Rescue NSW
@@ -59,9 +59,14 @@ const maxPlausiblePPM = 100
 
 // readerManager owns the pager reader components. It detects the attached SDRs
 // once, then (re)computes the reader set from a frequency plan whenever a config
-// is applied: it writes one reader.sh per dongle in use (pinned to it by
-// serial), and runs them under a supervisor. captureEnabled=false stops the
-// readers (they are registered disabled) while keeping the agent connected.
+// is applied: it writes one reader.sh per dongle in use, and runs them under a
+// supervisor. captureEnabled=false stops the readers (they are registered
+// disabled) while keeping the agent connected.
+//
+// Normally that is ONE reader: a dongle carries every frequency it can fit,
+// and a further dongle is only used for a frequency that fits on none in use
+// (channelize.Assign). Dongles beyond that stay idle, and detection leaves
+// them alone (see detectDevices).
 //
 // A dongle carrying one frequency runs the plain rtl_fm reader, component
 // "reader:<label>". One carrying several runs the channelize reader, component
@@ -104,24 +109,61 @@ type readerManager struct {
 	exe string
 }
 
-// newReaderManager detects + de-duplicates the attached SDR serials (best-effort;
-// a detection failure leaves the manager with no devices, so it simply runs no
-// readers until hardware/serials are sorted out) and prepares the reader script
-// directory. relayAddr is the loopback relay host:port the readers POST to.
-func newReaderManager(rootCtx context.Context, dataDir, relayAddr string) *readerManager {
+// newReaderManager detects the attached SDRs and prepares the dongles that boot
+// (the config the node will start on) needs (best-effort; a detection failure
+// leaves the manager with no devices, so it simply runs no readers until the
+// hardware is sorted out). relayAddr is the loopback relay host:port the
+// readers POST to.
+func newReaderManager(rootCtx context.Context, dataDir, relayAddr string, boot wsclient.PagerConfig) *readerManager {
 	m := &readerManager{
 		rootCtx:    rootCtx,
 		dataDir:    dataDir,
 		readersDir: filepath.Join(dataDir, "readers"),
 		relayURL:   "http://" + relayAddr + "/pager",
 		audioURL:   "http://" + relayAddr + "/audio",
-		// Sensible default until the first configPush / Apply, so a Rescan before
-		// any config still (re)starts readers rather than leaving them disabled.
-		lastCfg: wsclient.PagerConfig{CaptureEnabled: true, FeedEnabled: true},
-		exe:     agentExe(),
+		lastCfg:    boot,
+		exe:        agentExe(),
 	}
-	m.devices = detectDevices()
+	m.devices = detectDevices(m.donglesNeeded)
 	return m
+}
+
+// planFrequencies is the frequency list a config resolves to: its valid
+// entries, or the default plan when none survive.
+func planFrequencies(cfg wsclient.PagerConfig) []wsclient.PagerFrequency {
+	freqs := validFrequencies(cfg.Frequencies)
+	if len(freqs) == 0 {
+		freqs = defaultPagerFrequencies
+	}
+	return freqs
+}
+
+func hzOf(freqs []wsclient.PagerFrequency) []int64 {
+	hz := make([]int64, len(freqs))
+	for i, f := range freqs {
+		hz[i] = channelize.HzFromMHz(f.MHz)
+	}
+	return hz
+}
+
+// perDongle is how many frequencies one dongle may carry: as many as fit, or
+// one when there is no channelize to split them with.
+func (m *readerManager) perDongle() int {
+	if m.exe == "" {
+		return 1
+	}
+	return channelize.MaxChannelsPerDongle
+}
+
+// donglesNeeded is how many of `attached` dongles the current config puts a
+// reader on: one for every plan that fits on a single dongle, which is every
+// plan today.
+func (m *readerManager) donglesNeeded(attached int) int {
+	m.mu.Lock()
+	cfg := m.lastCfg
+	m.mu.Unlock()
+	groups, _ := channelize.Assign(hzOf(planFrequencies(cfg)), attached, m.perDongle())
+	return len(groups)
 }
 
 // agentExe resolves this binary's real path for the reader scripts to call.
@@ -139,25 +181,50 @@ func agentExe() string {
 	return exe
 }
 
-// detectDevices enumerates the SDRs and ensures distinct serials, logging and
-// returning an empty list on failure rather than aborting the agent.
-func detectDevices() []pagersdr.Device {
-	devs, err := pagersdr.Detect()
+// The hardware side of detection, swapped out in tests.
+var (
+	sdrDetect         = pagersdr.Detect
+	sdrEnsureDistinct = pagersdr.EnsureDistinctSerials
+	sdrMeasurePPM     = pagersdr.MeasurePPM
+)
+
+// detectDevices enumerates the SDRs and prepares the ones the frequency plan
+// will use, logging and returning an empty list on failure rather than
+// aborting the agent. needed says how many of the attached dongles get a
+// reader; readers take dongles in index order, so those are the first ones.
+//
+// Only those are prepared. Each ppm measurement holds its dongle for up to a
+// minute, sequentially, with every reader waiting, so measuring an idle spare
+// only makes the node deaf for longer on every boot. And serials only need to
+// be unique when more than one dongle is in use: rewriting an EEPROM is a
+// permanent hardware change, so a node running one reader never has a
+// colliding serial rewritten just because a spare is plugged in. A dongle that
+// later gets a reader without having been measured runs at ppm 0 (applyLocked
+// says so) until the next "Recheck SDRs".
+func detectDevices(needed func(attached int) int) []pagersdr.Device {
+	devs, err := sdrDetect()
 	if err != nil {
 		log.Printf("readers: SDR detection failed (%v); no readers will run until it succeeds", err)
 		return nil
 	}
 	log.Printf("readers: detected %d SDR device(s)", len(devs))
 
-	devs, err = pagersdr.EnsureDistinctSerials(devs)
-	if err != nil {
-		log.Printf("readers: ensuring distinct SDR serials failed (%v); proceeding with detected serials", err)
+	inUse := min(needed(len(devs)), len(devs))
+	if inUse >= 2 {
+		devs, err = sdrEnsureDistinct(devs)
+		if err != nil {
+			log.Printf("readers: ensuring distinct SDR serials failed (%v); proceeding with detected serials", err)
+		}
+		inUse = min(inUse, len(devs))
+	} else if len(devs) > inUse {
+		log.Printf("readers: the frequency plan needs %d of %d SDRs; the rest stay idle and are not measured or reprogrammed", inUse, len(devs))
 	}
-	// Measure each dongle's sample-clock error (ppm) BEFORE any reader claims the
-	// device, so rtl_fm can correct for it. Done fresh every startup.
-	measurePPMs(devs)
+	// Measure the sample-clock error (ppm) of each dongle in use BEFORE any
+	// reader claims it, so the reader can correct for it. Done fresh every
+	// startup and rescan.
+	measurePPMs(devs[:inUse])
 	for _, d := range devs {
-		log.Printf("readers: SDR index=%d serial=%q ppm=%d", d.Index, d.Serial, d.PPM)
+		log.Printf("readers: SDR index=%d serial=%q ppm=%d measured=%t", d.Index, d.Serial, d.PPM, d.PPMMeasured)
 	}
 	return devs
 }
@@ -184,9 +251,10 @@ func measurePPMs(devs []pagersdr.Device) {
 	if len(devs) == 0 {
 		return
 	}
-	log.Printf("readers: measuring SDR ppm (rtl_test -p, ~%s per dongle, sequential)…", pagersdr.PPMMeasureDur)
+	log.Printf("readers: measuring SDR ppm (rtl_test -p, up to %s per dongle, sequential)…", pagersdr.PPMMeasureDur)
 	for i := range devs {
-		ppm, err := pagersdr.MeasurePPM(devs[i].Index, pagersdr.PPMMeasureDur)
+		devs[i].PPMMeasured = true
+		ppm, err := sdrMeasurePPM(devs[i].Index, pagersdr.PPMMeasureDur)
 		if err != nil {
 			log.Printf("readers: ppm measure failed for SDR index=%d (%v); using ppm=0", devs[i].Index, err)
 			continue
@@ -244,10 +312,7 @@ func (m *readerManager) applyLocked() error {
 
 	// Drop any out-of-range/garbage frequencies from the push before they reach
 	// rtl_fm, falling back to the defaults if nothing valid remains.
-	freqs := validFrequencies(cfg.Frequencies)
-	if len(freqs) == 0 {
-		freqs = defaultPagerFrequencies
-	}
+	freqs := planFrequencies(cfg)
 	protocols := cfg.Protocols
 	if len(protocols) == 0 {
 		protocols = defaultPagerProtocols
@@ -264,13 +329,11 @@ func (m *readerManager) applyLocked() error {
 		log.Printf("readers: ppm override in effect: %d (applied to all readers)", *cfg.Ppm)
 	}
 
-	// Which dongle carries which frequencies: one each while there are enough
-	// dongles, sharing (and so splitting) only when frequencies outnumber them.
-	hz := make([]int64, len(freqs))
+	// Which dongle carries which frequencies: the first carries every one it can
+	// fit, and another is only used for what fits on none already in use.
 	labels := make([]string, len(freqs))
 	usedLabel := map[string]bool{}
 	for i, f := range freqs {
-		hz[i] = channelize.HzFromMHz(f.MHz)
 		labels[i] = sanitizeLabel(f.Label, i)
 		if usedLabel[labels[i]] {
 			// Two entries with one label would collide as components.
@@ -278,17 +341,7 @@ func (m *readerManager) applyLocked() error {
 		}
 		usedLabel[labels[i]] = true
 	}
-	groups, unplaced := channelize.Assign(hz, len(m.devices))
-	if m.exe == "" {
-		// Without our own path there is no channelize: keep each dongle's
-		// priority frequency and report the rest as unplaced.
-		for g := range groups {
-			if groups[g].Multi() {
-				unplaced = append(unplaced, groups[g].Members[1:]...)
-				groups[g] = channelize.Group{Members: groups[g].Members[:1]}
-			}
-		}
-	}
+	groups, unplaced := channelize.Assign(hzOf(freqs), len(m.devices), m.perDongle())
 	for _, i := range unplaced {
 		log.Printf("readers: %s (%.4f MHz) is NOT being received: no dongle can take it (%d attached)", labels[i], freqs[i].MHz, len(m.devices))
 	}
@@ -308,6 +361,8 @@ func (m *readerManager) applyLocked() error {
 		ppm := dev.PPM
 		if cfg.Ppm != nil {
 			ppm = *cfg.Ppm
+		} else if !dev.PPMMeasured {
+			log.Printf("readers: SDR index=%d was idle at the last detect, so its ppm was never measured; running at 0 until the next SDR recheck", dev.Index)
 		}
 
 		var name, scriptPath string
@@ -425,7 +480,7 @@ func (m *readerManager) Rescan() error {
 	// Let the killed readers release their USB devices before rtl_test opens them.
 	time.Sleep(1500 * time.Millisecond)
 
-	devs := detectDevices()
+	devs := detectDevices(m.donglesNeeded)
 	log.Printf("readers: rescan detected %d SDR device(s); re-applying readers", len(devs))
 
 	// Clear the flag and rebuild under ONE hold of the lock, so nothing can

@@ -101,7 +101,7 @@ rtl_sdr -d <index> -f <centre Hz> -s <rate> -p <ppm> -g <gain>
 `internal/supervise` launches each rendered script as a component and restarts it
 on crash.
 
-`-p` is per dongle, measured at startup and again on every rescan by
+`-p` is per dongle, measured for each dongle in use at startup and again on every rescan by
 `pagersdr.MeasurePPM`. It runs `rtl_test -p` — which compares the RTL's actual
 sample rate against the host clock, so no antenna or signal is needed — and waits
 for the reading to **settle**: three consecutive cumulative readings agreeing to
@@ -134,18 +134,28 @@ arrive from a server config push.
 The backend pushes each state's plan (`PAGER_PLANS` in
 `backends/node/src/services/nodes/configMerge.ts`), which overrides this default.
 
-`channelize.Assign` decides which dongle carries which frequency:
+`channelize.Assign` decides which dongle carries which frequency, and the answer
+is normally **one reader on dongle 0**:
 
-- **Enough dongles: one frequency each**, on the plain `rtl_fm` reader. A node
-  that already had a dongle per frequency runs exactly the readers it always did.
-- **More frequencies than dongles: they share.** Frequencies are packed onto
-  dongles first-fit in priority order, so the first one is always placed, and a
-  spare dongle is then handed a frequency from the most crowded one. One dongle
-  receives both NSW frequencies at once.
-- A frequency no dongle can take (too far from the others, or past
-  `MaxChannelsPerDongle` = 8) is **not received**, and the agent logs it by name.
-  The priority order (the staff drawer's "Priority frequency") decides what keeps
-  its place.
+- **The first dongle carries every frequency it can fit**, packed first-fit in
+  priority order, so the first one is always placed. Both NSW frequencies share
+  it; a state with one frequency runs it on the plain `rtl_fm` reader.
+- **A further dongle is only taken for a frequency that fits on none in use**
+  (too far from the others, or past `MaxChannelsPerDongle` = 8). Dongles beyond
+  that stay idle, however many are plugged in.
+- A frequency no dongle can take is **not received**, and the agent logs it by
+  name. The priority order (the staff drawer's "Priority frequency") decides
+  what keeps its place.
+- If the agent cannot resolve its own path it has no `channelize`, and falls back
+  to one frequency per dongle.
+
+Detection follows the same plan (`detectDevices`). Only the dongles that will
+carry a reader are measured for ppm, because each measurement holds its dongle
+for up to a minute with every reader waiting, so measuring an idle spare only
+lengthens the deaf spell on every boot. Serials are only made unique when two or
+more dongles are in use (see below). A dongle that later picks up a reader
+without having been measured runs at `ppm=0`, and the agent says so, until the
+next "Recheck SDRs".
 
 ### Several frequencies on one dongle
 
@@ -209,14 +219,18 @@ hardware.
 
 `internal/pagersdr` enumerates dongles by shelling out to `rtl_test` and
 `rtl_eeprom` (installed on the host by the node installer), and its key job is
-guaranteeing each has a **unique, stable USB serial**. The serial is the dongle's
-identity: it is what the agent matches when it enumerates, what pins a frequency
-to a particular antenna, and what the EEPROM work exists to protect.
+guaranteeing each dongle in use has a **unique, stable USB serial**. The serial is
+the dongle's identity, and what the EEPROM work exists to protect.
 
 Cheap RTL-SDR clones ship with identical serials (`00000001`), which makes that
 identity ambiguous. The agent rewrites an EEPROM serial **only when one actually
-collides** — an EEPROM write is a permanent hardware change, so a dongle that
-already has a distinct serial is left untouched.
+collides and two or more dongles are in use** — an EEPROM write is a permanent
+hardware change, so a dongle that already has a distinct serial is left
+untouched, and so is every dongle on a node running one reader, spare or not.
+
+In practice readers take dongles in **index order** (the reader for the first
+group goes on index 0), not by serial, so the serial pins nothing by itself; it
+is how a log line or a script on disk names the physical dongle.
 
 What `rtl_fm -d` (or `rtl_sdr -d`) receives, though, is the **librtlsdr device index** the agent
 resolved for that serial, not the serial itself. librtlsdr's
