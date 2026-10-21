@@ -4341,10 +4341,10 @@
           <div class="nd2-table-wrap">
             <table class="nd-table">
               <thead>
-                <tr><th>Time</th><th>Service</th><th>Message</th><th>Capcodes</th><th>Nodes</th></tr>
+                <tr><th>Time</th><th>Capcode</th><th>Label</th><th>Service</th><th>Message</th><th>Nodes</th></tr>
               </thead>
               <tbody id="nd2-pg-body">
-                <tr><td colspan="5" class="nd2-empty">Loading…</td></tr>
+                <tr><td colspan="6" class="nd2-empty">Loading…</td></tr>
               </tbody>
             </table>
           </div>
@@ -4388,10 +4388,10 @@
               <div class="nd2-table-wrap">
                 <table class="nd-table">
                   <thead>
-                    <tr><th>Time</th><th>Service</th><th>Message</th><th>Capcodes</th></tr>
+                    <tr><th>Time</th><th>Capcode</th><th>Label</th><th>Service</th><th>Message</th></tr>
                   </thead>
                   <tbody id="nd2-pnr-body">
-                    <tr><td colspan="4" class="nd2-empty">Loading…</td></tr>
+                    <tr><td colspan="5" class="nd2-empty">Loading…</td></tr>
                   </tbody>
                 </table>
               </div>
@@ -8819,13 +8819,14 @@
 
     // A capcode table gives the number and its label a column each, so either
     // can be scanned down: nd2CapNum → "10627", nd2CapLabel → "Gresford
-    // Brigade RFS" (the alias, its agency secondary; "—" when none resolves).
+    // Brigade RFS" (the alias, its agency secondary unless the table has a
+    // Service column of its own; "—" when none resolves).
     function nd2CapNum(o) {
       return o ? `<span class="nd-strong nd2-capnum">${escapeHtml(String(o.capcode))}</span>` : '—';
     }
-    function nd2CapLabel(o) {
+    function nd2CapLabel(o, withAgency = true) {
       if (!o || !o.alias) return '<span class="nd-sub">—</span>';
-      const ag = o.agency ? ` <span class="nd-sub">${escapeHtml(String(o.agency))}</span>` : '';
+      const ag = (withAgency && o.agency) ? ` <span class="nd-sub">${escapeHtml(String(o.agency))}</span>` : '';
       return `<span class="nd-strong">${escapeHtml(String(o.alias))}</span>${ag}`;
     }
     function nd2PagerNodeChip(o) {
@@ -9831,28 +9832,22 @@
       const chips = (nodes || []).map(n => `<span class="nd2-chip">${escapeHtml(n.name || String(n.id))}</span>`).join('');
       return chips ? `<div class="nd2-chips">${chips}</div>` : '—';
     }
-    /** One capcode as a chip: its alias when it has one, the number either way. */
-    function nd2CapChip(c) {
-      const title = escapeHtml(String(c.capcode) + (c.agency ? ' · ' + c.agency : ''));
-      return c.alias
-        ? `<span class="nd2-chip" title="${title}"><span class="nd-strong">${escapeHtml(c.alias)}</span> <span class="nd-sub">${escapeHtml(String(c.capcode))}</span></span>`
-        : `<span class="nd2-chip" title="${title}">${escapeHtml(String(c.capcode))}</span>`;
-    }
-    /** The cells of one page as sent (see pagerPageGroups on the server): the
-     *  service it went out on, the message, and every capcode it went to. The
-     *  service is the capcodes' agency, which is what staff read; the
-     *  frequency sits under it for the one case that has no alias. */
+    /** The cells of one page row: one capcode, as Pagermon lists them (see
+     *  pagerPageRows on the server), so a job sent to five capcodes is five
+     *  rows. Time | Capcode | Label | Service | Message (| Nodes), the
+     *  Filtered table's order with Service where it has Reason. The agency
+     *  has its own column here, so the label is the alias alone; the
+     *  frequency sits under the agency for capcodes with no alias. */
     function nd2PageCells(p, withNodes) {
-      const caps = p.capcodes || [];
-      const agencies = [...new Set(caps.map(c => c.agency).filter(Boolean))];
       const freq = (p.freqMhz != null && isFinite(p.freqMhz)) ? `${Number(p.freqMhz).toFixed(4)} MHz` : '';
-      const service = (agencies.length ? agencies.map(a => nd2AgencyCell(a)).join(' ') : '<span class="nd-sub">—</span>')
+      const service = (p.agency ? nd2AgencyCell(p.agency) : '<span class="nd-sub">—</span>')
         + (freq ? `<span class="nd2-time-rel" style="white-space:nowrap;">${escapeHtml(freq)}</span>` : '');
       const cells = [
         nd2TimeCell(p.at),
+        nd2CapNum(p),
+        nd2CapLabel(p, false),
         service,
         `<span class="nd2-pmsg">${escapeHtml(p.message || '') || '—'}</span>`,
-        caps.length ? `<div class="nd2-chips">${caps.map(nd2CapChip).join('')}</div>` : '—',
       ];
       if (withNodes) cells.push(nd2PagerNodeChips(p.nodes));
       return cells;
@@ -9915,7 +9910,7 @@
       if (recentEl) {
         const pages = (ov && ov.recent) || [];
         recentEl.innerHTML = pages.length
-          ? nd2MiniTable([{ label: 'Time' }, { label: 'Service' }, { label: 'Message' }, { label: 'Capcodes' }],
+          ? nd2MiniTable([{ label: 'Time' }, { label: 'Capcode' }, { label: 'Label' }, { label: 'Service' }, { label: 'Message' }],
               pages.map(p => nd2PageCells(p, false)))
           : '<div class="nd2-empty">No pages in this window yet.</div>';
       }
@@ -9975,9 +9970,9 @@
         const pages = data.pages || [];
         nd2.pg.total = data.total || 0;
         document.getElementById('nd2-pg-body').innerHTML =
-          nd2PageRowsHtml(pages, true, 5, q ? 'No pages match.' : 'No pages in this window yet.');
+          nd2PageRowsHtml(pages, true, 6, q ? 'No pages match.' : 'No pages in this window yet.');
         nd2PageBtns('pg', nd2.pg, pages.length);
-      } catch (e) { nd2TableMsg('nd2-pg-body', 5, e); nd2.pg.total = 0; nd2PageBtns('pg', nd2.pg, 0); }
+      } catch (e) { nd2TableMsg('nd2-pg-body', 6, e); nd2.pg.total = 0; nd2PageBtns('pg', nd2.pg, 0); }
     }
 
     // ---- Nodes (list › one node) ------------------------------------------
@@ -10080,7 +10075,7 @@
       try {
         d = await nd2Fetch(`/api/node-data/pager-node?${params}`);
       } catch (e) {
-        nd2TableMsg('nd2-pnr-body', 4, e);
+        nd2TableMsg('nd2-pnr-body', 5, e);
         return;
       }
       if (!d || nd2.pn.nodeId !== nodeId) return;   // superseded while in flight
@@ -10088,7 +10083,7 @@
         nd2RenderPagerNode(d);
       } catch (e) {
         console.error('nd2RenderPagerNode failed', e);
-        nd2TableMsg('nd2-pnr-body', 4, { message: 'loaded, but could not render' });
+        nd2TableMsg('nd2-pnr-body', 5, { message: 'loaded, but could not render' });
       }
     }
 
@@ -10140,7 +10135,7 @@
       const pages = rec.pages || [];
       nd2.pn.total = rec.total || 0;
       document.getElementById('nd2-pnr-body').innerHTML =
-        nd2PageRowsHtml(pages, false, 4, 'Nothing heard in this window.');
+        nd2PageRowsHtml(pages, false, 5, 'Nothing heard in this window.');
       nd2PageBtns('pnr', nd2.pn, pages.length);
     }
 

@@ -4997,37 +4997,32 @@ async function pagerTopNodeByCapcode(
   return out;
 }
 
-/** Copies of one message no further apart than this are one page as sent.
- *  RFS sends a job to each capcode in turn — brigade, captain, duty officer —
- *  seconds apart, so per capcode it reads as three identical pages; a re-page
- *  minutes later is a new row. */
-const PAGE_GROUP_GAP_S = 60;
-
-type PagerPageGroup = {
+type PagerPageRow = {
   at: string | null;
   message: string | null;
   freqMhz: number | null;
-  capcodes: Array<{ capcode: string; alias: string | null; agency: string | null }>;
+  capcode: string;
+  alias: string | null;
+  agency: string | null;
   nodes: Array<{ id: string; name: string | null }>;
   receptions: number;
 };
 
 /**
- * Traffic pages newest first, one row per page AS SENT: the same message to
- * several capcodes, heard by several nodes, within PAGE_GROUP_GAP_S of the
- * copy before it. The per-capcode browser (/capcode) still shows each capcode
- * on its own.
+ * Traffic pages newest first, one row per capcode, as Pagermon lists them:
+ * a job sent to a brigade, its captain and the duty officer is three rows.
+ * Each row is one logical page (COALESCE(logical_id, id) — the ingest
+ * groups one capcode's copy of a message across nodes), so a page two nodes
+ * heard is still one row, with both nodes on it.
  *
- * Grouping chains on the gap to the PREVIOUS copy rather than bucketing by
- * time, so a page sent at 12:00:59 and 12:01:01 is not split on the minute.
  * `total` rides on the page itself (COUNT OVER the grouped rows), so a page
  * past the end reports 0 — the tables only ever step one page at a time.
  */
-async function pagerPageGroups(
+async function pagerPageRows(
   pool: Pool,
   aliases: CapcodeAliasMap,
   opts: { interval: string; nodeId?: string; q?: string; limit: number; offset: number },
-): Promise<{ total: number; pages: PagerPageGroup[] }> {
+): Promise<{ total: number; pages: PagerPageRow[] }> {
   const params: unknown[] = [opts.interval, blockedCapcodeList()];
   const conds = ['e.received_at >= now() - $1::interval', pagerKept('e')];
   if (opts.nodeId) {
@@ -5047,38 +5042,23 @@ async function pagerPageGroups(
     at: Date;
     message: string | null;
     freq_mhz: number | null;
+    capcode: string;
     receptions: number;
-    capcodes: string[];
     nodes: Array<{ id: string; name: string | null }>;
     total: unknown;
   }>(
-    `WITH k AS (
-       SELECT e.id, e.node_id, e.received_at, e.capcode, e.message, e.message_hash, e.freq_mhz
-         FROM node_pager_events e
-        WHERE ${conds.join(' AND ')}
-     ), s AS (
-       SELECT k.*,
-              CASE WHEN k.received_at - lag(k.received_at) OVER w
-                        <= interval '${PAGE_GROUP_GAP_S} seconds'
-                   THEN 0 ELSE 1 END AS brk
-         FROM k
-       WINDOW w AS (PARTITION BY k.message_hash ORDER BY k.received_at, k.id)
-     ), g AS (
-       SELECT s.*,
-              SUM(s.brk) OVER (PARTITION BY s.message_hash ORDER BY s.received_at, s.id) AS grp
-         FROM s
-     )
-     SELECT MIN(g.received_at)         AS at,
-            MIN(g.message)             AS message,
-            MIN(g.freq_mhz)::float8    AS freq_mhz,
+    `SELECT MIN(e.received_at)         AS at,
+            MIN(e.message)             AS message,
+            MIN(e.freq_mhz)::float8    AS freq_mhz,
+            MIN(e.capcode)             AS capcode,
             COUNT(*)::int              AS receptions,
-            array_agg(DISTINCT g.capcode) AS capcodes,
-            jsonb_agg(DISTINCT jsonb_build_object('id', g.node_id, 'name', n.name)) AS nodes,
+            jsonb_agg(DISTINCT jsonb_build_object('id', e.node_id, 'name', n.name)) AS nodes,
             COUNT(*) OVER ()::int      AS total
-       FROM g
-       LEFT JOIN nodes n ON n.id = g.node_id
-      GROUP BY g.message_hash, g.grp
-      ORDER BY at DESC
+       FROM node_pager_events e
+       LEFT JOIN nodes n ON n.id = e.node_id
+      WHERE ${conds.join(' AND ')}
+      GROUP BY COALESCE(e.logical_id, e.id)
+      ORDER BY at DESC, capcode ASC
       LIMIT $${limIdx} OFFSET $${offIdx}`,
     params,
   );
@@ -5089,7 +5069,8 @@ async function pagerPageGroups(
       at: isoOrNull(r.at),
       message: r.message,
       freqMhz: r.freq_mhz,
-      capcodes: (r.capcodes ?? []).map((capcode) => ({ capcode, ...capcodeLabel(aliases, capcode) })),
+      capcode: r.capcode,
+      ...capcodeLabel(aliases, r.capcode),
       nodes: r.nodes ?? [],
       receptions: num(r.receptions),
     })),
@@ -5150,7 +5131,7 @@ nodeDataRouter.get(
           base,
         ),
         pagerHourlySeries(pool, interval),
-        pagerPageGroups(pool, aliases, { interval, limit: 8, offset: 0 }),
+        pagerPageRows(pool, aliases, { interval, limit: 8, offset: 0 }),
       ]);
 
       const topNodeByCap = await pagerTopNodeByCapcode(
@@ -5193,7 +5174,7 @@ nodeDataRouter.get(
 // ---------------------------------------------------------------------------
 // GET /api/node-data/pager-pages?window=&q=<text>&nodeId=&limit=50(≤100)&offset=0
 //
-// The traffic page log: one row per page as sent (see pagerPageGroups), newest
+// The traffic page log: one row per capcode (see pagerPageRows), newest
 // first. `q` is a case-insensitive substring of the message.
 // ---------------------------------------------------------------------------
 nodeDataRouter.get(
@@ -5210,7 +5191,7 @@ nodeDataRouter.get(
       const nodeId = (url.searchParams.get('nodeId') ?? '').trim();
 
       const aliases = await capcodeAliasLookup(pool);
-      const res = await pagerPageGroups(pool, aliases, {
+      const res = await pagerPageRows(pool, aliases, {
         interval: WINDOW_INTERVAL[window],
         ...(nodeId ? { nodeId } : {}),
         ...(q ? { q } : {}),
@@ -5623,7 +5604,7 @@ nodeDataRouter.get(
 //               tick is still on air.
 //   topCapcodes — busiest capcodes on this node (alias-resolved).
 //   series    — hourly page counts, same shape as the overview chart.
-//   recent    — this node's pages as sent (see pagerPageGroups), paged.
+//   recent    — this node's pages, one row per capcode (see pagerPageRows), paged.
 // ---------------------------------------------------------------------------
 nodeDataRouter.get(
   '/api/node-data/pager-node',
@@ -5682,7 +5663,7 @@ nodeDataRouter.get(
           [interval, blocked, nodeId],
         ),
         pagerHourlySeries(pool, interval, nodeId),
-        pagerPageGroups(pool, aliases, { interval, nodeId, limit, offset }),
+        pagerPageRows(pool, aliases, { interval, nodeId, limit, offset }),
       ]);
 
       const t = totalsQ.rows[0];
