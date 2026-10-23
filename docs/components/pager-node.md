@@ -324,6 +324,29 @@ than reading a stored flag, so changing `PAGER_BLOCKED_CAPCODES` moves a
 capcode's past pages too. The tests hold the SQL and the relay's JS to the
 same cases.
 
+### The owner's view
+
+The node's owner sees the same split on the feeder page. Their node modal has
+three tabs, read from `node_pager_events` through the staff helpers
+(`feederPagerOverview` / `feederPagerMessages` in `api/node-data.ts`, behind
+ownership in `api/feeder.ts`):
+
+| Tab | Route | What it shows |
+|---|---|---|
+| Overview | `GET /api/feeder/nodes/:id/pager-overview` | Messages, filtered and capcodes for 24 hours and 7 days; the last message; busiest capcodes and filtered-by-reason for 7 days |
+| Messages | `GET /api/feeder/nodes/:id/pager-messages?window=&offset=` | The node's traffic, one row per capcode, 50 a page |
+| Filtered | `…/pager-messages?filtered=1` | What the relay kept out of Pagermon, each with its reason |
+
+The Overview's counts equal the two lists' totals for the same window,
+because the lists count the same logical pages. Rows carry the plan label for
+their frequency (`pagerPlanLabelFor`). They leave out which other nodes heard
+a page, which is staff-only detail.
+
+The owner used to read the backend's in-memory ring buffer
+(`GET /api/feeder/nodes/:id/messages`). That route is gone: 50 decodes, nine
+in ten of them filtered, and empty after every restart. The buffer itself
+stays for the staff drawer.
+
 ## The control WebSocket
 
 `internal/wsclient` holds a persistent outbound connection to
