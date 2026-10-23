@@ -339,22 +339,39 @@
     .node-loc .nl-item i { opacity: 0.7; }
     .node-loc .nl-warn { color: #fbbf24; }
     .node-loc .nl-key code, .node-loc .nl-ip code { background: rgba(255,255,255,0.06); border: 1px solid var(--border-subtle); border-radius: 4px; padding: 0.02rem 0.32rem; font-size: 0.7rem; color: var(--text-soft); }
-    /* Recent-messages modal (owner view of decoded pager pages). */
-    .msg-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
-    .msg-head h3 { margin: 0; }
+    /* Pager node modal: Overview / Messages / Filtered tabs (the owner's
+       view of their own decoded pages). */
+    /* The rule is an inset shadow, not a border: the active tab's underline
+       paints over it without a negative margin, which in a horizontal
+       scroller would overflow and add a vertical scrollbar. */
+    .nm-tabs { display: flex; gap: 0.2rem; box-shadow: inset 0 -1px 0 var(--border-subtle);
+      margin: -0.3rem 0 1rem; overflow-x: auto; }
+    .nm-tab { background: none; border: 0; border-bottom: 2px solid transparent;
+      color: var(--text-soft); font-family: inherit; font-size: 0.82rem; font-weight: 600;
+      padding: 0.45rem 0.85rem; cursor: pointer; white-space: nowrap; }
+    .nm-tab:hover { color: var(--text-primary); }
+    .nm-tab.active { color: #7dd3fc; border-bottom-color: var(--accent); }
+    .fs-cols.pg-cols { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .pg-note { font-size: 0.72rem; color: var(--text-soft); line-height: 1.45; margin-top: 0.5rem; }
+    .pg-pager { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
+      flex-wrap: wrap; margin-top: 0.6rem; font-size: 0.75rem; color: var(--text-soft); }
+    .pg-pager .mini-btn:disabled { opacity: 0.45; cursor: default; }
     .msg-sub { font-size: 0.75rem; color: var(--text-soft); margin: 0.35rem 0 0.7rem; }
     .msg-list { max-height: 55vh; overflow-y: auto; display: flex; flex-direction: column; gap: 0.3rem; }
     .msg-row { display: grid; grid-template-columns: auto 1fr auto; gap: 0.6rem; align-items: baseline;
       padding: 0.42rem 0.6rem; border-radius: 8px; background: rgba(255,255,255,0.03);
       border: 1px solid var(--border-subtle); font-size: 0.82rem; }
-    .msg-row.msg-filtered { opacity: 0.5; }
     .msg-time { color: var(--text-soft); font-size: 0.72rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
     .msg-body { min-width: 0; word-break: break-word; line-height: 1.4; }
     .msg-addr { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #7dd3fc; }
+    /* Who the capcode belongs to, where we know. Secondary to the message. */
+    .msg-label { font-size: 0.68rem; color: var(--text-soft); background: rgba(148,163,184,0.14);
+      border-radius: 4px; padding: 0.02rem 0.3rem; margin-left: 0.3rem; white-space: nowrap; }
+    .msg-notext { color: var(--text-soft); font-style: italic; }
     .msg-src { color: var(--text-soft); font-size: 0.72rem; white-space: nowrap; }
     .msg-badge { font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em;
       color: #fcd34d; background: rgba(234,179,8,0.14); border: 1px solid rgba(234,179,8,0.4);
-      padding: 0.02rem 0.32rem; border-radius: 4px; margin-right: 0.25rem; }
+      padding: 0.02rem 0.32rem; border-radius: 4px; margin-right: 0.3rem; white-space: nowrap; }
     .msg-empty { color: var(--text-soft); text-align: center; padding: 1.6rem 1rem; font-size: 0.85rem; }
     /* Per-node activity & stats modal (radio nodes). */
     /* Higher specificity than the base `.modal` (which sets max-width:520px and
@@ -443,7 +460,7 @@
       font-size: 0.58rem; font-weight: 700; padding: 0.02rem 0.28rem; border-radius: 4px; margin-right: 0.35rem; vertical-align: middle; }
     @media (max-width: 640px) {
       .fs-tiles { grid-template-columns: repeat(3, 1fr); }
-      .fs-cols { grid-template-columns: 1fr; }
+      .fs-cols, .fs-cols.pg-cols { grid-template-columns: 1fr; }
       .fs-arow { grid-template-columns: 3.6rem minmax(0, 1fr) 1.8rem; }
       .fs-aun, .fs-asite { display: none; }
     }
@@ -1166,24 +1183,209 @@
         </div>`;
     }
 
-    // Owner view of a pager node's recent decoded pages (the rolling buffer the
-    // backend keeps, same data staff see in the drawer). Polls every 5s while open.
-    let _msgPoll = null;
-    let _msgNodeId = null;
-    async function loadNodeMessages() {
-      const nodeId = _msgNodeId;
+    // ===== Pager node: Overview / Messages / Filtered ====================
+    // The owner's view of their pager node, from the pages the backend stores
+    // (30 days). Filtered messages are the ones the relay keeps out of
+    // Pagermon (encoded-data capcodes, empty or 1-2 character decodes, FRNSW
+    // clock ticks): nine in ten of what a NSW node decodes, so they get a tab
+    // of their own rather than burying the real pages.
+    const PG_LIMIT = 50;
+    let _pgPoll = null;
+    let _pgNodeId = null;
+    let _pgTab = 'overview';     // 'overview' | 'messages' | 'filtered'
+    let _pgWindow = '24h';       // shared by Messages and Filtered
+    let _pgOffset = 0;
+    let _pgSeq = 0;              // a slower, older response must not overwrite a newer one
+    let _pgBusy = false;
+    let _pgLoadedAt = 0;
+
+    function setPagerTab(tab) {
+      if (tab === _pgTab) return;
+      _pgTab = tab;
+      _pgOffset = 0;
+      document.querySelectorAll('#node-modal .nm-tab').forEach((b) => {
+        const on = b.dataset.tab === tab;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      const ov = document.getElementById('pg-overview');
+      const ls = document.getElementById('pg-list');
+      if (ov) ov.hidden = tab !== 'overview';
+      if (ls) ls.hidden = tab === 'overview';
+      if (tab !== 'overview') {
+        const sub = document.getElementById('msg-sub');
+        const list = document.getElementById('msg-list');
+        const pager = document.getElementById('pg-pager');
+        if (sub) sub.textContent = 'loading…';
+        if (list) list.innerHTML = '';
+        if (pager) pager.innerHTML = '';
+      }
+      loadPagerTab();
+    }
+    window.setPagerTab = setPagerTab;
+
+    function setPagerWindow(w) {
+      if (w === _pgWindow) return;
+      _pgWindow = w;
+      _pgOffset = 0;
+      document.querySelectorAll('#node-modal .fs-win[data-kind="pager"]').forEach(b => b.classList.toggle('active', b.dataset.w === w));
+      loadPagerTab();
+    }
+    window.setPagerWindow = setPagerWindow;
+
+    function pagerPage(dir) {
+      _pgOffset = Math.max(0, _pgOffset + dir * PG_LIMIT);
+      loadPagerTab().then(() => {
+        const list = document.getElementById('msg-list');
+        if (list) list.scrollTop = 0;
+      });
+    }
+    window.pagerPage = pagerPage;
+
+    async function loadPagerTab() {
+      const nodeId = _pgNodeId;
       if (!nodeId) return;
+      const seq = ++_pgSeq;
+      const tab = _pgTab;
+      const url = tab === 'overview'
+        ? `${API_BASE_URL}/api/feeder/nodes/${nodeId}/pager-overview`
+        : `${API_BASE_URL}/api/feeder/nodes/${nodeId}/pager-messages?window=${encodeURIComponent(_pgWindow)}`
+          + `&filtered=${tab === 'filtered' ? 1 : 0}&limit=${PG_LIMIT}&offset=${_pgOffset}`;
+      _pgBusy = true;
       try {
         const jwt = await getToken();
-        const res = await fetch(`${API_BASE_URL}/api/feeder/nodes/${nodeId}/messages`, {
-          headers: { 'Authorization': 'Bearer ' + jwt },
-        });
+        const res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + jwt } });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        if (document.getElementById('node-modal')) _renderNodeMessages(data.messages || []);
+        if (seq !== _pgSeq || !document.getElementById('node-modal')) return;
+        _pgLoadedAt = Date.now();
+        if (tab === 'overview') _renderPagerOverview(data);
+        else _renderPagerMessages(data, tab === 'filtered');
       } catch (e) {
-        const sub = document.getElementById('msg-sub');
-        if (sub) sub.textContent = 'Could not load messages — try again shortly.';
+        if (seq !== _pgSeq) return;
+        if (tab === 'overview') {
+          const body = document.getElementById('pg-overview');
+          if (body) body.innerHTML = `<div class="msg-empty">Couldn't load the overview — try again shortly.</div>`;
+        } else {
+          const sub = document.getElementById('msg-sub');
+          if (sub) sub.textContent = 'Could not load messages — try again shortly.';
+        }
+      } finally {
+        if (seq === _pgSeq) _pgBusy = false;
+      }
+    }
+
+    // Lists refresh every 10s, the overview every 30s, and nothing while the
+    // tab is hidden. An older page of a list is left alone: new messages
+    // would shift its rows under the reader.
+    function _pagerTick() {
+      if (document.hidden || _pgBusy) return;
+      if (_pgTab !== 'overview' && _pgOffset > 0) return;
+      const every = _pgTab === 'overview' ? 30000 : 10000;
+      if (Date.now() - _pgLoadedAt < every - 1000) return;
+      loadPagerTab();
+    }
+
+    const _PG_REASON = {
+      'blocked capcode': 'Data capcode',
+      'empty message': 'No text',
+      'noise': 'Decoding noise',
+      'time code': 'Clock tick',
+    };
+
+    /** "11:04:31 am" today, "22 Oct 11:04:31 am" before today. */
+    function _pgTime(iso) {
+      const at = iso ? new Date(iso) : null;
+      if (!at || Number.isNaN(at.getTime())) return '—';
+      const time = at.toLocaleTimeString();
+      if (at.toDateString() === new Date().toDateString()) return time;
+      return `${at.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })} ${time}`;
+    }
+
+    function _renderPagerOverview(d) {
+      const body = document.getElementById('pg-overview');
+      if (!body) return;
+      const t = d.totals || {};
+      const tile = (val, label) => `<div class="fs-tile"><div class="fs-tile-v">${val}</div><div class="fs-tile-l">${label}</div></div>`;
+      const n = (v) => Number(v || 0).toLocaleString();
+      const last = t.lastMessage ? (_statsTimeAgo(t.lastMessage) || '—') : '—';
+      const tiles = `<div class="fs-tiles">
+        ${tile(n(t.messages24h), 'Messages · 24h')}
+        ${tile(n(t.messages7d), 'Messages · 7 days')}
+        ${tile(n(t.filtered24h), 'Filtered · 24h')}
+        ${tile(n(t.filtered7d), 'Filtered · 7 days')}
+        ${tile(n(t.capcodes7d), 'Capcodes · 7 days')}
+        ${tile(escapeHtml(last), 'Last message')}
+      </div>`;
+
+      const caps = (d.topCapcodes || []).map((c) => `<div class="fs-li">
+          <span class="fs-li-n"><span class="msg-addr">${escapeHtml(c.capcode)}</span>${c.alias ? ` ${escapeHtml(c.alias)}` : ''}</span>
+          <span class="fs-li-c">${n(c.messages)}</span>
+        </div>`).join('') || '<div class="fs-li fs-li-empty">No messages in the last 7 days.</div>';
+
+      const reasons = Object.entries(d.filteredByReason || {})
+        .filter(([, v]) => v > 0)
+        .sort((a, b) => b[1] - a[1])
+        .map(([r, v]) => `<div class="fs-li">
+          <span class="fs-li-n">${escapeHtml(_PG_REASON[r] || r)}</span>
+          <span class="fs-li-c">${n(v)}</span>
+        </div>`).join('') || '<div class="fs-li fs-li-empty">Nothing filtered in the last 7 days.</div>';
+
+      body.innerHTML = `${tiles}
+        <div class="fs-cols pg-cols">
+          <div class="fs-col"><div class="fs-col-h">Busiest capcodes · 7 days</div>${caps}</div>
+          <div class="fs-col"><div class="fs-col-h">Why messages were filtered · 7 days</div>${reasons}
+            <div class="pg-note">Filtered messages are decoded but not sent on to Pagermon: capcodes that
+              only carry data, pages with no text or a character or two of decoding noise, and the
+              clock ticks FRNSW sends every few minutes.</div>
+          </div>
+        </div>`;
+    }
+
+    function _renderPagerMessages(d, filtered) {
+      const list = document.getElementById('msg-list');
+      const sub = document.getElementById('msg-sub');
+      const pager = document.getElementById('pg-pager');
+      if (!list) return;
+      const msgs = d.messages || [];
+      const total = Number(d.total || 0);
+      const span = { '24h': 'the last 24 hours', '7d': 'the last 7 days', '30d': 'the last 30 days' }[d.window] || 'this window';
+      if (sub) {
+        sub.textContent = total
+          ? `${total.toLocaleString()} ${filtered ? 'filtered ' : ''}message${total === 1 ? '' : 's'} in ${span}, newest first${filtered ? ' · not sent on to Pagermon' : ''}`
+          : (filtered ? `Nothing filtered in ${span}.` : `No messages in ${span}.`);
+      }
+      if (!msgs.length) {
+        list.innerHTML = `<div class="msg-empty">${filtered
+          ? 'Filtered messages will appear here.'
+          : 'Decoded messages will appear here as they come in.'}</div>`;
+      } else {
+        list.innerHTML = msgs.map((m) => {
+          const badge = filtered && m.reason
+            ? `<span class="msg-badge" title="Not sent on to Pagermon (${escapeHtml(m.reason)})">${escapeHtml(_PG_REASON[m.reason] || m.reason)}</span>`
+            : '';
+          const label = m.alias ? `<span class="msg-label">${escapeHtml(m.alias)}</span>` : '';
+          const text = escapeHtml(m.message || '') || '<span class="msg-notext">no text</span>';
+          return `<div class="msg-row">
+            <span class="msg-time">${escapeHtml(_pgTime(m.at))}</span>
+            <span class="msg-body">${badge}<span class="msg-addr">${escapeHtml(m.capcode || '')}</span>${label} ${text}</span>
+            <span class="msg-src">${escapeHtml(m.source || '')}</span>
+          </div>`;
+        }).join('');
+      }
+      if (pager) {
+        const offset = Number(d.offset || 0);
+        if (total > PG_LIMIT || offset > 0) {
+          const from = total ? offset + 1 : 0;
+          const to = Math.min(offset + msgs.length, total);
+          pager.innerHTML = `<span>${from.toLocaleString()}–${to.toLocaleString()} of ${total.toLocaleString()}</span>
+            <span>
+              <button class="mini-btn" onclick="pagerPage(-1)"${offset === 0 ? ' disabled' : ''}><i class="fas fa-chevron-left"></i> Newer</button>
+              <button class="mini-btn" onclick="pagerPage(1)"${to >= total ? ' disabled' : ''}>Older <i class="fas fa-chevron-right"></i></button>
+            </span>`;
+        } else {
+          pager.innerHTML = '';
+        }
       }
     }
     // ===== The node modal: one big surface per node ======================
@@ -1230,14 +1432,22 @@
       const loc = `<button class="mini-btn" title="Set region / exact pin" onclick="openLocationPicker('${node.id}')"><i class="fas fa-location-dot"></i> ${locLabel}</button>`;
 
       // Body: the kind's own view, ids preserved so every existing renderer
-      // ( _renderNodeStats / _renderNodeMessages / _renderAdsb* ) is untouched.
+      // ( _renderNodeStats / _renderPagerOverview / _renderAdsb* ) is untouched.
       const winBtns = (prefix, setter) => ['24h', '7d', '30d'].map((w) =>
         `<button class="fs-win${w === '24h' ? ' active' : ''}" data-kind="${prefix}" data-w="${w}" onclick="${setter}('${w}')">${w === '24h' ? '24h' : (w === '7d' ? '7 days' : '30 days')}</button>`).join('');
       let body;
       if (isPager) {
+        const tab = (id, label) =>
+          `<button class="nm-tab${id === 'overview' ? ' active' : ''}" role="tab" aria-selected="${id === 'overview'}" data-tab="${id}" onclick="setPagerTab('${id}')">${label}</button>`;
         body = `
-          <div class="msg-sub" id="msg-sub">loading…</div>
-          <div id="msg-list" class="msg-list"></div>`;
+          <div class="nm-tabs" role="tablist">${tab('overview', 'Overview')}${tab('messages', 'Messages')}${tab('filtered', 'Filtered')}</div>
+          <div id="pg-overview"><div class="loading" style="padding:2rem;"><i class="fas fa-spinner"></i></div></div>
+          <div id="pg-list" hidden>
+            <div class="fs-wins">${winBtns('pager', 'setPagerWindow')}</div>
+            <div class="msg-sub" id="msg-sub">loading…</div>
+            <div id="msg-list" class="msg-list"></div>
+            <div class="pg-pager" id="pg-pager"></div>
+          </div>`;
       } else if (isAdsb) {
         body = `
           <div class="fs-wins">${winBtns('adsb', 'setAdsbWindow')}</div>
@@ -1306,9 +1516,13 @@
       // Start the kind's own loader + poller — the same cadences the three
       // standalone modals used.
       if (isPager) {
-        _msgNodeId = nodeId;
-        loadNodeMessages();
-        _msgPoll = setInterval(loadNodeMessages, 5000);
+        _pgNodeId = nodeId;
+        _pgTab = 'overview';
+        _pgWindow = '24h';
+        _pgOffset = 0;
+        _pgLoadedAt = 0;
+        loadPagerTab();
+        _pgPoll = setInterval(_pagerTick, 5000);
       } else if (isAdsb) {
         _abNodeId = nodeId;
         _abWindow = '24h';
@@ -1332,10 +1546,12 @@
 
     /** ONE teardown for everything the modal can have started. */
     function closeNodeModal() {
-      if (_msgPoll) { clearInterval(_msgPoll); _msgPoll = null; }
+      if (_pgPoll) { clearInterval(_pgPoll); _pgPoll = null; }
       if (_statsPoll) { clearInterval(_statsPoll); _statsPoll = null; }
       if (_abPoll) { clearInterval(_abPoll); _abPoll = null; }
-      _msgNodeId = null; _statsNodeId = null; _abNodeId = null; _nmNodeId = null;
+      // Bumping the sequence drops any response still in flight for this node.
+      _pgSeq++; _pgBusy = false;
+      _pgNodeId = null; _statsNodeId = null; _abNodeId = null; _nmNodeId = null;
       // Tear the map down explicitly: removing its container via innerHTML
       // leaves Leaflet's listeners and tile requests alive.
       if (_abLayer) { _abLayer.remove(); _abLayer = null; }
@@ -1349,30 +1565,6 @@
     }
     window.closeNodeModal = closeNodeModal;
 
-    function _renderNodeMessages(msgs) {
-      const list = document.getElementById('msg-list');
-      const sub = document.getElementById('msg-sub');
-      if (!list) return;
-      const filteredN = msgs.filter(m => m.filtered).length;
-      if (sub) sub.textContent = msgs.length
-        ? `newest first · ${msgs.length} buffered${filteredN ? ` · ${filteredN} filtered (dimmed)` : ''}`
-        : 'No messages decoded yet.';
-      if (!msgs.length) {
-        list.innerHTML = `<div class="msg-empty">Decoded pages will appear here as they come in.</div>`;
-        return;
-      }
-      list.innerHTML = msgs.slice().reverse().map(m => {
-        const at = m.at != null ? new Date(m.at) : null;
-        const time = at && !Number.isNaN(at.getTime()) ? at.toLocaleTimeString() : '—';
-        const filt = m.filtered ? ' msg-filtered' : '';
-        const badge = m.filtered ? `<span class="msg-badge" title="Not forwarded (${escapeHtml(m.filtered)})">filtered</span>` : '';
-        return `<div class="msg-row${filt}">
-          <span class="msg-time">${escapeHtml(time)}</span>
-          <span class="msg-body">${badge}<span class="msg-addr">${escapeHtml(m.address || '')}</span> ${escapeHtml(m.message || '')}</span>
-          <span class="msg-src">${escapeHtml(m.source || '')}</span>
-        </div>`;
-      }).join('');
-    }
     // --- Per-node activity & stats (radio nodes) -----------------------------
     // A LIGHT owner-facing summary of what this node is hearing: calls,
     // receptions, top talkgroup / unit / site, and a short recent-call feed.
