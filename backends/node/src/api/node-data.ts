@@ -49,6 +49,7 @@ import {
   PAGER_FILTER_REASONS,
   type PagerFilterReason,
 } from '../services/pagerFilter.js';
+import { pagerPlanLabelFor } from '../services/nodes/configMerge.js';
 import {
   adsbAuthFailures,
   nodeAdsbObservedRange,
@@ -4921,7 +4922,7 @@ function capcodeLabel(aliases: CapcodeAliasMap, capcode: string) {
 }
 
 /** The pager tables' shared paging params: limit 1..100 (default 50), offset ≥ 0. */
-function pagerPaging(url: URL, defLimit = 50): { limit: number; offset: number } {
+export function pagerPaging(url: URL, defLimit = 50): { limit: number; offset: number } {
   return {
     limit: Math.max(1, Math.min(100, Number(url.searchParams.get('limit') ?? defLimit) || defLimit)),
     offset: Math.max(0, Number(url.searchParams.get('offset') ?? 0) || 0),
@@ -5077,6 +5078,101 @@ async function pagerPageRows(
   };
 }
 
+/**
+ * The window's pages with their filter reason computed once per row, as CTE
+ * `f`; everything that lists or counts filtered pages reads it from there.
+ * `nodeCond` narrows it to one node (`AND e.node_id = $n`) inside the scan,
+ * so a node-scoped read never computes reasons for the rest of the fleet.
+ */
+function pagerFilteredCte(nodeCond = ''): string {
+  return `WITH f AS (
+     SELECT e.*, ${pagerFilterReasonSql('$2', 'e')} AS reason
+       FROM node_pager_events e
+      WHERE e.received_at >= now() - $1::interval ${nodeCond}
+   )`;
+}
+
+type PagerFilteredRow = {
+  at: string | null;
+  capcode: string;
+  alias: string | null;
+  agency: string | null;
+  reason: string;
+  message: string | null;
+  freqMhz: number | null;
+  receptions: number;
+  nodes: Array<{ id: string; name: string | null }>;
+};
+
+/**
+ * Filtered pages newest first, one row per logical page like pagerPageRows,
+ * each with the reason it was kept out of Pagermon. `total` rides on the page
+ * the same way.
+ */
+async function pagerFilteredRows(
+  pool: Pool,
+  aliases: CapcodeAliasMap,
+  opts: { interval: string; nodeId?: string; reason?: string; limit: number; offset: number },
+): Promise<{ total: number; messages: PagerFilteredRow[] }> {
+  const params: unknown[] = [opts.interval, blockedCapcodeList()];
+  let nodeCond = '';
+  if (opts.nodeId) {
+    params.push(opts.nodeId);
+    nodeCond = `AND e.node_id = $${params.length}`;
+  }
+  let reasonCond = '';
+  if (opts.reason) {
+    params.push(opts.reason);
+    reasonCond = `AND f.reason = $${params.length}`;
+  }
+  params.push(opts.limit);
+  const limIdx = params.length;
+  params.push(opts.offset);
+  const offIdx = params.length;
+
+  const res = await pool.query<{
+    at: Date;
+    capcode: string;
+    reason: string;
+    message: string | null;
+    freq_mhz: number | null;
+    receptions: number;
+    nodes: Array<{ id: string; name: string | null }>;
+    total: unknown;
+  }>(
+    `${pagerFilteredCte(nodeCond)}
+     SELECT MIN(f.received_at)      AS at,
+            f.capcode,
+            f.reason,
+            MIN(f.message)          AS message,
+            MIN(f.freq_mhz)::float8 AS freq_mhz,
+            COUNT(*)::int           AS receptions,
+            jsonb_agg(DISTINCT jsonb_build_object('id', f.node_id, 'name', n.name)) AS nodes,
+            COUNT(*) OVER ()::int   AS total
+       FROM f
+       LEFT JOIN nodes n ON n.id = f.node_id
+      WHERE f.reason IS NOT NULL ${reasonCond}
+      GROUP BY COALESCE(f.logical_id, f.id), f.capcode, f.reason
+      ORDER BY at DESC, f.capcode ASC
+      LIMIT $${limIdx} OFFSET $${offIdx}`,
+    params,
+  );
+
+  return {
+    total: num(res.rows[0]?.total),
+    messages: res.rows.map((r) => ({
+      at: isoOrNull(r.at),
+      capcode: r.capcode,
+      ...capcodeLabel(aliases, r.capcode),
+      reason: r.reason,
+      message: r.message,
+      freqMhz: r.freq_mhz,
+      receptions: num(r.receptions),
+      nodes: r.nodes ?? [],
+    })),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // GET /api/node-data/pager-overview?window=24h|7d|30d
 //   Traffic totals, how much was filtered (by reason), top capcodes (with
@@ -5212,7 +5308,7 @@ nodeDataRouter.get(
 // The pages the relay keeps out of Pagermon, and out of every other pager
 // view here. `byReason` and `byCapcode` cover the whole window whatever
 // `reason` is set to, so the filter pills can show what each would hold; the
-// message list (grouped by logical_id, like /capcode) honours it.
+// message list (pagerFilteredRows) honours it.
 // ---------------------------------------------------------------------------
 nodeDataRouter.get(
   '/api/node-data/pager-filtered',
@@ -5230,25 +5326,10 @@ nodeDataRouter.get(
         return c.json({ error: `reason must be one of: ${PAGER_FILTER_REASONS.join(', ')}` }, 400);
       }
 
-      // The reason is computed once per row, in a CTE, and everything below
-      // reads it from there.
-      const filteredCte = `WITH f AS (
-         SELECT e.*, ${pagerFilterReasonSql('$2', 'e')} AS reason
-           FROM node_pager_events e
-          WHERE e.received_at >= now() - $1::interval
-       )`;
-      const listParams: unknown[] = [interval, blockedCapcodeList()];
-      let reasonCond = '';
-      if (reasonRaw) {
-        listParams.push(reasonRaw);
-        reasonCond = `AND f.reason = $${listParams.length}`;
-      }
-      listParams.push(limit);
-      const limIdx = listParams.length;
-      listParams.push(offset);
-      const offIdx = listParams.length;
+      const filteredCte = pagerFilteredCte();
+      const aliases = await capcodeAliasLookup(pool);
 
-      const [byReasonQ, byCapQ, listQ] = await Promise.all([
+      const [byReasonQ, byCapQ, list] = await Promise.all([
         pool.query<{ reason: string; n: unknown }>(
           `${filteredCte}
            SELECT reason, COUNT(DISTINCT COALESCE(logical_id, id))::int AS n
@@ -5267,34 +5348,14 @@ nodeDataRouter.get(
             LIMIT 10`,
           [interval, blockedCapcodeList()],
         ),
-        pool.query<{
-          at: Date;
-          capcode: string;
-          reason: string;
-          message: string | null;
-          freq_mhz: number | null;
-          receptions: number;
-          nodes: Array<{ id: string; name: string | null }>;
-        }>(
-          `${filteredCte}
-           SELECT MIN(f.received_at)      AS at,
-                  f.capcode,
-                  f.reason,
-                  MIN(f.message)          AS message,
-                  MIN(f.freq_mhz)::float8 AS freq_mhz,
-                  COUNT(*)::int           AS receptions,
-                  jsonb_agg(DISTINCT jsonb_build_object('id', f.node_id, 'name', n.name)) AS nodes
-             FROM f
-             LEFT JOIN nodes n ON n.id = f.node_id
-            WHERE f.reason IS NOT NULL ${reasonCond}
-            GROUP BY COALESCE(f.logical_id, f.id), f.capcode, f.reason
-            ORDER BY at DESC
-            LIMIT $${limIdx} OFFSET $${offIdx}`,
-          listParams,
-        ),
+        pagerFilteredRows(pool, aliases, {
+          interval,
+          ...(reasonRaw ? { reason: reasonRaw } : {}),
+          limit,
+          offset,
+        }),
       ]);
 
-      const aliases = await capcodeAliasLookup(pool);
       const byReason = Object.fromEntries(byReasonQ.rows.map((r) => [r.reason, num(r.n)]));
       const all = Object.values(byReason).reduce((a, b) => a + b, 0);
 
@@ -5312,16 +5373,7 @@ nodeDataRouter.get(
           pages: num(r.pages),
           lastSeen: isoOrNull(r.last_seen),
         })),
-        messages: listQ.rows.map((r) => ({
-          at: isoOrNull(r.at),
-          capcode: r.capcode,
-          ...capcodeLabel(aliases, r.capcode),
-          reason: r.reason,
-          message: r.message,
-          freqMhz: r.freq_mhz,
-          receptions: num(r.receptions),
-          nodes: r.nodes ?? [],
-        })),
+        messages: list.messages,
       });
     } catch (err) {
       log.error({ err }, '/api/node-data/pager-filtered error');
@@ -5701,6 +5753,141 @@ nodeDataRouter.get(
     }
   },
 );
+
+// ---------------------------------------------------------------------------
+// The owner's view of their own pager node (feeder.ts, behind ownedNode):
+// an overview and the node's messages, traffic and filtered apart. Built from
+// the same helpers and filter rules as the staff views above, so an owner and
+// staff looking at one node see the same numbers. Staff-only detail (which
+// other nodes heard a page, reception counts) is left out: the owner is
+// looking at one node, their own.
+// ---------------------------------------------------------------------------
+
+export interface FeederPagerOverview {
+  totals: {
+    messages24h: number;
+    messages7d: number;
+    filtered24h: number;
+    filtered7d: number;
+    capcodes24h: number;
+    capcodes7d: number;
+    /** Newest traffic message in the 7 days. */
+    lastMessage: string | null;
+    /** Newest decode of any kind: a node hearing only clock ticks is still on air. */
+    lastHeard: string | null;
+  };
+  topCapcodes: Array<{
+    capcode: string;
+    alias: string | null;
+    agency: string | null;
+    messages: number;
+    lastSeen: string | null;
+  }>;
+  /** Filtered messages in the 7 days, by reason. */
+  filteredByReason: Record<string, number>;
+}
+
+/** Tiles and lists for the owner's Overview tab: one node, 24 hours and 7 days. */
+export async function feederPagerOverview(pool: Pool, nodeId: string): Promise<FeederPagerOverview> {
+  const params = ['7 days', blockedCapcodeList(), nodeId];
+  const aliases = await capcodeAliasLookup(pool);
+  const [totalsQ, topCapsQ, byReasonQ] = await Promise.all([
+    pool.query<Record<string, unknown>>(
+      `SELECT COUNT(DISTINCT g) FILTER (WHERE kept AND day)       AS messages_24h,
+              COUNT(DISTINCT g) FILTER (WHERE kept)               AS messages_7d,
+              COUNT(DISTINCT g) FILTER (WHERE NOT kept AND day)   AS filtered_24h,
+              COUNT(DISTINCT g) FILTER (WHERE NOT kept)           AS filtered_7d,
+              COUNT(DISTINCT capcode) FILTER (WHERE kept AND day) AS capcodes_24h,
+              COUNT(DISTINCT capcode) FILTER (WHERE kept)         AS capcodes_7d,
+              MAX(received_at) FILTER (WHERE kept)                AS last_message,
+              MAX(received_at)                                    AS last_heard
+         FROM (SELECT capcode, received_at, COALESCE(logical_id, id) AS g,
+                      ${pagerKept()} AS kept,
+                      received_at >= now() - interval '24 hours' AS day
+                 FROM node_pager_events
+                WHERE node_id = $3 AND received_at >= now() - $1::interval) e`,
+      params,
+    ),
+    pool.query<{ capcode: string; messages: unknown; last_seen: unknown }>(
+      `SELECT capcode,
+              COUNT(DISTINCT COALESCE(logical_id, id))::int AS messages,
+              MAX(received_at)                              AS last_seen
+         FROM node_pager_events
+        WHERE node_id = $3 AND received_at >= now() - $1::interval AND ${pagerKept()}
+        GROUP BY capcode
+        ORDER BY messages DESC, last_seen DESC
+        LIMIT 10`,
+      params,
+    ),
+    pool.query<{ reason: string; n: unknown }>(
+      `${pagerFilteredCte('AND e.node_id = $3')}
+       SELECT reason, COUNT(DISTINCT COALESCE(logical_id, id))::int AS n
+         FROM f WHERE reason IS NOT NULL
+        GROUP BY reason`,
+      params,
+    ),
+  ]);
+
+  const t = totalsQ.rows[0] ?? {};
+  return {
+    totals: {
+      messages24h: num(t['messages_24h']),
+      messages7d: num(t['messages_7d']),
+      filtered24h: num(t['filtered_24h']),
+      filtered7d: num(t['filtered_7d']),
+      capcodes24h: num(t['capcodes_24h']),
+      capcodes7d: num(t['capcodes_7d']),
+      lastMessage: isoOrNull(t['last_message']),
+      lastHeard: isoOrNull(t['last_heard']),
+    },
+    topCapcodes: topCapsQ.rows.map((r) => ({
+      capcode: r.capcode,
+      ...capcodeLabel(aliases, r.capcode),
+      messages: num(r.messages),
+      lastSeen: isoOrNull(r.last_seen),
+    })),
+    filteredByReason: Object.fromEntries(byReasonQ.rows.map((r) => [r.reason, num(r.n)])),
+  };
+}
+
+export interface FeederPagerMessage {
+  at: string | null;
+  capcode: string;
+  alias: string | null;
+  agency: string | null;
+  message: string | null;
+  /** The plan label the page came in on (NSWRFS, FRNSW), else its frequency. */
+  source: string | null;
+  /** Filtered list only: why the relay kept it out of Pagermon. */
+  reason?: string;
+}
+
+/** One page of the node's messages, traffic or filtered, newest first. */
+export async function feederPagerMessages(
+  pool: Pool,
+  node: { id: string; state?: string | null },
+  opts: { window: DetailWindow; filtered: boolean; limit: number; offset: number },
+): Promise<{ window: DetailWindow; total: number; limit: number; offset: number; messages: FeederPagerMessage[] }> {
+  const aliases = await capcodeAliasLookup(pool);
+  const query = { interval: WINDOW_INTERVAL[opts.window], nodeId: node.id, limit: opts.limit, offset: opts.offset };
+  const shape = (r: PagerPageRow | PagerFilteredRow): FeederPagerMessage => ({
+    at: r.at,
+    capcode: r.capcode,
+    alias: r.alias,
+    agency: r.agency,
+    message: r.message,
+    source:
+      pagerPlanLabelFor(node.state, r.freqMhz) ??
+      (r.freqMhz != null && Number.isFinite(r.freqMhz) ? `${r.freqMhz.toFixed(4)} MHz` : null),
+  });
+  const page = { window: opts.window, limit: opts.limit, offset: opts.offset };
+  if (opts.filtered) {
+    const res = await pagerFilteredRows(pool, aliases, query);
+    return { ...page, total: res.total, messages: res.messages.map((m) => ({ ...shape(m), reason: m.reason })) };
+  }
+  const res = await pagerPageRows(pool, aliases, query);
+  return { ...page, total: res.total, messages: res.pages.map(shape) };
+}
 
 // ---------------------------------------------------------------------------
 // GET /api/node-data/adsb-overview?window=24h|7d|30d

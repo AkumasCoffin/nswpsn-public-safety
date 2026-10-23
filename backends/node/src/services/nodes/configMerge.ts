@@ -209,6 +209,18 @@ export function pagerPlanWithServicesFor(
   return pagerPlanFor(state).map((f) => ({ ...f, service: PAGER_SERVICES[f.label] ?? null }));
 }
 
+/**
+ * The plan label (NSWRFS / FRNSW / QFES) for a stored page's frequency, or
+ * null when it is not on the state's plan. The stored row has only freq_mhz;
+ * this is what the live buffer's `source` field says for the same page.
+ * Display only. The tolerance absorbs float storage, not tuning error: plan
+ * frequencies are 12.5 kHz apart at the closest.
+ */
+export function pagerPlanLabelFor(state: string | null | undefined, mhz: number | null): string | null {
+  if (mhz == null || !Number.isFinite(mhz)) return null;
+  return pagerPlanFor(state).find((f) => Math.abs(f.mhz - mhz) < 0.0015)?.label ?? null;
+}
+
 /** The per-node tuner-gain override ("auto" or a number-as-string, dB), or
  *  undefined when unset (agent uses its default). Read from config_override so
  *  it persists across restarts/updates. */
