@@ -1755,6 +1755,39 @@
     .status-badge.pending  { background: rgba(245, 158, 11, 0.16); color: var(--warning); }
     .status-badge.approved { background: rgba(34, 197, 94, 0.16);  color: var(--success); }
     .status-badge.rejected { background: rgba(239, 68, 68, 0.16);  color: var(--danger); }
+    .status-badge.muted    { background: rgba(148, 163, 184, 0.14); color: var(--text-soft); }
+
+    /* === Requests → API keys: the keys table and one key's usage === */
+    .ak-stats { margin-bottom: 1rem; gap: 0.6rem; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
+    .ak-stats .stat-card { padding: 0.7rem 0.85rem; }
+    .ak-stats .stat-value { font-size: 1.35rem; }
+    .ak-stats .stat-card.warn .stat-value { color: var(--warning); }
+    .ak-stats .stat-card.bad .stat-value { color: var(--danger); }
+    .ak-stats .stat-card.zero .stat-value { color: var(--text-soft); }
+    .ak-keys td, .ak-keys th { white-space: nowrap; }
+    .ak-keys thead tr.ak-groups th { border-bottom: none; padding-bottom: 0; }
+    .ak-keys th.ak-group { text-align: center; }
+    .ak-paths th:first-child { width: 36%; }
+    .ak-keys tr.ak-open > td { background: rgba(56, 189, 248, 0.05); }
+    .ak-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .ak-warn { color: var(--warning); font-weight: 600; }
+    .ak-bad { color: var(--danger); font-weight: 600; }
+    .ak-zero { color: var(--text-soft); opacity: 0.6; }
+    /* Its own box under the table, not a row inside it: on a phone the table
+       scrolls sideways, and a panel inside it would be the table's full width. */
+    .ak-usage {
+      margin-top: 0.9rem; padding: 0.9rem 0.9rem 1rem; min-width: 0;
+      background: rgba(2, 6, 23, 0.35); border: 1px solid var(--border-subtle); border-radius: 12px;
+    }
+    .ak-usage-title { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; font-size: 0.82rem; margin-bottom: 0.7rem; }
+    .ak-usage-title .btn { margin-left: auto; }
+    .ak-usage-head { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 0.8rem; }
+    .ak-usage-head .filter-bar { margin: 0; }
+    .ak-usage-chart { position: relative; height: 200px; margin: 0.2rem 0 1rem; }
+    .ak-legend { display: flex; flex-wrap: wrap; gap: 0.35rem 0.9rem; font-size: 0.7rem; color: var(--text-soft); margin-bottom: 0.4rem; }
+    .ak-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 0.3rem; vertical-align: -1px; }
+    .ak-paths td.ak-path { max-width: 32rem; overflow: hidden; text-overflow: ellipsis; }
+    .ak-note { font-size: 0.72rem; color: var(--text-soft); margin-top: 0.5rem; line-height: 1.5; }
 
     .action-buttons { display: flex; gap: 0.4rem; }
 
@@ -3355,7 +3388,12 @@
           <div id="apikeys-container">
             <div class="loading"><i class="fas fa-spinner"></i></div>
           </div>
-          <div class="dev-section-h" style="margin-top:1.6rem;">Issued keys</div>
+          <div class="dev-section-h" style="margin-top:1.6rem;">Keys</div>
+          <div class="filter-bar">
+            <button class="filter-btn active" data-akkeys="active" onclick="setAkKeysFilter('active')">Active</button>
+            <button class="filter-btn" data-akkeys="all" onclick="setAkKeysFilter('all')">All</button>
+          </div>
+          <div id="apikeys-keys-summary" class="stats-bar ak-stats"></div>
           <div id="apikeys-keys-container">
             <div class="loading"><i class="fas fa-spinner"></i></div>
           </div>
@@ -17403,44 +17441,265 @@
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();
         _akKeys = data.keys || [];
+        // Fresh list, fresh figures: an open usage panel refetches too.
+        _akUsageData = null;
         renderApiKeysList();
       } catch (e) {
         if (el) el.innerHTML = `<div class="empty-state"><i class="fas fa-exclamation-triangle"></i><p>Couldn't load issued keys.</p></div>`;
       }
     }
+    // Keys: Active by default — what staff mostly need is what is live now —
+    // with All for revoked, expired and owner-deleted keys and their history.
+    let _akKeysFilter = 'active';
+    function setAkKeysFilter(f) {
+      _akKeysFilter = f;
+      document.querySelectorAll('[data-akkeys]').forEach(b => b.classList.toggle('active', b.dataset.akkeys === f));
+      renderApiKeysList();
+    }
+    // `active` is the server's word; the badge says why a key is not.
+    function _akKeyState(k) {
+      if (k.deletedAt) return 'deleted';
+      if (k.revokedAt) return 'revoked';
+      if (!k.active || (k.expiresAt && new Date(k.expiresAt) <= new Date())) return 'expired';
+      return 'active';
+    }
+    const _AK_BADGE = {
+      active: '<span class="status-badge approved">Active</span>',
+      expired: '<span class="status-badge pending">Expired</span>',
+      revoked: '<span class="status-badge rejected">Revoked</span>',
+      deleted: '<span class="status-badge muted" title="Deleted by its owner — revoked, and gone from their list">Deleted</span>',
+    };
+    const _akN = (n) => Number(n || 0).toLocaleString('en-AU');
+    // A count cell: zero recedes, anything else is tinted by how bad it is.
+    function _akCell(n, tone) {
+      const v = Number(n || 0);
+      if (!v) return '<span class="ak-zero">0</span>';
+      return tone ? `<span class="${tone}">${_akN(v)}</span>` : _akN(v);
+    }
+    function _akSummary(keys) {
+      const el = document.getElementById('apikeys-keys-summary');
+      if (!el) return;
+      const live = keys.filter(k => _akKeyState(k) === 'active').length;
+      // Every key's last 24h, live or not: a revoked key still being called
+      // is exactly what the refused figure is for.
+      const withUsage = keys.filter(k => k.usage);
+      const sum = (cls) => withUsage.reduce((s, k) => s + (k.usage.h24[cls] || 0), 0);
+      const known = withUsage.length > 0 || keys.length === 0;
+      const card = (v, label, tone) => `<div class="stat-card ${!known ? 'zero' : (v ? tone : 'zero')}" title="Every key, revoked and expired ones included"><div class="stat-value">${known ? _akN(v) : '—'}</div><div class="stat-label">${label}</div></div>`;
+      el.innerHTML = `<div class="stat-card approved"><div class="stat-value">${_akN(live)}</div><div class="stat-label">Active keys</div></div>`
+        + card(sum('requests'), 'Requests · 24h', '')
+        + card(sum('notFound'), '404s · 24h', 'warn')
+        + card(sum('refused'), 'Refused · 24h', 'bad')
+        + card(sum('rateLimited'), 'Rate-limited · 24h', 'warn')
+        + card(sum('serverError'), '5xx · 24h', 'bad');
+    }
     function renderApiKeysList() {
       const el = document.getElementById('apikeys-keys-container');
       if (!el) return;
-      if (!_akKeys.length) {
-        el.innerHTML = `<div class="empty-state"><i class="fas fa-key"></i><p>No keys have been generated yet.</p></div>`;
+      _akSummary(_akKeys);
+      const keys = _akKeysFilter === 'active' ? _akKeys.filter(k => _akKeyState(k) === 'active') : _akKeys;
+      if (!keys.length) {
+        _akCloseChart();
+        el.innerHTML = `<div class="empty-state"><i class="fas fa-key"></i><p>${_akKeys.length ? 'No active keys.' : 'No keys have been generated yet.'}</p></div>`;
         return;
       }
-      const fmt = (iso) => iso ? new Date(iso).toLocaleString() : '';
-      const rows = _akKeys.map(k => {
-        // `active` is the server's word; an unrevoked key past its expiry is
-        // still inactive, and that is the case worth showing distinctly.
-        const expired = !k.revokedAt && k.expiresAt && new Date(k.expiresAt) <= new Date();
-        const badge = k.revokedAt ? '<span class="status-badge rejected">Revoked</span>'
-          : (expired || !k.active) ? '<span class="status-badge pending">Expired</span>'
-          : '<span class="status-badge approved">Active</span>';
-        const revoke = k.active && !k.revokedAt && !expired
+      const rows = keys.map(k => {
+        const state = _akKeyState(k);
+        const u = k.usage;
+        const open = _akUsageOpen === k.id;
+        const revoke = state === 'active'
           ? `<button class="btn btn-danger btn-sm" onclick="akRevoke('${escapeHtml(k.prefix)}')"><i class="fas fa-ban"></i> Revoke</button>`
           : '';
-        return `<tr>
-          <td style="font-family:ui-monospace, SFMono-Regular, Menlo, monospace;">${escapeHtml(k.prefix)}</td>
+        const usageCells = u
+          ? `<td class="nd2-num">${_akCell(u.h24.requests)}</td>
+             <td class="nd2-num">${_akCell(u.d7.requests)}</td>
+             <td class="nd2-num">${_akCell(k.requestsTotal)}</td>
+             <td class="nd2-num">${_akCell(u.d7.notFound, 'ak-warn')}</td>
+             <td class="nd2-num">${_akCell(u.d7.refused, 'ak-bad')}</td>
+             <td class="nd2-num">${_akCell(u.d7.rateLimited, 'ak-warn')}</td>
+             <td class="nd2-num">${_akCell(u.d7.serverError, 'ak-bad')}</td>`
+          : '<td class="nd2-num nd-sub">—</td>'.repeat(7);
+        const reissued = k.reissuedAt ? ` <span class="nd-sub" title="Re-issued ${escapeHtml(new Date(k.reissuedAt).toLocaleString())}">↻</span>` : '';
+        return `<tr class="${open ? 'ak-open' : ''}">
+          <td class="ak-mono">${escapeHtml(k.prefix)}${reissued}</td>
           <td>${escapeHtml(k.name)}</td>
           <td>${_akOwnerLink(k.userId, k.userName)}</td>
-          <td>${escapeHtml(k.rateLimitPerMin)}</td>
-          <td>${k.lastUsedAt ? escapeHtml(fmt(k.lastUsedAt)) : '<span class="nd-sub">never</span>'}</td>
-          <td>${k.expiresAt ? escapeHtml(fmt(k.expiresAt)) : '<span class="nd-sub">—</span>'}</td>
-          <td>${badge}</td>
-          <td>${revoke}</td>
+          <td>${_AK_BADGE[state]}</td>
+          ${usageCells}
+          <td class="nd2-num">${escapeHtml(k.rateLimitPerMin)}</td>
+          <td title="${k.lastUsedAt ? escapeHtml(new Date(k.lastUsedAt).toLocaleString()) : ''}">${k.lastUsedAt ? escapeHtml(nd2Ago(k.lastUsedAt) || new Date(k.lastUsedAt).toLocaleString()) : '<span class="nd-sub">never</span>'}</td>
+          <td>${k.expiresAt ? escapeHtml(new Date(k.expiresAt).toLocaleDateString('en-AU')) : '<span class="nd-sub">—</span>'}</td>
+          <td><div class="action-buttons">
+            <button class="btn btn-secondary btn-sm" onclick="akToggleUsage('${escapeHtml(k.id)}')" aria-expanded="${open}"><i class="fas fa-chart-column"></i> ${open ? 'Hide' : 'Usage'}</button>
+            ${revoke}
+          </div></td>
         </tr>`;
       }).join('');
-      el.innerHTML = `<div style="overflow-x:auto;"><table class="nd-table">
-        <thead><tr><th>Prefix</th><th>Name</th><th>Owner</th><th>Limit/min</th><th>Last used</th><th>Expires</th><th>Status</th><th></th></tr></thead>
+      const openKey = keys.find(k => k.id === _akUsageOpen);
+      const panel = openKey
+        ? `<div class="ak-usage" id="ak-usage-wrap">
+            <div class="ak-usage-title">Usage · <strong>${escapeHtml(openKey.name)}</strong> <span class="ak-mono nd-sub">${escapeHtml(openKey.prefix)}</span>
+              <button class="btn btn-secondary btn-sm" onclick="akToggleUsage('${escapeHtml(openKey.id)}')"><i class="fas fa-times"></i> Close</button></div>
+            <div id="ak-usage-panel"></div>
+          </div>`
+        : '';
+      _akCloseChart();
+      el.innerHTML = `<div class="nd-table-scroll"><table class="nd-table ak-keys">
+        <thead>
+          <tr class="ak-groups"><th colspan="4"></th><th class="ak-group" colspan="3">Requests</th><th class="ak-group" colspan="4">Last 7 days</th><th colspan="4"></th></tr>
+          <tr><th>Key</th><th>Name</th><th>Owner</th><th>Status</th>
+            <th class="nd2-num">24h</th><th class="nd2-num">7 days</th><th class="nd2-num" title="Every request since the key was made">All time</th>
+            <th class="nd2-num" title="Not found">404</th>
+            <th class="nd2-num" title="401/403 — used from a web page, revoked or expired, or a path keys may not read">Refused</th>
+            <th class="nd2-num" title="Over the key's per-minute limit">429</th>
+            <th class="nd2-num" title="Server errors">5xx</th>
+            <th class="nd2-num">Limit/min</th><th>Last used</th><th>Expires</th><th></th></tr>
+        </thead>
         <tbody>${rows}</tbody>
-      </table></div>`;
+      </table></div>${panel}`;
+      if (openKey) _akRenderUsage();
+    }
+
+    // --- One key's usage, expanded under its row ---------------------------
+    let _akUsageOpen = null;        // key id
+    let _akUsageWindow = '24h';
+    let _akUsageData = null;        // last response, so a re-render of the table needn't refetch
+    let _akUsageSeq = 0;
+    let _akUsageChart = null;
+    const _AK_CLASSES = [
+      ['ok', 'OK', '#22c55e'],
+      ['notFound', '404', '#f59e0b'],
+      ['refused', 'Refused', '#ef4444'],
+      ['rateLimited', '429', '#a78bfa'],
+      ['otherClient', 'Other 4xx', '#f472b6'],
+      ['serverError', '5xx', '#b91c1c'],
+    ];
+    function _akCloseChart() {
+      if (_akUsageChart) { _akUsageChart.destroy(); _akUsageChart = null; }
+    }
+    function akToggleUsage(id) {
+      _akUsageOpen = _akUsageOpen === id ? null : id;
+      _akUsageData = null;
+      renderApiKeysList();
+      // The panel sits under the table, which may be a screen away from the row.
+      if (_akUsageOpen) document.getElementById('ak-usage-wrap')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+    function setAkUsageWindow(w) {
+      if (_akUsageWindow === w) return;
+      _akUsageWindow = w;
+      _akUsageData = null;
+      _akRenderUsage();
+    }
+    async function _akRenderUsage() {
+      const panel = document.getElementById('ak-usage-panel');
+      if (!panel || !_akUsageOpen) return;
+      const pills = [['24h', '24h'], ['7d', '7 days'], ['30d', '30 days']].map(([w, label]) =>
+        `<button class="filter-btn${_akUsageWindow === w ? ' active' : ''}" onclick="setAkUsageWindow('${w}')">${label}</button>`).join('');
+      const head = `<div class="ak-usage-head"><div class="filter-bar">${pills}</div><span class="nd-sub" id="ak-usage-sub"></span></div>`;
+      const d = _akUsageData;
+      if (d && d.key && d.key.id === _akUsageOpen && d.window === _akUsageWindow) {
+        panel.innerHTML = head + _akUsageBody(d);
+        _akDrawUsageChart(d);
+        return;
+      }
+      panel.innerHTML = head + '<div class="loading"><i class="fas fa-spinner"></i></div>';
+      const seq = ++_akUsageSeq;
+      const id = _akUsageOpen, win = _akUsageWindow;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/staff/api-keys/${encodeURIComponent(id)}/usage?window=${encodeURIComponent(win)}`, { headers: { 'Authorization': await authHeader() } });
+        if (seq !== _akUsageSeq) return;
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        if (seq !== _akUsageSeq || _akUsageOpen !== id || _akUsageWindow !== win) return;
+        _akUsageData = data;
+        const p = document.getElementById('ak-usage-panel');
+        if (!p) return;
+        p.innerHTML = head + _akUsageBody(data);
+        _akDrawUsageChart(data);
+      } catch (e) {
+        if (seq !== _akUsageSeq) return;
+        const p = document.getElementById('ak-usage-panel');
+        if (p) p.innerHTML = head + `<div class="nd-sub">Couldn't load this key's usage.</div>`;
+      }
+    }
+    function _akUsageBody(d) {
+      const t = d.totals || {};
+      const tile = (v, label, tone) => `<div class="stat-card ${v ? tone : 'zero'}"><div class="stat-value">${_akN(v)}</div><div class="stat-label">${label}</div></div>`;
+      const tiles = `<div class="stats-bar ak-stats">
+        ${tile(t.requests, 'Requests', '')}
+        ${tile(t.ok, 'OK', 'approved')}
+        ${tile(t.notFound, 'Not found · 404', 'warn')}
+        ${tile(t.refused, 'Refused · 401/403', 'bad')}
+        ${tile(t.rateLimited, 'Rate-limited · 429', 'warn')}
+        ${tile(t.otherClient, 'Other 4xx', 'warn')}
+        ${tile(t.serverError, 'Server · 5xx', 'bad')}
+      </div>`;
+      if (!t.requests) {
+        return tiles + `<div class="nd-sub">No requests with this key in the last ${d.window === '24h' ? '24 hours' : d.window === '7d' ? '7 days' : '30 days'}.</div>`;
+      }
+      const legend = `<div class="ak-legend">${_AK_CLASSES.map(([, label, colour]) => `<span><i style="background:${colour}"></i>${label}</span>`).join('')}</div>`;
+      const chart = `${legend}<div class="ak-usage-chart"><canvas id="ak-usage-canvas"></canvas></div>`;
+      const paths = d.paths || [];
+      const pathRows = paths.map(p => `<tr>
+          <td class="ak-mono ak-path" title="${escapeHtml(p.path)}">${escapeHtml(p.path)}</td>
+          <td class="nd2-num">${_akN(p.requests)}</td>
+          <td class="nd2-num">${_akCell(p.ok)}</td>
+          <td class="nd2-num">${_akCell(p.notFound, 'ak-warn')}</td>
+          <td class="nd2-num">${_akCell(p.refused, 'ak-bad')}</td>
+          <td class="nd2-num">${_akCell(p.rateLimited, 'ak-warn')}</td>
+          <td class="nd2-num">${_akCell(p.otherClient, 'ak-warn')}</td>
+          <td class="nd2-num">${_akCell(p.serverError, 'ak-bad')}</td>
+          <td title="${p.lastSeen ? escapeHtml(new Date(p.lastSeen).toLocaleString()) : ''}">${p.lastSeen ? escapeHtml(nd2Ago(p.lastSeen) || '') : ''}</td>
+        </tr>`).join('');
+      const more = d.pathCount > paths.length ? `Showing the ${paths.length} busiest of ${_akN(d.pathCount)} paths. ` : '';
+      return tiles + chart + `<div class="dev-section-h" style="margin:0.4rem 0 0.4rem;">Paths</div>
+        <div class="nd-table-scroll"><table class="nd-table ak-keys ak-paths">
+          <thead><tr><th>Path</th><th class="nd2-num">Requests</th><th class="nd2-num">OK</th><th class="nd2-num">404</th><th class="nd2-num">Refused</th><th class="nd2-num">429</th><th class="nd2-num">Other 4xx</th><th class="nd2-num">5xx</th><th>Last hour seen</th></tr></thead>
+          <tbody>${pathRows}</tbody>
+        </table></div>
+        <div class="ak-note">${more}Ids in a path are folded to <span class="ak-mono">:id</span>; anything but a GET shows its method. Past 100 different paths in an hour, the rest are counted as <span class="ak-mono">(other paths)</span>. Refused includes use from a web page, after revocation or expiry, and paths keys may not read.</div>`;
+    }
+    function _akDrawUsageChart(d) {
+      _akCloseChart();
+      const canvas = document.getElementById('ak-usage-canvas');
+      if (!canvas || typeof Chart === 'undefined') return;
+      const s = d.series || [];
+      const labels = s.map(p => {
+        if (d.bucket === 'hour') return new Date(p.at).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' });
+        const [y, m, day] = String(p.at).split('-').map(Number);
+        return new Date(y, m - 1, day).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' });
+      });
+      const sub = document.getElementById('ak-usage-sub');
+      if (sub) sub.textContent = d.bucket === 'hour' ? 'per hour' : 'per day (Sydney) — the first day is partial';
+      _akUsageChart = new Chart(canvas, {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: _AK_CLASSES.map(([cls, label, colour]) => ({
+            label, data: s.map(p => p[cls] || 0), backgroundColor: colour, borderWidth: 0, stack: 'u',
+          })),
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              backgroundColor: '#121e33', borderColor: 'rgba(148,163,184,0.25)', borderWidth: 1,
+              titleColor: '#f1f5f9', bodyColor: '#94a3b8', padding: 10,
+              filter: (item) => item.raw > 0,
+            },
+          },
+          scales: {
+            x: { stacked: true, grid: { display: false }, border: { color: 'rgba(148,163,184,0.16)' },
+                 ticks: { color: '#64748b', maxTicksLimit: 12, maxRotation: 0,
+                          font: { family: "'Space Grotesk', sans-serif", size: 10 } } },
+            y: { stacked: true, beginAtZero: true, grid: { color: 'rgba(148,163,184,0.07)' }, border: { display: false },
+                 ticks: { color: '#64748b', precision: 0, maxTicksLimit: 5,
+                          font: { family: "'Space Grotesk', sans-serif", size: 10 } } },
+          },
+        },
+      });
     }
     async function akRevoke(prefix) {
       const ok = (typeof uiConfirm === 'function')
