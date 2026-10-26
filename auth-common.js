@@ -233,6 +233,31 @@ function createProfileModal() {
       #profile-tabs button { background:rgba(148,163,184,0.08); border:1px solid rgba(148,163,184,0.2); border-radius:8px; color:#94a3b8; font:inherit; font-size:0.82rem; font-weight:600; padding:0.45rem 1.1rem; cursor:pointer; }
       #profile-tabs button.on { background:rgba(249,115,22,0.16); border-color:rgba(249,115,22,0.45); color:#f97316; }
       #profile-modal .pf-sect-hd { color:#cbd5e1; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em; font-weight:600; margin-bottom:0.6rem; display:block; }
+      #profile-modal [hidden] { display:none !important; }
+      /* API keys card (loadProfileApiKeys) */
+      #profile-modal .ak-h { color:#94a3b8; font-size:0.68rem; text-transform:uppercase; letter-spacing:0.08em; font-weight:700; margin:1rem 0 0.45rem; }
+      #profile-modal .ak-h:first-child { margin-top:0; }
+      #profile-modal .ak-item { background:rgba(2,6,23,0.4); border:1px solid rgba(148,163,184,0.15); border-radius:10px; padding:0.65rem 0.8rem; margin-bottom:0.45rem; }
+      #profile-modal .ak-item.dead .ak-name, #profile-modal .ak-item.dead .ak-prefix { opacity:0.6; }
+      #profile-modal .ak-top { display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap; }
+      #profile-modal .ak-name { font-weight:700; color:#f1f5f9; font-size:0.86rem; overflow-wrap:anywhere; }
+      #profile-modal .ak-chip { border-radius:999px; padding:0.08rem 0.5rem; font-size:0.62rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; white-space:nowrap; }
+      #profile-modal .ak-chip.ok { background:rgba(34,197,94,0.15); color:#86efac; }
+      #profile-modal .ak-chip.wait { background:rgba(249,115,22,0.15); color:#fdba74; }
+      #profile-modal .ak-chip.bad { background:rgba(239,68,68,0.15); color:#fca5a5; }
+      #profile-modal .ak-actions { margin-left:auto; display:flex; gap:0.35rem; flex-wrap:wrap; justify-content:flex-end; }
+      #profile-modal .ak-btn { padding:0.32rem 0.7rem; background:rgba(148,163,184,0.12); border:1px solid rgba(148,163,184,0.25); border-radius:6px; color:#e2e8f0; font-size:0.74rem; font-weight:600; cursor:pointer; font-family:inherit; white-space:nowrap; }
+      #profile-modal .ak-btn:hover { background:rgba(148,163,184,0.2); }
+      #profile-modal .ak-btn:disabled { opacity:0.5; cursor:default; }
+      #profile-modal .ak-btn.danger { color:#fca5a5; border-color:rgba(239,68,68,0.3); background:rgba(239,68,68,0.1); }
+      #profile-modal .ak-btn.primary { color:#fff; border-color:#f97316; background:#f97316; }
+      #profile-modal .ak-prefix { font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color:#94a3b8; font-size:0.76rem; margin-top:0.35rem; }
+      #profile-modal .ak-meta { color:#64748b; font-size:0.72rem; margin-top:0.2rem; line-height:1.45; }
+      #profile-modal .ak-note { color:#94a3b8; font-size:0.74rem; margin-top:0.35rem; line-height:1.45; }
+      #profile-modal .ak-empty { color:#64748b; font-size:0.78rem; margin-bottom:0.6rem; }
+      #profile-modal .ak-form { display:flex; flex-direction:column; gap:0.45rem; }
+      #profile-modal .ak-input { width:100%; padding:0.55rem 0.7rem; background:rgba(2,6,23,0.5); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#fff; font-size:0.85rem; box-sizing:border-box; font-family:inherit; }
+      #profile-modal .ak-reveal { border:1px solid rgba(34,197,94,0.4); background:rgba(34,197,94,0.07); border-radius:10px; padding:0.75rem 0.85rem; margin-bottom:0.9rem; }
     </style>
     <div style="background:#0f172a; width:100%; height:100%; overflow-y:auto; padding:1.6rem clamp(1rem, 4vw, 3rem) 3rem; box-sizing:border-box;">
       <div style="max-width:1180px; margin:0 auto;">
@@ -327,7 +352,7 @@ function createProfileModal() {
 
       <div id="profile-apikeys-section" class="pf-card">
         <label style="display:block; color:#cbd5e1; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem; font-weight:600;">API keys</label>
-        <div style="color:#64748b; font-size:0.72rem; margin-bottom:0.7rem;">For scripts and the command line — a key is refused from web pages by design. It can <strong>read the data feeds</strong> (RFS, traffic, transport, aircraft, vessels, weather, power, cameras, pager, radio sites) and nothing else: no account data, and no writes. Staff approve a request; you then generate the key here and see it exactly once (nothing stores it, staff never see it). One pending request at a time, up to 3 active keys.</div>
+        <div style="color:#64748b; font-size:0.72rem; margin-bottom:0.7rem;">For scripts and the command line — a key is refused from web pages by design. It can <strong>read the data feeds</strong> (RFS, traffic, transport, aircraft, vessels, weather, power, cameras, pager, radio sites) and nothing else: no account data, and no writes. Staff approve a request; you then generate the key here and see it exactly once (nothing stores it, staff never see it). Lost one? Re-issue it — same key, new secret. One pending request at a time, up to 3 active keys.</div>
         <div id="profile-apikeys-body"></div>
         <div id="profile-apikeys-msg" style="margin-top:0.5rem; font-size:0.8rem; min-height:1.2em;"></div>
       </div>
@@ -1158,81 +1183,122 @@ async function loadProfileApiKeys(session) {
   const requests = Array.isArray(j.requests) ? j.requests : [];
   const keys = Array.isArray(j.keys) ? j.keys : [];
   const maxKeys = Number(j.limits?.maxActiveKeys) || 3;
-  const rowStyle = 'display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap; padding:0.5rem 0.65rem; background:rgba(2,6,23,0.4); border:1px solid rgba(148,163,184,0.15); border-radius:8px; margin-bottom:0.4rem; font-size:0.8rem; color:#e2e8f0;';
-  const subStyle = 'color:#64748b; font-size:0.72rem;';
-  const smallBtn = 'padding:0.3rem 0.65rem; background:rgba(148,163,184,0.12); border:1px solid rgba(148,163,184,0.25); border-radius:6px; color:#e2e8f0; font-size:0.75rem; cursor:pointer; font-family:inherit;';
   const parts = [];
 
   // a. The one-time reveal. The plaintext is set as a DOM value below, never
   //    through innerHTML.
   if (_apiKeyReveal) {
+    const revealLine = _apiKeyReveal.reissued
+      ? `Your new key for ${escNotif(_apiKeyReveal.name)} — the old one has stopped working. Copy it now, it will not be shown again.`
+      : `Your key for ${escNotif(_apiKeyReveal.name)} — copy it now, it will not be shown again.`;
     parts.push(`
-      <div style="border:1px solid rgba(34,197,94,0.4); background:rgba(34,197,94,0.07); border-radius:8px; padding:0.7rem 0.8rem; margin-bottom:0.7rem;">
-        <div style="color:#86efac; font-size:0.8rem; font-weight:600; margin-bottom:0.45rem;">Your key for ${escNotif(_apiKeyReveal.name)} — copy it now, it will not be shown again.</div>
+      <div class="ak-reveal">
+        <div style="color:#86efac; font-size:0.8rem; font-weight:600; margin-bottom:0.5rem;">${revealLine}</div>
         <div style="display:flex; align-items:center; gap:0.5rem;">
-          <input type="text" id="profile-apikey-plain" readonly style="flex:1; min-width:0; padding:0.5rem 0.65rem; background:rgba(2,6,23,0.6); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#e2e8f0; font-size:0.78rem; font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; box-sizing:border-box;">
-          <button type="button" data-ak-copy title="Copy key" style="${smallBtn}"><i class="fas fa-copy"></i></button>
+          <input type="text" id="profile-apikey-plain" readonly class="ak-input" style="flex:1; min-width:0; font-size:0.78rem; font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;">
+          <button type="button" data-ak-copy title="Copy key" class="ak-btn"><i class="fas fa-copy"></i></button>
         </div>
-        <div style="${subStyle} margin-top:0.45rem; word-break:break-all; font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;">curl -H "Authorization: Bearer ak_..." https://api.forcequit.xyz/api/rfs/incidents</div>
-        <button type="button" data-ak-done style="${smallBtn} margin-top:0.55rem;">Done</button>
+        <div class="ak-meta" style="margin-top:0.5rem; word-break:break-all; font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;">curl -H "Authorization: Bearer ak_..." https://api.forcequit.xyz/api/rfs/incidents</div>
+        <button type="button" data-ak-done class="ak-btn" style="margin-top:0.6rem;">Done</button>
       </div>`);
   }
 
-  // b. Requests. Old rejections drop off so the list doesn't grow forever.
-  const chip = { pending: ['rgba(249,115,22,0.15)', '#fdba74'], approved: ['rgba(34,197,94,0.15)', '#86efac'], rejected: ['rgba(239,68,68,0.15)', '#fca5a5'] };
+  // b. Keys. Only the prefix is ever known to the browser after generation.
+  //    A live key can be re-issued (new secret, same key) or deleted; a dead
+  //    one can only be deleted, which takes it off this list.
+  if (keys.length) {
+    parts.push('<div class="ak-h">Your keys</div>');
+    keys.forEach((k) => {
+      const dead = !k.active;
+      const chip = dead
+        ? `<span class="ak-chip bad">${k.revokedAt ? 'Revoked' : 'Expired'}</span>`
+        : '<span class="ak-chip ok">Active</span>';
+      const total = Number(k.requestsTotal) || 0;
+      const meta = [
+        `${k.rateLimitPerMin} a minute`,
+        `${total.toLocaleString('en-AU')} request${total === 1 ? '' : 's'}`,
+        k.lastUsedAt ? `last used ${notifAgo(k.lastUsedAt) || apiKeyDate(k.lastUsedAt)}` : 'never used',
+      ];
+      if (k.expiresAt) meta.push(`${dead && !k.revokedAt ? 'expired' : 'expires'} ${apiKeyDate(k.expiresAt)}`);
+      parts.push(`
+        <div class="ak-item${dead ? ' dead' : ''}">
+          <div class="ak-top">
+            <span class="ak-name">${escNotif(k.name)}</span>
+            ${chip}
+            <span class="ak-actions">
+              ${dead ? '' : `<button type="button" data-ak-reissue="${escNotif(k.prefix)}" class="ak-btn">Re-issue</button>`}
+              <button type="button" data-ak-delete="${escNotif(k.prefix)}" class="ak-btn danger">Delete</button>
+            </span>
+          </div>
+          <div class="ak-prefix">ak_${escNotif(k.prefix)}_…</div>
+          <div class="ak-meta">${escNotif(meta.join(' · '))}</div>
+        </div>`);
+    });
+  }
+
+  // c. Requests still in play. Old rejections drop off so the list doesn't
+  //    grow forever, and a request that has been generated is its key above.
   const cutoff = Date.now() - 30 * 86400000;
-  requests.forEach((r) => {
-    if (r.status === 'rejected' && new Date(r.createdAt).getTime() < cutoff) return;
-    const [bg, fg] = chip[r.status] || chip.pending;
-    let action = '';
-    if (r.status === 'approved') {
-      // A lapsed grant (expiry passed before it was generated) can't be
-      // minted into a working key; the server refuses it and it no longer
-      // blocks a fresh request.
-      action = r.claimed
-        ? `<span style="${subStyle}">generated</span>`
-        : r.lapsed
-          ? `<span style="color:#fca5a5; font-size:0.72rem; font-weight:600;">lapsed — request again</span>`
-          : `<button type="button" data-ak-claim="${escNotif(r.id)}" style="padding:0.35rem 0.8rem; background:#f97316; border:none; border-radius:6px; color:#fff; font-weight:700; cursor:pointer; font-size:0.75rem; font-family:inherit;">Generate key</button>`;
-    }
-    parts.push(`
-      <div style="${rowStyle}">
-        <span style="font-weight:600; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis;">${escNotif(r.name)}</span>
-        <span style="background:${bg}; color:${fg}; border-radius:999px; padding:0.1rem 0.55rem; font-size:0.68rem; font-weight:600; text-transform:uppercase; letter-spacing:0.04em;">${escNotif(r.status)}</span>
-        <span style="${subStyle}">${escNotif(apiKeyDate(r.createdAt))}</span>
-        ${action}
-        ${r.reviewNote ? `<div style="${subStyle} width:100%;">Staff note: ${escNotif(r.reviewNote)}</div>` : ''}
-      </div>`);
-  });
+  const shown = requests.filter((r) => !r.claimed && !(r.status === 'rejected' && new Date(r.createdAt).getTime() < cutoff));
+  if (shown.length) {
+    parts.push('<div class="ak-h">Requests</div>');
+    shown.forEach((r) => {
+      let chip;
+      let action = '';
+      let line;
+      if (r.status === 'pending') {
+        chip = '<span class="ak-chip wait">Pending</span>';
+        line = `Sent ${apiKeyDate(r.createdAt)} · waiting for staff`;
+      } else if (r.status === 'approved' && r.lapsed) {
+        // A lapsed grant (expiry passed before it was generated) can't be
+        // minted into a working key; the server refuses it and it no longer
+        // blocks a fresh request.
+        chip = '<span class="ak-chip bad">Lapsed</span>';
+        line = 'Its expiry passed before it was generated — request again';
+      } else if (r.status === 'approved') {
+        chip = '<span class="ak-chip ok">Approved</span>';
+        action = `<span class="ak-actions"><button type="button" data-ak-claim="${escNotif(r.id)}" class="ak-btn primary">Generate key</button></span>`;
+        line = 'Generate it now — the key is shown once';
+      } else {
+        chip = '<span class="ak-chip bad">Not approved</span>';
+        line = `Sent ${apiKeyDate(r.createdAt)}`;
+      }
+      parts.push(`
+        <div class="ak-item">
+          <div class="ak-top"><span class="ak-name">${escNotif(r.name)}</span>${chip}${action}</div>
+          <div class="ak-meta">${escNotif(line)}</div>
+          ${r.reviewNote ? `<div class="ak-note">Staff note: ${escNotif(r.reviewNote)}</div>` : ''}
+        </div>`);
+    });
+  }
 
-  // c. Keys. Only the prefix is ever known to the browser after generation.
-  keys.forEach((k) => {
-    const state = k.active ? '' : (k.revokedAt ? 'revoked' : 'expired');
-    const used = k.lastUsedAt ? `last used ${notifAgo(k.lastUsedAt) || apiKeyDate(k.lastUsedAt)}` : 'never used';
-    parts.push(`
-      <div style="${rowStyle}${state ? ' opacity:0.55;' : ''}">
-        <span style="font-weight:600;">${escNotif(k.name)}</span>
-        <span style="font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color:#94a3b8; font-size:0.75rem;">ak_${escNotif(k.prefix)}_…</span>
-        ${state ? `<span style="color:#fca5a5; font-size:0.72rem; font-weight:600;">${state}</span>` : ''}
-        <span style="${subStyle} flex:1; min-width:0;">${escNotif(String(k.rateLimitPerMin))}/min · ${escNotif(used)}${k.expiresAt ? ` · expires ${escNotif(apiKeyDate(k.expiresAt))}` : ''}</span>
-        ${k.active ? `<button type="button" data-ak-revoke="${escNotif(k.prefix)}" style="${smallBtn} color:#fca5a5; border-color:rgba(239,68,68,0.3); background:rgba(239,68,68,0.12);">Revoke</button>` : ''}
-      </div>`);
-  });
-
-  // d. Ask for one, or say why not.
-  const inputStyle = 'width:100%; padding:0.55rem 0.7rem; background:rgba(2,6,23,0.5); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#fff; font-size:0.85rem; box-sizing:border-box; font-family:inherit;';
+  // d. Ask for one, or say why not. The form stays folded behind its button:
+  //    open, it read as part of the list above it.
   if (loadFailed) {
-    parts.push(`<div style="${subStyle} margin-top:0.3rem;">Couldn't load your API keys. <button type="button" data-ak-retry style="${smallBtn}">Retry</button></div>`);
+    parts.push(`<div class="ak-empty">Couldn't load your API keys. <button type="button" data-ak-retry class="ak-btn">Retry</button></div>`);
   } else if (j.canRequest) {
+    if (!keys.length && !shown.length) parts.push('<div class="ak-empty">You don\'t have any keys yet.</div>');
     parts.push(`
-      <div style="display:flex; flex-direction:column; gap:0.45rem; margin-top:${parts.length ? '0.7rem' : '0'};">
-        <input type="text" id="profile-apikey-name" maxlength="60" placeholder="What will use it? e.g. home-assistant" style="${inputStyle}">
-        <textarea id="profile-apikey-reason" maxlength="1000" rows="2" placeholder="What it's for — helps staff approve it" style="${inputStyle} resize:vertical;"></textarea>
-        <div><button type="button" id="profile-apikey-request-btn" onclick="requestProfileApiKey()" style="padding:0.5rem 0.9rem; background:#f97316; border:none; border-radius:8px; color:#fff; font-weight:700; cursor:pointer; font-size:0.8rem; font-family:inherit;">Request a key</button></div>
+      <div style="margin-top:${parts.length ? '0.9rem' : '0'};">
+        <button type="button" data-ak-open-form class="ak-btn primary">Request a key</button>
+        <div class="ak-form" data-ak-form hidden>
+          <input type="text" id="profile-apikey-name" maxlength="60" placeholder="What will use it? e.g. home-assistant" class="ak-input">
+          <textarea id="profile-apikey-reason" maxlength="1000" rows="2" placeholder="What it's for — helps staff approve it" class="ak-input" style="resize:vertical;"></textarea>
+          <div style="display:flex; gap:0.4rem;">
+            <button type="button" id="profile-apikey-request-btn" onclick="requestProfileApiKey()" class="ak-btn primary">Send request</button>
+            <button type="button" data-ak-close-form class="ak-btn">Cancel</button>
+          </div>
+        </div>
       </div>`);
   } else {
-    const pending = requests.some((r) => r.status === 'pending');
-    parts.push(`<div style="${subStyle} margin-top:0.3rem;">${pending ? 'A request is pending — staff will review it.' : `You hold the maximum of ${maxKeys} active key${maxKeys === 1 ? '' : 's'}. Revoke one to request another.`}</div>`);
+    // Why not, in the server's order: an open request (waiting, or approved
+    // and not generated) blocks first, then the live-key cap.
+    const why = requests.some((r) => r.status === 'pending')
+      ? 'You can ask for another key once staff have reviewed this one.'
+      : requests.some((r) => r.status === 'approved' && !r.claimed && !r.lapsed)
+        ? 'Generate your approved key first; then you can ask for another.'
+        : `You hold the maximum of ${maxKeys} active key${maxKeys === 1 ? '' : 's'}. Delete one to request another.`;
+    parts.push(`<div class="ak-empty" style="margin-top:0.6rem;">${why}</div>`);
   }
 
   body.innerHTML = parts.join('');
@@ -1241,39 +1307,74 @@ async function loadProfileApiKeys(session) {
   body.querySelector('[data-ak-copy]')?.addEventListener('click', (e) => copyTextFrom(plain, e.currentTarget));
   body.querySelector('[data-ak-done]')?.addEventListener('click', () => { _apiKeyReveal = null; loadProfileApiKeys(session); });
   body.querySelector('[data-ak-retry]')?.addEventListener('click', () => loadProfileApiKeys(session));
+  const openBtn = body.querySelector('[data-ak-open-form]');
+  const form = body.querySelector('[data-ak-form]');
+  openBtn?.addEventListener('click', () => {
+    openBtn.hidden = true;
+    form.hidden = false;
+    form.querySelector('#profile-apikey-name')?.focus();
+  });
+  body.querySelector('[data-ak-close-form]')?.addEventListener('click', () => {
+    form.hidden = true;
+    openBtn.hidden = false;
+    setApiKeysMsg('', false);
+  });
   // Disabled on click: a second click would be a second claim, which the
   // server refuses — and that refusal would then print under the key.
   body.querySelectorAll('[data-ak-claim]').forEach((b) => b.addEventListener('click', () => { b.disabled = true; claimProfileApiKey(b.dataset.akClaim); }));
-  // Revoking is final, so it asks once — a second click on the button itself,
-  // for the same reason the notification Clear does (ui-dialogs.js isn't here).
-  body.querySelectorAll('[data-ak-revoke]').forEach((b) => {
+  // Both are final for the key in hand, so each asks once — a second click on
+  // the button itself, for the same reason the notification Clear does
+  // (ui-dialogs.js isn't here).
+  const armOnce = (b, armedText, run) => {
+    const label = b.textContent;
     let armed = false;
     b.addEventListener('click', async () => {
       if (!armed) {
         armed = true;
-        b.textContent = 'Click again to revoke';
+        b.textContent = armedText;
         setTimeout(() => {
           if (!armed || !b.isConnected) return;
-          armed = false; b.textContent = 'Revoke';
+          armed = false; b.textContent = label;
         }, 4000);
         return;
       }
       armed = false;
       b.disabled = true;
-      try {
-        const res = await fetch(`${API_BASE_URL}/api/api-keys/${encodeURIComponent(b.dataset.akRevoke)}/revoke`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${session.access_token}` },
-        });
-        const rj = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(rj.error || 'HTTP ' + res.status);
-        setApiKeysMsg('Key revoked.', false);
-      } catch (e) {
-        setApiKeysMsg('Could not revoke: ' + (e && e.message ? e.message : 'unknown error'), true);
-      }
-      loadProfileApiKeys(session);
+      await run();
     });
-  });
+  };
+  body.querySelectorAll('[data-ak-reissue]').forEach((b) => armOnce(b, 'Click again — the old key stops working', () => reissueProfileApiKey(b.dataset.akReissue)));
+  body.querySelectorAll('[data-ak-delete]').forEach((b) => armOnce(b, 'Click again to delete', async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/api-keys/${encodeURIComponent(b.dataset.akDelete)}/delete`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      const rj = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(rj.error || 'HTTP ' + res.status);
+      setApiKeysMsg('Key deleted — anything still using it is refused.', false);
+    } catch (e) {
+      setApiKeysMsg('Could not delete: ' + (e && e.message ? e.message : 'unknown error'), true);
+    }
+    loadProfileApiKeys(session);
+  }));
+}
+
+// A new secret for a live key. Like a claim, the plaintext comes back once and
+// only lives in the reveal box until Done or the modal closes.
+async function reissueProfileApiKey(prefix) {
+  setApiKeysMsg('', false);
+  try {
+    const h = await notifHeaders();
+    if (!h) return;
+    const res = await fetch(`${API_BASE_URL}/api/api-keys/${encodeURIComponent(prefix)}/reissue`, { method: 'POST', headers: h });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok || !j.plaintext) throw new Error(j.error || 'HTTP ' + res.status);
+    _apiKeyReveal = { plaintext: j.plaintext, name: (j.key && j.key.name) || '', reissued: true };
+  } catch (e) {
+    setApiKeysMsg('Could not re-issue the key: ' + (e && e.message ? e.message : 'unknown error'), true);
+  }
+  loadProfileApiKeys();
 }
 
 async function claimProfileApiKey(id) {
