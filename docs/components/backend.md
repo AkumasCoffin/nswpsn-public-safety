@@ -350,11 +350,30 @@ key. The **user** mints it (`POST /api/api-keys/requests/:id/claim`), so the
 plaintext is shown once to its owner and never to staff; nothing stores it.
 Until they do, staff can withdraw the approval (`…/withdraw`), and a grant
 whose expiry passes before it is generated lapses on its own. A user holds at
-most three active keys, lists and revokes their own from the profile, and
-staff list and revoke any key from the staff page. The caps are checked under
+most three active keys. From the profile they can **re-issue** a live key
+(`POST /api/api-keys/:prefix/reissue`: a new secret and prefix on the same
+row, so its limit, expiry and history carry on; the plaintext is shown once,
+and the old key stops resolving once the change commits) or **delete** one
+(`…/delete`: revoked if live, and gone from their list; staff still see it).
+Staff list and revoke any key from the staff page. The caps are checked under
 a per-user advisory lock, with a partial unique index on pending requests as
 the backstop. The requests live in `api_key_requests` (migration 121); the
 routes are in `api/apiKeys.ts`.
+
+**What each key does is counted** (migration 127, `services/auth/apiKeyUsage.ts`):
+every request presented with a key's real secret, by key, hour, path and
+status, including the ones the gate refuses (from a web page, revoked or
+expired, over the limit, a path keys may not read). A wrong secret against a
+real prefix is not counted against the key. The tally is in memory and written
+to `api_key_usage_hourly` once a minute and at shutdown; a failed write drops
+that minute rather than counting it twice. Paths fold identifiers to `:id`
+and keep a non-GET method in front, and a key may add 100 distinct paths an
+hour before the rest are counted as `(other paths)`. The hourly rows are pruned
+after 90 days; `api_keys.requests_total` keeps the lifetime count. The staff
+page shows each key's 24-hour and 7-day figures by class (OK, 404, refused,
+429, other 4xx, 5xx) and, per key, a 24h / 7d / 30d chart and its busiest
+paths (`GET /api/staff/api-keys/:id/usage`). A window is a whole number of
+hours ending with the current one, so the list, the tiles and the chart agree.
 `scripts/issue-api-key.ts` remains the no-review path for a key minted on the
 server.
 
