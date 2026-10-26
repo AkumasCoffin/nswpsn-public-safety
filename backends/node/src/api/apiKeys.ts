@@ -11,17 +11,25 @@
  * user holding the terminal.
  *
  *   User (requireSupabaseJwt):
- *     GET  /api/api-keys/me                       own requests + keys + caps
+ *     GET  /api/api-keys/me                       own requests + undeleted keys + caps
  *     POST /api/api-keys/requests                 {name, reason} → pending
  *     POST /api/api-keys/requests/:id/claim       approved → mints, returns plaintext ONCE
- *     POST /api/api-keys/:prefix/revoke           own key
+ *     POST /api/api-keys/:prefix/reissue          own live key → new secret, plaintext ONCE
+ *     POST /api/api-keys/:prefix/delete           own key → revoked + gone from their list
  *   Staff (owner|staff — canManageUsers):
  *     GET  /api/staff/api-keys/requests?status=   pending|approved|rejected|all
  *     POST /api/staff/api-keys/requests/:id/approve   {rateLimitPerMin?, expiresAt?, note?}
  *     POST /api/staff/api-keys/requests/:id/reject    {note?}
  *     POST /api/staff/api-keys/requests/:id/withdraw  {note?}  approved-but-unclaimed → rejected
- *     GET  /api/staff/api-keys                    every key, with owner names
+ *     GET  /api/staff/api-keys                    every key (deleted too), owner names, 24h/7d usage
+ *     GET  /api/staff/api-keys/:id/usage?window=  24h|7d|30d — series + paths for one key
  *     POST /api/staff/api-keys/:prefix/revoke     any key; the owner is told
+ *
+ * Usage figures come from api_key_usage_hourly (migration 127,
+ * services/auth/apiKeyUsage.ts): every request made with a key's real secret,
+ * the gate's refusals included, by hour, path and status. A window is a whole
+ * number of hourly buckets ending with the current one, so a key's "24h" in
+ * the list, its tiles and the sum of its chart are the same number.
  *
  * Caps: one OPEN request per user (pending, or approved and not yet
  * generated and not lapsed) and MAX_ACTIVE_KEYS_PER_USER live keys. Both are
@@ -40,6 +48,9 @@ import { requireRole, canManageUsers } from '../services/auth/roles.js';
 import {
   createApiKey,
   revokeApiKey,
+  reissueApiKey,
+  deleteApiKey,
+  forgetApiKeyPrefix,
   DEFAULT_RATE_LIMIT_PER_MIN,
   type ApiKeyRow,
 } from '../services/auth/apiKeys.js';
@@ -64,6 +75,7 @@ export const MAX_ACTIVE_KEYS_PER_USER = 3;
 const KEYS_LINK = '/#api-keys';
 
 const PREFIX_RE = /^[A-Za-z0-9]{10}$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * A request that still binds the user: waiting on staff, or approved and
@@ -180,9 +192,79 @@ function mapKey(k: ApiKeyRow, now: number, nameOverlay?: Map<string, string>) {
     lastUsedAt: k.last_used_at,
     expiresAt: k.expires_at,
     revokedAt: k.revoked_at,
+    reissuedAt: k.reissued_at ?? null,
+    deletedAt: k.deleted_at ?? null,
+    requestsTotal: Number(k.requests_total ?? 0),
     active: isLiveKey(k, now),
     ...(nameOverlay ? { userId: k.user_id, userName: nameOverlay.get(k.user_id) ?? null } : {}),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Usage (api_key_usage_hourly)
+// ---------------------------------------------------------------------------
+
+/**
+ * How a status is reported. ok is anything the key's caller got data or a
+ * not-modified from; refused is the gate (or a route) saying no.
+ */
+const USAGE_CLASSES = ['ok', 'notFound', 'refused', 'rateLimited', 'otherClient', 'serverError'] as const;
+type UsageClass = (typeof USAGE_CLASSES)[number];
+type UsageCounts = { requests: number } & Record<UsageClass, number>;
+
+const USAGE_CLASS_SQL = `CASE WHEN status < 400 THEN 'ok'
+            WHEN status = 404 THEN 'notFound'
+            WHEN status IN (401, 403) THEN 'refused'
+            WHEN status = 429 THEN 'rateLimited'
+            WHEN status < 500 THEN 'otherClient'
+            ELSE 'serverError' END`;
+
+/**
+ * The first hourly bucket of a window `$n` hours long that ends with the
+ * current hour. Bracketed: AT TIME ZONE binds tighter than the minus, so an
+ * unbracketed start would apply it to the interval alone.
+ */
+const windowStartSql = (param: string) => `(date_trunc('hour', now()) - (${param}::int - 1) * interval '1 hour')`;
+
+const USAGE_WINDOWS: Record<string, { hours: number; bucket: 'hour' | 'day' }> = {
+  '24h': { hours: 24, bucket: 'hour' },
+  '7d': { hours: 7 * 24, bucket: 'day' },
+  '30d': { hours: 30 * 24, bucket: 'day' },
+};
+
+function emptyCounts(): UsageCounts {
+  return { requests: 0, ok: 0, notFound: 0, refused: 0, rateLimited: 0, otherClient: 0, serverError: 0 };
+}
+
+function addTo(c: UsageCounts, cls: string, n: number): void {
+  if (!(USAGE_CLASSES as readonly string[]).includes(cls)) return;
+  c[cls as UsageClass] += n;
+  c.requests += n;
+}
+
+/** Every key's last 24 hours and last 7 days, by class. Keys with no use are absent. */
+async function usageByKey(pool: Pool): Promise<Map<string, { h24: UsageCounts; d7: UsageCounts }>> {
+  const { rows } = await pool.query<{ key_id: string; in_day: boolean; cls: string; n: number }>(
+    `SELECT key_id::text AS key_id,
+            hour >= ${windowStartSql('$1')} AS in_day,
+            ${USAGE_CLASS_SQL} AS cls,
+            SUM(requests)::int AS n
+       FROM api_key_usage_hourly
+      WHERE hour >= ${windowStartSql('$2')}
+      GROUP BY 1, 2, 3`,
+    [USAGE_WINDOWS['24h']!.hours, USAGE_WINDOWS['7d']!.hours],
+  );
+  const out = new Map<string, { h24: UsageCounts; d7: UsageCounts }>();
+  for (const r of rows) {
+    let u = out.get(r.key_id);
+    if (!u) {
+      u = { h24: emptyCounts(), d7: emptyCounts() };
+      out.set(r.key_id, u);
+    }
+    addTo(u.d7, r.cls, Number(r.n));
+    if (r.in_day) addTo(u.h24, r.cls, Number(r.n));
+  }
+  return out;
 }
 
 /**
@@ -231,8 +313,9 @@ apiKeysRouter.get('/api/api-keys/me', requireSupabaseJwt, async (c) => {
         'SELECT * FROM api_key_requests WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50',
         [userId],
       ),
+      // A key the owner deleted is gone from their view; staff still see it.
       pool.query<ApiKeyRow>(
-        'SELECT * FROM api_keys WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50',
+        'SELECT * FROM api_keys WHERE user_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 50',
         [userId],
       ),
     ]);
@@ -379,26 +462,75 @@ apiKeysRouter.post('/api/api-keys/requests/:id/claim', requireSupabaseJwt, async
   }
 });
 
-apiKeysRouter.post('/api/api-keys/:prefix/revoke', requireSupabaseJwt, async (c) => {
+// A lost or leaked key, replaced without another review: the grant is the
+// same, only the secret changes. The plaintext exists only in this response,
+// exactly as at claim. Same per-user lock as claim, so a re-issue cannot
+// interleave with a claim or a second re-issue in another tab.
+apiKeysRouter.post('/api/api-keys/:prefix/reissue', requireSupabaseJwt, async (c) => {
+  const userId = currentUserId(c)!;
+  const prefix = c.req.param('prefix');
+  if (!PREFIX_RE.test(prefix)) return c.json({ error: 'invalid key' }, 400);
+  const pool = await getPool();
+  if (!pool) return c.json({ error: 'database unavailable' }, 503);
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await lockUser(client, userId);
+    const sel = await client.query<ApiKeyRow>(
+      'SELECT * FROM api_keys WHERE prefix = $1 AND user_id = $2 AND deleted_at IS NULL FOR UPDATE',
+      [prefix, userId],
+    );
+    const key = sel.rows[0];
+    if (!key) {
+      await client.query('ROLLBACK');
+      return c.json({ error: 'key not found' }, 404);
+    }
+    const now = Date.now();
+    if (!isLiveKey(key, now)) {
+      await client.query('ROLLBACK');
+      return c.json(
+        { error: key.revoked_at ? 'this key is revoked — it cannot be re-issued' : 'this key has expired — request a new one' },
+        409,
+      );
+    }
+    const out = await reissueApiKey(key.id, client);
+    if (!out) {
+      await client.query('ROLLBACK');
+      return c.json({ error: 'this key is no longer live' }, 409);
+    }
+    await client.query('COMMIT');
+    // Only now: before the commit, a request could re-cache the old row.
+    forgetApiKeyPrefix(out.oldPrefix);
+    log.info({ userId, oldPrefix: out.oldPrefix, prefix: out.row.prefix }, 'api key re-issued');
+    return c.json({ ok: true, plaintext: out.plaintext, key: mapKey(out.row, now) });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    log.error({ err, prefix, userId }, 'api key re-issue failed');
+    return c.json({ error: 'Failed to re-issue the key' }, 500);
+  } finally {
+    client.release();
+  }
+});
+
+// Delete is the owner's one way to end a key: a live one is revoked as it
+// goes. The row stays — it is the staff record, and its usage history hangs
+// off it — but the owner never sees it again.
+apiKeysRouter.post('/api/api-keys/:prefix/delete', requireSupabaseJwt, async (c) => {
   const userId = currentUserId(c)!;
   const prefix = c.req.param('prefix');
   if (!PREFIX_RE.test(prefix)) return c.json({ error: 'invalid key' }, 400);
   const pool = await getPool();
   if (!pool) return c.json({ error: 'database unavailable' }, 503);
   try {
-    const own = await pool.query<{ revoked_at: string | null }>(
-      'SELECT revoked_at FROM api_keys WHERE prefix = $1 AND user_id = $2',
-      [prefix, userId],
-    );
-    if (!own.rows[0]) return c.json({ error: 'key not found' }, 404);
-    // revokeApiKey only flips a live key, so a revoke that raced another
-    // (staff, or a second tab) reports the truth rather than a second success.
-    if (own.rows[0].revoked_at || !(await revokeApiKey(prefix))) return c.json({ error: 'already revoked' }, 409);
-    log.info({ prefix, userId }, 'api key revoked by owner');
+    // One UPDATE scoped to the owner: someone else's prefix, a deleted key and
+    // a second click all match nothing.
+    if (!(await deleteApiKey(prefix, userId))) return c.json({ error: 'key not found' }, 404);
+    log.info({ prefix, userId }, 'api key deleted by owner');
     return c.json({ ok: true });
   } catch (err) {
-    log.error({ err, prefix, userId }, 'api key self-revoke failed');
-    return c.json({ error: 'Failed to revoke' }, 500);
+    log.error({ err, prefix, userId }, 'api key delete failed');
+    return c.json({ error: 'Failed to delete' }, 500);
   }
 });
 
@@ -596,10 +728,123 @@ apiKeysRouter.get('/api/staff/api-keys', async (c) => {
     const now = Date.now();
     const res = await pool.query<ApiKeyRow>('SELECT * FROM api_keys ORDER BY created_at DESC LIMIT 500');
     const names = await displayNameMap(pool, res.rows.map((k) => k.user_id));
-    return c.json({ keys: res.rows.map((k) => mapKey(k, now, names)) });
+    // The keys are the point of the page; their counts are a column. A usage
+    // read that fails leaves the list up with usage null ("—" on the page).
+    let usage: Map<string, { h24: UsageCounts; d7: UsageCounts }> | null = null;
+    try {
+      usage = await usageByKey(pool);
+    } catch (err) {
+      log.warn({ err }, 'api key usage totals failed');
+    }
+    return c.json({
+      keys: res.rows.map((k) => ({
+        ...mapKey(k, now, names),
+        usage: usage ? (usage.get(k.id) ?? { h24: emptyCounts(), d7: emptyCounts() }) : null,
+      })),
+    });
   } catch (err) {
     log.error({ err }, 'api keys list failed');
     return c.json({ error: 'failed to load keys' }, 500);
+  }
+});
+
+// One key's usage over a window: totals, a zero-filled series (hourly for
+// 24h, by Sydney day for 7d and 30d), and the paths it hit most. Addressed by
+// id, not prefix: a re-issue changes the prefix but not the key.
+apiKeysRouter.get('/api/staff/api-keys/:id/usage', async (c) => {
+  const id = c.req.param('id');
+  if (!UUID_RE.test(id)) return c.json({ error: 'invalid key id' }, 400);
+  const windowRaw = new URL(c.req.url).searchParams.get('window') ?? '24h';
+  const window = USAGE_WINDOWS[windowRaw] ? windowRaw : '24h';
+  const spec = USAGE_WINDOWS[window]!;
+  const pool = await getPool();
+  if (!pool) return c.json({ error: 'database unavailable' }, 503);
+  try {
+    const now = Date.now();
+    const keyRes = await pool.query<ApiKeyRow>('SELECT * FROM api_keys WHERE id = $1', [id]);
+    const key = keyRes.rows[0];
+    if (!key) return c.json({ error: 'key not found' }, 404);
+
+    const start = windowStartSql('$2');
+    // Day buckets are Sydney days: the first is partial (the window starts on
+    // the hour, not at midnight), so the bars still sum to the totals.
+    const bucketExpr = spec.bucket === 'hour' ? 'hour' : `(hour AT TIME ZONE 'Australia/Sydney')::date`;
+    const bucketSeries = spec.bucket === 'hour'
+      ? `(SELECT generate_series(${start}, date_trunc('hour', now()), interval '1 hour') AS at)`
+      : `(SELECT generate_series((${start} AT TIME ZONE 'Australia/Sydney')::date,
+                                 (now() AT TIME ZONE 'Australia/Sydney')::date, interval '1 day')::date AS at)`;
+    const [seriesRes, pathsRes, pathCountRes] = await Promise.all([
+      pool.query<{ at: Date | string; cls: string | null; n: number }>(
+        `WITH u AS (
+           SELECT ${bucketExpr} AS at, ${USAGE_CLASS_SQL} AS cls, requests
+             FROM api_key_usage_hourly
+            WHERE key_id = $1 AND hour >= ${start}
+         )
+         SELECT b.at${spec.bucket === 'day' ? '::text' : ''} AS at, u.cls, COALESCE(SUM(u.requests), 0)::int AS n
+           FROM ${bucketSeries} AS b
+           LEFT JOIN u ON u.at = b.at
+          GROUP BY b.at, u.cls
+          ORDER BY b.at`,
+        [id, spec.hours],
+      ),
+      pool.query<{ path: string; cls: string; n: number; last_hour: Date }>(
+        `WITH top AS (
+           SELECT path FROM api_key_usage_hourly
+            WHERE key_id = $1 AND hour >= ${start}
+            GROUP BY path ORDER BY SUM(requests) DESC, path LIMIT 50
+         )
+         SELECT u.path, ${USAGE_CLASS_SQL} AS cls, SUM(u.requests)::int AS n, MAX(u.hour) AS last_hour
+           FROM api_key_usage_hourly u JOIN top USING (path)
+          WHERE u.key_id = $1 AND u.hour >= ${start}
+          GROUP BY 1, 2`,
+        [id, spec.hours],
+      ),
+      pool.query<{ n: number }>(
+        `SELECT COUNT(DISTINCT path)::int AS n FROM api_key_usage_hourly WHERE key_id = $1 AND hour >= ${start}`,
+        [id, spec.hours],
+      ),
+    ]);
+
+    const totals = emptyCounts();
+    const series: Array<{ at: string } & UsageCounts> = [];
+    for (const r of seriesRes.rows) {
+      const at = r.at instanceof Date ? r.at.toISOString() : String(r.at);
+      let point = series[series.length - 1];
+      if (!point || point.at !== at) {
+        point = { at, ...emptyCounts() };
+        series.push(point);
+      }
+      if (r.cls) {
+        addTo(point, r.cls, Number(r.n));
+        addTo(totals, r.cls, Number(r.n));
+      }
+    }
+
+    const byPath = new Map<string, { path: string; lastSeen: string | null } & UsageCounts>();
+    for (const r of pathsRes.rows) {
+      let p = byPath.get(r.path);
+      if (!p) {
+        p = { path: r.path, lastSeen: null, ...emptyCounts() };
+        byPath.set(r.path, p);
+      }
+      addTo(p, r.cls, Number(r.n));
+      const last = r.last_hour ? new Date(r.last_hour).toISOString() : null;
+      if (last && (!p.lastSeen || last > p.lastSeen)) p.lastSeen = last;
+    }
+    const paths = Array.from(byPath.values()).sort((a, b) => b.requests - a.requests || a.path.localeCompare(b.path));
+
+    return c.json({
+      key: mapKey(key, now),
+      window,
+      bucket: spec.bucket,
+      totals,
+      series,
+      paths,
+      pathCount: Number(pathCountRes.rows[0]?.n ?? 0),
+    });
+  } catch (err) {
+    log.error({ err, id }, 'api key usage failed');
+    return c.json({ error: 'failed to load usage' }, 500);
   }
 });
 

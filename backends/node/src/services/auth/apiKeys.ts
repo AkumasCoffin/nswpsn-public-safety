@@ -39,6 +39,11 @@ export interface ApiKeyRow {
   last_used_at: string | null;
   expires_at: string | null;
   revoked_at: string | null;
+  /** Lifetime request count, bumped by the usage flush (apiKeyUsage.ts). pg returns BIGINT as text. */
+  requests_total: string | number;
+  reissued_at: string | null;
+  /** The owner removed it from their list. Always revoked as well. */
+  deleted_at: string | null;
 }
 
 function sha256hex(s: string): string {
@@ -68,6 +73,13 @@ export function looksLikeApiKey(s: string | undefined | null): boolean {
 /** Anything that can run a parameterised query — the pool, or a client mid-transaction. */
 export type Queryable = Pick<Pool, 'query'>;
 
+/** A fresh prefix + plaintext pair, and the hash that is all the table keeps. */
+function mintKeyMaterial(): { prefix: string; plaintext: string; hash: string } {
+  const prefix = randomBytes(8).toString('base64url').replace(/[-_]/g, 'x').slice(0, LOOKUP_LEN);
+  const plaintext = `${API_KEY_PREFIX}${prefix}_${randomBytes(SECRET_BYTES).toString('base64url')}`;
+  return { prefix, plaintext, hash: sha256hex(plaintext) };
+}
+
 /**
  * Mint a key. The plaintext is returned ONCE for the caller to hand over; only
  * the hash lands in the table. Pass `q` to mint inside a caller's transaction
@@ -82,8 +94,7 @@ export async function createApiKey(opts: {
 }, q?: Queryable): Promise<{ plaintext: string; row: ApiKeyRow }> {
   const runner: Queryable | null = q ?? (await getPool());
   if (!runner) throw new Error('no database');
-  const prefix = randomBytes(8).toString('base64url').replace(/[-_]/g, 'x').slice(0, LOOKUP_LEN);
-  const plaintext = `${API_KEY_PREFIX}${prefix}_${randomBytes(SECRET_BYTES).toString('base64url')}`;
+  const { prefix, plaintext, hash } = mintKeyMaterial();
   const res = await runner.query<ApiKeyRow>(
     `INSERT INTO api_keys (user_id, name, prefix, key_hash, scopes, rate_limit_per_min, expires_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -92,7 +103,7 @@ export async function createApiKey(opts: {
       opts.userId,
       opts.name,
       prefix,
-      sha256hex(plaintext),
+      hash,
       opts.scopes ?? ['read'],
       opts.rateLimitPerMin ?? DEFAULT_RATE_LIMIT_PER_MIN,
       opts.expiresAt ?? null,
@@ -110,6 +121,57 @@ export async function revokeApiKey(prefix: string): Promise<boolean> {
   const res = await pool.query(
     `UPDATE api_keys SET revoked_at = now() WHERE prefix = $1 AND revoked_at IS NULL`,
     [prefix],
+  );
+  resolveCache.delete(prefix);
+  return (res.rowCount ?? 0) > 0;
+}
+
+/**
+ * Give a live key a new secret, and with it a new prefix. Everything else
+ * about the key carries on: its id, name, limit, expiry and usage history,
+ * and its per-minute window, which is keyed by id, so re-issuing cannot reset
+ * the limit. The row no longer has the old prefix to be found by, so the old
+ * plaintext stops resolving — once the caller has COMMITTED and then dropped
+ * `oldPrefix` from the cache (forgetApiKeyPrefix). Dropping it any earlier
+ * lets a request in that gap re-cache the old row from the uncommitted state.
+ *
+ * Returns null when the key is not live (revoked, expired or deleted) — the
+ * UPDATE's own WHERE decides, so a revoke racing the re-issue wins cleanly.
+ */
+export async function reissueApiKey(id: string, q: Queryable): Promise<{ plaintext: string; row: ApiKeyRow; oldPrefix: string } | null> {
+  const old = await q.query<{ prefix: string }>('SELECT prefix FROM api_keys WHERE id = $1', [id]);
+  const oldPrefix = old.rows[0]?.prefix;
+  if (!oldPrefix) return null;
+  const { prefix, plaintext, hash } = mintKeyMaterial();
+  const res = await q.query<ApiKeyRow>(
+    `UPDATE api_keys SET prefix = $2, key_hash = $3, reissued_at = now()
+      WHERE id = $1 AND revoked_at IS NULL AND deleted_at IS NULL
+        AND (expires_at IS NULL OR expires_at > now())
+      RETURNING *`,
+    [id, prefix, hash],
+  );
+  const row = res.rows[0];
+  if (!row) return null;
+  return { plaintext, row, oldPrefix };
+}
+
+/** Drop a prefix's cached resolution, so its next use reads the table. */
+export function forgetApiKeyPrefix(prefix: string): void {
+  resolveCache.delete(prefix);
+}
+
+/**
+ * The owner removes a key from their list. It is revoked if it was still live
+ * (a deleted key never works), and stays in the table for staff and for its
+ * usage history. False when the owner has no undeleted key with that prefix.
+ */
+export async function deleteApiKey(prefix: string, userId: string): Promise<boolean> {
+  const pool = await getPool();
+  if (!pool) throw new Error('no database');
+  const res = await pool.query(
+    `UPDATE api_keys SET revoked_at = COALESCE(revoked_at, now()), deleted_at = now()
+      WHERE prefix = $1 AND user_id = $2 AND deleted_at IS NULL`,
+    [prefix, userId],
   );
   resolveCache.delete(prefix);
   return (res.rowCount ?? 0) > 0;
@@ -168,9 +230,15 @@ export function _apiKeyCacheSize(): number {
   return resolveCache.size;
 }
 
+/**
+ * A revoked or expired key still names its row: the secret matched, so the
+ * request is that key's holder, and the gate counts it against the key
+ * (apiKeyUsage.ts) — a dead key that is still being used is worth seeing.
+ */
 export type ApiKeyResolve =
   | { ok: true; row: ApiKeyRow }
-  | { ok: false; reason: 'bad_key' | 'revoked' | 'expired' | 'unavailable' };
+  | { ok: false; reason: 'revoked' | 'expired'; row: ApiKeyRow }
+  | { ok: false; reason: 'bad_key' | 'unavailable' };
 
 /** Presented plaintext → its row, or why not. Constant-time on the hash. */
 export async function resolveApiKey(plaintext: string, now = Date.now()): Promise<ApiKeyResolve> {
@@ -191,8 +259,8 @@ export async function resolveApiKey(plaintext: string, now = Date.now()): Promis
   }
 
   if (!row || !safeEqual(supplied, row.key_hash)) return { ok: false, reason: 'bad_key' };
-  if (row.revoked_at) return { ok: false, reason: 'revoked' };
-  if (row.expires_at && new Date(row.expires_at).getTime() <= now) return { ok: false, reason: 'expired' };
+  if (row.revoked_at) return { ok: false, reason: 'revoked', row };
+  if (row.expires_at && new Date(row.expires_at).getTime() <= now) return { ok: false, reason: 'expired', row };
   return { ok: true, row };
 }
 

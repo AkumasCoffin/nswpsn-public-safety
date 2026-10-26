@@ -282,16 +282,23 @@ export const requireApiKey: MiddlewareHandler = async (c, next) => {
   // --- Named API key ------------------------------------------------------------
   const presentedKey = looksLikeApiKey(bearer) ? bearer : looksLikeApiKey(xApiKey) ? xApiKey : '';
   if (presentedKey) {
+    // Resolved before any refusal so that every refusal below can be counted
+    // against the key it was for (apiKeyUsage.ts) — a key used from a web
+    // page, after revocation, past its limit or on the wrong path is what
+    // staff most need to see. Only a matching secret is attributed: a wrong
+    // one against a real prefix is not the key's holder.
+    const r = await resolveApiKey(presentedKey);
+    if ('row' in r) c.set('apiKeyUsageId', r.row.id);
     // Keys are for scripts and servers. A browser always sends Origin on a
     // cross-origin call, so its presence means a web page — ours or another
-    // site's — is trying to use a key, and that is exactly what keys are not for.
+    // site's — is trying to use a key, and that is exactly what keys are not
+    // for. Answered before the key's own state, as it always was.
     if (c.req.header('Origin')) {
       return c.json(
         { error: 'api_key_browser_use', message: 'API keys are for scripts and the command line, not web pages' },
         403,
       );
     }
-    const r = await resolveApiKey(presentedKey);
     if (!r.ok) {
       if (r.reason === 'unavailable') {
         return c.json({ error: 'auth_unavailable', message: 'Could not verify the API key; try again shortly' }, 503);

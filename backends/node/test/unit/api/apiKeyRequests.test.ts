@@ -97,6 +97,8 @@ const REQUEST = (over: Record<string, unknown> = {}) => ({
   reviewed_by: null, reviewed_by_name: null, reviewed_at: null, key_id: null, claimed_at: null, created_at: 't', ...over,
 });
 
+const UUID = '0b6e1f6a-6d0c-4b8e-9a51-2f3c4d5e6f70';
+
 const KEY = (over: Record<string, unknown> = {}) => ({
   id: 'k-uuid', user_id: 'user-1', name: 'home-assistant', prefix: 'abcdefghij', key_hash: 'deadbeef',
   scopes: ['read'], rate_limit_per_min: 120, created_at: 't', last_used_at: null, expires_at: null, revoked_at: null, ...over,
@@ -313,27 +315,90 @@ describe('user routes', () => {
     });
   });
 
-  it('self-revoke: only own live keys, prefix validated', async () => {
+  it('GET /me reads only keys the owner has not deleted', async () => {
+    resultQueue = [{ rows: [] }, { rows: [KEY({ requests_total: '1204', reissued_at: '2026-10-01T00:00:00Z' })] }];
+    const body = await (await makeApp().request('/api/api-keys/me')).json() as { keys: Array<Record<string, unknown>> };
+    const sel = calls.find((q) => q.sql.includes('FROM api_keys WHERE user_id'));
+    expect(sel?.sql).toContain('deleted_at IS NULL');
+    // BIGINT arrives as text; the owner sees a number.
+    expect(body.keys[0]).toMatchObject({ requestsTotal: 1204, reissuedAt: '2026-10-01T00:00:00Z' });
+  });
+
+  it('the owner revoke route is gone — Delete replaced it', async () => {
+    expect((await makeApp().request('/api/api-keys/abcdefghij/revoke', { method: 'POST' })).status).toBe(404);
+  });
+
+  describe('re-issue', () => {
+    it('400 on a bad prefix; 404 for a key that is not yours or was deleted', async () => {
+      const app = makeApp();
+      expect((await app.request('/api/api-keys/not-a-prefix!/reissue', { method: 'POST' })).status).toBe(400);
+      resultQueue = [{ rows: [] }];
+      expect((await app.request('/api/api-keys/abcdefghij/reissue', { method: 'POST' })).status).toBe(404);
+      const sel = calls.find((q) => q.sql.includes('FOR UPDATE'));
+      expect(sel?.sql).toContain('deleted_at IS NULL');
+      expect(sel?.params).toEqual(['abcdefghij', 'user-1']);
+      expect(calls.some((q) => q.sql.startsWith('ROLLBACK'))).toBe(true);
+    });
+
+    it('409 for a revoked or expired key, and nothing is changed', async () => {
+      const app = makeApp();
+      resultQueue = [{ rows: [KEY({ revoked_at: 'r' })] }];
+      const revoked = await app.request('/api/api-keys/abcdefghij/reissue', { method: 'POST' });
+      expect(revoked.status).toBe(409);
+      expect(((await revoked.json()) as { error: string }).error).toContain('revoked');
+      resultQueue = [{ rows: [KEY({ expires_at: new Date(Date.now() - 1000).toISOString() })] }];
+      expect((await app.request('/api/api-keys/abcdefghij/reissue', { method: 'POST' })).status).toBe(409);
+      expect(calls.some((q) => q.sql.includes('SET prefix'))).toBe(false);
+    });
+
+    it('swaps the secret on the same row under the per-user lock and returns the new plaintext once', async () => {
+      resultQueue = [
+        { rows: [KEY()] },                                                  // SELECT … FOR UPDATE
+        { rows: [{ prefix: 'abcdefghij' }] },                               // reissueApiKey: old prefix
+        { rows: [KEY({ prefix: 'newprefix0', reissued_at: 'now' })] },      // UPDATE … RETURNING
+      ];
+      const res = await makeApp().request('/api/api-keys/abcdefghij/reissue', { method: 'POST' });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { plaintext: string; key: Record<string, unknown> };
+      expect(body.plaintext).toMatch(/^ak_[A-Za-z0-9]{10}_[A-Za-z0-9_-]{32}$/);
+      expect(body.key).toMatchObject({ id: 'k-uuid', prefix: 'newprefix0' });
+      expect(body.key).not.toHaveProperty('key_hash');
+
+      const order = calls.map((q) => q.sql.trim().split(/\s+/)[0]);
+      expect(order[0]).toBe('BEGIN');
+      expect(calls[1]!.sql).toContain('pg_advisory_xact_lock');
+      expect(order[order.length - 1]).toBe('COMMIT');
+      const upd = calls.find((q) => q.sql.includes('SET prefix'));
+      // Same row; a fresh hash; only while the key is still live.
+      expect(upd!.params![0]).toBe('k-uuid');
+      expect(String(upd!.params![2])).toMatch(/^[0-9a-f]{64}$/);
+      expect(upd!.sql).toContain('revoked_at IS NULL AND deleted_at IS NULL');
+      expect(calls.some((q) => (q.params ?? []).includes(body.plaintext))).toBe(false);
+    });
+
+    it('a revoke that lands between the read and the swap wins: 409, rolled back', async () => {
+      resultQueue = [{ rows: [KEY()] }, { rows: [{ prefix: 'abcdefghij' }] }, { rows: [] }];
+      expect((await makeApp().request('/api/api-keys/abcdefghij/reissue', { method: 'POST' })).status).toBe(409);
+      expect(calls.some((q) => q.sql.startsWith('ROLLBACK'))).toBe(true);
+      expect(calls.some((q) => q.sql.startsWith('COMMIT'))).toBe(false);
+    });
+  });
+
+  it('delete: one owner-scoped UPDATE that revokes and hides; a second delete is 404', async () => {
     const app = makeApp();
-    expect((await app.request('/api/api-keys/not-a-prefix!/revoke', { method: 'POST' })).status).toBe(400);
+    expect((await app.request('/api/api-keys/not-a-prefix!/delete', { method: 'POST' })).status).toBe(400);
 
-    resultQueue = [{ rows: [] }];
-    expect((await app.request('/api/api-keys/abcdefghij/revoke', { method: 'POST' })).status).toBe(404);
-    const sel = calls.find((q) => q.sql.includes('FROM api_keys WHERE prefix'));
-    expect(sel?.params).toEqual(['abcdefghij', 'user-1']);
-
-    resultQueue = [{ rows: [{ revoked_at: 'r' }] }];
-    expect((await app.request('/api/api-keys/abcdefghij/revoke', { method: 'POST' })).status).toBe(409);
-
-    resultQueue = [{ rows: [{ revoked_at: null }] }, { rows: [], rowCount: 1 }];
-    expect((await app.request('/api/api-keys/abcdefghij/revoke', { method: 'POST' })).status).toBe(200);
-    expect(calls.some((q) => q.sql.includes('SET revoked_at = now()'))).toBe(true);
+    resultQueue = [{ rows: [], rowCount: 1 }];
+    expect((await app.request('/api/api-keys/abcdefghij/delete', { method: 'POST' })).status).toBe(200);
+    const upd = calls.find((q) => q.sql.includes('deleted_at = now()'));
+    expect(upd?.sql).toContain('revoked_at = COALESCE(revoked_at, now())');
+    expect(upd?.sql).toContain('deleted_at IS NULL');
+    expect(upd?.params).toEqual(['abcdefghij', 'user-1']);
     expect(bells).toHaveLength(0);
 
-    // Lost the race (staff revoked it between the read and the write): the
-    // UPDATE touches nothing, and that is reported, not papered over.
-    resultQueue = [{ rows: [{ revoked_at: null }] }, { rows: [], rowCount: 0 }];
-    expect((await app.request('/api/api-keys/abcdefghij/revoke', { method: 'POST' })).status).toBe(409);
+    // Someone else's key, or already deleted: the UPDATE matches nothing.
+    resultQueue = [{ rows: [], rowCount: 0 }];
+    expect((await app.request('/api/api-keys/abcdefghij/delete', { method: 'POST' })).status).toBe(404);
   });
 });
 
@@ -344,6 +409,7 @@ describe('staff routes', () => {
     expect((await app.request('/api/staff/api-keys')).status).toBe(403);
     expect((await app.request('/api/staff/api-keys/requests/5/approve', json({}))).status).toBe(403);
     expect((await app.request('/api/staff/api-keys/abcdefghij/revoke', { method: 'POST' })).status).toBe(403);
+    expect((await app.request(`/api/staff/api-keys/${UUID}/usage`)).status).toBe(403);
     expect((await makeApp({ userId: null }).request('/api/staff/api-keys/requests')).status).toBe(401);
     expect(calls).toHaveLength(0);
   });
@@ -450,6 +516,105 @@ describe('staff routes', () => {
     expect(JSON.stringify(body)).not.toContain('deadbeef');
     expect(body.keys[0]).toMatchObject({ prefix: 'abcdefghij', userId: 'user-1', userName: 'Current Name', active: true });
     expect(body.keys[1]).toMatchObject({ userId: 'user-2', userName: null });
+  });
+
+  it('each key carries its 24h and 7-day usage by class; deleted keys stay listed for staff', async () => {
+    staff = true;
+    resultQueue = [
+      { rows: [KEY(), KEY({ id: 'k2', prefix: 'zzzzzzzzzz', deleted_at: 'd', revoked_at: 'd' })] },
+      {
+        rows: [
+          { key_id: 'k-uuid', in_day: true, cls: 'ok', n: 10 },
+          { key_id: 'k-uuid', in_day: true, cls: 'notFound', n: 2 },
+          { key_id: 'k-uuid', in_day: false, cls: 'ok', n: 30 },
+          { key_id: 'k-uuid', in_day: false, cls: 'rateLimited', n: 4 },
+        ],
+      },
+    ];
+    const res = await makeApp({ userId: 'staff-1' }).request('/api/staff/api-keys');
+    const body = (await res.json()) as { keys: Array<Record<string, unknown>> };
+    expect(body.keys[0]!.usage).toEqual({
+      h24: { requests: 12, ok: 10, notFound: 2, refused: 0, rateLimited: 0, otherClient: 0, serverError: 0 },
+      d7: { requests: 46, ok: 40, notFound: 2, refused: 0, rateLimited: 4, otherClient: 0, serverError: 0 },
+    });
+    // A key with no use reads as zeros, not as missing.
+    expect((body.keys[1]!.usage as { d7: { requests: number } }).d7.requests).toBe(0);
+    expect(body.keys[1]).toMatchObject({ deletedAt: 'd', active: false });
+    const agg = calls.find((q) => q.sql.includes('FROM api_key_usage_hourly'));
+    expect(agg?.params).toEqual([24, 168]);
+  });
+
+  it('a failed usage read leaves the key list up, with usage null', async () => {
+    staff = true;
+    resultQueue = [{ rows: [KEY()] }, { rows: [], error: new Error('relation does not exist') }];
+    const res = await makeApp({ userId: 'staff-1' }).request('/api/staff/api-keys');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { keys: Array<Record<string, unknown>> };
+    expect(body.keys[0]).toMatchObject({ prefix: 'abcdefghij', usage: null });
+  });
+
+  describe('one key\'s usage', () => {
+    it('400 on a non-uuid id, 404 for an unknown key', async () => {
+      staff = true;
+      const app = makeApp({ userId: 'staff-1' });
+      expect((await app.request('/api/staff/api-keys/abcdefghij/usage')).status).toBe(400);
+      expect(calls).toHaveLength(0);
+      resultQueue = [{ rows: [] }];
+      expect((await app.request(`/api/staff/api-keys/${UUID}/usage`)).status).toBe(404);
+    });
+
+    it('24h: hourly buckets, totals summed from the series, paths merged across classes', async () => {
+      staff = true;
+      const h1 = new Date('2026-10-27T01:00:00Z');
+      const h2 = new Date('2026-10-27T02:00:00Z');
+      resultQueue = [
+        { rows: [KEY({ id: UUID })] },
+        {
+          rows: [
+            { at: h1, cls: null, n: 0 },
+            { at: h2, cls: 'ok', n: 5 },
+            { at: h2, cls: 'notFound', n: 3 },
+          ],
+        },
+        {
+          rows: [
+            { path: '/api/rfs/incidents', cls: 'ok', n: 5, last_hour: h2 },
+            { path: '/api/rfs/nope', cls: 'notFound', n: 3, last_hour: h1 },
+          ],
+        },
+        { rows: [{ n: 2 }] },
+      ];
+      const res = await makeApp({ userId: 'staff-1' }).request(`/api/staff/api-keys/${UUID}/usage?window=24h`);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(body).toMatchObject({ window: '24h', bucket: 'hour', pathCount: 2 });
+      expect(body.totals).toEqual({ requests: 8, ok: 5, notFound: 3, refused: 0, rateLimited: 0, otherClient: 0, serverError: 0 });
+      const series = body.series as Array<Record<string, unknown>>;
+      expect(series).toHaveLength(2);
+      expect(series[0]).toMatchObject({ at: h1.toISOString(), requests: 0 });
+      expect(series[1]).toMatchObject({ at: h2.toISOString(), ok: 5, notFound: 3 });
+      expect((body.paths as Array<Record<string, unknown>>)[0]).toMatchObject({ path: '/api/rfs/incidents', requests: 5, lastSeen: h2.toISOString() });
+      // Every read is scoped to this key and this window's hours.
+      const reads = calls.filter((q) => q.sql.includes('api_key_usage_hourly'));
+      expect(reads).toHaveLength(3);
+      for (const r of reads) expect(r.params).toEqual([UUID, 24]);
+    });
+
+    it('7d and 30d are Sydney days; an unknown window falls back to 24h', async () => {
+      staff = true;
+      const app = makeApp({ userId: 'staff-1' });
+      resultQueue = [{ rows: [KEY({ id: UUID })] }, { rows: [{ at: '2026-10-27', cls: 'ok', n: 1 }] }, { rows: [] }, { rows: [{ n: 0 }] }];
+      let body = (await (await app.request(`/api/staff/api-keys/${UUID}/usage?window=7d`)).json()) as Record<string, unknown>;
+      expect(body).toMatchObject({ window: '7d', bucket: 'day' });
+      expect((body.series as Array<Record<string, unknown>>)[0]).toMatchObject({ at: '2026-10-27', ok: 1 });
+      expect(calls.find((q) => q.sql.includes('generate_series'))?.sql).toContain("AT TIME ZONE 'Australia/Sydney'");
+      expect(calls.find((q) => q.sql.includes('generate_series'))?.params).toEqual([UUID, 168]);
+
+      calls.length = 0;
+      resultQueue = [{ rows: [KEY({ id: UUID })] }, { rows: [] }, { rows: [] }, { rows: [{ n: 0 }] }];
+      body = (await (await app.request(`/api/staff/api-keys/${UUID}/usage?window=1y`)).json()) as Record<string, unknown>;
+      expect(body).toMatchObject({ window: '24h', bucket: 'hour' });
+    });
   });
 
   it('staff revoke works on any key and bells the owner (not themselves)', async () => {

@@ -217,6 +217,59 @@ describe('requireApiKey', () => {
     });
   });
 
+  // Which requests count against a key (apiKeyUsage.ts reads apiKeyUsageId
+  // after the response exists). The refusals are the point: staff need to see
+  // a key used from a page, after revocation, past its limit or off its paths.
+  describe('usage attribution', () => {
+    function attributing(seen: Array<string | null>) {
+      const app = new Hono();
+      app.use('*', async (c, next) => {
+        await next();
+        seen.push(((c.get as (k: string) => unknown)('apiKeyUsageId') as string | undefined) ?? null);
+      });
+      app.use('*', requireApiKey);
+      app.get(FEED, (c) => c.json(body(c)));
+      app.get('/api/thing', (c) => c.json(body(c)));
+      return app;
+    }
+    const h = { headers: { Authorization: `Bearer ${KEY}` } };
+
+    it('marks an accepted request, a refused path, a web page and a request over the limit', async () => {
+      const seen: Array<string | null> = [];
+      const app = attributing(seen);
+      expect((await app.request(FEED, h)).status).toBe(200);
+      expect((await app.request('/api/thing', h)).status).toBe(403);
+      expect((await app.request(FEED, h)).status).toBe(429);
+      expect((await app.request(FEED, { headers: { ...h.headers, Origin: 'https://someone-elses.site' } })).status).toBe(403);
+      expect(seen).toEqual(['k1', 'k1', 'k1', 'k1']);
+    });
+
+    it('marks a revoked key that is still being used', async () => {
+      queryMock.mockResolvedValue({ rows: [{ ...keyRow(), revoked_at: 'r' }], rowCount: 1 });
+      const seen: Array<string | null> = [];
+      const res = await attributing(seen).request(FEED, h);
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({ error: 'Invalid API key' });
+      expect(seen).toEqual(['k1']);
+    });
+
+    it('does not mark a wrong secret against a real prefix, nor the static key', async () => {
+      const seen: Array<string | null> = [];
+      const app = attributing(seen);
+      expect((await app.request(FEED, { headers: { Authorization: `Bearer ak_abcdefghij_${'W'.repeat(32)}` } })).status).toBe(403);
+      expect((await app.request('/api/thing', { headers: { Authorization: 'Bearer test-api-key' } })).status).toBe(200);
+      expect(seen).toEqual([null, null]);
+    });
+
+    it('a web page with a key still gets the browser-use 403 when the database is down', async () => {
+      const { getPool } = await import('../../../src/db/pool.js');
+      vi.mocked(getPool).mockResolvedValueOnce(null as never);
+      const res = await makeApp().request(FEED, { headers: { Authorization: `Bearer ${KEY}`, Origin: 'https://x.example' } });
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({ error: 'api_key_browser_use' });
+    });
+  });
+
   describe('static site key (server callers)', () => {
     it('still works via Bearer, X-API-Key and ?api_key=', async () => {
       const app = makeApp();

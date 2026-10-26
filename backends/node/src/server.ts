@@ -79,6 +79,7 @@ import { nodeIngestRouter } from './api/node-ingest.js';
 import { scannerIngestRouter } from './api/scanner-ingest.js';
 import { nodeDataRouter } from './api/node-data.js';
 import { requireApiKey } from './services/auth/apiKey.js';
+import { apiKeyUsage } from './services/auth/apiKeyUsage.js';
 import { isFirstPartyOrigin } from './services/auth/firstParty.js';
 import { optionalSupabaseJwt } from './services/auth/supabaseJwt.js';
 import { sessionRouter } from './api/session.js';
@@ -246,6 +247,10 @@ export function createApp() {
 
   // Custom request logger — see comment on requestLogger above.
   app.use('*', requestLogger);
+
+  // Per-key usage counts (apiKeyUsage.ts). Outside the credential gate, so
+  // it sees the gate's refusals of a key as well as what the route answered.
+  app.use('*', apiKeyUsage);
 
   // Brotli/gzip compression. The /api/data/history full payloads and
   // (~1-2 MB raw) compress ~10×. Cloudflare/

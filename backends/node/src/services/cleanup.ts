@@ -47,6 +47,8 @@ const DEFAULT_INTERVAL_SECS = Number.parseInt(
 // window, and the status page and the ADS-B history view both report it. See
 // lib/retention.ts for why that is one definition and not three.
 const DEFAULT_RETENTION_DAYS = DATA_RETENTION_DAYS;
+/** api_key_usage_hourly keeps this long; see the prune below. */
+const API_KEY_USAGE_RETENTION_DAYS = 90;
 
 const ARCHIVE_TABLES = [
   'archive_traffic',
@@ -454,6 +456,23 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
         }
       } catch (err) {
         log.warn({ err: (err as Error).message }, 'cleanup: node-hourly prune failed');
+      }
+
+      // 2c-sexies. Per-key API usage (migration 127). Its own fixed window
+      // rather than DATA_RETENTION_DAYS: the staff view reads at most 30 days,
+      // and a key's lifetime count lives on api_keys.requests_total.
+      try {
+        const r = await client.query(
+          `DELETE FROM api_key_usage_hourly
+            WHERE hour < (NOW() - ($1 || ' days')::interval)`,
+          [String(API_KEY_USAGE_RETENTION_DAYS)],
+        );
+        if ((r.rowCount ?? 0) > 0) {
+          rowsDeleted += r.rowCount ?? 0;
+          log.info({ rows: r.rowCount }, 'cleanup: pruned api_key_usage_hourly');
+        }
+      } catch (err) {
+        log.warn({ err: (err as Error).message }, 'cleanup: api-key usage prune failed');
       }
 
       // 2d. Prune archive_*_latest sidecar entries we haven't seen in

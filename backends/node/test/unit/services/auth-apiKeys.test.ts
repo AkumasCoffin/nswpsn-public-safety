@@ -18,6 +18,9 @@ import {
   lookupPrefix,
   apiKeyRequestOk,
   revokeApiKey,
+  reissueApiKey,
+  deleteApiKey,
+  forgetApiKeyPrefix,
   _clearApiKeyCache,
   type ApiKeyRow,
 } from '../../../src/services/auth/apiKeys.js';
@@ -35,6 +38,9 @@ function rowFor(plaintext: string, over: Partial<ApiKeyRow> = {}): ApiKeyRow {
     last_used_at: null,
     expires_at: null,
     revoked_at: null,
+    requests_total: 0,
+    reissued_at: null,
+    deleted_at: null,
     ...over,
   };
 }
@@ -79,10 +85,12 @@ describe('resolveApiKey', () => {
   it('refuses revoked and expired keys', async () => {
     const k = 'ak_abcdefghij_' + 'A'.repeat(32);
     queryMock.mockResolvedValueOnce({ rows: [rowFor(k, { revoked_at: '2026-10-10T00:00:00Z' })] });
-    expect(await resolveApiKey(k)).toEqual({ ok: false, reason: 'revoked' });
+    // The row comes back with the refusal: the secret matched, so the gate
+    // counts the attempt against the key (apiKeyUsage.ts).
+    expect(await resolveApiKey(k)).toMatchObject({ ok: false, reason: 'revoked', row: { id: 'k1' } });
     _clearApiKeyCache();
     queryMock.mockResolvedValueOnce({ rows: [rowFor(k, { expires_at: '2020-01-01T00:00:00Z' })] });
-    expect(await resolveApiKey(k)).toEqual({ ok: false, reason: 'expired' });
+    expect(await resolveApiKey(k)).toMatchObject({ ok: false, reason: 'expired', row: { id: 'k1' } });
   });
 
   it('reports unavailable, not bad, when there is no database', async () => {
@@ -98,7 +106,60 @@ describe('resolveApiKey', () => {
     queryMock.mockResolvedValueOnce({ rowCount: 1 });
     expect(await revokeApiKey('abcdefghij')).toBe(true);
     queryMock.mockResolvedValueOnce({ rows: [rowFor(k, { revoked_at: 'now' })] });
-    expect(await resolveApiKey(k)).toEqual({ ok: false, reason: 'revoked' });
+    expect(await resolveApiKey(k)).toMatchObject({ ok: false, reason: 'revoked' });
+  });
+
+  it('re-issue: the old plaintext stops resolving once its prefix is forgotten, the new one resolves', async () => {
+    const old = 'ak_abcdefghij_' + 'A'.repeat(32);
+    queryMock.mockResolvedValueOnce({ rows: [rowFor(old)] });
+    expect((await resolveApiKey(old)).ok).toBe(true);
+
+    let minted: { prefix: string; hash: string } | null = null;
+    queryMock.mockImplementation((sql: string, params: unknown[]) => {
+      if (sql.startsWith('SELECT prefix')) return Promise.resolve({ rows: [{ prefix: 'abcdefghij' }] });
+      if (sql.includes('SET prefix')) {
+        minted = { prefix: params[1] as string, hash: params[2] as string };
+        return Promise.resolve({ rows: [{ ...rowFor(old), prefix: minted.prefix, key_hash: minted.hash, reissued_at: 'now' }] });
+      }
+      return Promise.resolve({ rows: [] });
+    });
+    const out = await reissueApiKey('k1', { query: queryMock } as never);
+    expect(out).not.toBeNull();
+    expect(out!.oldPrefix).toBe('abcdefghij');
+    expect(out!.row.id).toBe('k1');
+    expect(lookupPrefix(out!.plaintext)).toBe(minted!.prefix);
+    expect(minted!.hash).toBe(createHash('sha256').update(out!.plaintext).digest('hex'));
+
+    // Until the caller forgets the old prefix the cache still answers for it —
+    // that ordering is the route's job (forget only after COMMIT).
+    expect((await resolveApiKey(old)).ok).toBe(true);
+    forgetApiKeyPrefix(out!.oldPrefix);
+    queryMock.mockReset();
+    queryMock.mockResolvedValue({ rows: [] }); // the old prefix no longer exists in the table
+    expect(await resolveApiKey(old)).toEqual({ ok: false, reason: 'bad_key' });
+
+    queryMock.mockResolvedValueOnce({ rows: [{ ...rowFor(old), prefix: minted!.prefix, key_hash: minted!.hash }] });
+    expect((await resolveApiKey(out!.plaintext)).ok).toBe(true);
+  });
+
+  it('re-issue refuses a key that is not live: the UPDATE matches nothing', async () => {
+    queryMock.mockImplementation((sql: string) =>
+      Promise.resolve({ rows: sql.startsWith('SELECT prefix') ? [{ prefix: 'abcdefghij' }] : [] }),
+    );
+    expect(await reissueApiKey('k1', { query: queryMock } as never)).toBeNull();
+  });
+
+  it('delete revokes and hides in one owner-scoped UPDATE, and drops the cache', async () => {
+    const k = 'ak_abcdefghij_' + 'A'.repeat(32);
+    queryMock.mockResolvedValueOnce({ rows: [rowFor(k)] });
+    expect((await resolveApiKey(k)).ok).toBe(true);
+    queryMock.mockResolvedValueOnce({ rowCount: 1 });
+    expect(await deleteApiKey('abcdefghij', 'u1')).toBe(true);
+    const [sql, params] = queryMock.mock.calls[1]!;
+    expect(sql).toContain('revoked_at = COALESCE(revoked_at, now()), deleted_at = now()');
+    expect(params).toEqual(['abcdefghij', 'u1']);
+    queryMock.mockResolvedValueOnce({ rows: [rowFor(k, { revoked_at: 'now', deleted_at: 'now' })] });
+    expect(await resolveApiKey(k)).toMatchObject({ ok: false, reason: 'revoked' });
   });
 });
 

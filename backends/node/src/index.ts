@@ -100,6 +100,10 @@ import {
   startNodeUptimeFlush,
   stopNodeUptimeFlush,
 } from './services/nodes/nodeUptime.js';
+import {
+  startApiKeyUsageFlush,
+  stopApiKeyUsageFlush,
+} from './services/auth/apiKeyUsage.js';
 
 // Pre-flight: hydrate the live store, run migrations, register every
 // source, and start the persist + flush + poll + activity-mode loops
@@ -148,7 +152,8 @@ async function preflight(): Promise<void> {
   startNodeHourlyRollup(); // hourly rebuild of node_radio_hourly* from the detail table
   startAdsbDailyFlush(); // 1-min flush of ADS-B per-node daily counters
   startNodeUptimeFlush(); // 1-min flush of per-node presence (all kinds)
-  startWhisperHealth();    // probe the faster-whisper backends rdio transcribes through
+  startApiKeyUsageFlush(); // 1-min flush of per-key request counts (api_key_usage_hourly)
+  startWhisperHealth();   // probe the faster-whisper backends rdio transcribes through
   startVideoProcessor(); // ffmpeg pass over newly uploaded Wire videos
   startWirePurge(); // purges deleted Wire posts past their 5-day recovery window
   startMemoryWatch(); // heap gauge — see services/memoryWatch.ts (post-OOM telemetry)
@@ -299,6 +304,7 @@ async function shutdown(signal: string) {
     // discarding it on every restart.
     await stopAdsbDailyFlush();
     await stopNodeUptimeFlush();
+    await stopApiKeyUsageFlush();
     stopWhisperHealth();
     stopVideoProcessor();
     stopMemoryWatch();
