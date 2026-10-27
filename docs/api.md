@@ -94,15 +94,22 @@ Staff may still grant `read`; a request cannot ask for it.
 | Incidents · Warnings | `GET /api/v1/wa-emergency/incidents` · `/wa-emergency/warnings` | `source:dfes`, `type:incidents` or `type:warnings`, `window:live` |
 | Hazards | `GET /api/v1/firms/hotspots` | `source:firms type:hazards window:live` |
 | Warnings | `GET /api/v1/bom/warnings` | `source:bom type:warnings window:live` |
+| Hazards | `GET /api/v1/traffic/{incidents,roadwork,flood,fire,majorevent,alpine,lga}` and each one's `/raw` · `/traffic/works` · `/traffic/lga-incidents` · `/traffic/all-feeds` | `source:livetraffic type:hazards window:live` |
+| Cameras | `GET /api/v1/traffic/cameras` | `source:livetraffic type:cameras window:live` |
+| Cameras | `GET /api/v1/aviation/cameras` · `/aviation/cameras/{airport}` | `source:aviation type:cameras window:live` |
+| Transport | `GET /api/v1/transport/{vehicles,lines,stops,alerts}` · `/transport/shape/{id}` · `/transport/trip/{date}/{tripId}/{instance}` · `/transport/departures/{stopId}` | `source:transport type:transit window:live` |
+| Aircraft | `GET /api/v1/adsb/aircraft` · `/adsb/trails` · `/adsb/photo/{hex}` | `source:adsb type:aircraft window:live` |
+| Aircraft | `GET /api/v1/adsb/history` | `source:adsb type:aircraft window:history` |
+| Ships | `GET /api/v1/marinetraffic/vessels` · `/marinetraffic/vessel/{id}` | `source:marinetraffic type:vessels window:live` |
 | Reference | `GET /api/v1/agency/extended` · `/agency/extended/{slug}` · `/boundaries/lga-names` | none — public |
 | Service | `GET /api/v1/health` · `/api/v1/status` | none — public |
 | — | `GET /api/v1/openapi.json` | any valid key |
 
-The other feeds a key can read — roads, transport, aircraft, ships, weather,
-beaches, shark reports, power, cameras, news, boundaries, pager traffic, the
-radio site list, the radio summaries and reception transcripts — are still on
-their unversioned `/api/…` paths, and keys read them there with the same scopes.
-They move to `/api/v1/` group by group.
+The other feeds a key can read — weather, beaches, shark reports, power, the
+fire-tower and QLD traffic cameras, news, boundaries, pager traffic, the radio
+site list, the radio summaries and reception transcripts — are still on their
+unversioned `/api/…` paths, and keys read them there with the same scopes. They
+move to `/api/v1/` group by group.
 
 `/rfs/incidents/raw` on v1 is the RFS's own `majorIncidents.json`, exactly as
 published at the last poll; the old `/api/rfs/incidents/raw` keeps its RSS-based
@@ -163,11 +170,22 @@ its first value. An optional switch such as `all=1` reads anything else as
 "off"; a required parameter that is missing or wrong is a
 `400 validation_failed`, with the failing fields in `details.issues`.
 
-**How fresh.** The live feeds are served from memory, refreshed from each source
-every one to fifteen minutes depending on the source, so asking more than once
-a minute gains nothing. The fire danger ratings change a few times a day and are
-read from the RFS at most every ten minutes. Some responses carry their own
-`Cache-Control` (30 seconds for several feeds, a minute for the agency tables).
+**How fresh.** Most feeds are served from memory, refreshed from their source on
+its own cadence — every fifteen seconds or so for aircraft, every one to fifteen
+minutes for the rest — so asking more often than that gains nothing. The fire
+danger ratings change a few times a day and are read from the RFS at most every
+ten minutes. Some endpoints read their source when asked instead — the traffic
+`/raw` feeds, a single airport's cameras, a vessel's details, and the transport
+endpoints, which keep each answer for a few seconds; the reference says so on
+each. Some responses carry their
+own `Cache-Control`.
+
+**When a source can't be read.** A feed served from memory keeps answering with
+its last good data. An endpoint that reads its source when asked answers an
+error on `/api/v1/` — `503 service_unavailable`, or `502` where the source
+answered but gave nothing usable — so an outage never reads as "nothing to
+report". (The old `/api/…` paths answered an empty list in some of those cases,
+and still do.)
 
 **Rate limit.** Per key, per minute — 120 unless staff set otherwise. Over it:
 `429 rate_limited`. Requests refused for scope or path count against the limit
@@ -194,6 +212,7 @@ too.
 | 403 | `forbidden` | Not allowed for another reason |
 | 404 | `not_found` | No endpoint at that path, or nothing by that id |
 | 429 | `rate_limited` | Over the key's per-minute limit |
+| 502 | `service_unavailable` | The source the endpoint reads answered, but with an error or nothing usable |
 | 503 | `auth_unavailable` | The key could not be checked just now |
 | 503 | `service_unavailable` | Something the endpoint depends on is down |
 | 500 | `internal_error` | A fault on this side |

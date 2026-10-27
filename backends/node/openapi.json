@@ -21,7 +21,23 @@
     },
     {
       "name": "Hazards",
-      "description": "Hazards observed rather than reported, such as satellite hotspots"
+      "description": "Hazards on the ground: road incidents and works, satellite hotspots"
+    },
+    {
+      "name": "Cameras",
+      "description": "Traffic, airport and fire-tower cameras"
+    },
+    {
+      "name": "Transport",
+      "description": "Public transport vehicles, stops, lines and alerts"
+    },
+    {
+      "name": "Aircraft",
+      "description": "Aircraft positions and tracks from ADS-B"
+    },
+    {
+      "name": "Ships",
+      "description": "Vessel positions from AIS"
     },
     {
       "name": "Reference",
@@ -687,6 +703,606 @@
         ],
         "additionalProperties": false
       },
+      "TrafficHazards": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "FeatureCollection"
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "Feature"
+                },
+                "geometry": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "Point"
+                    },
+                    "coordinates": {
+                      "type": "array",
+                      "prefixItems": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ],
+                      "items": false,
+                      "minItems": 2,
+                      "maxItems": 2,
+                      "description": "[longitude, latitude] (WGS84)"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "coordinates"
+                  ],
+                  "additionalProperties": false
+                },
+                "properties": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "description": "The feed's own id for the record. On /traffic/works, an id made from the record's position, title and category instead, because that feed issues new ids each time it is rebuilt"
+                    },
+                    "type": {
+                      "type": "string",
+                      "description": "Which feed the record came from: Incident, Roadwork, Flood, Fire, Major Event, Alpine or Council. On /traffic/works, the record's eventCategory (else its eventType, else Works)"
+                    },
+                    "incidentType": {
+                      "type": "string",
+                      "description": "The kind of incident named at the start of the title, upper case (CRASH, BREAKDOWN, HAZARD, FLOODING, ROADWORK, …); empty when the title starts with none of them"
+                    },
+                    "mainCategory": {
+                      "type": "string",
+                      "description": "The feed's own category, e.g. CRASH or SCHEDULED ROADWORK. On /traffic/works, its eventCategory (Roadwork, Flood, generalHazards, …)"
+                    },
+                    "subCategory": {
+                      "type": "string",
+                      "description": "The feed's sub-category (its subCategoryA, else subCategoryB) as published — sometimes the text \"null\""
+                    },
+                    "subcategory": {
+                      "type": "string",
+                      "description": "A filter key: incidentType, else mainCategory. On /traffic/works: mainCategory, else incidentKind"
+                    },
+                    "incidentKind": {
+                      "type": "string",
+                      "description": "As the hazard feeds give it — Planned or Unplanned in the samples seen. On /traffic/works, the record's eventType"
+                    },
+                    "title": {
+                      "type": "string",
+                      "description": "The headline, else the title, else the display name, with a leading incidentType taken off when enough is left to stand as a title"
+                    },
+                    "headline": {
+                      "type": "string"
+                    },
+                    "displayName": {
+                      "type": "string"
+                    },
+                    "subtitle": {
+                      "type": "string"
+                    },
+                    "otherAdvice": {
+                      "type": "string",
+                      "description": "Plain text (the HTML the feed writes is removed): the feed's otherAdvice, else its adviceA"
+                    },
+                    "adviceB": {
+                      "type": "string",
+                      "description": "Plain text (the HTML the feed writes is removed)"
+                    },
+                    "roads": {
+                      "type": "string",
+                      "description": "The affected roads, each as \"street suburb\", separated by \"; \" (or the feed's own text, where it gives the roads as text)"
+                    },
+                    "affectedDirection": {
+                      "type": "string",
+                      "description": "From the record's first road: its affectedDirection, else its conditionTendency — empty in the hazard feeds as currently published"
+                    },
+                    "impactedLanes": {
+                      "type": "array",
+                      "items": {},
+                      "description": "From the record's first road: its impactedLanes, where the feed gives them as a list"
+                    },
+                    "speedLimit": {
+                      "type": "string",
+                      "description": "As the feed gives it, written as text; \"-1\" or empty where it sets none"
+                    },
+                    "expectedDelay": {
+                      "type": "string",
+                      "description": "The feed's expectedDelay (else delay), written as text; \"-1\" or empty where there is none"
+                    },
+                    "diversions": {
+                      "type": "string"
+                    },
+                    "encodedPolyline": {
+                      "type": "string",
+                      "description": "The first line in encodedPolylines, or empty"
+                    },
+                    "encodedPolylines": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "coords": {
+                            "type": "string",
+                            "description": "The line as an encoded polyline, as the feed gives it"
+                          },
+                          "direction": {
+                            "type": "string",
+                            "description": "As the feed gives it, e.g. BOTH_DIRECTIONS"
+                          }
+                        },
+                        "required": [
+                          "coords",
+                          "direction"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "description": "Every line the record carries"
+                    },
+                    "created": {
+                      "type": "string",
+                      "description": "When the record was created (else its start). On the hazard feeds, unix milliseconds written as a string; on /traffic/works, ISO 8601. Empty when the feed has none"
+                    },
+                    "lastUpdated": {
+                      "type": "string",
+                      "description": "When the record was last updated (else its end). On the hazard feeds, unix milliseconds written as a string; on /traffic/works, ISO 8601. Empty when the feed has none"
+                    },
+                    "start": {
+                      "type": "string",
+                      "description": "On the hazard feeds, unix milliseconds written as a string; on /traffic/works, ISO 8601. Empty when the feed has none"
+                    },
+                    "end": {
+                      "type": "string",
+                      "description": "On the hazard feeds, unix milliseconds written as a string; on /traffic/works, ISO 8601. Empty when the feed has none"
+                    },
+                    "isEnded": {
+                      "type": "boolean"
+                    },
+                    "isMajor": {
+                      "type": "boolean"
+                    },
+                    "arrangement": {
+                      "type": "string"
+                    },
+                    "periods": {
+                      "type": "array",
+                      "items": {},
+                      "description": "The feed's periods, as published"
+                    },
+                    "isLocalRoad": {
+                      "type": "string",
+                      "description": "Road ownership as the hazard feeds word it: \"State road\" or \"Local road\""
+                    },
+                    "region": {
+                      "type": "string",
+                      "description": "From the record's first road"
+                    },
+                    "crossStreet": {
+                      "type": "string",
+                      "description": "From the record's first road"
+                    },
+                    "secondLocation": {
+                      "type": "string",
+                      "description": "From the record's first road"
+                    },
+                    "locationQualifier": {
+                      "type": "string",
+                      "description": "From the record's first road, e.g. \"between\""
+                    },
+                    "queueLength": {
+                      "description": "From the record's first road: its queueLength, or null",
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "duration": {
+                      "type": "string"
+                    },
+                    "adviceC": {
+                      "type": "string",
+                      "description": "Plain text (the HTML the feed writes is removed)"
+                    },
+                    "webLinks": {
+                      "type": "array",
+                      "items": {},
+                      "description": "Links the feed gives for the record, as published"
+                    },
+                    "upstreamId": {
+                      "description": "/traffic/works only: that feed's own id for the record, which changes when the feed is rebuilt",
+                      "type": "string"
+                    },
+                    "orgName": {
+                      "type": "string",
+                      "description": "The council that submitted the record — Council feed only, empty elsewhere"
+                    },
+                    "orgContact": {
+                      "type": "string",
+                      "description": "The council's phone number — Council feed only"
+                    },
+                    "orgEmail": {
+                      "type": "string",
+                      "description": "Council feed only"
+                    },
+                    "orgWebsite": {
+                      "type": "string",
+                      "description": "Council feed only"
+                    },
+                    "source": {
+                      "type": "string",
+                      "const": "livetraffic"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "type",
+                    "incidentType",
+                    "mainCategory",
+                    "subCategory",
+                    "subcategory",
+                    "incidentKind",
+                    "title",
+                    "headline",
+                    "displayName",
+                    "subtitle",
+                    "otherAdvice",
+                    "adviceB",
+                    "roads",
+                    "affectedDirection",
+                    "impactedLanes",
+                    "speedLimit",
+                    "expectedDelay",
+                    "diversions",
+                    "encodedPolyline",
+                    "encodedPolylines",
+                    "created",
+                    "lastUpdated",
+                    "start",
+                    "end",
+                    "isEnded",
+                    "isMajor",
+                    "arrangement",
+                    "periods",
+                    "isLocalRoad",
+                    "region",
+                    "crossStreet",
+                    "secondLocation",
+                    "locationQualifier",
+                    "queueLength",
+                    "duration",
+                    "adviceC",
+                    "webLinks",
+                    "orgName",
+                    "orgContact",
+                    "orgEmail",
+                    "orgWebsite",
+                    "source"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "type",
+                "geometry",
+                "properties"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "count": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Number of features"
+          }
+        },
+        "required": [
+          "type",
+          "features",
+          "count"
+        ],
+        "additionalProperties": false
+      },
+      "TrafficHazardFeed": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "FeatureCollection"
+          },
+          "lastPublished": {
+            "description": "When Transport for NSW last published the feed, unix milliseconds",
+            "type": "number"
+          },
+          "layerName": {
+            "description": "Which feed this is, e.g. Incident, Roadwork, LGA",
+            "type": "string"
+          },
+          "rights": {
+            "description": "Transport for NSW's copyright and licence for the data",
+            "type": "object",
+            "properties": {
+              "copyright": {
+                "type": "string"
+              },
+              "licence": {
+                "type": "string",
+                "description": "Link to the licence"
+              }
+            },
+            "required": [
+              "copyright",
+              "licence"
+            ],
+            "additionalProperties": {}
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "Feature"
+                },
+                "id": {
+                  "description": "Transport for NSW's id for the record",
+                  "type": "number"
+                },
+                "geometry": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string"
+                    },
+                    "coordinates": {}
+                  },
+                  "required": [
+                    "type",
+                    "coordinates"
+                  ],
+                  "additionalProperties": {}
+                },
+                "properties": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {},
+                  "description": "The record's fields as Transport for NSW names them; its times (created, lastUpdated, start, end) are unix milliseconds"
+                }
+              },
+              "required": [
+                "type",
+                "geometry",
+                "properties"
+              ],
+              "additionalProperties": {}
+            }
+          }
+        },
+        "required": [
+          "type",
+          "features"
+        ],
+        "additionalProperties": {}
+      },
+      "TrafficCameras": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "FeatureCollection"
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "Feature"
+                },
+                "geometry": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "Point"
+                    },
+                    "coordinates": {
+                      "type": "array",
+                      "prefixItems": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ],
+                      "items": false,
+                      "minItems": 2,
+                      "maxItems": 2,
+                      "description": "[longitude, latitude] (WGS84)"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "coordinates"
+                  ],
+                  "additionalProperties": false
+                },
+                "properties": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string",
+                      "description": "The camera's name; \"Traffic Camera\" when the feed gives none"
+                    },
+                    "view": {
+                      "type": "string",
+                      "description": "What the camera shows, in words"
+                    },
+                    "direction": {
+                      "type": "string",
+                      "description": "Roughly the way the camera looks, as a compass point: N, N-E, E, S-E, S, S-W, W or N-W"
+                    },
+                    "region": {
+                      "type": "string",
+                      "description": "The feed's region for the camera, mostly a code such as SYD_MET or REG_NORTH"
+                    },
+                    "imageUrl": {
+                      "type": "string",
+                      "description": "The camera's image (a JPEG), on Transport for NSW's servers"
+                    },
+                    "path": {
+                      "type": "string",
+                      "description": "The feed's short name for the camera, e.g. \"5-ways-miranda\""
+                    },
+                    "source": {
+                      "type": "string",
+                      "const": "livetraffic_cameras"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "title",
+                    "view",
+                    "direction",
+                    "region",
+                    "imageUrl",
+                    "path",
+                    "source"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "type",
+                "geometry",
+                "properties"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "count": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Number of features"
+          }
+        },
+        "required": [
+          "type",
+          "features",
+          "count"
+        ],
+        "additionalProperties": false
+      },
+      "TrafficLgaIncidents": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "FeatureCollection"
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            },
+            "description": "Each record exactly as Transport for NSW publishes it: a GeoJSON Feature, with the council's fields in its properties"
+          }
+        },
+        "required": [
+          "type",
+          "features"
+        ],
+        "additionalProperties": false
+      },
+      "TrafficAllFeeds": {
+        "type": "object",
+        "properties": {
+          "raw": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "eventType": {
+                  "type": "string"
+                },
+                "eventCategory": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": {},
+              "description": "A record exactly as published"
+            },
+            "description": "Every record in the feed, in its order"
+          },
+          "grouped": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "eventType": {
+                    "type": "string"
+                  },
+                  "eventCategory": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": {},
+                "description": "A record exactly as published"
+              }
+            },
+            "description": "The same records by eventType (else eventCategory, else \"unknown\")"
+          },
+          "eventTypes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The keys of grouped"
+          },
+          "totalCount": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Number of records in raw"
+          }
+        },
+        "required": [
+          "raw",
+          "grouped",
+          "eventTypes",
+          "totalCount"
+        ],
+        "additionalProperties": false
+      },
       "FirmsHotspots": {
         "type": "object",
         "properties": {
@@ -927,6 +1543,688 @@
           "source_status",
           "bbox",
           "fetched_at"
+        ],
+        "additionalProperties": false
+      },
+      "AdsbAircraft": {
+        "type": "object",
+        "properties": {
+          "aircraft": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "hex": {
+                  "type": "string",
+                  "description": "ICAO 24-bit address, lowercase hex; a leading ~ marks a non-ICAO (TIS-B) id"
+                },
+                "callsign": {
+                  "description": "Callsign as broadcast",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "reg": {
+                  "description": "Registration",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "type": {
+                  "description": "ICAO aircraft type designator, e.g. B738",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "lat": {
+                  "type": "number"
+                },
+                "lon": {
+                  "type": "number"
+                },
+                "altFt": {
+                  "description": "Barometric altitude, feet; null on the ground or when not known",
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "onGround": {
+                  "type": "boolean"
+                },
+                "gsKt": {
+                  "description": "Ground speed, knots",
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "trackDeg": {
+                  "description": "Track over the ground, degrees true",
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "category": {
+                  "description": "ADS-B emitter category, e.g. A3",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "squawk": {
+                  "description": "Transponder code",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "emergencySquawk": {
+                  "type": "boolean",
+                  "description": "Squawking 7500, 7600 or 7700, or broadcasting an ADS-B emergency status"
+                },
+                "esTag": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "enum": [
+                        "polair",
+                        "rescue",
+                        "firebomber",
+                        "ambulance",
+                        "military"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "An emergency-service aircraft recognised by its callsign, or a military one by the aggregator's database flag"
+                },
+                "ageSec": {
+                  "type": "number",
+                  "description": "How old the position is, seconds"
+                },
+                "sourceCount": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "sources": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Who reported it: the aggregators (adsb_lol, adsb_fi, airplanes_live, adsb_one) and AusAware receivers (node:<name>)"
+                },
+                "estimated": {
+                  "type": "boolean",
+                  "description": "true when the position is dead-reckoned from the last heading and speed, not received — show it as a guess"
+                },
+                "estimatedSec": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "When estimated, seconds since the last real fix; otherwise null"
+                }
+              },
+              "required": [
+                "hex",
+                "callsign",
+                "reg",
+                "type",
+                "lat",
+                "lon",
+                "altFt",
+                "onGround",
+                "gsKt",
+                "trackDeg",
+                "category",
+                "squawk",
+                "emergencySquawk",
+                "esTag",
+                "ageSec",
+                "sourceCount",
+                "sources",
+                "estimated",
+                "estimatedSec"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Those with an esTag or emergencySquawk first, then by altitude, lowest first; no altitude (including on the ground) last"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "emergency_count": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Aircraft with an esTag (emergency service or military)"
+          },
+          "upstreams": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "The aggregator, or \"nodes\" for AusAware receivers"
+                },
+                "ok": {
+                  "type": "boolean"
+                },
+                "circles_ok": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991,
+                  "description": "Area queries it answered this poll; for \"nodes\", the receivers feeding"
+                },
+                "circles_total": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991,
+                  "description": "Area queries made to it this poll; for \"nodes\", the receivers feeding"
+                },
+                "count": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991,
+                  "description": "Positions it gave this poll, before merging"
+                },
+                "error": {
+                  "description": "When it answered none of its queries, the first error",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "ok",
+                "circles_ok",
+                "circles_total",
+                "count"
+              ],
+              "additionalProperties": false
+            },
+            "description": "How each source fared on the last poll"
+          },
+          "bbox": {
+            "type": "array",
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "items": false,
+            "minItems": 4,
+            "maxItems": 4,
+            "description": "The area covered, [west, south, east, north]"
+          },
+          "fetched_at": {
+            "type": "string",
+            "description": "When the last poll finished, ISO 8601 (the epoch before the first one)"
+          },
+          "history": {
+            "type": "object",
+            "properties": {
+              "retentionDays": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991,
+                "description": "Days of history kept"
+              },
+              "oldestMs": {
+                "type": "number",
+                "description": "The oldest instant /adsb/history can show, unix milliseconds"
+              },
+              "newestMs": {
+                "type": "number",
+                "description": "Now, unix milliseconds"
+              }
+            },
+            "required": [
+              "retentionDays",
+              "oldestMs",
+              "newestMs"
+            ],
+            "additionalProperties": false,
+            "description": "What /adsb/history can be asked for"
+          }
+        },
+        "required": [
+          "aircraft",
+          "count",
+          "emergency_count",
+          "upstreams",
+          "bbox",
+          "fetched_at",
+          "history"
+        ],
+        "additionalProperties": false
+      },
+      "AdsbHistory": {
+        "type": "object",
+        "properties": {
+          "atMs": {
+            "type": "number",
+            "description": "The instant served, unix milliseconds: `at` snapped down to the minute"
+          },
+          "trailMinutes": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Minutes of track before atMs, as served"
+          },
+          "retentionDays": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Days of history kept"
+          },
+          "oldestMs": {
+            "type": "number",
+            "description": "The oldest instant that can be asked for, unix milliseconds"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "true when the answer was cut to 4,000 aircraft, keeping those heard most recently"
+          },
+          "aircraft": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "hex": {
+                  "type": "string",
+                  "description": "ICAO 24-bit address, lowercase hex; a leading ~ marks a non-ICAO (TIS-B) id"
+                },
+                "callsign": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "reg": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "type": {
+                  "description": "ICAO aircraft type designator",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "esTag": {
+                  "description": "As on the live aircraft",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "sources": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Who reported it in the hour of atMs — across the whole track when that hour recorded none"
+                },
+                "points": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "prefixItems": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": [
+                          "number",
+                          "null"
+                        ]
+                      }
+                    ],
+                    "items": false,
+                    "minItems": 4,
+                    "maxItems": 4
+                  },
+                  "description": "The track, oldest first: [unix milliseconds, latitude, longitude, altitude in feet or null]"
+                }
+              },
+              "required": [
+                "hex",
+                "callsign",
+                "reg",
+                "type",
+                "esTag",
+                "sources",
+                "points"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "atMs",
+          "trailMinutes",
+          "retentionDays",
+          "oldestMs",
+          "count",
+          "truncated",
+          "aircraft"
+        ],
+        "additionalProperties": false
+      },
+      "AdsbTrails": {
+        "type": "object",
+        "properties": {
+          "trails": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                ],
+                "items": false,
+                "minItems": 3,
+                "maxItems": 3
+              }
+            },
+            "description": "By aircraft hex: where it has been seen while tracked, oldest first, each [latitude, longitude, altitude in feet or null] — latitude first. Observed positions only; older stretches are thinned. Aircraft with fewer than two points are left out."
+          },
+          "fetched_at": {
+            "type": "string",
+            "description": "When the trails were last rebuilt, ISO 8601 (the epoch before the first poll)"
+          }
+        },
+        "required": [
+          "trails",
+          "fetched_at"
+        ],
+        "additionalProperties": false
+      },
+      "AdsbPhoto": {
+        "type": "object",
+        "properties": {
+          "photo": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "src": {
+                    "type": "string",
+                    "description": "The image's URL, as Planespotters gives it (their large thumbnail where there is one)"
+                  },
+                  "link": {
+                    "description": "The photo's page on Planespotters",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "photographer": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "src",
+                  "link",
+                  "photographer"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "null when Planespotters has none, or could not be reached"
+          }
+        },
+        "required": [
+          "photo"
+        ],
+        "additionalProperties": false
+      },
+      "AviationCameras": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "FeatureCollection"
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "Feature"
+                },
+                "geometry": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "Point"
+                    },
+                    "coordinates": {
+                      "type": "array",
+                      "prefixItems": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ],
+                      "items": false,
+                      "minItems": 2,
+                      "maxItems": 2,
+                      "description": "[longitude, latitude] (WGS84)"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "coordinates"
+                  ],
+                  "additionalProperties": false
+                },
+                "properties": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "description": "Airservices' id for the airport"
+                    },
+                    "title": {
+                      "type": "string",
+                      "description": "The airport's name, e.g. \"Albury Airport\"; \"Airport Camera\" when Airservices gives none"
+                    },
+                    "name": {
+                      "type": "string",
+                      "description": "Airservices' short name for the airport, e.g. \"albury-airport\" — what /aviation/cameras/{airport} takes"
+                    },
+                    "state": {
+                      "type": "string",
+                      "description": "State or territory, abbreviated: NSW, VIC, …"
+                    },
+                    "state_full": {
+                      "type": "string",
+                      "description": "State or territory in full"
+                    },
+                    "link": {
+                      "type": "string",
+                      "description": "The airport's page on the Airservices weather cameras site"
+                    },
+                    "imageUrl": {
+                      "type": "string",
+                      "description": "An image from one of the airport's cameras"
+                    },
+                    "source": {
+                      "type": "string",
+                      "const": "airservices_australia"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "title",
+                    "name",
+                    "state",
+                    "state_full",
+                    "link",
+                    "imageUrl",
+                    "source"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "type",
+                "geometry",
+                "properties"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "count": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Number of features"
+          }
+        },
+        "required": [
+          "type",
+          "features",
+          "count"
+        ],
+        "additionalProperties": false
+      },
+      "AviationCamera": {
+        "type": "object",
+        "properties": {
+          "airport": {
+            "type": "string",
+            "description": "The airport as asked for"
+          },
+          "title": {
+            "type": "string",
+            "description": "The airport's name; the airport as asked for when Airservices gives none"
+          },
+          "state": {
+            "type": "string",
+            "description": "State or territory in full, e.g. \"New South Wales\"; empty when Airservices gives none"
+          },
+          "name": {
+            "type": "string",
+            "description": "Airservices' short name for the airport; the airport as asked for when it gives none"
+          },
+          "cameras": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "direction": {
+                  "type": "string",
+                  "description": "Which of Airservices' four camera slots this is: North, East, South or West"
+                },
+                "angle": {
+                  "type": "string",
+                  "description": "As Airservices gives it, e.g. \"070\""
+                },
+                "imageUrl": {
+                  "type": "string",
+                  "description": "The image"
+                },
+                "thumbnail": {
+                  "type": "string",
+                  "description": "A smaller copy of the image"
+                },
+                "timestamp": {
+                  "type": "string",
+                  "description": "When the image was taken, as Airservices writes it (\"DD/MM/YYYY HH:MM:SS\"); UTC in the samples seen"
+                }
+              },
+              "required": [
+                "direction",
+                "angle",
+                "imageUrl",
+                "thumbnail",
+                "timestamp"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Only the slots that have an image"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Number of cameras"
+          }
+        },
+        "required": [
+          "airport",
+          "title",
+          "state",
+          "name",
+          "cameras",
+          "count"
         ],
         "additionalProperties": false
       },
@@ -2135,6 +3433,58 @@
         ],
         "additionalProperties": false
       },
+      "MarineVessels": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "number",
+            "const": 1
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "rows": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {}
+                },
+                "description": "One per vessel, as MarineTraffic's map tiles give it: MarineTraffic's own upper-case fields (SHIP_ID, SHIPNAME, LAT, LON, …), unchanged and not described here"
+              },
+              "areaShips": {
+                "type": "number",
+                "description": "The sum of MarineTraffic's own per-tile vessel counts — the tiles overlap, so it is not a count of distinct vessels — or the number of rows when that sum is 0"
+              }
+            },
+            "required": [
+              "rows",
+              "areaShips"
+            ],
+            "additionalProperties": false
+          },
+          "warming": {
+            "description": "true until the first batch since a restart has come in, and rows is empty until then; absent afterwards",
+            "type": "boolean",
+            "const": true
+          }
+        },
+        "required": [
+          "type",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "MarineVessel": {
+        "type": "object",
+        "propertyNames": {
+          "type": "string"
+        },
+        "additionalProperties": {},
+        "description": "MarineTraffic's own record for the vessel, as its vessel page loads it: the fields are MarineTraffic's, vary between vessels and are not described here"
+      },
       "Status": {
         "type": "object",
         "properties": {
@@ -2232,6 +3582,1039 @@
           "active_viewers",
           "summary",
           "checks"
+        ],
+        "additionalProperties": false
+      },
+      "TransportVehicles": {
+        "type": "object",
+        "properties": {
+          "vehicles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransportVehicle"
+            }
+          },
+          "count": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Number of vehicles"
+          },
+          "network_counts": {
+            "description": "NSW only, and only while this server joins TfNSW positions: vehicles per mode across the whole TfNSW network for the feeds asked for, not just this area",
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            }
+          },
+          "fetched_at": {
+            "type": "string",
+            "description": "When AnyTrip was read, ISO 8601 (when switched off, the time of this answer)"
+          },
+          "disabled": {
+            "description": "Present only when transport data is switched off on this server; the answer is then empty",
+            "type": "boolean",
+            "const": true
+          }
+        },
+        "required": [
+          "vehicles",
+          "count",
+          "fetched_at"
+        ],
+        "additionalProperties": false
+      },
+      "TransportVehicle": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "lat": {
+            "type": "number",
+            "description": "Latitude of the last reported position"
+          },
+          "lon": {
+            "type": "number",
+            "description": "Longitude of the last reported position"
+          },
+          "bearing": {
+            "description": "Heading in degrees, as the feed reports it",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "speedKmh": {
+            "description": "Speed in km/h, to one decimal",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "mode": {
+            "$ref": "#/components/schemas/TransportMode"
+          },
+          "route": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "description": "Short name, e.g. \"SW1\"",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "longName": {
+                "description": "e.g. \"Bankstown to Sydenham\"",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "color": {
+                "description": "#RRGGBB (upper-case hex); null when the feed has no valid colour",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "textColor": {
+                "description": "#RRGGBB (upper-case hex); null when the feed has no valid colour",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "longName",
+              "color",
+              "textColor"
+            ],
+            "additionalProperties": false
+          },
+          "headsign": {
+            "description": "Where it is going, e.g. \"Sydenham\"",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "headsignSub": {
+            "description": "The second line of the headsign, e.g. \"via Marrickville\"",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "agency": {
+            "description": "The operator",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "occupancy": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 6
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "AnyTrip's 0–6 crowding scale: 0–1 space available, 2 limited space, 3–4 standing room only, 5–6 no space (the first carriage where the feed reports each); null when not reported"
+          },
+          "wheelchair": {
+            "description": "Wheelchair accessible; null means unknown, not no",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "aircon": {
+            "description": "Air-conditioned; null means unknown, not no",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ageSec": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Seconds between the position report and when this answer was built, which a cached answer understates; posTime is the absolute time"
+          },
+          "posTime": {
+            "description": "When the position was reported, unix seconds",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "tripId": {
+            "description": "The trip it is running; with startDate and instanceNumber it addresses /api/v1/transport/trip/{date}/{tripId}/{instance}",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "shapeId": {
+            "description": "The trip's route track, for /api/v1/transport/shape/{id}",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "vdap": {
+            "description": "How far along the shape it is, in metres from the start",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "startDate": {
+            "description": "The trip's service date, YYYYMMDD",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "instanceNumber": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "lat",
+          "lon",
+          "bearing",
+          "speedKmh",
+          "mode",
+          "route",
+          "headsign",
+          "headsignSub",
+          "agency",
+          "occupancy",
+          "wheelchair",
+          "aircon",
+          "model",
+          "ageSec",
+          "posTime",
+          "tripId",
+          "shapeId",
+          "vdap",
+          "startDate",
+          "instanceNumber"
+        ],
+        "additionalProperties": false
+      },
+      "TransportMode": {
+        "type": "string",
+        "enum": [
+          "buses",
+          "sydneytrains",
+          "metro",
+          "nswtrains",
+          "ferries",
+          "lightrail",
+          "other"
+        ],
+        "description": "One vocabulary for every region: suburban heavy rail anywhere is sydneytrains (Queensland Rail, Adelaide Metro and Metro Trains Melbourne too), regional trains are nswtrains (V/Line too), trams are lightrail and school buses are buses; anything not recognised is other"
+      },
+      "TransportShape": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The shape id asked for; empty when switched off"
+          },
+          "enc": {
+            "description": "The track as a Google encoded polyline (precision 5, latitude first); null when AnyTrip has no geometry for it",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "disabled": {
+            "description": "Present only when transport data is switched off on this server; the answer is then empty",
+            "type": "boolean",
+            "const": true
+          }
+        },
+        "required": [
+          "id",
+          "enc"
+        ],
+        "additionalProperties": false
+      },
+      "TransportTrip": {
+        "type": "object",
+        "properties": {
+          "tripId": {
+            "type": "string",
+            "description": "As asked for"
+          },
+          "startDate": {
+            "type": "string",
+            "description": "As asked for, YYYYMMDD"
+          },
+          "instanceNumber": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "As asked for"
+          },
+          "headsign": {
+            "description": "Where it is going",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "route": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "longName": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "color": {
+                "description": "#RRGGBB (upper-case hex); null when the feed has no valid colour",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "textColor": {
+                "description": "#RRGGBB (upper-case hex); null when the feed has no valid colour",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "mode": {
+                "$ref": "#/components/schemas/TransportMode"
+              }
+            },
+            "required": [
+              "name",
+              "longName",
+              "color",
+              "textColor",
+              "mode"
+            ],
+            "additionalProperties": false
+          },
+          "shapeId": {
+            "description": "The trip's route track, for /api/v1/transport/shape/{id}",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stops": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransportTripStop"
+            },
+            "description": "Its stops, with times as AnyTrip currently estimates them"
+          },
+          "alerts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Headlines of up to three alerts AnyTrip lists for the trip"
+          },
+          "vehicle": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "time": {
+                    "description": "When the position was reported, unix seconds",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "statusString": {
+                    "description": "AnyTrip's account of where it is, e.g. \"at Lakemba Station, Stand D\" or \"2.5km from …\"",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "lat": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "lon": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "time",
+                  "statusString",
+                  "lat",
+                  "lon"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where the vehicle running the trip is; null when AnyTrip reports none"
+          },
+          "prev": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TransportTripLink"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The trip before this one in the block"
+          },
+          "next": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TransportTripLink"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The trip after this one in the block"
+          },
+          "fetched_at": {
+            "type": "string",
+            "description": "When AnyTrip was read, ISO 8601"
+          }
+        },
+        "required": [
+          "tripId",
+          "startDate",
+          "instanceNumber",
+          "headsign",
+          "route",
+          "shapeId",
+          "stops",
+          "alerts",
+          "vehicle",
+          "prev",
+          "next",
+          "fetched_at"
+        ],
+        "additionalProperties": false
+      },
+      "TransportTripStop": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "\"Unknown stop\" when the feed names none"
+          },
+          "lat": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "lon": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "seq": {
+            "type": "number",
+            "description": "The stop's sequence number in the trip, or its place in this list when the feed gives none"
+          },
+          "arr": {
+            "description": "Arrival time, unix seconds",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "arrDelay": {
+            "description": "Arrival delay, seconds late; negative is early",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "dep": {
+            "description": "Departure time, unix seconds",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "depDelay": {
+            "description": "Departure delay, seconds late; negative is early",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "platform": {
+            "description": "Platform or stand, as AnyTrip names it",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "locality": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "occupancy": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                }
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "One entry per carriage (one for a bus), each on AnyTrip's 0–6 crowding scale: 0–1 space available, 2 limited space, 3–4 standing room only, 5–6 no space, or null; null when not reported"
+          },
+          "pickUp": {
+            "description": "GTFS pickup_type: 1 means passengers cannot board here",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "dropOff": {
+            "description": "GTFS drop_off_type: 1 means passengers cannot get off here",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "lat",
+          "lon",
+          "seq",
+          "arr",
+          "arrDelay",
+          "dep",
+          "depDelay",
+          "platform",
+          "locality",
+          "code",
+          "occupancy",
+          "pickUp",
+          "dropOff"
+        ],
+        "additionalProperties": false
+      },
+      "TransportTripLink": {
+        "type": "object",
+        "properties": {
+          "tripId": {
+            "type": "string"
+          },
+          "startDate": {
+            "type": "string",
+            "description": "YYYYMMDD"
+          },
+          "instanceNumber": {
+            "type": "number"
+          },
+          "routeName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "routeColor": {
+            "description": "#RRGGBB (upper-case hex); null when the feed has no valid colour",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "routeTextColor": {
+            "description": "#RRGGBB (upper-case hex); null when the feed has no valid colour",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "headsign": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "tripId",
+          "startDate",
+          "instanceNumber",
+          "routeName",
+          "routeColor",
+          "routeTextColor",
+          "headsign"
+        ],
+        "additionalProperties": false,
+        "description": "An adjacent trip in the same block, addressed the same way as this one"
+      },
+      "TransportDepartures": {
+        "type": "object",
+        "properties": {
+          "stopId": {
+            "type": "string",
+            "description": "As asked for"
+          },
+          "stopName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "departures": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransportDeparture"
+            }
+          },
+          "alerts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Headlines of up to three alerts AnyTrip lists with the departures"
+          },
+          "fetched_at": {
+            "type": "string",
+            "description": "When AnyTrip was read, ISO 8601"
+          }
+        },
+        "required": [
+          "stopId",
+          "stopName",
+          "departures",
+          "alerts",
+          "fetched_at"
+        ],
+        "additionalProperties": false
+      },
+      "TransportDeparture": {
+        "type": "object",
+        "properties": {
+          "route": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "color": {
+                "description": "#RRGGBB (upper-case hex); null when the feed has no valid colour",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "textColor": {
+                "description": "#RRGGBB (upper-case hex); null when the feed has no valid colour",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "mode": {
+                "$ref": "#/components/schemas/TransportMode"
+              }
+            },
+            "required": [
+              "name",
+              "color",
+              "textColor",
+              "mode"
+            ],
+            "additionalProperties": false
+          },
+          "headsign": {
+            "description": "Where it is going: the stop's own headsign where there is one, else the trip's",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "headsignSub": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dep": {
+            "description": "Departure time (the arrival time where there is none), unix seconds",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "delay": {
+            "description": "Departure delay, seconds late; negative is early",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "platform": {
+            "description": "Platform or stand, as AnyTrip names it",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tripId": {
+            "description": "With startDate and instanceNumber it addresses /api/v1/transport/trip/{date}/{tripId}/{instance}",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "startDate": {
+            "description": "YYYYMMDD",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "instanceNumber": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "route",
+          "headsign",
+          "headsignSub",
+          "dep",
+          "delay",
+          "platform",
+          "tripId",
+          "startDate",
+          "instanceNumber"
+        ],
+        "additionalProperties": false
+      },
+      "TransportLines": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "FeatureCollection"
+          },
+          "features": {
+            "type": "array",
+            "items": {},
+            "description": "AnyTrip's GeoJSON features, passed through unchanged"
+          },
+          "disabled": {
+            "description": "Present only when transport data is switched off on this server; the answer is then empty",
+            "type": "boolean",
+            "const": true
+          }
+        },
+        "required": [
+          "type",
+          "features"
+        ],
+        "additionalProperties": false
+      },
+      "TransportStops": {
+        "type": "object",
+        "properties": {
+          "stops": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransportStop"
+            }
+          },
+          "count": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Number of stops"
+          },
+          "fetched_at": {
+            "type": "string",
+            "description": "When AnyTrip was read, ISO 8601 (when switched off, the time of this answer)"
+          },
+          "disabled": {
+            "description": "Present only when transport data is switched off on this server; the answer is then empty",
+            "type": "boolean",
+            "const": true
+          }
+        },
+        "required": [
+          "stops",
+          "count",
+          "fetched_at"
+        ],
+        "additionalProperties": false
+      },
+      "TransportStop": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "AnyTrip's stop id, region first (au2:200060, au3:G1058, au5:ad:50009) — the {stopId} of /api/v1/transport/departures/{stopId}"
+          },
+          "name": {
+            "type": "string"
+          },
+          "lat": {
+            "type": "number"
+          },
+          "lon": {
+            "type": "number"
+          },
+          "modes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Modes that serve it: AnyTrip's names without the region prefix, regional ones mapped as for TransportMode (tram is lightrail, and so on)"
+          },
+          "locality": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "wheelchair": {
+            "description": "Wheelchair accessible; null means unknown, not no",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "accessibility": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Accessibility facilities as AnyTrip lists them, e.g. \"Lift\""
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "lat",
+          "lon",
+          "modes",
+          "locality",
+          "wheelchair",
+          "accessibility"
+        ],
+        "additionalProperties": false
+      },
+      "TransportAlerts": {
+        "type": "object",
+        "properties": {
+          "alerts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransportAlert"
+            }
+          },
+          "count": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Number of alerts"
+          },
+          "configured": {
+            "type": "boolean",
+            "description": "false when TfNSW alerts are not set up on this server; the list is then empty"
+          },
+          "fetched_at": {
+            "description": "The time of this answer, ISO 8601 — not when TfNSW was last read; absent when configured is false",
+            "type": "string"
+          },
+          "disabled": {
+            "description": "Present only when transport data is switched off on this server; the answer is then empty",
+            "type": "boolean",
+            "const": true
+          }
+        },
+        "required": [
+          "alerts",
+          "count",
+          "configured"
+        ],
+        "additionalProperties": false
+      },
+      "TransportAlert": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The feed's own id for the alert, or the start of its headline where it has none"
+          },
+          "header": {
+            "type": "string",
+            "description": "Headline, in English where the feed offers a choice"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cause": {
+            "description": "The GTFS-realtime cause, by its name (e.g. MAINTENANCE); null when not given",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "effect": {
+            "description": "The GTFS-realtime effect, by its name (e.g. DETOUR); null when not given",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "severity": {
+            "description": "The GTFS-realtime severity level, by its name (e.g. WARNING); null when not given",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "start": {
+            "description": "Start of its first active period, unix seconds; null when not given",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "end": {
+            "description": "End of its first active period, unix seconds; null when not given",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "routes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "TfNSW GTFS route ids it names (not AnyTrip ids)"
+          },
+          "stops": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "TfNSW GTFS stop ids it names (not AnyTrip ids)"
+          },
+          "agencies": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "TfNSW GTFS agency ids it names"
+          }
+        },
+        "required": [
+          "id",
+          "header",
+          "description",
+          "url",
+          "cause",
+          "effect",
+          "severity",
+          "start",
+          "end",
+          "routes",
+          "stops",
+          "agencies"
         ],
         "additionalProperties": false
       }
@@ -2473,7 +4856,7 @@
             }
           },
           "503": {
-            "description": "A dependency is down; try again shortly (service_unavailable)",
+            "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2648,6 +5031,1311 @@
         ]
       }
     },
+    "/api/v1/traffic/incidents": {
+      "get": {
+        "operationId": "getTrafficIncidents",
+        "tags": [
+          "Hazards"
+        ],
+        "summary": "NSW road incidents",
+        "description": "Crashes, breakdowns, hazards and changed traffic conditions on NSW roads, from Live Traffic NSW (Transport for NSW), in one record shape across the Live Traffic feeds. Records the feed marks ended are left out. Refreshed every minute.",
+        "responses": {
+          "200": {
+            "description": "A GeoJSON FeatureCollection of records",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrafficHazards"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:livetraffic",
+          "type:hazards",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/traffic/incidents/raw": {
+      "get": {
+        "operationId": "getTrafficIncidentsRaw",
+        "tags": [
+          "Hazards"
+        ],
+        "summary": "NSW road incidents, unparsed",
+        "description": "The Live Traffic NSW feed behind /traffic/incidents, exactly as Transport for NSW publishes it, for clients that parse it themselves. Read from Live Traffic NSW on each request, and ended records are not removed.",
+        "responses": {
+          "200": {
+            "description": "The feed as published: a GeoJSON FeatureCollection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrafficHazardFeed"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:livetraffic",
+          "type:hazards",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/traffic/roadwork": {
+      "get": {
+        "operationId": "getTrafficRoadwork",
+        "tags": [
+          "Hazards"
+        ],
+        "summary": "NSW roadwork",
+        "description": "Roadwork on NSW roads, from Live Traffic NSW (Transport for NSW), in one record shape across the Live Traffic feeds. Records the feed marks ended are left out. Refreshed every five minutes.",
+        "responses": {
+          "200": {
+            "description": "A GeoJSON FeatureCollection of records",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrafficHazards"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:livetraffic",
+          "type:hazards",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/traffic/roadwork/raw": {
+      "get": {
+        "operationId": "getTrafficRoadworkRaw",
+        "tags": [
+          "Hazards"
+        ],
+        "summary": "NSW roadwork, unparsed",
+        "description": "The Live Traffic NSW feed behind /traffic/roadwork, exactly as Transport for NSW publishes it, for clients that parse it themselves. Read from Live Traffic NSW on each request, and ended records are not removed.",
+        "responses": {
+          "200": {
+            "description": "The feed as published: a GeoJSON FeatureCollection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrafficHazardFeed"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:livetraffic",
+          "type:hazards",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/traffic/flood": {
+      "get": {
+        "operationId": "getTrafficFlood",
+        "tags": [
+          "Hazards"
+        ],
+        "summary": "NSW roads affected by flooding",
+        "description": "Road closures and hazards on NSW roads caused by flooding, from Live Traffic NSW (Transport for NSW), in one record shape across the Live Traffic feeds. Records the feed marks ended are left out. Refreshed every five minutes.",
+        "responses": {
+          "200": {
+            "description": "A GeoJSON FeatureCollection of records",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrafficHazards"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:livetraffic",
+          "type:hazards",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/traffic/flood/raw": {
+      "get": {
+        "operationId": "getTrafficFloodRaw",
+        "tags": [
+          "Hazards"
+        ],
+        "summary": "NSW roads affected by flooding, unparsed",
+        "description": "The Live Traffic NSW feed behind /traffic/flood, exactly as Transport for NSW publishes it, for clients that parse it themselves. Read from Live Traffic NSW on each request, and ended records are not removed.",
+        "responses": {
+          "200": {
+            "description": "The feed as published: a GeoJSON FeatureCollection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrafficHazardFeed"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:livetraffic",
+          "type:hazards",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/traffic/fire": {
+      "get": {
+        "operationId": "getTrafficFire",
+        "tags": [
+          "Hazards"
+        ],
+        "summary": "NSW roads affected by fire",
+        "description": "Fire affecting NSW roads, from Live Traffic NSW (Transport for NSW), in one record shape across the Live Traffic feeds. Records the feed marks ended are left out. Refreshed every five minutes.",
+        "responses": {
+          "200": {
+            "description": "A GeoJSON FeatureCollection of records",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrafficHazards"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:livetraffic",
+          "type:hazards",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/traffic/fire/raw": {
+      "get": {
+        "operationId": "getTrafficFireRaw",
+        "tags": [
+          "Hazards"
+        ],
+        "summary": "NSW roads affected by fire, unparsed",
+        "description": "The Live Traffic NSW feed behind /traffic/fire, exactly as Transport for NSW publishes it, for clients that parse it themselves. Read from Live Traffic NSW on each request, and ended records are not removed.",
+        "responses": {
+          "200": {
+            "description": "The feed as published: a GeoJSON FeatureCollection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrafficHazardFeed"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:livetraffic",
+          "type:hazards",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/traffic/majorevent": {
+      "get": {
+        "operationId": "getTrafficMajorEvents",
+        "tags": [
+          "Hazards"
+        ],
+        "summary": "NSW major events on the roads",
+        "description": "Special events that close or change NSW roads, from Live Traffic NSW (Transport for NSW), in one record shape across the Live Traffic feeds. Records the feed marks ended are left out. Refreshed every five minutes.",
+        "responses": {
+          "200": {
+            "description": "A GeoJSON FeatureCollection of records",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrafficHazards"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:livetraffic",
+          "type:hazards",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/traffic/majorevent/raw": {
+      "get": {
+        "operationId": "getTrafficMajorEventsRaw",
+        "tags": [
+          "Hazards"
+        ],
+        "summary": "NSW major events on the roads, unparsed",
+        "description": "The Live Traffic NSW feed behind /traffic/majorevent, exactly as Transport for NSW publishes it, for clients that parse it themselves. Read from Live Traffic NSW on each request, and ended records are not removed.",
+        "responses": {
+          "200": {
+            "description": "The feed as published: a GeoJSON FeatureCollection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrafficHazardFeed"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:livetraffic",
+          "type:hazards",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/traffic/alpine": {
+      "get": {
+        "operationId": "getTrafficAlpine",
+        "tags": [
+          "Hazards"
+        ],
+        "summary": "NSW alpine road conditions",
+        "description": "Conditions on NSW alpine roads, from Live Traffic NSW (Transport for NSW), in one record shape across the Live Traffic feeds. Records the feed marks ended are left out. Refreshed every five minutes.",
+        "responses": {
+          "200": {
+            "description": "A GeoJSON FeatureCollection of records",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrafficHazards"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:livetraffic",
+          "type:hazards",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/traffic/alpine/raw": {
+      "get": {
+        "operationId": "getTrafficAlpineRaw",
+        "tags": [
+          "Hazards"
+        ],
+        "summary": "NSW alpine road conditions, unparsed",
+        "description": "The Live Traffic NSW feed behind /traffic/alpine, exactly as Transport for NSW publishes it, for clients that parse it themselves. Read from Live Traffic NSW on each request, and ended records are not removed.",
+        "responses": {
+          "200": {
+            "description": "The feed as published: a GeoJSON FeatureCollection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrafficHazardFeed"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:livetraffic",
+          "type:hazards",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/traffic/lga": {
+      "get": {
+        "operationId": "getTrafficCouncil",
+        "tags": [
+          "Hazards"
+        ],
+        "summary": "NSW council road records",
+        "description": "Records NSW councils submit for their local roads — roadwork, hazards, weather and events — with the council's contact details, from Live Traffic NSW (Transport for NSW), in one record shape across the Live Traffic feeds. Records the feed marks ended are left out. Refreshed every five minutes.",
+        "responses": {
+          "200": {
+            "description": "A GeoJSON FeatureCollection of records",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrafficHazards"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:livetraffic",
+          "type:hazards",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/traffic/lga/raw": {
+      "get": {
+        "operationId": "getTrafficCouncilRaw",
+        "tags": [
+          "Hazards"
+        ],
+        "summary": "NSW council road records, unparsed",
+        "description": "The Live Traffic NSW feed behind /traffic/lga, exactly as Transport for NSW publishes it, for clients that parse it themselves. Read from Live Traffic NSW on each request, and ended records are not removed.",
+        "responses": {
+          "200": {
+            "description": "The feed as published: a GeoJSON FeatureCollection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrafficHazardFeed"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:livetraffic",
+          "type:hazards",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/traffic/cameras": {
+      "get": {
+        "operationId": "getTrafficCameras",
+        "tags": [
+          "Cameras"
+        ],
+        "summary": "NSW traffic cameras",
+        "description": "Live Traffic NSW (Transport for NSW) traffic cameras, each with a link to its image. Refreshed every minute.",
+        "responses": {
+          "200": {
+            "description": "A GeoJSON FeatureCollection of cameras",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrafficCameras"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:livetraffic",
+          "type:cameras",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/traffic/works": {
+      "get": {
+        "operationId": "getTrafficWorks",
+        "tags": [
+          "Hazards"
+        ],
+        "summary": "Road works and hazards from the Live Traffic aggregate feed",
+        "description": "Roadwork, hazards, flooding and events from Live Traffic NSW's aggregate web feed, which carries other states' and territories' road agencies, in the same record shape as the hazard feeds. Cameras, rest areas, heavy vehicle checking stations, fire records (eventType Fire, which carries the RFS's own incidents) and records marked ended are left out. When every record from one upstream source (apiSource) drops out of the feed at once, the last ones seen are kept for up to six hours. Refreshed every five minutes.",
+        "responses": {
+          "200": {
+            "description": "A GeoJSON FeatureCollection of records",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrafficHazards"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:livetraffic",
+          "type:hazards",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/traffic/lga-incidents": {
+      "get": {
+        "operationId": "getTrafficLgaIncidents",
+        "tags": [
+          "Hazards"
+        ],
+        "summary": "NSW council road records, unparsed",
+        "description": "The records NSW councils submit for their local roads, exactly as Transport for NSW publishes them, read from Live Traffic NSW on each request. /traffic/lga has the same records in the hazard record shape; /traffic/lga/raw has the feed with its own top-level fields.",
+        "responses": {
+          "200": {
+            "description": "A GeoJSON FeatureCollection of records",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrafficLgaIncidents"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:livetraffic",
+          "type:hazards",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/traffic/all-feeds": {
+      "get": {
+        "operationId": "getTrafficAllFeeds",
+        "tags": [
+          "Hazards"
+        ],
+        "summary": "The Live Traffic aggregate feed, unparsed",
+        "description": "Every record in Live Traffic NSW's aggregate web feed (all-feeds-web.json) as published — other states' and territories' road events, NSW RFS fires, traffic cameras, rest areas and more — and the same records grouped by eventType. Read from Live Traffic NSW on each request; a large response.",
+        "responses": {
+          "200": {
+            "description": "The records, and the records grouped",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/TrafficAllFeeds"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:livetraffic",
+          "type:hazards",
+          "window:live"
+        ]
+      }
+    },
     "/api/v1/firms/hotspots": {
       "get": {
         "operationId": "getFirmsHotspots",
@@ -2716,6 +6404,560 @@
         "x-scopes": [
           "source:firms",
           "type:hazards",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/adsb/aircraft": {
+      "get": {
+        "operationId": "getAdsbAircraft",
+        "tags": [
+          "Aircraft"
+        ],
+        "summary": "Aircraft over Australia",
+        "description": "Aircraft over Australia now, merged from four public ADS-B aggregators (adsb.lol, adsb.fi, airplanes.live, ADSB One) and AusAware's own receivers, one record per ICAO address. Polled about every 15 seconds. An aircraft that stops reporting is held at its last position for a while; one in flight with a known heading and speed is then projected forward, marked `estimated`, until its last real fix is three minutes old.",
+        "responses": {
+          "200": {
+            "description": "Every aircraft, with how each source fared and the history window",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AdsbAircraft"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:adsb",
+          "type:aircraft",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/adsb/history": {
+      "get": {
+        "operationId": "getAdsbHistory",
+        "tags": [
+          "Aircraft"
+        ],
+        "summary": "Aircraft at an instant in the past",
+        "description": "Where every aircraft was at an instant within the retention window, with the track each flew in the minutes before it. The instant is snapped down to the minute, so everyone asking about the same minute shares one cacheable answer; the points either side let a client interpolate within it. An instant older than the window is a 400 whose `details.oldest_ms` says how far back it goes; the live aircraft endpoint's `history` block gives the window too.",
+        "responses": {
+          "200": {
+            "description": "Every aircraft heard in the window, with its track",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AdsbHistory"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A query parameter is not valid (validation_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The history could not be read (internal_error)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "at",
+            "schema": {
+              "type": "number"
+            },
+            "description": "The instant, unix milliseconds; snapped down to the minute. It may be no older than the retention window (oldestMs) or the answer is 400. Send it: absent or empty reads as 0, which is outside the window. A value that is not a number reads as now."
+          },
+          {
+            "in": "query",
+            "name": "trail",
+            "schema": {
+              "type": "number"
+            },
+            "description": "Minutes of track before the instant, 0 to 30 (rounded, and held to that range). Default 15."
+          }
+        ],
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:adsb",
+          "type:aircraft",
+          "window:history"
+        ]
+      }
+    },
+    "/api/v1/adsb/trails": {
+      "get": {
+        "operationId": "getAdsbTrails",
+        "tags": [
+          "Aircraft"
+        ],
+        "summary": "Aircraft tracks",
+        "description": "The track each aircraft has flown while tracked, rebuilt after every poll of the live aircraft. A track ends ten minutes after its aircraft was last seen.",
+        "responses": {
+          "200": {
+            "description": "A track per aircraft",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AdsbTrails"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:adsb",
+          "type:aircraft",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/adsb/photo/{hex}": {
+      "get": {
+        "operationId": "getAdsbPhoto",
+        "tags": [
+          "Aircraft"
+        ],
+        "summary": "A photo of an aircraft",
+        "description": "A photo of the aircraft from Planespotters.net, looked up by its ICAO address and then, failing that, by `reg`. A TIS-B id (one starting with ~) is looked up by `reg` alone. Answers are kept for a day.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "hex",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "ICAO 24-bit address as the live aircraft give it: 4 to 8 hex digits, optionally after a ~"
+          },
+          {
+            "in": "query",
+            "name": "reg",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Registration to try when the address finds no photo, e.g. VH-ABC: 2 to 10 letters, digits or hyphens, in any case"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The photo, or null",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AdsbPhoto"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The hex or reg is not valid (validation_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:adsb",
+          "type:aircraft",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/aviation/cameras": {
+      "get": {
+        "operationId": "getAviationCameras",
+        "tags": [
+          "Cameras"
+        ],
+        "summary": "Airport weather cameras",
+        "description": "Airports with Airservices Australia weather cameras, each with an image from one of its cameras; /aviation/cameras/{airport} has every camera at an airport. Refreshed from Airservices every five minutes.",
+        "responses": {
+          "200": {
+            "description": "A GeoJSON FeatureCollection of airports",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AviationCameras"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:aviation",
+          "type:cameras",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/aviation/cameras/{airport}": {
+      "get": {
+        "operationId": "getAviationCamera",
+        "tags": [
+          "Cameras"
+        ],
+        "summary": "One airport's weather cameras",
+        "description": "Every weather camera at one airport, with its image, from Airservices Australia. {airport} is the airport's name from /aviation/cameras (e.g. albury-airport); its id works too. An airport Airservices does not know answers an empty list. Read from Airservices when asked, then kept for two minutes.",
+        "responses": {
+          "200": {
+            "description": "The airport's cameras",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AviationCamera"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "airport",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:aviation",
+          "type:cameras",
           "window:live"
         ]
       }
@@ -2845,7 +7087,7 @@
             }
           },
           "503": {
-            "description": "A dependency is down; try again shortly (service_unavailable)",
+            "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3499,6 +7741,200 @@
         "security": []
       }
     },
+    "/api/v1/marinetraffic/vessels": {
+      "get": {
+        "operationId": "getMarineVessels",
+        "tags": [
+          "Ships"
+        ],
+        "summary": "Vessel positions",
+        "description": "Vessels as MarineTraffic's live map shows them, from a fixed set of its map tiles covering the major shipping basins and Australian waters (the NSW coast and Sydney in most detail), merged into one list. The tiles are fetched in batches of a few minutes, about a minute apart while anyone is asking and not at all otherwise, so after a quiet spell the first answers carry the last batch while a new one is fetched. Until the first batch after a restart has come in, the answer is empty and says `warming` — or is a 503 while the browser that fetches the tiles is not running.",
+        "responses": {
+          "200": {
+            "description": "The vessels",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/MarineVessels"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:marinetraffic",
+          "type:vessels",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/marinetraffic/vessel/{id}": {
+      "get": {
+        "operationId": "getMarineVessel",
+        "tags": [
+          "Ships"
+        ],
+        "summary": "One vessel",
+        "description": "MarineTraffic's details for one vessel (name, IMO, MMSI, dimensions, flag, type and so on). Served from a cache for up to 24 hours, and older when MarineTraffic cannot be reached; otherwise read from MarineTraffic, which takes a few seconds.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]+$"
+            },
+            "description": "MarineTraffic's ship id: SHIP_ID in the vessels list"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The vessel",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/MarineVessel"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The id is not a number (validation_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "MarineTraffic gave no record for the vessel: it may not exist, or the lookup failed; a failure is not remembered, so a later try may work (service_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:marinetraffic",
+          "type:vessels",
+          "window:live"
+        ]
+      }
+    },
     "/api/v1/status": {
       "get": {
         "operationId": "getStatus",
@@ -3555,6 +7991,900 @@
           }
         },
         "security": []
+      }
+    },
+    "/api/v1/transport/vehicles": {
+      "get": {
+        "operationId": "getTransportVehicles",
+        "tags": [
+          "Transport"
+        ],
+        "summary": "Public transport vehicles in an area",
+        "description": "Live positions of trains, metro, light rail, trams, buses and ferries inside an area, for one region, from AnyTrip. The area is clamped to the region's coverage and widened outward to a 0.01° grid; after clamping it may span at most 2.5° each way, and an area outside the region is refused. Vehicles whose last report is more than ten minutes old are left out, and at most 1,500 are returned. Each area's answer is cached for 5 seconds and can be up to 30 seconds old.",
+        "responses": {
+          "200": {
+            "description": "The vehicles in the area",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/TransportVehicles"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A query parameter is not valid (validation_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "AnyTrip did not answer usably and there was nothing recent to serve instead (service_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "region",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "au2",
+                "au3",
+                "au4",
+                "au5",
+                "au9"
+              ]
+            },
+            "description": "au2 NSW (the default), au3 Victoria, au4 South East Queensland, au5 Adelaide, au9 the ACT; any other value is refused"
+          },
+          {
+            "in": "query",
+            "name": "minLat",
+            "schema": {
+              "type": "number"
+            },
+            "required": true,
+            "description": "Southern edge of the area, degrees latitude"
+          },
+          {
+            "in": "query",
+            "name": "maxLat",
+            "schema": {
+              "type": "number"
+            },
+            "required": true,
+            "description": "Northern edge of the area, degrees latitude"
+          },
+          {
+            "in": "query",
+            "name": "minLon",
+            "schema": {
+              "type": "number"
+            },
+            "required": true,
+            "description": "Western edge of the area, degrees longitude"
+          },
+          {
+            "in": "query",
+            "name": "maxLon",
+            "schema": {
+              "type": "number"
+            },
+            "required": true,
+            "description": "Eastern edge of the area, degrees longitude"
+          },
+          {
+            "in": "query",
+            "name": "feeds",
+            "schema": {
+              "type": "string"
+            },
+            "description": "au2 only: comma-separated feeds — st (sydneytrains), mt (metro), nt (nswtrains), fr (ferries), lr (lightrail), bs (buses), sp (school and special services, reported as buses). All of them when absent; an unknown one is refused"
+          },
+          {
+            "in": "query",
+            "name": "modes",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Every region but au2: comma-separated modes — au3 metrotrains, vlinetrains, tram, buses; au4 trains, ferries, lightrail, buses; au5 trains, lightrail, buses, schoolbuses; au9 lightrail, buses, schoolbuses. All of them when absent; an unknown one is refused"
+          }
+        ],
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:transport",
+          "type:transit",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/transport/shape/{id}": {
+      "get": {
+        "operationId": "getTransportShape",
+        "tags": [
+          "Transport"
+        ],
+        "summary": "A trip's route track",
+        "description": "The track a trip follows, for a vehicle's shapeId, from AnyTrip. The region comes from the id's own prefix. Cached for a day; an answer can be up to a week old.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^au\\d+:[a-z]{2}:[A-Za-z0-9_.:-]+$"
+            },
+            "description": "A vehicle's shapeId, e.g. au2:bs:222299"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The track",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/TransportShape"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The shape id is not valid, or its region prefix is not one this API serves (validation_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "AnyTrip did not answer usably and there was nothing recent to serve instead (service_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:transport",
+          "type:transit",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/transport/trip/{date}/{tripId}/{instance}": {
+      "get": {
+        "operationId": "getTransportTrip",
+        "tags": [
+          "Transport"
+        ],
+        "summary": "One trip, stop by stop",
+        "description": "One trip's stops with live times and delays, where its vehicle is, and the trips before and after it in the same block. Address it with a vehicle's startDate, tripId and instanceNumber; the region comes from the trip id's own prefix. From AnyTrip, cached for 15 seconds; an answer can be up to a minute old.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "date",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{8}$"
+            },
+            "description": "The trip's service date, YYYYMMDD — a vehicle's startDate"
+          },
+          {
+            "in": "path",
+            "name": "tripId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^au\\d+:[a-z]{2}:[A-Za-z0-9 _.:-]+$"
+            },
+            "description": "A vehicle's tripId, URL-encoded"
+          },
+          {
+            "in": "path",
+            "name": "instance",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{1,3}$"
+            },
+            "description": "A vehicle's instanceNumber"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The trip",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/TransportTrip"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The date, trip id or instance is not valid, or its region prefix is not one this API serves (validation_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Transport data is switched off on this server (not_found)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "AnyTrip did not answer usably and there was nothing recent to serve instead (service_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:transport",
+          "type:transit",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/transport/departures/{stopId}": {
+      "get": {
+        "operationId": "getTransportDepartures",
+        "tags": [
+          "Transport"
+        ],
+        "summary": "Departures from a stop",
+        "description": "Departures from a stop or station as AnyTrip lists them, with delays and platforms. The region comes from the stop id's own prefix. Cached for 20 seconds; an answer can be up to a minute old.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "stopId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^au\\d+:[A-Za-z0-9_.:-]+$"
+            },
+            "description": "A stop id from /api/v1/transport/stops, e.g. au2:200060"
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20
+            },
+            "description": "How many departures to ask AnyTrip for, 1–20 (default 10); more than 20 is read as 20"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The departures",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/TransportDepartures"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The stop id is not valid, or its region prefix is not one this API serves (validation_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Transport data is switched off on this server (not_found)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "AnyTrip did not answer usably and there was nothing recent to serve instead (service_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:transport",
+          "type:transit",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/transport/lines": {
+      "get": {
+        "operationId": "getTransportLines",
+        "tags": [
+          "Transport"
+        ],
+        "summary": "Rail network lines",
+        "description": "The rail, metro and light-rail network as AnyTrip draws it, each line in its official colour: greater Sydney, a few lines elsewhere such as Canberra light rail, and Queensland Rail's South East Queensland network. AnyTrip's GeoJSON is passed through unchanged; if one of its files cannot be read the others are still served. Cached for a day; an answer can be up to a week old.",
+        "responses": {
+          "200": {
+            "description": "A GeoJSON FeatureCollection of the network",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportLines"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "AnyTrip did not answer usably and there was nothing recent to serve instead (service_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:transport",
+          "type:transit",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/transport/stops": {
+      "get": {
+        "operationId": "getTransportStops",
+        "tags": [
+          "Transport"
+        ],
+        "summary": "Stations and stops in an area",
+        "description": "Train, metro, light-rail, tram and ferry stops inside an area, for one region, from AnyTrip — bus stops are not included. The area is clamped to the region's coverage and widened outward to a 0.01° grid; after clamping it may span at most 2.5° each way, and an area outside the region is refused. At most 500 stops. Each area's answer is cached for an hour and can be up to a day old.",
+        "responses": {
+          "200": {
+            "description": "The stops in the area",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/TransportStops"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A query parameter is not valid (validation_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "AnyTrip did not answer usably and there was nothing recent to serve instead (service_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "region",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "au2",
+                "au3",
+                "au4",
+                "au5",
+                "au9"
+              ]
+            },
+            "description": "au2 NSW (the default), au3 Victoria, au4 South East Queensland, au5 Adelaide, au9 the ACT; any other value is refused"
+          },
+          {
+            "in": "query",
+            "name": "minLat",
+            "schema": {
+              "type": "number"
+            },
+            "required": true,
+            "description": "Southern edge of the area, degrees latitude"
+          },
+          {
+            "in": "query",
+            "name": "maxLat",
+            "schema": {
+              "type": "number"
+            },
+            "required": true,
+            "description": "Northern edge of the area, degrees latitude"
+          },
+          {
+            "in": "query",
+            "name": "minLon",
+            "schema": {
+              "type": "number"
+            },
+            "required": true,
+            "description": "Western edge of the area, degrees longitude"
+          },
+          {
+            "in": "query",
+            "name": "maxLon",
+            "schema": {
+              "type": "number"
+            },
+            "required": true,
+            "description": "Eastern edge of the area, degrees longitude"
+          },
+          {
+            "in": "query",
+            "name": "modes",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated modes — au2 metro, sydneytrains, nswtrains, ferries, lightrail; au3 metrotrains, vlinetrains, tram; au4 trains, ferries, lightrail; au5 trains, lightrail; au9 lightrail. All of them when absent; an unknown one is refused. No region offers bus stops"
+          }
+        ],
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:transport",
+          "type:transit",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/transport/alerts": {
+      "get": {
+        "operationId": "getTransportAlerts",
+        "tags": [
+          "Transport"
+        ],
+        "summary": "Transport for NSW service alerts",
+        "description": "Service alerts from Transport for NSW's official GTFS-realtime alert feeds, for every mode. Cached for a minute; an answer can be up to ten minutes old. Empty, with configured false, when this server has no TfNSW access set up.",
+        "responses": {
+          "200": {
+            "description": "The alerts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/TransportAlerts"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The TfNSW alerts could not be read (service_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:transport",
+          "type:transit",
+          "window:live"
+        ]
       }
     }
   }

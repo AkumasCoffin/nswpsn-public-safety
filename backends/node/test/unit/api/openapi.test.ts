@@ -118,10 +118,16 @@ describe('filterSpecForKey', () => {
   });
 
   it('wildcards and window "any" read as the gate reads them', () => {
-    const every = ops(filterSpecForKey(fresh, ['source:*', 'type:*', 'window:history'])).map((o) => o.path);
-    expect(every).not.toContain('/api/v1/rfs/incidents'); // live only
-    const live = ops(filterSpecForKey(fresh, ['source:*', 'type:*', 'window:live'])).length;
-    expect(live).toBe(ops(fresh).length);
+    const history = ops(filterSpecForKey(fresh, ['source:*', 'type:*', 'window:history'])).map((o) => o.path);
+    expect(history).not.toContain('/api/v1/rfs/incidents'); // live only
+    expect(history).toContain('/api/v1/adsb/history');
+    const live = ops(filterSpecForKey(fresh, ['source:*', 'type:*', 'window:live'])).map((o) => o.path);
+    expect(live).not.toContain('/api/v1/adsb/history'); // history only
+    // Everything else is live, public, or reference data that takes either window.
+    const historyOnly = ops(fresh).filter((o) => (o.op['x-scopes'] ?? []).includes('window:history'));
+    expect(live).toHaveLength(ops(fresh).length - historyOnly.length);
+    const both = ops(filterSpecForKey(fresh, ['source:*', 'type:*', 'window:*'])).length;
+    expect(both).toBe(ops(fresh).length);
   });
 
   it('a `read` key sees the feeds on the old list', () => {

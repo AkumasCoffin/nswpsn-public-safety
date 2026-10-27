@@ -186,6 +186,12 @@ export const NOT_FOUND_ERROR: Responses = {
   404: errorResponse('Nothing by that name (not_found)'),
 };
 
+/**
+ * Something the endpoint depends on is down. Listed after GATED_ERRORS it
+ * replaces that 503, so it names the key-check case as well.
+ */
 export const UNAVAILABLE_ERROR: Responses = {
-  503: errorResponse('A dependency is down; try again shortly (service_unavailable)'),
+  503: errorResponse(
+    'Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)',
+  ),
 };

@@ -398,6 +398,17 @@ export function createApp() {
   app.route('/', bomRouter);
   mirror(app, bomRouter, ['/api/bom/warnings']);
   app.route('/', trafficRouter);
+  mirror(app, trafficRouter, [
+    '/api/traffic/incidents', '/api/traffic/incidents/raw',
+    '/api/traffic/roadwork', '/api/traffic/roadwork/raw',
+    '/api/traffic/flood', '/api/traffic/flood/raw',
+    '/api/traffic/fire', '/api/traffic/fire/raw',
+    '/api/traffic/majorevent', '/api/traffic/majorevent/raw',
+    '/api/traffic/alpine', '/api/traffic/alpine/raw',
+    '/api/traffic/lga', '/api/traffic/lga/raw',
+    '/api/traffic/cameras', '/api/traffic/works',
+    '/api/traffic/lga-incidents', '/api/traffic/all-feeds',
+  ]);
   app.route('/', beachRouter);
   app.route('/', dorsalRouter);
   app.route('/', weatherRouter);
@@ -405,6 +416,8 @@ export function createApp() {
   app.route('/', firmsRouter);
   mirror(app, firmsRouter, ['/api/firms/hotspots']);
   app.route('/', adsbRouter);
+  // Not /api/adsb/receivers: node status, never part of the public API.
+  mirror(app, adsbRouter, ['/api/adsb/aircraft', '/api/adsb/history', '/api/adsb/trails', '/api/adsb/photo/:hex']);
   app.route('/', radioPublicRouter);
   // Power + heartbeat + stats
   app.route('/', endeavourRouter);
@@ -430,6 +443,7 @@ export function createApp() {
   app.route('/', dataHistoryRouter);
   // Aviation cameras + news RSS + summaries (W7)
   app.route('/', aviationRouter);
+  mirror(app, aviationRouter, ['/api/aviation/cameras', '/api/aviation/cameras/:airport']);
   app.route('/', qldCamerasRouter);
   app.route('/', ntFireRouter);
   // The NT feed asks not to be re-published (sources/ntFire.ts); the owner
@@ -449,6 +463,8 @@ export function createApp() {
   app.route('/', agencyRouter);
   mirror(app, agencyRouter, ['/api/agency/extended', '/api/agency/extended/:slug']);
   app.route('/', marinetrafficRouter);
+  // Not /api/marinetraffic/vessel-image/:id: nothing uses it, and it goes when old paths are retired.
+  mirror(app, marinetrafficRouter, ['/api/marinetraffic/vessels', '/api/marinetraffic/vessel/:id']);
   app.route('/', newsRouter);
   app.route('/', summariesRouter);
   app.route('/', transcriptsRouter);
@@ -464,6 +480,15 @@ export function createApp() {
   // that middleware ignores query strings, so a CDN would cross-serve one
   // viewport's vehicles to every viewport.
   app.route('/', transportRouter);
+  mirror(app, transportRouter, [
+    '/api/transport/vehicles',
+    '/api/transport/shape/:id',
+    '/api/transport/trip/:date/:tripId/:instance',
+    '/api/transport/departures/:stopId',
+    '/api/transport/lines',
+    '/api/transport/stops',
+    '/api/transport/alerts',
+  ]);
   // System / debug / admin (cache clear, debug/* echoes, admin/db/*)
   app.route('/', systemRouter);
   // Feeder nodes. node-updates FIRST so its exact `/api/nodes/versions`

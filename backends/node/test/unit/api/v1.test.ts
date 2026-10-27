@@ -141,7 +141,7 @@ describe('not found and errors', () => {
   });
 
   it('a route that is not versioned is not on v1', async () => {
-    expect((await get('/api/v1/adsb/aircraft')).status).toBe(404);
+    expect((await get('/api/v1/adsb/receivers')).status).toBe(404); // node status: never versioned
     expect((await get('/api/v1/heartbeat')).status).toBe(404);
   });
 
