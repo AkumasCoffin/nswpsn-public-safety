@@ -260,8 +260,11 @@ canonical form as the outbox rows, run the other way (the backend's
 Attachments are read before anything else and re-sent on the board post, since
 the member's message is deleted once filed and Discord's attachment links
 expire. The confirmation mentions them and self-deletes after 10 s, so the
-channel holds nothing but the pin. Under ten characters with no attachment, or
-within 20 s of their last one, is answered the same way and not filed; the
+channel holds nothing but the pin. The message must be a `#` title line with the
+details on the lines under it (`split_feedback_message`) — that is what gives a
+report a title and a description of its own; one without that shape, or with no
+details and no attachment, or within 20 s of their last one, is answered with
+the format and not filed; the
 backend's refusal (five open reports per reporter, or an outage) is answered
 and the message left in place. There are no prefix commands, so the
 `on_message` override has no `process_commands` to forward to.

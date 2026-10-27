@@ -76,10 +76,18 @@ def build_feedback_notice_embed(kind: str, site_url: str) -> discord.Embed:
     """
     label, in_sentence, icon, color = FEEDBACK_KINDS.get(kind, FEEDBACK_KINDS['bug'])
     site = (site_url or '').rstrip('/')
+    # The shape the bot requires (bot.py split_feedback_message): a title
+    # line starting with '#', the details on the lines under it. A message
+    # without that is answered with the format and not filed.
     if kind == 'suggestion':
         lines = [
-            "Post your idea here as **one message** and the bot files it:",
-            "",
+            "Post your idea as **one message**: a title line starting with `#`, "
+            "then the details on the lines under it.",
+            "```",
+            "# A dark mode for the incident map",
+            "Night shifts: the white map is hard on the eyes. A toggle in the",
+            "map settings, remembered per device.",
+            "```",
             "• what it would do, and why it would help",
             "• where on the site it belongs, if that matters",
             "",
@@ -91,8 +99,13 @@ def build_feedback_notice_embed(kind: str, site_url: str) -> discord.Embed:
         title = f"{icon} Suggestions"
     else:
         lines = [
-            "Post the bug here as **one message** and the bot files it:",
-            "",
+            "Post the bug as **one message**: a title line starting with `#`, "
+            "then the details on the lines under it.",
+            "```",
+            "# Map tiles go blank past zoom 14",
+            "Zoomed in on the incident map and the tiles stopped loading.",
+            "Expected them to keep loading. Firefox 131, Windows 11.",
+            "```",
             "• what you did, what happened, and what you expected",
             "• the page or feature, and your device and browser",
             "• a screenshot, if you have one — attach it to the same message",

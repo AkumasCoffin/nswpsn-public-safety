@@ -6,6 +6,7 @@ Provides real-time alerts for emergency services, BOM warnings, traffic incident
 
 import os
 import io
+import re
 import time
 import asyncio
 import functools
@@ -683,6 +684,29 @@ def _channel_has_subscriptions(db, guild_id: int, channel_id: int) -> bool:
         return bool(db.list_presets_in_channel(guild_id, channel_id))
     except Exception:
         return False
+
+
+_FEEDBACK_TITLE_RE = re.compile(r'^#{1,3}\s+(\S.*)$')
+
+
+def split_feedback_message(text: str):
+    """A bug report or suggestion posted in Discord: a '#' title line, then
+    the details. Returns (title, details); title is None when the first
+    non-blank line is not a heading, or the heading is too short to be a
+    subject (the backend wants three characters)."""
+    lines = [ln.rstrip() for ln in (text or '').strip().splitlines()]
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    if not lines:
+        return None, ''
+    m = _FEEDBACK_TITLE_RE.match(lines[0].strip())
+    if not m:
+        return None, (text or '').strip()
+    title = m.group(1).strip().strip('#').strip()
+    if len(title) < 3:
+        return None, (text or '').strip()
+    details = '\n'.join(lines[1:]).strip()
+    return title, details
 
 
 class NSWPSNBot(commands.Bot):
@@ -1873,10 +1897,27 @@ class NSWPSNBot(commands.Bot):
         text = (message.content or '').strip()
         mention = message.author.mention
 
-        if len(text) < 10 and not message.attachments:
+        # The required shape: a '#' title line, the details under it. That
+        # is what gives the report a title and a description of its own
+        # rather than the same first line twice. Anything else is told the
+        # format and not filed.
+        title, details = split_feedback_message(text)
+        example = '# A dark mode for the map' if kind == 'suggestion' else '# Map tiles go blank past zoom 14'
+        if title is None:
             await self._send_then_delete(
-                message, f"{mention} that's a bit short — see the pinned message for what to put in a {in_sentence}.",
-                10, True)
+                message,
+                f"{mention} start with a title line — `{example}` — and put the details on the "
+                f"lines under it. See the pinned message for an example.",
+                15, True)
+            return
+        if len(details) < 10 and not message.attachments:
+            await self._send_then_delete(
+                message,
+                f"{mention} add the details under the title — "
+                + ("what it would do and why it helps." if kind == 'suggestion'
+                   else "what you did, what happened, what you expected, and where.")
+                + " See the pinned message for an example.",
+                15, True)
             return
 
         now = time.monotonic()
@@ -1916,11 +1957,8 @@ class NSWPSNBot(commands.Bot):
                 attach_names.append(f"{a.filename} (could not be fetched)")
 
         reporter = (message.author.display_name or message.author.name or 'a member')[:100]
-        first_line = text.splitlines()[0].strip() if text else ''
-        subject = (first_line or f"{label} from {reporter}")[:140]
-        if len(subject) < 3:
-            subject = f"{label} from {reporter}"[:140]
-        body = text or '(no text — see the attachments on the board post)'
+        subject = title[:140]
+        body = details or '(see the attachments on the board post)'
         if attach_names:
             body += "\n\nAttachments: " + ", ".join(attach_names)
         params = {
