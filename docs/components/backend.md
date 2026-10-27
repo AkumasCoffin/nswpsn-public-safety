@@ -429,6 +429,47 @@ the path list are what hold the line today.
 authentication and identity only. Never propose row-level security on the
 incident or role tables — RLS is a Supabase feature and does not apply to them.
 
+### Contact: tickets, bug reports, suggestions
+
+The contact page sends three things, and they are two kinds of thing.
+
+A **support ticket** (`api/tickets.ts`, `support_tickets` + `support_ticket_messages`,
+migration 114) is a private conversation: subject, category, a message thread, and a
+status that says whose court the ball is in (`open` — staff must act; `awaiting_user`;
+`closed`, which the user can reopen by replying for 72 hours). Owner and `support`
+work the queue on the staff page and can open a ticket *at* a user. A new ticket or
+user reply is a Discord staff alert (kind `ticket`); staff replies and closes are a
+bell to the owner.
+
+A **bug report or suggestion** (`api/feedback.ts`, table `feedback`, migration 128)
+is the report, its description and a **status** staff set — no thread — and it is
+**public**: every one is posted to a Discord board channel with its status, and each
+status change is relayed under that post. Statuses are `open`, `in_progress`, `done`,
+`declined`, `duplicate`, labelled in the kind's own words (Looking into it / Planned,
+Fixed / Added, Won't fix / Not added). When a report needs a back-and-forth, staff
+**link it to a ticket** (`POST /api/staff/feedback/:id/ticket`, or `…/ticket/new` to
+open one at the reporter with the report quoted); a handler's ticket view lists the
+reports linked to it. Reports are never pruned. Five open per reporter.
+
+They arrive two ways. From the site, a logged-in account (`POST /api/feedback`,
+`source = 'site'`). From Discord, any member of the server posting in an intake
+channel: the bot files it with `POST /api/discord/feedback`, gated by
+`services/auth/botSigned.ts` — the static key **and** an HMAC of the body in
+`X-Bot-Signature`, computed with `BOT_ACTION_SIGNING_SECRET` and the outbox's
+canonical form (`verifyBotActionSig`). Without the secret the route answers 503:
+nothing else tells the bot from anyone holding the key. If the reporter's Discord is
+linked to a site account (`findUserByDiscordId`, a walk of the Supabase admin list)
+the report is filed under it too. The board post's message id comes back on
+`POST /api/discord/feedback/:id/board` and becomes the staff page's board link.
+
+Everything Discord-side goes through the signed outbox (`services/staffNotify.ts`):
+the staff alert (kinds `bug_report`, `suggestion`, with a new `update` event for a
+status that is not the end of the matter), `feedback_channels` whenever the owner
+changes a kind's intake or board channel on the staff page (`PUT
+/api/staff/discord-notify {feedback}`), and `feedback_board` (`new` for site reports
+— the bot posts Discord ones itself, with their attachments — `status`, `delete`).
+See `docs/components/discord-bot.md`, "Bug reports and suggestions".
+
 ## Configuration
 
 `src/config.ts` is the **only** place `process.env` is read. Everything else

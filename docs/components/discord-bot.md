@@ -224,7 +224,8 @@ reinstate the command without solving the query first.
 The web dashboard's admin panel cannot reach into Discord. Instead the backend
 writes a row to `pending_bot_actions` in the bot's database, and the bot's
 `drain_bot_actions` loop picks it up — sync, test, cleanup, broadcast,
-`staff_notify`.
+`staff_notify`, and for bug reports and suggestions `feedback_channels` and
+`feedback_board` (next section).
 
 Rows are **HMAC-signed** with `BOT_ACTION_SIGNING_SECRET`, set to the same value
 on both sides (`backends/node/src/services/botActionSign.ts` signs,
@@ -241,6 +242,44 @@ migration state. Generate one with `openssl rand -hex 32`.
 
 The drainer reclaims stale `running` rows on each pass, so an action orphaned by
 a bot restart is retried rather than stuck.
+
+## Bug reports and suggestions
+
+The one place the bot WRITES to the backend. Two public channels per kind
+(bug, suggestion), chosen on the staff page's Discord settings and pushed here
+by the `feedback_channels` action, because the bot never reads the backend's
+`app_settings`; the bot keeps them in `feedback_channels`.
+
+**Intake.** The bot posts and pins a how-to (`build_feedback_notice_embed`;
+needs Manage Messages, posted unpinned without it) and `on_message` files every
+member's message there as a report: a signed `POST /api/discord/feedback` —
+the static key plus `X-Bot-Signature`, which is `sign_bot_action(secret,
+'feedback', 'bot', body)` with the same `BOT_ACTION_SIGNING_SECRET` and
+canonical form as the outbox rows, run the other way (the backend's
+`services/auth/botSigned.ts` verifies, and fails closed without the secret).
+Attachments are read before anything else and re-sent on the board post, since
+the member's message is deleted once filed and Discord's attachment links
+expire. The confirmation mentions them and self-deletes after 10 s, so the
+channel holds nothing but the pin. Under ten characters with no attachment, or
+within 20 s of their last one, is answered the same way and not filed; the
+backend's refusal (five open reports per reporter, or an outage) is answered
+and the message left in place. There are no prefix commands, so the
+`on_message` override has no `process_commands` to forward to.
+
+**Board.** Every report is posted with its status (`build_feedback_board_embed`):
+a Discord one by the bot itself at filing, with the files, after which it tells
+the backend the message id (`POST /api/discord/feedback/:id/board`, the
+"Open on the board" link on the staff page); a site one when the backend's
+`feedback_board` action with event `new` arrives. A status change (`status`)
+replies under the post with the new status and staff's note, and edits the
+post's Status field; a removed report (`delete`) takes the post down. The map
+of report → message is `feedback_board_posts`. A kind with no board channel
+simply skips all of this.
+
+The private staff alert for a new report is an ordinary `staff_notify` with
+kind `bug_report` or `suggestion`; a status change arrives as event `resolved`
+(done, declined, duplicate) or the newer `update` (looking into it), both of
+which edit the alert in place — `update` without the resolved styling.
 
 ## Guild removal does not delete anything
 
