@@ -250,9 +250,10 @@ The one place the bot WRITES to the backend. Two public channels per kind
 by the `feedback_channels` action, because the bot never reads the backend's
 `app_settings`; the bot keeps them in `feedback_channels`.
 
-**Intake.** The bot posts and pins a how-to (`build_feedback_notice_embed`, with a
-link button to the same thing on the site, `build_feedback_notice_view`; needs
-Manage Messages, posted unpinned without it) and `on_message` files every
+**Intake.** The bot posts a how-to (`build_feedback_notice_embed`, with a link
+button to the same thing on the site, `build_feedback_notice_view`) — not pinned:
+every other message there is removed once filed, so it is the only one standing —
+and `on_message` files every
 member's message there as a report: a signed `POST /api/discord/feedback` —
 the static key plus `X-Bot-Signature`, which is `sign_bot_action(secret,
 'feedback', 'bot', body)` with the same `BOT_ACTION_SIGNING_SECRET` and
@@ -262,7 +263,7 @@ Attachments are read before anything else and re-sent on the board post, since
 the member's message is deleted once filed and Discord's attachment links
 expire. Every answer to the member is an embed (`build_feedback_reply_embed`)
 in the channel, mentioning them and self-deleting after 10–15 s, so the channel
-holds nothing but the pin (Discord has no "only you can see this" for a reply
+holds nothing but the how-to (Discord has no "only you can see this" for a reply
 to an ordinary message; that exists for interactions alone). The confirmation
 carries an "Open on the board" button. The message must be a `#` title line with the
 details on the lines under it (`split_feedback_message`) — that is what gives a

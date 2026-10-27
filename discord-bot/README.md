@@ -53,8 +53,8 @@ A Discord bot that provides real-time alerts for NSW emergency services, BOM war
    - Read Message History
    - Use Slash Commands
    - Manage Messages, Attach Files (the bug-report / suggestion intake channels:
-     the bot pins its how-to there, removes each member's message once filed,
-     and re-sends their screenshots on the public board)
+     the bot removes each member's message once filed, leaving only its
+     how-to, and re-sends their screenshots on the public board)
 4. Copy the generated URL and use it to invite the bot to your server
 
 ### 3. Configure Environment

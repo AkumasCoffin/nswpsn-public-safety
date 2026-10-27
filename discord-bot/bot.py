@@ -939,7 +939,7 @@ class NSWPSNBot(commands.Bot):
             )
         )
 
-        # The pinned how-tos in the intake channels: bring them up to date
+        # The how-tos in the intake channels: bring them up to date
         # with this build's wording (once per process — on_ready fires again
         # on every reconnect).
         if not self._feedback_notices_checked:
@@ -1588,7 +1588,9 @@ class NSWPSNBot(commands.Bot):
     # Two public channels per kind, chosen on the staff page and pushed here
     # by the feedback_channels action: an INTAKE channel, where a member's
     # message is filed as a report (on_message -> _file_feedback) and a
-    # pinned how-to lives; and a BOARD channel, where every report is posted
+    # how-to lives (the only message left standing there — every member's
+    # message is removed once filed, so it needs no pin); and a BOARD
+    # channel, where every report is posted
     # with its status and each status change is relayed under it
     # (feedback_board action). Filing is a signed POST to the backend
     # (_feedback_post): the static key plus an HMAC of the body, the same
@@ -1635,9 +1637,11 @@ class NSWPSNBot(commands.Bot):
         return os.getenv('PUBLIC_BASE_URL', 'https://nswpsn.forcequit.xyz').rstrip('/')
 
     async def _refresh_feedback_notices(self):
-        """Edit each pinned how-to in place when its wording has changed
-        since it was posted (a new build, a corrected link); repost one that
-        was deleted. Content is compared, so an unchanged notice is left alone."""
+        """Edit each how-to in place when its wording has changed since it
+        was posted (a new build, a corrected link); repost one that was
+        deleted. Content is compared, so an unchanged notice is left alone.
+        One pinned by an earlier build is unpinned: it is the only message
+        in its channel, so a pin adds nothing but a banner."""
         loop = asyncio.get_event_loop()
         for kind, row in list(self._feedback_channels.items()):
             intake = int(row.get('intake_channel_id') or 0)
@@ -1661,6 +1665,11 @@ class NSWPSNBot(commands.Bot):
                     logger.warning(f"feedback notices: {kind} notice not fetched: {e}")
                     continue
             if msg is not None:
+                if msg.pinned:
+                    try:
+                        await msg.unpin()
+                    except discord.HTTPException as e:
+                        logger.info(f"feedback notices: {kind} unpin failed: {e}")
                 have = msg.embeds[0] if msg.embeds else None
                 # Same words and already carrying the button: leave it alone.
                 if (have and have.title == wanted.title
@@ -1673,12 +1682,8 @@ class NSWPSNBot(commands.Bot):
                 except discord.HTTPException as e:
                     logger.warning(f"feedback notices: {kind} edit failed: {e}")
                 continue
-            # Gone (or never recorded): post and pin a fresh one.
+            # Gone (or never recorded): post a fresh one.
             msg = await channel.send(embed=wanted, view=wanted_view)
-            try:
-                await msg.pin()
-            except discord.HTTPException as e:
-                logger.warning(f"feedback notices: {kind} pin failed: {e}")
             row = dict(row)
             row['notice_message_id'] = msg.id
             await loop.run_in_executor(
@@ -1689,7 +1694,8 @@ class NSWPSNBot(commands.Bot):
             logger.info(f"feedback notices: {kind} how-to reposted")
 
     async def _remove_feedback_notice(self, channel_id: int, message_id: int):
-        """Take a pinned how-to down. Best-effort: it may already be gone."""
+        """Take a how-to down (unpinning first, for one an earlier build
+        pinned). Best-effort: it may already be gone."""
         if not channel_id or not message_id:
             return
         try:
@@ -1721,10 +1727,11 @@ class NSWPSNBot(commands.Bot):
         prior = self._feedback_channels.get(kind) or {}
         prior_intake = int(prior.get('intake_channel_id') or 0)
         notice_id = int(prior.get('notice_message_id') or 0)
-        pinned = None
 
         # The how-to belongs to the intake channel: when that changes or goes,
-        # the old one comes down; a new intake channel gets a fresh one.
+        # the old one comes down; a new intake channel gets a fresh one. No
+        # pin: every other message there is removed once filed, so the
+        # how-to is the only one standing.
         if notice_id and intake != prior_intake:
             await self._remove_feedback_notice(prior_intake, notice_id)
             notice_id = 0
@@ -1733,15 +1740,6 @@ class NSWPSNBot(commands.Bot):
             msg = await channel.send(embed=build_feedback_notice_embed(kind, site_url),
                                      view=build_feedback_notice_view(kind, site_url))
             notice_id = msg.id
-            try:
-                await msg.pin()
-                pinned = True
-            except discord.Forbidden:
-                pinned = False
-                logger.warning(f"feedback notice: cannot pin in {intake} (needs Manage Messages); posted unpinned")
-            except discord.HTTPException as e:
-                pinned = False
-                logger.warning(f"feedback notice: pin failed in {intake}: {e}")
 
         await loop.run_in_executor(
             None, lambda: self.db.set_feedback_channels(kind, gid, intake, board, notice_id))
@@ -1751,7 +1749,7 @@ class NSWPSNBot(commands.Bot):
         })
         logger.info(f"feedback channels: {kind} intake={intake or '-'} board={board or '-'} notice={notice_id or '-'}")
         return {'kind': kind, 'intake_channel_id': str(intake), 'board_channel_id': str(board),
-                'notice_message_id': str(notice_id), 'pinned': pinned}
+                'notice_message_id': str(notice_id)}
 
     async def _post_feedback_board(self, kind: str, feedback_id: int, subject: str, body: str,
                                    reporter: str, source: str, status: str, status_label: str,
@@ -1919,7 +1917,7 @@ class NSWPSNBot(commands.Bot):
                 'hint', f"Not filed — start with a title line",
                 f"Begin your message with a title line, then put the details on the lines under it:\n"
                 f"```\n{example}\nWhat it is, and the details…\n```\n"
-                f"See the pinned message for a full example.",
+                f"The how-to at the top of the channel has a full example.",
                 15, True)
             return
         if len(details) < 10 and not message.attachments:
@@ -1927,7 +1925,7 @@ class NSWPSNBot(commands.Bot):
                 'hint', f"Not filed — add the details under the title",
                 ("What it would do, and why it would help." if kind == 'suggestion'
                  else "What you did, what happened, what you expected, and where.")
-                + " See the pinned message for an example.",
+                + " The how-to at the top of the channel has an example.",
                 15, True)
             return
 

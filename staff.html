@@ -17569,9 +17569,9 @@
       html += `
         <div class="dev-section-h" style="margin:1.4rem 0 0.6rem;">Bug reports &amp; suggestions — public channels</div>
         <p style="color:var(--text-soft); font-size:0.82rem; line-height:1.55; margin:0 0 0.9rem;">
-          <strong>Intake:</strong> the bot pins a how-to there, files each member's message as a report
-          (then removes the message and confirms with its number). Anyone in the server can post; the
-          bot needs Manage Messages and Attach Files in it.
+          <strong>Intake:</strong> the bot keeps a how-to there and files each member's message as a report
+          (then removes the message and confirms with its number, so the how-to is all that stays).
+          Anyone in the server can post; the bot needs Manage Messages and Attach Files in it.
           <strong>Board:</strong> every report — from the site too — is posted there with its status, and
           each status change is replied to under its post. The two can be the same channel.
         </p>`;
@@ -17598,7 +17598,7 @@
         });
         _dnState.feedback = d.feedback || _dnState.feedback;
         showToast(channelId
-          ? (which === 'intake' ? 'Intake channel saved — the bot posts and pins its how-to there within a few seconds.' : 'Board channel saved.')
+          ? (which === 'intake' ? 'Intake channel saved — the bot posts its how-to there within a few seconds.' : 'Board channel saved.')
           : (which === 'intake' ? 'Intake turned off — the bot takes its how-to down.' : 'Board turned off.'), 'success');
       } catch (e) {
         showToast(`Could not save: ${e.message}`, 'error');

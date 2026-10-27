@@ -67,7 +67,8 @@ def _feedback_status_text(status: str, status_label: str) -> str:
 
 
 def build_feedback_notice_embed(kind: str, site_url: str) -> discord.Embed:
-    """The how-to the bot pins in an intake channel.
+    """The how-to the bot keeps in an intake channel — the only message there,
+    since every member's message is removed once filed.
 
     Everything a member needs to know before posting: one message per
     report, what to include, and that the bot files it, removes the message
