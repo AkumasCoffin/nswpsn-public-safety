@@ -592,10 +592,10 @@ describe('staff routes', () => {
       { rows: [KEY(), KEY({ id: 'k2', prefix: 'zzzzzzzzzz', deleted_at: 'd', revoked_at: 'd' })] },
       {
         rows: [
-          { key_id: 'k-uuid', in_day: true, cls: 'ok', n: 10 },
-          { key_id: 'k-uuid', in_day: true, cls: 'notFound', n: 2 },
-          { key_id: 'k-uuid', in_day: false, cls: 'ok', n: 30 },
-          { key_id: 'k-uuid', in_day: false, cls: 'rateLimited', n: 4 },
+          { key_id: 'k-uuid', in_day: true, cls: 'ok', unversioned: false, n: 10 },
+          { key_id: 'k-uuid', in_day: true, cls: 'notFound', unversioned: true, n: 2 },
+          { key_id: 'k-uuid', in_day: false, cls: 'ok', unversioned: true, n: 30 },
+          { key_id: 'k-uuid', in_day: false, cls: 'rateLimited', unversioned: false, n: 4 },
         ],
       },
     ];
@@ -604,6 +604,8 @@ describe('staff routes', () => {
     expect(body.keys[0]!.usage).toEqual({
       h24: { requests: 12, ok: 10, notFound: 2, refused: 0, rateLimited: 0, otherClient: 0, serverError: 0 },
       d7: { requests: 46, ok: 40, notFound: 2, refused: 0, rateLimited: 4, otherClient: 0, serverError: 0 },
+      // Of the 7 days, the requests still made on an unversioned /api/ path.
+      unversionedD7: 32,
     });
     // A key with no use reads as zeros, not as missing.
     expect((body.keys[1]!.usage as { d7: { requests: number } }).d7.requests).toBe(0);
@@ -650,12 +652,14 @@ describe('staff routes', () => {
             { path: '/api/rfs/nope', cls: 'notFound', n: 3, last_hour: h1 },
           ],
         },
-        { rows: [{ n: 2 }] },
+        { rows: [{ n: 2, unversioned: 3 }] },
       ];
       const res = await makeApp({ userId: 'staff-1' }).request(`/api/staff/api-keys/${UUID}/usage?window=24h`);
       expect(res.status).toBe(200);
       const body = (await res.json()) as Record<string, unknown>;
-      expect(body).toMatchObject({ window: '24h', bucket: 'hour', pathCount: 2 });
+      expect(body).toMatchObject({ window: '24h', bucket: 'hour', pathCount: 2, unversioned: 3 });
+      // Unversioned use is counted from the path as stored: /api/… but not /api/v1/….
+      expect(calls.find((q) => q.sql.includes('COUNT(DISTINCT path)'))?.sql).toContain("path !~ '^([A-Z]+ )?/api/v1/'");
       expect(body.totals).toEqual({ requests: 8, ok: 5, notFound: 3, refused: 0, rateLimited: 0, otherClient: 0, serverError: 0 });
       const series = body.series as Array<Record<string, unknown>>;
       expect(series).toHaveLength(2);

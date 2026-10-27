@@ -33,7 +33,10 @@
  * services/auth/apiKeyUsage.ts): every request made with a key's real secret,
  * the gate's refusals included, by hour, path and status. A window is a whole
  * number of hourly buckets ending with the current one, so a key's "24h" in
- * the list, its tiles and the sum of its chart are the same number.
+ * the list, its tiles and the sum of its chart are the same number. Paths are
+ * shown as requested, /api/v1/ and /api/ apart; `unversioned` counts the
+ * requests made on unversioned paths — who still uses an old path before it is
+ * retired (feeds not yet on /api/v1/ included: those have nowhere to move yet).
  *
  * Caps: one OPEN request per user (pending, or approved and not yet
  * generated and not lapsed) and MAX_ACTIVE_KEYS_PER_USER live keys. Both are
@@ -254,32 +257,49 @@ function emptyCounts(): UsageCounts {
   return { requests: 0, ok: 0, notFound: 0, refused: 0, rateLimited: 0, otherClient: 0, serverError: 0 };
 }
 
+/** True for a stored path on the unversioned API — /api/… but not /api/v1/… (a non-GET keeps its method in front). */
+const UNVERSIONED_SQL = `(path ~ '^([A-Z]+ )?/api/' AND path !~ '^([A-Z]+ )?/api/v1/')`;
+
+/** Usage per key as the keys list shows it. */
+interface KeyUsage {
+  h24: UsageCounts;
+  d7: UsageCounts;
+  /** Of the 7 days' requests, those made on an unversioned path. */
+  unversionedD7: number;
+}
+
 function addTo(c: UsageCounts, cls: string, n: number): void {
   if (!(USAGE_CLASSES as readonly string[]).includes(cls)) return;
   c[cls as UsageClass] += n;
   c.requests += n;
 }
 
+function emptyUsage(): KeyUsage {
+  return { h24: emptyCounts(), d7: emptyCounts(), unversionedD7: 0 };
+}
+
 /** Every key's last 24 hours and last 7 days, by class. Keys with no use are absent. */
-async function usageByKey(pool: Pool): Promise<Map<string, { h24: UsageCounts; d7: UsageCounts }>> {
-  const { rows } = await pool.query<{ key_id: string; in_day: boolean; cls: string; n: number }>(
+async function usageByKey(pool: Pool): Promise<Map<string, KeyUsage>> {
+  const { rows } = await pool.query<{ key_id: string; in_day: boolean; cls: string; unversioned: boolean; n: number }>(
     `SELECT key_id::text AS key_id,
             hour >= ${windowStartSql('$1')} AS in_day,
             ${USAGE_CLASS_SQL} AS cls,
+            ${UNVERSIONED_SQL} AS unversioned,
             SUM(requests)::int AS n
        FROM api_key_usage_hourly
       WHERE hour >= ${windowStartSql('$2')}
-      GROUP BY 1, 2, 3`,
+      GROUP BY 1, 2, 3, 4`,
     [USAGE_WINDOWS['24h']!.hours, USAGE_WINDOWS['7d']!.hours],
   );
-  const out = new Map<string, { h24: UsageCounts; d7: UsageCounts }>();
+  const out = new Map<string, KeyUsage>();
   for (const r of rows) {
     let u = out.get(r.key_id);
     if (!u) {
-      u = { h24: emptyCounts(), d7: emptyCounts() };
+      u = emptyUsage();
       out.set(r.key_id, u);
     }
     addTo(u.d7, r.cls, Number(r.n));
+    if (r.unversioned) u.unversionedD7 += Number(r.n);
     if (r.in_day) addTo(u.h24, r.cls, Number(r.n));
   }
   return out;
@@ -788,7 +808,7 @@ apiKeysRouter.get('/api/staff/api-keys', async (c) => {
     const names = await displayNameMap(pool, res.rows.map((k) => k.user_id));
     // The keys are the point of the page; their counts are a column. A usage
     // read that fails leaves the list up with usage null ("—" on the page).
-    let usage: Map<string, { h24: UsageCounts; d7: UsageCounts }> | null = null;
+    let usage: Map<string, KeyUsage> | null = null;
     try {
       usage = await usageByKey(pool);
     } catch (err) {
@@ -797,7 +817,7 @@ apiKeysRouter.get('/api/staff/api-keys', async (c) => {
     return c.json({
       keys: res.rows.map((k) => ({
         ...mapKey(k, now, names),
-        usage: usage ? (usage.get(k.id) ?? { h24: emptyCounts(), d7: emptyCounts() }) : null,
+        usage: usage ? (usage.get(k.id) ?? emptyUsage()) : null,
       })),
     });
   } catch (err) {
@@ -857,8 +877,10 @@ apiKeysRouter.get('/api/staff/api-keys/:id/usage', async (c) => {
           GROUP BY 1, 2`,
         [id, spec.hours],
       ),
-      pool.query<{ n: number }>(
-        `SELECT COUNT(DISTINCT path)::int AS n FROM api_key_usage_hourly WHERE key_id = $1 AND hour >= ${start}`,
+      pool.query<{ n: number; unversioned: number }>(
+        `SELECT COUNT(DISTINCT path)::int AS n,
+                COALESCE(SUM(requests) FILTER (WHERE ${UNVERSIONED_SQL}), 0)::int AS unversioned
+           FROM api_key_usage_hourly WHERE key_id = $1 AND hour >= ${start}`,
         [id, spec.hours],
       ),
     ]);
@@ -899,6 +921,7 @@ apiKeysRouter.get('/api/staff/api-keys/:id/usage', async (c) => {
       series,
       paths,
       pathCount: Number(pathCountRes.rows[0]?.n ?? 0),
+      unversioned: Number(pathCountRes.rows[0]?.unversioned ?? 0),
     });
   } catch (err) {
     log.error({ err, id }, 'api key usage failed');

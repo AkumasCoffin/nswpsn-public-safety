@@ -33,13 +33,13 @@ Before changing anything, read [`../OPERATING-RULES.md`](../OPERATING-RULES.md).
    │   src/services/       poller · node hub · whisper router · LLM      │
    │   src/store/live.ts   LiveStore — current state, in memory          │
    │   src/store/archive.ts ArchiveWriter — history, into Postgres       │
-   │   src/api/*.ts        57 route modules, composed by src/server.ts  │
+   │   src/api/*.ts        61 route modules, composed by src/server.ts  │
    └───────┬──────────────────────────┬─────────────────────┬───────────┘
            │                          │                     │
            ▼                          ▼                     ▼
    static site (repo root)      Discord bot            PostgreSQL
    Leaflet, no build step       discord-bot/bot.py     (canonical store)
-   map · live · logs · wire     presets · dispatch     123 migrations
+   map · live · logs · wire     presets · dispatch     129 migrations
 ```
 
 Three things are **outside** the backend and must not be confused with it:
@@ -569,7 +569,7 @@ News and media posts, written in `wire-compose.html` and read at `wire.html`.
 
 | Store | Owner | Access |
 |---|---|---|
-| Backend PostgreSQL | AusAware | read/write. 123 numbered migrations in `src/db/migrations`, applied by `src/db/migrate.ts` at boot and by `npm run migrate` on deploy |
+| Backend PostgreSQL | AusAware | read/write. 129 numbered migrations in `src/db/migrations`, applied by `src/db/migrate.ts` at boot and by `npm run migrate` on deploy |
 | rdio-scanner PostgreSQL | central rdio-scanner | **read-only** via `RDIO_DATABASE_URL` (`src/services/rdio.ts`) |
 | Bot PostgreSQL | Discord bot | read via `BOT_DATA_DATABASE_URL` for the dashboard; the bot writes it |
 | Supabase | — | **authentication and identity only** |
@@ -612,10 +612,6 @@ that "the site makes no Waze requests" does not depend on an exhaustive reading
 of the call sites; clearing the constant and reverting the UI commit is what
 would bring the layer back.
 
-One live misstatement does survive on the backend: `src/server.ts:459` still
-advertises `police-heatmap` in the root endpoint catalogue, for a route that does
-not exist.
-
 The rest is dead reference rather than breakage, and there is a lot of it —
 roughly 88 mentions across 16 non-migration files under `backends/node/src`.
 The ones most likely to mislead:
@@ -653,7 +649,9 @@ any of it.
    scopes, and the user then generates it so only they ever see the
    plaintext — `src/api/apiKeys.ts`), or the
    static `NSWPSN_API_KEY` for the Discord bot and rdio's transcripts
-   plugin. Browsers are never given the static key.
+   plugin. Browsers are never given the static key. On `/api/v1/` paths the
+   gate's refusals use the versioned API's error shape; on `/api/` they keep
+   their old bodies.
 3. Role checks (`src/services/auth/roles.ts`) gate the staff surfaces. Roles
    live in the backend PostgreSQL, not in Supabase.
 4. Node agents use `X-Node-Token` + `X-Node-Install`
@@ -695,6 +693,7 @@ anything else (`src/server.ts`).
 | Component | Doc | Entry point |
 |---|---|---|
 | Backend | [`components/backend.md`](components/backend.md) | `backends/node/src/index.ts` |
+| Public data API (`/api/v1/`) | [`api.md`](api.md) | `backends/node/src/api/v1/` |
 | Public site | [`components/public-site.md`](components/public-site.md) | repo-root `*.html` |
 | Discord bot | [`components/discord-bot.md`](components/discord-bot.md) | `discord-bot/bot.py` |
 | Radio node | [`components/radio-node.md`](components/radio-node.md) | `feeder-nodes/radio-node/cmd/nodeagent/main.go` |

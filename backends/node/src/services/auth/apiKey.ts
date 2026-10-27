@@ -20,11 +20,16 @@
  *                     it always was. No longer handed to browsers.
  *
  * The error bodies for "nothing presented" / "wrong key" are unchanged from
- * the original Python backend — clients key off them.
+ * the original Python backend — clients key off them. On /api/v1/ paths every
+ * refusal is the versioned API's one error shape instead (api/v1/respond.ts),
+ * with the same status.
  */
 import { timingSafeEqual } from 'node:crypto';
-import type { MiddlewareHandler } from 'hono';
+import type { Context, MiddlewareHandler } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { config } from '../../config.js';
+import { isV1Path, unversionedPath } from '../../lib/apiVersion.js';
+import { v1ErrorBody, type ErrorCode } from '../../api/v1/respond.js';
 import { clientIp } from './clientIp.js';
 import { requestIsFirstParty } from './firstParty.js';
 import { BROWSER_TOKEN_PREFIX, verifyBrowserToken } from './browserToken.js';
@@ -139,17 +144,37 @@ export const PUBLIC_ENDPOINT_PREFIXES: readonly string[] = [
   // LGA names for the signup form's State -> LGA flow. Signup runs before any
   // auth exists, and the list is ABS public data.
   '/api/boundaries/lga-names',
+  // The API documentation page and the viewer it loads (api/v1/docs.ts). The
+  // page asks for a key itself and sends it to /api/v1/openapi.json, which is
+  // NOT public — what it shows depends on the key.
+  '/api/docs',
 ];
 
-function isPublic(path: string): boolean {
-  if (PUBLIC_ENDPOINTS.has(path)) return true;
+/**
+ * Does this path take no credential? A /api/v1/ path is judged as its
+ * unversioned twin: versioning a route does not change who may call it.
+ */
+export function isPublicPath(path: string): boolean {
+  const p = unversionedPath(path);
+  if (PUBLIC_ENDPOINTS.has(p)) return true;
   for (const prefix of PUBLIC_ENDPOINT_PREFIXES) {
-    if (path.startsWith(prefix)) return true;
+    if (p.startsWith(prefix)) return true;
   }
   // Non-/api paths skip auth entirely, so the middleware is safe to mount
   // globally.
-  if (!path.startsWith('/api/')) return true;
+  if (!p.startsWith('/api/')) return true;
   return false;
+}
+
+/** A refusal: the versioned error shape on /api/v1/, the original body elsewhere. */
+function refuse(
+  c: Context,
+  status: ContentfulStatusCode,
+  code: ErrorCode,
+  body: { error: string; message: string },
+): Response {
+  if (isV1Path(c.req.path)) return c.json(v1ErrorBody(code, body.message), status);
+  return c.json(body, status);
 }
 
 function bearerOf(authHeader: string | undefined): string {
@@ -173,7 +198,7 @@ export const requireApiKey: MiddlewareHandler = async (c, next) => {
   }
 
   const url = new URL(c.req.url);
-  if (isPublic(url.pathname)) {
+  if (isPublicPath(url.pathname)) {
     await next();
     return;
   }
@@ -196,15 +221,15 @@ export const requireApiKey: MiddlewareHandler = async (c, next) => {
     // A token is only ever presented by one of our pages; without a
     // first-party Origin the holder is a script, whatever it copied.
     if (!requestIsFirstParty(c)) {
-      return c.json({ error: 'token_origin', message: 'Session tokens are valid from this site’s pages only' }, 401);
+      return refuse(c, 401, 'token_origin', { error: 'token_origin', message: 'Session tokens are valid from this site’s pages only' });
     }
     const v = verifyBrowserToken(bearer, { ip: clientIp(c), ua: c.req.header('user-agent') ?? '' });
     if (v === 'expired') {
       // The page re-mints on this — the one failure it is meant to recover from.
-      return c.json({ error: 'token_expired', message: 'Session token expired; request a new one' }, 401);
+      return refuse(c, 401, 'token_expired', { error: 'token_expired', message: 'Session token expired; request a new one' });
     }
     if (v !== 'ok') {
-      return c.json({ error: 'token_invalid', message: 'Session token is not valid for this client' }, 401);
+      return refuse(c, 401, 'token_invalid', { error: 'token_invalid', message: 'Session token is not valid for this client' });
     }
     c.set('authClass', 'browser');
     await next();
@@ -225,28 +250,38 @@ export const requireApiKey: MiddlewareHandler = async (c, next) => {
     // cross-origin call, so its presence means a web page — ours or another
     // site's — is trying to use a key, and that is exactly what keys are not
     // for. Answered before the key's own state, as it always was.
-    if (c.req.header('Origin')) {
-      return c.json(
-        { error: 'api_key_browser_use', message: 'API keys are for scripts and the command line, not web pages' },
-        403,
-      );
+    //
+    // The one page that may: the API's own documentation (/api/docs), served
+    // from this origin, where the holder pastes their key to read the
+    // reference and try it. Chrome and Firefox send no Origin on a same-origin
+    // GET; Safari does. Sec-Fetch-Site is set by the browser and a page cannot
+    // forge it, so `same-origin` there is a page on this API's own origin —
+    // never nswpsn.forcequit.xyz (same-site) and never anyone else's.
+    if (c.req.header('Origin') && c.req.header('Sec-Fetch-Site') !== 'same-origin') {
+      return refuse(c, 403, 'api_key_browser_use', {
+        error: 'api_key_browser_use',
+        message: 'API keys are for scripts and the command line, not web pages',
+      });
     }
     if (!r.ok) {
       if (r.reason === 'unavailable') {
-        return c.json({ error: 'auth_unavailable', message: 'Could not verify the API key; try again shortly' }, 503);
+        return refuse(c, 503, 'auth_unavailable', {
+          error: 'auth_unavailable',
+          message: 'Could not verify the API key; try again shortly',
+        });
       }
-      return c.json(BAD_KEY, 403);
+      return refuse(c, 403, 'invalid_api_key', BAD_KEY);
     }
     if (!apiKeyRequestOk(r.row)) {
-      return c.json(
-        { error: 'rate_limited', message: `This key is limited to ${r.row.rate_limit_per_min} requests per minute` },
-        429,
-      );
+      return refuse(c, 429, 'rate_limited', {
+        error: 'rate_limited',
+        message: `This key is limited to ${r.row.rate_limit_per_min} requests per minute`,
+      });
     }
     // Checked after the rate limit on purpose: hammering a refused path still
     // spends the key's budget, so a scan cannot be free.
     const may = keyMayRequest(r.row.scopes, c.req.method, url.pathname, routeNeed(c));
-    if (!may.ok) return c.json({ error: may.error, message: may.message }, 403);
+    if (!may.ok) return refuse(c, 403, may.error, { error: may.error, message: may.message });
     touchLastUsed(r.row);
     c.set('authClass', 'apikey');
     c.set('apiKeyId', r.row.id);
@@ -260,10 +295,10 @@ export const requireApiKey: MiddlewareHandler = async (c, next) => {
   // --- Static site key (server-side callers) ------------------------------------
   const provided = bearer || xApiKey || url.searchParams.get('api_key') || '';
   if (!provided) {
-    return c.json(NEED_KEY, 401);
+    return refuse(c, 401, 'unauthorized', NEED_KEY);
   }
   if (!safeEqual(provided, config.NSWPSN_API_KEY)) {
-    return c.json(BAD_KEY, 403);
+    return refuse(c, 403, 'invalid_api_key', BAD_KEY);
   }
   c.set('authClass', 'static');
   await next();

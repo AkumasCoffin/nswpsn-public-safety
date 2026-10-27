@@ -311,6 +311,22 @@ describe('requireApiKey', () => {
         const same = await app.request('/api/rfs/incidents', { headers: { ...h.headers, 'Sec-Fetch-Site': 'same-origin' } });
         expect(same.status).toBe(200);
       });
+
+      it('lets the API’s own page through when the browser says so — Safari sends Origin even same-origin', async () => {
+        withScopes(['source:rfs', 'type:incidents', 'window:live']);
+        const app = scopedApp();
+        const safari = await app.request('/api/rfs/incidents', {
+          headers: { ...h.headers, Origin: 'https://api.forcequit.xyz', 'Sec-Fetch-Site': 'same-origin' },
+        });
+        expect(safari.status).toBe(200);
+        // Our own site is same-SITE, not same-origin: still a web page using a key.
+        for (const site of ['same-site', 'cross-site', 'none']) {
+          const res = await app.request('/api/rfs/incidents', {
+            headers: { ...h.headers, Origin: SITE, 'Sec-Fetch-Site': site },
+          });
+          expect(res.status, site).toBe(403);
+        }
+      });
     });
   });
 

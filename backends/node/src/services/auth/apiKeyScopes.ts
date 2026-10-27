@@ -30,6 +30,7 @@
  */
 import type { Context, MiddlewareHandler } from 'hono';
 import { matchedRoutes } from 'hono/route';
+import { unversionedPath } from '../../lib/apiVersion.js';
 
 /** Sources a key can be scoped to. Labels are what staff and users see. */
 export const SCOPE_SOURCES: Readonly<Record<string, string>> = {
@@ -271,14 +272,10 @@ const LEGACY_READ_PATHS: ReadonlySet<string> = new Set([
   '/api/beachwatch',
 ]);
 
-/** The versioned path of a feed is the same feed: `read` reaches both. */
-function unversioned(path: string): string {
-  return path.startsWith('/api/v1/') ? '/api/' + path.slice('/api/v1/'.length) : path;
-}
-
 function legacyReadAllows(method: string, path: string): boolean {
   if (method !== 'GET' && method !== 'HEAD') return false;
-  const p = unversioned(path);
+  // The versioned path of a feed is the same feed: `read` reaches both.
+  const p = unversionedPath(path);
   if (LEGACY_READ_PATHS.has(p)) return true;
   return LEGACY_READ_PREFIXES.some((prefix) => p.startsWith(prefix));
 }
@@ -324,22 +321,31 @@ export function declaredNeeds(): ScopeNeed[] {
   return [...declared.values()];
 }
 
+/** The need a handler declares, if it is a scoped() label (through Hono's wrapper). */
+function needOf(handler: unknown): RouteNeed | null {
+  let h = handler as ScopedHandler & Record<string, unknown>;
+  while (typeof h[COMPOSED_HANDLER] === 'function') h = h[COMPOSED_HANDLER] as typeof h;
+  return h[SCOPE] ?? null;
+}
+
+/** The need a chain of handlers declares: the last declaration on it. */
+export function declaredNeedOf(handlers: readonly unknown[]): RouteNeed | null {
+  let need: RouteNeed | null = null;
+  for (const h of handlers) need = needOf(h) ?? need;
+  return need;
+}
+
 /**
  * The matched route's declared need, and whether any route (not just
  * middleware) matched at all. Hono resolves the whole handler chain before the
  * first middleware runs, so the gate can read it without an index of its own.
  */
 export function routeNeed(c: Context): { matched: boolean; need: RouteNeed | null } {
-  let matched = false;
-  let need: RouteNeed | null = null;
-  for (const r of matchedRoutes(c)) {
-    if (r.method !== 'ALL') matched = true;
-    let h = r.handler as ScopedHandler & Record<string, unknown>;
-    while (typeof h[COMPOSED_HANDLER] === 'function') h = h[COMPOSED_HANDLER] as typeof h;
-    const n = h[SCOPE];
-    if (n) need = n;
-  }
-  return { matched, need };
+  const routes = matchedRoutes(c);
+  return {
+    matched: routes.some((r) => r.method !== 'ALL'),
+    need: declaredNeedOf(routes.map((r) => r.handler)),
+  };
 }
 
 export type ScopeDecision =
@@ -356,7 +362,9 @@ const LEGACY_REFUSAL = {
  * May a key with these scopes make this request? `route` is routeNeed(c).
  *
  * A key in the new form that asks for a path no route serves is let through,
- * so the not-found answer says so — a typo is a 404, not a refusal.
+ * so the not-found answer says so — a typo is a 404, not a refusal. A route
+ * declared ANY_KEY (the API description) is readable by every key, `read`
+ * included.
  */
 export function keyMayRequest(
   scopes: readonly string[],
@@ -364,9 +372,11 @@ export function keyMayRequest(
   path: string,
   route: { matched: boolean; need: RouteNeed | null },
 ): ScopeDecision {
+  const reading = method === 'GET' || method === 'HEAD';
+  if (reading && route.need && 'anyKey' in route.need) return { ok: true };
   if (isLegacyScopes(scopes)) return legacyReadAllows(method, path) ? { ok: true } : LEGACY_REFUSAL;
 
-  if (method !== 'GET' && method !== 'HEAD') {
+  if (!reading) {
     return { ok: false, error: 'api_key_scope_forbidden', message: 'API keys only read (GET).' };
   }
   if (!route.matched) return { ok: true };
@@ -383,4 +393,15 @@ export function keyMayRequest(
     error: 'api_key_scope_forbidden',
     message: `This key's scopes do not cover this endpoint. It needs ${needScopes(route.need).join(', ')}.`,
   };
+}
+
+/**
+ * Would a key with these scopes be let through to GET this route? The same
+ * answer the gate gives, for a route rather than a request — what the API
+ * description shows a key (api/v1/openapi.ts). `path` may be a template
+ * ('/api/v1/agency/extended/{slug}'); the old feed list matches by prefix, so a
+ * template reads the same as any path it stands for.
+ */
+export function keyCanRead(scopes: readonly string[], path: string, need: RouteNeed | null): boolean {
+  return keyMayRequest(scopes, 'GET', path, { matched: true, need }).ok;
 }

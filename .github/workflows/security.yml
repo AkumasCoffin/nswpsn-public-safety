@@ -80,6 +80,12 @@ jobs:
           # vars, useless assignments, etc.) — this is a security gate, not
           # a linter, and those were ~130 alerts of noise.
           queries: security-extended
+          # The API docs viewer is vendored, minified third-party code (Scalar,
+          # MIT — backends/node/assets/scalar/README.md). Its findings are
+          # upstream's to fix and would bury ours.
+          config: |
+            paths-ignore:
+              - backends/node/assets/scalar
       - name: Analyze
         uses: github/codeql-action/analyze@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
         with:

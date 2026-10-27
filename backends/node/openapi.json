@@ -1,0 +1,3099 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AusAware API",
+    "description": "Live and recent public-safety data for Australia — fire and emergency incidents, warnings and hazards — as AusAware relays it from the agencies' own public feeds.\n\n**Keys.** Every feed needs an API key (the reference and service endpoints are public), sent as `X-API-Key: <key>` or `Authorization: Bearer <key>`. Request one from your profile at nswpsn.forcequit.xyz (API keys); staff choose what it may read. Keys are for scripts and servers — a request carrying a browser `Origin` header is refused.\n\n**Scopes.** A key reads an endpoint when its scopes cover the endpoint's source, type and window — listed on each operation as `x-scopes`. This document shows the public endpoints and the ones your key's scopes reach.\n\n**Responses.** GeoJSON endpoints answer with a bare FeatureCollection. Everything else answers `{ \"data\": … }`. Errors are `{ \"error\": { \"code\", \"message\" } }` with a stable `code`.\n\nAusAware is an independent project. It is not affiliated with, endorsed by or acting for any agency whose data it carries; the data is theirs, as published.",
+    "version": "1"
+  },
+  "servers": [
+    {
+      "url": "https://api.forcequit.xyz"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Incidents",
+      "description": "Fire, rescue and ambulance incidents happening now"
+    },
+    {
+      "name": "Warnings",
+      "description": "Public warnings: emergency warnings, fire danger, weather"
+    },
+    {
+      "name": "Hazards",
+      "description": "Hazards observed rather than reported, such as satellite hotspots"
+    },
+    {
+      "name": "Reference",
+      "description": "Slow-changing reference data"
+    },
+    {
+      "name": "Service",
+      "description": "Whether the API is up"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "ApiKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key",
+        "description": "Your API key. `Authorization: Bearer <key>` works too."
+      }
+    },
+    "schemas": {
+      "Health": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ok"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "dev",
+              "production"
+            ]
+          },
+          "cache_keys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Live sources holding data right now"
+          },
+          "active_viewers": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Pages open on the site right now"
+          }
+        },
+        "required": [
+          "status",
+          "mode",
+          "cache_keys",
+          "active_viewers"
+        ],
+        "additionalProperties": false
+      },
+      "RfsIncidents": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "FeatureCollection"
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "Feature"
+                },
+                "geometry": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "Point"
+                    },
+                    "coordinates": {
+                      "type": "array",
+                      "prefixItems": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ],
+                      "items": false,
+                      "minItems": 2,
+                      "maxItems": 2,
+                      "description": "[longitude, latitude] (WGS84)"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "coordinates"
+                  ],
+                  "additionalProperties": false
+                },
+                "properties": {
+                  "type": "object",
+                  "properties": {
+                    "title": {
+                      "type": "string"
+                    },
+                    "guid": {
+                      "type": "string",
+                      "description": "A stable id for the record across polls, built from the agency's own id where it has one"
+                    },
+                    "status": {
+                      "type": "string",
+                      "description": "As the agency words it"
+                    },
+                    "location": {
+                      "type": "string"
+                    },
+                    "alertLevel": {
+                      "type": "string",
+                      "description": "Warning level as published (Advice, Watch and Act, Emergency Warning), or what the feed has in its place — RFS mostly says \"Not Applicable\""
+                    },
+                    "fireType": {
+                      "type": "string",
+                      "description": "Kind of incident as the agency classes it"
+                    },
+                    "responsibleAgency": {
+                      "type": "string"
+                    },
+                    "updated": {
+                      "type": "string",
+                      "description": "Last update for display: the agency's own wording (RFS, NT) or a local-time rendering of updatedISO (the others)"
+                    },
+                    "updatedISO": {
+                      "type": "string",
+                      "description": "Last update as an ISO 8601 timestamp; empty when there is none, and for RFS the agency text itself when it cannot be read as a time"
+                    },
+                    "link": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "type": "string",
+                      "description": "The feed's HTML-free description block"
+                    },
+                    "size": {
+                      "type": "string",
+                      "description": "Fire size as the RFS writes it, e.g. \"12 ha\""
+                    },
+                    "councilArea": {
+                      "type": "string"
+                    },
+                    "polygons": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Fire-ground polygons as GeoRSS writes them, one \"lat lon lat lon …\" string each"
+                    },
+                    "source": {
+                      "type": "string",
+                      "const": "rfs"
+                    }
+                  },
+                  "required": [
+                    "title",
+                    "guid",
+                    "status",
+                    "location",
+                    "alertLevel",
+                    "fireType",
+                    "responsibleAgency",
+                    "updated",
+                    "updatedISO",
+                    "link",
+                    "description",
+                    "size",
+                    "councilArea",
+                    "polygons",
+                    "source"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "type",
+                "geometry",
+                "properties"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "count": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Number of features"
+          }
+        },
+        "required": [
+          "type",
+          "features",
+          "count"
+        ],
+        "additionalProperties": false
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "validation_failed",
+                  "unauthorized",
+                  "forbidden",
+                  "invalid_api_key",
+                  "token_origin",
+                  "token_expired",
+                  "token_invalid",
+                  "api_key_browser_use",
+                  "api_key_path_forbidden",
+                  "api_key_scope_forbidden",
+                  "auth_unavailable",
+                  "rate_limited",
+                  "not_found",
+                  "service_unavailable",
+                  "internal_error"
+                ],
+                "description": "Stable, machine-readable reason"
+              },
+              "message": {
+                "type": "string",
+                "description": "For people; may change"
+              },
+              "details": {
+                "description": "Extra context for some codes, such as the failed fields for validation_failed"
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "additionalProperties": false
+      },
+      "RfsIncidentsRaw": {
+        "type": "object",
+        "properties": {
+          "channel": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "pubDate": {
+                "type": "string",
+                "description": "As the feed writes it (RFC 822)"
+              }
+            },
+            "required": [
+              "title",
+              "description",
+              "pubDate"
+            ],
+            "additionalProperties": false
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "link": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "pubDate": {
+                  "type": "string",
+                  "description": "As the feed writes it (RFC 822)"
+                },
+                "guid": {
+                  "type": "string"
+                },
+                "category": {
+                  "type": "string"
+                },
+                "point": {
+                  "description": "\"lat lon\" from georss:point, or null",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "title",
+                "link",
+                "description",
+                "pubDate",
+                "guid",
+                "category",
+                "point"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "count": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "channel",
+          "items",
+          "count"
+        ],
+        "additionalProperties": false
+      },
+      "ActAmbulanceIncidents": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "FeatureCollection"
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "Feature"
+                },
+                "geometry": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "Point"
+                    },
+                    "coordinates": {
+                      "type": "array",
+                      "prefixItems": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ],
+                      "items": false,
+                      "minItems": 2,
+                      "maxItems": 2,
+                      "description": "[longitude, latitude] (WGS84)"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "coordinates"
+                  ],
+                  "additionalProperties": false
+                },
+                "properties": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "location_text": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    },
+                    "agency": {
+                      "type": "string"
+                    },
+                    "category": {
+                      "type": "string"
+                    },
+                    "subcategory": {
+                      "type": "string"
+                    },
+                    "timestamp": {
+                      "description": "Last update (else time of call), unix seconds",
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "time_of_call": {
+                      "type": "string",
+                      "description": "As the ESA feed writes it (ACT local time)"
+                    },
+                    "updated": {
+                      "type": "string",
+                      "description": "As the ESA feed writes it (ACT local time)"
+                    },
+                    "is_active": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "title",
+                    "location_text",
+                    "status",
+                    "type",
+                    "agency",
+                    "category",
+                    "subcategory",
+                    "timestamp",
+                    "time_of_call",
+                    "updated",
+                    "is_active"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "type",
+                "geometry",
+                "properties"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "count": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Number of features"
+          }
+        },
+        "required": [
+          "type",
+          "features",
+          "count"
+        ],
+        "additionalProperties": false
+      },
+      "BomWarnings": {
+        "type": "object",
+        "properties": {
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "category": {
+                  "type": "string",
+                  "enum": [
+                    "land",
+                    "marine"
+                  ]
+                },
+                "warningType": {
+                  "type": "string",
+                  "description": "The kind of warning, from the title: Flood, Severe Weather, Wind, …"
+                },
+                "severity": {
+                  "type": "string",
+                  "enum": [
+                    "severe",
+                    "warning",
+                    "watch",
+                    "advice",
+                    "info"
+                  ],
+                  "description": "Read from the title"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "area": {
+                  "type": "string"
+                },
+                "issued": {
+                  "type": "string",
+                  "description": "As the Bureau writes it"
+                },
+                "expiry": {
+                  "type": "string",
+                  "description": "As the Bureau writes it"
+                },
+                "link": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string",
+                  "const": "bom"
+                }
+              },
+              "required": [
+                "title",
+                "type",
+                "category",
+                "warningType",
+                "severity",
+                "description",
+                "area",
+                "issued",
+                "expiry",
+                "link",
+                "source"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "count": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "land": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "marine": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "land",
+              "marine"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "warnings",
+          "count",
+          "counts"
+        ],
+        "additionalProperties": false
+      },
+      "FirmsHotspots": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "FeatureCollection"
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "Feature"
+                },
+                "geometry": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "Polygon"
+                    },
+                    "coordinates": {
+                      "type": "array",
+                      "prefixItems": [
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "array",
+                            "prefixItems": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "number"
+                              }
+                            ],
+                            "items": false,
+                            "minItems": 2,
+                            "maxItems": 2,
+                            "description": "[longitude, latitude] (WGS84)"
+                          }
+                        }
+                      ],
+                      "items": false,
+                      "minItems": 1,
+                      "maxItems": 1,
+                      "description": "The satellite pixel footprint, one ring of [longitude, latitude]"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "coordinates"
+                  ],
+                  "additionalProperties": false
+                },
+                "properties": {
+                  "type": "object",
+                  "properties": {
+                    "latitude": {
+                      "type": "number"
+                    },
+                    "longitude": {
+                      "type": "number"
+                    },
+                    "brightness": {
+                      "description": "Brightness temperature, kelvin",
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "scan_km": {
+                      "description": "Pixel size along the scan, km",
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "track_km": {
+                      "description": "Pixel size along the track, km",
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "acq_date": {
+                      "type": "string",
+                      "description": "Acquisition date as FIRMS gives it (UTC)"
+                    },
+                    "acq_time": {
+                      "type": "string",
+                      "description": "Acquisition time as FIRMS gives it (UTC, HHMM)"
+                    },
+                    "acq_datetime": {
+                      "type": "string",
+                      "description": "Acquisition time, ISO 8601 UTC"
+                    },
+                    "satellite": {
+                      "type": "string"
+                    },
+                    "instrument": {
+                      "type": "string"
+                    },
+                    "confidence": {
+                      "type": "string",
+                      "description": "As FIRMS gives it; for VIIRS l, n or h (low, nominal, high)"
+                    },
+                    "version": {
+                      "type": "string"
+                    },
+                    "bright_t31": {
+                      "description": "Second-channel brightness temperature, kelvin",
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "frp": {
+                      "description": "Fire radiative power, MW",
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "daynight": {
+                      "type": "string",
+                      "description": "D (day) or N (night)"
+                    },
+                    "source": {
+                      "type": "string",
+                      "description": "The FIRMS product, e.g. VIIRS_NOAA20_NRT"
+                    },
+                    "satellite_tag": {
+                      "type": "string",
+                      "description": "The platform: S-NPP, NOAA-20 or NOAA-21"
+                    }
+                  },
+                  "required": [
+                    "latitude",
+                    "longitude",
+                    "brightness",
+                    "scan_km",
+                    "track_km",
+                    "acq_date",
+                    "acq_time",
+                    "acq_datetime",
+                    "satellite",
+                    "instrument",
+                    "confidence",
+                    "version",
+                    "bright_t31",
+                    "frp",
+                    "daynight",
+                    "source",
+                    "satellite_tag"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "type",
+                "geometry",
+                "properties"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "count": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Number of features"
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The FIRMS products queried; source_status says how each fared"
+          },
+          "source_status": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "type": "string"
+                },
+                "satellite": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "ok": {
+                  "type": "boolean"
+                },
+                "count": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "stale": {
+                  "description": "true while serving the product's last good detections through an outage",
+                  "type": "boolean"
+                },
+                "error": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "source",
+                "satellite",
+                "label",
+                "ok",
+                "count"
+              ],
+              "additionalProperties": false
+            },
+            "description": "How each product fared on the last fetch"
+          },
+          "bbox": {
+            "type": "string",
+            "description": "The area queried, \"west,south,east,north\""
+          },
+          "fetched_at": {
+            "type": "string",
+            "description": "When FIRMS was last fetched, ISO 8601"
+          }
+        },
+        "required": [
+          "type",
+          "features",
+          "count",
+          "sources",
+          "source_status",
+          "bbox",
+          "fetched_at"
+        ],
+        "additionalProperties": false
+      },
+      "LgaNames": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "NSW",
+              "VIC",
+              "QLD",
+              "SA",
+              "WA",
+              "TAS",
+              "NT",
+              "ACT"
+            ]
+          },
+          "names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "state",
+          "names"
+        ],
+        "additionalProperties": false
+      },
+      "QldFireRecords": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "FeatureCollection"
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "Feature"
+                },
+                "geometry": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "Point"
+                    },
+                    "coordinates": {
+                      "type": "array",
+                      "prefixItems": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ],
+                      "items": false,
+                      "minItems": 2,
+                      "maxItems": 2,
+                      "description": "[longitude, latitude] (WGS84)"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "coordinates"
+                  ],
+                  "additionalProperties": false
+                },
+                "properties": {
+                  "type": "object",
+                  "properties": {
+                    "title": {
+                      "type": "string"
+                    },
+                    "guid": {
+                      "type": "string",
+                      "description": "A stable id for the record across polls, built from the agency's own id where it has one"
+                    },
+                    "status": {
+                      "type": "string",
+                      "description": "As the agency words it"
+                    },
+                    "location": {
+                      "type": "string"
+                    },
+                    "alertLevel": {
+                      "type": "string",
+                      "description": "Warning level as published (Advice, Watch and Act, Emergency Warning), or what the feed has in its place — RFS mostly says \"Not Applicable\""
+                    },
+                    "fireType": {
+                      "type": "string",
+                      "description": "Kind of incident as the agency classes it"
+                    },
+                    "responsibleAgency": {
+                      "type": "string"
+                    },
+                    "updated": {
+                      "type": "string",
+                      "description": "Last update for display: the agency's own wording (RFS, NT) or a local-time rendering of updatedISO (the others)"
+                    },
+                    "updatedISO": {
+                      "type": "string",
+                      "description": "Last update as an ISO 8601 timestamp; empty when there is none, and for RFS the agency text itself when it cannot be read as a time"
+                    },
+                    "polygons": {
+                      "description": "Warning areas, as polygon outer rings of [longitude, latitude]; warnings only",
+                      "type": "array",
+                      "items": {
+                        "type": "array",
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "number"
+                          }
+                        }
+                      }
+                    },
+                    "layer": {
+                      "type": "string",
+                      "enum": [
+                        "fire",
+                        "hazard"
+                      ],
+                      "description": "Which map layer the record belongs on"
+                    },
+                    "incidentRef": {
+                      "type": "string",
+                      "description": "Warnings: the incident the warning belongs to, when QFD says"
+                    },
+                    "warningText": {
+                      "type": "string",
+                      "description": "Warnings: the public advice text"
+                    },
+                    "header": {
+                      "type": "string"
+                    },
+                    "impacts": {
+                      "type": "string"
+                    },
+                    "shouldDo": {
+                      "type": "string"
+                    },
+                    "leaveSafely": {
+                      "type": "string"
+                    },
+                    "furtherInformation": {
+                      "type": "string"
+                    },
+                    "vehiclesAssigned": {
+                      "description": "Incidents: appliances assigned",
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "vehiclesOnRoute": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "vehiclesOnScene": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "is_active": {
+                      "type": "boolean"
+                    },
+                    "agency": {
+                      "type": "string",
+                      "const": "QFD"
+                    },
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "qld_fire",
+                        "qld_warning"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "title",
+                    "guid",
+                    "status",
+                    "location",
+                    "alertLevel",
+                    "fireType",
+                    "responsibleAgency",
+                    "updated",
+                    "updatedISO",
+                    "layer",
+                    "incidentRef",
+                    "warningText",
+                    "header",
+                    "impacts",
+                    "shouldDo",
+                    "leaveSafely",
+                    "furtherInformation",
+                    "vehiclesAssigned",
+                    "vehiclesOnRoute",
+                    "vehiclesOnScene",
+                    "is_active",
+                    "agency",
+                    "source"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "type",
+                "geometry",
+                "properties"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "count": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Number of features"
+          }
+        },
+        "required": [
+          "type",
+          "features",
+          "count"
+        ],
+        "additionalProperties": false
+      },
+      "VicEmergencyEvents": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "FeatureCollection"
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "Feature"
+                },
+                "geometry": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "Point"
+                    },
+                    "coordinates": {
+                      "type": "array",
+                      "prefixItems": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ],
+                      "items": false,
+                      "minItems": 2,
+                      "maxItems": 2,
+                      "description": "[longitude, latitude] (WGS84)"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "coordinates"
+                  ],
+                  "additionalProperties": false
+                },
+                "properties": {
+                  "type": "object",
+                  "properties": {
+                    "title": {
+                      "type": "string"
+                    },
+                    "guid": {
+                      "type": "string",
+                      "description": "A stable id for the record across polls, built from the agency's own id where it has one"
+                    },
+                    "status": {
+                      "type": "string",
+                      "description": "As the agency words it"
+                    },
+                    "location": {
+                      "type": "string"
+                    },
+                    "alertLevel": {
+                      "type": "string",
+                      "description": "Warning level as published (Advice, Watch and Act, Emergency Warning), or what the feed has in its place — RFS mostly says \"Not Applicable\""
+                    },
+                    "fireType": {
+                      "type": "string",
+                      "description": "Kind of incident as the agency classes it"
+                    },
+                    "responsibleAgency": {
+                      "type": "string"
+                    },
+                    "updated": {
+                      "type": "string",
+                      "description": "Last update for display: the agency's own wording (RFS, NT) or a local-time rendering of updatedISO (the others)"
+                    },
+                    "updatedISO": {
+                      "type": "string",
+                      "description": "Last update as an ISO 8601 timestamp; empty when there is none, and for RFS the agency text itself when it cannot be read as a time"
+                    },
+                    "layer": {
+                      "type": "string",
+                      "enum": [
+                        "fire",
+                        "flood",
+                        "hazard"
+                      ],
+                      "description": "Which map layer the record belongs on"
+                    },
+                    "agency": {
+                      "type": "string",
+                      "description": "The publishing organisation: CFA, SES, DEECA, EMV or ESTA, else the feed's own name for it"
+                    },
+                    "polygons": {
+                      "type": "array",
+                      "items": {
+                        "type": "array",
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "number"
+                          }
+                        }
+                      },
+                      "description": "Warning areas, as polygon outer rings of [longitude, latitude]"
+                    },
+                    "capEvent": {
+                      "type": "string",
+                      "description": "Warnings: the CAP event"
+                    },
+                    "capSeverity": {
+                      "type": "string"
+                    },
+                    "capUrgency": {
+                      "type": "string"
+                    },
+                    "capCertainty": {
+                      "type": "string"
+                    },
+                    "capResponseType": {
+                      "type": "string"
+                    },
+                    "capSender": {
+                      "type": "string"
+                    },
+                    "text": {
+                      "type": "string",
+                      "description": "Plain-text advice"
+                    },
+                    "action": {
+                      "type": "string"
+                    },
+                    "resources": {
+                      "type": "string"
+                    },
+                    "sizeFmt": {
+                      "type": "string",
+                      "description": "Size as the feed formats it"
+                    },
+                    "url": {
+                      "type": "string"
+                    },
+                    "is_active": {
+                      "type": "boolean"
+                    },
+                    "source": {
+                      "type": "string",
+                      "const": "vic_emergency"
+                    }
+                  },
+                  "required": [
+                    "title",
+                    "guid",
+                    "status",
+                    "location",
+                    "alertLevel",
+                    "fireType",
+                    "responsibleAgency",
+                    "updated",
+                    "updatedISO",
+                    "layer",
+                    "agency",
+                    "polygons",
+                    "capEvent",
+                    "capSeverity",
+                    "capUrgency",
+                    "capCertainty",
+                    "capResponseType",
+                    "capSender",
+                    "text",
+                    "action",
+                    "resources",
+                    "sizeFmt",
+                    "url",
+                    "is_active",
+                    "source"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "type",
+                "geometry",
+                "properties"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "count": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Number of features"
+          }
+        },
+        "required": [
+          "type",
+          "features",
+          "count"
+        ],
+        "additionalProperties": false
+      },
+      "WaEmergencyRecords": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "FeatureCollection"
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "Feature"
+                },
+                "geometry": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "Point"
+                    },
+                    "coordinates": {
+                      "type": "array",
+                      "prefixItems": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ],
+                      "items": false,
+                      "minItems": 2,
+                      "maxItems": 2,
+                      "description": "[longitude, latitude] (WGS84)"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "coordinates"
+                  ],
+                  "additionalProperties": false
+                },
+                "properties": {
+                  "type": "object",
+                  "properties": {
+                    "title": {
+                      "type": "string"
+                    },
+                    "guid": {
+                      "type": "string",
+                      "description": "A stable id for the record across polls, built from the agency's own id where it has one"
+                    },
+                    "status": {
+                      "type": "string",
+                      "description": "As the agency words it"
+                    },
+                    "location": {
+                      "type": "string"
+                    },
+                    "alertLevel": {
+                      "type": "string",
+                      "description": "Warning level as published (Advice, Watch and Act, Emergency Warning), or what the feed has in its place — RFS mostly says \"Not Applicable\""
+                    },
+                    "fireType": {
+                      "type": "string",
+                      "description": "Kind of incident as the agency classes it"
+                    },
+                    "responsibleAgency": {
+                      "type": "string"
+                    },
+                    "updated": {
+                      "type": "string",
+                      "description": "Last update for display: the agency's own wording (RFS, NT) or a local-time rendering of updatedISO (the others)"
+                    },
+                    "updatedISO": {
+                      "type": "string",
+                      "description": "Last update as an ISO 8601 timestamp; empty when there is none, and for RFS the agency text itself when it cannot be read as a time"
+                    },
+                    "layer": {
+                      "type": "string",
+                      "enum": [
+                        "fire",
+                        "flood",
+                        "hazard"
+                      ],
+                      "description": "Which map layer the record belongs on"
+                    },
+                    "polygons": {
+                      "type": "array",
+                      "items": {
+                        "type": "array",
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "number"
+                          }
+                        }
+                      },
+                      "description": "Warning areas, as polygon outer rings of [longitude, latitude]"
+                    },
+                    "eventRef": {
+                      "type": "string",
+                      "description": "The event the record belongs to; incidents and warnings join on it"
+                    },
+                    "incidentRef": {
+                      "type": "string",
+                      "description": "Warnings: the incident's event id"
+                    },
+                    "headline": {
+                      "type": "string",
+                      "description": "Warnings: the public advice"
+                    },
+                    "alertLine": {
+                      "type": "string"
+                    },
+                    "whatToDo": {
+                      "type": "string"
+                    },
+                    "peopleAffected": {
+                      "type": "string"
+                    },
+                    "action": {
+                      "type": "string",
+                      "description": "Warnings: e.g. \"Monitor conditions\""
+                    },
+                    "actionType": {
+                      "type": "string"
+                    },
+                    "capSeverity": {
+                      "type": "string"
+                    },
+                    "capUrgency": {
+                      "type": "string"
+                    },
+                    "capCertainty": {
+                      "type": "string"
+                    },
+                    "cadId": {
+                      "type": "string",
+                      "description": "Incidents only"
+                    },
+                    "region": {
+                      "type": "string"
+                    },
+                    "is_active": {
+                      "type": "boolean"
+                    },
+                    "agency": {
+                      "type": "string",
+                      "const": "DFES"
+                    },
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "wa_incident",
+                        "wa_warning"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "title",
+                    "guid",
+                    "status",
+                    "location",
+                    "alertLevel",
+                    "fireType",
+                    "responsibleAgency",
+                    "updated",
+                    "updatedISO",
+                    "layer",
+                    "polygons",
+                    "eventRef",
+                    "incidentRef",
+                    "headline",
+                    "alertLine",
+                    "whatToDo",
+                    "peopleAffected",
+                    "action",
+                    "actionType",
+                    "capSeverity",
+                    "capUrgency",
+                    "capCertainty",
+                    "cadId",
+                    "region",
+                    "is_active",
+                    "agency",
+                    "source"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "type",
+                "geometry",
+                "properties"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "count": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Number of features"
+          }
+        },
+        "required": [
+          "type",
+          "features",
+          "count"
+        ],
+        "additionalProperties": false
+      },
+      "SaFireIncidents": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "FeatureCollection"
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "Feature"
+                },
+                "geometry": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "Point"
+                    },
+                    "coordinates": {
+                      "type": "array",
+                      "prefixItems": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ],
+                      "items": false,
+                      "minItems": 2,
+                      "maxItems": 2,
+                      "description": "[longitude, latitude] (WGS84)"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "coordinates"
+                  ],
+                  "additionalProperties": false
+                },
+                "properties": {
+                  "type": "object",
+                  "properties": {
+                    "title": {
+                      "type": "string"
+                    },
+                    "guid": {
+                      "type": "string",
+                      "description": "A stable id for the record across polls, built from the agency's own id where it has one"
+                    },
+                    "status": {
+                      "type": "string",
+                      "description": "As the agency words it"
+                    },
+                    "location": {
+                      "type": "string"
+                    },
+                    "alertLevel": {
+                      "type": "string",
+                      "description": "Warning level as published (Advice, Watch and Act, Emergency Warning), or what the feed has in its place — RFS mostly says \"Not Applicable\""
+                    },
+                    "fireType": {
+                      "type": "string",
+                      "description": "Kind of incident as the agency classes it"
+                    },
+                    "responsibleAgency": {
+                      "type": "string"
+                    },
+                    "updated": {
+                      "type": "string",
+                      "description": "Last update for display: the agency's own wording (RFS, NT) or a local-time rendering of updatedISO (the others)"
+                    },
+                    "updatedISO": {
+                      "type": "string",
+                      "description": "Last update as an ISO 8601 timestamp; empty when there is none, and for RFS the agency text itself when it cannot be read as a time"
+                    },
+                    "layer": {
+                      "type": "string",
+                      "enum": [
+                        "fire",
+                        "flood",
+                        "hazard"
+                      ],
+                      "description": "Which map layer the record belongs on"
+                    },
+                    "district": {
+                      "type": "string",
+                      "description": "Fire ban district"
+                    },
+                    "resources": {
+                      "description": "CFS: appliances turned out",
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "aircraft": {
+                      "description": "CFS: aircraft turned out",
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "resourcesText": {
+                      "type": "string",
+                      "description": "The two counts as one line, e.g. \"3 appliances, 1 aircraft\"; empty when none"
+                    },
+                    "text": {
+                      "type": "string",
+                      "description": "CFS: the public message, when one has been written"
+                    },
+                    "url": {
+                      "type": "string"
+                    },
+                    "is_active": {
+                      "type": "boolean",
+                      "description": "False once the incident is complete (only with all=1)"
+                    },
+                    "agency": {
+                      "type": "string",
+                      "enum": [
+                        "SACFS",
+                        "SAMFS"
+                      ]
+                    },
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "sa_cfs",
+                        "sa_mfs"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "title",
+                    "guid",
+                    "status",
+                    "location",
+                    "alertLevel",
+                    "fireType",
+                    "responsibleAgency",
+                    "updated",
+                    "updatedISO",
+                    "layer",
+                    "district",
+                    "resources",
+                    "aircraft",
+                    "resourcesText",
+                    "text",
+                    "url",
+                    "is_active",
+                    "agency",
+                    "source"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "type",
+                "geometry",
+                "properties"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "count": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Number of features"
+          }
+        },
+        "required": [
+          "type",
+          "features",
+          "count"
+        ],
+        "additionalProperties": false
+      },
+      "Agency": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "tag": {
+            "type": "string"
+          },
+          "badges": {
+            "type": "array",
+            "items": {}
+          },
+          "overview": {
+            "type": "array",
+            "items": {}
+          },
+          "sections": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "csv": {
+                  "type": "string"
+                },
+                "table": {
+                  "$ref": "#/components/schemas/AgencyTable"
+                },
+                "groups": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "csv": {
+                        "type": "string"
+                      },
+                      "table": {
+                        "$ref": "#/components/schemas/AgencyTable"
+                      }
+                    },
+                    "additionalProperties": {}
+                  }
+                }
+              },
+              "additionalProperties": {}
+            }
+          }
+        },
+        "required": [
+          "title",
+          "tag",
+          "badges",
+          "overview",
+          "sections"
+        ],
+        "additionalProperties": false
+      },
+      "AgencyTable": {
+        "type": "object",
+        "properties": {
+          "headers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "headers",
+          "rows"
+        ],
+        "additionalProperties": false
+      },
+      "AgencyWithSlug": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "tag": {
+            "type": "string"
+          },
+          "badges": {
+            "type": "array",
+            "items": {}
+          },
+          "overview": {
+            "type": "array",
+            "items": {}
+          },
+          "sections": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "csv": {
+                  "type": "string"
+                },
+                "table": {
+                  "$ref": "#/components/schemas/AgencyTable"
+                },
+                "groups": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "csv": {
+                        "type": "string"
+                      },
+                      "table": {
+                        "$ref": "#/components/schemas/AgencyTable"
+                      }
+                    },
+                    "additionalProperties": {}
+                  }
+                }
+              },
+              "additionalProperties": {}
+            }
+          },
+          "slug": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "tag",
+          "badges",
+          "overview",
+          "sections",
+          "slug"
+        ],
+        "additionalProperties": false
+      },
+      "Status": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "degraded",
+              "down"
+            ]
+          },
+          "uptime_secs": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "started_at": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Process start, unix seconds"
+          },
+          "now": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Unix seconds"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "dev",
+              "production"
+            ]
+          },
+          "active_viewers": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Pages open on the site right now"
+          },
+          "summary": {
+            "type": "object",
+            "properties": {
+              "checks_failed": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "sources_total": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "sources_ok": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "sources_unknown": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "checks_failed",
+              "sources_total",
+              "sources_ok",
+              "sources_unknown"
+            ],
+            "additionalProperties": false
+          },
+          "checks": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            },
+            "description": "One block per subsystem; most carry `ok`, and `sources` holds a block per live source"
+          }
+        },
+        "required": [
+          "status",
+          "uptime_secs",
+          "started_at",
+          "now",
+          "mode",
+          "active_viewers",
+          "summary",
+          "checks"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "paths": {
+    "/api/v1/health": {
+      "get": {
+        "operationId": "getHealth",
+        "tags": [
+          "Service"
+        ],
+        "summary": "Liveness",
+        "description": "Answers whenever the API process is up. For whether the data behind it is flowing, see the service status.",
+        "responses": {
+          "200": {
+            "description": "The API is up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Health"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/v1/rfs/incidents": {
+      "get": {
+        "operationId": "getRfsIncidents",
+        "tags": [
+          "Incidents"
+        ],
+        "summary": "NSW RFS incidents",
+        "description": "Current NSW Rural Fire Service incidents (major incidents feed).",
+        "responses": {
+          "200": {
+            "description": "A GeoJSON FeatureCollection of incidents",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RfsIncidents"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:rfs",
+          "type:incidents",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/rfs/incidents/raw": {
+      "get": {
+        "operationId": "getRfsIncidentsRaw",
+        "tags": [
+          "Incidents"
+        ],
+        "summary": "NSW RFS incidents, unparsed",
+        "description": "The RFS major incidents feed's channel and items as JSON — each item's title, link, description (with its HTML), date, guid, category and point — fetched from the RFS when asked rather than from memory. Empty (not an error) when the RFS feed cannot be reached.",
+        "responses": {
+          "200": {
+            "description": "The feed channel and its items",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/RfsIncidentsRaw"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:rfs",
+          "type:incidents",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/act-ambulance/incidents": {
+      "get": {
+        "operationId": "getActAmbulanceIncidents",
+        "tags": [
+          "Incidents"
+        ],
+        "summary": "ACT Ambulance Service responses",
+        "description": "ACT Ambulance Service responses still running, from the ACT ESA feed.",
+        "responses": {
+          "200": {
+            "description": "A GeoJSON FeatureCollection of responses",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActAmbulanceIncidents"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:actas",
+          "type:incidents",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/bom/warnings": {
+      "get": {
+        "operationId": "getBomWarnings",
+        "tags": [
+          "Warnings"
+        ],
+        "summary": "Bureau of Meteorology warnings for NSW",
+        "description": "Current Bureau of Meteorology land and marine warnings for NSW.",
+        "responses": {
+          "200": {
+            "description": "Current warnings, with counts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/BomWarnings"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:bom",
+          "type:warnings",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/firms/hotspots": {
+      "get": {
+        "operationId": "getFirmsHotspots",
+        "tags": [
+          "Hazards"
+        ],
+        "summary": "Satellite fire hotspots",
+        "description": "NASA FIRMS VIIRS hotspot detections over Australia from the last 24 hours, each as its pixel footprint. A hotspot is a heat signature seen from orbit, not a confirmed fire.",
+        "responses": {
+          "200": {
+            "description": "A GeoJSON FeatureCollection of hotspots",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FirmsHotspots"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:firms",
+          "type:hazards",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/boundaries/lga-names": {
+      "get": {
+        "operationId": "getLgaNames",
+        "tags": [
+          "Reference"
+        ],
+        "summary": "Local government area names",
+        "description": "Every local government area in a state or territory, by name. The ACT has none, so its list is empty.",
+        "responses": {
+          "200": {
+            "description": "The names, sorted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/LgaNames"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A query parameter is not valid (validation_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A dependency is down; try again shortly (service_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "state",
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "description": "NSW, VIC, QLD, SA, WA, TAS, NT or ACT, in any case"
+          }
+        ],
+        "security": []
+      }
+    },
+    "/api/v1/qld-fire/incidents": {
+      "get": {
+        "operationId": "getQldFireIncidents",
+        "tags": [
+          "Incidents"
+        ],
+        "summary": "QLD Fire Department incidents",
+        "description": "Current Queensland Fire Department incidents.",
+        "responses": {
+          "200": {
+            "description": "A GeoJSON FeatureCollection of incidents",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QldFireRecords"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:qfd",
+          "type:incidents",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/qld-fire/warnings": {
+      "get": {
+        "operationId": "getQldFireWarnings",
+        "tags": [
+          "Warnings"
+        ],
+        "summary": "QLD Fire Department warnings",
+        "description": "Current Queensland Fire Department public warnings with their warning areas.",
+        "responses": {
+          "200": {
+            "description": "A GeoJSON FeatureCollection of warnings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QldFireRecords"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:qfd",
+          "type:warnings",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/vic-emergency/events": {
+      "get": {
+        "operationId": "getVicEmergencyEvents",
+        "tags": [
+          "Incidents"
+        ],
+        "summary": "VIC Emergency incidents and warnings",
+        "description": "Current incidents and warnings from the emergency.vic.gov.au feed (CFA, SES, DEECA, EMV and others). Each record says which map layer it belongs on — fire, flood or hazard.",
+        "responses": {
+          "200": {
+            "description": "A GeoJSON FeatureCollection of events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VicEmergencyEvents"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:vic",
+          "type:incidents",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/wa-emergency/incidents": {
+      "get": {
+        "operationId": "getWaEmergencyIncidents",
+        "tags": [
+          "Incidents"
+        ],
+        "summary": "WA DFES incidents",
+        "description": "Current WA Department of Fire and Emergency Services incidents.",
+        "responses": {
+          "200": {
+            "description": "A GeoJSON FeatureCollection of incidents",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WaEmergencyRecords"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:dfes",
+          "type:incidents",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/wa-emergency/warnings": {
+      "get": {
+        "operationId": "getWaEmergencyWarnings",
+        "tags": [
+          "Warnings"
+        ],
+        "summary": "WA DFES warnings",
+        "description": "Current WA Department of Fire and Emergency Services public warnings with their warning areas.",
+        "responses": {
+          "200": {
+            "description": "A GeoJSON FeatureCollection of warnings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WaEmergencyRecords"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:dfes",
+          "type:warnings",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/sa-fire/cfs": {
+      "get": {
+        "operationId": "getSaCfsIncidents",
+        "tags": [
+          "Incidents"
+        ],
+        "summary": "SA Country Fire Service incidents",
+        "description": "Current SA Country Fire Service incidents. Completed incidents are left out unless all=1.",
+        "responses": {
+          "200": {
+            "description": "A GeoJSON FeatureCollection of incidents",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SaFireIncidents"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "all",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "0",
+                "1"
+              ]
+            },
+            "description": "1 includes completed incidents as well"
+          }
+        ],
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:safire",
+          "type:incidents",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/sa-fire/mfs": {
+      "get": {
+        "operationId": "getSaMfsIncidents",
+        "tags": [
+          "Incidents"
+        ],
+        "summary": "SA Metropolitan Fire Service incidents",
+        "description": "Current SA Metropolitan Fire Service incidents. Completed incidents are left out unless all=1.",
+        "responses": {
+          "200": {
+            "description": "A GeoJSON FeatureCollection of incidents",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SaFireIncidents"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "all",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "0",
+                "1"
+              ]
+            },
+            "description": "1 includes completed incidents as well"
+          }
+        ],
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:safire",
+          "type:incidents",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/agency/extended": {
+      "get": {
+        "operationId": "getAgencies",
+        "tags": [
+          "Reference"
+        ],
+        "summary": "Agency reference tables",
+        "description": "Reference tables for each agency on the site's agency pages, keyed by the agency's slug.",
+        "responses": {
+          "200": {
+            "description": "Every agency",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "agencies": {
+                          "type": "object",
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "additionalProperties": {
+                            "$ref": "#/components/schemas/Agency"
+                          }
+                        }
+                      },
+                      "required": [
+                        "agencies"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/v1/agency/extended/{slug}": {
+      "get": {
+        "operationId": "getAgency",
+        "tags": [
+          "Reference"
+        ],
+        "summary": "One agency's reference tables",
+        "responses": {
+          "200": {
+            "description": "The agency",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AgencyWithSlug"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Nothing by that name (not_found)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "slug",
+            "required": true
+          }
+        ],
+        "security": []
+      }
+    },
+    "/api/v1/status": {
+      "get": {
+        "operationId": "getStatus",
+        "tags": [
+          "Service"
+        ],
+        "summary": "Service status",
+        "description": "Whether the API and the systems behind it are working. 200 when ok or degraded, 503 when down — the body says which, with a block per subsystem.",
+        "responses": {
+          "200": {
+            "description": "ok or degraded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Status"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "down — the same document with status \"down\", or an error (service_unavailable) when the status could not be worked out at all",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/Status"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    }
+  }
+}

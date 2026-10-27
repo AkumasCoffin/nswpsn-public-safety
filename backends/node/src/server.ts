@@ -85,14 +85,20 @@ import { isFirstPartyOrigin } from './services/auth/firstParty.js';
 import { optionalSupabaseJwt } from './services/auth/supabaseJwt.js';
 import { sessionRouter } from './api/session.js';
 import { apiKeysRouter } from './api/apiKeys.js';
+// The versioned public data API (/api/v1/) and its documentation.
+import { mirror } from './api/v1/mirror.js';
+import { notFound, onError } from './api/v1/respond.js';
+import { openapiRouter } from './api/v1/openapi.js';
+import { docsRouter } from './api/v1/docs.js';
+import { unversionedPath } from './lib/apiVersion.js';
 import { log } from './lib/log.js';
 
 // Paths that should never appear in the request log even on
 // success — they fire constantly and drown out everything else.
 // Failures still show up because the success-only filter below
-// only short-circuits on 2xx/3xx.
+// only short-circuits on 2xx/3xx. Their /api/v1/ twins are just as quiet.
 const QUIET_PATHS_RE =
-  /^\/(?:api\/heartbeat|api\/check-editor\/|api\/config|api\/health|api\/status)/;
+  /^\/api\/(?:v1\/)?(?:heartbeat|check-editor\/|config|health|status)/;
 
 const SLOW_REQUEST_MS = 500;
 
@@ -265,7 +271,8 @@ export function createApp() {
   // and dashboard panel re-renders. SWR=300s lets stale responses tide
   // a request over while we revalidate in the background.
   // Skipped for auth-sensitive endpoints (/api/config, /api/dashboard/*),
-  // per-user state (/api/heartbeat), and POST/PUT/DELETE.
+  // per-user state (/api/heartbeat), and POST/PUT/DELETE. A path's /api/v1/
+  // twin (api/v1/mirror.ts) is cached alike.
   const CACHEABLE_PATHS = [
     '/api/data/history',
     '/api/data/history/filters',
@@ -297,7 +304,7 @@ export function createApp() {
   app.use('*', async (c, next) => {
     await next();
     if (c.req.method !== 'GET') return;
-    const path = new URL(c.req.url).pathname;
+    const path = unversionedPath(new URL(c.req.url).pathname);
     if (!CACHEABLE_PATHS.includes(path)) return;
     if (!c.res.headers.has('Cache-Control')) {
       c.res.headers.set(
@@ -375,19 +382,29 @@ export function createApp() {
   // Register route modules. Each router defines its own paths under
   // /api/...; mounting at '/' keeps the handlers' URLs identical to
   // the Python equivalents.
+  //
+  // mirror() serves the routes it names under /api/v1/ as well, with the
+  // same handler chain (api/v1/mirror.ts). Only the public data API is
+  // versioned — docs/api.md has the list and the policy.
   app.route('/', healthRouter);
+  mirror(app, healthRouter, ['/api/health']);
   app.route('/', configRouter);
   app.route('/', sessionRouter);
   // Simple sources
   app.route('/', rfsRouter);
+  // Not /api/rfs/fdr yet: its upstream changed format and it answers empty (rfs.ts).
+  mirror(app, rfsRouter, ['/api/rfs/incidents', '/api/rfs/incidents/raw']);
   app.route('/', actAmbulanceRouter);
+  mirror(app, actAmbulanceRouter, ['/api/act-ambulance/incidents']);
   app.route('/', bomRouter);
+  mirror(app, bomRouter, ['/api/bom/warnings']);
   app.route('/', trafficRouter);
   app.route('/', beachRouter);
   app.route('/', dorsalRouter);
   app.route('/', weatherRouter);
   app.route('/', pagerRouter);
   app.route('/', firmsRouter);
+  mirror(app, firmsRouter, ['/api/firms/hotspots']);
   app.route('/', adsbRouter);
   app.route('/', radioPublicRouter);
   // Power + heartbeat + stats
@@ -415,14 +432,22 @@ export function createApp() {
   // Aviation cameras + news RSS + summaries (W7)
   app.route('/', aviationRouter);
   app.route('/', qldCamerasRouter);
+  // Not mirrored: the NT feed asks not to be re-published (sources/ntFire.ts),
+  // so whether it belongs in the documented public API is the owner's call.
   app.route('/', ntFireRouter);
   app.route('/', boundariesRouter);
+  mirror(app, boundariesRouter, ['/api/boundaries/lga-names']);
   app.route('/', whisperRouter);
   app.route('/', qldFireRouter);
+  mirror(app, qldFireRouter, ['/api/qld-fire/incidents', '/api/qld-fire/warnings']);
   app.route('/', vicEmergencyRouter);
+  mirror(app, vicEmergencyRouter, ['/api/vic-emergency/events']);
   app.route('/', waEmergencyRouter);
+  mirror(app, waEmergencyRouter, ['/api/wa-emergency/incidents', '/api/wa-emergency/warnings']);
   app.route('/', saFireRouter);
+  mirror(app, saFireRouter, ['/api/sa-fire/cfs', '/api/sa-fire/mfs']);
   app.route('/', agencyRouter);
+  mirror(app, agencyRouter, ['/api/agency/extended', '/api/agency/extended/:slug']);
   app.route('/', marinetrafficRouter);
   app.route('/', newsRouter);
   app.route('/', summariesRouter);
@@ -432,6 +457,7 @@ export function createApp() {
   app.route('/', dashboardRouter);
   // Uptime-Kuma-shaped status endpoint
   app.route('/', statusRouter);
+  mirror(app, statusRouter, ['/api/status']);
   // What3Words proxy
   app.route('/', w3wRouter);
   // AnyTrip public-transport proxy. Deliberately NOT in CACHEABLE_PATHS —
@@ -451,6 +477,14 @@ export function createApp() {
   app.route('/', scannerIngestRouter);
   // Feeder node event analytics (staff Data tab, owner|dev only)
   app.route('/', nodeDataRouter);
+
+  // The API description (filtered per key) and the documentation page.
+  app.route('/', openapiRouter);
+  app.route('/', docsRouter);
+
+  // JSON for /api/v1/; every other path keeps Hono's plain-text answers.
+  app.notFound(notFound);
+  app.onError(onError);
 
   // Root route — endpoint catalogue. Mirrors python's `/` response at
   // external_api_proxy.py:11431 so any monitoring / smoke-test relying

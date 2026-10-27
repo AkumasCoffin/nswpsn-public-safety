@@ -64,7 +64,9 @@ describe('browser session token', () => {
     const [p, exp, nonce, sig] = token.split('.') as [string, string, string, string];
     expect(verifyBrowserToken(`${p}.${Number(exp) + 100}.${nonce}.${sig}`, me)).toBe('mismatch');
     expect(verifyBrowserToken(`${p}.${exp}.${nonce}x.${sig}`, me)).toBe('mismatch');
-    expect(verifyBrowserToken(`${p}.${exp}.${nonce}.${sig.slice(0, -1)}A`, me)).toBe('mismatch');
+    // A different last character — the signature's own may already be 'A'.
+    const last = sig.endsWith('A') ? 'B' : 'A';
+    expect(verifyBrowserToken(`${p}.${exp}.${nonce}.${sig.slice(0, -1)}${last}`, me)).toBe('mismatch');
     expect(verifyBrowserToken('bt1.garbage', me)).toBe('bad');
     expect(verifyBrowserToken('not-a-token', me)).toBe('bad');
   });

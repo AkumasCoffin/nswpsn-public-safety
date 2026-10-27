@@ -22,16 +22,20 @@ backends/node/
   src/index.ts          entry point — preflight(), serve(), shutdown hooks
   src/server.ts         createApp() — the Hono instance, middleware, routes
   src/config.ts         zod-validated env. The ONLY process.env reader
-  src/api/*.ts          57 route modules, one per endpoint group
+  src/api/*.ts          61 route modules, one per endpoint group
+  src/api/v1/           the versioned public API: mirror, response shapes,
+                        zod schemas, the OpenAPI document, the docs page
   src/sources/*.ts      one module per polled upstream
   src/services/         pollers, node hub, whisper router, LLM, auth, …
   src/store/live.ts     LiveStore — current state, in memory
   src/store/archive.ts  ArchiveWriter — history, batched into PostgreSQL
   src/db/pool.ts        pg pool wrapper
   src/db/migrate.ts     migration runner
-  src/db/migrations/    123 numbered .sql files
+  src/db/migrations/    129 numbered .sql files
   src/lib/              logger, timezone, masks, relay-error formatting
-  assets/               node-versions.json (agent manifest), rfs-zones.json
+  assets/               node-versions.json (agent manifest), rfs-zones.json,
+                        docs/ and scalar/ (the /api/docs page and its viewer)
+  openapi.json          the API description, generated — `npm run openapi`
   scripts/deploy.sh     the deploy. The OWNER runs this. You do not
   test/unit/            Vitest, no database
 ```
@@ -53,10 +57,12 @@ curl http://localhost:3000/api/health
 | `npm run build` | `tsc` then copy migrations into `dist/` |
 | `npm run migrate` | apply migrations |
 | `npm run simulate-node` | drive the node ingest path without a real receiver |
+| `npm run openapi` | regenerate `openapi.json` after changing anything on `/api/v1/` |
 | `npm run deploy` | **the owner's deploy. Never run this** |
 
 All the `tsx`/`node` scripts load `../.env` when present, so one `backends/.env`
-drives everything.
+drives everything — except `npm run openapi`, which uses placeholders on
+purpose: the description must not depend on whose machine generated it.
 
 ## Boot sequence
 
@@ -255,9 +261,22 @@ report on day eight. The map asks for `?hours=168` explicitly.
 
 ## Routes
 
-57 modules in `src/api/`, composed by `createApp()` in `src/server.ts`. Each
+61 modules in `src/api/`, composed by `createApp()` in `src/server.ts`. Each
 defines its own `/api/...` paths and is mounted at `/`, so handler URLs are
 exactly the paths they declare.
+
+**The public data API is also served under `/api/v1/`** — see
+[`../api.md`](../api.md) for what is there, the versioning policy and the
+response and error shapes. Routers are not rewritten for it: after a router's
+`app.route('/', …)`, `mirror(app, router, [paths])` (`api/v1/mirror.ts`)
+registers the listed routes a second time under `/api/v1/` with the same
+handler chain — the same `scoped()` declaration, validators and
+`describeRoute()` metadata — and records them for the OpenAPI document. Only
+the listed paths are versioned, a listed path the router lacks throws at boot,
+and router-level middleware travels with the routes it covers. Handlers answer
+through `ok()`, `geo()` and `fail()` (`api/v1/respond.ts`), which wrap the body
+in `data` and use the `{ error: { code, message } }` shape on `/api/v1/`, and
+send exactly the old body on `/api/`.
 
 Order matters in one place: `nodeUpdatesRouter` is mounted **before**
 `nodesRouter` so its exact `/api/nodes/versions` matches before
@@ -278,15 +297,15 @@ Roughly grouped:
 | Discord | `dashboard` |
 | Utility | `w3w` |
 
-`GET /` returns an endpoint catalogue. One entry in it is stale:
-`police-heatmap` (`src/server.ts:453`) — Waze was removed and no such route
-exists. See the architecture doc.
+`GET /` returns an endpoint catalogue kept from the Python backend's shape. It
+lists unversioned paths only.
 
 ### Middleware, in order
 
 1. **Request logger** — a replacement for Hono's. Quiet on 2xx/3xx for
    high-volume paths (`/api/heartbeat`, `/api/config`, `/api/health`,
-   `/api/status`, `/api/check-editor/*`); `info` for anything slower than 500 ms,
+   `/api/status`, `/api/check-editor/*`, and their `/api/v1/` twins); `info`
+   for anything slower than 500 ms,
    for 4xx, and for all 2xx outside production; `warn` for 5xx; silent for
    OPTIONS. Every line is tagged with the caller it identified — `browser`,
    `discord-bot`, `node`, `rdio`, `whisper`, `whisper-node`, `other` — and
@@ -300,9 +319,9 @@ exists. See the architecture doc.
 2. **Compression** — brotli/gzip. `/api/data/history` payloads compress about
    10×.
 
-3. **Short public cache** — a fixed list of cheap GETs gets
-   `public, max-age=30, stale-while-revalidate=300`. Auth-sensitive and
-   per-user paths are excluded.
+3. **Short public cache** — a fixed list of cheap GETs (and their `/api/v1/`
+   twins) gets `public, max-age=30, stale-while-revalidate=300`.
+   Auth-sensitive and per-user paths are excluded.
 
 4. **CORS** — an explicit allowlist of exact first-party origins, extensible
    without a code change via `CORS_ALLOWED_ORIGINS`. The allowlist is
@@ -317,9 +336,18 @@ exists. See the architecture doc.
    route can role-check the real person.
 
 6. **`requireApiKey`** — the credential gate. Short-circuits for OPTIONS, a
-   list of public endpoints, anything outside `/api`, and any request already
+   list of public endpoints (a `/api/v1/` path is public exactly when its
+   `/api/` twin is), anything outside `/api`, and any request already
    authenticated as a Supabase user; otherwise resolves one of the three
-   credential classes in the table below and tags the request with it.
+   credential classes in the table below and tags the request with it. Its
+   refusals keep their old bodies on `/api/` and use the v1 error shape on
+   `/api/v1/`, with the same status.
+
+After the routes, `app.notFound` and `app.onError` (`api/v1/respond.ts`) answer
+`/api/v1/` in JSON — `404 not_found`, and a `500 internal_error` that says
+nothing about the cause — and leave every other path with Hono's plain-text
+`404 Not Found` and `Internal Server Error`, as before. The gate runs first, so
+an unknown `/api/…` path without a credential is still a 401.
 
 ### Authentication
 
@@ -338,7 +366,11 @@ shortcuts). Only the sha256 and a lookup prefix are stored.
 A key carries scopes (what it may read — below), its own per-minute limit, an
 optional expiry and a `revoked_at`. **Keys are refused from web pages**: a
 request presenting one with a browser `Origin` header is a 403, so a key cannot
-be used from another site, nor pasted into ours.
+be used from another site, nor pasted into ours. The exception is the API's own
+documentation page (`/api/docs`): a request the browser marks
+`Sec-Fetch-Site: same-origin` comes from a page on the API's own origin, which a
+page cannot forge — Safari sends `Origin` even then, where Chrome and Firefox
+send none.
 
 Keys are normally **requested, not issued**. A logged-in user asks from their
 profile (`POST /api/api-keys/requests`, a name, a reason and, optionally, the
@@ -381,6 +413,11 @@ page shows each key's 24-hour and 7-day figures by class (OK, 404, refused,
 429, other 4xx, 5xx) and, per key, a 24h / 7d / 30d chart and its busiest
 paths (`GET /api/staff/api-keys/:id/usage`). A window is a whole number of
 hours ending with the current one, so the list, the tiles and the chart agree.
+Paths are shown as requested, `/api/v1/` and `/api/` apart, and the list's
+**Unversioned** column (`unversionedD7`; `unversioned` for one key's window)
+counts requests on unversioned `/api/…` paths — the keys to warn before an old
+path is retired. It includes feeds that are not on `/api/v1/` yet, which have
+nowhere to move.
 `scripts/issue-api-key.ts` remains the no-review path for a key minted on the
 server.
 
@@ -458,6 +495,16 @@ for it.
 
 Refused requests of either kind still spend the key's per-minute budget, so
 scanning for an opening is not free.
+
+One route is declared `ANY_KEY`: `GET /api/v1/openapi.json`, the API
+description. Every valid key may fetch it, `read` keys included, and what comes
+back is filtered to that key — the public operations plus those its scopes
+reach (`api/v1/openapi.ts`, which reuses the gate's own check). The document is
+generated from the routes by `npm run openapi` into `backends/node/openapi.json`
+and committed; `test/unit/api/openapi.test.ts` fails while it is stale. The page
+at `/api/docs` (public) asks for a key, fetches the document with it and shows
+it in Scalar, vendored under `assets/scalar/` and served pre-compressed; the
+page's Content-Security-Policy allows this origin only.
 
 **Roles live in the backend's own PostgreSQL, not in Supabase.** Supabase is
 authentication and identity only. Never propose row-level security on the
@@ -570,7 +617,7 @@ either; the backend substitutes them when it forwards.
 
 ## Database
 
-PostgreSQL, 124 numbered migrations in `src/db/migrations/`, applied by
+PostgreSQL, 129 numbered migrations in `src/db/migrations/`, applied by
 `src/db/migrate.ts` at boot and by `npm run migrate` before the restart on
 deploy. The runner is idempotent, so applying twice is a no-op. New schema is a
 new numbered file; never edit an applied one. The most recent are `122`, a
@@ -787,6 +834,8 @@ table really is `calls`. Describing *our* traffic as a "call" is wrong.
 
 ## See also
 
+- [`../api.md`](../api.md) — the public data API on `/api/v1/`: keys, scopes,
+  versions, response and error shapes, and how to add an endpoint.
 - [`../architecture.md`](../architecture.md) — the system, and the full trace
   from a transmission in the air to where it surfaces.
 - [`transcription.md`](transcription.md) — the whisper router.

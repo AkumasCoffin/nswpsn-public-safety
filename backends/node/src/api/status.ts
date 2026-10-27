@@ -36,6 +36,10 @@ import { cleanupStatsForStatus } from '../services/cleanup.js';
 import { rdioSchedulerStats } from '../services/llm.js';
 import { config, modeLabel } from '../config.js';
 import { log } from '../lib/log.js';
+import { z } from 'zod';
+import { describeRoute, resolver } from 'hono-openapi';
+import { fail, ok } from './v1/respond.js';
+import { assertShape, envelope, ErrorBody, okJson, type SameShape } from './v1/schemas.js';
 
 // Thresholds — match python defaults at lines 11020-11037.
 const STATUS_DB_TIMEOUT_SECS = 5;
@@ -66,7 +70,7 @@ const FILTER_CACHE_BOOT_GRACE_SECS = 120;
 
 const PROCESS_START_MS = Date.now();
 
-interface StatusPayload {
+export interface StatusPayload {
   status: 'ok' | 'degraded' | 'down';
   uptime_secs: number;
   started_at: number;
@@ -481,34 +485,69 @@ async function computeStatus(): Promise<{
 
 export const statusRouter = new Hono();
 
-statusRouter.get('/api/status', async (c) => {
-  const nowMs = Date.now();
-  if (statusCache && nowMs - statusCache.ts < STATUS_CACHE_TTL_MS) {
-    // Re-stamp the volatile fields so cached responses don't visibly drift.
-    const fresh: StatusPayload = {
-      ...statusCache.data,
-      now: Math.floor(nowMs / 1000),
-      uptime_secs: Math.floor((nowMs - PROCESS_START_MS) / 1000),
-      active_viewers: activeViewerCount(),
-    };
-    return c.json(fresh, statusCache.httpCode as 200 | 503);
-  }
-  try {
-    const { payload, httpCode } = await computeStatus();
-    statusCache = { data: payload, httpCode, ts: nowMs };
-    return c.json(payload, httpCode as 200 | 503);
-  } catch (err) {
-    log.error({ err }, '/api/status compute failed');
-    return c.json(
-      {
+// What /api/v1/ documents (api/v1/openapi.ts). The checks are internal and
+// change as the backend does, so they are described loosely.
+const Status = z.object({
+  status: z.enum(['ok', 'degraded', 'down']),
+  uptime_secs: z.number().int(),
+  started_at: z.number().int().describe('Process start, unix seconds'),
+  now: z.number().int().describe('Unix seconds'),
+  mode: z.enum(['dev', 'production']),
+  active_viewers: z.number().int().describe('Pages open on the site right now'),
+  summary: z.object({
+    checks_failed: z.number().int(),
+    sources_total: z.number().int(),
+    sources_ok: z.number().int(),
+    sources_unknown: z.number().int(),
+  }),
+  checks: z
+    .record(z.string(), z.record(z.string(), z.unknown()))
+    .describe('One block per subsystem; most carry `ok`, and `sources` holds a block per live source'),
+}).meta({ id: 'Status' });
+assertShape<SameShape<z.infer<typeof Status>, StatusPayload>>();
+
+statusRouter.get(
+  '/api/status',
+  describeRoute({
+    operationId: 'getStatus',
+    tags: ['Service'],
+    summary: 'Service status',
+    description:
+      'Whether the API and the systems behind it are working. 200 when ok or degraded, 503 when down — the body says which, with a block per subsystem.',
+    responses: {
+      ...okJson(envelope(Status), 'ok or degraded'),
+      503: {
+        description: 'down — the same document with status "down", or an error (service_unavailable) when the status could not be worked out at all',
+        content: { 'application/json': { schema: resolver(z.union([envelope(Status), ErrorBody])) } },
+      },
+    },
+  }),
+  async (c) => {
+    const nowMs = Date.now();
+    if (statusCache && nowMs - statusCache.ts < STATUS_CACHE_TTL_MS) {
+      // Re-stamp the volatile fields so cached responses don't visibly drift.
+      const fresh: StatusPayload = {
+        ...statusCache.data,
+        now: Math.floor(nowMs / 1000),
+        uptime_secs: Math.floor((nowMs - PROCESS_START_MS) / 1000),
+        active_viewers: activeViewerCount(),
+      };
+      return ok(c, fresh, statusCache.httpCode as 200 | 503);
+    }
+    try {
+      const { payload, httpCode } = await computeStatus();
+      statusCache = { data: payload, httpCode, ts: nowMs };
+      return ok(c, payload, httpCode as 200 | 503);
+    } catch (err) {
+      log.error({ err }, '/api/status compute failed');
+      return fail(c, 503, 'service_unavailable', 'Could not work out the status.', {
         status: 'down',
         error: (err as Error).message,
         now: Math.floor(nowMs / 1000),
-      },
-      503,
-    );
-  }
-});
+      });
+    }
+  },
+);
 
 export function _resetStatusCacheForTests(): void {
   statusCache = null;

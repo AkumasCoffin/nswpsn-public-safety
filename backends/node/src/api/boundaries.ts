@@ -37,8 +37,12 @@
  * response for an hour as well.
  */
 import { Hono } from 'hono';
+import { z } from 'zod';
+import { describeRoute } from 'hono-openapi';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
+import { fail, ok } from './v1/respond.js';
+import { envelope, okJson, queryValidator, UNAVAILABLE_ERROR, VALIDATION_ERROR } from './v1/schemas.js';
 import { scoped } from '../services/auth/apiKeyScopes.js';
 
 export const boundariesRouter = new Hono();
@@ -370,29 +374,56 @@ function toFeature(r: BoundaryRow, kind: string, geom: unknown) {
  * Cached per state for the process lifetime: LGA boundaries change on a
  * census cadence, not a request cadence.
  */
-const LGA_STATES = new Set(['NSW', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'NT', 'ACT']);
+const LGA_STATES = ['NSW', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'NT', 'ACT'] as const;
 const _lgaNameCache = new Map<string, string[]>();
 
-boundariesRouter.get('/api/boundaries/lga-names', SCOPE_BOUNDARIES, async (c) => {
-  const state = (c.req.query('state') ?? '').toUpperCase().trim();
-  if (!LGA_STATES.has(state)) {
-    return c.json({ error: 'state must be one of NSW, VIC, QLD, SA, WA, TAS, NT, ACT' }, 400);
-  }
-  const cached = _lgaNameCache.get(state);
-  if (cached) return c.json({ state, names: cached });
-
-  const pool = await getPool();
-  if (!pool) return c.json({ error: 'database unavailable' }, 503);
-  const res = await pool.query<{ name: string }>(
-    `SELECT DISTINCT name FROM boundaries WHERE kind = 'lga' AND state = $1 ORDER BY name`,
-    [state],
-  );
-  const names = res.rows.map((r) => r.name);
-  // ACT has no incorporated LGAs — an empty list is correct, not a miss, and
-  // the form treats it as free text. Cache it either way.
-  _lgaNameCache.set(state, names);
-  return c.json({ state, names });
+// Also served at /api/v1/ (server.ts mirrors it), wrapped in `data` there.
+const LGA_STATE_ERROR = 'state must be one of NSW, VIC, QLD, SA, WA, TAS, NT, ACT';
+const LgaNamesQuery = z.object({
+  state: z
+    .string()
+    .transform((s) => s.toUpperCase().trim())
+    .pipe(z.enum(LGA_STATES))
+    .describe('NSW, VIC, QLD, SA, WA, TAS, NT or ACT, in any case'),
 });
+
+const LgaNames = z
+  .object({ state: z.enum(LGA_STATES), names: z.array(z.string()) })
+  .meta({ id: 'LgaNames' });
+
+boundariesRouter.get(
+  '/api/boundaries/lga-names',
+  SCOPE_BOUNDARIES,
+  describeRoute({
+    operationId: 'getLgaNames',
+    tags: ['Reference'],
+    summary: 'Local government area names',
+    description: 'Every local government area in a state or territory, by name. The ACT has none, so its list is empty.',
+    responses: {
+      ...okJson(envelope(LgaNames), 'The names, sorted'),
+      ...VALIDATION_ERROR,
+      ...UNAVAILABLE_ERROR,
+    },
+  }),
+  queryValidator(LgaNamesQuery, { error: LGA_STATE_ERROR }),
+  async (c) => {
+    const state = c.req.valid('query').state;
+    const cached = _lgaNameCache.get(state);
+    if (cached) return ok(c, { state, names: cached } satisfies z.infer<typeof LgaNames>);
+
+    const pool = await getPool();
+    if (!pool) return fail(c, 503, 'service_unavailable', 'database unavailable');
+    const res = await pool.query<{ name: string }>(
+      `SELECT DISTINCT name FROM boundaries WHERE kind = 'lga' AND state = $1 ORDER BY name`,
+      [state],
+    );
+    const names = res.rows.map((r) => r.name);
+    // ACT has no incorporated LGAs — an empty list is correct, not a miss, and
+    // the form treats it as free text. Cache it either way.
+    _lgaNameCache.set(state, names);
+    return ok(c, { state, names } satisfies z.infer<typeof LgaNames>);
+  },
+);
 
 boundariesRouter.get('/api/boundaries/:kind', SCOPE_BOUNDARIES, async (c) => {
   const kind = c.req.param('kind');

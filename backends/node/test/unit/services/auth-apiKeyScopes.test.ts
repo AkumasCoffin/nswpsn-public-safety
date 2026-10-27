@@ -11,6 +11,7 @@ import {
   canonicalScopes,
   declaredNeeds,
   isLegacyScopes,
+  keyCanRead,
   keyMayRequest,
   needScopes,
   routeNeed,
@@ -162,6 +163,32 @@ describe('keyMayRequest', () => {
     it('goes through to the 404 when no route matches at all', () => {
       expect(keyMayRequest(RFS_LIVE, 'GET', '/api/rfs/nope', { matched: false, need: null })).toEqual({ ok: true });
     });
+  });
+
+  describe('an ANY_KEY route (the API description)', () => {
+    it('is readable by every key, `read` included, though it is on no list', () => {
+      for (const scopes of [['read'], RFS_LIVE, ['source:pager', 'type:pager', 'window:history']]) {
+        expect(keyMayRequest(scopes, 'GET', '/api/v1/openapi.json', matched(ANY_KEY))).toEqual({ ok: true });
+      }
+    });
+
+    it('is still read-only', () => {
+      expect(keyMayRequest(['read'], 'POST', '/api/v1/openapi.json', matched(ANY_KEY)).ok).toBe(false);
+      expect(keyMayRequest(RFS_LIVE, 'POST', '/api/v1/openapi.json', matched(ANY_KEY)).ok).toBe(false);
+    });
+  });
+});
+
+describe('keyCanRead — the gate’s answer for a route, as the API description asks it', () => {
+  it('matches keyMayRequest on a GET', () => {
+    expect(keyCanRead(RFS_LIVE, '/api/v1/rfs/incidents', RFS_INCIDENTS)).toBe(true);
+    expect(keyCanRead(RFS_LIVE, '/api/v1/bom/warnings', { source: 'bom', type: 'warnings', window: 'live' })).toBe(false);
+    expect(keyCanRead(RFS_LIVE, '/api/v1/rfs/incidents', null)).toBe(false);
+  });
+
+  it('judges a `read` key by the path, templates included', () => {
+    expect(keyCanRead(['read'], '/api/v1/rfs/incidents', null)).toBe(true);
+    expect(keyCanRead(['read'], '/api/v1/agency/extended/{slug}', null)).toBe(false);
   });
 });
 
