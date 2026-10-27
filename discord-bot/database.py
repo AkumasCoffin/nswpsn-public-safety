@@ -453,6 +453,17 @@ class Database:
                         created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
                     )
                 ''')
+                # The bot's own replies under a board post (status changes),
+                # so removing a report takes them down with the post.
+                c.execute('''
+                    CREATE TABLE IF NOT EXISTS feedback_board_replies (
+                        message_id  BIGINT PRIMARY KEY,
+                        feedback_id INTEGER NOT NULL,
+                        channel_id  BIGINT NOT NULL,
+                        created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+                    )
+                ''')
+                c.execute('CREATE INDEX IF NOT EXISTS idx_feedback_board_replies_fb ON feedback_board_replies(feedback_id)')
 
                 # Live-DB migration for the per-preset filters column.
                 c.execute("ALTER TABLE alert_presets ADD COLUMN IF NOT EXISTS filters JSONB NOT NULL DEFAULT '{}'::jsonb")
@@ -1533,14 +1544,45 @@ class Database:
         return dict(row) if row else None
 
     def delete_feedback_board_post(self, feedback_id: int):
+        """Forget a report's board post and the replies under it."""
         self._require_postgres()
         conn = self._connect()
         try:
             c = conn.cursor()
+            c.execute('DELETE FROM feedback_board_replies WHERE feedback_id = %s', (int(feedback_id),))
             c.execute('DELETE FROM feedback_board_posts WHERE feedback_id = %s', (int(feedback_id),))
             conn.commit()
         finally:
             conn.close()
+
+    def record_feedback_board_reply(self, feedback_id: int, channel_id: int, message_id: int):
+        self._require_postgres()
+        conn = self._connect()
+        try:
+            c = conn.cursor()
+            c.execute(
+                '''INSERT INTO feedback_board_replies (message_id, feedback_id, channel_id)
+                   VALUES (%s, %s, %s) ON CONFLICT (message_id) DO NOTHING''',
+                (int(message_id), int(feedback_id), int(channel_id)),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_feedback_board_replies(self, feedback_id: int):
+        """The replies the bot posted under this report's board post."""
+        self._require_postgres()
+        conn = self._connect()
+        try:
+            c = conn.cursor()
+            c.execute(
+                'SELECT channel_id, message_id FROM feedback_board_replies WHERE feedback_id = %s ORDER BY message_id',
+                (int(feedback_id),),
+            )
+            rows = c.fetchall()
+        finally:
+            conn.close()
+        return [dict(r) for r in rows]
 
     def cleanup_old_incident_messages(self, days: int = 14):
         conn = self._connect()

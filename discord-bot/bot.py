@@ -1815,12 +1815,43 @@ class NSWPSNBot(commands.Bot):
             return {'skipped': 'board_post_gone'}
 
         if event == 'delete':
+            # The replies under the post go first: the ones recorded as they
+            # were posted, plus a sweep of the channel after the post for any
+            # of the bot's messages that reply to it (replies from before they
+            # were recorded). Then the post itself.
+            gone = 0
+            seen: set = set()
+            try:
+                for r in await loop.run_in_executor(None, lambda: self.db.get_feedback_board_replies(fid)):
+                    mid = int(r['message_id'])
+                    seen.add(mid)
+                    try:
+                        await (await channel.fetch_message(mid)).delete()
+                        gone += 1
+                    except discord.NotFound:
+                        pass
+                    except discord.HTTPException as e:
+                        logger.info(f"feedback board: reply {mid} not deleted: {e}")
+            except Exception as e:
+                logger.warning(f"feedback board: reply lookup failed for #{fid}: {e}")
+            try:
+                async for m in channel.history(after=discord.Object(id=msg.id), limit=300):
+                    ref = m.reference
+                    if (m.author.id == self.user.id and ref and ref.message_id == msg.id
+                            and m.id not in seen):
+                        try:
+                            await m.delete()
+                            gone += 1
+                        except discord.HTTPException as e:
+                            logger.info(f"feedback board: reply {m.id} not deleted: {e}")
+            except discord.HTTPException as e:
+                logger.info(f"feedback board: history sweep failed for #{fid}: {e}")
             try:
                 await msg.delete()
             except discord.Forbidden:
                 raise ValueError('forbidden deleting the board post')
             await loop.run_in_executor(None, lambda: self.db.delete_feedback_board_post(fid))
-            return {'deleted': True}
+            return {'deleted': True, 'replies_deleted': gone}
 
         if event == 'status':
             # Reply, so followers of the post see it, AND edit, so the post
@@ -1834,6 +1865,12 @@ class NSWPSNBot(commands.Bot):
                 embed=build_feedback_status_embed(kind, status, status_label,
                                                   params.get('note') or '', params.get('actor') or ''),
                 mention_author=False)
+            try:
+                await loop.run_in_executor(
+                    None, lambda: self.db.record_feedback_board_reply(fid, channel.id, reply.id))
+            except Exception as e:
+                # The reply stands; the sweep on delete still finds it.
+                logger.warning(f"feedback board: could not record reply for #{fid}: {e}")
             return {'replied': True, 'message_id': str(reply.id)}
 
         raise ValueError(f'unknown feedback_board event: {event}')

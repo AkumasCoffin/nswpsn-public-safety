@@ -280,9 +280,11 @@ the backend the message id (`POST /api/discord/feedback/:id/board`, the
 "Open on the board" link on the staff page); a site one when the backend's
 `feedback_board` action with event `new` arrives. A status change (`status`)
 replies under the post with the new status and staff's note, and edits the
-post's Status field; a removed report (`delete`) takes the post down. The map
-of report → message is `feedback_board_posts`. A kind with no board channel
-simply skips all of this.
+post's Status field; a removed report (`delete`) takes down the replies and then
+the post. The map of report → message is `feedback_board_posts`; the bot's
+replies are `feedback_board_replies`, and the delete also sweeps the channel
+after the post for any of its own replies recorded before that table existed.
+A kind with no board channel simply skips all of this.
 
 The private staff alert for a new report is an ordinary `staff_notify` with
 kind `bug_report` or `suggestion`; a status change arrives as event `resolved`
