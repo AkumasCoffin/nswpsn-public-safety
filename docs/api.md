@@ -8,7 +8,9 @@ from the same handlers, that the site's own pages read.
 
 AusAware is an independent project. It relays what agencies publish in their
 own public feeds; it is not affiliated with, endorsed by or acting for any of
-them, and the data stays theirs.
+them, and the data stays theirs. Credit NT Fire and Rescue Service wherever you
+show its records — its feed asks not to be re-published, and the reference
+repeats this on that endpoint.
 
 This document is for people using the API and for anyone changing it. How the
 backend is put together is in [`components/backend.md`](components/backend.md);
@@ -85,6 +87,7 @@ Staff may still grant `read`; a request cannot ask for it.
 | Incidents | `GET /api/v1/rfs/incidents` · `/rfs/incidents/raw` | `source:rfs type:incidents window:live` |
 | Incidents | `GET /api/v1/act-ambulance/incidents` | `source:actas type:incidents window:live` |
 | Incidents · Warnings | `GET /api/v1/qld-fire/incidents` · `/qld-fire/warnings` | `source:qfd`, `type:incidents` or `type:warnings`, `window:live` |
+| Incidents | `GET /api/v1/nt-fire/incidents` | `source:ntfrs type:incidents window:live` |
 | Incidents | `GET /api/v1/sa-fire/cfs` · `/sa-fire/mfs` | `source:safire type:incidents window:live` |
 | Incidents | `GET /api/v1/vic-emergency/events` | `source:vic type:incidents window:live` |
 | Incidents · Warnings | `GET /api/v1/wa-emergency/incidents` · `/wa-emergency/warnings` | `source:dfes`, `type:incidents` or `type:warnings`, `window:live` |
@@ -98,10 +101,13 @@ The other feeds a key can read — roads, transport, aircraft, ships, weather,
 beaches, shark reports, power, cameras, news, boundaries, pager traffic, the
 radio site list, the radio summaries and reception transcripts — are still on
 their unversioned `/api/…` paths, and keys read them there with the same scopes.
-They move to `/api/v1/` group by group. Two fire feeds wait on something else:
-NT Fire and Rescue (its feed asks not to be re-published) and the RFS fire
-danger ratings (`/api/rfs/fdr`, which needs reworking for the format the RFS now
-publishes).
+They move to `/api/v1/` group by group. The RFS fire danger ratings
+(`/api/rfs/fdr`) wait on something else: they need reworking for the format the
+RFS now publishes.
+
+`/rfs/incidents/raw` on v1 is the RFS's own `majorIncidents.json`, exactly as
+published at the last poll; the old `/api/rfs/incidents/raw` keeps its RSS-based
+shape until it is retired.
 
 ## Versions
 
@@ -160,9 +166,8 @@ its first value. An optional switch such as `all=1` reads anything else as
 
 **How fresh.** The live feeds are served from memory, refreshed from each source
 every one to fifteen minutes depending on the source, so asking more than once
-a minute gains nothing. The exception is `/rfs/incidents/raw`, fetched from the
-RFS on each request. Some responses carry their own `Cache-Control` (30 seconds
-for several feeds, a minute for the agency tables).
+a minute gains nothing. Some responses carry their own `Cache-Control` (30
+seconds for several feeds, a minute for the agency tables).
 
 **Rate limit.** Per key, per minute — 120 unless staff set otherwise. Over it:
 `429 rate_limited`. Requests refused for scope or path count against the limit

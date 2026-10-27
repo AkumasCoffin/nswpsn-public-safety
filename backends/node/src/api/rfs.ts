@@ -1,14 +1,18 @@
 /**
  * GET /api/rfs/incidents       — parsed GeoJSON FeatureCollection
- * GET /api/rfs/incidents/raw   — pass-through of the upstream XML feed
- *                                 converted to JSON, for clients that
- *                                 want to do their own parsing
+ * GET /api/rfs/incidents/raw   — the upstream feed unparsed, for clients
+ *                                 that want to do their own parsing
  * GET /api/rfs/fdr             — fire danger ratings and fire bans
  *
  * Mirrors the Python routes at external_api_proxy.py:10621 + 10726.
- * The /incidents path serves out of LiveStore (filled by the poller).
- * The /raw path hits upstream on every request — same as Python which
- * caches it at HTTP layer rather than via the prewarm pipeline.
+ * The /incidents path serves out of LiveStore (filled by the poller from
+ * majorIncidents.json — sources/rfs.ts).
+ *
+ * /raw differs by path. On /api/v1/ it is majorIncidents.json exactly as
+ * the RFS published it at the last poll, from memory. On the old /api/ path
+ * it is what it always was: the channel + item view of the RSS version,
+ * fetched per request (Python cached it at the HTTP layer instead) — kept
+ * until that path is retired.
  *
  * /incidents and /incidents/raw are also served at /api/v1/ (server.ts
  * mirrors them). /fdr is not: see the note on it below.
@@ -16,7 +20,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { describeRoute } from 'hono-openapi';
-import { rfsSnapshot, fetchRfsRaw, type RfsSnapshot, type RfsRawSnapshot } from '../sources/rfs.js';
+import { rfsSnapshot, rfsFeedSnapshot, fetchRfsRaw, type RfsSnapshot, type RfsFeed } from '../sources/rfs.js';
 import { fetchText } from '../sources/shared/http.js';
 import { parseXml, asArray, textOf } from '../sources/shared/xml.js';
 import { log } from '../lib/log.js';
@@ -24,7 +28,6 @@ import { scoped } from '../services/auth/apiKeyScopes.js';
 import { geo, isV1, ok } from './v1/respond.js';
 import {
   assertShape,
-  envelope,
   feature,
   featureCollection,
   GATED_ERRORS,
@@ -56,25 +59,37 @@ const RfsIncidents = featureCollection(
 ).meta({ id: 'RfsIncidents' });
 assertShape<SameShape<z.infer<typeof RfsIncidents>, RfsSnapshot>>();
 
-const RfsRaw = z.object({
-  channel: z.object({ title: z.string(), description: z.string(), pubDate: z.string().describe('As the feed writes it (RFC 822)') }),
-  items: z.array(
-    z.object({
-      title: z.string(),
-      link: z.string(),
-      description: z.string(),
-      pubDate: z.string().describe('As the feed writes it (RFC 822)'),
-      guid: z.string(),
-      category: z.string(),
-      point: z.string().nullable().describe('"lat lon" from georss:point, or null'),
-    }),
-  ),
-  count: z.number().int(),
-}).meta({ id: 'RfsIncidentsRaw' });
-assertShape<SameShape<z.infer<typeof RfsRaw>, RfsRawSnapshot>>();
-
-/** What /raw answers when the RFS feed cannot be reached; on /api/v1/ it keeps the documented shape. */
-const EMPTY_RAW: RfsRawSnapshot = { channel: { title: '', description: '', pubDate: '' }, items: [], count: 0 };
+const RfsFeedSchema = z
+  .object({
+    type: z.literal('FeatureCollection'),
+    features: z.array(
+      z.object({
+        type: z.literal('Feature'),
+        geometry: z
+          .object({
+            type: z.string(),
+            coordinates: z.unknown().optional(),
+            geometries: z.array(z.unknown()).optional(),
+          })
+          .describe('A Point, or a GeometryCollection of the Point and a GeometryCollection of the fire-ground Polygons'),
+        properties: z
+          .object({
+            title: z.string(),
+            link: z.string(),
+            category: z.string().describe('The warning level'),
+            guid: z.string(),
+            guid_isPermaLink: z.string(),
+            pubDate: z.string().describe('As the RFS writes it, e.g. "27/10/2026 6:46:00 AM" — UTC in every sample seen'),
+            description: z
+              .string()
+              .describe('HTML: ALERT LEVEL, LOCATION, COUNCIL AREA, STATUS, TYPE, FIRE, SIZE, RESPONSIBLE AGENCY and UPDATED, separated by <br />'),
+          })
+          .catchall(z.unknown()),
+      }),
+    ),
+  })
+  .meta({ id: 'RfsFeed' });
+assertShape<SameShape<z.infer<typeof RfsFeedSchema>, RfsFeed>>();
 
 rfsRouter.get(
   '/api/rfs/incidents',
@@ -97,17 +112,17 @@ rfsRouter.get(
     tags: ['Incidents'],
     summary: 'NSW RFS incidents, unparsed',
     description:
-      "The RFS major incidents feed's channel and items as JSON — each item's title, link, description (with its HTML), date, guid, category and point — fetched from the RFS when asked rather than from memory. Empty (not an error) when the RFS feed cannot be reached.",
-    responses: { ...okJson(envelope(RfsRaw), 'The feed channel and its items'), ...GATED_ERRORS },
+      "The RFS major incidents feed (majorIncidents.json) exactly as the RFS published it at the last poll, for clients that parse it themselves. Empty until the first poll after a restart.",
+    responses: { ...okJson(RfsFeedSchema, 'The RFS GeoJSON FeatureCollection, unchanged'), ...GATED_ERRORS },
   }),
   async (c) => {
+    if (isV1(c)) return geo(c, rfsFeedSnapshot());
     try {
       const raw = await fetchRfsRaw();
       return ok(c, raw);
     } catch (err) {
       log.warn({ err: (err as Error).message }, 'rfs raw fetch failed');
-      // The old path keeps the body it always sent.
-      return ok(c, isV1(c) ? EMPTY_RAW : { channel: {}, items: [], count: 0 });
+      return ok(c, { channel: {}, items: [], count: 0 });
     }
   },
 );

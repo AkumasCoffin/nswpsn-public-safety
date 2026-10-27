@@ -9,8 +9,9 @@
  * logs page shows how each one progressed — but a closed job does not
  * belong on a live map. `?all=1` returns them too, for debugging.
  *
- * NOT on /api/v1/ (see server.ts): the feed asks not to be re-published.
- * Its description below is ready for when that is decided.
+ * Also served at /api/v1/ (server.ts mirrors it). The feed asks not to be
+ * re-published (sources/ntFire.ts); the owner chose to carry it, so its
+ * description credits NTFRS and asks API users to do the same.
  */
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -71,7 +72,7 @@ ntFireRouter.get(
     tags: ['Incidents'],
     summary: 'NT Fire and Rescue incidents',
     description:
-      'NT Fire and Rescue Service incidents from the NT Police, Fire and Emergency Services incident map feed, including Bushfires NT warnings. Closed incidents are left out unless all=1.',
+      'NT Fire and Rescue Service incidents from the NT Police, Fire and Emergency Services incident map feed, including Bushfires NT warnings. Closed incidents are left out unless all=1. The data is NTFRS’s: credit NT Fire and Rescue Service wherever you show it.',
     responses: { ...okJson(NtFireIncidents, 'A GeoJSON FeatureCollection of incidents'), ...GATED_ERRORS },
   }),
   queryValidator(Query),

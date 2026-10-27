@@ -1,23 +1,33 @@
 /**
- * RFS Major Incidents — XML feed -> GeoJSON FeatureCollection.
+ * RFS Major Incidents — the RFS GeoJSON feed -> our FeatureCollection.
  *
  * Mirrors the Python `/api/rfs/incidents` route at
- * external_api_proxy.py:10621. We pull from the same upstream feed and
- * preserve the same JSON shape so the frontend doesn't have to know
- * which backend served the request:
+ * external_api_proxy.py:10621, and preserves its JSON shape so the
+ * frontend, the bot and the archive don't have to know where it came from:
  *
  *   { type: 'FeatureCollection', features: [...], count }
  *
  * Each feature's properties include the parsed-out alertLevel /
  * location / size / status / etc. fields the Python parser extracts
  * from the RFS description's pipe-delimited free text.
+ *
+ * THE UPSTREAM IS majorIncidents.json, not the .xml it used to be. The two
+ * carry the same incidents, the same description text and the same
+ * geometry; the JSON's is plain GeoJSON — a Point, or a GeometryCollection
+ * of the point and the fire-ground Polygons — where the XML spread it over
+ * GeoRSS elements whose namespace handling varied. The fire-ground
+ * polygons are still emitted as GeoRSS "lat lon lat lon …" strings, which
+ * is what the map and the archive have always read. The feed itself, as
+ * published, is kept from the last poll for /api/v1/rfs/incidents/raw.
  */
-import { fetchText } from './shared/http.js';
+import { fetchJson, fetchText } from './shared/http.js';
 import { asArray, parseXml, textOf } from './shared/xml.js';
 import { registerSource } from '../services/sourceRegistry.js';
 import { liveStore } from '../store/live.js';
 
-const RFS_URL = 'https://www.rfs.nsw.gov.au/feeds/majorIncidents.xml';
+const RFS_URL = 'https://www.rfs.nsw.gov.au/feeds/majorIncidents.json';
+/** The same feed as RSS — read only by the old /api/rfs/incidents/raw. */
+const RFS_XML_URL = 'https://www.rfs.nsw.gov.au/feeds/majorIncidents.xml';
 
 export interface RfsFeature {
   type: 'Feature';
@@ -45,6 +55,25 @@ export interface RfsSnapshot {
   type: 'FeatureCollection';
   features: RfsFeature[];
   count: number;
+}
+
+/** majorIncidents.json as the RFS publishes it (the fields seen; it may carry more). */
+export interface RfsFeed {
+  type: 'FeatureCollection';
+  features: Array<{
+    type: 'Feature';
+    geometry: { type: string; coordinates?: unknown; geometries?: unknown[] };
+    properties: {
+      title: string;
+      link: string;
+      category: string;
+      guid: string;
+      guid_isPermaLink: string;
+      pubDate: string;
+      description: string;
+      [k: string]: unknown;
+    };
+  }>;
 }
 
 interface ParsedDescription {
@@ -165,57 +194,79 @@ export function parseRfsDescription(desc: string): ParsedDescription {
   return result;
 }
 
+/**
+ * Fifteen significant digits, as the XML feed wrote its numbers. The JSON
+ * carries the full doubles (143.58525085400004 where the XML said
+ * 143.585250854, -33.406180796999934 where it said -33.4061807969999);
+ * cutting them the same way keeps every incident byte-identical to what the
+ * XML gave, so the switch did not rewrite every archived record.
+ */
+const sig15 = (v: number) => Number(v.toPrecision(15));
+
+/** A GeoJSON position we can use: finite [lon, lat]. */
+function lonLat(v: unknown): [number, number] | null {
+  if (!Array.isArray(v) || v.length < 2) return null;
+  const lon = Number(v[0]);
+  const lat = Number(v[1]);
+  return Number.isFinite(lon) && Number.isFinite(lat) ? [sig15(lon), sig15(lat)] : null;
+}
+
+/**
+ * The pin and the fire-ground rings out of a feed geometry, however nested:
+ * the first Point is the pin, and each Polygon's (or MultiPolygon part's)
+ * outer ring is a fire ground. Holes are dropped — the GeoRSS strings the map
+ * reads have no way to say "hole", and the XML feed never sent one either.
+ */
+function readGeometry(g: unknown, out: { point: [number, number] | null; rings: Array<Array<[number, number]>> }): void {
+  if (!g || typeof g !== 'object') return;
+  const geom = g as { type?: unknown; coordinates?: unknown; geometries?: unknown };
+  const outerRing = (poly: unknown) => {
+    const ring: unknown = Array.isArray(poly) ? poly[0] : null;
+    if (!Array.isArray(ring)) return;
+    const pts = ring.map(lonLat).filter((p): p is [number, number] => p !== null);
+    if (pts.length >= 3) out.rings.push(pts);
+  };
+  if (geom.type === 'Point') {
+    out.point ??= lonLat(geom.coordinates);
+  } else if (geom.type === 'Polygon') {
+    outerRing(geom.coordinates);
+  } else if (geom.type === 'MultiPolygon' && Array.isArray(geom.coordinates)) {
+    for (const poly of geom.coordinates) outerRing(poly);
+  } else if (geom.type === 'GeometryCollection' && Array.isArray(geom.geometries)) {
+    for (const member of geom.geometries) readGeometry(member, out);
+  }
+}
+
+/** The feed as last fetched, for /api/v1/rfs/incidents/raw. */
+let lastFeed: RfsFeed | null = null;
+
 export async function fetchRfs(): Promise<RfsSnapshot> {
-  const xml = await fetchText(RFS_URL, {
+  const feed = await fetchJson<RfsFeed>(RFS_URL, {
     headers: { 'User-Agent': 'Mozilla/5.0' },
   });
-  const root = parseXml(xml);
-  const rss = (root['rss'] as Record<string, unknown> | undefined) ?? root;
-  const channel =
-    rss && typeof rss === 'object'
-      ? ((rss as Record<string, unknown>)['channel'] as Record<string, unknown> | undefined)
-      : undefined;
-  const items = asArray(channel?.['item']) as Array<Record<string, unknown>>;
+  // A body that parses but is not the feed (an error page served as JSON,
+  // say) throws, so the poller keeps the last good snapshot rather than
+  // publishing an empty map.
+  if (!feed || feed.type !== 'FeatureCollection' || !Array.isArray(feed.features)) {
+    throw new Error('rfs: majorIncidents.json is not a FeatureCollection');
+  }
 
   const features: RfsFeature[] = [];
-  for (const item of items) {
-    const title = textOf(item, 'title');
-    const link = textOf(item, 'link');
-    const desc = textOf(item, 'description');
-    const guid = textOf(item, 'guid');
-    const category = textOf(item, 'category');
-    // The RFS feed declares the GeoRSS namespace inline on each <point> /
-    // <polygon> element (xmlns="http://www.georss.org/georss") rather than
-    // via a prefix on the root. fast-xml-parser strips the inline xmlns
-    // and exposes the elements under their bare local names, so we look
-    // up both `georss:point` (legacy / prefixed feeds) and `point`.
-    const pointText = textOf(item, 'georss:point') || textOf(item, 'point');
-    if (!pointText) continue;
+  for (const f of feed.features) {
+    const props = (f?.properties ?? {}) as Record<string, unknown>;
+    const str = (k: string) => (typeof props[k] === 'string' ? (props[k] as string).trim() : '');
+    const title = str('title');
+    const link = str('link');
+    const desc = str('description');
+    const guid = str('guid');
+    const category = str('category');
 
-    const parts = pointText.trim().split(/\s+/);
-    if (parts.length < 2) continue;
-    const lat = Number(parts[0]);
-    const lon = Number(parts[1]);
-    if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
-
-    // Polygon may live under either `georss:polygon` or bare `polygon`
-    // depending on whether the upstream uses a prefix or an inline xmlns.
-    const rawPolys =
-      (item as Record<string, unknown>)['georss:polygon'] ??
-      (item as Record<string, unknown>)['polygon'];
-    const polygons: string[] = [];
-    if (rawPolys !== undefined && rawPolys !== null) {
-      const arr = asArray(rawPolys);
-      for (const p of arr) {
-        if (typeof p === 'string') {
-          const t = p.trim();
-          if (t) polygons.push(t);
-        } else if (typeof p === 'object' && p !== null && '#text' in p) {
-          const t = String((p as Record<string, unknown>)['#text'] ?? '').trim();
-          if (t) polygons.push(t);
-        }
-      }
-    }
+    const geo: { point: [number, number] | null; rings: Array<Array<[number, number]>> } = { point: null, rings: [] };
+    readGeometry(f?.geometry, geo);
+    // No pin, no feature — as the XML parser skipped an item with no point.
+    if (!geo.point) continue;
+    const [lon, lat] = geo.point;
+    const polygons = geo.rings.map((ring) => ring.map(([x, y]) => `${y} ${x}`).join(' '));
 
     const parsed = parseRfsDescription(desc);
     if (!parsed.alertLevel && category) parsed.alertLevel = category;
@@ -248,6 +299,7 @@ export async function fetchRfs(): Promise<RfsSnapshot> {
     });
   }
 
+  lastFeed = feed;
   return {
     type: 'FeatureCollection',
     features,
@@ -255,9 +307,15 @@ export async function fetchRfs(): Promise<RfsSnapshot> {
   };
 }
 
-/** Raw passthrough used by /api/rfs/incidents/raw. Independent fetch
- *  because it caches differently in Python; we just expose the
- *  channel + item view of the same XML. */
+/** The RFS feed as it was published at the last poll; empty before the first. */
+export function rfsFeedSnapshot(): RfsFeed {
+  return lastFeed ?? { type: 'FeatureCollection', features: [] };
+}
+
+/** Raw passthrough used by the OLD /api/rfs/incidents/raw: the channel +
+ *  item view of the RSS version of the feed, fetched per request because it
+ *  cached differently in Python. Kept as it was until that path is retired;
+ *  /api/v1/rfs/incidents/raw serves rfsFeedSnapshot() instead. */
 export interface RfsRawSnapshot {
   channel: { title: string; description: string; pubDate: string };
   items: Array<{
@@ -273,7 +331,7 @@ export interface RfsRawSnapshot {
 }
 
 export async function fetchRfsRaw(): Promise<RfsRawSnapshot> {
-  const xml = await fetchText(RFS_URL, {
+  const xml = await fetchText(RFS_XML_URL, {
     headers: { 'User-Agent': 'Mozilla/5.0' },
   });
   const root = parseXml(xml);

@@ -104,9 +104,15 @@ describe('answers on /api/v1/', () => {
   });
 
   it('a tolerant query keeps its tolerance on both paths', async () => {
-    for (const path of ['/api/v1/sa-fire/cfs?all=yes', '/api/sa-fire/cfs?all=yes']) {
-      expect((await get(path)).status).toBe(200);
+    for (const path of ['/api/v1/sa-fire/cfs?all=yes', '/api/sa-fire/cfs?all=yes', '/api/v1/nt-fire/incidents?all=yes']) {
+      expect((await get(path)).status, path).toBe(200);
     }
+  });
+
+  it('RFS raw on v1 is the feed as last polled, from memory — no fetch per request', async () => {
+    const res = await get('/api/v1/rfs/incidents/raw');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ type: 'FeatureCollection', features: [] });
   });
 
   it('a repeated parameter is read by its first value, as it always was', async () => {
@@ -137,8 +143,7 @@ describe('not found and errors', () => {
   it('a route that is not versioned is not on v1', async () => {
     expect((await get('/api/v1/adsb/aircraft')).status).toBe(404);
     expect((await get('/api/v1/heartbeat')).status).toBe(404);
-    // Held back: the NT feed asks not to be re-published; fdr reads a format upstream dropped.
-    expect((await get('/api/v1/nt-fire/incidents')).status).toBe(404);
+    // Held back: fdr reads a format the RFS no longer publishes.
     expect((await get('/api/v1/rfs/fdr')).status).toBe(404);
   });
 

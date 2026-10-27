@@ -432,9 +432,10 @@ export function createApp() {
   // Aviation cameras + news RSS + summaries (W7)
   app.route('/', aviationRouter);
   app.route('/', qldCamerasRouter);
-  // Not mirrored: the NT feed asks not to be re-published (sources/ntFire.ts),
-  // so whether it belongs in the documented public API is the owner's call.
   app.route('/', ntFireRouter);
+  // The NT feed asks not to be re-published (sources/ntFire.ts); the owner
+  // decided to carry it on v1, with NTFRS credited in its description.
+  mirror(app, ntFireRouter, ['/api/nt-fire/incidents']);
   app.route('/', boundariesRouter);
   mirror(app, boundariesRouter, ['/api/boundaries/lga-names']);
   app.route('/', whisperRouter);
