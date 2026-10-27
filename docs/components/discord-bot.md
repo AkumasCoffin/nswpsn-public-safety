@@ -41,7 +41,11 @@ decide PostgreSQL versus SQLite. Load `.env` after that import and the bot
 silently falls back to SQLite even with a valid URL in `.env`.
 
 Required environment: `DISCORD_BOT_TOKEN`, `BOT_OWNER_ID`, `API_BASE_URL`,
-`NSWPSN_API_KEY`, `BOT_DATABASE_URL`. See `env.sample`.
+`NSWPSN_API_KEY`, `BOT_DATABASE_URL`, `BOT_ACTION_SIGNING_SECRET` (the same
+value as the backend's; without it the bot executes no queued action and files
+nothing). `PUBLIC_BASE_URL` is the SITE's origin for every link the bot builds
+itself — set it to the same origin as the backend's `DASHBOARD_FRONTEND_URL`.
+See `env.sample`.
 
 `NSWPSN_API_KEY` must match the backend's. `BOT_DATABASE_URL` here and
 `BOT_DATA_DATABASE_URL` in the backend's `.env` must point at the **same**
@@ -252,8 +256,11 @@ by the `feedback_channels` action, because the bot never reads the backend's
 
 **Intake.** The bot posts a how-to (`build_feedback_notice_embed`, with a link
 button to the same thing on the site, `build_feedback_notice_view`) — not pinned:
-every other message there is removed once filed, so it is the only one standing —
-and `on_message` files every
+every other message there is removed once filed, so it is the only one standing.
+(The `feedback_channels` action records the channels even when that post fails,
+say in a channel the bot cannot yet write to, and the start-up refresh posts it
+later; the refresh also re-edits a how-to whose words or button URL have
+changed, one kind independently of the other.) `on_message` files every
 member's message there as a report: a signed `POST /api/discord/feedback` —
 the static key plus `X-Bot-Signature`, which is `sign_bot_action(secret,
 'feedback', 'bot', body)` with the same `BOT_ACTION_SIGNING_SECRET` and
@@ -261,18 +268,26 @@ canonical form as the outbox rows, run the other way (the backend's
 `services/auth/botSigned.ts` verifies, and fails closed without the secret).
 Attachments are read before anything else and re-sent on the board post, since
 the member's message is deleted once filed and Discord's attachment links
-expire. Every answer to the member is an embed (`build_feedback_reply_embed`)
-in the channel, mentioning them and self-deleting after 10–15 s, so the channel
-holds nothing but the how-to (Discord has no "only you can see this" for a reply
-to an ordinary message; that exists for interactions alone). The confirmation
-carries an "Open on the board" button. The message must be a `#` title line with the
-details on the lines under it (`split_feedback_message`) — that is what gives a
-report a title and a description of its own; one without that shape, or with no
-details and no attachment, or within 20 s of their last one, is answered with
-the format and not filed; the
-backend's refusal (five open reports per reporter, or an outage) is answered
-and the message left in place. There are no prefix commands, so the
-`on_message` override has no `process_commands` to forward to.
+expire; the board post is the only place they can live, so a kind with no board
+channel cannot keep them — a report that is only a screenshot is then asked for
+words, and one filed with screenshots is told they were not kept. Every answer
+to the member is an embed (`build_feedback_reply_embed`) in the channel,
+mentioning them and self-deleting after 10–30 s, so the channel holds nothing but
+the how-to and messages still to be fixed (Discord has no "only you can see
+this" for a reply to an ordinary message; that exists for interactions alone).
+The confirmation carries an "Open on the board" button. The message must be a `#`
+title line with the details on the lines under it (`split_feedback_message`) —
+that is what gives a report a title and a description of its own; one without
+that shape, or with no details, is answered with the format and LEFT IN PLACE:
+the member edits it into shape and `on_message_edit` files it then (their text is
+theirs to fix, not the bot's to delete). A second report within 20 s of the
+last simply waits for its turn. The backend's refusal is answered and the
+message left in place — the cap (five open reports per reporter) or a report it
+will not take (its reason is relayed; title and body are cut to the backend's
+limits in UTF-16 units, `cut_utf16`, so an emoji counts as the backend counts
+it) — as is an outage ("try again in a minute"). Discord's own system messages
+(a pin notice has a human author) are not reports. There are no prefix
+commands, so the `on_message` override has no `process_commands` to forward to.
 
 **Board.** Every report is posted with its status (`build_feedback_board_embed`):
 a Discord one by the bot itself at filing, with the files, after which it tells
@@ -281,10 +296,15 @@ the backend the message id (`POST /api/discord/feedback/:id/board`, the
 `feedback_board` action with event `new` arrives. A status change (`status`)
 replies under the post with the new status and staff's note, and edits the
 post's Status field; a removed report (`delete`) takes down the replies and then
-the post. The map of report → message is `feedback_board_posts`; the bot's
-replies are `feedback_board_replies`, and the delete also sweeps the channel
-after the post for any of its own replies recorded before that table existed.
-A kind with no board channel simply skips all of this.
+the post. The map of report → message is `feedback_board_posts`, with the
+backend's own copy of the ids (sent as `channel_id`/`message_id` on `status`
+and `delete`) standing in when the bot has no record; the bot's replies are
+`feedback_board_replies`, and the delete also sweeps the channel after the post
+for any of its own replies recorded before that table existed. A post someone
+removed by hand still has its replies cleared, then is forgotten. A kind with no
+board channel skips the posting; a status change or removal still reaches a
+post made while there was one. A board link the backend refuses
+(`POST …/board` not 2xx) is logged by `_feedback_post`.
 
 The private staff alert for a new report is an ordinary `staff_notify` with
 kind `bug_report` or `suggestion`; a status change arrives as event `resolved`
@@ -324,11 +344,13 @@ An account with no roles and no signup request is a normal public user.
 ## Where its data lives
 
 PostgreSQL when `BOT_DATABASE_URL` is set, SQLite otherwise. This is a **separate
-database from the backend's**. `apply_schema_presets.py` owns its schema and is
-idempotent; it creates `alert_presets`, `guild_mute_state`,
+database from the backend's**. `apply_schema_presets.py` owns the preset
+schema and is idempotent; it creates `alert_presets`, `guild_mute_state`,
 `channel_mute_state`, `preset_fire_log`, `preset_audit_log`,
 `pending_bot_actions`, `dash_sessions` and `source_health`, with their indexes
-and triggers.
+and triggers. The rest — the staff-alert message map, `feedback_channels`,
+`feedback_board_posts`, `feedback_board_replies` — is created by
+`Database.init_db()` at start-up, also `IF NOT EXISTS`.
 
 The backend reads this same database through `BOT_DATA_DATABASE_URL` to serve the
 dashboard, on its own pool, closed separately at shutdown.
