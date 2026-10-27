@@ -260,8 +260,11 @@ canonical form as the outbox rows, run the other way (the backend's
 `services/auth/botSigned.ts` verifies, and fails closed without the secret).
 Attachments are read before anything else and re-sent on the board post, since
 the member's message is deleted once filed and Discord's attachment links
-expire. The confirmation mentions them and self-deletes after 10 s, so the
-channel holds nothing but the pin. The message must be a `#` title line with the
+expire. Every answer to the member is an embed (`build_feedback_reply_embed`)
+in the channel, mentioning them and self-deleting after 10–15 s, so the channel
+holds nothing but the pin (Discord has no "only you can see this" for a reply
+to an ordinary message; that exists for interactions alone). The confirmation
+carries an "Open on the board" button. The message must be a `#` title line with the
 details on the lines under it (`split_feedback_message`) — that is what gives a
 report a title and a description of its own; one without that shape, or with no
 details and no attachment, or within 20 s of their last one, is answered with

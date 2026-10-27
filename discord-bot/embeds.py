@@ -141,6 +141,27 @@ def build_feedback_notice_view(kind: str, site_url: str):
     return view
 
 
+_FEEDBACK_REPLY_COLOR = {
+    'ok': 0x22C55E,
+    'hint': 0xF59E0B,
+    'fail': 0xEF4444,
+    'info': 0x94A3B8,
+}
+
+
+def build_feedback_reply_embed(kind: str, tone: str, title: str, text: str) -> discord.Embed:
+    """What the bot says back to a member who posted in an intake channel:
+    filed (ok), not filed and why (hint / fail), or not set up (info)."""
+    _, _, icon, _ = FEEDBACK_KINDS.get(kind, FEEDBACK_KINDS['bug'])
+    embed = discord.Embed(
+        title=title[:256],
+        description=(text or '')[:4096] or None,
+        color=_FEEDBACK_REPLY_COLOR.get(tone, _FEEDBACK_REPLY_COLOR['info']),
+    )
+    embed.set_footer(text=f"{icon} AusAware · {'bug reports' if kind == 'bug' else 'suggestions'}")
+    return embed
+
+
 def build_feedback_board_embed(kind: str, feedback_id: str, subject: str, body: str,
                                reporter: str, source: str, status: str, status_label: str,
                                site_url: str) -> discord.Embed:

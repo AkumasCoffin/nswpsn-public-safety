@@ -33,7 +33,8 @@ from alert_poller import AlertPoller
 from embeds import (
     EmbedBuilder, build_staff_notify_embed, STAFF_NOTIFY_KINDS,
     FEEDBACK_KINDS, build_feedback_notice_embed, build_feedback_notice_view,
-    build_feedback_board_embed, set_feedback_board_status, feedback_status_line,
+    build_feedback_reply_embed, build_feedback_board_embed,
+    set_feedback_board_status, feedback_status_line,
 )
 import alert_catalog
 
@@ -1861,14 +1862,18 @@ class NSWPSNBot(commands.Bot):
             logger.warning(f"feedback post {path}: {e}")
             return 0, {}
 
-    async def _send_then_delete(self, message: discord.Message, text: str, after: int, delete_original: bool):
-        """Answer a member in the intake channel and keep the channel clean:
-        the answer self-deletes, and the member's message goes too once the
-        report is filed. Their mention is re-allowed for this one send (the
-        bot's default allows none)."""
+    async def _answer_member(self, message: discord.Message, embed: discord.Embed, after: int,
+                             delete_original: bool, view=None):
+        """Answer a member who posted in an intake channel, and keep the
+        channel clean: an embed in the channel, mentioning them (re-allowed
+        for this one send — the bot's default allows none), that self-deletes
+        after `after` seconds. Discord has no "only you can see this" for a
+        reply to an ordinary message (ephemeral exists for interactions
+        alone), so brief is the nearest thing. The member's own message goes
+        too once the report is filed."""
         try:
             await message.channel.send(
-                text[:2000], delete_after=after,
+                content=message.author.mention, embed=embed, view=view, delete_after=after,
                 allowed_mentions=discord.AllowedMentions(users=[message.author]))
         except Exception as e:
             logger.warning(f"feedback intake: reply failed in {message.channel.id}: {e}")
@@ -1900,7 +1905,8 @@ class NSWPSNBot(commands.Bot):
         """A member's message in an intake channel becomes a report."""
         label, in_sentence, _, _ = FEEDBACK_KINDS[kind]
         text = (message.content or '').strip()
-        mention = message.author.mention
+        answer = lambda tone, title, body, after, delete_original, view=None: self._answer_member(  # noqa: E731
+            message, build_feedback_reply_embed(kind, tone, title, body), after, delete_original, view)
 
         # The required shape: a '#' title line, the details under it. That
         # is what gives the report a title and a description of its own
@@ -1909,27 +1915,25 @@ class NSWPSNBot(commands.Bot):
         title, details = split_feedback_message(text)
         example = '# A dark mode for the map' if kind == 'suggestion' else '# Map tiles go blank past zoom 14'
         if title is None:
-            await self._send_then_delete(
-                message,
-                f"{mention} start with a title line — `{example}` — and put the details on the "
-                f"lines under it. See the pinned message for an example.",
+            await answer(
+                'hint', f"Not filed — start with a title line",
+                f"Begin your message with a title line, then put the details on the lines under it:\n"
+                f"```\n{example}\nWhat it is, and the details…\n```\n"
+                f"See the pinned message for a full example.",
                 15, True)
             return
         if len(details) < 10 and not message.attachments:
-            await self._send_then_delete(
-                message,
-                f"{mention} add the details under the title — "
-                + ("what it would do and why it helps." if kind == 'suggestion'
-                   else "what you did, what happened, what you expected, and where.")
+            await answer(
+                'hint', f"Not filed — add the details under the title",
+                ("What it would do, and why it would help." if kind == 'suggestion'
+                 else "What you did, what happened, what you expected, and where.")
                 + " See the pinned message for an example.",
                 15, True)
             return
 
         now = time.monotonic()
         if now - self._feedback_last_post.get(message.author.id, 0.0) < 20:
-            await self._send_then_delete(
-                message, f"{mention} one at a time — give it a few seconds before the next {in_sentence}.",
-                10, True)
+            await answer('hint', "One at a time", f"Give it a few seconds before the next {in_sentence}.", 10, True)
             return
         self._feedback_last_post[message.author.id] = now
         if len(self._feedback_last_post) > 500:
@@ -1940,8 +1944,7 @@ class NSWPSNBot(commands.Bot):
             if not self._feedback_unsigned_notice:
                 self._feedback_unsigned_notice = True
                 logger.error("feedback intake: BOT_ACTION_SIGNING_SECRET is not set — nothing can be filed")
-            await self._send_then_delete(
-                message, f"{mention} {label}s aren't set up yet — please use the site for now.", 15, False)
+            await answer('info', f"{label}s aren't set up yet", "Please use the site for now.", 15, False)
             return
 
         # Attachments are read NOW: the message is deleted once filed, and
@@ -1991,20 +1994,27 @@ class NSWPSNBot(commands.Bot):
                     'id': str(fid), 'guild_id': str(message.guild.id),
                     'channel_id': str(board_msg.channel.id), 'message_id': str(board_msg.id),
                 })
-            where = f" — follow it in <#{board_msg.channel.id}>" if board_msg is not None else ""
-            linked = " It's on your site account too." if data.get('linked') else ""
-            await self._send_then_delete(
-                message, f"{mention} ✅ Logged as {in_sentence} #{fid}{where}.{linked}", 10, True)
+            lines = [f"**{subject}**"]
+            if board_msg is not None:
+                lines.append(f"It's on the board in <#{board_msg.channel.id}> with its status, and the post "
+                             f"is replied to whenever that changes.")
+            if data.get('linked'):
+                lines.append("It's on your site account's contact page too.")
+            view = None
+            if board_msg is not None:
+                view = discord.ui.View(timeout=None)
+                view.add_item(discord.ui.Button(style=discord.ButtonStyle.link, label='Open on the board',
+                                                url=board_msg.jump_url))
+            await answer('ok', f"✅ Logged as {in_sentence} #{fid}", "\n".join(lines), 10, True, view)
             logger.info(f"feedback intake: {kind} #{fid} from {message.author.id}")
             return
 
         if status == 429:
-            await self._send_then_delete(
-                message, f"{mention} {data.get('error') or 'you have too many open reports already'}.", 15, False)
+            await answer('fail', "Not filed — too many open",
+                         (data.get('error') or 'You have too many open reports already') + '.', 15, False)
             return
         logger.warning(f"feedback intake: backend answered {status}: {data}")
-        await self._send_then_delete(
-            message, f"{mention} couldn't file that right now — try again in a minute.", 15, False)
+        await answer('fail', "Couldn't file that right now", "Try again in a minute.", 15, False)
 
     async def _exec_action_broadcast(self, params):
         """Send an embed to a list of channels. Uses channel.send() so
