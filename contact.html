@@ -63,7 +63,7 @@
     .tk-status.declined, .tk-status.duplicate { background:rgba(148,163,184,0.15); color:#94a3b8; }
     .fb-row { cursor:pointer; flex-wrap:wrap; }
     .fb-kind { font-size:1.05rem; line-height:1; }
-    .fb-body { display:none; width:100%; font-size:0.84rem; color:var(--text-muted); white-space:pre-wrap; word-break:break-word; margin-top:0.35rem; padding-top:0.5rem; border-top:1px solid var(--border-subtle); }
+    .fb-body { display:none; width:100%; font-size:0.84rem; color:var(--text-muted); word-break:break-word; margin-top:0.35rem; padding-top:0.5rem; border-top:1px solid var(--border-subtle); }
     .fb-row.open .fb-body { display:block; }
     .fb-note { width:100%; font-size:0.78rem; color:#bae6fd; margin-top:0.3rem; }
     /* Rendered markdown inside message bubbles. */
@@ -318,6 +318,8 @@
 
     function tkSetType(t) {
       if (!TK_TYPES[t]) t = 'support';
+      // What was typed stays with the type it was typed under.
+      if (t !== tkType) tkSaveNewDraft();
       tkType = t;
       const cfg = TK_TYPES[t];
       document.querySelectorAll('.tk-type').forEach((b) => {
@@ -333,7 +335,7 @@
       document.getElementById('tk-body').placeholder = cfg.bodyPh;
       document.getElementById('tk-submit').textContent = cfg.button;
       tkBanner('tk-new-banner', '', '');
-      tkSaveNewDraft();
+      tkLoadNewDraft();
     }
 
     const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -384,34 +386,54 @@
 
     // ---- Draft autosave ----
     // A long report should survive a refresh or an accidental navigation.
+    // One draft per type: a half-written support ticket is still there after
+    // a "Report a bug" link opened the bug form, and the other way round.
     // Browser-local only (per device), best-effort: storage can be blocked, so
     // every touch is wrapped. Cleared the moment a submit succeeds.
-    const TK_DRAFT_NEW = 'tk_draft_new';
+    const tkDraftKey = (t) => 'tk_draft_new_' + t;
     const tkReplyDraftKey = (id) => 'tk_draft_reply_' + id;
+    // Saving is off until the form shows a draft that was loaded: before that
+    // the empty inputs would overwrite the stored one.
+    let tkDraftLive = false;
 
     function tkSaveNewDraft() {
+      if (!tkDraftLive) return;
       try {
         const d = {
-          t: tkType,
           s: document.getElementById('tk-subject').value,
           c: document.getElementById('tk-category').value,
           b: document.getElementById('tk-body').value,
         };
-        if (!d.s && !d.b) localStorage.removeItem(TK_DRAFT_NEW);
-        else localStorage.setItem(TK_DRAFT_NEW, JSON.stringify(d));
+        if (!d.s && !d.b) localStorage.removeItem(tkDraftKey(tkType));
+        else localStorage.setItem(tkDraftKey(tkType), JSON.stringify(d));
       } catch (e) {}
     }
-    function tkRestoreNewDraft() {
+    // The current type's draft into the form; empty fields when there is none.
+    function tkLoadNewDraft() {
+      let d = null;
+      try { d = JSON.parse(localStorage.getItem(tkDraftKey(tkType)) || 'null'); } catch (e) {}
+      document.getElementById('tk-subject').value = (d && d.s) || '';
+      document.getElementById('tk-body').value = (d && d.b) || '';
+      // A category no longer offered (a draft from when "Bug report" was one)
+      // falls back to the first, never to a blank select the server refuses.
+      const sel = document.getElementById('tk-category');
+      const has = !!(d && d.c) && Array.from(sel.options).some((o) => o.value === d.c);
+      sel.value = has ? d.c : (sel.options[0] ? sel.options[0].value : '');
+      tkDraftLive = true;
+    }
+    // A draft from before there was one per type carried its type inside.
+    function tkMigrateDraft() {
       try {
-        const d = JSON.parse(localStorage.getItem(TK_DRAFT_NEW) || 'null');
-        if (!d) return;
-        if (d.t && TK_TYPES[d.t]) tkSetType(d.t);
-        if (d.s) document.getElementById('tk-subject').value = d.s;
-        if (d.c && TK_CATEGORIES[d.c]) document.getElementById('tk-category').value = d.c;
-        if (d.b) document.getElementById('tk-body').value = d.b;
+        const old = localStorage.getItem('tk_draft_new');
+        if (!old) return;
+        localStorage.removeItem('tk_draft_new');
+        const d = JSON.parse(old);
+        if (d && (d.s || d.b)) {
+          localStorage.setItem(tkDraftKey(TK_TYPES[d.t] ? d.t : 'support'), JSON.stringify({ s: d.s || '', c: d.c || '', b: d.b || '' }));
+        }
       } catch (e) {}
     }
-    function tkClearNewDraft() { try { localStorage.removeItem(TK_DRAFT_NEW); } catch (e) {} }
+    function tkClearNewDraft() { try { localStorage.removeItem(tkDraftKey(tkType)); } catch (e) {} }
 
     function tkSaveReplyDraft() {
       if (tkCurrent == null) return;
@@ -479,7 +501,7 @@
           </div>
           <span class="tk-status ${esc(f.status)}">${esc(f.statusLabel || f.status)}</span>
           ${f.statusNote ? `<div class="fb-note">Staff: ${esc(f.statusNote)}</div>` : ''}
-          <div class="fb-body">${esc(f.body)}</div>
+          <div class="fb-body tk-md">${tkMd(f.body)}</div>
         </div>`).join('');
       const tag = document.getElementById('fb-list-tag');
       if (tag) tag.textContent = fbItems.length + (fbItems.length === 1 ? ' report' : ' reports');
@@ -622,12 +644,12 @@
       document.getElementById('tk-new-card').style.display = '';
       document.getElementById('tk-list-card').style.display = '';
       document.getElementById('fb-list-card').style.display = '';
-      tkRestoreNewDraft();
+      tkMigrateDraft();
       // /contact?type=bug|suggestion (about.html, the Discord how-to) picks
-      // the type; it wins over a restored draft's.
+      // the type; Support otherwise. Each type brings its own draft back.
       const params = new URLSearchParams(location.search);
       const wanted = params.get('type');
-      if (wanted && TK_TYPES[wanted]) tkSetType(wanted);
+      tkSetType(wanted && TK_TYPES[wanted] ? wanted : 'support');
       document.getElementById('tk-subject').addEventListener('input', tkSaveNewDraft);
       document.getElementById('tk-category').addEventListener('change', tkSaveNewDraft);
       document.getElementById('tk-body').addEventListener('input', tkSaveNewDraft);

@@ -5760,6 +5760,7 @@
       if (event) { event.preventDefault(); event.stopPropagation(); }
       const menu = document.getElementById('data-dd-menu');
       if (!menu) return;
+      closeOtherTabMenus('data');
       const open = !menu.classList.contains('open');
       _nd2SetDataMenu(open);
     }
@@ -16479,10 +16480,19 @@
         if (tabs.nodes) switchTab('nodes');
       } else if (view === 'tickets') {
         if (!tabs.tickets) return;
-        // ?view=tickets&tab=reports&kind=bug|suggestion — the staff alert's link.
-        let tab = '', kind = '';
-        try { const p = new URLSearchParams(location.search); tab = p.get('tab') || ''; kind = p.get('kind') || ''; } catch (e) {}
-        openTicketsView(tab === 'reports' ? (kind === 'suggestion' ? 'suggestion' : 'bug') : 'tickets');
+        // ?view=tickets[&id=N] or ?view=tickets&tab=reports&kind=bug|suggestion[&id=N]
+        // — the staff alert's link. With an id it opens that ticket or
+        // report itself, whatever the list happens to be filtered to.
+        let tab = '', kind = '', id = 0;
+        try {
+          const p = new URLSearchParams(location.search);
+          tab = p.get('tab') || ''; kind = p.get('kind') || ''; id = Number(p.get('id')) || 0;
+        } catch (e) {}
+        const which = tab === 'reports' ? (kind === 'suggestion' ? 'suggestion' : 'bug') : 'tickets';
+        openTicketsView(which);
+        if (Number.isInteger(id) && id > 0) {
+          if (which === 'tickets') _tkOpenTicket(id); else _fbOpenReport(id);
+        }
       }
     }
     
@@ -16578,6 +16588,7 @@
       if (event) { event.preventDefault(); event.stopPropagation(); }
       const menu = document.getElementById('requests-dd-menu');
       if (!menu) return;
+      closeOtherTabMenus('requests');
       const open = !menu.classList.contains('open');
       menu.classList.toggle('open', open);
       const btn = document.getElementById('requests-tab-btn');
@@ -16618,10 +16629,19 @@
 
     // ---- Tickets dropdown-tab: Tickets / Bug reports / Suggestions ----
     // Mirrors the Auth dropdown. The item decides which list the tab shows.
+    // One tab-bar menu open at a time. Each toggle stops its click reaching
+    // the document-level closers, so it closes the other menus itself.
+    function closeOtherTabMenus(keep) {
+      if (keep !== 'tickets') closeTicketsMenu();
+      if (keep !== 'requests') closeRequestsMenu();
+      if (keep !== 'auth') closeAuthMenu();
+      if (keep !== 'data') closeDataMenu();
+    }
     function toggleTicketsMenu(event) {
       if (event) { event.preventDefault(); event.stopPropagation(); }
       const menu = document.getElementById('tickets-dd-menu');
       if (!menu) return;
+      closeOtherTabMenus('tickets');
       const open = !menu.classList.contains('open');
       menu.classList.toggle('open', open);
       const btn = document.getElementById('tickets-tab-btn');
@@ -16678,9 +16698,26 @@
     function _tkLoadActive() {
       _tkSetKind(_tkKind);
     }
+    let _tkKindShown = null; // the kind whose panel is on screen
     function _tkSetKind(k) {
       _tkKind = k;
       staffRemember(STAFF_TK_KIND_KEY, k);
+      // A detail left open under another kind is closed with it: the
+      // polling that refreshes the lists holds off while any detail is
+      // open, and a hidden one would hold it off for good.
+      if (_tkKindShown !== k) {
+        _tkKindShown = k;
+        if (_tkOpenId != null) {
+          _tkOpenId = null;
+          document.getElementById('tk-staff-detail').style.display = 'none';
+          document.getElementById('tk-staff-list-wrap').style.display = '';
+        }
+        if (_fbOpenId != null) {
+          _fbOpenId = null; _fbOpen = null;
+          document.getElementById('fb-staff-detail').style.display = 'none';
+          document.getElementById('fb-staff-list-wrap').style.display = '';
+        }
+      }
       document.querySelectorAll('#tickets-dd-menu .tab-dd-item').forEach((it) => it.classList.toggle('active', it.dataset.tkkind === k));
       document.getElementById('tk-tickets-panel').style.display = k === 'tickets' ? '' : 'none';
       document.getElementById('fb-panel').style.display = k === 'tickets' ? 'none' : '';
@@ -17090,10 +17127,11 @@
       }
     }
 
+    // null unlinks (the Unlink button); anything from the Ticket # box must be a number.
     async function _fbLinkTicket(raw) {
       if (_fbOpenId == null) return;
-      const ticketId = raw === null || raw === '' ? null : Number(raw);
-      if (ticketId !== null && !(Number.isInteger(ticketId) && ticketId > 0)) { showToast('Enter a ticket number.', 'warn'); return; }
+      const ticketId = raw === null ? null : Number(raw);
+      if (ticketId !== null && !(raw !== '' && Number.isInteger(ticketId) && ticketId > 0)) { showToast('Enter a ticket number.', 'warn'); return; }
       try {
         await _tkApi(`/api/staff/feedback/${_fbOpenId}/ticket`, { method: 'POST', body: JSON.stringify({ ticket_id: ticketId }) });
         showToast(ticketId ? `Linked to ticket #${ticketId}.` : 'Unlinked.', 'success');
@@ -17721,6 +17759,7 @@
       if (event) { event.preventDefault(); event.stopPropagation(); }
       const menu = document.getElementById('auth-dd-menu');
       if (!menu) return;
+      closeOtherTabMenus('auth');
       const open = !menu.classList.contains('open');
       menu.classList.toggle('open', open);
       const btn = document.getElementById('auth-tab-btn');
