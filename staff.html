@@ -1074,10 +1074,16 @@
     .fb-sect { margin-bottom:1rem; }
     .fb-sect-h { font-size:0.68rem; font-weight:600; color:var(--text-soft); text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.4rem; }
     .fb-hint { font-size:0.74rem; color:var(--text-soft); margin-top:0.4rem; }
-    .fb-ticket-row { display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center; }
-    .fb-ticket-row input { width:7rem; background:rgba(2,6,23,0.5); border:1px solid var(--border-subtle); border-radius:8px; color:var(--text-main); padding:0.45rem 0.55rem; font-family:inherit; font-size:0.85rem; }
-    .fb-ticket-new { margin-top:0.6rem; }
-    .fb-ticket-new textarea { width:100%; box-sizing:border-box; min-height:70px; background:rgba(2,6,23,0.5); border:1px solid var(--border-subtle); border-radius:8px; color:var(--text-main); padding:0.5rem; font-family:inherit; font-size:0.85rem; resize:vertical; }
+    /* The report's ticket: one box — a lead line, then the actions in a row. */
+    .fb-tbox { border:1px solid var(--border-subtle); border-radius:10px; padding:0.75rem 0.9rem; background:rgba(2,6,23,0.3); }
+    .fb-tbox-lead { font-size:0.84rem; color:var(--text-soft); line-height:1.5; margin-bottom:0.6rem; }
+    .fb-tbox-lead strong { color:var(--text-main); }
+    .fb-tbox-row { display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap; }
+    .fb-tbox-or { font-size:0.78rem; color:var(--text-soft); margin-left:0.3rem; }
+    .fb-tbox-row input { width:6.5rem; background:rgba(2,6,23,0.5); border:1px solid var(--border-subtle); border-radius:8px; color:var(--text-main); padding:0.45rem 0.55rem; font-family:inherit; font-size:0.85rem; }
+    .fb-tbox-new { margin-top:0.2rem; }
+    .fb-tbox-new label { display:block; font-size:0.72rem; color:var(--text-soft); text-transform:uppercase; letter-spacing:0.04em; margin-bottom:0.35rem; }
+    .fb-tbox-new textarea { width:100%; box-sizing:border-box; min-height:80px; background:rgba(2,6,23,0.5); border:1px solid var(--border-subtle); border-radius:8px; color:var(--text-main); padding:0.55rem; font-family:inherit; font-size:0.86rem; resize:vertical; margin-bottom:0.5rem; }
     .tk-smsg { max-width:85%; border-radius:12px; padding:0.6rem 0.8rem; margin-bottom:0.6rem; font-size:0.86rem; line-height:1.5; }
     .tk-smsg.staff { background:rgba(56,189,248,0.1); border:1px solid rgba(56,189,248,0.25); margin-left:auto; }
     .tk-smsg.user { background:rgba(249,115,22,0.1); border:1px solid rgba(249,115,22,0.22); margin-right:auto; }
@@ -16864,25 +16870,59 @@
 
     function _fbRenderTicketBox(f, ticket) {
       const box = document.getElementById('fb-ticket-box');
+      const name = escapeHtml(f.userName || f.discordUserName || 'the reporter');
+      const kindWord = (FB_KIND_LABEL[f.kind] || 'report').toLowerCase();
+      const linkRow = `<input id="fb-link-id" type="number" min="1" placeholder="Ticket #">
+          <button class="btn btn-secondary btn-sm" onclick="_fbLinkTicket(document.getElementById('fb-link-id').value)"><i class="fas fa-link"></i> Link</button>`;
+
       if (f.ticketId) {
-        box.innerHTML = `<div class="fb-ticket-row">
-            <span>Linked to <a href="#" onclick="_fbGoTicket(${Number(f.ticketId)}); return false;" style="color:var(--accent); font-weight:600;">ticket #${Number(f.ticketId)}</a>${ticket ? ` — ${escapeHtml(ticket.subject)} <span class="tk-schip ${escapeHtml(ticket.status)}">${escapeHtml(TK_STATUS_STAFF[ticket.status] || ticket.status)}</span>` : ''}</span>
-            <button class="btn btn-secondary btn-sm" onclick="_fbLinkTicket(null)">Unlink</button>
-          </div>
-          <div class="fb-hint">The conversation about this report happens on the ticket.</div>`;
+        const n = Number(f.ticketId);
+        box.innerHTML = `<div class="fb-tbox">
+            <div class="fb-tbox-lead">The conversation about this ${kindWord} is on <strong>ticket #${n}</strong>${ticket ? ` — ${escapeHtml(ticket.subject)} <span class="tk-schip ${escapeHtml(ticket.status)}">${escapeHtml(TK_STATUS_STAFF[ticket.status] || ticket.status)}</span>` : ''}.</div>
+            <div class="fb-tbox-row">
+              <button class="btn btn-primary btn-sm" onclick="_fbGoTicket(${n})"><i class="fas fa-ticket"></i> Open ticket #${n}</button>
+              <button class="btn btn-secondary btn-sm" onclick="_fbLinkTicket(null)">Unlink</button>
+            </div>
+          </div>`;
         return;
       }
-      const canOpen = !!f.userId;
-      box.innerHTML = `<div class="fb-ticket-row">
-          <input id="fb-link-id" type="number" min="1" placeholder="Ticket #">
-          <button class="btn btn-secondary btn-sm" onclick="_fbLinkTicket(document.getElementById('fb-link-id').value)"><i class="fas fa-link"></i> Link existing</button>
-        </div>
-        <div class="fb-ticket-new">
-          ${canOpen
-            ? `<textarea id="fb-new-ticket-body" maxlength="5000" placeholder="Open a ticket at ${escapeHtml(f.userName || 'the reporter')} about this — your first message. The report is quoted above it."></textarea>
-               <div style="margin-top:0.4rem;"><button class="btn btn-primary btn-sm" id="fb-new-ticket-btn" onclick="_fbNewTicket()"><i class="fas fa-ticket"></i> Open a ticket for this</button></div>`
-            : `<div class="fb-hint">Reported from Discord by someone with no site account, so a ticket can't be opened at them. If they open one on the site, link it here.</div>`}
+
+      if (!f.userId) {
+        // A Discord-only reporter has no contact page for a ticket to appear on.
+        box.innerHTML = `<div class="fb-tbox">
+            <div class="fb-tbox-lead">No ticket. <strong>${name}</strong> reported this from Discord and has no site account, so a ticket can't be started with them. If they open one on the site, link it here.</div>
+            <div class="fb-tbox-row">${linkRow}</div>
+          </div>`;
+        return;
+      }
+
+      box.innerHTML = `<div class="fb-tbox">
+          <div class="fb-tbox-lead">No ticket. A ticket is a private conversation with <strong>${name}</strong> on their contact page — start one when this ${kindWord} needs a back-and-forth.</div>
+          <div class="fb-tbox-row" id="fb-tbox-actions">
+            <button class="btn btn-primary btn-sm" onclick="_fbShowNewTicket(true)"><i class="fas fa-comments"></i> Start a ticket with ${name}</button>
+            <span class="fb-tbox-or">or link an existing one</span>
+            ${linkRow}
+          </div>
+          <div class="fb-tbox-new" id="fb-new-ticket" style="display:none;">
+            <label for="fb-new-ticket-body">Your first message to ${name}</label>
+            <textarea id="fb-new-ticket-body" maxlength="5000" placeholder="e.g. Thanks for this — which browser were you using? (The ${kindWord} is quoted above your message.)"></textarea>
+            <div class="fb-tbox-row">
+              <button class="btn btn-primary btn-sm" id="fb-new-ticket-btn" onclick="_fbNewTicket()"><i class="fas fa-paper-plane"></i> Open ticket</button>
+              <button class="btn btn-secondary btn-sm" onclick="_fbShowNewTicket(false)">Cancel</button>
+            </div>
+          </div>
         </div>`;
+    }
+
+    // The message form replaces the actions row while it is open; Cancel
+    // brings the row back.
+    function _fbShowNewTicket(show) {
+      const panel = document.getElementById('fb-new-ticket');
+      const actions = document.getElementById('fb-tbox-actions');
+      if (!panel) return;
+      panel.style.display = show ? '' : 'none';
+      if (actions) actions.style.display = show ? 'none' : '';
+      if (show) document.getElementById('fb-new-ticket-body')?.focus();
     }
 
     function _fbGoTicket(id) {
