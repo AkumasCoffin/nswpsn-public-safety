@@ -393,10 +393,28 @@ describe('bug reports and suggestions', () => {
     expect(insertArgs()[0]).toBe('feedback_board');
     const sent = sentParams();
     expect(Object.keys(sent).sort()).toEqual(
-      ['actor', 'body', 'channel_id', 'event', 'guild_id', 'id', 'kind', 'note', 'reporter', 'site_url', 'source', 'status', 'status_label', 'subject'],
+      ['actor', 'body', 'channel_id', 'event', 'guild_id', 'id', 'kind', 'message_id', 'note', 'reporter', 'site_url', 'source', 'status', 'status_label', 'subject'],
     );
     for (const v of Object.values(sent)) expect(typeof v).toBe('string');
-    expect(sent).toMatchObject({ event: 'status', id: '12', channel_id: '900000000000000002', status_label: 'Fixed', note: 'Deployed', actor: 'Jordan' });
+    expect(sent).toMatchObject({ event: 'status', id: '12', channel_id: '900000000000000002', message_id: '', status_label: 'Fixed', note: 'Deployed', actor: 'Jordan' });
+  });
+
+  it('a status change or removal goes to the post itself, even once the board is unset', async () => {
+    // Nothing configured any more — the board was cleared after this report was posted.
+    settingsRows = [];
+    const post = { guildId: '111111111111111111', channelId: '900000000000000009', messageId: '123456789012345678' };
+    expect(await enqueueFeedbackBoard(mainPool, { event: 'delete', kind: 'bug', id: 12, status: 'open', statusLabel: 'Open', board: post })).toBe(true);
+    expect(sentParams()).toMatchObject({ event: 'delete', guild_id: post.guildId, channel_id: post.channelId, message_id: post.messageId });
+    // A new report has no post yet: the configured board, or nothing.
+    vi.clearAllMocks();
+    expect(await enqueueFeedbackBoard(mainPool, { event: 'new', kind: 'bug', id: 13, status: 'open', statusLabel: 'Open', board: post })).toBe(false);
+    expect(botQuery).not.toHaveBeenCalled();
+  });
+
+  it('an alert may name its own view: the report itself, not just the list', async () => {
+    configureFeedback();
+    await notifyStaffAsync(mainPool, { kind: 'bug_report', event: 'new', ref: '12', view: 'tickets&tab=reports&kind=bug&id=12', title: 'Bug report #12' });
+    expect(sentParams().url).toMatch(/\/staff\?view=tickets&tab=reports&kind=bug&id=12$/);
   });
 });
 

@@ -121,8 +121,8 @@ staffNotifyRouter.put('/api/staff/discord-notify', async (c) => {
   }
 
   // The public bug-report / suggestion channels. Each change is pushed to
-  // the bot as well: it keeps a pinned how-to in an intake channel and must
-  // know which channel that is now.
+  // the bot as well: it keeps a how-to in an intake channel and must know
+  // which channel that is now.
   const feedbackIn = body['feedback'];
   if (feedbackIn && typeof feedbackIn === 'object' && !Array.isArray(feedbackIn)) {
     const changed = new Set<FeedbackKind>();

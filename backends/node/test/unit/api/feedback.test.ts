@@ -152,7 +152,8 @@ describe('filing from the site', () => {
 
     const ins = calls.find((q) => q.sql.includes('INSERT INTO feedback'));
     expect(ins?.params).toEqual(['bug', 'site', 'user-1', 'Test User', null, null, 'Map tiles blank on Firefox', 'Zoomed in past 14 and the tiles stopped loading.']);
-    expect(alerts[0]).toMatchObject({ kind: 'bug_report', event: 'new', ref: '12', title: 'Bug report #12', subtitle: 'Map tiles blank on Firefox' });
+    // The alert links to the report itself, not to a list it may be filtered out of.
+    expect(alerts[0]).toMatchObject({ kind: 'bug_report', event: 'new', ref: '12', view: 'tickets&tab=reports&kind=bug&id=12', title: 'Bug report #12', subtitle: 'Map tiles blank on Firefox' });
     // No status on a new alert: that is what made new tickets render as resolved.
     expect(alerts[0]).not.toHaveProperty('status');
     expect(board[0]).toMatchObject({ event: 'new', kind: 'bug', id: 12, reporter: 'Test User', source: 'site', status: 'open', statusLabel: 'Open' });
@@ -177,12 +178,20 @@ describe('filing from the site', () => {
     expect(calls.some((q) => q.sql.includes('INSERT'))).toBe(false);
   });
 
-  it('GET /mine lists the caller\'s reports with their status labels', async () => {
-    resultQueue = [{ rows: [ROW({ status: 'done', status_note: 'Fixed in last night\'s deploy' }), ROW({ id: 9, kind: 'suggestion', status: 'declined' })] }];
+  it('GET /mine lists the caller\'s reports with their status labels, and a ticket number only when the ticket is theirs', async () => {
+    resultQueue = [{ rows: [
+      ROW({ status: 'done', status_note: 'Fixed in last night\'s deploy', ticket_id: 40, own_ticket_id: 40 }),
+      // Linked by staff to someone else's ticket: that number is not theirs to see.
+      ROW({ id: 9, kind: 'suggestion', status: 'declined', ticket_id: 41, own_ticket_id: null }),
+    ] }];
     const res = await makeApp().request('/api/feedback/mine');
     const body = (await res.json()) as { feedback: Array<Record<string, unknown>> };
-    expect(body.feedback[0]).toMatchObject({ status: 'done', statusLabel: 'Fixed', statusNote: 'Fixed in last night\'s deploy' });
-    expect(body.feedback[1]).toMatchObject({ statusLabel: 'Not added' });
+    expect(body.feedback[0]).toMatchObject({ status: 'done', statusLabel: 'Fixed', statusNote: 'Fixed in last night\'s deploy', ticketId: 40 });
+    expect(body.feedback[1]).toMatchObject({ statusLabel: 'Not added', ticketId: null });
+    expect(body.feedback[0]).not.toHaveProperty('userId');
+    expect(body.feedback[0]).not.toHaveProperty('discordUserId');
+    expect(body.feedback[0]).not.toHaveProperty('statusByName');
+    expect(calls[0]?.sql).toContain('LEFT JOIN support_tickets');
     expect(calls[0]?.params).toEqual(['user-1']);
   });
 });
@@ -313,14 +322,15 @@ describe('staff routes', () => {
     it('opens a ticket at a site reporter with the report quoted, links it, bells them', async () => {
       handler = true;
       resultQueue = [
-        { rows: [ROW()] },        // fetch
-        { rows: [{ id: 41 }] },   // INSERT support_tickets
-        { rows: [] },             // INSERT message
-        { rows: [] },             // UPDATE feedback
+        { rows: [ROW()] },              // fetch
+        { rows: [{ id: 41 }] },         // INSERT support_tickets
+        { rows: [] },                   // INSERT message
+        { rows: [], rowCount: 1 },      // UPDATE feedback — claimed
       ];
       const res = await makeApp({ userId: 'staff-1', userName: 'Staff Person' }).request('/api/staff/feedback/12/ticket/new', json({ body: 'Which Firefox version?' }));
       expect(res.status).toBe(200);
       expect(await res.json()).toEqual({ ok: true, ticketId: 41 });
+      expect(calls.find((q) => q.sql.includes('SET ticket_id'))?.sql).toContain('AND ticket_id IS NULL');
       const t = calls.find((q) => q.sql.includes('INSERT INTO support_tickets'));
       expect(t?.params?.[0]).toBe('user-1');
       expect(t?.params?.[2]).toBe('Re: your bug report #12 — Map tiles blank on Firefox');
@@ -335,6 +345,26 @@ describe('staff routes', () => {
       expect(order).toContain('BEGIN');
       expect(order[order.length - 1]).toBe('COMMIT');
       expect(bells[0]).toMatchObject({ userId: 'user-1', type: 'ticket.opened', link: '/contact?t=41' });
+    });
+
+    it('two staff opening a ticket at once: the second loses — 409, rolled back, no bell', async () => {
+      handler = true;
+      resultQueue = [{ rows: [ROW()] }, { rows: [{ id: 42 }] }, { rows: [] }, { rows: [], rowCount: 0 }];
+      const res = await makeApp({ userId: 'staff-2' }).request('/api/staff/feedback/12/ticket/new', json({ body: 'hi there' }));
+      expect(res.status).toBe(409);
+      const order = calls.map((q) => q.sql.trim().split(/\s+/)[0]);
+      expect(order).toContain('ROLLBACK');
+      expect(order).not.toContain('COMMIT');
+      expect(bells).toHaveLength(0);
+    });
+
+    it('staff\'s whole message goes into the ticket, however long the quote makes the whole', async () => {
+      handler = true;
+      const long = 'x'.repeat(5000);
+      resultQueue = [{ rows: [ROW({ body: 'y'.repeat(1500) })] }, { rows: [{ id: 43 }] }, { rows: [] }, { rows: [], rowCount: 1 }];
+      expect((await makeApp().request('/api/staff/feedback/12/ticket/new', json({ body: long }))).status).toBe(200);
+      const m = calls.find((q) => q.sql.includes('INSERT INTO support_ticket_messages'));
+      expect(String(m?.params?.[3]).endsWith(long)).toBe(true);
     });
 
     it('409 for a Discord-only reporter, and when already linked', async () => {
@@ -354,7 +384,13 @@ describe('staff routes', () => {
     resultQueue = [{ rows: [ROW()] }];
     expect((await makeApp().request('/api/staff/feedback/12', { method: 'DELETE' })).status).toBe(200);
     expect(calls[0]?.sql).toContain('DELETE FROM feedback');
-    expect(board[0]).toMatchObject({ event: 'delete', kind: 'bug', id: 12 });
+    expect(board[0]).toMatchObject({ event: 'delete', kind: 'bug', id: 12, board: null });
+    // A report that was posted: the take-down names the post, so it comes
+    // down wherever the board channel setting has gone since.
+    board.length = 0;
+    resultQueue = [{ rows: [ROW({ board_guild_id: '111111111111111111', board_channel_id: '900000000000000002', board_message_id: '123456789012345678' })] }];
+    expect((await makeApp().request('/api/staff/feedback/12', { method: 'DELETE' })).status).toBe(200);
+    expect(board[0]).toMatchObject({ event: 'delete', board: { guildId: '111111111111111111', channelId: '900000000000000002', messageId: '123456789012345678' } });
     resultQueue = [{ rows: [] }];
     expect((await makeApp().request('/api/staff/feedback/12', { method: 'DELETE' })).status).toBe(404);
   });

@@ -146,6 +146,11 @@ function excerpt(body: string, max = 300): string {
   return body.length > max ? body.slice(0, max - 1) + '…' : body;
 }
 
+/** The staff alert's deep link: this report, open, under its kind. */
+function staffView(r: Pick<FeedbackRow, 'id' | 'kind'>): string {
+  return `tickets&tab=reports&kind=${r.kind}&id=${r.id}`;
+}
+
 /** The name on the board and in the staff alert. */
 function reporterName(r: Pick<FeedbackRow, 'user_name' | 'discord_user_name' | 'source'>): string {
   return r.user_name ?? r.discord_user_name ?? (r.source === 'discord' ? 'a Discord member' : 'a user');
@@ -154,6 +159,13 @@ function reporterName(r: Pick<FeedbackRow, 'user_name' | 'discord_user_name' | '
 function boardUrl(r: Pick<FeedbackRow, 'board_guild_id' | 'board_channel_id' | 'board_message_id'>): string | null {
   return r.board_guild_id && r.board_channel_id && r.board_message_id
     ? `https://discord.com/channels/${r.board_guild_id}/${r.board_channel_id}/${r.board_message_id}`
+    : null;
+}
+
+/** Where the report's board post is, for a status change or a removal to find it. */
+function boardPost(r: Pick<FeedbackRow, 'board_guild_id' | 'board_channel_id' | 'board_message_id'>) {
+  return r.board_guild_id && r.board_channel_id && r.board_message_id
+    ? { guildId: r.board_guild_id, channelId: r.board_channel_id, messageId: r.board_message_id }
     : null;
 }
 
@@ -235,6 +247,7 @@ async function createFeedback(pool: Pool, input: CreateInput): Promise<FeedbackR
     kind: STAFF_NOTIFY_KIND[row.kind],
     event: 'new',
     ref: String(row.id),
+    view: staffView(row),
     title: `${FEEDBACK_KIND_LABELS[row.kind]} #${row.id}`,
     subtitle: row.subject,
     fields: [
@@ -293,11 +306,16 @@ feedbackRouter.get('/api/feedback/mine', requireSupabaseJwt, async (c) => {
   const pool = await getPool();
   if (!pool) return c.json({ error: 'database unavailable' }, 503);
   try {
-    const r = await pool.query<FeedbackRow>(
-      'SELECT * FROM feedback WHERE user_id = $1 ORDER BY created_at DESC LIMIT 100',
+    // Staff may link a report to any ticket — a Discord-only reporter has
+    // none of their own — so the reporter is told the ticket number only
+    // when the ticket is theirs; another user's ticket is private.
+    const r = await pool.query<FeedbackRow & { own_ticket_id: number | null }>(
+      `SELECT f.*, CASE WHEN t.user_id = f.user_id THEN f.ticket_id END AS own_ticket_id
+         FROM feedback f LEFT JOIN support_tickets t ON t.id = f.ticket_id
+        WHERE f.user_id = $1 ORDER BY f.created_at DESC LIMIT 100`,
       [userId],
     );
-    return c.json({ feedback: r.rows.map((row) => mapFeedback(row)) });
+    return c.json({ feedback: r.rows.map((row) => mapFeedback({ ...row, ticket_id: row.own_ticket_id ?? null })) });
   } catch (err) {
     log.error({ err, userId }, 'feedback list failed');
     return c.json({ error: 'Failed to list' }, 500);
@@ -418,6 +436,7 @@ feedbackRouter.post('/api/staff/feedback/:id/status', requireRole(canHandleTicke
       kind: STAFF_NOTIFY_KIND[row.kind],
       event: TERMINAL.has(row.status) ? 'resolved' : 'update',
       ref: String(row.id),
+      view: staffView(row),
       title: `${kindLabel} #${row.id} · ${label}`,
       subtitle: row.subject,
       status: row.status === 'open' ? '' : label,
@@ -433,6 +452,7 @@ feedbackRouter.post('/api/staff/feedback/:id/status', requireRole(canHandleTicke
       statusLabel: label,
       note: note.note,
       actor: actorName,
+      board: boardPost(row),
     });
     log.info({ id, status, by: actorId }, 'feedback status set');
     return c.json({ ok: true, feedback: mapFeedback(row, { names: new Map() }) });
@@ -500,8 +520,11 @@ feedbackRouter.post('/api/staff/feedback/:id/ticket/new', requireRole(canHandleT
 
     const kindLabel = FEEDBACK_KIND_LABELS[row.kind];
     const subject = `Re: your ${kindLabel.toLowerCase()} #${row.id} — ${row.subject}`.slice(0, SUBJECT_MAX);
+    // Not cut to BODY_MAX: the quote is bounded and staff's text already is,
+    // and the column has no limit — a cut here would silently drop the end
+    // of what staff wrote.
     const quoted = excerpt(row.body, 1000).split('\n').map((l) => `> ${l}`).join('\n');
-    const first = `> **${kindLabel} #${row.id} · ${row.subject}**\n${quoted}\n\n${body}`.slice(0, BODY_MAX);
+    const first = `> **${kindLabel} #${row.id} · ${row.subject}**\n${quoted}\n\n${body}`;
 
     const client = await pool.connect();
     let ticket: { id: number };
@@ -517,7 +540,17 @@ feedbackRouter.post('/api/staff/feedback/:id/ticket/new', requireRole(canHandleT
         'INSERT INTO support_ticket_messages (ticket_id, author_id, author_name, is_staff, body) VALUES ($1, $2, $3, true, $4)',
         [ticket.id, actorId, actorName, first],
       );
-      await client.query('UPDATE feedback SET ticket_id = $2, updated_at = now() WHERE id = $1', [row.id, ticket.id]);
+      // The link is claimed only if nobody claimed it first: two staff
+      // opening a ticket at once would otherwise leave one ticket orphaned
+      // at the reporter with the report quoted and nothing pointing at it.
+      const linked = await client.query(
+        'UPDATE feedback SET ticket_id = $2, updated_at = now() WHERE id = $1 AND ticket_id IS NULL',
+        [row.id, ticket.id],
+      );
+      if (!linked.rowCount) {
+        await client.query('ROLLBACK');
+        return c.json({ error: 'a ticket was just opened for this report by someone else' }, 409);
+      }
       await client.query('COMMIT');
     } catch (err) {
       await client.query('ROLLBACK').catch(() => undefined);
@@ -557,6 +590,7 @@ feedbackRouter.delete('/api/staff/feedback/:id', requireRole(canHandleTickets), 
       id: row.id,
       status: row.status,
       statusLabel: FEEDBACK_STATUS_LABELS[row.kind][row.status],
+      board: boardPost(row),
     });
     log.info({ id, by: actorId }, 'feedback removed');
     return c.json({ ok: true });

@@ -227,6 +227,12 @@ export interface StaffNotifyInput {
   event: 'new' | 'resolved' | 'update';
   /** Stable id of the underlying row — how 'resolved' finds its message. */
   ref: string;
+  /**
+   * The query after `/staff?view=` the alert links to, when the kind's
+   * default view (STAFF_VIEW) is not specific enough — a report's alert
+   * opens that report, not the list it may be filtered out of.
+   */
+  view?: string;
   /** Short non-identifying headline, e.g. "Radio Feeder · NSW". */
   title: string;
   /** Optional second line. Must not contain personal data. */
@@ -312,7 +318,7 @@ export async function notifyStaffAsync(pool: Pool | null, input: StaffNotifyInpu
     // JSON in a string: every param stays a string so the canonical signing
     // form is identical either side of the language boundary.
     fields: JSON.stringify(packFields(input.fields)),
-    url: `${siteBase()}/staff?view=${STAFF_VIEW[input.kind]}`,
+    url: `${siteBase()}/staff?view=${input.view || STAFF_VIEW[input.kind]}`,
   });
 }
 
@@ -324,7 +330,7 @@ export async function notifyStaffAsync(pool: Pool | null, input: StaffNotifyInpu
  * Tell the bot which channels one kind uses now. Sent whenever the owner
  * changes either picker, with BOTH current values, so the bot's row for the
  * kind is always whole. An empty id means "none": the bot takes down its
- * pinned how-to from an intake channel that is no longer one.
+ * how-to from an intake channel that is no longer one.
  */
 export async function enqueueFeedbackChannels(pool: Pool, kind: FeedbackKind): Promise<boolean> {
   const s = await readNotifySettings(pool);
@@ -351,25 +357,46 @@ export interface FeedbackBoardInput {
   statusLabel: string;
   note?: string | null;
   actor?: string | null;
+  /**
+   * For 'status' and 'delete': where the report's post is (the feedback
+   * row's board_* columns, filled in when it was posted). The post is acted
+   * on wherever it is, even after the owner has moved or cleared the board
+   * channel — a removed report must not stay up because the setting changed.
+   */
+  board?: { guildId: string; channelId: string; messageId: string } | null;
 }
 
 /**
- * The public board. Skipped (false) when the kind has no board channel —
- * the owner may well run intake without a board, or neither.
+ * The public board. A new report is skipped (false) when the kind has no
+ * board channel — the owner may well run intake without a board, or
+ * neither. A status change or removal goes to the post itself when the row
+ * knows where that is, else to the configured board (the bot keeps its own
+ * record of posts too), and is skipped only when there is neither.
  * Discord-sourced reports are posted by the bot itself at filing time (it
  * holds the attachments then), so callers send 'new' for site reports only.
  */
 export async function enqueueFeedbackBoard(pool: Pool, input: FeedbackBoardInput): Promise<boolean> {
-  const s = await readNotifySettings(pool);
-  const channelId = s[FEEDBACK_CHANNEL_KEYS[input.kind].board];
-  const guildId = s[NOTIFY_GUILD_KEY];
-  if (!channelId || !guildId) return false;
+  const post = input.event !== 'new' ? input.board ?? null : null;
+  let guildId: string;
+  let channelId: string;
+  if (post) {
+    guildId = post.guildId;
+    channelId = post.channelId;
+  } else {
+    const s = await readNotifySettings(pool);
+    const board = s[FEEDBACK_CHANNEL_KEYS[input.kind].board];
+    const guild = s[NOTIFY_GUILD_KEY];
+    if (!board || !guild) return false;
+    guildId = String(guild);
+    channelId = String(board);
+  }
   return enqueueBotAction('feedback_board', {
     event: input.event,
     kind: input.kind,
     id: String(input.id),
-    guild_id: String(guildId),
-    channel_id: String(channelId),
+    guild_id: guildId,
+    channel_id: channelId,
+    message_id: post?.messageId ?? '',
     subject: input.subject ?? '',
     body: (input.body ?? '').slice(0, 4000),
     reporter: input.reporter ?? '',

@@ -195,30 +195,39 @@ interface SupabaseUsersResponse {
  * posted in Discord can be filed under the reporter's account when their
  * Discord is linked. There is no index for this: the link lives only in
  * Supabase auth, so this walks the admin user list the way getUsernameMap
- * does. Reports are a few a day, so one list read per report is fine.
+ * does, page by page until the account turns up or the list ends — a
+ * linked member past the first page would otherwise file as nobody, with
+ * no bell and nothing on their contact page. Reports are a few a day, so
+ * a list walk per report is fine.
  * Best-effort: null when unlinked, unknown, or Supabase is unreachable.
  */
 export async function findUserByDiscordId(discordId: string): Promise<{ id: string; name: string } | null> {
   const want = discordId.trim();
   if (!want || !config.SUPABASE_URL || !config.SUPABASE_SERVICE_ROLE_KEY) return null;
+  const PER_PAGE = 1000;
+  const MAX_PAGES = 20;
   try {
-    const res = await fetch(`${config.SUPABASE_URL}/auth/v1/admin/users?per_page=1000`, {
-      headers: {
-        apikey: config.SUPABASE_SERVICE_ROLE_KEY,
-        Authorization: `Bearer ${config.SUPABASE_SERVICE_ROLE_KEY}`,
-      },
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (!res.ok) return null;
-    const data = (await res.json()) as SupabaseUsersResponse;
-    for (const u of data.users ?? []) {
-      if (!u.id) continue;
-      const d = discordInfo(u);
-      // Only an OAuth link counts: the legacy typed-in discord_id is a
-      // handle someone wrote on a form, not proof they hold that account.
-      if (d.discord_linked && d.discord_id === want) {
-        return { id: u.id, name: usernameFromMetadata(u.user_metadata) ?? u.email?.split('@')[0] ?? 'User' };
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const res = await fetch(`${config.SUPABASE_URL}/auth/v1/admin/users?page=${page}&per_page=${PER_PAGE}`, {
+        headers: {
+          apikey: config.SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${config.SUPABASE_SERVICE_ROLE_KEY}`,
+        },
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!res.ok) return null;
+      const data = (await res.json()) as SupabaseUsersResponse;
+      const users = data.users ?? [];
+      for (const u of users) {
+        if (!u.id) continue;
+        const d = discordInfo(u);
+        // Only an OAuth link counts: the legacy typed-in discord_id is a
+        // handle someone wrote on a form, not proof they hold that account.
+        if (d.discord_linked && d.discord_id === want) {
+          return { id: u.id, name: usernameFromMetadata(u.user_metadata) ?? u.email?.split('@')[0] ?? 'User' };
+        }
       }
+      if (users.length < PER_PAGE) break;
     }
   } catch {
     /* best-effort */
