@@ -424,6 +424,36 @@ class Database:
                     )
                 ''')
 
+                # Bug reports and suggestions. Per kind, the INTAKE channel
+                # (messages posted there are filed as reports; the bot keeps
+                # a pinned how-to, notice_message_id) and the public BOARD
+                # channel (every report is posted there with its status).
+                # Both are chosen on the staff page and pushed here by the
+                # feedback_channels action — the bot never reads the
+                # backend's settings.
+                c.execute('''
+                    CREATE TABLE IF NOT EXISTS feedback_channels (
+                        kind              TEXT PRIMARY KEY,
+                        guild_id          BIGINT,
+                        intake_channel_id BIGINT,
+                        notice_message_id BIGINT,
+                        board_channel_id  BIGINT,
+                        updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+                    )
+                ''')
+                # Which board message is which report, so a status change
+                # replies to and edits the right post. Keyed on the backend's
+                # feedback id.
+                c.execute('''
+                    CREATE TABLE IF NOT EXISTS feedback_board_posts (
+                        feedback_id INTEGER PRIMARY KEY,
+                        kind        TEXT NOT NULL,
+                        channel_id  BIGINT NOT NULL,
+                        message_id  BIGINT NOT NULL,
+                        created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+                    )
+                ''')
+
                 # Live-DB migration for the per-preset filters column.
                 c.execute("ALTER TABLE alert_presets ADD COLUMN IF NOT EXISTS filters JSONB NOT NULL DEFAULT '{}'::jsonb")
                 # Live-DB migration: HMAC signature column for bot-action rows.
@@ -1424,6 +1454,90 @@ class Database:
                 "DELETE FROM staff_notify_messages WHERE created_at < NOW() - INTERVAL '1 day' * %s",
                 (days,),
             )
+            conn.commit()
+        finally:
+            conn.close()
+
+    # ==================== BUG REPORTS / SUGGESTIONS ====================
+
+    def get_feedback_channels(self):
+        """Every kind's channel row (bot.py loads these at startup)."""
+        self._require_postgres()
+        conn = self._connect()
+        try:
+            c = conn.cursor()
+            c.execute(
+                'SELECT kind, guild_id, intake_channel_id, notice_message_id, board_channel_id FROM feedback_channels'
+            )
+            rows = c.fetchall()
+        finally:
+            conn.close()
+        return [dict(r) for r in rows]
+
+    def set_feedback_channels(self, kind: str, guild_id: int, intake_channel_id: int,
+                              board_channel_id: int, notice_message_id: int):
+        """Replace one kind's row. Zero for a channel means none."""
+        self._require_postgres()
+        conn = self._connect()
+        try:
+            c = conn.cursor()
+            c.execute(
+                '''INSERT INTO feedback_channels (kind, guild_id, intake_channel_id, board_channel_id, notice_message_id)
+                   VALUES (%s, %s, %s, %s, %s)
+                   ON CONFLICT (kind) DO UPDATE
+                     SET guild_id = EXCLUDED.guild_id,
+                         intake_channel_id = EXCLUDED.intake_channel_id,
+                         board_channel_id = EXCLUDED.board_channel_id,
+                         notice_message_id = EXCLUDED.notice_message_id,
+                         updated_at = now()''',
+                (kind, int(guild_id or 0) or None, int(intake_channel_id or 0) or None,
+                 int(board_channel_id or 0) or None, int(notice_message_id or 0) or None),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def record_feedback_board_post(self, feedback_id: int, kind: str, channel_id: int, message_id: int):
+        """Remember the board message for a report. Upserts, as record_staff_message does."""
+        self._require_postgres()
+        conn = self._connect()
+        try:
+            c = conn.cursor()
+            c.execute(
+                '''INSERT INTO feedback_board_posts (feedback_id, kind, channel_id, message_id)
+                   VALUES (%s, %s, %s, %s)
+                   ON CONFLICT (feedback_id) DO UPDATE
+                     SET kind = EXCLUDED.kind,
+                         channel_id = EXCLUDED.channel_id,
+                         message_id = EXCLUDED.message_id,
+                         created_at = now()''',
+                (int(feedback_id), kind, int(channel_id), int(message_id)),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_feedback_board_post(self, feedback_id: int):
+        """The board message for this report, or None."""
+        self._require_postgres()
+        conn = self._connect()
+        try:
+            c = conn.cursor()
+            c.execute(
+                'SELECT kind, channel_id, message_id FROM feedback_board_posts WHERE feedback_id = %s',
+                (int(feedback_id),),
+            )
+            row = c.fetchone()
+        finally:
+            conn.close()
+        return dict(row) if row else None
+
+    def delete_feedback_board_post(self, feedback_id: int):
+        self._require_postgres()
+        conn = self._connect()
+        try:
+            c = conn.cursor()
+            c.execute('DELETE FROM feedback_board_posts WHERE feedback_id = %s', (int(feedback_id),))
             conn.commit()
         finally:
             conn.close()

@@ -26,13 +26,132 @@ STAFF_NOTIFY_KINDS = {
     'ticket': ('Contact ticket', '\U0001F3AB', 0xEAB308),
     'siteSurvey': ('Site survey', '\U0001F4E1', 0x7DD3FC),
     'api_key_request': ('API key request', '\U0001F511', 0x38BDF8),
+    # Bug reports and suggestions (backend api/feedback.ts) — the PRIVATE
+    # staff alert. Their public board and intake channels are below.
+    'bug_report': ('Bug report', '\U0001F41E', 0xEF4444),
+    'suggestion': ('Suggestion', '\U0001F4A1', 0x38BDF8),
 }
 _STAFF_STATUS_COLOR = {
     'approved': 0x22C55E,
     'upheld': 0x22C55E,
     'rejected': 0x64748B,
     'closed': 0x64748B,
+    # The feedback statuses, as the backend labels them.
+    'fixed': 0x22C55E,
+    'added': 0x22C55E,
+    "won't fix": 0x64748B,
+    'not added': 0x64748B,
+    'duplicate': 0x94A3B8,
 }
+
+# --- Bug reports and suggestions: the public side ---------------------------
+# Per kind: label, the same in a sentence, icon, accent.
+FEEDBACK_KINDS = {
+    'bug': ('Bug report', 'bug report', '\U0001F41E', 0xEF4444),
+    'suggestion': ('Suggestion', 'suggestion', '\U0001F4A1', 0x38BDF8),
+}
+# Per status: the dot shown beside its label, and the accent a post takes
+# (None keeps the kind's own).
+_FEEDBACK_STATUS_STYLE = {
+    'open': ('\U0001F7E1', None),
+    'in_progress': ('\U0001F535', 0x3B82F6),
+    'done': ('\U0001F7E2', 0x22C55E),
+    'declined': ('⚫', 0x64748B),
+    'duplicate': ('⚪', 0x94A3B8),
+}
+
+
+def _feedback_status_text(status: str, status_label: str) -> str:
+    dot, _ = _FEEDBACK_STATUS_STYLE.get(status, ('\U0001F7E1', None))
+    return f"{dot} {status_label or status or 'Open'}"
+
+
+def build_feedback_notice_embed(kind: str, site_url: str) -> discord.Embed:
+    """The how-to the bot pins in an intake channel.
+
+    Everything a member needs to know before posting: one message per
+    report, what to include, and that the bot files it, removes the message
+    and confirms with its number. Plain text apart from the one link, so it
+    reads the same on every client.
+    """
+    label, in_sentence, icon, color = FEEDBACK_KINDS.get(kind, FEEDBACK_KINDS['bug'])
+    site = (site_url or '').rstrip('/')
+    if kind == 'suggestion':
+        lines = [
+            "Post your idea here as **one message** and the bot files it:",
+            "",
+            "• what it would do, and why it would help",
+            "• where on the site it belongs, if that matters",
+            "",
+            "The bot removes your message and replies with the suggestion's number. "
+            "It then appears on the suggestions board with its status, and the "
+            "board post is replied to whenever the status changes "
+            "(Planned, Added, Not added).",
+        ]
+        title = f"{icon} Suggestions"
+    else:
+        lines = [
+            "Post the bug here as **one message** and the bot files it:",
+            "",
+            "• what you did, what happened, and what you expected",
+            "• the page or feature, and your device and browser",
+            "• a screenshot, if you have one — attach it to the same message",
+            "",
+            "The bot removes your message and replies with the report's number. "
+            "It then appears on the bug board with its status, and the board "
+            "post is replied to whenever the status changes "
+            "(Looking into it, Fixed, Won't fix).",
+        ]
+        title = f"{icon} Bug reports"
+    if site:
+        lines += ["", f"Prefer the site? {site}/contact?type={kind}"]
+    embed = discord.Embed(title=title, description="\n".join(lines)[:4096], color=color)
+    embed.set_footer(text=f"AusAware · one {in_sentence} per message")
+    return embed
+
+
+def build_feedback_board_embed(kind: str, feedback_id: str, subject: str, body: str,
+                               reporter: str, source: str, status: str, status_label: str,
+                               site_url: str) -> discord.Embed:
+    """A report as it sits on the public board: what, by whom, and its status."""
+    label, _, icon, color = FEEDBACK_KINDS.get(kind, FEEDBACK_KINDS['bug'])
+    _, status_color = _FEEDBACK_STATUS_STYLE.get(status, ('', None))
+    site = (site_url or '').rstrip('/')
+    embed = discord.Embed(
+        title=f"{icon} {label} #{feedback_id} · {subject}"[:256],
+        description=(body or '')[:4000] or '​',
+        color=status_color or color,
+        url=f"{site}/contact?type={kind}" if site else None,
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.add_field(name='Status', value=_feedback_status_text(status, status_label), inline=True)
+    via = 'via Discord' if source == 'discord' else 'on the site'
+    embed.set_footer(text=f"Reported by {reporter or 'a member'} · {via}")
+    return embed
+
+
+def set_feedback_board_status(embed: discord.Embed, status: str, status_label: str) -> discord.Embed:
+    """The board post after a status change: Status field and accent updated, the rest kept."""
+    _, status_color = _FEEDBACK_STATUS_STYLE.get(status, ('', None))
+    if status_color:
+        embed.color = status_color
+    for i, f in enumerate(embed.fields):
+        if f.name == 'Status':
+            embed.set_field_at(i, name='Status', value=_feedback_status_text(status, status_label), inline=True)
+            break
+    else:
+        embed.add_field(name='Status', value=_feedback_status_text(status, status_label), inline=True)
+    return embed
+
+
+def feedback_status_line(kind: str, status: str, status_label: str, note: str, actor: str) -> str:
+    """The reply posted under a board post when its status changes."""
+    text = f"**{_feedback_status_text(status, status_label)}**"
+    if actor:
+        text += f" — set by {actor}"
+    if note:
+        text += f"\n{note[:1500]}"
+    return text
 
 
 def _parse_notify_fields(raw: Any) -> List[Dict[str, Any]]:
@@ -70,16 +189,22 @@ def build_staff_notify_embed(kind: str, params: Dict[str, Any]) -> discord.Embed
         kind, ('Staff notification', '\U0001F514', 0x94A3B8))
     title = (params.get('title') or '').strip() or label
     subtitle = (params.get('subtitle') or '').strip()
-    status = (params.get('status') or '').strip().lower()
+    status = (params.get('status') or '').strip()
     actor = (params.get('actor') or '').strip()
     url = (params.get('url') or '').strip()
 
-    resolved = bool(status)
-    color = _STAFF_STATUS_COLOR.get(status, base_color) if resolved else base_color
+    # Resolved is the EVENT, not the presence of a status: a new ticket
+    # arrives with status 'open', and deciding by the status alone rendered
+    # every new ticket as "Open \u00b7 Handled by a staff member \u00b7 resolved".
+    # 'update' is a status that is not the end of it (a bug report marked
+    # "Looking into it"): shown in the heading, live styling kept.
+    event = (params.get('event') or 'new').strip().lower()
+    resolved = event == 'resolved'
+    color = _STAFF_STATUS_COLOR.get(status.lower(), base_color) if resolved else base_color
 
     heading = f"{icon} {label}"
-    if resolved:
-        heading = f"{heading} \u00b7 {status.title()}"
+    if status:
+        heading = f"{heading} \u00b7 {status[:1].upper()}{status[1:]}"
 
     embed = discord.Embed(
         title=heading[:256],
