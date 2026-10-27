@@ -1067,6 +1067,17 @@
     .tk-schip.open { background:rgba(249,115,22,0.15); color:#fdba74; }
     .tk-schip.awaiting_user { background:rgba(56,189,248,0.15); color:#7dd3fc; }
     .tk-schip.closed { background:rgba(148,163,184,0.15); color:#94a3b8; }
+    /* Bug reports / suggestions: their statuses wear the kind's own label. */
+    .tk-schip.in_progress { background:rgba(59,130,246,0.15); color:#93c5fd; }
+    .tk-schip.done { background:rgba(34,197,94,0.15); color:#86efac; }
+    .tk-schip.declined, .tk-schip.duplicate { background:rgba(148,163,184,0.15); color:#94a3b8; }
+    .fb-sect { margin-bottom:1rem; }
+    .fb-sect-h { font-size:0.68rem; font-weight:600; color:var(--text-soft); text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.4rem; }
+    .fb-hint { font-size:0.74rem; color:var(--text-soft); margin-top:0.4rem; }
+    .fb-ticket-row { display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center; }
+    .fb-ticket-row input { width:7rem; background:rgba(2,6,23,0.5); border:1px solid var(--border-subtle); border-radius:8px; color:var(--text-main); padding:0.45rem 0.55rem; font-family:inherit; font-size:0.85rem; }
+    .fb-ticket-new { margin-top:0.6rem; }
+    .fb-ticket-new textarea { width:100%; box-sizing:border-box; min-height:70px; background:rgba(2,6,23,0.5); border:1px solid var(--border-subtle); border-radius:8px; color:var(--text-main); padding:0.5rem; font-family:inherit; font-size:0.85rem; resize:vertical; }
     .tk-smsg { max-width:85%; border-radius:12px; padding:0.6rem 0.8rem; margin-bottom:0.6rem; font-size:0.86rem; line-height:1.5; }
     .tk-smsg.staff { background:rgba(56,189,248,0.1); border:1px solid rgba(56,189,248,0.25); margin-left:auto; }
     .tk-smsg.user { background:rgba(249,115,22,0.1); border:1px solid rgba(249,115,22,0.22); margin-right:auto; }
@@ -3255,6 +3266,16 @@
 
       <!-- Tickets tab (contact tickets — owner + support role) -->
       <div id="tickets-tab" class="tab-content">
+        <!-- Three things live here: tickets (private threads), and bug
+             reports and suggestions (a report with a public status, no
+             thread — see api/feedback.ts). -->
+        <div id="tk-kinds" style="display:flex; gap:0.4rem; flex-wrap:wrap; margin-bottom:0.9rem;">
+          <button class="btn btn-secondary btn-sm tk-pill tk-kind active" data-tkkind="tickets" onclick="_tkSetKind('tickets')"><i class="fas fa-ticket"></i> Tickets <span id="tk-count-tickets" class="dd-count" style="display:none;"></span></button>
+          <button class="btn btn-secondary btn-sm tk-pill tk-kind" data-tkkind="bug" onclick="_tkSetKind('bug')">🐞 Bug reports <span id="tk-count-bug" class="dd-count" style="display:none;"></span></button>
+          <button class="btn btn-secondary btn-sm tk-pill tk-kind" data-tkkind="suggestion" onclick="_tkSetKind('suggestion')">💡 Suggestions <span id="tk-count-suggestion" class="dd-count" style="display:none;"></span></button>
+        </div>
+
+        <div id="tk-tickets-panel">
         <div style="display:flex; align-items:center; gap:0.6rem; flex-wrap:wrap; margin-bottom:1rem;">
           <div id="tk-filters" style="display:flex; gap:0.4rem; flex-wrap:wrap;">
             <button class="btn btn-secondary btn-sm tk-pill active" data-tkfilter="open" onclick="_tkSetFilter('open')">Needs reply <span id="tk-count-open" class="dd-count" style="display:none;"></span></button>
@@ -3280,6 +3301,42 @@
             <div style="margin-top:0.5rem; display:flex; align-items:center; gap:0.7rem;">
               <button class="btn btn-primary btn-sm" id="tk-staff-reply-btn" onclick="_tkStaffReply()"><i class="fas fa-paper-plane"></i> Send reply</button>
               <span id="tk-detail-note" style="color:var(--text-soft); font-size:0.78rem;"></span>
+            </div>
+          </div>
+        </div>
+        </div><!-- /tk-tickets-panel -->
+
+        <!-- Bug reports / suggestions: list, then one report with its
+             status, its ticket (if any) and the board link. -->
+        <div id="fb-panel" style="display:none;">
+          <div id="fb-filters" style="display:flex; gap:0.4rem; flex-wrap:wrap; margin-bottom:1rem;">
+            <button class="btn btn-secondary btn-sm tk-pill active" data-fbfilter="open" onclick="_fbSetFilter('open')">Open</button>
+            <button class="btn btn-secondary btn-sm tk-pill" data-fbfilter="in_progress" onclick="_fbSetFilter('in_progress')" id="fb-pill-progress">In progress</button>
+            <button class="btn btn-secondary btn-sm tk-pill" data-fbfilter="closed" onclick="_fbSetFilter('closed')">Done / declined</button>
+            <button class="btn btn-secondary btn-sm tk-pill" data-fbfilter="all" onclick="_fbSetFilter('all')">All</button>
+          </div>
+          <div id="fb-staff-list"></div>
+          <div id="fb-staff-detail" style="display:none;">
+            <div style="display:flex; align-items:center; gap:0.7rem; margin-bottom:0.8rem; flex-wrap:wrap;">
+              <button class="btn btn-secondary btn-sm" onclick="_fbBackToList()"><i class="fas fa-arrow-left"></i> Back</button>
+              <div id="fb-detail-title" style="font-weight:600; flex:1; min-width:200px;"></div>
+              <a id="fb-board-link" class="btn btn-secondary btn-sm" href="#" target="_blank" rel="noopener" style="display:none;"><i class="fab fa-discord"></i> Open on the board</a>
+              <button class="btn btn-danger btn-sm" onclick="_fbRemove()" title="Remove — spam or not a report"><i class="fas fa-trash"></i> Remove</button>
+            </div>
+            <div id="fb-detail-meta" style="margin-bottom:0.8rem; font-size:0.8rem; color:var(--text-soft);"></div>
+            <div id="fb-detail-body" class="tk-md" style="background:rgba(2,6,23,0.4); border:1px solid var(--border-subtle); border-radius:10px; padding:0.8rem 0.95rem; font-size:0.88rem; line-height:1.55; margin-bottom:1rem;"></div>
+            <div class="fb-sect">
+              <div class="fb-sect-h">Status</div>
+              <div style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:flex-start;">
+                <select id="fb-status-sel" style="background:rgba(2,6,23,0.5); border:1px solid var(--border-subtle); border-radius:8px; color:var(--text-main); padding:0.5rem; font-family:inherit; font-size:0.85rem;"></select>
+                <input id="fb-status-note" maxlength="1000" placeholder="Note for the reporter and the board (optional)" style="flex:1 1 16rem; background:rgba(2,6,23,0.5); border:1px solid var(--border-subtle); border-radius:8px; color:var(--text-main); padding:0.5rem; font-family:inherit; font-size:0.85rem;">
+                <button class="btn btn-primary btn-sm" id="fb-status-btn" onclick="_fbSetStatus()"><i class="fas fa-check"></i> Set status</button>
+              </div>
+              <div class="fb-hint">Goes to the reporter's bell, the staff alert, and as a reply under the board post.</div>
+            </div>
+            <div class="fb-sect">
+              <div class="fb-sect-h">Ticket</div>
+              <div id="fb-ticket-box"></div>
             </div>
           </div>
         </div>
@@ -3437,10 +3494,11 @@
           <div class="dev-section-h">Discord notifications</div>
           <div class="dev-card" style="max-width:760px;">
             <p style="color:var(--text-soft); font-size:0.88rem; line-height:1.6; margin-bottom:1rem;">
-              Announce new signup requests, Wire approvals and takedown notices in Discord.
-              Messages carry a short summary and a link back here &mdash; never an email,
-              Discord handle or the body of a notice.
-              When an item is actioned, its original message is edited to show who handled it.
+              Announce new signup requests, Wire approvals, takedown notices, tickets, bug reports
+              and suggestions in Discord. These are <strong>private staff channels</strong>: messages
+              carry what staff need to triage and a link back here. When an item is actioned, its
+              message is edited to show who handled it.
+              Bug reports and suggestions also have <strong>public</strong> channels, set further down.
             </p>
             <div id="dn-status" style="margin-bottom:1rem;"></div>
             <div id="dn-body">
@@ -5285,7 +5343,7 @@
       }
 
       if (tab === 'tickets') {
-        loadTickets();
+        _tkLoadActive();
         startTicketsPolling();
       } else {
         stopTicketsPolling();
@@ -16348,7 +16406,12 @@
       } else if (view === 'nodes') {
         if (tabs.nodes) switchTab('nodes');
       } else if (view === 'tickets') {
-        if (tabs.tickets) switchTab('tickets');
+        if (!tabs.tickets) return;
+        switchTab('tickets');
+        // ?view=tickets&tab=reports&kind=bug|suggestion — the staff alert's link.
+        let tab = '', kind = '';
+        try { const p = new URLSearchParams(location.search); tab = p.get('tab') || ''; kind = p.get('kind') || ''; } catch (e) {}
+        if (tab === 'reports') _tkSetKind(kind === 'suggestion' ? 'suggestion' : 'bug');
       }
     }
     
@@ -16470,6 +16533,10 @@
     let _tkTimer = null;
     let _tkPicked = null; // {id, username, email} chosen in the new-ticket modal
     let _tkSearchT = null;
+    // Which of the tab's three lists is showing, and the badge's two halves.
+    let _tkKind = 'tickets';   // 'tickets' | 'bug' | 'suggestion'
+    let _tkOpenCount = 0;
+    let _fbOpenCount = 0;
 
     // Markdown for message bodies — the Wire's pattern (marked + DOMPurify),
     // tightened for tickets: images are stripped (a hotlinked image would let
@@ -16495,9 +16562,22 @@
       return j;
     }
 
+    // Whichever list the tab is showing: tickets, or one kind of report.
+    function _tkLoadActive() {
+      if (_tkKind === 'tickets') loadTickets(); else loadFeedback();
+    }
+    function _tkSetKind(k) {
+      _tkKind = k;
+      document.querySelectorAll('#tk-kinds .tk-kind').forEach((b) => b.classList.toggle('active', b.dataset.tkkind === k));
+      document.getElementById('tk-tickets-panel').style.display = k === 'tickets' ? '' : 'none';
+      document.getElementById('fb-panel').style.display = k === 'tickets' ? 'none' : '';
+      const pr = document.getElementById('fb-pill-progress');
+      if (pr) pr.textContent = k === 'suggestion' ? 'Planned' : 'Looking into it';
+      _tkLoadActive();
+    }
     function startTicketsPolling() {
       if (_tkTimer) return;
-      _tkTimer = setInterval(() => { if (_tkOpenId == null) loadTickets(); }, 30000);
+      _tkTimer = setInterval(() => { if (_tkOpenId == null && _fbOpenId == null) _tkLoadActive(); }, 30000);
     }
     function stopTicketsPolling() {
       if (_tkTimer) { clearInterval(_tkTimer); _tkTimer = null; }
@@ -16537,20 +16617,39 @@
       } catch (e) {}
     }
 
-    function _tkBadge(counts) {
+    // The tab badge is tickets needing a reply plus open reports; each list
+    // feeds its half and the sum is redrawn.
+    function _tkDrawBadge() {
       const el = document.getElementById('tickets-badge');
-      if (!el) return;
-      const n = counts && counts.open ? counts.open : 0;
-      el.textContent = n;
-      el.style.display = n > 0 ? '' : 'none';
-      const fc = document.getElementById('tk-count-open');
-      if (fc) { fc.textContent = n; fc.style.display = n > 0 ? '' : 'none'; }
+      const n = _tkOpenCount + _fbOpenCount;
+      if (el) { el.textContent = n; el.style.display = n > 0 ? '' : 'none'; }
+      const pill = (id, v) => { const p = document.getElementById(id); if (p) { p.textContent = v; p.style.display = v > 0 ? '' : 'none'; } };
+      pill('tk-count-open', _tkOpenCount);
+      pill('tk-count-tickets', _tkOpenCount);
+    }
+    function _tkBadge(counts) {
+      _tkOpenCount = counts && counts.open ? counts.open : 0;
+      _tkDrawBadge();
+    }
+    function _fbBadge(counts) {
+      const c = counts || {};
+      const bug = (c.bug && c.bug.open) || 0;
+      const sug = (c.suggestion && c.suggestion.open) || 0;
+      _fbOpenCount = bug + sug;
+      const pill = (id, v) => { const p = document.getElementById(id); if (p) { p.textContent = v; p.style.display = v > 0 ? '' : 'none'; } };
+      pill('tk-count-bug', bug);
+      pill('tk-count-suggestion', sug);
+      _tkDrawBadge();
     }
 
     async function _tkRefreshBadge() {
       try {
-        const j = await _tkApi('/api/staff/tickets?status=open');
-        _tkBadge(j.counts);
+        const [t, f] = await Promise.all([
+          _tkApi('/api/staff/tickets?status=open'),
+          _tkApi('/api/staff/feedback?kind=all&status=open').catch(() => null),
+        ]);
+        _tkBadge(t.counts);
+        if (f) _fbBadge(f.counts);
       } catch (e) { /* badge is best-effort */ }
     }
 
@@ -16590,7 +16689,13 @@
           `<span class="tk-schip ${escapeHtml(t.status)}">${escapeHtml(TK_STATUS_STAFF[t.status] || t.status)}</span>` +
           ` ${escapeHtml(t.userName || t.userId || '')} · ${escapeHtml(TK_CATEGORIES[t.category] || t.category)}` +
           (t.closedByName ? ` · closed by ${escapeHtml(t.closedByName)}` : '') +
-          (t.locked ? ' · <span style="color:#fbbf24;">locked</span>' : '');
+          (t.locked ? ' · <span style="color:#fbbf24;">locked</span>' : '') +
+          // The reports this ticket was opened about (api/feedback.ts links them).
+          ((j.feedback || []).length
+            ? '<div style="margin-top:0.35rem;">Linked: ' + j.feedback.map((f) =>
+                `<a href="#" onclick="_fbJump(${Number(f.id)}, '${escapeHtml(f.kind)}'); return false;" style="color:var(--accent);">${FB_KIND_ICON[f.kind] || ''} #${Number(f.id)} ${escapeHtml(f.subject)}</a> <span class="tk-schip ${escapeHtml(f.status)}">${escapeHtml((FB_STATUS[f.kind] || {})[f.status] || f.status)}</span>`
+              ).join(' · ') + '</div>'
+            : '');
         document.getElementById('tk-detail-thread').innerHTML = (j.messages || []).map((m) => `
           <div class="tk-smsg ${m.isStaff ? 'staff' : 'user'}">
             <div class="tk-smsg-head">${_tkAvatar(m)}<a href="profile?u=${encodeURIComponent(m.authorId || '')}" target="_blank" rel="noopener" style="color:inherit; text-decoration:none;"><strong>${escapeHtml(m.authorName)}</strong></a>${m.isStaff ? ' · staff' : ''} · ${escapeHtml(_tkAgo(m.createdAt))}</div>
@@ -16664,6 +16769,201 @@
         _tkRefreshBadge();
       } catch (e) {
         showToast('Reopen failed: ' + e.message, 'error');
+      }
+    }
+
+    // === Bug reports and suggestions (the Tickets tab's other two lists) ===
+    // A report is its description and a status; no thread. When it needs a
+    // conversation, it is linked to a ticket (opened at the reporter, or one
+    // that exists) and the talk happens there.
+    const FB_KIND_ICON = { bug: '🐞', suggestion: '💡' };
+    const FB_KIND_LABEL = { bug: 'Bug report', suggestion: 'Suggestion' };
+    const FB_STATUS = {
+      bug: { open: 'Open', in_progress: 'Looking into it', done: 'Fixed', declined: "Won't fix", duplicate: 'Duplicate' },
+      suggestion: { open: 'Open', in_progress: 'Planned', done: 'Added', declined: 'Not added', duplicate: 'Duplicate' },
+    };
+    let _fbFilter = 'open';
+    let _fbItems = [];
+    let _fbOpenId = null;
+    let _fbOpen = null; // the report showing in the detail
+
+    function _fbSetFilter(f) {
+      _fbFilter = f;
+      document.querySelectorAll('#fb-filters .tk-pill').forEach((b) => b.classList.toggle('active', b.dataset.fbfilter === f));
+      loadFeedback();
+    }
+
+    function _fbWho(f) {
+      const name = f.userName || f.discordUserName || 'unknown';
+      return f.source === 'discord' ? `${name} · via Discord${f.userId ? ' (linked account)' : ''}` : name;
+    }
+
+    async function loadFeedback() {
+      const el = document.getElementById('fb-staff-list');
+      if (!el) return;
+      try {
+        const j = await _tkApi(`/api/staff/feedback?kind=${encodeURIComponent(_tkKind)}&status=${encodeURIComponent(_fbFilter)}`);
+        _fbItems = j.feedback || [];
+        _fbBadge(j.counts);
+        if (!_fbItems.length) {
+          el.innerHTML = '<div style="color:var(--text-soft); padding:1rem;">Nothing here.</div>';
+          return;
+        }
+        el.innerHTML = _fbItems.map((f) => `
+          <div class="tk-srow" onclick="_fbOpenReport(${Number(f.id)})">
+            <span style="font-size:1.05rem; line-height:1;">${FB_KIND_ICON[f.kind] || ''}</span>
+            <div style="flex:1; min-width:0;">
+              <div style="font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(f.subject)}</div>
+              <div style="font-size:0.72rem; color:var(--text-soft); margin-top:0.15rem;">
+                #${Number(f.id)} · ${escapeHtml(_fbWho(f))} · ${escapeHtml(_tkAgo(f.createdAt))}${f.ticketId ? ` · ticket #${Number(f.ticketId)}` : ''}
+              </div>
+            </div>
+            <span class="tk-schip ${escapeHtml(f.status)}">${escapeHtml(f.statusLabel || f.status)}</span>
+          </div>`).join('');
+      } catch (e) {
+        el.innerHTML = `<div style="color:#f87171; padding:1rem;">Could not load reports: ${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    // From a ticket's "Linked" line: switch to that kind and open the report.
+    function _fbJump(id, kind) {
+      _tkOpenId = null;
+      document.getElementById('tk-staff-detail').style.display = 'none';
+      document.getElementById('tk-staff-list').style.display = '';
+      _tkSetKind(kind === 'suggestion' ? 'suggestion' : 'bug');
+      _fbOpenReport(id);
+    }
+
+    async function _fbOpenReport(id) {
+      try {
+        const j = await _tkApi(`/api/staff/feedback/${id}`);
+        const f = j.feedback;
+        _fbOpenId = id;
+        _fbOpen = f;
+        document.getElementById('fb-detail-title').textContent = `${FB_KIND_ICON[f.kind] || ''} #${f.id} · ${f.subject}`;
+        document.getElementById('fb-detail-meta').innerHTML =
+          `<span class="tk-schip ${escapeHtml(f.status)}">${escapeHtml(f.statusLabel || f.status)}</span>` +
+          ` ${escapeHtml(FB_KIND_LABEL[f.kind] || f.kind)} · ${escapeHtml(_fbWho(f))} · ${escapeHtml(_tkAgo(f.createdAt))}` +
+          (f.statusByName ? ` · status by ${escapeHtml(f.statusByName)}${f.statusAt ? ' ' + escapeHtml(_tkAgo(f.statusAt)) : ''}` : '') +
+          (f.statusNote ? `<div style="margin-top:0.3rem; color:#bae6fd;">Note: ${escapeHtml(f.statusNote)}</div>` : '');
+        document.getElementById('fb-detail-body').innerHTML = tkMd(f.body);
+        const link = document.getElementById('fb-board-link');
+        if (f.boardUrl) { link.href = f.boardUrl; link.style.display = ''; } else { link.style.display = 'none'; }
+        // Status options in this kind's words; the current one selected.
+        const sel = document.getElementById('fb-status-sel');
+        sel.innerHTML = Object.entries(FB_STATUS[f.kind] || FB_STATUS.bug)
+          .map(([v, label]) => `<option value="${v}"${v === f.status ? ' selected' : ''}>${escapeHtml(label)}</option>`).join('');
+        document.getElementById('fb-status-note').value = '';
+        _fbRenderTicketBox(f, j.ticket);
+        document.getElementById('fb-staff-list').style.display = 'none';
+        document.getElementById('fb-staff-detail').style.display = '';
+      } catch (e) {
+        showToast('Could not open the report: ' + e.message, 'error');
+      }
+    }
+
+    function _fbRenderTicketBox(f, ticket) {
+      const box = document.getElementById('fb-ticket-box');
+      if (f.ticketId) {
+        box.innerHTML = `<div class="fb-ticket-row">
+            <span>Linked to <a href="#" onclick="_fbGoTicket(${Number(f.ticketId)}); return false;" style="color:var(--accent); font-weight:600;">ticket #${Number(f.ticketId)}</a>${ticket ? ` — ${escapeHtml(ticket.subject)} <span class="tk-schip ${escapeHtml(ticket.status)}">${escapeHtml(TK_STATUS_STAFF[ticket.status] || ticket.status)}</span>` : ''}</span>
+            <button class="btn btn-secondary btn-sm" onclick="_fbLinkTicket(null)">Unlink</button>
+          </div>
+          <div class="fb-hint">The conversation about this report happens on the ticket.</div>`;
+        return;
+      }
+      const canOpen = !!f.userId;
+      box.innerHTML = `<div class="fb-ticket-row">
+          <input id="fb-link-id" type="number" min="1" placeholder="Ticket #">
+          <button class="btn btn-secondary btn-sm" onclick="_fbLinkTicket(document.getElementById('fb-link-id').value)"><i class="fas fa-link"></i> Link existing</button>
+        </div>
+        <div class="fb-ticket-new">
+          ${canOpen
+            ? `<textarea id="fb-new-ticket-body" maxlength="5000" placeholder="Open a ticket at ${escapeHtml(f.userName || 'the reporter')} about this — your first message. The report is quoted above it."></textarea>
+               <div style="margin-top:0.4rem;"><button class="btn btn-primary btn-sm" id="fb-new-ticket-btn" onclick="_fbNewTicket()"><i class="fas fa-ticket"></i> Open a ticket for this</button></div>`
+            : `<div class="fb-hint">Reported from Discord by someone with no site account, so a ticket can't be opened at them. If they open one on the site, link it here.</div>`}
+        </div>`;
+    }
+
+    function _fbGoTicket(id) {
+      _fbOpenId = null;
+      _fbOpen = null;
+      document.getElementById('fb-staff-detail').style.display = 'none';
+      document.getElementById('fb-staff-list').style.display = '';
+      _tkSetKind('tickets');
+      _tkOpenTicket(id);
+    }
+
+    function _fbBackToList() {
+      _fbOpenId = null;
+      _fbOpen = null;
+      document.getElementById('fb-staff-detail').style.display = 'none';
+      document.getElementById('fb-staff-list').style.display = '';
+      loadFeedback();
+    }
+
+    async function _fbSetStatus() {
+      if (_fbOpenId == null) return;
+      const status = document.getElementById('fb-status-sel').value;
+      const note = document.getElementById('fb-status-note').value.trim();
+      const btn = document.getElementById('fb-status-btn');
+      btn.disabled = true;
+      try {
+        await _tkApi(`/api/staff/feedback/${_fbOpenId}/status`, { method: 'POST', body: JSON.stringify({ status, note: note || undefined }) });
+        showToast('Status set — the reporter and the board are told.', 'success');
+        _fbOpenReport(_fbOpenId);
+        _tkRefreshBadge();
+      } catch (e) {
+        showToast('Could not set the status: ' + e.message, 'error');
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function _fbLinkTicket(raw) {
+      if (_fbOpenId == null) return;
+      const ticketId = raw === null || raw === '' ? null : Number(raw);
+      if (ticketId !== null && !(Number.isInteger(ticketId) && ticketId > 0)) { showToast('Enter a ticket number.', 'warn'); return; }
+      try {
+        await _tkApi(`/api/staff/feedback/${_fbOpenId}/ticket`, { method: 'POST', body: JSON.stringify({ ticket_id: ticketId }) });
+        showToast(ticketId ? `Linked to ticket #${ticketId}.` : 'Unlinked.', 'success');
+        _fbOpenReport(_fbOpenId);
+      } catch (e) {
+        showToast('Could not link: ' + e.message, 'error');
+      }
+    }
+
+    async function _fbNewTicket() {
+      if (_fbOpenId == null) return;
+      const ta = document.getElementById('fb-new-ticket-body');
+      const body = (ta && ta.value || '').trim();
+      if (!body) { showToast('Write your first message to the reporter.', 'warn'); return; }
+      const btn = document.getElementById('fb-new-ticket-btn');
+      if (btn) btn.disabled = true;
+      try {
+        const j = await _tkApi(`/api/staff/feedback/${_fbOpenId}/ticket/new`, { method: 'POST', body: JSON.stringify({ body }) });
+        showToast(`Ticket #${j.ticketId} opened — the reporter is notified.`, 'success');
+        _fbOpenReport(_fbOpenId);
+        _tkRefreshBadge();
+      } catch (e) {
+        showToast('Could not open a ticket: ' + e.message, 'error');
+        if (btn) btn.disabled = false;
+      }
+    }
+
+    async function _fbRemove() {
+      if (_fbOpenId == null) return;
+      const ok = (typeof uiConfirm === 'function')
+        ? await uiConfirm('Remove this report? It is deleted here and its board post is taken down. For spam, not for "won\'t fix" — set a status for that.', { title: 'Remove report', okText: 'Remove' })
+        : confirm('Remove this report?');
+      if (!ok) return;
+      try {
+        await _tkApi(`/api/staff/feedback/${_fbOpenId}`, { method: 'DELETE' });
+        showToast('Report removed.', 'success');
+        _fbBackToList();
+        _tkRefreshBadge();
+      } catch (e) {
+        showToast('Could not remove: ' + e.message, 'error');
       }
     }
 
@@ -17025,8 +17325,16 @@
       ['ticket', 'Contact tickets', 'New tickets and user replies; closing a ticket edits the message in place.'],
       ['siteSurvey', 'Site surveys', 'A radio node finishes measuring the sites around it — how well it heard each one, and which were added.'],
       ['api_key_request', 'API key requests', 'A user asks for a named API key; the decision edits the message in place.'],
+      ['bug_report', 'Bug reports (staff alert)', 'A new bug report, from the site or the Discord intake channel; a status change edits the message in place.'],
+      ['suggestion', 'Suggestions (staff alert)', 'A new suggestion; a status change edits the message in place.'],
     ];
-    let _dnState = { guild_id: null, channels: {}, guilds: [], channelList: [], delivery: {} };
+    // The PUBLIC side of bug reports and suggestions, per kind: where members
+    // post them, and where every report is shown with its status.
+    const DN_FEEDBACK = [
+      ['bug', 'Bug reports', '🐞'],
+      ['suggestion', 'Suggestions', '💡'],
+    ];
+    let _dnState = { guild_id: null, channels: {}, feedback: {}, guilds: [], channelList: [], delivery: {} };
 
     async function _dnFetch(path, opts) {
       const res = await fetch(`${API_BASE_URL}/api/staff/discord-notify${path}`, {
@@ -17052,6 +17360,7 @@
         const d = await _dnFetch('');
         _dnState.guild_id = d.guild_id || null;
         _dnState.channels = d.channels || {};
+        _dnState.feedback = d.feedback || {};
         _dnState.delivery = d.delivery || {};
         try {
           _dnState.guilds = await _dnFetch('/guilds');
@@ -17139,7 +17448,51 @@
             <div class="dn-hint">${escapeHtml(hint)}</div>
           </div>`;
       }
+
+      // Public channels for bug reports and suggestions. These are where
+      // members post and where everyone can follow — not staff channels.
+      const pubOpts = (selected) => ['<option value="">Off</option>'].concat(
+        (_dnState.channelList || []).map(ch =>
+          `<option value="${escapeHtml(ch.id)}"${String(ch.id) === String(selected) ? ' selected' : ''}>#${escapeHtml(ch.name || ch.id)}</option>`)
+      ).join('');
+      html += `
+        <div class="dev-section-h" style="margin:1.4rem 0 0.6rem;">Bug reports &amp; suggestions — public channels</div>
+        <p style="color:var(--text-soft); font-size:0.82rem; line-height:1.55; margin:0 0 0.9rem;">
+          <strong>Intake:</strong> the bot pins a how-to there, files each member's message as a report
+          (then removes the message and confirms with its number). Anyone in the server can post; the
+          bot needs Manage Messages and Attach Files in it.
+          <strong>Board:</strong> every report — from the site too — is posted there with its status, and
+          each status change is replied to under its post. The two can be the same channel.
+        </p>`;
+      for (const [kind, label, icon] of DN_FEEDBACK) {
+        const cur = _dnState.feedback[kind] || {};
+        html += `
+          <div class="dn-fld">
+            <label for="dn-fb-${kind}-intake">${icon} ${escapeHtml(label)} — intake channel</label>
+            <select id="dn-fb-${kind}-intake" onchange="dnSetFeedback('${kind}', 'intake', this.value)">${pubOpts(cur.intake || '')}</select>
+          </div>
+          <div class="dn-fld">
+            <label for="dn-fb-${kind}-board">${icon} ${escapeHtml(label)} — board channel</label>
+            <select id="dn-fb-${kind}-board" onchange="dnSetFeedback('${kind}', 'board', this.value)">${pubOpts(cur.board || '')}</select>
+          </div>`;
+      }
       body.innerHTML = html;
+    }
+
+    async function dnSetFeedback(kind, which, channelId) {
+      try {
+        const d = await _dnFetch('', {
+          method: 'PUT',
+          body: JSON.stringify({ feedback: { [kind]: { [which]: channelId || null } } }),
+        });
+        _dnState.feedback = d.feedback || _dnState.feedback;
+        showToast(channelId
+          ? (which === 'intake' ? 'Intake channel saved — the bot posts and pins its how-to there within a few seconds.' : 'Board channel saved.')
+          : (which === 'intake' ? 'Intake turned off — the bot takes its how-to down.' : 'Board turned off.'), 'success');
+      } catch (e) {
+        showToast(`Could not save: ${e.message}`, 'error');
+        await loadDiscordNotify();
+      }
     }
 
     async function dnSetGuild(guildId) {
@@ -17151,6 +17504,7 @@
           body: JSON.stringify({
             guild_id: guildId || null,
             channels: Object.fromEntries(DN_KINDS.map(([k]) => [k, null])),
+            feedback: Object.fromEntries(DN_FEEDBACK.map(([k]) => [k, { intake: null, board: null }])),
           }),
         });
         showToast(guildId ? 'Server set — now pick channels.' : 'Discord notifications turned off.', 'success');
