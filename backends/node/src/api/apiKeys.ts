@@ -47,7 +47,7 @@ import { requireSupabaseJwt } from '../services/auth/supabaseJwt.js';
 import { requireRole, canManageUsers } from '../services/auth/roles.js';
 import {
   createApiKey,
-  revokeApiKey,
+  revokeApiKeyById,
   reissueApiKey,
   deleteApiKey,
   forgetApiKeyPrefix,
@@ -848,22 +848,25 @@ apiKeysRouter.get('/api/staff/api-keys/:id/usage', async (c) => {
   }
 });
 
-apiKeysRouter.post('/api/staff/api-keys/:prefix/revoke', async (c) => {
+// By id, like the usage route: the owner may re-issue while the staff page
+// is open, and the prefix on that page is then one no key has.
+apiKeysRouter.post('/api/staff/api-keys/:id/revoke', async (c) => {
   const userId = c.get('userId') as string;
-  const prefix = c.req.param('prefix');
-  if (!PREFIX_RE.test(prefix)) return c.json({ error: 'invalid key' }, 400);
+  const id = c.req.param('id');
+  if (!UUID_RE.test(id)) return c.json({ error: 'invalid key id' }, 400);
   const pool = await getPool();
   if (!pool) return c.json({ error: 'database unavailable' }, 503);
   try {
     const cur = await pool.query<{ user_id: string; name: string; revoked_at: string | null }>(
-      'SELECT user_id, name, revoked_at FROM api_keys WHERE prefix = $1',
-      [prefix],
+      'SELECT user_id, name, revoked_at FROM api_keys WHERE id = $1',
+      [id],
     );
     const key = cur.rows[0];
     if (!key) return c.json({ error: 'key not found' }, 404);
     // Only the request that actually flipped the key tells the owner — a
     // lost race must not produce a second "revoked by staff" bell.
-    if (key.revoked_at || !(await revokeApiKey(prefix))) return c.json({ error: 'already revoked' }, 409);
+    const prefix = key.revoked_at ? null : await revokeApiKeyById(id);
+    if (!prefix) return c.json({ error: 'already revoked' }, 409);
     await notify(pool, {
       userId: key.user_id,
       type: 'api_key_revoked',
@@ -872,10 +875,10 @@ apiKeysRouter.post('/api/staff/api-keys/:prefix/revoke', async (c) => {
       link: KEYS_LINK,
       exceptUserId: userId,
     });
-    log.info({ prefix, by: userId, owner: key.user_id }, 'api key revoked by staff');
+    log.info({ id, prefix, by: userId, owner: key.user_id }, 'api key revoked by staff');
     return c.json({ ok: true });
   } catch (err) {
-    log.error({ err, prefix }, 'api key staff revoke failed');
+    log.error({ err, id }, 'api key staff revoke failed');
     return c.json({ error: 'Failed to revoke' }, 500);
   }
 });

@@ -10,7 +10,8 @@
 -- written from an in-memory tally once a minute (services/auth/apiKeyUsage.ts),
 -- not per request: a key at its default 120/min is 170k requests a day.
 --
--- EVERY request that presents a key whose secret matches is counted, including
+-- EVERY request the gate resolves to a key is counted (a key presented on a
+-- public path, or beside a session, is never looked at), including
 -- the ones the gate refuses: from a web page (403), revoked or expired (403),
 -- over its per-minute limit (429), or to a path keys may not read (403). Those
 -- refusals are what staff most need to see. A wrong secret against a real

@@ -361,8 +361,10 @@ the backstop. The requests live in `api_key_requests` (migration 121); the
 routes are in `api/apiKeys.ts`.
 
 **What each key does is counted** (migration 127, `services/auth/apiKeyUsage.ts`):
-every request presented with a key's real secret, by key, hour, path and
-status, including the ones the gate refuses (from a web page, revoked or
+every request the gate resolves to a key (its real secret, on a path that
+takes a key — a public path never looks at the key, and a request that
+already carries a session is counted as that session, not the key), by key,
+hour, path and status, including the ones the gate refuses (from a web page, revoked or
 expired, over the limit, a path keys may not read). A wrong secret against a
 real prefix is not counted against the key. The tally is in memory and written
 to `api_key_usage_hourly` once a minute and at shutdown; a failed write drops

@@ -18032,7 +18032,7 @@
         const u = k.usage;
         const open = _akUsageOpen === k.id;
         const revoke = state === 'active'
-          ? `<button class="btn btn-danger btn-sm" onclick="akRevoke('${escapeHtml(k.prefix)}')"><i class="fas fa-ban"></i> Revoke</button>`
+          ? `<button class="btn btn-danger btn-sm" onclick="akRevoke('${escapeHtml(k.id)}')"><i class="fas fa-ban"></i> Revoke</button>`
           : '';
         const usageCells = u
           ? `<td class="nd2-num">${_akCell(u.h24.requests)}</td>
@@ -18225,13 +18225,15 @@
         },
       });
     }
-    async function akRevoke(prefix) {
+    // By the key's id: a re-issue changes its prefix, which a page open
+    // across one would still be showing.
+    async function akRevoke(id) {
       const ok = (typeof uiConfirm === 'function')
         ? await uiConfirm('Revoke this key? The owner is notified and the key stops working immediately.', { title: 'Revoke API key', okText: 'Revoke' })
         : confirm('Revoke this key? The owner is notified and the key stops working immediately.');
       if (!ok) return;
       try {
-        const res = await fetch(`${API_BASE_URL}/api/staff/api-keys/${encodeURIComponent(prefix)}/revoke`, { method: 'POST', headers: { 'Authorization': await authHeader() } });
+        const res = await fetch(`${API_BASE_URL}/api/staff/api-keys/${encodeURIComponent(id)}/revoke`, { method: 'POST', headers: { 'Authorization': await authHeader() } });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) { showToast(data.error || 'Revoke failed', 'error'); return; }
         showToast('Key revoked', 'success');

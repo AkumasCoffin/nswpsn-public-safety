@@ -122,8 +122,26 @@ export async function revokeApiKey(prefix: string): Promise<boolean> {
     `UPDATE api_keys SET revoked_at = now() WHERE prefix = $1 AND revoked_at IS NULL`,
     [prefix],
   );
-  resolveCache.delete(prefix);
+  forgetApiKeyPrefix(prefix);
   return (res.rowCount ?? 0) > 0;
+}
+
+/**
+ * The staff form of revoke, by the key's id: a re-issue changes the prefix,
+ * so a staff page that was open across one would otherwise name a prefix
+ * that no longer exists. Returns the prefix it revoked, or null when the
+ * key was not live.
+ */
+export async function revokeApiKeyById(id: string): Promise<string | null> {
+  const pool = await getPool();
+  if (!pool) throw new Error('no database');
+  const res = await pool.query<{ prefix: string }>(
+    `UPDATE api_keys SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL RETURNING prefix`,
+    [id],
+  );
+  const prefix = res.rows[0]?.prefix ?? null;
+  if (prefix) forgetApiKeyPrefix(prefix);
+  return prefix;
 }
 
 /**
@@ -132,8 +150,8 @@ export async function revokeApiKey(prefix: string): Promise<boolean> {
  * and its per-minute window, which is keyed by id, so re-issuing cannot reset
  * the limit. The row no longer has the old prefix to be found by, so the old
  * plaintext stops resolving — once the caller has COMMITTED and then dropped
- * `oldPrefix` from the cache (forgetApiKeyPrefix). Dropping it any earlier
- * lets a request in that gap re-cache the old row from the uncommitted state.
+ * `oldPrefix` from the cache (forgetApiKeyPrefix, which also refuses to
+ * re-cache a read that began before the drop; see rememberResolve).
  *
  * Returns null when the key is not live (revoked, expired or deleted) — the
  * UPDATE's own WHERE decides, so a revoke racing the re-issue wins cleanly.
@@ -155,9 +173,19 @@ export async function reissueApiKey(id: string, q: Queryable): Promise<{ plainte
   return { plaintext, row, oldPrefix };
 }
 
-/** Drop a prefix's cached resolution, so its next use reads the table. */
+/**
+ * Drop a prefix's cached resolution, so its next use reads the table.
+ *
+ * Dropping the entry is not enough on its own: a resolve of the same prefix
+ * may be mid-flight, its SELECT already answered from the row as it was
+ * BEFORE the revoke or re-issue committed, and it would write that stale row
+ * back into the cache a moment after this delete — the old secret then works
+ * for another RESOLVE_CACHE_TTL_MS. So the moment of the drop is kept, and
+ * rememberResolve refuses any read that began at or before it.
+ */
 export function forgetApiKeyPrefix(prefix: string): void {
   resolveCache.delete(prefix);
+  forgottenAt.set(prefix, Date.now());
 }
 
 /**
@@ -173,7 +201,7 @@ export async function deleteApiKey(prefix: string, userId: string): Promise<bool
       WHERE prefix = $1 AND user_id = $2 AND deleted_at IS NULL`,
     [prefix, userId],
   );
-  resolveCache.delete(prefix);
+  forgetApiKeyPrefix(prefix);
   return (res.rowCount ?? 0) > 0;
 }
 
@@ -202,6 +230,9 @@ const RESOLVE_CACHE_TTL_MS = 60_000;
  */
 const RESOLVE_CACHE_MAX = 1_000;
 const resolveCache = new Map<string, { ts: number; row: ApiKeyRow | null }>();
+/** When each prefix was last forgotten (forgetApiKeyPrefix); a read that
+ *  began at or before that moment may hold the row from before the change. */
+const forgottenAt = new Map<string, number>();
 
 /** Expire on write (as roles.ts does), then cap. Map is in insertion order, so
  *  the cap drops the least-recently-written prefix. */
@@ -209,6 +240,13 @@ function rememberResolve(prefix: string, ts: number, row: ApiKeyRow | null): voi
   for (const [p, entry] of resolveCache) {
     if (ts - entry.ts >= RESOLVE_CACHE_TTL_MS) resolveCache.delete(p);
   }
+  // A forget only matters to reads that were in flight when it happened, so
+  // stamps older than the TTL have nothing left to protect.
+  for (const [p, at] of forgottenAt) {
+    if (ts - at >= RESOLVE_CACHE_TTL_MS) forgottenAt.delete(p);
+  }
+  const forgotten = forgottenAt.get(prefix);
+  if (forgotten !== undefined && ts <= forgotten) return;
   // Re-insert rather than overwrite so a refreshed entry counts as the newest.
   resolveCache.delete(prefix);
   resolveCache.set(prefix, { ts, row });
@@ -221,6 +259,7 @@ function rememberResolve(prefix: string, ts: number, row: ApiKeyRow | null): voi
 
 export function _clearApiKeyCache(): void {
   resolveCache.clear();
+  forgottenAt.clear();
   lastUsedTouch.clear();
   keyCounts.clear();
 }

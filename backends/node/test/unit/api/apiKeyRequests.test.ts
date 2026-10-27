@@ -408,7 +408,7 @@ describe('staff routes', () => {
     expect((await app.request('/api/staff/api-keys/requests')).status).toBe(403);
     expect((await app.request('/api/staff/api-keys')).status).toBe(403);
     expect((await app.request('/api/staff/api-keys/requests/5/approve', json({}))).status).toBe(403);
-    expect((await app.request('/api/staff/api-keys/abcdefghij/revoke', { method: 'POST' })).status).toBe(403);
+    expect((await app.request(`/api/staff/api-keys/${UUID}/revoke`, { method: 'POST' })).status).toBe(403);
     expect((await app.request(`/api/staff/api-keys/${UUID}/usage`)).status).toBe(403);
     expect((await makeApp({ userId: null }).request('/api/staff/api-keys/requests')).status).toBe(401);
     expect(calls).toHaveLength(0);
@@ -617,23 +617,27 @@ describe('staff routes', () => {
     });
   });
 
-  it('staff revoke works on any key and bells the owner (not themselves)', async () => {
+  it('staff revoke is by id (a re-issue changes the prefix), works on any key and bells the owner (not themselves)', async () => {
     staff = true;
     const app = makeApp({ userId: 'staff-1' });
-    resultQueue = [{ rows: [{ user_id: 'user-1', name: 'home-assistant', revoked_at: null }] }, { rows: [], rowCount: 1 }];
-    expect((await app.request('/api/staff/api-keys/abcdefghij/revoke', { method: 'POST' })).status).toBe(200);
-    expect(calls.some((q) => q.sql.includes('SET revoked_at = now()'))).toBe(true);
+    resultQueue = [{ rows: [{ user_id: 'user-1', name: 'home-assistant', revoked_at: null }] }, { rows: [{ prefix: 'abcdefghij' }] }];
+    expect((await app.request(`/api/staff/api-keys/${UUID}/revoke`, { method: 'POST' })).status).toBe(200);
+    const upd = calls.find((q) => q.sql.includes('SET revoked_at = now()'));
+    expect(upd?.sql).toContain('WHERE id = $1');
+    expect(upd?.params).toEqual([UUID]);
     expect(bells[0]).toMatchObject({ userId: 'user-1', type: 'api_key_revoked', exceptUserId: 'staff-1' });
 
     resultQueue = [{ rows: [{ user_id: 'user-1', name: 'x', revoked_at: 'r' }] }];
-    expect((await app.request('/api/staff/api-keys/abcdefghij/revoke', { method: 'POST' })).status).toBe(409);
+    expect((await app.request(`/api/staff/api-keys/${UUID}/revoke`, { method: 'POST' })).status).toBe(409);
     resultQueue = [{ rows: [] }];
-    expect((await app.request('/api/staff/api-keys/abcdefghij/revoke', { method: 'POST' })).status).toBe(404);
+    expect((await app.request(`/api/staff/api-keys/${UUID}/revoke`, { method: 'POST' })).status).toBe(404);
+    // A prefix is not an id: the old prefix of a re-issued key names no key at all.
+    expect((await app.request('/api/staff/api-keys/abcdefghij/revoke', { method: 'POST' })).status).toBe(400);
 
     // Lost race: the owner revoked it between staff's read and write → 409 and NO second bell.
     bells.length = 0;
-    resultQueue = [{ rows: [{ user_id: 'user-1', name: 'x', revoked_at: null }] }, { rows: [], rowCount: 0 }];
-    expect((await app.request('/api/staff/api-keys/abcdefghij/revoke', { method: 'POST' })).status).toBe(409);
+    resultQueue = [{ rows: [{ user_id: 'user-1', name: 'x', revoked_at: null }] }, { rows: [] }];
+    expect((await app.request(`/api/staff/api-keys/${UUID}/revoke`, { method: 'POST' })).status).toBe(409);
     expect(bells).toHaveLength(0);
   });
 });

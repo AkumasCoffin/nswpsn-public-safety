@@ -18,6 +18,7 @@ import {
   lookupPrefix,
   apiKeyRequestOk,
   revokeApiKey,
+  revokeApiKeyById,
   reissueApiKey,
   deleteApiKey,
   forgetApiKeyPrefix,
@@ -140,6 +141,36 @@ describe('resolveApiKey', () => {
 
     queryMock.mockResolvedValueOnce({ rows: [{ ...rowFor(old), prefix: minted!.prefix, key_hash: minted!.hash }] });
     expect((await resolveApiKey(out!.plaintext)).ok).toBe(true);
+  });
+
+  it('a read in flight across the forget is not re-cached: the old secret stops at the commit', async () => {
+    const old = 'ak_abcdefghij_' + 'A'.repeat(32);
+    // The SELECT answers from the row as it was before the re-issue committed…
+    let answer: (v: unknown) => void = () => undefined;
+    queryMock.mockImplementationOnce(() => new Promise((res) => { answer = res; }));
+    const inFlight = resolveApiKey(old);
+    await new Promise((r) => setTimeout(r, 2));
+    // …the route commits and forgets the prefix while that read is still pending…
+    forgetApiKeyPrefix('abcdefghij');
+    answer({ rows: [rowFor(old)] });
+    expect((await inFlight).ok).toBe(true); // that one request read pre-commit; fine
+    // …and the next read must go to the table, which no longer has the prefix.
+    queryMock.mockResolvedValueOnce({ rows: [] });
+    expect(await resolveApiKey(old)).toEqual({ ok: false, reason: 'bad_key' });
+    expect(queryMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('revoke by id returns the prefix it revoked and drops its cache', async () => {
+    const k = 'ak_abcdefghij_' + 'A'.repeat(32);
+    queryMock.mockResolvedValueOnce({ rows: [rowFor(k)] });
+    expect((await resolveApiKey(k)).ok).toBe(true);
+    queryMock.mockResolvedValueOnce({ rows: [{ prefix: 'abcdefghij' }] });
+    expect(await revokeApiKeyById('k1')).toBe('abcdefghij');
+    expect(String(queryMock.mock.calls[1]![0])).toContain('WHERE id = $1 AND revoked_at IS NULL RETURNING prefix');
+    queryMock.mockResolvedValueOnce({ rows: [rowFor(k, { revoked_at: 'now' })] });
+    expect(await resolveApiKey(k)).toMatchObject({ ok: false, reason: 'revoked' });
+    queryMock.mockResolvedValueOnce({ rows: [] });
+    expect(await revokeApiKeyById('k1')).toBeNull();
   });
 
   it('re-issue refuses a key that is not live: the UPDATE matches nothing', async () => {
