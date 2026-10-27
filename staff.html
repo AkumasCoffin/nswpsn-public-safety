@@ -3249,10 +3249,18 @@
         <button class="tab-btn" data-tab="nodes" onclick="switchTab('nodes')">
           <i class="fas fa-satellite-dish"></i> Nodes
         </button>
-        <button class="tab-btn" data-tab="tickets" id="tickets-tab-btn" onclick="switchTab('tickets')">
-          <i class="fas fa-ticket"></i> Tickets
-          <span class="badge" id="tickets-badge" style="display:none;">0</span>
-        </button>
+        <div class="tab-dd" id="tickets-dd">
+          <button class="tab-btn" data-tab="tickets" id="tickets-tab-btn" aria-haspopup="menu" aria-expanded="false" onclick="toggleTicketsMenu(event)">
+            <i class="fas fa-ticket"></i> Tickets
+            <span class="badge" id="tickets-badge" style="display:none;">0</span>
+            <i class="fas fa-caret-down tab-dd-caret"></i>
+          </button>
+          <div class="tab-dd-menu" id="tickets-dd-menu" role="menu" aria-label="Tickets, bug reports or suggestions">
+            <button class="tab-dd-item active" role="menuitem" data-tkkind="tickets" onclick="openTicketsView('tickets')"><i class="fas fa-ticket"></i> Tickets <span class="dd-count" id="dd-tickets-badge" style="display:none;"></span></button>
+            <button class="tab-dd-item" role="menuitem" data-tkkind="bug" onclick="openTicketsView('bug')">🐞 Bug reports <span class="dd-count" id="dd-bug-badge" style="display:none;"></span></button>
+            <button class="tab-dd-item" role="menuitem" data-tkkind="suggestion" onclick="openTicketsView('suggestion')">💡 Suggestions <span class="dd-count" id="dd-suggestion-badge" style="display:none;"></span></button>
+          </div>
+        </div>
       </div>
 
         <div class="header-actions">
@@ -3290,23 +3298,16 @@
         <!-- Three things live here: tickets (private threads), and bug
              reports and suggestions (a report with a public status, no
              thread — see api/feedback.ts). -->
-        <!-- Same furniture as the Data tab: segmented pills, a table shell,
-             a detail head, cards. -->
-        <div class="nd2-controls">
-          <div class="nd2-seg" id="tk-kinds" role="group" aria-label="Tickets, bug reports or suggestions">
-            <button class="filter-btn active" data-tkkind="tickets" onclick="_tkSetKind('tickets')"><i class="fas fa-ticket"></i> Tickets <span class="nd-sub" id="tk-count-tickets"></span></button>
-            <button class="filter-btn" data-tkkind="bug" onclick="_tkSetKind('bug')">🐞 Bug reports <span class="nd-sub" id="tk-count-bug"></span></button>
-            <button class="filter-btn" data-tkkind="suggestion" onclick="_tkSetKind('suggestion')">💡 Suggestions <span class="nd-sub" id="tk-count-suggestion"></span></button>
-          </div>
-        </div>
-
+        <!-- Which of the three is showing comes from the Tickets dropdown in
+             the tab bar (openTicketsView). Same furniture as the Data tab: a
+             segmented status filter, a table shell, a detail head, cards. -->
         <div id="tk-tickets-panel">
           <div class="nd2-controls">
             <div class="nd2-seg" id="tk-filters" role="group" aria-label="Ticket status">
-              <button class="filter-btn active" data-tkfilter="open" onclick="_tkSetFilter('open')">Needs reply <span class="nd-sub" id="tk-count-open"></span></button>
+              <button class="filter-btn active" data-tkfilter="all" onclick="_tkSetFilter('all')">All</button>
+              <button class="filter-btn" data-tkfilter="open" onclick="_tkSetFilter('open')">Needs reply <span class="nd-sub" id="tk-count-open"></span></button>
               <button class="filter-btn" data-tkfilter="awaiting_user" onclick="_tkSetFilter('awaiting_user')">Waiting on user</button>
               <button class="filter-btn" data-tkfilter="closed" onclick="_tkSetFilter('closed')">Closed</button>
-              <button class="filter-btn" data-tkfilter="all" onclick="_tkSetFilter('all')">All</button>
             </div>
             <span style="flex:1;"></span>
             <button class="btn btn-primary btn-sm" onclick="_tkNewOpen()"><i class="fas fa-plus"></i> New ticket</button>
@@ -3357,10 +3358,10 @@
         <div id="fb-panel" style="display:none;">
           <div class="nd2-controls">
             <div class="nd2-seg" id="fb-filters" role="group" aria-label="Report status">
-              <button class="filter-btn active" data-fbfilter="open" onclick="_fbSetFilter('open')">Open</button>
+              <button class="filter-btn active" data-fbfilter="all" onclick="_fbSetFilter('all')">All</button>
+              <button class="filter-btn" data-fbfilter="open" onclick="_fbSetFilter('open')">Open</button>
               <button class="filter-btn" data-fbfilter="in_progress" onclick="_fbSetFilter('in_progress')" id="fb-pill-progress">In progress</button>
               <button class="filter-btn" data-fbfilter="closed" onclick="_fbSetFilter('closed')">Done / declined</button>
-              <button class="filter-btn" data-fbfilter="all" onclick="_fbSetFilter('all')">All</button>
             </div>
           </div>
           <div class="nd2-table-wrap nd2-detail-gap" id="fb-staff-list-wrap">
@@ -16478,11 +16479,10 @@
         if (tabs.nodes) switchTab('nodes');
       } else if (view === 'tickets') {
         if (!tabs.tickets) return;
-        switchTab('tickets');
         // ?view=tickets&tab=reports&kind=bug|suggestion — the staff alert's link.
         let tab = '', kind = '';
         try { const p = new URLSearchParams(location.search); tab = p.get('tab') || ''; kind = p.get('kind') || ''; } catch (e) {}
-        if (tab === 'reports') _tkSetKind(kind === 'suggestion' ? 'suggestion' : 'bug');
+        openTicketsView(tab === 'reports' ? (kind === 'suggestion' ? 'suggestion' : 'bug') : 'tickets');
       }
     }
     
@@ -16498,7 +16498,7 @@
       const datBtn = document.querySelector('[data-tab="data"]');
       const nodBtn = document.querySelector('[data-tab="nodes"]');
       const tkBtn = document.querySelector('[data-tab="tickets"]');
-      if (tkBtn) tkBtn.style.display = tabs.tickets ? '' : 'none';
+      if (tkBtn) (tkBtn.closest('.tab-dd') || tkBtn).style.display = tabs.tickets ? '' : 'none';
       if (reqBtn) reqBtn.style.display = tabs.requests ? '' : 'none';
       if (usrBtn) usrBtn.style.display = tabs.users    ? '' : 'none';
       if (devBtn) devBtn.style.display = tabs.dev      ? '' : 'none';
@@ -16598,16 +16598,54 @@
       feeder_node: 'Feeder node help', bug: 'Bug report', other: 'Other',
     };
     const TK_STATUS_STAFF = { open: 'Needs reply', awaiting_user: 'Waiting on user', closed: 'Closed' };
-    let _tkFilter = 'open';
+    // Filters open on All and stay where they were last put (per list), so
+    // the tab never greets you with a view you didn't pick.
+    const STAFF_TK_FILTER_KEY = 'staff_tk_filter';
+    const STAFF_TK_KIND_KEY = 'staff_tk_kind';
+    const STAFF_FB_FILTER_KEY = 'staff_fb_filter_'; // + kind
+    const TK_FILTERS = ['all', 'open', 'awaiting_user', 'closed'];
+    let _tkFilter = TK_FILTERS.includes(staffRecall(STAFF_TK_FILTER_KEY)) ? staffRecall(STAFF_TK_FILTER_KEY) : 'all';
     let _tkTickets = [];
     let _tkOpenId = null;
     let _tkTimer = null;
     let _tkPicked = null; // {id, username, email} chosen in the new-ticket modal
     let _tkSearchT = null;
-    // Which of the tab's three lists is showing, and the badge's two halves.
-    let _tkKind = 'tickets';   // 'tickets' | 'bug' | 'suggestion'
+    // Which of the tab's three lists is showing (chosen from the Tickets
+    // dropdown in the tab bar), and the badge's two halves.
+    let _tkKind = ['tickets', 'bug', 'suggestion'].includes(staffRecall(STAFF_TK_KIND_KEY)) ? staffRecall(STAFF_TK_KIND_KEY) : 'tickets';
     let _tkOpenCount = 0;
     let _fbOpenCount = 0;
+
+    // ---- Tickets dropdown-tab: Tickets / Bug reports / Suggestions ----
+    // Mirrors the Auth dropdown. The item decides which list the tab shows.
+    function toggleTicketsMenu(event) {
+      if (event) { event.preventDefault(); event.stopPropagation(); }
+      const menu = document.getElementById('tickets-dd-menu');
+      if (!menu) return;
+      const open = !menu.classList.contains('open');
+      menu.classList.toggle('open', open);
+      const btn = document.getElementById('tickets-tab-btn');
+      if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+    function closeTicketsMenu() {
+      const menu = document.getElementById('tickets-dd-menu');
+      if (menu) menu.classList.remove('open');
+      const btn = document.getElementById('tickets-tab-btn');
+      if (btn) btn.setAttribute('aria-expanded', 'false');
+    }
+    function openTicketsView(kind) {
+      closeTicketsMenu();
+      _tkKind = kind;
+      staffRemember(STAFF_TK_KIND_KEY, kind);
+      // switchTab loads whichever list _tkKind names; a direct _tkSetKind
+      // when already on the tab.
+      if (currentTab !== 'tickets') switchTab('tickets'); else _tkSetKind(kind);
+    }
+    document.addEventListener('click', (e) => {
+      const dd = document.getElementById('tickets-dd');
+      if (dd && !dd.contains(e.target)) closeTicketsMenu();
+    });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeTicketsMenu(); });
 
     // Markdown for message bodies — the Wire's pattern (marked + DOMPurify),
     // tightened for tickets: images are stripped (a hotlinked image would let
@@ -16634,17 +16672,30 @@
     }
 
     // Whichever list the tab is showing: tickets, or one kind of report.
+    // Also the place the panels and pills are put right for that list, so
+    // entering the tab (switchTab) and picking from the dropdown both land
+    // on a consistent view.
     function _tkLoadActive() {
-      if (_tkKind === 'tickets') loadTickets(); else loadFeedback();
+      _tkSetKind(_tkKind);
     }
     function _tkSetKind(k) {
       _tkKind = k;
-      document.querySelectorAll('#tk-kinds .filter-btn').forEach((b) => b.classList.toggle('active', b.dataset.tkkind === k));
+      staffRemember(STAFF_TK_KIND_KEY, k);
+      document.querySelectorAll('#tickets-dd-menu .tab-dd-item').forEach((it) => it.classList.toggle('active', it.dataset.tkkind === k));
       document.getElementById('tk-tickets-panel').style.display = k === 'tickets' ? '' : 'none';
       document.getElementById('fb-panel').style.display = k === 'tickets' ? 'none' : '';
       const pr = document.getElementById('fb-pill-progress');
       if (pr) pr.textContent = k === 'suggestion' ? 'Planned' : 'Looking into it';
-      _tkLoadActive();
+      if (k === 'tickets') {
+        document.querySelectorAll('#tk-filters .filter-btn').forEach((b) => b.classList.toggle('active', b.dataset.tkfilter === _tkFilter));
+        loadTickets();
+      } else {
+        // Each kind of report keeps its own last filter.
+        const want = staffRecall(STAFF_FB_FILTER_KEY + k);
+        _fbFilter = ['all', 'open', 'in_progress', 'closed'].includes(want) ? want : 'all';
+        document.querySelectorAll('#fb-filters .filter-btn').forEach((b) => b.classList.toggle('active', b.dataset.fbfilter === _fbFilter));
+        loadFeedback();
+      }
     }
     function startTicketsPolling() {
       if (_tkTimer) return;
@@ -16656,6 +16707,7 @@
 
     function _tkSetFilter(f) {
       _tkFilter = f;
+      staffRemember(STAFF_TK_FILTER_KEY, f);
       document.querySelectorAll('#tk-filters .filter-btn').forEach((b) => b.classList.toggle('active', b.dataset.tkfilter === f));
       loadTickets();
     }
@@ -16690,13 +16742,20 @@
 
     // The tab badge is tickets needing a reply plus open reports; each list
     // feeds its half and the sum is redrawn.
+    // A dropdown item's count, shown only when there is one (dd-count style).
+    function _tkDdCount(id, v) {
+      const p = document.getElementById(id);
+      if (!p) return;
+      p.textContent = v;
+      p.style.display = v > 0 ? '' : 'none';
+    }
     function _tkDrawBadge() {
       const el = document.getElementById('tickets-badge');
       const n = _tkOpenCount + _fbOpenCount;
       if (el) { el.textContent = n; el.style.display = n > 0 ? '' : 'none'; }
-      const pill = (id, v) => { const p = document.getElementById(id); if (p) p.textContent = v > 0 ? String(v) : ''; };
-      pill('tk-count-open', _tkOpenCount);
-      pill('tk-count-tickets', _tkOpenCount);
+      const pill = document.getElementById('tk-count-open');
+      if (pill) pill.textContent = _tkOpenCount > 0 ? String(_tkOpenCount) : '';
+      _tkDdCount('dd-tickets-badge', _tkOpenCount);
     }
     function _tkBadge(counts) {
       _tkOpenCount = counts && counts.open ? counts.open : 0;
@@ -16707,9 +16766,8 @@
       const bug = (c.bug && c.bug.open) || 0;
       const sug = (c.suggestion && c.suggestion.open) || 0;
       _fbOpenCount = bug + sug;
-      const pill = (id, v) => { const p = document.getElementById(id); if (p) p.textContent = v > 0 ? String(v) : ''; };
-      pill('tk-count-bug', bug);
-      pill('tk-count-suggestion', sug);
+      _tkDdCount('dd-bug-badge', bug);
+      _tkDdCount('dd-suggestion-badge', sug);
       _tkDrawBadge();
     }
 
@@ -16863,13 +16921,14 @@
       bug: { open: 'Open', in_progress: 'Looking into it', done: 'Fixed', declined: "Won't fix", duplicate: 'Duplicate' },
       suggestion: { open: 'Open', in_progress: 'Planned', done: 'Added', declined: 'Not added', duplicate: 'Duplicate' },
     };
-    let _fbFilter = 'open';
+    let _fbFilter = 'all'; // set per kind by _tkSetKind
     let _fbItems = [];
     let _fbOpenId = null;
     let _fbOpen = null; // the report showing in the detail
 
     function _fbSetFilter(f) {
       _fbFilter = f;
+      staffRemember(STAFF_FB_FILTER_KEY + _tkKind, f);
       document.querySelectorAll('#fb-filters .filter-btn').forEach((b) => b.classList.toggle('active', b.dataset.fbfilter === f));
       loadFeedback();
     }
@@ -16910,7 +16969,7 @@
       _tkOpenId = null;
       document.getElementById('tk-staff-detail').style.display = 'none';
       document.getElementById('tk-staff-list-wrap').style.display = '';
-      _tkSetKind(kind === 'suggestion' ? 'suggestion' : 'bug');
+      openTicketsView(kind === 'suggestion' ? 'suggestion' : 'bug');
       _fbOpenReport(id);
     }
 
@@ -17001,7 +17060,7 @@
       _fbOpen = null;
       document.getElementById('fb-staff-detail').style.display = 'none';
       document.getElementById('fb-staff-list-wrap').style.display = '';
-      _tkSetKind('tickets');
+      openTicketsView('tickets');
       _tkOpenTicket(id);
     }
 
