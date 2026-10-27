@@ -1060,7 +1060,6 @@
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .nd-mgr-badge { display: inline-block; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; border: 1px solid; border-radius: 4px; padding: 0 5px; opacity: 0.9; }
     /* Tickets tab */
-    .tk-pill.active { background: rgba(249,115,22,0.18); border-color: rgba(249,115,22,0.5); color: #fdba74; }
     .tk-srow { display:flex; align-items:center; gap:0.8rem; padding:0.7rem 0.9rem; border:1px solid var(--border-subtle); border-radius:10px; margin-bottom:0.55rem; cursor:pointer; }
     .tk-srow:hover { border-color: var(--accent, #f97316); }
     .tk-schip { display:inline-block; font-size:0.66rem; font-weight:600; text-transform:uppercase; letter-spacing:0.04em; border-radius:999px; padding:0.14rem 0.55rem; }
@@ -1071,11 +1070,27 @@
     .tk-schip.in_progress { background:rgba(59,130,246,0.15); color:#93c5fd; }
     .tk-schip.done { background:rgba(34,197,94,0.15); color:#86efac; }
     .tk-schip.declined, .tk-schip.duplicate { background:rgba(148,163,184,0.15); color:#94a3b8; }
-    .fb-sect { margin-bottom:1rem; }
-    .fb-sect-h { font-size:0.68rem; font-weight:600; color:var(--text-soft); text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.4rem; }
-    .fb-hint { font-size:0.74rem; color:var(--text-soft); margin-top:0.4rem; }
-    /* The report's ticket: one box — a lead line, then the actions in a row. */
-    .fb-tbox { border:1px solid var(--border-subtle); border-radius:10px; padding:0.75rem 0.9rem; background:rgba(2,6,23,0.3); }
+    /* The Tickets tab borrows the Data tab's furniture (.nd2-*). What is its
+       own: the tables' row behaviour, the inputs, and the detail cards' padding
+       (.nd2-card has none — tables run edge to edge; text needs some). */
+    .nd2-pad { padding: 0.85rem 1rem 1rem; }
+    /* The Data tab's detail head carries Back and a heading; these carry two
+       action buttons as well, so on a phone the row wraps and the heading
+       takes a full line rather than being squeezed to a word a line. */
+    #tickets-tab .nd2-detail-head { flex-wrap: wrap; }
+    #tickets-tab .nd2-detail-title { flex: 1 1 14rem; min-width: 0; overflow-wrap: anywhere; }
+    .tk-table tbody tr { cursor: pointer; }
+    .tk-table tbody tr:hover td { background: rgba(255, 255, 255, 0.03); }
+    .nd2-table-wrap .nd-table.tk-table td.tk-subj { white-space: normal; min-width: 18rem; max-width: 40rem; line-height: 1.35; }
+    .tk-subj strong { font-weight: 600; color: var(--text-primary); }
+    .tk-subj .nd-sub { display: block; margin-top: 0.1rem; }
+    .tk-ctx .tk-schip { margin-right: 0.15rem; }
+    .tk-ctx a { color: var(--accent); text-decoration: none; }
+    .tk-input { background: rgba(2,6,23,0.5); border: 1px solid var(--border-subtle); border-radius: 8px; color: var(--text-main); padding: 0.5rem 0.6rem; font-family: inherit; font-size: 0.85rem; width: 100%; box-sizing: border-box; }
+    textarea.tk-input { resize: vertical; }
+    .fb-row { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
+    .fb-hint { font-size: 0.74rem; color: var(--text-soft); margin-top: 0.5rem; line-height: 1.45; }
+    /* The report's ticket, inside its card: a lead line, then the actions. */
     .fb-tbox-lead { font-size:0.84rem; color:var(--text-soft); line-height:1.5; margin-bottom:0.6rem; }
     .fb-tbox-lead strong { color:var(--text-main); }
     .fb-tbox-row { display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap; }
@@ -3275,74 +3290,124 @@
         <!-- Three things live here: tickets (private threads), and bug
              reports and suggestions (a report with a public status, no
              thread — see api/feedback.ts). -->
-        <div id="tk-kinds" style="display:flex; gap:0.4rem; flex-wrap:wrap; margin-bottom:0.9rem;">
-          <button class="btn btn-secondary btn-sm tk-pill tk-kind active" data-tkkind="tickets" onclick="_tkSetKind('tickets')"><i class="fas fa-ticket"></i> Tickets <span id="tk-count-tickets" class="dd-count" style="display:none;"></span></button>
-          <button class="btn btn-secondary btn-sm tk-pill tk-kind" data-tkkind="bug" onclick="_tkSetKind('bug')">🐞 Bug reports <span id="tk-count-bug" class="dd-count" style="display:none;"></span></button>
-          <button class="btn btn-secondary btn-sm tk-pill tk-kind" data-tkkind="suggestion" onclick="_tkSetKind('suggestion')">💡 Suggestions <span id="tk-count-suggestion" class="dd-count" style="display:none;"></span></button>
+        <!-- Same furniture as the Data tab: segmented pills, a table shell,
+             a detail head, cards. -->
+        <div class="nd2-controls">
+          <div class="nd2-seg" id="tk-kinds" role="group" aria-label="Tickets, bug reports or suggestions">
+            <button class="filter-btn active" data-tkkind="tickets" onclick="_tkSetKind('tickets')"><i class="fas fa-ticket"></i> Tickets <span class="nd-sub" id="tk-count-tickets"></span></button>
+            <button class="filter-btn" data-tkkind="bug" onclick="_tkSetKind('bug')">🐞 Bug reports <span class="nd-sub" id="tk-count-bug"></span></button>
+            <button class="filter-btn" data-tkkind="suggestion" onclick="_tkSetKind('suggestion')">💡 Suggestions <span class="nd-sub" id="tk-count-suggestion"></span></button>
+          </div>
         </div>
 
         <div id="tk-tickets-panel">
-        <div style="display:flex; align-items:center; gap:0.6rem; flex-wrap:wrap; margin-bottom:1rem;">
-          <div id="tk-filters" style="display:flex; gap:0.4rem; flex-wrap:wrap;">
-            <button class="btn btn-secondary btn-sm tk-pill active" data-tkfilter="open" onclick="_tkSetFilter('open')">Needs reply <span id="tk-count-open" class="dd-count" style="display:none;"></span></button>
-            <button class="btn btn-secondary btn-sm tk-pill" data-tkfilter="awaiting_user" onclick="_tkSetFilter('awaiting_user')">Waiting on user</button>
-            <button class="btn btn-secondary btn-sm tk-pill" data-tkfilter="closed" onclick="_tkSetFilter('closed')">Closed</button>
-            <button class="btn btn-secondary btn-sm tk-pill" data-tkfilter="all" onclick="_tkSetFilter('all')">All</button>
+          <div class="nd2-controls">
+            <div class="nd2-seg" id="tk-filters" role="group" aria-label="Ticket status">
+              <button class="filter-btn active" data-tkfilter="open" onclick="_tkSetFilter('open')">Needs reply <span class="nd-sub" id="tk-count-open"></span></button>
+              <button class="filter-btn" data-tkfilter="awaiting_user" onclick="_tkSetFilter('awaiting_user')">Waiting on user</button>
+              <button class="filter-btn" data-tkfilter="closed" onclick="_tkSetFilter('closed')">Closed</button>
+              <button class="filter-btn" data-tkfilter="all" onclick="_tkSetFilter('all')">All</button>
+            </div>
+            <span style="flex:1;"></span>
+            <button class="btn btn-primary btn-sm" onclick="_tkNewOpen()"><i class="fas fa-plus"></i> New ticket</button>
           </div>
-          <span style="flex:1;"></span>
-          <button class="btn btn-primary btn-sm" onclick="_tkNewOpen()"><i class="fas fa-plus"></i> New ticket</button>
-        </div>
-        <div id="tk-staff-list"></div>
-        <div id="tk-staff-detail" style="display:none;">
-          <div style="display:flex; align-items:center; gap:0.7rem; margin-bottom:0.8rem; flex-wrap:wrap;">
-            <button class="btn btn-secondary btn-sm" onclick="_tkBackToList()"><i class="fas fa-arrow-left"></i> All tickets</button>
-            <div id="tk-detail-title" style="font-weight:600; flex:1; min-width:200px;"></div>
-            <button class="btn btn-secondary btn-sm" id="tk-reopen-btn" style="display:none;" onclick="_tkReopen()"><i class="fas fa-rotate-left"></i> Reopen</button>
-            <button class="btn btn-danger btn-sm" id="tk-close-btn" onclick="_tkCloseTicket()"><i class="fas fa-check"></i> Close ticket</button>
+          <div class="nd2-table-wrap nd2-detail-gap" id="tk-staff-list-wrap">
+            <table class="nd-table tk-table">
+              <thead>
+                <tr>
+                  <th class="nd2-num">#</th>
+                  <th>Subject</th>
+                  <th>User</th>
+                  <th>Category</th>
+                  <th>Status</th>
+                  <th class="nd2-num">Msgs</th>
+                  <th>Updated</th>
+                </tr>
+              </thead>
+              <tbody id="tk-staff-list"><tr><td colspan="7" class="nd2-empty">Loading…</td></tr></tbody>
+            </table>
           </div>
-          <div id="tk-detail-meta" style="margin-bottom:0.8rem; font-size:0.8rem; color:var(--text-soft);"></div>
-          <div id="tk-detail-thread"></div>
-          <div style="margin-top:1rem;">
-            <textarea id="tk-staff-reply" maxlength="5000" oninput="_tkSaveReplyDraft()" placeholder="Reply to the user… Markdown supported." style="width:100%; box-sizing:border-box; min-height:90px; background:rgba(2,6,23,0.5); border:1px solid var(--border-subtle); border-radius:8px; color:var(--text-main); padding:0.6rem; font-family:inherit; font-size:0.88rem; resize:vertical;"></textarea>
-            <div style="margin-top:0.5rem; display:flex; align-items:center; gap:0.7rem;">
-              <button class="btn btn-primary btn-sm" id="tk-staff-reply-btn" onclick="_tkStaffReply()"><i class="fas fa-paper-plane"></i> Send reply</button>
-              <span id="tk-detail-note" style="color:var(--text-soft); font-size:0.78rem;"></span>
+          <div id="tk-staff-detail" style="display:none;">
+            <div class="nd2-detail-head">
+              <button type="button" class="nd2-back" onclick="_tkBackToList()"><i class="fas fa-arrow-left"></i> Back</button>
+              <h3 class="nd2-detail-title" id="tk-detail-title">Ticket</h3>
+              <span style="flex:1;"></span>
+              <button class="btn btn-secondary btn-sm" id="tk-reopen-btn" style="display:none;" onclick="_tkReopen()"><i class="fas fa-rotate-left"></i> Reopen</button>
+              <button class="btn btn-danger btn-sm" id="tk-close-btn" onclick="_tkCloseTicket()"><i class="fas fa-check"></i> Close ticket</button>
+            </div>
+            <div class="nd2-ctx tk-ctx" id="tk-detail-meta"></div>
+            <div class="nd2-card nd2-detail-gap">
+              <div class="nd2-card-h"><i class="fas fa-comments"></i> Conversation</div>
+              <div class="nd2-pad" id="tk-detail-thread"></div>
+            </div>
+            <div class="nd2-card">
+              <div class="nd2-card-h"><i class="fas fa-reply"></i> Reply <span class="nd2-note" id="tk-detail-note"></span></div>
+              <div class="nd2-pad">
+                <textarea id="tk-staff-reply" class="tk-input" maxlength="5000" oninput="_tkSaveReplyDraft()" placeholder="Reply to the user… Markdown supported." style="min-height:90px;"></textarea>
+                <div class="fb-row" style="margin-top:0.55rem;">
+                  <button class="btn btn-primary btn-sm" id="tk-staff-reply-btn" onclick="_tkStaffReply()"><i class="fas fa-paper-plane"></i> Send reply</button>
+                </div>
+              </div>
             </div>
           </div>
-        </div>
         </div><!-- /tk-tickets-panel -->
 
         <!-- Bug reports / suggestions: list, then one report with its
              status, its ticket (if any) and the board link. -->
         <div id="fb-panel" style="display:none;">
-          <div id="fb-filters" style="display:flex; gap:0.4rem; flex-wrap:wrap; margin-bottom:1rem;">
-            <button class="btn btn-secondary btn-sm tk-pill active" data-fbfilter="open" onclick="_fbSetFilter('open')">Open</button>
-            <button class="btn btn-secondary btn-sm tk-pill" data-fbfilter="in_progress" onclick="_fbSetFilter('in_progress')" id="fb-pill-progress">In progress</button>
-            <button class="btn btn-secondary btn-sm tk-pill" data-fbfilter="closed" onclick="_fbSetFilter('closed')">Done / declined</button>
-            <button class="btn btn-secondary btn-sm tk-pill" data-fbfilter="all" onclick="_fbSetFilter('all')">All</button>
+          <div class="nd2-controls">
+            <div class="nd2-seg" id="fb-filters" role="group" aria-label="Report status">
+              <button class="filter-btn active" data-fbfilter="open" onclick="_fbSetFilter('open')">Open</button>
+              <button class="filter-btn" data-fbfilter="in_progress" onclick="_fbSetFilter('in_progress')" id="fb-pill-progress">In progress</button>
+              <button class="filter-btn" data-fbfilter="closed" onclick="_fbSetFilter('closed')">Done / declined</button>
+              <button class="filter-btn" data-fbfilter="all" onclick="_fbSetFilter('all')">All</button>
+            </div>
           </div>
-          <div id="fb-staff-list"></div>
+          <div class="nd2-table-wrap nd2-detail-gap" id="fb-staff-list-wrap">
+            <table class="nd-table tk-table">
+              <thead>
+                <tr>
+                  <th class="nd2-num">#</th>
+                  <th>Title</th>
+                  <th>Reporter</th>
+                  <th>From</th>
+                  <th>Status</th>
+                  <th>Ticket</th>
+                  <th>Received</th>
+                </tr>
+              </thead>
+              <tbody id="fb-staff-list"><tr><td colspan="7" class="nd2-empty">Loading…</td></tr></tbody>
+            </table>
+          </div>
           <div id="fb-staff-detail" style="display:none;">
-            <div style="display:flex; align-items:center; gap:0.7rem; margin-bottom:0.8rem; flex-wrap:wrap;">
-              <button class="btn btn-secondary btn-sm" onclick="_fbBackToList()"><i class="fas fa-arrow-left"></i> Back</button>
-              <div id="fb-detail-title" style="font-weight:600; flex:1; min-width:200px;"></div>
+            <div class="nd2-detail-head">
+              <button type="button" class="nd2-back" onclick="_fbBackToList()"><i class="fas fa-arrow-left"></i> Back</button>
+              <h3 class="nd2-detail-title" id="fb-detail-title">Report</h3>
+              <span style="flex:1;"></span>
               <a id="fb-board-link" class="btn btn-secondary btn-sm" href="#" target="_blank" rel="noopener" style="display:none;"><i class="fab fa-discord"></i> Open on the board</a>
               <button class="btn btn-danger btn-sm" onclick="_fbRemove()" title="Remove — spam or not a report"><i class="fas fa-trash"></i> Remove</button>
             </div>
-            <div id="fb-detail-meta" style="margin-bottom:0.8rem; font-size:0.8rem; color:var(--text-soft);"></div>
-            <div id="fb-detail-body" class="tk-md" style="background:rgba(2,6,23,0.4); border:1px solid var(--border-subtle); border-radius:10px; padding:0.8rem 0.95rem; font-size:0.88rem; line-height:1.55; margin-bottom:1rem;"></div>
-            <div class="fb-sect">
-              <div class="fb-sect-h">Status</div>
-              <div style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:flex-start;">
-                <select id="fb-status-sel" style="background:rgba(2,6,23,0.5); border:1px solid var(--border-subtle); border-radius:8px; color:var(--text-main); padding:0.5rem; font-family:inherit; font-size:0.85rem;"></select>
-                <input id="fb-status-note" maxlength="1000" placeholder="Note for the reporter and the board (optional)" style="flex:1 1 16rem; background:rgba(2,6,23,0.5); border:1px solid var(--border-subtle); border-radius:8px; color:var(--text-main); padding:0.5rem; font-family:inherit; font-size:0.85rem;">
-                <button class="btn btn-primary btn-sm" id="fb-status-btn" onclick="_fbSetStatus()"><i class="fas fa-check"></i> Set status</button>
-              </div>
-              <div class="fb-hint">Goes to the reporter's bell, the staff alert, and as a reply under the board post.</div>
+            <div class="nd2-ctx tk-ctx" id="fb-detail-meta"></div>
+            <div class="nd2-card nd2-detail-gap">
+              <div class="nd2-card-h"><i class="fas fa-align-left"></i> Report <span class="nd2-note" id="fb-detail-note"></span></div>
+              <div class="nd2-pad tk-md" id="fb-detail-body"></div>
             </div>
-            <div class="fb-sect">
-              <div class="fb-sect-h">Ticket</div>
-              <div id="fb-ticket-box"></div>
+            <div class="nd2-top-grid">
+              <div class="nd2-card">
+                <div class="nd2-card-h"><i class="fas fa-flag"></i> Status</div>
+                <div class="nd2-pad">
+                  <div class="fb-row">
+                    <select id="fb-status-sel" class="tk-input" style="width:auto;"></select>
+                    <input id="fb-status-note" class="tk-input" maxlength="1000" placeholder="Note for the reporter and the board (optional)" style="flex:1 1 14rem;">
+                    <button class="btn btn-primary btn-sm" id="fb-status-btn" onclick="_fbSetStatus()"><i class="fas fa-check"></i> Set status</button>
+                  </div>
+                  <div class="fb-hint">Goes to the reporter's bell, the staff alert, and as a reply under the board post.</div>
+                </div>
+              </div>
+              <div class="nd2-card">
+                <div class="nd2-card-h"><i class="fas fa-ticket"></i> Ticket</div>
+                <div class="nd2-pad" id="fb-ticket-box"></div>
+              </div>
             </div>
           </div>
         </div>
@@ -16574,7 +16639,7 @@
     }
     function _tkSetKind(k) {
       _tkKind = k;
-      document.querySelectorAll('#tk-kinds .tk-kind').forEach((b) => b.classList.toggle('active', b.dataset.tkkind === k));
+      document.querySelectorAll('#tk-kinds .filter-btn').forEach((b) => b.classList.toggle('active', b.dataset.tkkind === k));
       document.getElementById('tk-tickets-panel').style.display = k === 'tickets' ? '' : 'none';
       document.getElementById('fb-panel').style.display = k === 'tickets' ? 'none' : '';
       const pr = document.getElementById('fb-pill-progress');
@@ -16591,7 +16656,7 @@
 
     function _tkSetFilter(f) {
       _tkFilter = f;
-      document.querySelectorAll('#tk-filters .tk-pill').forEach((b) => b.classList.toggle('active', b.dataset.tkfilter === f));
+      document.querySelectorAll('#tk-filters .filter-btn').forEach((b) => b.classList.toggle('active', b.dataset.tkfilter === f));
       loadTickets();
     }
 
@@ -16629,7 +16694,7 @@
       const el = document.getElementById('tickets-badge');
       const n = _tkOpenCount + _fbOpenCount;
       if (el) { el.textContent = n; el.style.display = n > 0 ? '' : 'none'; }
-      const pill = (id, v) => { const p = document.getElementById(id); if (p) { p.textContent = v; p.style.display = v > 0 ? '' : 'none'; } };
+      const pill = (id, v) => { const p = document.getElementById(id); if (p) p.textContent = v > 0 ? String(v) : ''; };
       pill('tk-count-open', _tkOpenCount);
       pill('tk-count-tickets', _tkOpenCount);
     }
@@ -16642,7 +16707,7 @@
       const bug = (c.bug && c.bug.open) || 0;
       const sug = (c.suggestion && c.suggestion.open) || 0;
       _fbOpenCount = bug + sug;
-      const pill = (id, v) => { const p = document.getElementById(id); if (p) { p.textContent = v; p.style.display = v > 0 ? '' : 'none'; } };
+      const pill = (id, v) => { const p = document.getElementById(id); if (p) p.textContent = v > 0 ? String(v) : ''; };
       pill('tk-count-bug', bug);
       pill('tk-count-suggestion', sug);
       _tkDrawBadge();
@@ -16659,6 +16724,13 @@
       } catch (e) { /* badge is best-effort */ }
     }
 
+    // A time cell the Data tab's way: the exact time, the relative one under it.
+    function _tkWhen(iso) {
+      if (!iso) return '';
+      const d = new Date(iso);
+      return `<span class="nd2-time">${escapeHtml(d.toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }))}<span class="nd2-time-rel">${escapeHtml(_tkAgo(iso))}</span></span>`;
+    }
+
     async function loadTickets() {
       const el = document.getElementById('tk-staff-list');
       if (!el) return;
@@ -16667,21 +16739,21 @@
         _tkTickets = j.tickets || [];
         _tkBadge(j.counts);
         if (!_tkTickets.length) {
-          el.innerHTML = '<div style="color:var(--text-soft); padding:1rem;">Nothing here.</div>';
+          el.innerHTML = '<tr><td colspan="7" class="nd2-empty">Nothing here.</td></tr>';
           return;
         }
         el.innerHTML = _tkTickets.map((t) => `
-          <div class="tk-srow" onclick="_tkOpenTicket(${Number(t.id)})">
-            <div style="flex:1; min-width:0;">
-              <div style="font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(t.subject)}</div>
-              <div style="font-size:0.72rem; color:var(--text-soft); margin-top:0.15rem;">
-                #${Number(t.id)} · ${escapeHtml(t.userName || t.userId || '')} · ${escapeHtml(TK_CATEGORIES[t.category] || t.category)} · ${escapeHtml(_tkAgo(t.lastMessageAt || t.updatedAt))}${t.createdByStaff ? ' · staff-opened' : ''} · ${Number(t.messageCount || 0)} msg
-              </div>
-            </div>
-            <span class="tk-schip ${escapeHtml(t.status)}">${escapeHtml(TK_STATUS_STAFF[t.status] || t.status)}</span>
-          </div>`).join('');
+          <tr onclick="_tkOpenTicket(${Number(t.id)})">
+            <td class="nd2-num nd2-pill-id">${Number(t.id)}</td>
+            <td class="tk-subj"><strong>${escapeHtml(t.subject)}</strong>${t.createdByStaff ? '<span class="nd-sub">opened by staff</span>' : ''}</td>
+            <td>${escapeHtml(t.userName || t.userId || '')}</td>
+            <td>${escapeHtml(TK_CATEGORIES[t.category] || t.category)}</td>
+            <td><span class="tk-schip ${escapeHtml(t.status)}">${escapeHtml(TK_STATUS_STAFF[t.status] || t.status)}</span></td>
+            <td class="nd2-num">${Number(t.messageCount || 0)}</td>
+            <td>${_tkWhen(t.lastMessageAt || t.updatedAt)}</td>
+          </tr>`).join('');
       } catch (e) {
-        el.innerHTML = `<div style="color:#f87171; padding:1rem;">Could not load tickets: ${escapeHtml(e.message)}</div>`;
+        el.innerHTML = `<tr><td colspan="7" class="nd2-empty" style="color:#f87171;">Could not load tickets: ${escapeHtml(e.message)}</td></tr>`;
       }
     }
 
@@ -16691,17 +16763,20 @@
         _tkOpenId = id;
         const t = j.ticket;
         document.getElementById('tk-detail-title').textContent = `#${t.id} · ${t.subject}`;
-        document.getElementById('tk-detail-meta').innerHTML =
-          `<span class="tk-schip ${escapeHtml(t.status)}">${escapeHtml(TK_STATUS_STAFF[t.status] || t.status)}</span>` +
-          ` ${escapeHtml(t.userName || t.userId || '')} · ${escapeHtml(TK_CATEGORIES[t.category] || t.category)}` +
-          (t.closedByName ? ` · closed by ${escapeHtml(t.closedByName)}` : '') +
-          (t.locked ? ' · <span style="color:#fbbf24;">locked</span>' : '') +
-          // The reports this ticket was opened about (api/feedback.ts links them).
-          ((j.feedback || []).length
-            ? '<div style="margin-top:0.35rem;">Linked: ' + j.feedback.map((f) =>
-                `<a href="#" onclick="_fbJump(${Number(f.id)}, '${escapeHtml(f.kind)}'); return false;" style="color:var(--accent);">${FB_KIND_ICON[f.kind] || ''} #${Number(f.id)} ${escapeHtml(f.subject)}</a> <span class="tk-schip ${escapeHtml(f.status)}">${escapeHtml((FB_STATUS[f.kind] || {})[f.status] || f.status)}</span>`
-              ).join(' · ') + '</div>'
-            : '');
+        // The context strip is a flex row (.nd2-ctx), so each fact is its own span.
+        const bits = [
+          `<span class="tk-schip ${escapeHtml(t.status)}">${escapeHtml(TK_STATUS_STAFF[t.status] || t.status)}</span>`,
+          `<span>${escapeHtml(t.userName || t.userId || '')}</span>`,
+          `<span>·</span><span>${escapeHtml(TK_CATEGORIES[t.category] || t.category)}</span>`,
+        ];
+        if (t.createdByStaff) bits.push('<span>·</span><span>opened by staff</span>');
+        if (t.closedByName) bits.push(`<span>·</span><span>closed by ${escapeHtml(t.closedByName)}</span>`);
+        if (t.locked) bits.push('<span>·</span><span style="color:#fbbf24;">locked</span>');
+        // The reports this ticket was opened about (api/feedback.ts links them).
+        for (const f of (j.feedback || [])) {
+          bits.push(`<span>·</span><span>about <a href="#" onclick="_fbJump(${Number(f.id)}, '${escapeHtml(f.kind)}'); return false;">${FB_KIND_ICON[f.kind] || ''} #${Number(f.id)} ${escapeHtml(f.subject)}</a> <span class="tk-schip ${escapeHtml(f.status)}">${escapeHtml((FB_STATUS[f.kind] || {})[f.status] || f.status)}</span></span>`);
+        }
+        document.getElementById('tk-detail-meta').innerHTML = bits.join('');
         document.getElementById('tk-detail-thread').innerHTML = (j.messages || []).map((m) => `
           <div class="tk-smsg ${m.isStaff ? 'staff' : 'user'}">
             <div class="tk-smsg-head">${_tkAvatar(m)}<a href="profile?u=${encodeURIComponent(m.authorId || '')}" target="_blank" rel="noopener" style="color:inherit; text-decoration:none;"><strong>${escapeHtml(m.authorName)}</strong></a>${m.isStaff ? ' · staff' : ''} · ${escapeHtml(_tkAgo(m.createdAt))}</div>
@@ -16714,8 +16789,8 @@
             ? (t.locked
                 ? 'Locked for the user (closed over 72h ago) — your reply still reopens it.'
                 : 'Replying reopens the ticket (status: waiting on user).')
-            : '';
-        document.getElementById('tk-staff-list').style.display = 'none';
+            : 'Your reply goes to the user\'s contact page and their bell.';
+        document.getElementById('tk-staff-list-wrap').style.display = 'none';
         document.getElementById('tk-staff-detail').style.display = '';
         try { document.getElementById('tk-staff-reply').value = localStorage.getItem(_tkReplyDraftKey(id)) || ''; } catch (e) {}
       } catch (e) {
@@ -16726,7 +16801,7 @@
     function _tkBackToList() {
       _tkOpenId = null;
       document.getElementById('tk-staff-detail').style.display = 'none';
-      document.getElementById('tk-staff-list').style.display = '';
+      document.getElementById('tk-staff-list-wrap').style.display = '';
       loadTickets();
     }
 
@@ -16795,7 +16870,7 @@
 
     function _fbSetFilter(f) {
       _fbFilter = f;
-      document.querySelectorAll('#fb-filters .tk-pill').forEach((b) => b.classList.toggle('active', b.dataset.fbfilter === f));
+      document.querySelectorAll('#fb-filters .filter-btn').forEach((b) => b.classList.toggle('active', b.dataset.fbfilter === f));
       loadFeedback();
     }
 
@@ -16812,22 +16887,21 @@
         _fbItems = j.feedback || [];
         _fbBadge(j.counts);
         if (!_fbItems.length) {
-          el.innerHTML = '<div style="color:var(--text-soft); padding:1rem;">Nothing here.</div>';
+          el.innerHTML = '<tr><td colspan="7" class="nd2-empty">Nothing here.</td></tr>';
           return;
         }
         el.innerHTML = _fbItems.map((f) => `
-          <div class="tk-srow" onclick="_fbOpenReport(${Number(f.id)})">
-            <span style="font-size:1.05rem; line-height:1;">${FB_KIND_ICON[f.kind] || ''}</span>
-            <div style="flex:1; min-width:0;">
-              <div style="font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(f.subject)}</div>
-              <div style="font-size:0.72rem; color:var(--text-soft); margin-top:0.15rem;">
-                #${Number(f.id)} · ${escapeHtml(_fbWho(f))} · ${escapeHtml(_tkAgo(f.createdAt))}${f.ticketId ? ` · ticket #${Number(f.ticketId)}` : ''}
-              </div>
-            </div>
-            <span class="tk-schip ${escapeHtml(f.status)}">${escapeHtml(f.statusLabel || f.status)}</span>
-          </div>`).join('');
+          <tr onclick="_fbOpenReport(${Number(f.id)})">
+            <td class="nd2-num nd2-pill-id">${Number(f.id)}</td>
+            <td class="tk-subj">${FB_KIND_ICON[f.kind] || ''} <strong>${escapeHtml(f.subject)}</strong></td>
+            <td>${escapeHtml(f.userName || f.discordUserName || 'unknown')}</td>
+            <td>${f.source === 'discord' ? `<span class="nd2-type-chip radio">DISCORD</span>${f.userId ? ' <span class="nd-sub">linked</span>' : ''}` : '<span class="nd2-type-chip pager">SITE</span>'}</td>
+            <td><span class="tk-schip ${escapeHtml(f.status)}">${escapeHtml(f.statusLabel || f.status)}</span></td>
+            <td>${f.ticketId ? `<span class="nd2-pill-id">#${Number(f.ticketId)}</span>` : '<span class="nd-sub">—</span>'}</td>
+            <td>${_tkWhen(f.createdAt)}</td>
+          </tr>`).join('');
       } catch (e) {
-        el.innerHTML = `<div style="color:#f87171; padding:1rem;">Could not load reports: ${escapeHtml(e.message)}</div>`;
+        el.innerHTML = `<tr><td colspan="7" class="nd2-empty" style="color:#f87171;">Could not load reports: ${escapeHtml(e.message)}</td></tr>`;
       }
     }
 
@@ -16835,7 +16909,7 @@
     function _fbJump(id, kind) {
       _tkOpenId = null;
       document.getElementById('tk-staff-detail').style.display = 'none';
-      document.getElementById('tk-staff-list').style.display = '';
+      document.getElementById('tk-staff-list-wrap').style.display = '';
       _tkSetKind(kind === 'suggestion' ? 'suggestion' : 'bug');
       _fbOpenReport(id);
     }
@@ -16849,9 +16923,12 @@
         document.getElementById('fb-detail-title').textContent = `${FB_KIND_ICON[f.kind] || ''} #${f.id} · ${f.subject}`;
         document.getElementById('fb-detail-meta').innerHTML =
           `<span class="tk-schip ${escapeHtml(f.status)}">${escapeHtml(f.statusLabel || f.status)}</span>` +
-          ` ${escapeHtml(FB_KIND_LABEL[f.kind] || f.kind)} · ${escapeHtml(_fbWho(f))} · ${escapeHtml(_tkAgo(f.createdAt))}` +
-          (f.statusByName ? ` · status by ${escapeHtml(f.statusByName)}${f.statusAt ? ' ' + escapeHtml(_tkAgo(f.statusAt)) : ''}` : '') +
-          (f.statusNote ? `<div style="margin-top:0.3rem; color:#bae6fd;">Note: ${escapeHtml(f.statusNote)}</div>` : '');
+          `<span>${escapeHtml(FB_KIND_LABEL[f.kind] || f.kind)}</span>` +
+          `<span>·</span><span>${escapeHtml(_fbWho(f))}</span>` +
+          `<span>·</span><span>${escapeHtml(_tkAgo(f.createdAt))}</span>` +
+          (f.statusNote ? `<span>·</span><span style="color:#bae6fd;">Note: ${escapeHtml(f.statusNote)}</span>` : '');
+        document.getElementById('fb-detail-note').textContent =
+          f.statusByName ? `status set by ${f.statusByName}${f.statusAt ? ' · ' + _tkAgo(f.statusAt) : ''}` : '';
         document.getElementById('fb-detail-body').innerHTML = tkMd(f.body);
         const link = document.getElementById('fb-board-link');
         if (f.boardUrl) { link.href = f.boardUrl; link.style.display = ''; } else { link.style.display = 'none'; }
@@ -16861,7 +16938,7 @@
           .map(([v, label]) => `<option value="${v}"${v === f.status ? ' selected' : ''}>${escapeHtml(label)}</option>`).join('');
         document.getElementById('fb-status-note').value = '';
         _fbRenderTicketBox(f, j.ticket);
-        document.getElementById('fb-staff-list').style.display = 'none';
+        document.getElementById('fb-staff-list-wrap').style.display = 'none';
         document.getElementById('fb-staff-detail').style.display = '';
       } catch (e) {
         showToast('Could not open the report: ' + e.message, 'error');
@@ -16877,27 +16954,22 @@
 
       if (f.ticketId) {
         const n = Number(f.ticketId);
-        box.innerHTML = `<div class="fb-tbox">
-            <div class="fb-tbox-lead">The conversation about this ${kindWord} is on <strong>ticket #${n}</strong>${ticket ? ` — ${escapeHtml(ticket.subject)} <span class="tk-schip ${escapeHtml(ticket.status)}">${escapeHtml(TK_STATUS_STAFF[ticket.status] || ticket.status)}</span>` : ''}.</div>
+        box.innerHTML = `<div class="fb-tbox-lead">The conversation about this ${kindWord} is on <strong>ticket #${n}</strong>${ticket ? ` — ${escapeHtml(ticket.subject)} <span class="tk-schip ${escapeHtml(ticket.status)}">${escapeHtml(TK_STATUS_STAFF[ticket.status] || ticket.status)}</span>` : ''}.</div>
             <div class="fb-tbox-row">
               <button class="btn btn-primary btn-sm" onclick="_fbGoTicket(${n})"><i class="fas fa-ticket"></i> Open ticket #${n}</button>
               <button class="btn btn-secondary btn-sm" onclick="_fbLinkTicket(null)">Unlink</button>
-            </div>
-          </div>`;
+            </div>`;
         return;
       }
 
       if (!f.userId) {
         // A Discord-only reporter has no contact page for a ticket to appear on.
-        box.innerHTML = `<div class="fb-tbox">
-            <div class="fb-tbox-lead">No ticket. <strong>${name}</strong> reported this from Discord and has no site account, so a ticket can't be started with them. If they open one on the site, link it here.</div>
-            <div class="fb-tbox-row">${linkRow}</div>
-          </div>`;
+        box.innerHTML = `<div class="fb-tbox-lead">No ticket. <strong>${name}</strong> reported this from Discord and has no site account, so a ticket can't be started with them. If they open one on the site, link it here.</div>
+            <div class="fb-tbox-row">${linkRow}</div>`;
         return;
       }
 
-      box.innerHTML = `<div class="fb-tbox">
-          <div class="fb-tbox-lead">No ticket. A ticket is a private conversation with <strong>${name}</strong> on their contact page — start one when this ${kindWord} needs a back-and-forth.</div>
+      box.innerHTML = `<div class="fb-tbox-lead">No ticket. A ticket is a private conversation with <strong>${name}</strong> on their contact page — start one when this ${kindWord} needs a back-and-forth.</div>
           <div class="fb-tbox-row" id="fb-tbox-actions">
             <button class="btn btn-primary btn-sm" onclick="_fbShowNewTicket(true)"><i class="fas fa-comments"></i> Start a ticket with ${name}</button>
             <span class="fb-tbox-or">or link an existing one</span>
@@ -16910,8 +16982,7 @@
               <button class="btn btn-primary btn-sm" id="fb-new-ticket-btn" onclick="_fbNewTicket()"><i class="fas fa-paper-plane"></i> Open ticket</button>
               <button class="btn btn-secondary btn-sm" onclick="_fbShowNewTicket(false)">Cancel</button>
             </div>
-          </div>
-        </div>`;
+          </div>`;
     }
 
     // The message form replaces the actions row while it is open; Cancel
@@ -16929,7 +17000,7 @@
       _fbOpenId = null;
       _fbOpen = null;
       document.getElementById('fb-staff-detail').style.display = 'none';
-      document.getElementById('fb-staff-list').style.display = '';
+      document.getElementById('fb-staff-list-wrap').style.display = '';
       _tkSetKind('tickets');
       _tkOpenTicket(id);
     }
@@ -16938,7 +17009,7 @@
       _fbOpenId = null;
       _fbOpen = null;
       document.getElementById('fb-staff-detail').style.display = 'none';
-      document.getElementById('fb-staff-list').style.display = '';
+      document.getElementById('fb-staff-list-wrap').style.display = '';
       loadFeedback();
     }
 
