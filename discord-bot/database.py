@@ -426,7 +426,7 @@ class Database:
 
                 # Bug reports and suggestions. Per kind, the INTAKE channel
                 # (messages posted there are filed as reports; the bot keeps
-                # a pinned how-to, notice_message_id) and the public BOARD
+                # a how-to there, notice_message_id) and the public BOARD
                 # channel (every report is posted there with its status).
                 # Both are chosen on the staff page and pushed here by the
                 # feedback_channels action — the bot never reads the

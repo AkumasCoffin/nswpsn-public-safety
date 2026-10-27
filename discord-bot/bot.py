@@ -710,6 +710,31 @@ def split_feedback_message(text: str):
     return title, details
 
 
+def cut_utf16(s: str, n: int) -> str:
+    """Cut to n UTF-16 code units — the backend's `.length`, which counts an
+    emoji as two. A cut by Python characters passes a title the backend then
+    refuses as too long, and nothing the member can do fixes that."""
+    out: List[str] = []
+    used = 0
+    for ch in s:
+        w = 2 if ord(ch) > 0xFFFF else 1
+        if used + w > n:
+            break
+        out.append(ch)
+        used += w
+    return ''.join(out)
+
+
+def _first_link_url(message) -> Optional[str]:
+    """The URL on the first link button of a message, if any."""
+    for row in getattr(message, 'components', None) or []:
+        for child in getattr(row, 'children', None) or []:
+            url = getattr(child, 'url', None)
+            if url:
+                return url
+    return None
+
+
 class NSWPSNBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
@@ -765,9 +790,15 @@ class NSWPSNBot(commands.Bot):
         # needs: intake channel id -> kind.
         self._feedback_channels: Dict[str, Dict[str, Any]] = {}
         self._feedback_intake: Dict[int, str] = {}
-        # Per-user: when they last filed, for a short cooldown. The real cap
-        # (five open reports) is the backend's.
+        # Per-user: the slot their next report may file in (20 s apart — a
+        # pace, not a refusal). The real cap (five open reports) is the
+        # backend's. Messages being filed right now, so an edit while one
+        # waits for its slot does not file it twice.
         self._feedback_last_post: Dict[int, float] = {}
+        self._feedback_inflight: set = set()
+        # Messages already filed: normally deleted at once, but one the bot
+        # could not delete (no Manage Messages) must not file again when edited.
+        self._feedback_filed: set = set()
         self._feedback_unsigned_notice = False
         self._feedback_notices_checked = False
         
@@ -1642,56 +1673,56 @@ class NSWPSNBot(commands.Bot):
         deleted. Content is compared, so an unchanged notice is left alone.
         One pinned by an earlier build is unpinned: it is the only message
         in its channel, so a pin adds nothing but a banner."""
-        loop = asyncio.get_event_loop()
         for kind, row in list(self._feedback_channels.items()):
-            intake = int(row.get('intake_channel_id') or 0)
-            notice_id = int(row.get('notice_message_id') or 0)
-            if not intake:
-                continue
-            wanted = build_feedback_notice_embed(kind, self._site_url())
-            wanted_view = build_feedback_notice_view(kind, self._site_url())
+            # One kind's trouble (a channel the bot lost, a send refused)
+            # must not keep the other kind's how-to stale.
             try:
-                channel = await self._fetch_text_channel(intake)
-            except ValueError as e:
-                logger.warning(f"feedback notices: {kind} intake channel unavailable: {e}")
-                continue
-            msg = None
-            if notice_id:
+                await self._refresh_feedback_notice(kind, row)
+            except Exception as e:
+                logger.warning(f"feedback notices: {kind} refresh failed: {e}")
+
+    async def _refresh_feedback_notice(self, kind: str, row: Dict[str, Any]):
+        loop = asyncio.get_event_loop()
+        intake = int(row.get('intake_channel_id') or 0)
+        notice_id = int(row.get('notice_message_id') or 0)
+        if not intake:
+            return
+        site_url = self._site_url()
+        wanted = build_feedback_notice_embed(kind, site_url)
+        wanted_view = build_feedback_notice_view(kind, site_url)
+        wanted_url = f"{site_url.rstrip('/')}/contact?type={kind}" if wanted_view else None
+        channel = await self._fetch_text_channel(intake)
+        msg = None
+        if notice_id:
+            try:
+                msg = await channel.fetch_message(notice_id)
+            except discord.NotFound:
+                msg = None
+        if msg is not None:
+            if msg.pinned:
                 try:
-                    msg = await channel.fetch_message(notice_id)
-                except discord.NotFound:
-                    msg = None
+                    await msg.unpin()
                 except discord.HTTPException as e:
-                    logger.warning(f"feedback notices: {kind} notice not fetched: {e}")
-                    continue
-            if msg is not None:
-                if msg.pinned:
-                    try:
-                        await msg.unpin()
-                    except discord.HTTPException as e:
-                        logger.info(f"feedback notices: {kind} unpin failed: {e}")
-                have = msg.embeds[0] if msg.embeds else None
-                # Same words and already carrying the button: leave it alone.
-                if (have and have.title == wanted.title
-                        and (have.description or '') == (wanted.description or '')
-                        and bool(msg.components) == bool(wanted_view)):
-                    continue
-                try:
-                    await msg.edit(embed=wanted, view=wanted_view)
-                    logger.info(f"feedback notices: {kind} how-to updated in place")
-                except discord.HTTPException as e:
-                    logger.warning(f"feedback notices: {kind} edit failed: {e}")
-                continue
-            # Gone (or never recorded): post a fresh one.
-            msg = await channel.send(embed=wanted, view=wanted_view)
-            row = dict(row)
-            row['notice_message_id'] = msg.id
-            await loop.run_in_executor(
-                None, lambda: self.db.set_feedback_channels(
-                    kind, int(row.get('guild_id') or 0), intake,
-                    int(row.get('board_channel_id') or 0), msg.id))
-            self._apply_feedback_row(row)
-            logger.info(f"feedback notices: {kind} how-to reposted")
+                    logger.info(f"feedback notices: {kind} unpin failed: {e}")
+            have = msg.embeds[0] if msg.embeds else None
+            # Same words and the button pointing at the same site: leave it alone.
+            if (have and have.title == wanted.title
+                    and (have.description or '') == (wanted.description or '')
+                    and _first_link_url(msg) == wanted_url):
+                return
+            await msg.edit(embed=wanted, view=wanted_view)
+            logger.info(f"feedback notices: {kind} how-to updated in place")
+            return
+        # Gone (or never recorded): post a fresh one.
+        msg = await channel.send(embed=wanted, view=wanted_view)
+        row = dict(row)
+        row['notice_message_id'] = msg.id
+        await loop.run_in_executor(
+            None, lambda: self.db.set_feedback_channels(
+                kind, int(row.get('guild_id') or 0), intake,
+                int(row.get('board_channel_id') or 0), msg.id))
+        self._apply_feedback_row(row)
+        logger.info(f"feedback notices: {kind} how-to reposted")
 
     async def _remove_feedback_notice(self, channel_id: int, message_id: int):
         """Take a how-to down (unpinning first, for one an earlier build
@@ -1735,11 +1766,20 @@ class NSWPSNBot(commands.Bot):
         if notice_id and intake != prior_intake:
             await self._remove_feedback_notice(prior_intake, notice_id)
             notice_id = 0
+        notice_error = None
         if intake and (intake != prior_intake or not notice_id):
-            channel = await self._fetch_text_channel(intake)
-            msg = await channel.send(embed=build_feedback_notice_embed(kind, site_url),
-                                     view=build_feedback_notice_view(kind, site_url))
-            notice_id = msg.id
+            try:
+                channel = await self._fetch_text_channel(intake)
+                msg = await channel.send(embed=build_feedback_notice_embed(kind, site_url),
+                                         view=build_feedback_notice_view(kind, site_url))
+                notice_id = msg.id
+            except Exception as e:
+                # The channels are recorded regardless: filing from the intake
+                # channel and posting to the board must not hang on the how-to
+                # (a channel the bot cannot post in yet, say). The start-up
+                # refresh posts it once the bot can.
+                notice_error = str(e)
+                logger.warning(f"feedback channels: {kind} how-to not posted in {intake}: {e}")
 
         await loop.run_in_executor(
             None, lambda: self.db.set_feedback_channels(kind, gid, intake, board, notice_id))
@@ -1748,8 +1788,11 @@ class NSWPSNBot(commands.Bot):
             'board_channel_id': board, 'notice_message_id': notice_id,
         })
         logger.info(f"feedback channels: {kind} intake={intake or '-'} board={board or '-'} notice={notice_id or '-'}")
-        return {'kind': kind, 'intake_channel_id': str(intake), 'board_channel_id': str(board),
-                'notice_message_id': str(notice_id)}
+        result = {'kind': kind, 'intake_channel_id': str(intake), 'board_channel_id': str(board),
+                  'notice_message_id': str(notice_id)}
+        if notice_error:
+            result['notice_error'] = notice_error
+        return result
 
     async def _post_feedback_board(self, kind: str, feedback_id: int, subject: str, body: str,
                                    reporter: str, source: str, status: str, status_label: str,
@@ -1806,46 +1849,31 @@ class NSWPSNBot(commands.Bot):
 
         prior = await loop.run_in_executor(None, lambda: self.db.get_feedback_board_post(fid))
         if not prior:
-            return {'skipped': 'no_board_post'}
+            # The bot's own record is the first choice. The backend keeps a
+            # copy of where the post went (the feedback row's board_* ids,
+            # sent as channel_id/message_id) and that stands in when the
+            # record is missing — it was not written, or the table was reset.
+            try:
+                cid = int(params.get('channel_id') or 0)
+                mid = int(params.get('message_id') or 0)
+            except (TypeError, ValueError):
+                cid = mid = 0
+            if not (cid and mid):
+                return {'skipped': 'no_board_post'}
+            prior = {'channel_id': cid, 'message_id': mid}
         channel = await self._fetch_text_channel(int(prior['channel_id']))
         try:
             msg = await channel.fetch_message(int(prior['message_id']))
         except discord.NotFound:
+            # Taken down by hand. Its replies are still the bot's to clear;
+            # then it is forgotten.
+            gone = await self._delete_board_replies(channel, fid, None)
             await loop.run_in_executor(None, lambda: self.db.delete_feedback_board_post(fid))
-            return {'skipped': 'board_post_gone'}
+            return {'skipped': 'board_post_gone', 'replies_deleted': gone}
 
         if event == 'delete':
-            # The replies under the post go first: the ones recorded as they
-            # were posted, plus a sweep of the channel after the post for any
-            # of the bot's messages that reply to it (replies from before they
-            # were recorded). Then the post itself.
-            gone = 0
-            seen: set = set()
-            try:
-                for r in await loop.run_in_executor(None, lambda: self.db.get_feedback_board_replies(fid)):
-                    mid = int(r['message_id'])
-                    seen.add(mid)
-                    try:
-                        await (await channel.fetch_message(mid)).delete()
-                        gone += 1
-                    except discord.NotFound:
-                        pass
-                    except discord.HTTPException as e:
-                        logger.info(f"feedback board: reply {mid} not deleted: {e}")
-            except Exception as e:
-                logger.warning(f"feedback board: reply lookup failed for #{fid}: {e}")
-            try:
-                async for m in channel.history(after=discord.Object(id=msg.id), limit=300):
-                    ref = m.reference
-                    if (m.author.id == self.user.id and ref and ref.message_id == msg.id
-                            and m.id not in seen):
-                        try:
-                            await m.delete()
-                            gone += 1
-                        except discord.HTTPException as e:
-                            logger.info(f"feedback board: reply {m.id} not deleted: {e}")
-            except discord.HTTPException as e:
-                logger.info(f"feedback board: history sweep failed for #{fid}: {e}")
+            # The replies under the post go first, then the post itself.
+            gone = await self._delete_board_replies(channel, fid, msg)
             try:
                 await msg.delete()
             except discord.Forbidden:
@@ -1875,8 +1903,47 @@ class NSWPSNBot(commands.Bot):
 
         raise ValueError(f'unknown feedback_board event: {event}')
 
+    async def _delete_board_replies(self, channel, fid: int, post) -> int:
+        """Delete the bot's status replies under a board post: the ones
+        recorded as they were posted, plus — when the post is still there to
+        sweep after — any of the bot's messages in the channel that reply to
+        it (replies from before they were recorded). Returns how many went."""
+        loop = asyncio.get_event_loop()
+        gone = 0
+        seen: set = set()
+        try:
+            for r in await loop.run_in_executor(None, lambda: self.db.get_feedback_board_replies(fid)):
+                mid = int(r['message_id'])
+                seen.add(mid)
+                try:
+                    await (await channel.fetch_message(mid)).delete()
+                    gone += 1
+                except discord.NotFound:
+                    pass
+                except discord.HTTPException as e:
+                    logger.info(f"feedback board: reply {mid} not deleted: {e}")
+        except Exception as e:
+            logger.warning(f"feedback board: reply lookup failed for #{fid}: {e}")
+        if post is None:
+            return gone
+        try:
+            async for m in channel.history(after=discord.Object(id=post.id), limit=300):
+                ref = m.reference
+                if (m.author.id == self.user.id and ref and ref.message_id == post.id
+                        and m.id not in seen):
+                    try:
+                        await m.delete()
+                        gone += 1
+                    except discord.HTTPException as e:
+                        logger.info(f"feedback board: reply {m.id} not deleted: {e}")
+        except discord.HTTPException as e:
+            logger.info(f"feedback board: history sweep failed for #{fid}: {e}")
+        return gone
+
     async def _feedback_post(self, action: str, path: str, params: Dict[str, str]):
-        """A signed POST to the backend. Returns (status, json or {})."""
+        """A signed POST to the backend. Returns (status, json or {}); a
+        refusal is logged here, so a caller that has nothing to do with it
+        still leaves a trace."""
         secret = os.getenv('BOT_ACTION_SIGNING_SECRET') or ''
         sig = database.sign_bot_action(secret, action, 'bot', params) if secret else ''
         headers = {
@@ -1893,7 +1960,10 @@ class NSWPSNBot(commands.Bot):
                         data = await resp.json(content_type=None)
                     except Exception:
                         data = {}
-                    return resp.status, data if isinstance(data, dict) else {}
+                    data = data if isinstance(data, dict) else {}
+                    if resp.status >= 300:
+                        logger.warning(f"feedback post {path}: {resp.status} {data.get('error') or data}")
+                    return resp.status, data
         except Exception as e:
             logger.warning(f"feedback post {path}: {e}")
             return 0, {}
@@ -1923,19 +1993,37 @@ class NSWPSNBot(commands.Bot):
             except Exception as e:
                 logger.warning(f"feedback intake: delete failed: {e}")
 
+    def _is_intake_post(self, message: discord.Message) -> bool:
+        """A member's own message in an intake channel: not a bot's, not a
+        DM, and not one of Discord's system messages — a pin notice has a
+        human author and no content, and is not a report."""
+        if message.author.bot or message.guild is None:
+            return False
+        if message.type not in (discord.MessageType.default, discord.MessageType.reply):
+            return False
+        return message.channel.id in self._feedback_intake
+
     async def on_message(self, message: discord.Message):
         # The only thing on_message does. No prefix commands exist (the '!'
         # prefix is a discord.py default nothing uses), so there is no
         # process_commands to hand the message on to.
-        if message.author.bot or message.guild is None:
-            return
-        kind = self._feedback_intake.get(message.channel.id)
-        if not kind:
+        if not self._is_intake_post(message):
             return
         try:
-            await self._file_feedback(kind, message)
+            await self._file_feedback(self._feedback_intake[message.channel.id], message)
         except Exception as e:
             logger.error(f"feedback intake: {e}", exc_info=True)
+
+    async def on_message_edit(self, before: discord.Message, after: discord.Message):
+        """A message left in an intake channel because it was not in the
+        report shape is filed once its author edits it into shape — the
+        text they wrote is theirs to fix, not the bot's to delete."""
+        if before.content == after.content or not self._is_intake_post(after):
+            return
+        try:
+            await self._file_feedback(self._feedback_intake[after.channel.id], after)
+        except Exception as e:
+            logger.error(f"feedback intake (edit): {e}", exc_info=True)
 
     async def _file_feedback(self, kind: str, message: discord.Message):
         """A member's message in an intake channel becomes a report."""
@@ -1943,38 +2031,65 @@ class NSWPSNBot(commands.Bot):
         text = (message.content or '').strip()
         answer = lambda tone, title, body, after, delete_original, view=None: self._answer_member(  # noqa: E731
             message, build_feedback_reply_embed(kind, tone, title, body), after, delete_original, view)
+        # Screenshots live on the board post — there is nowhere else to keep
+        # them — so without a board channel for this kind they cannot be kept.
+        board_ok = bool(int((self._feedback_channels.get(kind) or {}).get('board_channel_id') or 0))
 
         # The required shape: a '#' title line, the details under it. That
         # is what gives the report a title and a description of its own
         # rather than the same first line twice. Anything else is told the
-        # format and not filed.
+        # format and left in place to be edited into shape (on_message_edit).
         title, details = split_feedback_message(text)
         example = '# A dark mode for the map' if kind == 'suggestion' else '# Map tiles go blank past zoom 14'
         if title is None:
             await answer(
-                'hint', f"Not filed — start with a title line",
+                'hint', "Not filed — start with a title line",
                 f"Begin your message with a title line, then put the details on the lines under it:\n"
                 f"```\n{example}\nWhat it is, and the details…\n```\n"
+                f"Edit your message into that shape and it is filed from there. "
                 f"The how-to at the top of the channel has a full example.",
-                15, True)
+                30, False)
             return
-        if len(details) < 10 and not message.attachments:
+        if len(details) < 10 and not (message.attachments and board_ok):
             await answer(
-                'hint', f"Not filed — add the details under the title",
+                'hint', "Not filed — add the details under the title",
                 ("What it would do, and why it would help." if kind == 'suggestion'
                  else "What you did, what happened, what you expected, and where.")
-                + " The how-to at the top of the channel has an example.",
-                15, True)
+                + (" Screenshots posted here can't be kept at the moment, so put what they show in words."
+                   if message.attachments else "")
+                + " Edit your message to add them and it is filed from there.",
+                30, False)
             return
 
-        now = time.monotonic()
-        if now - self._feedback_last_post.get(message.author.id, 0.0) < 20:
-            await answer('hint', "One at a time", f"Give it a few seconds before the next {in_sentence}.", 10, True)
+        if message.id in self._feedback_inflight or message.id in self._feedback_filed:
             return
-        self._feedback_last_post[message.author.id] = now
+        self._feedback_inflight.add(message.id)
+        try:
+            await self._file_feedback_now(kind, message, title, details, board_ok, answer)
+        finally:
+            self._feedback_inflight.discard(message.id)
+
+    async def _file_feedback_now(self, kind: str, message: discord.Message, title: str, details: str,
+                                 board_ok: bool, answer):
+        label, in_sentence, _, _ = FEEDBACK_KINDS[kind]
+
+        # One report per member every 20 s: pacing, not a refusal. Each
+        # message takes the next slot and waits for it; the backend's cap on
+        # open reports is the real limit.
+        now = time.monotonic()
+        slot = max(now, self._feedback_last_post.get(message.author.id, 0.0) + 20)
+        self._feedback_last_post[message.author.id] = slot
         if len(self._feedback_last_post) > 500:
             cutoff = now - 60
             self._feedback_last_post = {u: t for u, t in self._feedback_last_post.items() if t > cutoff}
+        if slot > now:
+            await asyncio.sleep(slot - now)
+            try:
+                await message.channel.fetch_message(message.id)
+            except discord.NotFound:
+                return  # withdrawn while it waited
+            except discord.HTTPException:
+                pass
 
         if not os.getenv('BOT_ACTION_SIGNING_SECRET'):
             if not self._feedback_unsigned_notice:
@@ -1985,36 +2100,48 @@ class NSWPSNBot(commands.Bot):
 
         # Attachments are read NOW: the message is deleted once filed, and
         # Discord's attachment links expire anyway, so the files are re-sent
-        # on the board post, which is the lasting copy.
+        # on the board post, which is the lasting copy. The guild's upload
+        # limit bounds each file and the lot together.
         files: List[discord.File] = []
         attach_names: List[str] = []
-        for a in message.attachments[:8]:
-            if a.size and a.size > 8 * 1024 * 1024:
-                attach_names.append(f"{a.filename} (too large to keep)")
-                continue
-            try:
-                data = await a.read()
-                files.append(discord.File(io.BytesIO(data), filename=a.filename))
-                attach_names.append(a.filename)
-            except Exception as e:
-                logger.warning(f"feedback intake: attachment {a.filename} not read: {e}")
-                attach_names.append(f"{a.filename} (could not be fetched)")
+        files_lost = bool(message.attachments) and not board_ok
+        if board_ok:
+            limit = int(getattr(message.guild, 'filesize_limit', 0) or 8 * 1024 * 1024)
+            total = 0
+            for a in message.attachments[:8]:
+                size = int(a.size or 0)
+                if size > limit or total + size > limit:
+                    attach_names.append(f"{a.filename} (too large to keep)")
+                    continue
+                try:
+                    data = await a.read()
+                    files.append(discord.File(io.BytesIO(data), filename=a.filename))
+                    attach_names.append(a.filename)
+                    total += size
+                except Exception as e:
+                    logger.warning(f"feedback intake: attachment {a.filename} not read: {e}")
+                    attach_names.append(f"{a.filename} (could not be fetched)")
 
-        reporter = (message.author.display_name or message.author.name or 'a member')[:100]
-        subject = title[:140]
+        reporter = cut_utf16(message.author.display_name or message.author.name or 'a member', 100)
+        subject = cut_utf16(title, 140)
         body = details or '(see the attachments on the board post)'
         if attach_names:
             body += "\n\nAttachments: " + ", ".join(attach_names)
+        elif files_lost:
+            body += "\n\n(Screenshots were posted but could not be kept: no board channel.)"
         params = {
             'kind': kind,
             'discord_user_id': str(message.author.id),
             'discord_user_name': reporter,
             'subject': subject,
-            'body': body[:5000],
+            'body': cut_utf16(body, 5000),
         }
         status, data = await self._feedback_post('feedback', '/api/discord/feedback', params)
 
         if status == 200 and data.get('ok'):
+            if len(self._feedback_filed) > 1000:
+                self._feedback_filed.clear()
+            self._feedback_filed.add(message.id)
             fb = data.get('feedback') or {}
             fid = int(fb.get('id') or 0)
             site_url = self._site_url()
@@ -2025,6 +2152,8 @@ class NSWPSNBot(commands.Bot):
                     fb.get('statusLabel') or 'Open', site_url, files=files)
             except Exception as e:
                 logger.warning(f"feedback intake: board post failed for #{fid}: {e}")
+                if files:
+                    files_lost = True
             if board_msg is not None:
                 await self._feedback_post('feedback_board_post', f'/api/discord/feedback/{fid}/board', {
                     'id': str(fid), 'guild_id': str(message.guild.id),
@@ -2034,6 +2163,9 @@ class NSWPSNBot(commands.Bot):
             if board_msg is not None:
                 lines.append(f"It's on the board in <#{board_msg.channel.id}> with its status, and the post "
                              f"is replied to whenever that changes.")
+            if files_lost:
+                lines.append("Your screenshots could not be kept — staff have the words. If they matter, "
+                             "describe what they showed.")
             # Linked or not, say how it reaches their contact page: the one
             # we could not match may well have an account they never linked.
             if data.get('linked'):
@@ -2053,6 +2185,12 @@ class NSWPSNBot(commands.Bot):
         if status == 429:
             await answer('fail', "Not filed — too many open",
                          (data.get('error') or 'You have too many open reports already') + '.', 15, False)
+            return
+        if status == 400:
+            # The report itself was refused (too long, say): a retry changes
+            # nothing, so the member is told what, and the message stays to
+            # be edited.
+            await answer('fail', "Not filed", (data.get('error') or 'The report was not accepted') + '.', 30, False)
             return
         logger.warning(f"feedback intake: backend answered {status}: {data}")
         await answer('fail', "Couldn't file that right now", "Try again in a minute.", 15, False)
