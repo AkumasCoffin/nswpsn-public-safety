@@ -32,8 +32,8 @@ from database import Database
 from alert_poller import AlertPoller
 from embeds import (
     EmbedBuilder, build_staff_notify_embed, STAFF_NOTIFY_KINDS,
-    FEEDBACK_KINDS, build_feedback_notice_embed, build_feedback_board_embed,
-    set_feedback_board_status, feedback_status_line,
+    FEEDBACK_KINDS, build_feedback_notice_embed, build_feedback_notice_view,
+    build_feedback_board_embed, set_feedback_board_status, feedback_status_line,
 )
 import alert_catalog
 
@@ -1644,6 +1644,7 @@ class NSWPSNBot(commands.Bot):
             if not intake:
                 continue
             wanted = build_feedback_notice_embed(kind, self._site_url())
+            wanted_view = build_feedback_notice_view(kind, self._site_url())
             try:
                 channel = await self._fetch_text_channel(intake)
             except ValueError as e:
@@ -1660,16 +1661,19 @@ class NSWPSNBot(commands.Bot):
                     continue
             if msg is not None:
                 have = msg.embeds[0] if msg.embeds else None
-                if have and have.title == wanted.title and (have.description or '') == (wanted.description or ''):
+                # Same words and already carrying the button: leave it alone.
+                if (have and have.title == wanted.title
+                        and (have.description or '') == (wanted.description or '')
+                        and bool(msg.components) == bool(wanted_view)):
                     continue
                 try:
-                    await msg.edit(embed=wanted)
+                    await msg.edit(embed=wanted, view=wanted_view)
                     logger.info(f"feedback notices: {kind} how-to updated in place")
                 except discord.HTTPException as e:
                     logger.warning(f"feedback notices: {kind} edit failed: {e}")
                 continue
             # Gone (or never recorded): post and pin a fresh one.
-            msg = await channel.send(embed=wanted)
+            msg = await channel.send(embed=wanted, view=wanted_view)
             try:
                 await msg.pin()
             except discord.HTTPException as e:
@@ -1725,7 +1729,8 @@ class NSWPSNBot(commands.Bot):
             notice_id = 0
         if intake and (intake != prior_intake or not notice_id):
             channel = await self._fetch_text_channel(intake)
-            msg = await channel.send(embed=build_feedback_notice_embed(kind, site_url))
+            msg = await channel.send(embed=build_feedback_notice_embed(kind, site_url),
+                                     view=build_feedback_notice_view(kind, site_url))
             notice_id = msg.id
             try:
                 await msg.pin()

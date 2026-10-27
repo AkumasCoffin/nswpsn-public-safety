@@ -250,8 +250,9 @@ The one place the bot WRITES to the backend. Two public channels per kind
 by the `feedback_channels` action, because the bot never reads the backend's
 `app_settings`; the bot keeps them in `feedback_channels`.
 
-**Intake.** The bot posts and pins a how-to (`build_feedback_notice_embed`;
-needs Manage Messages, posted unpinned without it) and `on_message` files every
+**Intake.** The bot posts and pins a how-to (`build_feedback_notice_embed`, with a
+link button to the same thing on the site, `build_feedback_notice_view`; needs
+Manage Messages, posted unpinned without it) and `on_message` files every
 member's message there as a report: a signed `POST /api/discord/feedback` —
 the static key plus `X-Bot-Signature`, which is `sign_bot_action(secret,
 'feedback', 'bot', body)` with the same `BOT_ACTION_SIGNING_SECRET` and
