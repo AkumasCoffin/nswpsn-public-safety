@@ -237,6 +237,9 @@ function createProfileModal() {
       /* API keys card (loadProfileApiKeys) */
       #profile-modal .ak-h { color:#94a3b8; font-size:0.68rem; text-transform:uppercase; letter-spacing:0.08em; font-weight:700; margin:1rem 0 0.45rem; }
       #profile-modal .ak-h:first-child { margin-top:0; }
+      #profile-modal .ak-h-row { display:flex; align-items:center; justify-content:space-between; gap:0.5rem; }
+      #profile-modal .ak-h-row .ak-btn { text-transform:none; letter-spacing:normal; }
+      #profile-modal a.ak-btn { text-decoration:none; display:inline-flex; align-items:center; gap:0.35rem; }
       #profile-modal .ak-item { background:rgba(2,6,23,0.4); border:1px solid rgba(148,163,184,0.15); border-radius:10px; padding:0.65rem 0.8rem; margin-bottom:0.45rem; }
       #profile-modal .ak-item.dead .ak-name, #profile-modal .ak-item.dead .ak-prefix { opacity:0.6; }
       #profile-modal .ak-top { display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap; }
@@ -1244,7 +1247,8 @@ async function loadProfileApiKeys(session) {
           <input type="text" id="profile-apikey-plain" readonly class="ak-input" style="flex:1; min-width:0; font-size:0.78rem; font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;">
           <button type="button" data-ak-copy title="Copy key" class="ak-btn"><i class="fas fa-copy"></i></button>
         </div>
-        <div class="ak-meta" style="margin-top:0.5rem; word-break:break-all; font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;">curl -H "Authorization: Bearer ak_..." https://api.forcequit.xyz/api/rfs/incidents</div>
+        <div class="ak-meta" style="margin-top:0.5rem; word-break:break-all; font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;">curl -H "Authorization: Bearer ak_..." https://api.forcequit.xyz/api/v1/rfs/incidents</div>
+        <div class="ak-meta">Paste it into the <a href="${API_BASE_URL}/api/docs" target="_blank" rel="noopener" style="color:#fdba74;">API docs</a> to see what it can read, with “Try it” on each endpoint.</div>
         <button type="button" data-ak-done class="ak-btn" style="margin-top:0.6rem;">Done</button>
       </div>`);
   }
@@ -1253,7 +1257,12 @@ async function loadProfileApiKeys(session) {
   //    A live key can be re-issued (new secret, same key) or deleted; a dead
   //    one can only be deleted, which takes it off this list.
   if (keys.length) {
-    parts.push('<div class="ak-h">Your keys</div>');
+    // The reference opens in its own tab on the API's origin and asks for the
+    // key there; it is only worth offering to someone with a key that works.
+    const docs = keys.some((k) => k.active)
+      ? `<a href="${API_BASE_URL}/api/docs" target="_blank" rel="noopener" class="ak-btn" title="What your keys can read, with “Try it” on each endpoint"><i class="fas fa-book"></i> API docs</a>`
+      : '';
+    parts.push(`<div class="ak-h ak-h-row"><span>Your keys</span>${docs}</div>`);
     keys.forEach((k) => {
       const dead = !k.active;
       const chip = dead

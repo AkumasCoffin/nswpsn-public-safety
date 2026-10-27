@@ -192,16 +192,21 @@ should read, live or history (staff choose the key's actual scopes when they
 approve) — generates it once staff approve (the plaintext is shown once and
 never again), re-issues it or deletes it. Each key and approved request says
 what it reads, in words, from `GET /api/api-keys/scope-catalog`; against an API
-that predates scopes the card simply leaves that out. A bell notification
-about a request links to `/#api-keys`, which opens that card.
+that predates scopes the card simply leaves that out. With an active key the
+card offers **API docs**, which opens `https://api.forcequit.xyz/api/docs` in a
+new tab — the API's own reference page, which asks for the key there and shows
+what it can read ([`../api.md`](../api.md)); the one-time reveal of a new key
+says the same, beside a curl example on `/api/v1/`. A bell notification about a
+request links to `/#api-keys`, which opens that card.
 
 ```
-map.html  ──►  /api/rfs/incidents        (RFS fires)
+map.html  ──►  /api/v1/rfs/incidents     (RFS fires)
+          ──►  /api/v1/{qld-fire,nt-fire,sa-fire,vic-emergency,wa-emergency,act-ambulance}/*
+                                         (the other states' fire and emergency feeds)
           ──►  /api/traffic/*            (seven hazard kinds + cameras)
-          ──►  /api/bom/warnings         (weather)
           ──►  /api/endeavour/*, /api/ausgrid/outages, /api/essential/*
           ──►  /api/pager/hits           (pager pins — map.html:6265)
-          ──►  /api/firms/hotspots       (satellite hotspots)
+          ──►  /api/v1/firms/hotspots    (satellite hotspots)
           ──►  /api/adsb/aircraft, /api/adsb/trails
           ──►  /api/transport/*          (public transport)
           ──►  /api/radio/grn-sites      (repeater site geography — 18474)
@@ -209,9 +214,15 @@ map.html  ──►  /api/rfs/incidents        (RFS fires)
           ──►  /api/dorsal/reports?hours=168  (SharkSmart layer)
           ──►  /api/incidents            (community-added)
 
-live.html ──►  per-source counts, /api/summaries/latest, /api/news/rss,
+live.html ──►  per-source counts, /api/v1/rfs/incidents, /api/v1/bom/warnings
+               (weather), /api/summaries/latest, /api/news/rss,
                /api/stats/history, /api/heartbeat
 ```
+
+The feeds on `/api/v1/` answer as they do on `/api/`, except that a non-GeoJSON
+body is wrapped in `data` — so `live.html` reads BOM's warnings from
+`response.data`. The rest move to `/api/v1/` group by group
+([`../api.md`](../api.md)).
 
 **SharkSmart is its own layer, not a beach feed, and that is deliberate.**
 Beachwatch and BeachSafe both describe the standing state of a beach and merge
