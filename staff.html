@@ -18239,8 +18239,9 @@
              <td class="nd2-num">${_akCell(u.d7.notFound, 'ak-warn')}</td>
              <td class="nd2-num">${_akCell(u.d7.refused, 'ak-bad')}</td>
              <td class="nd2-num">${_akCell(u.d7.rateLimited, 'ak-warn')}</td>
-             <td class="nd2-num">${_akCell(u.d7.serverError, 'ak-bad')}</td>`
-          : '<td class="nd2-num nd-sub">—</td>'.repeat(7);
+             <td class="nd2-num">${_akCell(u.d7.serverError, 'ak-bad')}</td>
+             <td class="nd2-num">${u.unversionedD7 == null ? '<span class="nd-sub">—</span>' : _akCell(u.unversionedD7)}</td>`
+          : '<td class="nd2-num nd-sub">—</td>'.repeat(8);
         const reissued = k.reissuedAt ? ` <span class="nd-sub" title="Re-issued ${escapeHtml(new Date(k.reissuedAt).toLocaleString())}">↻</span>` : '';
         return `<tr class="${open ? 'ak-open' : ''}">
           <td class="ak-mono">${escapeHtml(k.prefix)}${reissued}</td>
@@ -18283,13 +18284,14 @@
       _akCloseChart();
       el.innerHTML = `<div class="nd-table-scroll"><table class="nd-table ak-keys">
         <thead>
-          <tr class="ak-groups"><th colspan="5"></th><th class="ak-group" colspan="3">Requests</th><th class="ak-group" colspan="4">Last 7 days</th><th colspan="4"></th></tr>
+          <tr class="ak-groups"><th colspan="5"></th><th class="ak-group" colspan="3">Requests</th><th class="ak-group" colspan="5">Last 7 days</th><th colspan="4"></th></tr>
           <tr><th>Key</th><th>Name</th><th>Owner</th><th>Status</th><th title="What the key may read — sources · types · window">Scopes</th>
             <th class="nd2-num">24h</th><th class="nd2-num">7 days</th><th class="nd2-num" title="Every request since the key was made">All time</th>
             <th class="nd2-num" title="Not found">404</th>
             <th class="nd2-num" title="401/403 — used from a web page, revoked or expired, or a path keys may not read">Refused</th>
             <th class="nd2-num" title="Over the key's per-minute limit">429</th>
             <th class="nd2-num" title="Server errors">5xx</th>
+            <th class="nd2-num" title="Requests on unversioned /api/… paths rather than /api/v1/… — including feeds not on /api/v1/ yet, which have nowhere to move">Unversioned</th>
             <th class="nd2-num">Limit/min</th><th>Last used</th><th>Expires</th><th></th></tr>
         </thead>
         <tbody>${rows}</tbody>
@@ -18420,12 +18422,15 @@
           <td title="${p.lastSeen ? escapeHtml(new Date(p.lastSeen).toLocaleString()) : ''}">${p.lastSeen ? escapeHtml(nd2Ago(p.lastSeen) || '') : ''}</td>
         </tr>`).join('');
       const more = d.pathCount > paths.length ? `Showing the ${paths.length} busiest of ${_akN(d.pathCount)} paths. ` : '';
+      // How much of the window went to unversioned /api/… paths rather than /api/v1/….
+      const versions = d.unversioned == null ? ''
+        : ` ${_akN(d.unversioned)} of these requests used an unversioned <span class="ak-mono">/api/…</span> path rather than <span class="ak-mono">/api/v1/…</span>.`;
       return tiles + chart + `<div class="dev-section-h" style="margin:0.4rem 0 0.4rem;">Paths</div>
         <div class="nd-table-scroll"><table class="nd-table ak-keys ak-paths">
           <thead><tr><th>Path</th><th class="nd2-num">Requests</th><th class="nd2-num">OK</th><th class="nd2-num">404</th><th class="nd2-num">Refused</th><th class="nd2-num">429</th><th class="nd2-num">Other 4xx</th><th class="nd2-num">5xx</th><th>Last hour seen</th></tr></thead>
           <tbody>${pathRows}</tbody>
         </table></div>
-        <div class="ak-note">${more}Ids in a path are folded to <span class="ak-mono">:id</span>; anything but a GET shows its method. Past 100 different paths in an hour, the rest are counted as <span class="ak-mono">(other paths)</span>. Refused includes use from a web page, after revocation or expiry, and paths keys may not read.</div>`;
+        <div class="ak-note">${more}Ids in a path are folded to <span class="ak-mono">:id</span>; anything but a GET shows its method. Past 100 different paths in an hour, the rest are counted as <span class="ak-mono">(other paths)</span>. Refused includes use from a web page, after revocation or expiry, and paths keys may not read.${versions}</div>`;
     }
     function _akDrawUsageChart(d) {
       _akCloseChart();
