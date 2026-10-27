@@ -45,6 +45,27 @@
     .tk-banner.err { background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.4); color:#fca5a5; }
     .tk-banner.ok { background:rgba(34,197,94,0.12); border:1px solid rgba(34,197,94,0.4); color:#86efac; }
     .tk-banner.info { background:rgba(56,189,248,0.12); border:1px solid rgba(56,189,248,0.4); color:#bae6fd; }
+    /* The type picker above the form. */
+    .tk-types { display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:0.6rem; margin-bottom:1.1rem; }
+    .tk-type { display:flex; align-items:center; gap:0.6rem; text-align:left; padding:0.65rem 0.8rem; background:rgba(2,6,23,0.35);
+      border:1px solid var(--border-subtle); border-radius:10px; color:var(--text-main); cursor:pointer; font-family:inherit; transition:border-color 0.15s, background 0.15s; }
+    .tk-type:hover { border-color:var(--accent); }
+    .tk-type.active { border-color:var(--accent); background:rgba(249,115,22,0.1); }
+    .tk-type-icon { font-size:1.3rem; line-height:1; }
+    .tk-type-text { display:flex; flex-direction:column; min-width:0; }
+    .tk-type-text strong { font-size:0.9rem; }
+    .tk-type-text small { font-size:0.72rem; color:var(--text-soft); line-height:1.3; }
+    .tk-public-note { font-size:0.78rem; color:var(--text-soft); margin:0 0 0.9rem; line-height:1.5; }
+    /* Reports and suggestions: the same row as a ticket, plus a kind mark; the
+       status chip wears the kind's own label (Fixed, Added, Not added…). */
+    .tk-status.in_progress { background:rgba(59,130,246,0.15); color:#93c5fd; }
+    .tk-status.done { background:rgba(34,197,94,0.15); color:#86efac; }
+    .tk-status.declined, .tk-status.duplicate { background:rgba(148,163,184,0.15); color:#94a3b8; }
+    .fb-row { cursor:pointer; flex-wrap:wrap; }
+    .fb-kind { font-size:1.05rem; line-height:1; }
+    .fb-body { display:none; width:100%; font-size:0.84rem; color:var(--text-muted); white-space:pre-wrap; word-break:break-word; margin-top:0.35rem; padding-top:0.5rem; border-top:1px solid var(--border-subtle); }
+    .fb-row.open .fb-body { display:block; }
+    .fb-note { width:100%; font-size:0.78rem; color:#bae6fd; margin-top:0.3rem; }
     /* Rendered markdown inside message bubbles. */
     .tk-md p { margin: 0 0 0.5rem; }
     .tk-md p:last-child { margin-bottom: 0; }
@@ -115,7 +136,7 @@
     <header class="main-header">
       <div class="breadcrumb">Contact</div>
       <h1>📨 Contact &amp; Support</h1>
-      <p>Open a support ticket and we'll get back to you — replies land here and in your notifications.</p>
+      <p>Open a support ticket, report a bug or suggest an improvement. Ticket replies land here and in your notifications; reports and suggestions show their status here.</p>
     </header>
 
     <section class="card-grid">
@@ -123,13 +144,17 @@
       <!-- Signed out: tickets need an account -->
       <article class="card card-wide" id="tk-signed-out" style="display:none;">
         <div class="card-header">
-          <div class="card-title">Opening a ticket requires an account</div>
+          <div class="card-title">Contacting us requires an account</div>
           <div class="card-tag">Sign in</div>
         </div>
         <div class="card-body">
           <p>
-            Support tickets are tied to your account so we can reply to you and you can follow the
-            conversation. Creating a user account is free and instant — no application needed.
+            Tickets, bug reports and suggestions are tied to your account so we can reply to you and
+            you can follow progress. Creating a user account is free and instant — no application needed.
+          </p>
+          <p style="margin-top:0.6rem; color:var(--text-soft); font-size:0.85rem;">
+            No account? Bug reports and suggestions can also be posted in our
+            <a href="https://discord.forcequit.xyz" target="_blank" rel="noopener noreferrer">Discord</a>.
           </p>
           <p style="margin-top:0.8rem;">
             <a class="btn btn-primary" href="signup?as=user&amp;reason=contact">Create an account</a>
@@ -144,23 +169,41 @@
       <!-- Signed in: new ticket + your tickets -->
       <article class="card card-wide" id="tk-new-card" style="display:none;">
         <div class="card-header">
-          <div class="card-title">Open a ticket</div>
+          <div class="card-title">Get in touch</div>
           <div class="card-tag">New</div>
         </div>
         <div class="card-body">
+          <!-- What kind of thing this is decides the form below: a support
+               ticket is a private conversation; a bug report or suggestion is
+               one message with a status, shared on our Discord. -->
+          <div class="tk-types" role="tablist" aria-label="What is this about?">
+            <button type="button" class="tk-type active" role="tab" aria-selected="true" data-tktype="support" onclick="tkSetType('support')">
+              <span class="tk-type-icon">🎫</span><span class="tk-type-text"><strong>Support</strong><small>Your account, a data correction, your node — a private ticket</small></span>
+            </button>
+            <button type="button" class="tk-type" role="tab" aria-selected="false" data-tktype="bug" onclick="tkSetType('bug')">
+              <span class="tk-type-icon">🐞</span><span class="tk-type-text"><strong>Bug report</strong><small>Something's broken or wrong</small></span>
+            </button>
+            <button type="button" class="tk-type" role="tab" aria-selected="false" data-tktype="suggestion" onclick="tkSetType('suggestion')">
+              <span class="tk-type-icon">💡</span><span class="tk-type-text"><strong>Suggestion</strong><small>An idea to make the site better</small></span>
+            </button>
+          </div>
           <div id="tk-new-banner"></div>
           <div class="form-group">
-            <label class="form-label" for="tk-subject">Subject</label>
+            <label class="form-label" for="tk-subject" id="tk-subject-label">Subject</label>
             <input class="form-input" id="tk-subject" maxlength="140" placeholder="What's this about?">
           </div>
-          <div class="form-group">
+          <div class="form-group" id="tk-category-group">
             <label class="form-label" for="tk-category">Category</label>
             <select class="form-select" id="tk-category"></select>
           </div>
           <div class="form-group">
-            <label class="form-label" for="tk-body">Message</label>
+            <label class="form-label" for="tk-body" id="tk-body-label">Message</label>
             <textarea class="form-textarea" id="tk-body" maxlength="5000" placeholder="Tell us what's going on — the more detail the better. Markdown supported."></textarea>
           </div>
+          <p class="tk-public-note" id="tk-public-note" style="display:none;">
+            Bug reports and suggestions are shared on our Discord with your display name, so everyone can
+            follow progress. Tickets are private.
+          </p>
           <button class="btn btn-primary" id="tk-submit" onclick="tkCreate()">Open ticket</button>
         </div>
       </article>
@@ -172,6 +215,17 @@
         </div>
         <div class="card-body">
           <div id="tk-list"></div>
+        </div>
+      </article>
+
+      <!-- Reports and suggestions: no thread — the report, and where it got to. -->
+      <article class="card card-wide" id="fb-list-card" style="display:none;">
+        <div class="card-header">
+          <div class="card-title">Your reports &amp; suggestions</div>
+          <div class="card-tag" id="fb-list-tag">Reports</div>
+        </div>
+        <div class="card-body">
+          <div id="fb-list"></div>
         </div>
       </article>
 
@@ -235,8 +289,52 @@
       closed: 'Closed',
     };
 
+    // The three things the form can send. A support ticket is the existing
+    // thread; a bug report or suggestion is one message with a status
+    // (POST /api/feedback), shared on the Discord board.
+    const TK_TYPES = {
+      support: {
+        subjectLabel: 'Subject', subjectPh: "What's this about?",
+        bodyLabel: 'Message', bodyPh: "Tell us what's going on — the more detail the better. Markdown supported.",
+        button: 'Open ticket', done: "Ticket opened — we'll get back to you.",
+      },
+      bug: {
+        subjectLabel: 'What went wrong, in one line', subjectPh: 'e.g. Map tiles go blank past zoom 14 on Firefox',
+        bodyLabel: 'Details', bodyPh: 'What you did, what happened, and what you expected. The page, your device and browser help. Markdown supported.',
+        button: 'Send bug report', done: 'Bug report sent — thanks. It is on your list below with its status.',
+      },
+      suggestion: {
+        subjectLabel: 'Your idea, in one line', subjectPh: 'e.g. A dark mode for the incident map',
+        bodyLabel: 'Details', bodyPh: 'What it would do, and why it would help. Markdown supported.',
+        button: 'Send suggestion', done: 'Suggestion sent — thanks. It is on your list below with its status.',
+      },
+    };
+    const FB_KIND_ICON = { bug: '🐞', suggestion: '💡' };
+    let tkType = 'support';
+
     let tkTickets = [];
+    let fbItems = [];
     let tkCurrent = null; // the open ticket id
+
+    function tkSetType(t) {
+      if (!TK_TYPES[t]) t = 'support';
+      tkType = t;
+      const cfg = TK_TYPES[t];
+      document.querySelectorAll('.tk-type').forEach((b) => {
+        const on = b.dataset.tktype === t;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      document.getElementById('tk-category-group').style.display = t === 'support' ? '' : 'none';
+      document.getElementById('tk-public-note').style.display = t === 'support' ? 'none' : '';
+      document.getElementById('tk-subject-label').textContent = cfg.subjectLabel;
+      document.getElementById('tk-subject').placeholder = cfg.subjectPh;
+      document.getElementById('tk-body-label').textContent = cfg.bodyLabel;
+      document.getElementById('tk-body').placeholder = cfg.bodyPh;
+      document.getElementById('tk-submit').textContent = cfg.button;
+      tkBanner('tk-new-banner', '', '');
+      tkSaveNewDraft();
+    }
 
     const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
@@ -294,6 +392,7 @@
     function tkSaveNewDraft() {
       try {
         const d = {
+          t: tkType,
           s: document.getElementById('tk-subject').value,
           c: document.getElementById('tk-category').value,
           b: document.getElementById('tk-body').value,
@@ -306,6 +405,7 @@
       try {
         const d = JSON.parse(localStorage.getItem(TK_DRAFT_NEW) || 'null');
         if (!d) return;
+        if (d.t && TK_TYPES[d.t]) tkSetType(d.t);
         if (d.s) document.getElementById('tk-subject').value = d.s;
         if (d.c && TK_CATEGORIES[d.c]) document.getElementById('tk-category').value = d.c;
         if (d.b) document.getElementById('tk-body').value = d.b;
@@ -360,6 +460,46 @@
       }
     }
 
+    // ---- Reports and suggestions ----
+    // No thread to open: a row is the report, its status, and staff's note if
+    // they left one. Clicking a row shows what was written.
+    function fbRenderList() {
+      const el = document.getElementById('fb-list');
+      if (!el) return;
+      if (!fbItems.length) {
+        el.innerHTML = '<p style="color:var(--text-soft);">No reports or suggestions yet — pick Bug report or Suggestion above.</p>';
+        return;
+      }
+      el.innerHTML = fbItems.map((f) => `
+        <div class="tk-row fb-row" onclick="this.classList.toggle('open')">
+          <span class="fb-kind" title="${esc(f.kindLabel)}">${FB_KIND_ICON[f.kind] || '📝'}</span>
+          <div class="tk-row-main">
+            <div class="tk-row-subject">${esc(f.subject)}</div>
+            <div class="tk-row-meta">#${Number(f.id)} · ${esc(f.kindLabel)} · ${esc(tkAgo(f.createdAt))}${f.statusAt ? ' · status set ' + esc(tkAgo(f.statusAt)) : ''}</div>
+          </div>
+          <span class="tk-status ${esc(f.status)}">${esc(f.statusLabel || f.status)}</span>
+          ${f.statusNote ? `<div class="fb-note">Staff: ${esc(f.statusNote)}</div>` : ''}
+          <div class="fb-body">${esc(f.body)}</div>
+        </div>`).join('');
+      const tag = document.getElementById('fb-list-tag');
+      if (tag) tag.textContent = fbItems.length + (fbItems.length === 1 ? ' report' : ' reports');
+    }
+
+    async function fbLoadList() {
+      const headers = await tkHeaders();
+      if (!headers) return;
+      try {
+        const res = await fetch(`${API_BASE}/api/feedback/mine`, { headers });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const j = await res.json();
+        fbItems = Array.isArray(j.feedback) ? j.feedback : [];
+        fbRenderList();
+      } catch (e) {
+        const el = document.getElementById('fb-list');
+        if (el) el.innerHTML = '<p style="color:#fca5a5;">Could not load your reports — try refreshing.</p>';
+      }
+    }
+
     async function tkOpen(id) {
       const headers = await tkHeaders();
       if (!headers) return;
@@ -387,6 +527,7 @@
         document.getElementById('tk-reopen-note').style.display = (!t.locked && t.status === 'closed') ? '' : 'none';
         if (!t.locked) tkRestoreReplyDraft(id);
         document.getElementById('tk-list-card').style.display = 'none';
+        document.getElementById('fb-list-card').style.display = 'none';
         document.getElementById('tk-new-card').style.display = 'none';
         document.getElementById('tk-thread-card').style.display = '';
       } catch (e) {
@@ -399,6 +540,7 @@
       document.getElementById('tk-thread-card').style.display = 'none';
       document.getElementById('tk-new-card').style.display = '';
       document.getElementById('tk-list-card').style.display = '';
+      document.getElementById('fb-list-card').style.display = '';
       tkLoadList();
       // Drop the deep-link param so refresh lands on the list.
       if (location.search.includes('t=')) history.replaceState(null, '', 'contact');
@@ -408,26 +550,32 @@
       const subject = document.getElementById('tk-subject').value.trim();
       const category = document.getElementById('tk-category').value;
       const body = document.getElementById('tk-body').value.trim();
-      if (subject.length < 3) { tkBanner('tk-new-banner', 'err', 'Subject needs at least 3 characters.'); return; }
-      if (!body) { tkBanner('tk-new-banner', 'err', 'Write a message first.'); return; }
+      const isTicket = tkType === 'support';
+      if (subject.length < 3) { tkBanner('tk-new-banner', 'err', (isTicket ? 'Subject' : 'The first line') + ' needs at least 3 characters.'); return; }
+      if (!body) { tkBanner('tk-new-banner', 'err', isTicket ? 'Write a message first.' : 'Add some detail first.'); return; }
       const headers = await tkHeaders();
       if (!headers) return;
       const btn = document.getElementById('tk-submit');
       btn.disabled = true;
       try {
-        const res = await fetch(`${API_BASE}/api/tickets`, {
-          method: 'POST', headers, body: JSON.stringify({ subject, category, body }),
-        });
+        const res = isTicket
+          ? await fetch(`${API_BASE}/api/tickets`, { method: 'POST', headers, body: JSON.stringify({ subject, category, body }) })
+          : await fetch(`${API_BASE}/api/feedback`, { method: 'POST', headers, body: JSON.stringify({ kind: tkType, subject, body }) });
         const j = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(j.error || ('HTTP ' + res.status));
         document.getElementById('tk-subject').value = '';
         document.getElementById('tk-body').value = '';
         tkClearNewDraft();
-        tkBanner('tk-new-banner', 'ok', 'Ticket opened — we\'ll get back to you.');
-        await tkLoadList();
-        tkOpen(j.ticket.id);
+        tkBanner('tk-new-banner', 'ok', TK_TYPES[tkType].done);
+        if (isTicket) {
+          await tkLoadList();
+          tkOpen(j.ticket.id);
+        } else {
+          await fbLoadList();
+          document.getElementById('fb-list-card').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
       } catch (e) {
-        tkBanner('tk-new-banner', 'err', e.message || 'Could not open the ticket.');
+        tkBanner('tk-new-banner', 'err', e.message || (isTicket ? 'Could not open the ticket.' : 'Could not send it.'));
       } finally {
         btn.disabled = false;
       }
@@ -458,9 +606,12 @@
     }
 
     async function tkBoot() {
-      // Category options.
+      // Category options for a support ticket. "Bug report" is its own type
+      // now, so it is no longer a ticket category to pick (old tickets filed
+      // under it still show the label).
       const sel = document.getElementById('tk-category');
       sel.innerHTML = Object.entries(TK_CATEGORIES)
+        .filter(([v]) => v !== 'bug')
         .map(([v, label]) => `<option value="${v}">${esc(label)}</option>`).join('');
 
       const { data } = await sb.auth.getSession();
@@ -470,14 +621,20 @@
       }
       document.getElementById('tk-new-card').style.display = '';
       document.getElementById('tk-list-card').style.display = '';
+      document.getElementById('fb-list-card').style.display = '';
       tkRestoreNewDraft();
+      // /contact?type=bug|suggestion (about.html, the Discord how-to) picks
+      // the type; it wins over a restored draft's.
+      const params = new URLSearchParams(location.search);
+      const wanted = params.get('type');
+      if (wanted && TK_TYPES[wanted]) tkSetType(wanted);
       document.getElementById('tk-subject').addEventListener('input', tkSaveNewDraft);
       document.getElementById('tk-category').addEventListener('change', tkSaveNewDraft);
       document.getElementById('tk-body').addEventListener('input', tkSaveNewDraft);
       document.getElementById('tk-reply').addEventListener('input', tkSaveReplyDraft);
-      await tkLoadList();
+      await Promise.all([tkLoadList(), fbLoadList()]);
       // Deep link from a notification: /contact?t=<id>
-      const t = Number(new URLSearchParams(location.search).get('t'));
+      const t = Number(params.get('t'));
       if (Number.isInteger(t) && t > 0) tkOpen(t);
     }
 
