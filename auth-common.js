@@ -258,6 +258,13 @@ function createProfileModal() {
       #profile-modal .ak-form { display:flex; flex-direction:column; gap:0.45rem; }
       #profile-modal .ak-input { width:100%; padding:0.55rem 0.7rem; background:rgba(2,6,23,0.5); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#fff; font-size:0.85rem; box-sizing:border-box; font-family:inherit; }
       #profile-modal .ak-reveal { border:1px solid rgba(34,197,94,0.4); background:rgba(34,197,94,0.07); border-radius:10px; padding:0.75rem 0.85rem; margin-bottom:0.9rem; }
+      #profile-modal .ak-scopes { color:#94a3b8; font-size:0.72rem; margin-top:0.25rem; line-height:1.45; }
+      #profile-modal .ak-scopes b { color:#cbd5e1; font-weight:600; }
+      #profile-modal .ak-ask-h { color:#94a3b8; font-size:0.74rem; margin-top:0.2rem; }
+      #profile-modal .ak-pills { display:flex; flex-wrap:wrap; gap:0.3rem; }
+      #profile-modal .ak-pill { display:inline-flex; align-items:center; padding:0.2rem 0.6rem; border-radius:999px; border:1px solid rgba(148,163,184,0.25); color:#94a3b8; font-size:0.74rem; cursor:pointer; user-select:none; }
+      #profile-modal .ak-pill input { display:none; }
+      #profile-modal .ak-pill.on { border-color:rgba(249,115,22,0.6); background:rgba(249,115,22,0.14); color:#fdba74; }
     </style>
     <div style="background:#0f172a; width:100%; height:100%; overflow-y:auto; padding:1.6rem clamp(1rem, 4vw, 3rem) 3rem; box-sizing:border-box;">
       <div style="max-width:1180px; margin:0 auto;">
@@ -352,7 +359,7 @@ function createProfileModal() {
 
       <div id="profile-apikeys-section" class="pf-card">
         <label style="display:block; color:#cbd5e1; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem; font-weight:600;">API keys</label>
-        <div style="color:#64748b; font-size:0.72rem; margin-bottom:0.7rem;">For scripts and the command line — a key is refused from web pages by design. It can <strong>read the data feeds</strong> (RFS, traffic, transport, aircraft, vessels, weather, power, cameras, pager, radio sites) and nothing else: no account data, and no writes. Staff approve a request; you then generate the key here and see it exactly once (nothing stores it, staff never see it). Lost one? Re-issue it — same key, new secret. One pending request at a time, up to 3 active keys.</div>
+        <div style="color:#64748b; font-size:0.72rem; margin-bottom:0.7rem;">For scripts and the command line — a key is refused from web pages by design. It <strong>reads only what it is scoped to</strong>: which data feeds (RFS, traffic, transport, aircraft, ships, weather, power, cameras, pager and more), and whether live, history or both. Never account data, and never writes. Staff approve a request and set its scopes; you then generate the key here and see it exactly once (nothing stores it, staff never see it). Lost one? Re-issue it — same key, new secret. One pending request at a time, up to 3 active keys.</div>
         <div id="profile-apikeys-body"></div>
         <div id="profile-apikeys-msg" style="margin-top:0.5rem; font-size:0.8rem; min-height:1.2em;"></div>
       </div>
@@ -1160,11 +1167,49 @@ function setApiKeysMsg(text, isError) {
   msg.textContent = text || '';
 }
 
+// The scopes there are (GET /api/api-keys/scope-catalog), for the request
+// form and for saying what each key reads. Null until loaded, and stays null
+// against an API that predates scopes — the card then just leaves them out.
+let _apiKeyScopeCatalog = null;
+async function loadApiKeyScopeCatalog(session) {
+  if (_apiKeyScopeCatalog) return _apiKeyScopeCatalog;
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/api-keys/scope-catalog`, {
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    });
+    if (res.ok) _apiKeyScopeCatalog = await res.json();
+  } catch (e) { /* stays null */ }
+  return _apiKeyScopeCatalog;
+}
+
+// What a scope set reads, in words: "NSW Rural Fire Service, Live Traffic NSW
+// · incidents · live". `read` is the set every key had before scopes.
+function apiKeyScopeText(scopes) {
+  const list = Array.isArray(scopes) ? scopes : [];
+  if (!list.length) return '';
+  if (list.includes('read')) return 'the original set of live data feeds';
+  const cat = _apiKeyScopeCatalog;
+  const by = (dim) => list.filter((s) => s.startsWith(dim + ':')).map((s) => s.slice(dim.length + 1));
+  const label = (dim, v) => {
+    const pool = cat && (dim === 'source' ? cat.sources : cat.types);
+    const hit = pool && pool.find((x) => x.key === v);
+    return hit ? hit.label : v;
+  };
+  const src = by('source');
+  const typ = by('type');
+  const win = by('window');
+  const s = src.includes('*') ? 'all sources' : src.map((v) => label('source', v)).join(', ');
+  const t = typ.includes('*') ? 'all kinds' : typ.map((v) => label('type', v).toLowerCase()).join(', ');
+  const w = win.includes('*') ? 'live and history' : win.join(' and ');
+  return `${s} · ${t} · ${w}`;
+}
+
 async function loadProfileApiKeys(session) {
   const body = document.getElementById('profile-apikeys-body');
   if (!body) return;
   if (!session) session = (await sb.auth.getSession()).data.session;
   if (!session) return;
+  const catalogReady = loadApiKeyScopeCatalog(session);
   let j;
   let loadFailed = false;
   try {
@@ -1180,6 +1225,7 @@ async function loadProfileApiKeys(session) {
     j = {};
     loadFailed = true;
   }
+  const scopeCatalog = await catalogReady;
   const requests = Array.isArray(j.requests) ? j.requests : [];
   const keys = Array.isArray(j.keys) ? j.keys : [];
   const maxKeys = Number(j.limits?.maxActiveKeys) || 3;
@@ -1231,6 +1277,7 @@ async function loadProfileApiKeys(session) {
             </span>
           </div>
           <div class="ak-prefix">ak_${escNotif(k.prefix)}_…</div>
+          ${apiKeyScopeText(k.scopes) ? `<div class="ak-scopes"><b>Reads</b> ${escNotif(apiKeyScopeText(k.scopes))}</div>` : ''}
           <div class="ak-meta">${escNotif(meta.join(' · '))}</div>
         </div>`);
     });
@@ -1263,10 +1310,17 @@ async function loadProfileApiKeys(session) {
         chip = '<span class="ak-chip bad">Not approved</span>';
         line = `Sent ${apiKeyDate(r.createdAt)}`;
       }
+      // What it will read once generated (the grant), else what was asked for.
+      const granted = r.status === 'approved' ? apiKeyScopeText(r.scopes) : '';
+      const asked = apiKeyScopeText(r.requestedScopes);
+      const scopeLine = granted
+        ? `<div class="ak-scopes"><b>Will read</b> ${escNotif(granted)}</div>`
+        : (asked ? `<div class="ak-scopes"><b>Asked for</b> ${escNotif(asked)}</div>` : '');
       parts.push(`
         <div class="ak-item">
           <div class="ak-top"><span class="ak-name">${escNotif(r.name)}</span>${chip}${action}</div>
           <div class="ak-meta">${escNotif(line)}</div>
+          ${scopeLine}
           ${r.reviewNote ? `<div class="ak-note">Staff note: ${escNotif(r.reviewNote)}</div>` : ''}
         </div>`);
     });
@@ -1284,6 +1338,7 @@ async function loadProfileApiKeys(session) {
         <div class="ak-form" data-ak-form hidden>
           <input type="text" id="profile-apikey-name" maxlength="60" placeholder="What will use it? e.g. home-assistant" class="ak-input">
           <textarea id="profile-apikey-reason" maxlength="1000" rows="2" placeholder="What it's for — helps staff approve it" class="ak-input" style="resize:vertical;"></textarea>
+          ${apiKeyScopeAsk(scopeCatalog)}
           <div style="display:flex; gap:0.4rem;">
             <button type="button" id="profile-apikey-request-btn" onclick="requestProfileApiKey()" class="ak-btn primary">Send request</button>
             <button type="button" data-ak-close-form class="ak-btn">Cancel</button>
@@ -1319,6 +1374,9 @@ async function loadProfileApiKeys(session) {
     openBtn.hidden = false;
     setApiKeysMsg('', false);
   });
+  body.querySelectorAll('.ak-pill input').forEach((i) => i.addEventListener('change', () => {
+    i.closest('.ak-pill').classList.toggle('on', i.checked);
+  }));
   // Disabled on click: a second click would be a second claim, which the
   // server refuses — and that refusal would then print under the key.
   body.querySelectorAll('[data-ak-claim]').forEach((b) => b.addEventListener('click', () => { b.disabled = true; claimProfileApiKey(b.dataset.akClaim); }));
@@ -1392,6 +1450,30 @@ async function claimProfileApiKey(id) {
   loadProfileApiKeys();
 }
 
+// The optional "what should it read?" on the request form: feeds and
+// live/history. It is an ask — staff choose the scopes — so it stays simple:
+// every kind of data from the feeds picked. Empty without a catalogue.
+function apiKeyScopeAsk(cat) {
+  if (!cat || !Array.isArray(cat.sources)) return '';
+  const pill = (attr, value, label) =>
+    `<label class="ak-pill"><input type="checkbox" ${attr} value="${escNotif(value)}">${escNotif(label)}</label>`;
+  return `
+    <div class="ak-ask-h">What should it read? Optional — staff decide what the key gets.</div>
+    <div class="ak-pills">${cat.sources.map((s) => pill('data-ak-ask-src', s.key, s.label)).join('')}</div>
+    <div class="ak-pills">${pill('data-ak-ask-win', 'live', 'Live — what the map shows now')}${pill('data-ak-ask-win', 'history', 'History — stored records')}</div>`;
+}
+
+// The ask as scopes, or none when nothing was picked.
+function apiKeyScopeAskValue() {
+  const picked = (sel) => Array.from(document.querySelectorAll(sel)).filter((i) => i.checked).map((i) => i.value);
+  const src = picked('[data-ak-ask-src]');
+  if (!src.length) return null;
+  const win = picked('[data-ak-ask-win]');
+  return src.map((s) => `source:${s}`)
+    .concat(['type:*'])
+    .concat((win.length ? win : ['live']).map((w) => `window:${w}`));
+}
+
 async function requestProfileApiKey() {
   const name = (document.getElementById('profile-apikey-name')?.value || '').trim();
   const reason = (document.getElementById('profile-apikey-reason')?.value || '').trim();
@@ -1404,7 +1486,10 @@ async function requestProfileApiKey() {
   try {
     const h = await notifHeaders();
     if (!h) throw new Error('you are signed out');
-    const res = await fetch(`${API_BASE_URL}/api/api-keys/requests`, { method: 'POST', headers: h, body: JSON.stringify({ name, reason }) });
+    const payload = { name, reason };
+    const scopes = apiKeyScopeAskValue();
+    if (scopes) payload.scopes = scopes;
+    const res = await fetch(`${API_BASE_URL}/api/api-keys/requests`, { method: 'POST', headers: h, body: JSON.stringify(payload) });
     const j = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(j.error || 'HTTP ' + res.status);
     setApiKeysMsg('Request sent — staff will review it.', false);

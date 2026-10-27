@@ -187,8 +187,12 @@ page keeps its own `apiFetch`/`userHeaders` helper and reads the token from
 on the public site reads a database directly.
 
 The profile modal (`auth-common.js`) also carries an **API keys** card where a
-logged-in user requests a personal key, generates it once staff approve (the
-plaintext is shown once and never again) and revokes it. A bell notification
+logged-in user requests a personal key — optionally saying which feeds it
+should read, live or history (staff choose the key's actual scopes when they
+approve) — generates it once staff approve (the plaintext is shown once and
+never again), re-issues it or deletes it. Each key and approved request says
+what it reads, in words, from `GET /api/api-keys/scope-catalog`; against an API
+that predates scopes the card simply leaves that out. A bell notification
 about a request links to `/#api-keys`, which opens that card.
 
 ```

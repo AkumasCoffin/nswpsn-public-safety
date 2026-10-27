@@ -1820,6 +1820,22 @@
     .ak-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 0.3rem; vertical-align: -1px; }
     .ak-paths td.ak-path { max-width: 32rem; overflow: hidden; text-overflow: ellipsis; }
     .ak-note { font-size: 0.72rem; color: var(--text-soft); margin-top: 0.5rem; line-height: 1.5; }
+    /* Scope picker: three groups of pills, an "all" per group, and the old
+       feed list as a deliberate alternative. */
+    .ak-scopes { width: 100%; display: flex; flex-direction: column; gap: 0.55rem; margin: 0.2rem 0 0.5rem; }
+    .ak-scope-h { display: flex; align-items: center; gap: 0.6rem; font-size: 0.72rem; font-weight: 600; color: var(--text-soft); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.3rem; }
+    .ak-scope-all { font-weight: 500; text-transform: none; letter-spacing: 0; display: inline-flex; align-items: center; gap: 0.25rem; cursor: pointer; }
+    .ak-scope-pills { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+    .ak-scope { display: inline-flex; align-items: center; padding: 0.18rem 0.55rem; border-radius: 999px; border: 1px solid var(--border-subtle); font-size: 0.74rem; color: var(--text-soft); cursor: pointer; user-select: none; }
+    .ak-scope input { display: none; }
+    .ak-scope.on { border-color: rgba(56, 189, 248, 0.6); background: rgba(56, 189, 248, 0.12); color: var(--text-main); }
+    .ak-scope.covered { border-style: dashed; }
+    .ak-scopes.legacy .ak-scope-group { opacity: 0.4; pointer-events: none; }
+    .ak-scope-legacy { font-size: 0.74rem; color: var(--text-soft); display: flex; align-items: center; gap: 0.35rem; cursor: pointer; }
+    .ak-scope-effect { font-size: 0.74rem; line-height: 1.5; color: var(--text-soft); }
+    .ak-scope-effect strong { color: var(--text-main); font-weight: 600; }
+    .ak-scope-effect.none { color: var(--warning); }
+    .ak-scope-sum { font-size: 0.76rem; }
 
     .action-buttons { display: flex; gap: 0.4rem; }
 
@@ -3504,7 +3520,8 @@
              plaintext once. Staff only ever see the prefix. -->
         <div id="requests-apikeys-view" style="display:none;">
           <p style="color:var(--text-soft); font-size:0.84rem; line-height:1.6; margin:0 0 0.8rem;">
-            A key is for scripts and the command line &mdash; the API refuses it from web pages.
+            A key is for scripts and the command line &mdash; the API refuses it from web pages &mdash; and it
+            only reads what its scopes cover: which sources, which kinds of data, live or history.
             Approving does not create the key: the requester generates it from their profile and
             sees it exactly once; nothing here stores or shows it. One pending request per user, three active keys.
           </p>
@@ -17889,9 +17906,132 @@
         _akUpdateBadge(data.pendingCount);
       } catch (e) { /* ignore */ }
     }
-    function loadApiKeysView() {
+    async function loadApiKeysView() {
+      await _akLoadScopeCatalog();
       loadApiKeyRequests();
       loadApiKeysList();
+    }
+
+    // --- Scopes: what a key may read -----------------------------------------
+    // The catalogue comes from the API (services/auth/apiKeyScopes.ts), so the
+    // picker never drifts from what the gate checks. `combos` is what routes
+    // actually declare, used to show what a selection grants. Until the API
+    // serving it is deployed the catalogue is null: the picker says so, and
+    // an approval sends no scopes, which the API of that time ignores.
+    let _akScopeCatalog = null;
+    let _akScopeCatalogTried = false;
+    async function _akLoadScopeCatalog() {
+      if (_akScopeCatalog || _akScopeCatalogTried) return _akScopeCatalog;
+      _akScopeCatalogTried = true;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/api-keys/scope-catalog`, { headers: { 'Authorization': await authHeader() } });
+        if (res.ok) _akScopeCatalog = await res.json();
+      } catch (e) { /* stays null */ }
+      return _akScopeCatalog;
+    }
+    function _akScopeLabel(dim, key) {
+      const c = _akScopeCatalog;
+      const list = c && (dim === 'source' ? c.sources : dim === 'type' ? c.types : c.windows);
+      const hit = list && list.find((x) => x.key === key);
+      return hit ? hit.label : key;
+    }
+    // The picker. `pid` keys its inputs; `selected` pre-ticks it.
+    function _akScopePicker(pid, selected) {
+      const cat = _akScopeCatalog;
+      if (!cat) return `<div class="ak-note">What the key reads is chosen here once the API update is live; until then an approval grants the old feed list.</div>`;
+      const sel = new Set(selected || []);
+      const legacy = sel.has(cat.legacy);
+      const group = (dim, title, items) => {
+        const all = sel.has(`${dim}:*`);
+        const pills = items.map((it) => {
+          const v = `${dim}:${it.key}`;
+          const on = sel.has(v);
+          return `<label class="ak-scope${on ? ' on' : ''}${all ? ' covered' : ''}" title="${escapeHtml(v)}">`
+            + `<input type="checkbox" data-akscope="${pid}" value="${escapeHtml(v)}"${on ? ' checked' : ''}${all ? ' disabled' : ''} onchange="_akScopeTick(this, '${pid}')">${escapeHtml(it.label)}</label>`;
+        }).join('');
+        return `<div class="ak-scope-group"><div class="ak-scope-h">${title}`
+          + `<label class="ak-scope-all"><input type="checkbox" data-akscope="${pid}" value="${dim}:*"${all ? ' checked' : ''} onchange="_akScopeAll(this, '${pid}')"> all</label></div>`
+          + `<div class="ak-scope-pills">${pills}</div></div>`;
+      };
+      return `<div class="ak-scopes${legacy ? ' legacy' : ''}" id="ak-scopes-${pid}">
+          ${group('source', 'Sources', cat.sources)}
+          ${group('type', 'Types', cat.types)}
+          ${group('window', 'Window', cat.windows)}
+          <label class="ak-scope-legacy"><input type="checkbox" data-akscope-legacy="${pid}"${legacy ? ' checked' : ''} onchange="_akScopeLegacy(this, '${pid}')"> Instead, the old feed list (<code>read</code>) — what every key read before scopes</label>
+          <div class="ak-scope-effect" id="ak-scope-effect-${pid}">${_akScopeEffectHtml(legacy ? [cat.legacy] : [...sel])}</div>
+        </div>`;
+    }
+    function _akScopeTick(cb, pid) {
+      cb.closest('.ak-scope').classList.toggle('on', cb.checked);
+      _akScopeRefresh(pid);
+    }
+    function _akScopeAll(cb, pid) {
+      // "all" covers the group: the single pills grey out rather than vanish,
+      // so unticking "all" puts the earlier choice back.
+      cb.closest('.ak-scope-group').querySelectorAll('.ak-scope input').forEach((i) => {
+        i.disabled = cb.checked;
+        i.closest('.ak-scope').classList.toggle('covered', cb.checked);
+      });
+      _akScopeRefresh(pid);
+    }
+    function _akScopeLegacy(cb, pid) {
+      document.getElementById(`ak-scopes-${pid}`)?.classList.toggle('legacy', cb.checked);
+      _akScopeRefresh(pid);
+    }
+    function _akScopeRefresh(pid) {
+      const el = document.getElementById(`ak-scope-effect-${pid}`);
+      if (!el) return;
+      const scopes = _akReadScopes(pid) || [];
+      el.className = 'ak-scope-effect';
+      el.innerHTML = _akScopeEffectHtml(scopes);
+      if (!_akScopeGrants(scopes).length && !scopes.includes(_akScopeCatalog.legacy)) el.classList.add('none');
+    }
+    // What the picker currently says, as the API would store it. null when the
+    // catalogue is unavailable (send nothing).
+    function _akReadScopes(pid) {
+      if (!_akScopeCatalog) return null;
+      const legacy = document.querySelector(`[data-akscope-legacy="${pid}"]`);
+      if (legacy && legacy.checked) return [_akScopeCatalog.legacy];
+      const out = [];
+      document.querySelectorAll(`[data-akscope="${pid}"]`).forEach((i) => { if (i.checked && !i.disabled) out.push(i.value); });
+      return out;
+    }
+    // The declared routes a scope set reaches — the gate's rule, run on the
+    // catalogue's combos (apiKeyScopes.ts scopesSatisfy).
+    function _akScopeGrants(scopes) {
+      const cat = _akScopeCatalog;
+      if (!cat || scopes.includes(cat.legacy)) return [];
+      const held = new Set(scopes);
+      const has = (dim, v) => held.has(`${dim}:*`) || (dim === 'window' && v === 'any'
+        ? scopes.some((s) => s.startsWith('window:')) : held.has(`${dim}:${v}`));
+      return (cat.combos || []).filter((n) => has('source', n.source) && has('type', n.type) && has('window', n.window));
+    }
+    function _akScopeEffectHtml(scopes) {
+      const cat = _akScopeCatalog;
+      if (!cat) return '';
+      if (scopes.includes(cat.legacy)) return 'Reads the <strong>old feed list</strong>: emergency services, traffic, transport, aircraft, ships, weather, power, cameras, news, boundaries, pager and radio sites — live and as they are today.';
+      const missing = ['source', 'type', 'window'].filter((d) => !scopes.some((s) => s.startsWith(d + ':')));
+      if (missing.length) return `Pick at least one ${missing.join(', ')}.`;
+      const grants = _akScopeGrants(scopes);
+      if (!grants.length) return 'This combination reads <strong>nothing</strong> — no endpoint serves it.';
+      const parts = grants.map((n) => `${escapeHtml(_akScopeLabel('source', n.source))} ${escapeHtml(_akScopeLabel('type', n.type).toLowerCase())}`
+        + (n.window === 'any' ? '' : ` (${escapeHtml(n.window)})`));
+      return `Reads <strong>${grants.length}</strong>: ${[...new Set(parts)].join(' · ')}`;
+    }
+    // A key's or request's scopes, compact, for the list; the full set in the title.
+    function _akScopeSummary(scopes) {
+      const list = scopes || [];
+      if (!list.length) return '<span class="nd-sub">—</span>';
+      if (list.includes('read')) return `<span class="ak-scope-sum nd-sub" title="read — the old feed list">old feed list</span>`;
+      const by = (dim) => list.filter((s) => s.startsWith(dim + ':')).map((s) => s.slice(dim.length + 1));
+      const part = (dim, one, many) => {
+        const v = by(dim);
+        if (v.includes('*')) return `all ${many}`;
+        return v.length === 1 ? escapeHtml(_akScopeLabel(dim, v[0])) : `${v.length} ${many}`;
+      };
+      const win = by('window');
+      const w = win.includes('*') ? 'live + history' : win.join(' + ');
+      return `<span class="ak-scope-sum" title="${escapeHtml(list.join(', '))}">${part('source', 'source', 'sources')} · ${part('type', 'type', 'types')} · ${escapeHtml(w)}</span>`;
     }
     async function loadApiKeyRequests() {
       const el = document.getElementById('apikeys-container');
@@ -17928,7 +18068,10 @@
         if (r.status === 'pending') {
           // The decision inputs live on the card: the limit and expiry are
           // per-key terms, not site settings, so they are chosen per request.
+          // What the key reads comes first: it is the decision. Pre-ticked
+          // with what the user asked for.
           actions = `<div class="dc-actions" style="flex-wrap:wrap; align-items:center;">
+            ${_akScopePicker('r' + id, r.requestedScopes)}
             <label style="font-size:0.74rem; color:var(--text-soft);">Limit / min <input type="number" id="ak-limit-${id}" value="120" min="1" max="6000" style="${_AK_INPUT_STYLE} width:5.5rem;"></label>
             <label style="font-size:0.74rem; color:var(--text-soft);">Expires <input type="date" id="ak-exp-${id}" style="${_AK_INPUT_STYLE}"></label>
             <label style="font-size:0.74rem; color:var(--text-soft); flex:1 1 14rem;">Note to user <input type="text" id="ak-note-${id}" maxlength="500" placeholder="optional" style="${_AK_INPUT_STYLE} width:100%; box-sizing:border-box;"></label>
@@ -17953,9 +18096,12 @@
             }
           }
           actions = `<div class="dc-status ${escapeHtml(r.status)}">${line}</div>`
+            + (r.status === 'approved' && (r.scopes || []).length ? `<div style="font-size:0.78rem; color:var(--text-soft); margin-top:0.2rem;">Granted: ${_akScopeSummary(r.scopes)}</div>` : '')
             + (r.reviewNote ? `<div style="font-size:0.78rem; color:var(--text-soft); margin-top:0.2rem;">Note: ${escapeHtml(r.reviewNote)}</div>` : '')
             + withdraw;
         }
+        const asked = (r.requestedScopes || []).length
+          ? `<div style="font-size:0.78rem; color:var(--text-soft); margin-top:0.35rem;">Asked for: ${_akScopeSummary(r.requestedScopes)}</div>` : '';
         return `<div class="dc-card">
           <div class="dc-head">
             <span class="dc-agency">${escapeHtml(r.name)}</span>
@@ -17963,6 +18109,7 @@
             <span class="dc-meta">${escapeHtml(when)}</span>
           </div>
           <div style="font-size:0.84rem; line-height:1.5; white-space:pre-wrap; word-break:break-word;">${escapeHtml(r.reason)}</div>
+          ${asked}
           ${actions}
         </div>`;
       }).join('');
@@ -17970,6 +18117,15 @@
     async function akDecide(id, action) {
       const body = {};
       if (action === 'approve') {
+        // null: the catalogue isn't served yet (API not updated) — send no
+        // scopes; that API grants the old feed list as it always has.
+        const scopes = _akReadScopes('r' + id);
+        if (scopes) {
+          const missing = scopes.includes(_akScopeCatalog.legacy) ? []
+            : ['source', 'type', 'window'].filter((d) => !scopes.some((s) => s.startsWith(d + ':')));
+          if (missing.length) { showToast(`Choose what the key reads: at least one ${missing.join(', ')}`, 'error'); return; }
+          body.scopes = scopes;
+        }
         const lim = parseInt((document.getElementById(`ak-limit-${id}`) || {}).value, 10);
         if (!(lim >= 1 && lim <= 6000)) { showToast('Limit must be 1–6000 per minute', 'error'); return; }
         body.rateLimitPerMin = lim;
@@ -18073,6 +18229,9 @@
         const revoke = state === 'active'
           ? `<button class="btn btn-danger btn-sm" onclick="akRevoke('${escapeHtml(k.id)}')"><i class="fas fa-ban"></i> Revoke</button>`
           : '';
+        const editScopes = state === 'active' && _akScopeCatalog
+          ? `<button class="btn btn-secondary btn-sm" onclick="akToggleScopes('${escapeHtml(k.id)}')" aria-expanded="${_akScopesOpen === k.id}"><i class="fas fa-sliders"></i> Scopes</button>`
+          : '';
         const usageCells = u
           ? `<td class="nd2-num">${_akCell(u.h24.requests)}</td>
              <td class="nd2-num">${_akCell(u.d7.requests)}</td>
@@ -18088,16 +18247,31 @@
           <td>${escapeHtml(k.name)}</td>
           <td>${_akOwnerLink(k.userId, k.userName)}</td>
           <td>${_AK_BADGE[state]}</td>
+          <td>${_akScopeSummary(k.scopes)}</td>
           ${usageCells}
           <td class="nd2-num">${escapeHtml(k.rateLimitPerMin)}</td>
           <td title="${k.lastUsedAt ? escapeHtml(new Date(k.lastUsedAt).toLocaleString()) : ''}">${k.lastUsedAt ? escapeHtml(nd2Ago(k.lastUsedAt) || new Date(k.lastUsedAt).toLocaleString()) : '<span class="nd-sub">never</span>'}</td>
           <td>${k.expiresAt ? escapeHtml(new Date(k.expiresAt).toLocaleDateString('en-AU')) : '<span class="nd-sub">—</span>'}</td>
           <td><div class="action-buttons">
             <button class="btn btn-secondary btn-sm" onclick="akToggleUsage('${escapeHtml(k.id)}')" aria-expanded="${open}"><i class="fas fa-chart-column"></i> ${open ? 'Hide' : 'Usage'}</button>
+            ${editScopes}
             ${revoke}
           </div></td>
         </tr>`;
       }).join('');
+      // The scopes editor: its own box under the table, like the usage panel.
+      const scopesKey = keys.find(k => k.id === _akScopesOpen && _akKeyState(k) === 'active');
+      const scopesPanel = scopesKey && _akScopeCatalog
+        ? `<div class="ak-usage" id="ak-scopes-wrap">
+            <div class="ak-usage-title">What <strong>${escapeHtml(scopesKey.name)}</strong> <span class="ak-mono nd-sub">${escapeHtml(scopesKey.prefix)}</span> can read
+              <button class="btn btn-secondary btn-sm" onclick="akToggleScopes('${escapeHtml(scopesKey.id)}')"><i class="fas fa-times"></i> Close</button></div>
+            ${_akScopePicker('k', scopesKey.scopes)}
+            <div class="action-buttons" style="margin-top:0.4rem;">
+              <button class="btn btn-success btn-sm" id="ak-scopes-save" onclick="akSaveScopes('${escapeHtml(scopesKey.id)}')"><i class="fas fa-check"></i> Save scopes</button>
+              <span class="ak-note" style="margin:0;">Takes effect on the key's next request; the owner is told.</span>
+            </div>
+          </div>`
+        : '';
       const openKey = keys.find(k => k.id === _akUsageOpen);
       const panel = openKey
         ? `<div class="ak-usage" id="ak-usage-wrap">
@@ -18109,8 +18283,8 @@
       _akCloseChart();
       el.innerHTML = `<div class="nd-table-scroll"><table class="nd-table ak-keys">
         <thead>
-          <tr class="ak-groups"><th colspan="4"></th><th class="ak-group" colspan="3">Requests</th><th class="ak-group" colspan="4">Last 7 days</th><th colspan="4"></th></tr>
-          <tr><th>Key</th><th>Name</th><th>Owner</th><th>Status</th>
+          <tr class="ak-groups"><th colspan="5"></th><th class="ak-group" colspan="3">Requests</th><th class="ak-group" colspan="4">Last 7 days</th><th colspan="4"></th></tr>
+          <tr><th>Key</th><th>Name</th><th>Owner</th><th>Status</th><th title="What the key may read — sources · types · window">Scopes</th>
             <th class="nd2-num">24h</th><th class="nd2-num">7 days</th><th class="nd2-num" title="Every request since the key was made">All time</th>
             <th class="nd2-num" title="Not found">404</th>
             <th class="nd2-num" title="401/403 — used from a web page, revoked or expired, or a path keys may not read">Refused</th>
@@ -18119,8 +18293,39 @@
             <th class="nd2-num">Limit/min</th><th>Last used</th><th>Expires</th><th></th></tr>
         </thead>
         <tbody>${rows}</tbody>
-      </table></div>${panel}`;
+      </table></div>${scopesPanel}${panel}`;
       if (openKey) _akRenderUsage();
+    }
+
+    let _akScopesOpen = null; // key id whose scopes editor is open
+    function akToggleScopes(id) {
+      _akScopesOpen = _akScopesOpen === id ? null : id;
+      renderApiKeysList();
+      if (_akScopesOpen) document.getElementById('ak-scopes-wrap')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+    async function akSaveScopes(id) {
+      const scopes = _akReadScopes('k');
+      if (!scopes) return;
+      const missing = scopes.includes(_akScopeCatalog.legacy) ? []
+        : ['source', 'type', 'window'].filter((d) => !scopes.some((s) => s.startsWith(d + ':')));
+      if (missing.length) { showToast(`Choose at least one ${missing.join(', ')}`, 'error'); return; }
+      const btn = document.getElementById('ak-scopes-save');
+      if (btn) btn.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/staff/api-keys/${encodeURIComponent(id)}/scopes`, {
+          method: 'POST',
+          headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scopes }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) { showToast(data.error || 'Saving scopes failed', 'error'); if (btn) btn.disabled = false; return; }
+        showToast('Scopes saved — the owner is notified', 'success');
+        _akScopesOpen = null;
+        loadApiKeysList();
+      } catch (e) {
+        showToast('Saving scopes failed', 'error');
+        if (btn) btn.disabled = false;
+      }
     }
 
     // --- One key's usage, expanded under its row ---------------------------
