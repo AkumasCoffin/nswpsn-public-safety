@@ -392,8 +392,7 @@ export function createApp() {
   app.route('/', sessionRouter);
   // Simple sources
   app.route('/', rfsRouter);
-  // Not /api/rfs/fdr yet: its upstream changed format and it answers empty (rfs.ts).
-  mirror(app, rfsRouter, ['/api/rfs/incidents', '/api/rfs/incidents/raw']);
+  mirror(app, rfsRouter, ['/api/rfs/incidents', '/api/rfs/incidents/raw', '/api/rfs/fdr']);
   app.route('/', actAmbulanceRouter);
   mirror(app, actAmbulanceRouter, ['/api/act-ambulance/incidents']);
   app.route('/', bomRouter);

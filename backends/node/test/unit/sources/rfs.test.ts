@@ -6,12 +6,14 @@
  * GeoJSON FeatureCollection whose geometry is a Point, or a
  * GeometryCollection of the Point and the fire-ground Polygons.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { Hono } from 'hono';
 
 const fetchJsonMock = vi.fn();
+const fetchTextMock = vi.fn();
 
 vi.mock('../../../src/sources/shared/http.js', () => ({
-  fetchText: vi.fn(),
+  fetchText: fetchTextMock,
   fetchJson: fetchJsonMock,
   fetchRaw: vi.fn(),
   HttpError: class extends Error {},
@@ -159,3 +161,136 @@ describe('rfs.parseRfsDescription', () => {
     expect(r.updatedISO).toBe('2026-02-01T09:00:00+11:00');
   });
 });
+
+const FDR_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<FireDangerMap>
+  <District>
+    <Name>Far North Coast</Name>
+    <RegionNumber>1</RegionNumber>
+    <Councils>Ballina; Byron; Clarence Valley</Councils>
+    <DangerLevelToday>NONE</DangerLevelToday>
+    <DangerLevelTomorrow>MODERATE</DangerLevelTomorrow>
+    <FireBanToday>No</FireBanToday>
+    <FireBanTomorrow>No</FireBanTomorrow>
+  </District>
+  <District>
+    <Name>Greater Hunter</Name>
+    <RegionNumber>7</RegionNumber>
+    <DangerLevelToday>Extreme</DangerLevelToday>
+    <DangerLevelTomorrow>HIGH</DangerLevelTomorrow>
+    <FireBanToday>Yes</FireBanToday>
+    <FireBanTomorrow>No</FireBanTomorrow>
+  </District>
+  <District><RegionNumber>99</RegionNumber></District>
+</FireDangerMap>`;
+
+describe('rfs.parseFireDangerMap', () => {
+  it('reads each district into fields, keeping the old title and description', async () => {
+    const { parseFireDangerMap } = await import('../../../src/sources/rfs.js');
+    const r = parseFireDangerMap(FDR_XML);
+    expect(r).toHaveLength(2); // the record with no name is dropped
+    expect(r[0]).toEqual({
+      title: 'Far North Coast',
+      description: 'Today: no rating, no total fire ban. Tomorrow: MODERATE, no total fire ban.',
+      source: 'rfs_fdr',
+      district: 'Far North Coast',
+      region_number: 1,
+      councils: ['Ballina', 'Byron', 'Clarence Valley'],
+      danger_today: 'NONE',
+      danger_tomorrow: 'MODERATE',
+      fire_ban_today: false,
+      fire_ban_tomorrow: false,
+    });
+    // Upper-cased as the feed mostly writes it; a missing Councils is an empty list.
+    expect(r[1]).toMatchObject({ danger_today: 'EXTREME', fire_ban_today: true, councils: [] });
+    expect(r[1]?.description).toBe('Today: EXTREME, total fire ban. Tomorrow: HIGH, no total fire ban.');
+  });
+});
+
+describe('rfs.rfsFireDanger — read at most every ten minutes', () => {
+  beforeEach(async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-28T00:00:00Z'));
+    fetchTextMock.mockReset();
+    const { _resetRfsFireDanger } = await import('../../../src/sources/rfs.js');
+    _resetRfsFireDanger();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('serves the last read for ten minutes, then reads again', async () => {
+    fetchTextMock.mockResolvedValue(FDR_XML);
+    const { rfsFireDanger } = await import('../../../src/sources/rfs.js');
+    const first = await rfsFireDanger();
+    expect(first.ratings).toHaveLength(2);
+    expect(first.fetched_at).toBe('2026-10-28T00:00:00.000Z');
+    vi.setSystemTime(new Date('2026-10-28T00:09:00Z'));
+    await rfsFireDanger();
+    expect(fetchTextMock).toHaveBeenCalledTimes(1);
+    vi.setSystemTime(new Date('2026-10-28T00:10:01Z'));
+    await rfsFireDanger();
+    expect(fetchTextMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps serving the last good read through an outage, retrying once a minute', async () => {
+    const { rfsFireDanger } = await import('../../../src/sources/rfs.js');
+    fetchTextMock.mockResolvedValueOnce(FDR_XML);
+    await rfsFireDanger();
+    vi.setSystemTime(new Date('2026-10-28T00:11:00Z'));
+    fetchTextMock.mockRejectedValue(new Error('down'));
+    expect((await rfsFireDanger()).fetched_at).toBe('2026-10-28T00:00:00.000Z');
+    vi.setSystemTime(new Date('2026-10-28T00:11:30Z'));
+    await rfsFireDanger();
+    expect(fetchTextMock).toHaveBeenCalledTimes(2); // not retried inside the minute
+    vi.setSystemTime(new Date('2026-10-28T00:12:01Z'));
+    await rfsFireDanger();
+    expect(fetchTextMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('throws only when there has never been a good read; an empty feed counts as a failure', async () => {
+    const { rfsFireDanger } = await import('../../../src/sources/rfs.js');
+    fetchTextMock.mockResolvedValueOnce('<FireDangerMap></FireDangerMap>');
+    await expect(rfsFireDanger()).rejects.toThrow(/no districts/);
+  });
+});
+
+describe('GET /api/rfs/fdr and /api/v1/rfs/fdr', () => {
+  async function app() {
+    const { rfsRouter } = await import('../../../src/api/rfs.js');
+    const { mirror } = await import('../../../src/api/v1/mirror.js');
+    const { notFound, onError } = await import('../../../src/api/v1/respond.js');
+    const a = new Hono();
+    a.route('/', rfsRouter);
+    mirror(a, rfsRouter, ['/api/rfs/fdr']);
+    a.notFound(notFound);
+    a.onError(onError);
+    return a;
+  }
+  beforeEach(async () => {
+    fetchTextMock.mockReset();
+    const { _resetRfsFireDanger } = await import('../../../src/sources/rfs.js');
+    _resetRfsFireDanger();
+  });
+
+  it('answers the districts — wrapped in data on v1', async () => {
+    fetchTextMock.mockResolvedValue(FDR_XML);
+    const a = await app();
+    const old = (await (await a.request('/api/rfs/fdr')).json()) as { ratings: unknown[] };
+    expect(old.ratings).toHaveLength(2);
+    const v1 = (await (await a.request('/api/v1/rfs/fdr')).json()) as { data: { ratings: unknown[] } };
+    expect(v1.data.ratings).toHaveLength(2);
+  });
+
+  it('when the RFS cannot be read: the old path its empty 200, v1 a 503', async () => {
+    fetchTextMock.mockRejectedValue(new Error('down'));
+    const a = await app();
+    const old = await a.request('/api/rfs/fdr');
+    expect(old.status).toBe(200);
+    expect(await old.json()).toEqual({ ratings: [] });
+    const v1 = await a.request('/api/v1/rfs/fdr');
+    expect(v1.status).toBe(503);
+    expect(((await v1.json()) as { error: { code: string } }).error.code).toBe('service_unavailable');
+  });
+});
+

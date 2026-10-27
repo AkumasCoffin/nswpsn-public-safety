@@ -14,26 +14,33 @@
  * fetched per request (Python cached it at the HTTP layer instead) — kept
  * until that path is retired.
  *
- * /incidents and /incidents/raw are also served at /api/v1/ (server.ts
- * mirrors them). /fdr is not: see the note on it below.
+ * All three are also served at /api/v1/ (server.ts mirrors them).
  */
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { describeRoute } from 'hono-openapi';
-import { rfsSnapshot, rfsFeedSnapshot, fetchRfsRaw, type RfsSnapshot, type RfsFeed } from '../sources/rfs.js';
-import { fetchText } from '../sources/shared/http.js';
-import { parseXml, asArray, textOf } from '../sources/shared/xml.js';
+import {
+  rfsSnapshot,
+  rfsFeedSnapshot,
+  fetchRfsRaw,
+  rfsFireDanger,
+  type RfsSnapshot,
+  type RfsFeed,
+  type RfsFireDanger,
+} from '../sources/rfs.js';
 import { log } from '../lib/log.js';
 import { scoped } from '../services/auth/apiKeyScopes.js';
-import { geo, isV1, ok } from './v1/respond.js';
+import { fail, geo, isV1, ok } from './v1/respond.js';
 import {
   assertShape,
+  envelope,
   feature,
   featureCollection,
   GATED_ERRORS,
   incidentProperties,
   okJson,
   PointGeometry,
+  UNAVAILABLE_ERROR,
   type SameShape,
 } from './v1/schemas.js';
 
@@ -91,6 +98,29 @@ const RfsFeedSchema = z
   .meta({ id: 'RfsFeed' });
 assertShape<SameShape<z.infer<typeof RfsFeedSchema>, RfsFeed>>();
 
+const FireDanger = z
+  .object({
+    ratings: z.array(
+      z.object({
+        title: z.string().describe('The district name (the field this route has always had)'),
+        description: z.string().describe('The ratings and bans as one line of text, for display'),
+        source: z.literal('rfs_fdr'),
+        district: z.string().describe('NSW fire weather district'),
+        region_number: z.number().int().nullable(),
+        councils: z.array(z.string()).describe('Local government areas in the district'),
+        danger_today: z
+          .string()
+          .describe('Fire danger rating as the RFS publishes it: NONE (no rating), MODERATE, HIGH, EXTREME or CATASTROPHIC'),
+        danger_tomorrow: z.string(),
+        fire_ban_today: z.boolean().describe('A total fire ban is in force'),
+        fire_ban_tomorrow: z.boolean(),
+      }),
+    ),
+    fetched_at: z.string().nullable().describe('When the RFS was last read successfully, ISO 8601'),
+  })
+  .meta({ id: 'RfsFireDanger' });
+assertShape<SameShape<z.infer<typeof FireDanger>, RfsFireDanger>>();
+
 rfsRouter.get(
   '/api/rfs/incidents',
   SCOPE_INCIDENTS,
@@ -127,46 +157,37 @@ rfsRouter.get(
   },
 );
 
-// /api/rfs/fdr — Fire Danger Ratings. Mirrors python line 10772-10799.
-// Fetched per request because the cadence is slow (daily) and the
-// payload is small; not worth a poller slot. Description's HTML is
-// stripped to match python's re.sub(r'<[^>]+>', '', ...) behaviour.
+// /api/rfs/fdr — Fire Danger Ratings and total fire bans, one record per
+// NSW fire weather district, from fdrToban.xml (sources/rfs.ts). Read at most
+// every ten minutes, not per request.
 //
-// BROKEN UPSTREAM, AND NOT ON /api/v1/ FOR THAT REASON. fdrToban.xml is no
-// longer RSS: it is <FireDangerMap><District> records (Name, RegionNumber,
-// Councils, DangerLevelToday/Tomorrow, FireBanToday/Tomorrow), so the
-// channel/item walk below finds nothing and this answers `{ ratings: [] }`
-// every time. Seen 2026-10-28. It goes on v1 once it reads the new format.
+// It once read that URL as RSS (python line 10772-10799), which it is not —
+// the RSS version is fdrTobanRSS.xml — so for a long time it answered
+// `{ ratings: [] }`. The records keep the old `title`/`description`/`source`
+// and add the fields themselves.
 rfsRouter.get(
   '/api/rfs/fdr',
   SCOPE_WARNINGS,
+  describeRoute({
+    operationId: 'getRfsFireDanger',
+    tags: ['Warnings'],
+    summary: 'NSW fire danger ratings and total fire bans',
+    description:
+      "Today's and tomorrow's fire danger rating and total fire ban for each NSW fire weather district, from the RFS. Refreshed from the RFS at most every ten minutes.",
+    responses: {
+      ...okJson(envelope(FireDanger), 'One record per district'),
+      ...GATED_ERRORS,
+      ...UNAVAILABLE_ERROR,
+    },
+  }),
   async (c) => {
     try {
-      const xml = await fetchText('https://www.rfs.nsw.gov.au/feeds/fdrToban.xml', {
-        timeoutMs: 15_000,
-        headers: { 'User-Agent': 'Mozilla/5.0' },
-      });
-      const parsed = parseXml(xml);
-      const rss =
-        (parsed['rss'] as Record<string, unknown> | undefined) ?? parsed;
-      const channel =
-        rss && typeof rss === 'object'
-          ? ((rss as Record<string, unknown>)['channel'] as
-              | Record<string, unknown>
-              | undefined)
-          : undefined;
-      const items = asArray(channel?.['item']) as Array<Record<string, unknown>>;
-      const ratings = items.map((item) => ({
-        title: textOf(item, 'title'),
-        description: textOf(item, 'description')
-          .replace(/<[^>]+>/g, '')
-          .trim(),
-        source: 'rfs_fdr' as const,
-      }));
-      return ok(c, { ratings });
+      return ok(c, await rfsFireDanger());
     } catch (err) {
       log.warn({ err: (err as Error).message }, 'rfs fdr fetch failed');
-      return ok(c, { ratings: [] });
+      // The old path has always answered an empty list (200) rather than an error.
+      if (!isV1(c)) return ok(c, { ratings: [] });
+      return fail(c, 503, 'service_unavailable', 'The RFS fire danger ratings could not be read just now.');
     }
   },
 );

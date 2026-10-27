@@ -85,6 +85,7 @@ Staff may still grant `read`; a request cannot ask for it.
 | Tag | Endpoint | Scopes it needs |
 |---|---|---|
 | Incidents | `GET /api/v1/rfs/incidents` · `/rfs/incidents/raw` | `source:rfs type:incidents window:live` |
+| Warnings | `GET /api/v1/rfs/fdr` — fire danger ratings and total fire bans by district | `source:rfs type:warnings window:live` |
 | Incidents | `GET /api/v1/act-ambulance/incidents` | `source:actas type:incidents window:live` |
 | Incidents · Warnings | `GET /api/v1/qld-fire/incidents` · `/qld-fire/warnings` | `source:qfd`, `type:incidents` or `type:warnings`, `window:live` |
 | Incidents | `GET /api/v1/nt-fire/incidents` | `source:ntfrs type:incidents window:live` |
@@ -101,9 +102,7 @@ The other feeds a key can read — roads, transport, aircraft, ships, weather,
 beaches, shark reports, power, cameras, news, boundaries, pager traffic, the
 radio site list, the radio summaries and reception transcripts — are still on
 their unversioned `/api/…` paths, and keys read them there with the same scopes.
-They move to `/api/v1/` group by group. The RFS fire danger ratings
-(`/api/rfs/fdr`) wait on something else: they need reworking for the format the
-RFS now publishes.
+They move to `/api/v1/` group by group.
 
 `/rfs/incidents/raw` on v1 is the RFS's own `majorIncidents.json`, exactly as
 published at the last poll; the old `/api/rfs/incidents/raw` keeps its RSS-based
@@ -166,8 +165,9 @@ its first value. An optional switch such as `all=1` reads anything else as
 
 **How fresh.** The live feeds are served from memory, refreshed from each source
 every one to fifteen minutes depending on the source, so asking more than once
-a minute gains nothing. Some responses carry their own `Cache-Control` (30
-seconds for several feeds, a minute for the agency tables).
+a minute gains nothing. The fire danger ratings change a few times a day and are
+read from the RFS at most every ten minutes. Some responses carry their own
+`Cache-Control` (30 seconds for several feeds, a minute for the agency tables).
 
 **Rate limit.** Per key, per minute — 120 unless staff set otherwise. Over it:
 `429 rate_limited`. Requests refused for scope or path count against the limit

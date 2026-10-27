@@ -143,8 +143,6 @@ describe('not found and errors', () => {
   it('a route that is not versioned is not on v1', async () => {
     expect((await get('/api/v1/adsb/aircraft')).status).toBe(404);
     expect((await get('/api/v1/heartbeat')).status).toBe(404);
-    // Held back: fdr reads a format the RFS no longer publishes.
-    expect((await get('/api/v1/rfs/fdr')).status).toBe(404);
   });
 
   it('an unknown old path keeps the plain-text 404', async () => {

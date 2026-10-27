@@ -363,6 +363,93 @@
         ],
         "additionalProperties": false
       },
+      "RfsFireDanger": {
+        "type": "object",
+        "properties": {
+          "ratings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string",
+                  "description": "The district name (the field this route has always had)"
+                },
+                "description": {
+                  "type": "string",
+                  "description": "The ratings and bans as one line of text, for display"
+                },
+                "source": {
+                  "type": "string",
+                  "const": "rfs_fdr"
+                },
+                "district": {
+                  "type": "string",
+                  "description": "NSW fire weather district"
+                },
+                "region_number": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "councils": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Local government areas in the district"
+                },
+                "danger_today": {
+                  "type": "string",
+                  "description": "Fire danger rating as the RFS publishes it: NONE (no rating), MODERATE, HIGH, EXTREME or CATASTROPHIC"
+                },
+                "danger_tomorrow": {
+                  "type": "string"
+                },
+                "fire_ban_today": {
+                  "type": "boolean",
+                  "description": "A total fire ban is in force"
+                },
+                "fire_ban_tomorrow": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "title",
+                "description",
+                "source",
+                "district",
+                "region_number",
+                "councils",
+                "danger_today",
+                "danger_tomorrow",
+                "fire_ban_today",
+                "fire_ban_tomorrow"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "fetched_at": {
+            "description": "When the RFS was last read successfully, ISO 8601",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "ratings",
+          "fetched_at"
+        ],
+        "additionalProperties": false
+      },
       "ActAmbulanceIncidents": {
         "type": "object",
         "properties": {
@@ -2323,6 +2410,87 @@
         "x-scopes": [
           "source:rfs",
           "type:incidents",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/rfs/fdr": {
+      "get": {
+        "operationId": "getRfsFireDanger",
+        "tags": [
+          "Warnings"
+        ],
+        "summary": "NSW fire danger ratings and total fire bans",
+        "description": "Today's and tomorrow's fire danger rating and total fire ban for each NSW fire weather district, from the RFS. Refreshed from the RFS at most every ten minutes.",
+        "responses": {
+          "200": {
+            "description": "One record per district",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/RfsFireDanger"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A dependency is down; try again shortly (service_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:rfs",
+          "type:warnings",
           "window:live"
         ]
       }
