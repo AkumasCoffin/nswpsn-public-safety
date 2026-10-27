@@ -30,6 +30,7 @@ import { describe, it, expect } from 'vitest';
 import {
   canonicalBotAction,
   signBotAction,
+  verifyBotActionSig,
 } from '../../../src/services/botActionSign.js';
 
 const PARAMS = {
@@ -99,5 +100,36 @@ describe('signBotAction', () => {
     const a = signBotAction('secret-a', 'broadcast', '42', PARAMS);
     const b = signBotAction('secret-b', 'broadcast', '42', PARAMS);
     expect(a).not.toBe(b);
+  });
+});
+
+// The reverse direction: the bot signs what it POSTs to the backend
+// (api/feedback.ts) and this is the check. Same canonical form, so the
+// Python fixture above applies here too:
+//   >>> sign_bot_action("shared-secret", "feedback", "bot", {"kind":"bug","subject":"x"})
+// must equal signBotAction('shared-secret', 'feedback', 'bot', {kind:'bug', subject:'x'}).
+describe('verifyBotActionSig', () => {
+  const secret = 'shared-secret';
+  const body = { kind: 'bug', subject: 'x' };
+
+  it('accepts the signature of exactly this action, sender and body — in either hex case', () => {
+    const sig = signBotAction(secret, 'feedback', 'bot', body);
+    expect(verifyBotActionSig(secret, 'feedback', 'bot', body, sig)).toBe(true);
+    expect(verifyBotActionSig(secret, 'feedback', 'bot', body, sig.toUpperCase())).toBe(true);
+    // Key order is irrelevant: the canonical form sorts it.
+    expect(verifyBotActionSig(secret, 'feedback', 'bot', { subject: 'x', kind: 'bug' }, sig)).toBe(true);
+  });
+
+  it('refuses a missing, mis-shaped or wrong signature, and any change to what was signed', () => {
+    const sig = signBotAction(secret, 'feedback', 'bot', body);
+    expect(verifyBotActionSig(secret, 'feedback', 'bot', body, undefined)).toBe(false);
+    expect(verifyBotActionSig(secret, 'feedback', 'bot', body, '')).toBe(false);
+    expect(verifyBotActionSig(secret, 'feedback', 'bot', body, 'not-hex')).toBe(false);
+    expect(verifyBotActionSig(secret, 'feedback', 'bot', body, sig.slice(0, 63))).toBe(false);
+    expect(verifyBotActionSig(secret, 'feedback', 'bot', body, 'f'.repeat(64))).toBe(false);
+    expect(verifyBotActionSig(secret, 'feedback', 'bot', { ...body, subject: 'y' }, sig)).toBe(false);
+    expect(verifyBotActionSig(secret, 'feedback_board_post', 'bot', body, sig)).toBe(false);
+    expect(verifyBotActionSig(secret, 'feedback', 'backend', body, sig)).toBe(false);
+    expect(verifyBotActionSig('other-secret', 'feedback', 'bot', body, sig)).toBe(false);
   });
 });

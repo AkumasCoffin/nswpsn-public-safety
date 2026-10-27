@@ -190,6 +190,42 @@ interface SupabaseUsersResponse {
   users?: SupabaseUser[];
 }
 
+/**
+ * The site account a Discord user id belongs to, if any — so a bug report
+ * posted in Discord can be filed under the reporter's account when their
+ * Discord is linked. There is no index for this: the link lives only in
+ * Supabase auth, so this walks the admin user list the way getUsernameMap
+ * does. Reports are a few a day, so one list read per report is fine.
+ * Best-effort: null when unlinked, unknown, or Supabase is unreachable.
+ */
+export async function findUserByDiscordId(discordId: string): Promise<{ id: string; name: string } | null> {
+  const want = discordId.trim();
+  if (!want || !config.SUPABASE_URL || !config.SUPABASE_SERVICE_ROLE_KEY) return null;
+  try {
+    const res = await fetch(`${config.SUPABASE_URL}/auth/v1/admin/users?per_page=1000`, {
+      headers: {
+        apikey: config.SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${config.SUPABASE_SERVICE_ROLE_KEY}`,
+      },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as SupabaseUsersResponse;
+    for (const u of data.users ?? []) {
+      if (!u.id) continue;
+      const d = discordInfo(u);
+      // Only an OAuth link counts: the legacy typed-in discord_id is a
+      // handle someone wrote on a form, not proof they hold that account.
+      if (d.discord_linked && d.discord_id === want) {
+        return { id: u.id, name: usernameFromMetadata(u.user_metadata) ?? u.email?.split('@')[0] ?? 'User' };
+      }
+    }
+  } catch {
+    /* best-effort */
+  }
+  return null;
+}
+
 interface UserRoleRow {
   user_id: string;
   role: string;

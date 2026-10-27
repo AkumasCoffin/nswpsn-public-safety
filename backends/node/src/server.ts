@@ -39,6 +39,7 @@ import { fleetRouter } from './api/fleet.js';
 import { profilesRouter } from './api/profiles.js';
 import { editorRouter } from './api/editor.js';
 import { ticketsRouter } from './api/tickets.js';
+import { feedbackRouter } from './api/feedback.js';
 import { staffNotifyRouter } from './api/staffNotify.js';
 import { staffNoticesRouter } from './api/staffNotices.js';
 import { referralsRouter } from './api/referrals.js';
@@ -403,6 +404,7 @@ export function createApp() {
   app.route('/', profilesRouter);
   app.route('/', editorRouter);
   app.route('/', ticketsRouter);
+  app.route('/', feedbackRouter);
   app.route('/', staffNotifyRouter);
   app.route('/', staffNoticesRouter);
   app.route('/', referralsRouter);

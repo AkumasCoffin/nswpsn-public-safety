@@ -26,14 +26,30 @@ import { getBotActionSecret } from '../services/botActionSign.js';
 import {
   NOTIFY_CHANNEL_KEYS,
   NOTIFY_GUILD_KEY,
+  FEEDBACK_CHANNEL_KEYS,
+  FEEDBACK_KINDS,
   readNotifySettings,
   writeNotifySetting,
+  enqueueFeedbackChannels,
   type StaffNotifyKind,
+  type FeedbackKind,
 } from '../services/staffNotify.js';
 
 export const staffNotifyRouter = new Hono();
 
 const KINDS = Object.keys(NOTIFY_CHANNEL_KEYS) as StaffNotifyKind[];
+
+/** The public bug-report / suggestion channels, per kind, as the page shows them. */
+function feedbackChannels(s: Record<string, string | null>): Record<FeedbackKind, { intake: string | null; board: string | null }> {
+  const out = {} as Record<FeedbackKind, { intake: string | null; board: string | null }>;
+  for (const kind of FEEDBACK_KINDS) {
+    out[kind] = {
+      intake: s[FEEDBACK_CHANNEL_KEYS[kind].intake] ?? null,
+      board: s[FEEDBACK_CHANNEL_KEYS[kind].board] ?? null,
+    };
+  }
+  return out;
+}
 
 function currentUserId(c: { get: (k: string) => unknown }): string | undefined {
   const v = c.get('userId');
@@ -65,6 +81,7 @@ staffNotifyRouter.get('/api/staff/discord-notify', async (c) => {
   return c.json({
     guild_id: s[NOTIFY_GUILD_KEY] ?? null,
     channels,
+    feedback: feedbackChannels(s),
     // Surfaced so the UI can explain why nothing is arriving rather than
     // looking configured-but-silent.
     delivery: {
@@ -95,6 +112,36 @@ staffNotifyRouter.put('/api/staff/discord-notify', async (c) => {
     // point notifications at ids that don't exist in the new one.
     if (!gid) {
       for (const kind of KINDS) await writeNotifySetting(pool, NOTIFY_CHANNEL_KEYS[kind], null, uid);
+      for (const kind of FEEDBACK_KINDS) {
+        await writeNotifySetting(pool, FEEDBACK_CHANNEL_KEYS[kind].intake, null, uid);
+        await writeNotifySetting(pool, FEEDBACK_CHANNEL_KEYS[kind].board, null, uid);
+        await enqueueFeedbackChannels(pool, kind).catch((err) => log.warn({ err }, 'feedback channels: enqueue failed'));
+      }
+    }
+  }
+
+  // The public bug-report / suggestion channels. Each change is pushed to
+  // the bot as well: it keeps a pinned how-to in an intake channel and must
+  // know which channel that is now.
+  const feedbackIn = body['feedback'];
+  if (feedbackIn && typeof feedbackIn === 'object' && !Array.isArray(feedbackIn)) {
+    const changed = new Set<FeedbackKind>();
+    for (const kind of FEEDBACK_KINDS) {
+      const obj = (feedbackIn as Record<string, unknown>)[kind];
+      if (!obj || typeof obj !== 'object' || Array.isArray(obj)) continue;
+      for (const which of ['intake', 'board'] as const) {
+        if (!Object.prototype.hasOwnProperty.call(obj, which)) continue;
+        const raw = (obj as Record<string, unknown>)[which];
+        const cid = raw === null || raw === '' ? null : cleanSnowflake(raw);
+        if (raw !== null && raw !== '' && !cid) {
+          return c.json({ error: `${which} channel for ${kind} must be a Discord id` }, 400);
+        }
+        await writeNotifySetting(pool, FEEDBACK_CHANNEL_KEYS[kind][which], cid, uid);
+        changed.add(kind);
+      }
+    }
+    for (const kind of changed) {
+      await enqueueFeedbackChannels(pool, kind).catch((err) => log.warn({ err, kind }, 'feedback channels: enqueue failed'));
     }
   }
 
@@ -116,7 +163,7 @@ staffNotifyRouter.put('/api/staff/discord-notify', async (c) => {
   const channels: Record<string, string | null> = {};
   for (const kind of KINDS) channels[kind] = s[NOTIFY_CHANNEL_KEYS[kind]] ?? null;
   log.info({ by: uid }, 'staff discord notification settings updated');
-  return c.json({ guild_id: s[NOTIFY_GUILD_KEY] ?? null, channels, success: true });
+  return c.json({ guild_id: s[NOTIFY_GUILD_KEY] ?? null, channels, feedback: feedbackChannels(s), success: true });
 });
 
 // ---------------------------------------------------------------------------

@@ -50,6 +50,7 @@ const bells: Array<Record<string, unknown>> = [];
 vi.mock('../../../src/services/wireComments.js', () => ({
   notify: vi.fn(async (_pool: unknown, n: Record<string, unknown>) => { bells.push(n); }),
   displayNameMap: vi.fn(async () => new Map<string, string>()),
+  avatarMap: vi.fn(async () => new Map<string, string>()),
 }));
 
 const discord: Array<Record<string, unknown>> = [];
@@ -140,6 +141,27 @@ describe('user routes', () => {
     resultQueue = [{ rows: [TICKET({ user_id: 'someone-else' })] }];
     const res = await makeApp().request('/api/tickets/7');
     expect(res.status).toBe(404);
+  });
+
+  it('a handler\'s view of a ticket lists the bug reports / suggestions linked to it; the owner\'s does not', async () => {
+    handler = true;
+    resultQueue = [
+      { rows: [TICKET({ user_id: 'someone-else' })] },
+      { rows: [] }, // messages
+      { rows: [{ id: 12, kind: 'bug', subject: 'Map tiles blank', status: 'in_progress' }] },
+    ];
+    const res = await makeApp({ userId: 'staff-1' }).request('/api/tickets/7');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { feedback?: unknown[] };
+    expect(body.feedback).toEqual([{ id: 12, kind: 'bug', subject: 'Map tiles blank', status: 'in_progress' }]);
+    expect(calls.find((q) => q.sql.includes('FROM feedback'))?.params).toEqual([7]);
+
+    handler = false;
+    calls.length = 0;
+    resultQueue = [{ rows: [TICKET()] }, { rows: [] }];
+    const own = (await (await makeApp().request('/api/tickets/7')).json()) as { feedback?: unknown[] };
+    expect(own.feedback).toBeUndefined();
+    expect(calls.some((q) => q.sql.includes('FROM feedback'))).toBe(false);
   });
 
   it('a LOCKED ticket (closed >72h) refuses user replies with 409', async () => {
