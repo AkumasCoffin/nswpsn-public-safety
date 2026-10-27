@@ -1996,8 +1996,13 @@ class NSWPSNBot(commands.Bot):
             if board_msg is not None:
                 lines.append(f"It's on the board in <#{board_msg.channel.id}> with its status, and the post "
                              f"is replied to whenever that changes.")
+            # Linked or not, say how it reaches their contact page: the one
+            # we could not match may well have an account they never linked.
             if data.get('linked'):
-                lines.append("It's on your site account's contact page too.")
+                lines.append("It's on your contact page on the site too — your Discord is linked to your account.")
+            else:
+                lines.append("If you have a site account and your Discord is linked to it, it shows on your "
+                             "contact page there too.")
             view = None
             if board_msg is not None:
                 view = discord.ui.View(timeout=None)
