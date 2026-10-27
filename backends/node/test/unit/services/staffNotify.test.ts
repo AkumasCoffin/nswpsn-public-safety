@@ -231,6 +231,31 @@ describe('notifyStaffAsync', () => {
     const sent = sentParams();
     expect(sent.url).toContain('/staff?view=takedowns');
   });
+
+  it('links to the SITE, never to this API\'s own origin', async () => {
+    // PUBLIC_BASE_URL is the API (api.forcequit.xyz on production); the site
+    // is DASHBOARD_FRONTEND_URL. A link built from the former lands on the
+    // API, which serves no pages.
+    const prevApi = process.env['PUBLIC_BASE_URL'];
+    const prevSite = process.env['DASHBOARD_FRONTEND_URL'];
+    process.env['PUBLIC_BASE_URL'] = 'https://api.example.test';
+    delete process.env['DASHBOARD_FRONTEND_URL'];
+    try {
+      configureAll();
+      await notifyStaffAsync(mainPool, { kind: 'signup_request', event: 'new', ref: 'x', title: 'T' });
+      expect(sentParams().url.startsWith('https://nswpsn.forcequit.xyz/staff?view=')).toBe(true);
+
+      vi.clearAllMocks();
+      invalidateStaffNotifySettings();
+      process.env['DASHBOARD_FRONTEND_URL'] = 'https://site.example.test/';
+      configureAll();
+      await notifyStaffAsync(mainPool, { kind: 'signup_request', event: 'new', ref: 'x', title: 'T' });
+      expect(sentParams().url).toBe('https://site.example.test/staff?view=signup');
+    } finally {
+      if (prevApi === undefined) delete process.env['PUBLIC_BASE_URL']; else process.env['PUBLIC_BASE_URL'] = prevApi;
+      if (prevSite === undefined) delete process.env['DASHBOARD_FRONTEND_URL']; else process.env['DASHBOARD_FRONTEND_URL'] = prevSite;
+    }
+  });
 });
 
 describe('new_user / new_node', () => {

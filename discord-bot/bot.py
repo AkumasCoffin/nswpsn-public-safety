@@ -744,6 +744,7 @@ class NSWPSNBot(commands.Bot):
         # (five open reports) is the backend's.
         self._feedback_last_post: Dict[int, float] = {}
         self._feedback_unsigned_notice = False
+        self._feedback_notices_checked = False
         
         # Track permission errors to suppress repeated warnings (debounce).
         # Entries are swept by `_record_send_error` whenever the dict is
@@ -912,6 +913,16 @@ class NSWPSNBot(commands.Bot):
                 name="Australian Emergency Alerts"
             )
         )
+
+        # The pinned how-tos in the intake channels: bring them up to date
+        # with this build's wording (once per process — on_ready fires again
+        # on every reconnect).
+        if not self._feedback_notices_checked:
+            self._feedback_notices_checked = True
+            try:
+                await self._refresh_feedback_notices()
+            except Exception as e:
+                logger.warning(f"feedback notices: refresh failed: {e}")
     
     async def on_guild_remove(self, guild: discord.Guild):
         """Called when the bot is removed from a guild - but we DON'T auto-delete configs anymore.
@@ -1593,6 +1604,61 @@ class NSWPSNBot(commands.Bot):
                 raise ValueError(f'forbidden ({cid})')
         return channel
 
+    def _site_url(self) -> str:
+        """The site's origin for links in Discord — the bot's PUBLIC_BASE_URL
+        is where the site is served (see env.sample), unlike the backend's."""
+        return os.getenv('PUBLIC_BASE_URL', 'https://nswpsn.forcequit.xyz').rstrip('/')
+
+    async def _refresh_feedback_notices(self):
+        """Edit each pinned how-to in place when its wording has changed
+        since it was posted (a new build, a corrected link); repost one that
+        was deleted. Content is compared, so an unchanged notice is left alone."""
+        loop = asyncio.get_event_loop()
+        for kind, row in list(self._feedback_channels.items()):
+            intake = int(row.get('intake_channel_id') or 0)
+            notice_id = int(row.get('notice_message_id') or 0)
+            if not intake:
+                continue
+            wanted = build_feedback_notice_embed(kind, self._site_url())
+            try:
+                channel = await self._fetch_text_channel(intake)
+            except ValueError as e:
+                logger.warning(f"feedback notices: {kind} intake channel unavailable: {e}")
+                continue
+            msg = None
+            if notice_id:
+                try:
+                    msg = await channel.fetch_message(notice_id)
+                except discord.NotFound:
+                    msg = None
+                except discord.HTTPException as e:
+                    logger.warning(f"feedback notices: {kind} notice not fetched: {e}")
+                    continue
+            if msg is not None:
+                have = msg.embeds[0] if msg.embeds else None
+                if have and have.title == wanted.title and (have.description or '') == (wanted.description or ''):
+                    continue
+                try:
+                    await msg.edit(embed=wanted)
+                    logger.info(f"feedback notices: {kind} how-to updated in place")
+                except discord.HTTPException as e:
+                    logger.warning(f"feedback notices: {kind} edit failed: {e}")
+                continue
+            # Gone (or never recorded): post and pin a fresh one.
+            msg = await channel.send(embed=wanted)
+            try:
+                await msg.pin()
+            except discord.HTTPException as e:
+                logger.warning(f"feedback notices: {kind} pin failed: {e}")
+            row = dict(row)
+            row['notice_message_id'] = msg.id
+            await loop.run_in_executor(
+                None, lambda: self.db.set_feedback_channels(
+                    kind, int(row.get('guild_id') or 0), intake,
+                    int(row.get('board_channel_id') or 0), msg.id))
+            self._apply_feedback_row(row)
+            logger.info(f"feedback notices: {kind} how-to reposted")
+
     async def _remove_feedback_notice(self, channel_id: int, message_id: int):
         """Take a pinned how-to down. Best-effort: it may already be gone."""
         if not channel_id or not message_id:
@@ -1620,7 +1686,7 @@ class NSWPSNBot(commands.Bot):
             board = int(params.get('board_channel_id') or 0)
         except (TypeError, ValueError):
             raise ValueError('bad guild_id/channel ids')
-        site_url = (params.get('site_url') or '').strip()
+        site_url = (params.get('site_url') or '').strip() or self._site_url()
         loop = asyncio.get_event_loop()
 
         prior = self._feedback_channels.get(kind) or {}
@@ -1869,7 +1935,7 @@ class NSWPSNBot(commands.Bot):
         if status == 200 and data.get('ok'):
             fb = data.get('feedback') or {}
             fid = int(fb.get('id') or 0)
-            site_url = os.getenv('PUBLIC_BASE_URL', 'https://nswpsn.forcequit.xyz')
+            site_url = self._site_url()
             board_msg = None
             try:
                 board_msg = await self._post_feedback_board(

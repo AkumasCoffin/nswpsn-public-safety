@@ -97,8 +97,15 @@ export const FEEDBACK_CHANNEL_KEYS: Record<FeedbackKind, { intake: string; board
   suggestion: { intake: 'discord_intake_channel_suggestion', board: 'discord_board_channel_suggestion' },
 };
 
-function publicBase(): string {
-  return (process.env['PUBLIC_BASE_URL'] || 'https://nswpsn.forcequit.xyz').replace(/\/+$/, '');
+/**
+ * The SITE's origin, for links people click in Discord. Not PUBLIC_BASE_URL:
+ * that is this API's own origin (the dashboard OAuth callback, node
+ * downloads), and on production it is api.forcequit.xyz, which serves no
+ * pages — every staff deep link built from it landed on the API. The site
+ * is DASHBOARD_FRONTEND_URL, as api/dashboard.ts resolves it.
+ */
+function siteBase(): string {
+  return (process.env['DASHBOARD_FRONTEND_URL'] || 'https://nswpsn.forcequit.xyz').replace(/\/+$/, '');
 }
 
 // ---------------------------------------------------------------------------
@@ -305,7 +312,7 @@ export async function notifyStaffAsync(pool: Pool | null, input: StaffNotifyInpu
     // JSON in a string: every param stays a string so the canonical signing
     // form is identical either side of the language boundary.
     fields: JSON.stringify(packFields(input.fields)),
-    url: `${publicBase()}/staff?view=${STAFF_VIEW[input.kind]}`,
+    url: `${siteBase()}/staff?view=${STAFF_VIEW[input.kind]}`,
   });
 }
 
@@ -326,7 +333,7 @@ export async function enqueueFeedbackChannels(pool: Pool, kind: FeedbackKind): P
     guild_id: s[NOTIFY_GUILD_KEY] ?? '',
     intake_channel_id: s[FEEDBACK_CHANNEL_KEYS[kind].intake] ?? '',
     board_channel_id: s[FEEDBACK_CHANNEL_KEYS[kind].board] ?? '',
-    site_url: publicBase(),
+    site_url: siteBase(),
   });
 }
 
@@ -371,7 +378,7 @@ export async function enqueueFeedbackBoard(pool: Pool, input: FeedbackBoardInput
     status_label: input.statusLabel,
     note: (input.note ?? '').slice(0, 1000),
     actor: input.actor ?? '',
-    site_url: publicBase(),
+    site_url: siteBase(),
   });
 }
 
