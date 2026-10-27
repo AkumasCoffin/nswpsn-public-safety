@@ -34,7 +34,7 @@ from embeds import (
     EmbedBuilder, build_staff_notify_embed, STAFF_NOTIFY_KINDS,
     FEEDBACK_KINDS, build_feedback_notice_embed, build_feedback_notice_view,
     build_feedback_reply_embed, build_feedback_board_embed,
-    set_feedback_board_status, feedback_status_line,
+    set_feedback_board_status, build_feedback_status_embed,
 )
 import alert_catalog
 
@@ -1830,9 +1830,10 @@ class NSWPSNBot(commands.Bot):
                     await msg.edit(embed=set_feedback_board_status(msg.embeds[0], status, status_label))
                 except discord.HTTPException as e:
                     logger.warning(f"feedback board: edit failed for #{fid}: {e}")
-            line = feedback_status_line(kind, status, status_label,
-                                        params.get('note') or '', params.get('actor') or '')
-            reply = await msg.reply(line[:2000], mention_author=False)
+            reply = await msg.reply(
+                embed=build_feedback_status_embed(kind, status, status_label,
+                                                  params.get('note') or '', params.get('actor') or ''),
+                mention_author=False)
             return {'replied': True, 'message_id': str(reply.id)}
 
         raise ValueError(f'unknown feedback_board event: {event}')

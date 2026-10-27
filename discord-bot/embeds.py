@@ -197,14 +197,20 @@ def set_feedback_board_status(embed: discord.Embed, status: str, status_label: s
     return embed
 
 
-def feedback_status_line(kind: str, status: str, status_label: str, note: str, actor: str) -> str:
-    """The reply posted under a board post when its status changes."""
-    text = f"**{_feedback_status_text(status, status_label)}**"
-    if actor:
-        text += f" — set by {actor}"
-    if note:
-        text += f"\n{note[:1500]}"
-    return text
+def build_feedback_status_embed(kind: str, status: str, status_label: str, note: str, actor: str) -> discord.Embed:
+    """The reply posted under a board post when its status changes: the new
+    status as the heading, staff's note as the body, who set it in the footer,
+    in the status's own colour — the same shape as the post it answers."""
+    _, _, icon, kind_color = FEEDBACK_KINDS.get(kind, FEEDBACK_KINDS['bug'])
+    _, status_color = _FEEDBACK_STATUS_STYLE.get(status, ('', None))
+    embed = discord.Embed(
+        title=_feedback_status_text(status, status_label)[:256],
+        description=(note or '')[:4096] or None,
+        color=status_color or kind_color,
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.set_footer(text=f"{icon} Set by {actor}" if actor else f"{icon} AusAware")
+    return embed
 
 
 def _parse_notify_fields(raw: Any) -> List[Dict[str, Any]]:
