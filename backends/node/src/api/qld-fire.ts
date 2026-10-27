@@ -8,8 +8,13 @@
  */
 import { Hono } from 'hono';
 import { qldIncidentsSnapshot, qldWarningsSnapshot } from '../sources/qldFire.js';
+import { scoped } from '../services/auth/apiKeyScopes.js';
 
 export const qldFireRouter = new Hono();
 
-qldFireRouter.get('/api/qld-fire/incidents', (c) => c.json(qldIncidentsSnapshot()));
-qldFireRouter.get('/api/qld-fire/warnings', (c) => c.json(qldWarningsSnapshot()));
+// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
+const SCOPE_INCIDENTS = scoped({ source: 'qfd', type: 'incidents', window: 'live' });
+const SCOPE_WARNINGS = scoped({ source: 'qfd', type: 'warnings', window: 'live' });
+
+qldFireRouter.get('/api/qld-fire/incidents', SCOPE_INCIDENTS, (c) => c.json(qldIncidentsSnapshot()));
+qldFireRouter.get('/api/qld-fire/warnings', SCOPE_WARNINGS, (c) => c.json(qldWarningsSnapshot()));

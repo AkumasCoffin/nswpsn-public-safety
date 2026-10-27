@@ -15,8 +15,12 @@
 import { Hono } from 'hono';
 import { dorsalSnapshot } from '../sources/dorsal.js';
 import type { DorsalFeature } from '../sources/dorsal.js';
+import { scoped } from '../services/auth/apiKeyScopes.js';
 
 export const dorsalRouter = new Hono();
+
+// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
+const SCOPE_HAZARDS = scoped({ source: 'dorsal', type: 'hazards', window: 'live' });
 
 const DEFAULT_HOURS = 48;
 /** 14 days — the most the source's rolling window can actually supply. */
@@ -40,7 +44,7 @@ function parseList(raw: string | null): Set<string> {
   return out;
 }
 
-dorsalRouter.get('/api/dorsal/reports', (c) => {
+dorsalRouter.get('/api/dorsal/reports', SCOPE_HAZARDS, (c) => {
   const url = new URL(c.req.url);
   const hours = parseHours(url.searchParams.get('hours'));
   const categories = parseList(url.searchParams.get('category'));

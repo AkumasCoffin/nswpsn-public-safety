@@ -41,8 +41,12 @@ import {
   tfnswConfigured,
   tfnswPositionsEnabled,
 } from '../sources/tfnsw.js';
+import { scoped } from '../services/auth/apiKeyScopes.js';
 
 export const transportRouter = new Hono();
+
+// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
+const SCOPE_TRANSIT = scoped({ source: 'transport', type: 'transit', window: 'live' });
 
 const ANYTRIP_HOST = 'https://api-cf-oc2.anytrip.com.au/api/v3/region';
 
@@ -578,7 +582,7 @@ function bboxParams(b: Bbox): string {
   return `minLat=${b.minLat}&maxLat=${b.maxLat}&minLon=${b.minLon}&maxLon=${b.maxLon}`;
 }
 
-transportRouter.get('/api/transport/vehicles', async (c) => {
+transportRouter.get('/api/transport/vehicles', SCOPE_TRANSIT, async (c) => {
   const empty: TransportVehiclesSnapshot = {
     vehicles: [],
     count: 0,
@@ -698,7 +702,7 @@ interface RawShapeResponse {
   response?: { shape?: { id?: string; enc?: string } };
 }
 
-transportRouter.get('/api/transport/shape/:id', async (c) => {
+transportRouter.get('/api/transport/shape/:id', SCOPE_TRANSIT, async (c) => {
   if (config.TRANSPORT_DISABLED) return c.json({ id: '', enc: null, disabled: true });
   const id = c.req.param('id').trim();
   if (!SHAPE_ID_RE.test(id)) return c.json({ error: 'invalid shape id' }, 400);
@@ -921,7 +925,7 @@ function stopName(st: RawStopTime['stop']): string {
   return st?.fullName ?? st?.name?.station_name ?? 'Unknown stop';
 }
 
-transportRouter.get('/api/transport/trip/:date/:tripId/:instance', async (c) => {
+transportRouter.get('/api/transport/trip/:date/:tripId/:instance', SCOPE_TRANSIT, async (c) => {
   if (config.TRANSPORT_DISABLED) return c.json({ error: 'disabled' }, 404);
   const date = c.req.param('date');
   const tripId = c.req.param('tripId');
@@ -1029,7 +1033,7 @@ transportRouter.get('/api/transport/trip/:date/:tripId/:instance', async (c) => 
   }
 });
 
-transportRouter.get('/api/transport/departures/:stopId', async (c) => {
+transportRouter.get('/api/transport/departures/:stopId', SCOPE_TRANSIT, async (c) => {
   if (config.TRANSPORT_DISABLED) return c.json({ error: 'disabled' }, 404);
   const stopId = c.req.param('stopId');
   if (!STOP_ID_RE.test(stopId)) return c.json({ error: 'invalid stop id' }, 400);
@@ -1119,7 +1123,7 @@ interface GeoFeatureCollection {
   features?: unknown[];
 }
 
-transportRouter.get('/api/transport/lines', async (c) => {
+transportRouter.get('/api/transport/lines', SCOPE_TRANSIT, async (c) => {
   if (config.TRANSPORT_DISABLED) {
     return c.json({ type: 'FeatureCollection', features: [], disabled: true });
   }
@@ -1156,7 +1160,7 @@ transportRouter.get('/api/transport/lines', async (c) => {
   }
 });
 
-transportRouter.get('/api/transport/stops', async (c) => {
+transportRouter.get('/api/transport/stops', SCOPE_TRANSIT, async (c) => {
   const empty: TransportStopsSnapshot = {
     stops: [],
     count: 0,
@@ -1209,7 +1213,7 @@ transportRouter.get('/api/transport/stops', async (c) => {
 // path, no viewport scoping — safe for the CDN cache list. Returns
 // `configured:false` (not an error) when no TFNSW_API_KEY is set so
 // the frontend can hide the UI.
-transportRouter.get('/api/transport/alerts', async (c) => {
+transportRouter.get('/api/transport/alerts', SCOPE_TRANSIT, async (c) => {
   if (config.TRANSPORT_DISABLED) {
     return c.json({ alerts: [], count: 0, configured: false, disabled: true });
   }

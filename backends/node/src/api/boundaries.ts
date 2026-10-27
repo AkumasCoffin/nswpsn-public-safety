@@ -39,8 +39,12 @@
 import { Hono } from 'hono';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
+import { scoped } from '../services/auth/apiKeyScopes.js';
 
 export const boundariesRouter = new Hono();
+
+// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
+const SCOPE_BOUNDARIES = scoped({ source: 'boundaries', type: 'boundaries', window: 'any' });
 
 const KINDS = new Set(['locality', 'lga', 'state']);
 /** Kinds where asking for the whole country would be absurd. */
@@ -369,7 +373,7 @@ function toFeature(r: BoundaryRow, kind: string, geom: unknown) {
 const LGA_STATES = new Set(['NSW', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'NT', 'ACT']);
 const _lgaNameCache = new Map<string, string[]>();
 
-boundariesRouter.get('/api/boundaries/lga-names', async (c) => {
+boundariesRouter.get('/api/boundaries/lga-names', SCOPE_BOUNDARIES, async (c) => {
   const state = (c.req.query('state') ?? '').toUpperCase().trim();
   if (!LGA_STATES.has(state)) {
     return c.json({ error: 'state must be one of NSW, VIC, QLD, SA, WA, TAS, NT, ACT' }, 400);
@@ -390,7 +394,7 @@ boundariesRouter.get('/api/boundaries/lga-names', async (c) => {
   return c.json({ state, names });
 });
 
-boundariesRouter.get('/api/boundaries/:kind', async (c) => {
+boundariesRouter.get('/api/boundaries/:kind', SCOPE_BOUNDARIES, async (c) => {
   const kind = c.req.param('kind');
   if (!KINDS.has(kind)) {
     return c.json({ error: 'unknown_kind', kinds: [...KINDS] }, 400);

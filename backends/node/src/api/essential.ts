@@ -19,8 +19,12 @@ import { liveStore } from '../store/live.js';
 import type { EssentialOutage } from '../sources/essential.js';
 import { fetchFeed } from '../sources/essential.js';
 import { log } from '../lib/log.js';
+import { scoped } from '../services/auth/apiKeyScopes.js';
 
 export const essentialRouter = new Hono();
+
+// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
+const SCOPE_OUTAGES = scoped({ source: 'essential', type: 'outages', window: 'live' });
 
 function readArray(key: string): EssentialOutage[] {
   const data = liveStore.getData<EssentialOutage[]>(key);
@@ -33,7 +37,7 @@ function totalCustomers(items: EssentialOutage[]): number {
   return n;
 }
 
-essentialRouter.get('/api/essential/outages', (c) => {
+essentialRouter.get('/api/essential/outages', SCOPE_OUTAGES, (c) => {
   const all: EssentialOutage[] = [
     ...readArray('essential_current'),
     ...readArray('essential_future'),
@@ -80,7 +84,7 @@ essentialRouter.get('/api/essential/outages', (c) => {
 });
 
 // Bot-canonical alias: planned items from current + future feeds combined.
-essentialRouter.get('/api/essential/planned', (c) => {
+essentialRouter.get('/api/essential/planned', SCOPE_OUTAGES, (c) => {
   const items = [
     ...readArray('essential_current'),
     ...readArray('essential_future'),
@@ -93,7 +97,7 @@ essentialRouter.get('/api/essential/planned', (c) => {
 });
 
 // Bot-canonical alias: just the future feed contents.
-essentialRouter.get('/api/essential/future', (c) => {
+essentialRouter.get('/api/essential/future', SCOPE_OUTAGES, (c) => {
   const items = readArray('essential_future');
   return c.json({
     outages: items,
@@ -105,7 +109,7 @@ essentialRouter.get('/api/essential/future', (c) => {
 // /api/essential/outages/current — current-feed outages only. Python
 // line 5237-5247 reads cache_get('essential_energy'); we read the same
 // LiveStore key our poller writes to.
-essentialRouter.get('/api/essential/outages/current', (c) => {
+essentialRouter.get('/api/essential/outages/current', SCOPE_OUTAGES, (c) => {
   const items = readArray('essential_current');
   return c.json({
     outages: items,
@@ -116,7 +120,7 @@ essentialRouter.get('/api/essential/outages/current', (c) => {
 
 // /api/essential/outages/future — future-feed outages only. Python
 // line 5250-5260.
-essentialRouter.get('/api/essential/outages/future', (c) => {
+essentialRouter.get('/api/essential/outages/future', SCOPE_OUTAGES, (c) => {
   const items = readArray('essential_future');
   return c.json({
     outages: items,
@@ -129,7 +133,7 @@ essentialRouter.get('/api/essential/outages/future', (c) => {
 // the merged parsed list. Python line 5293-5305 hits both feeds without
 // the LiveStore intermediary so debug tooling can see exactly what
 // upstream is shipping. We keep the same behaviour for parity.
-essentialRouter.get('/api/essential/outages/raw', async (c) => {
+essentialRouter.get('/api/essential/outages/raw', SCOPE_OUTAGES, async (c) => {
   const out: EssentialOutage[] = [];
   for (const feed of ['current', 'future'] as const) {
     try {

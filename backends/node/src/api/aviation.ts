@@ -13,12 +13,16 @@ import {
   fetchAviationCameraDetail,
 } from '../sources/aviation.js';
 import { log } from '../lib/log.js';
+import { scoped } from '../services/auth/apiKeyScopes.js';
 
 export const aviationRouter = new Hono();
 
-aviationRouter.get('/api/aviation/cameras', (c) => c.json(aviationSnapshot()));
+// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
+const SCOPE_CAMERAS = scoped({ source: 'aviation', type: 'cameras', window: 'live' });
 
-aviationRouter.get('/api/aviation/cameras/:airport', async (c) => {
+aviationRouter.get('/api/aviation/cameras', SCOPE_CAMERAS, (c) => c.json(aviationSnapshot()));
+
+aviationRouter.get('/api/aviation/cameras/:airport', SCOPE_CAMERAS, async (c) => {
   const airport = c.req.param('airport');
   try {
     const detail = await fetchAviationCameraDetail(airport);

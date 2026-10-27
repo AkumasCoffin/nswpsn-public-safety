@@ -43,8 +43,12 @@ import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { requireRole, isOwner } from '../services/auth/roles.js';
 import { hub } from '../services/nodes/hub.js';
+import { scoped } from '../services/auth/apiKeyScopes.js';
 
 export const radioPublicRouter = new Hono();
+
+// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
+const SCOPE_RADIO = scoped({ source: 'radio', type: 'radio', window: 'any' });
 
 /** How stale a snapshot may be and still count as "monitoring". */
 const MONITORED_WINDOW_SECONDS = 5 * 60;
@@ -243,7 +247,7 @@ export async function seedGrnSitesIfEmpty(): Promise<void> {
 
 let _grnCache: { at: number; body: Record<string, unknown> } | null = null;
 
-radioPublicRouter.get('/api/radio/grn-sites', async (c) => {
+radioPublicRouter.get('/api/radio/grn-sites', SCOPE_RADIO, async (c) => {
   const now = Date.now();
   if (_grnCache && now - _grnCache.at < CACHE_TTL_MS) return c.json(_grnCache.body);
   const pool = await getPool();

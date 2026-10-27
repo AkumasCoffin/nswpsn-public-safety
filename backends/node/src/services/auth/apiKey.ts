@@ -12,7 +12,8 @@
  *   Named API key     `ak_…` — a person's key from the api_keys table
  *                     (apiKeys.ts). Works from scripts and the command line.
  *                     REFUSED when a browser `Origin` header is present: keys
- *                     are not for web pages, ours or anyone else's.
+ *                     are not for web pages, ours or anyone else's. Reads
+ *                     only what its scopes cover (apiKeyScopes.ts).
  *   Static site key   NSWPSN_API_KEY, for the server-side callers that
  *                     predate the above (Discord bot, rdio's transcripts
  *                     plugin). Accepted via Bearer, X-API-Key or ?api_key= as
@@ -34,6 +35,7 @@ import {
   resolveApiKey,
   touchLastUsed,
 } from './apiKeys.js';
+import { keyMayRequest, routeNeed } from './apiKeyScopes.js';
 
 /** Which credential class satisfied the gate. Read by the request log. */
 export type AuthClass = 'jwt' | 'browser' | 'apikey' | 'static';
@@ -48,87 +50,17 @@ declare module 'hono' {
     apiKeyPrefix?: string;
     /** Owner of that key. Not `userId`: a key is not a login. */
     apiKeyUserId?: string;
-    /** Scopes on that key. Only 'read' exists today; nothing enforces it yet. */
+    /** Scopes on that key (apiKeyScopes.ts) — what the gate let it read. */
     apiKeyScopes?: string[];
   }
 }
 
-/**
- * What a named API key may reach: the upstream data feeds, read-only.
- *
- * A key is a polling credential for somebody's script. It is NOT a login, and
- * passing the credential gate was never meant to mean "everything a page can
- * see" — but that is what it meant, because the gate is all most routes have.
- * An audit of all 344 registered routes found a key could read the complete
- * role matrix of any account (/api/check-admin/:userId), read anyone's profile,
- * enumerate every live visitor session, walk the whole rdio call corpus with
- * its transcripts and audio links, spend the server's paid what3words quota,
- * post an unbounded takedown notice into the private staff Discord channel,
- * inflate any contributor's view counts, and push 25 MB of audio at the GPU
- * transcription backends — none of which is polling a data feed.
- *
- * So the class is confined here, at the one chokepoint, rather than by
- * annotating sixty handlers: a key may only make a GET or HEAD, and only to a
- * path on this list. Everything else is 403, including every write.
- *
- * The list is upstream sources — what the feeds publish — plus two the owner
- * asked for by name. It deliberately does NOT include this site's own content
- * or telemetry: no profiles or accounts, no user-submitted incidents, no radio
- * summaries or transcripts, no site statistics, no cache or collection
- * internals, no archive history.
- *
- * Public endpoints (PUBLIC_ENDPOINTS below) never reach this check — they take
- * no credential from anyone — so nothing here is about hiding those.
- */
-const API_KEY_PATH_PREFIXES: readonly string[] = [
-  // Emergency services, state by state.
-  '/api/rfs/',
-  '/api/act-ambulance/',
-  '/api/qld-fire/',
-  '/api/qld/',
-  '/api/nt-fire/',
-  '/api/sa-fire/',
-  '/api/vic-emergency/',
-  '/api/wa-emergency/',
-  '/api/firms/',
-  // Roads, transport, aviation, marine (AIS).
-  '/api/traffic/',
-  '/api/transport/',
-  '/api/adsb/',
-  '/api/aviation/',
-  '/api/marinetraffic/',
-  // Weather, fire danger, water.
-  '/api/weather/',
-  '/api/bom/',
-  '/api/beachsafe',
-  '/api/beachwatch',
-  '/api/dorsal/',
-  // Power outages.
-  '/api/ausgrid/',
-  '/api/endeavour/',
-  '/api/essential/',
-  // Fire-tower cameras, news, reference geometry.
-  '/api/centralwatch/',
-  '/api/news/',
-  '/api/boundaries/',
-  // Pager traffic from the owner's own Pagermon relay, and the public radio
-  // site reference — both included at the owner's request.
-  '/api/pager/',
-  '/api/radio/',
-];
-
-/** Exact paths, for feeds whose route has no trailing segment. */
-const API_KEY_PATHS: ReadonlySet<string> = new Set([
-  '/api/beachsafe',
-  '/api/beachwatch',
-]);
-
-/** May a named key make this request? GET/HEAD on a data feed, nothing else. */
-function apiKeyMayRead(method: string, path: string): boolean {
-  if (method !== 'GET' && method !== 'HEAD') return false;
-  if (API_KEY_PATHS.has(path)) return true;
-  return API_KEY_PATH_PREFIXES.some((p) => path.startsWith(p));
-}
+// What a named key may reach is decided by its scopes, in apiKeyScopes.ts:
+// a key in the new form reads the routes whose declared source, type and
+// window it holds; a key holding `read` (every key made before scopes) reads
+// the fixed list of upstream feeds it always could. Either way, GET or HEAD
+// only. Public endpoints (PUBLIC_ENDPOINTS below) never reach that check —
+// they take no credential from anyone — so nothing there is about hiding them.
 
 /**
  * Constant-time string comparison. Guards against length mismatch first
@@ -312,18 +244,9 @@ export const requireApiKey: MiddlewareHandler = async (c, next) => {
       );
     }
     // Checked after the rate limit on purpose: hammering a refused path still
-    // spends the key's budget, so a scan cannot be free. See apiKeyMayRead.
-    if (!apiKeyMayRead(c.req.method, url.pathname)) {
-      return c.json(
-        {
-          error: 'api_key_path_forbidden',
-          message:
-            'API keys may only read the upstream data feeds (GET). ' +
-            'This path is not one of them.',
-        },
-        403,
-      );
-    }
+    // spends the key's budget, so a scan cannot be free.
+    const may = keyMayRequest(r.row.scopes, c.req.method, url.pathname, routeNeed(c));
+    if (!may.ok) return c.json({ error: may.error, message: may.message }, 403);
     touchLastUsed(r.row);
     c.set('authClass', 'apikey');
     c.set('apiKeyId', r.row.id);

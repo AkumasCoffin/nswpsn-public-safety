@@ -25,6 +25,7 @@ import {
   generateRdioHourlySummary,
   generateRdioRecentSummary,
 } from '../services/llm.js';
+import { scoped } from '../services/auth/apiKeyScopes.js';
 
 interface SummaryRow extends QueryResultRow {
   id: number;
@@ -80,7 +81,10 @@ function rowToSummary(row: SummaryRow): SummaryShape {
 
 export const summariesRouter = new Hono();
 
-summariesRouter.get('/api/summaries/latest', async (c) => {
+// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
+const SCOPE_SUMMARIES_HISTORY = scoped({ source: 'rdio', type: 'summaries', window: 'history' });
+
+summariesRouter.get('/api/summaries/latest', SCOPE_SUMMARIES_HISTORY, async (c) => {
   try {
     const pool = await getPool();
     if (!pool) {
@@ -103,7 +107,7 @@ summariesRouter.get('/api/summaries/latest', async (c) => {
   }
 });
 
-summariesRouter.get('/api/summaries', async (c) => {
+summariesRouter.get('/api/summaries', SCOPE_SUMMARIES_HISTORY, async (c) => {
   try {
     const url = new URL(c.req.url);
     let stype = url.searchParams.get('type');

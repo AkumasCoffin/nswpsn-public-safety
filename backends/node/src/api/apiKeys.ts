@@ -1,9 +1,11 @@
 /**
  * Named API keys — request, review, claim, revoke.
  *
- * Any logged-in account can ASK for a key (name + what it is for). Owner|staff
- * approve or reject from the staff page (Moderation → API keys), optionally
- * setting the per-minute limit and an expiry. Approval does NOT mint anything:
+ * Any logged-in account can ASK for a key (name + what it is for, and the
+ * scopes they would like). Owner|staff approve or reject from the staff page
+ * (Moderation → API keys), choosing the scopes the key gets
+ * (services/auth/apiKeyScopes.ts) and optionally the per-minute limit and an
+ * expiry. Approval does NOT mint anything:
  * the user then generates the key from their profile (POST …/claim), the
  * backend mints it in that request, and the plaintext goes back once to the
  * person who owns it. Staff never see a plaintext and nothing stores one —
@@ -12,18 +14,20 @@
  *
  *   User (requireSupabaseJwt):
  *     GET  /api/api-keys/me                       own requests + undeleted keys + caps
- *     POST /api/api-keys/requests                 {name, reason} → pending
+ *     GET  /api/api-keys/scope-catalog            the scopes there are, for the pickers
+ *     POST /api/api-keys/requests                 {name, reason, scopes?} → pending
  *     POST /api/api-keys/requests/:id/claim       approved → mints, returns plaintext ONCE
  *     POST /api/api-keys/:prefix/reissue          own live key → new secret, plaintext ONCE
  *     POST /api/api-keys/:prefix/delete           own key → revoked + gone from their list
  *   Staff (owner|staff — canManageUsers):
  *     GET  /api/staff/api-keys/requests?status=   pending|approved|rejected|all
- *     POST /api/staff/api-keys/requests/:id/approve   {rateLimitPerMin?, expiresAt?, note?}
+ *     POST /api/staff/api-keys/requests/:id/approve   {scopes, rateLimitPerMin?, expiresAt?, note?}
  *     POST /api/staff/api-keys/requests/:id/reject    {note?}
  *     POST /api/staff/api-keys/requests/:id/withdraw  {note?}  approved-but-unclaimed → rejected
  *     GET  /api/staff/api-keys                    every key (deleted too), owner names, 24h/7d usage
  *     GET  /api/staff/api-keys/:id/usage?window=  24h|7d|30d — series + paths for one key
- *     POST /api/staff/api-keys/:prefix/revoke     any key; the owner is told
+ *     POST /api/staff/api-keys/:id/scopes         {scopes} — a live key's scopes; the owner is told
+ *     POST /api/staff/api-keys/:id/revoke         any key; the owner is told
  *
  * Usage figures come from api_key_usage_hourly (migration 127,
  * services/auth/apiKeyUsage.ts): every request made with a key's real secret,
@@ -54,6 +58,14 @@ import {
   DEFAULT_RATE_LIMIT_PER_MIN,
   type ApiKeyRow,
 } from '../services/auth/apiKeys.js';
+import {
+  LEGACY_READ,
+  SCOPE_SOURCES,
+  SCOPE_TYPES,
+  SCOPE_WINDOWS,
+  declaredNeeds,
+  validateScopes,
+} from '../services/auth/apiKeyScopes.js';
 import { notify, displayNameMap } from '../services/wireComments.js';
 import { notifyStaff } from '../services/staffNotify.js';
 import { getUsername } from './users.js';
@@ -101,6 +113,10 @@ interface RequestRow {
   key_id: string | null;
   claimed_at: string | null;
   created_at: string;
+  /** What the user asked for (migration 129). May be empty. */
+  requested_scopes: string[];
+  /** What staff granted on approval; the claim copies it to the key. */
+  scopes: string[];
 }
 
 type Queryable = Pick<Pool, 'query'>;
@@ -176,6 +192,8 @@ function mapRequest(r: RequestRow, now: number, nameOverlay?: Map<string, string
     claimedAt: r.claimed_at,
     lapsed: isLapsed(r, now),
     createdAt: r.created_at,
+    requestedScopes: r.requested_scopes ?? [],
+    scopes: r.scopes ?? [],
     ...(nameOverlay ? { userId: r.user_id, userName: nameOverlay.get(r.user_id) ?? r.user_name } : {}),
   };
 }
@@ -298,6 +316,21 @@ function excerpt(s: string): string {
   return s.length > 300 ? s.slice(0, 297) + '…' : s;
 }
 
+/** A scope list for a staff alert or a bell: short, and says so when there is none. */
+function scopesLine(scopes: readonly string[]): string {
+  if (!scopes.length) return 'none asked for';
+  return excerpt(scopes.join(', '));
+}
+
+/**
+ * What the claim copies to the key. A request approved before scopes existed
+ * (or by the backend of that time, between a page update and its deploy) has
+ * none recorded; such a grant meant the old feed list, so it still does.
+ */
+function grantedScopes(req: RequestRow): string[] {
+  return req.scopes?.length ? req.scopes : [LEGACY_READ];
+}
+
 // ---------------------------------------------------------------------------
 // User endpoints — any logged-in account
 // ---------------------------------------------------------------------------
@@ -333,6 +366,21 @@ apiKeysRouter.get('/api/api-keys/me', requireSupabaseJwt, async (c) => {
   }
 });
 
+// The scopes there are, for the request form on the profile and the staff
+// picker. `combos` is what routes actually declare, so a picker can say which
+// types a source has (asking for source:rfs with type:outages reads nothing).
+apiKeysRouter.get('/api/api-keys/scope-catalog', requireSupabaseJwt, (c) => {
+  const list = (o: Readonly<Record<string, string>>) => Object.entries(o).map(([key, label]) => ({ key, label }));
+  return c.json({
+    sources: list(SCOPE_SOURCES),
+    types: list(SCOPE_TYPES),
+    windows: list(SCOPE_WINDOWS),
+    combos: declaredNeeds().sort((a, b) =>
+      a.source.localeCompare(b.source) || a.type.localeCompare(b.type) || a.window.localeCompare(b.window)),
+    legacy: LEGACY_READ,
+  });
+});
+
 apiKeysRouter.post('/api/api-keys/requests', requireSupabaseJwt, async (c) => {
   const userId = currentUserId(c)!;
   const userName = currentUserName(c);
@@ -341,6 +389,9 @@ apiKeysRouter.post('/api/api-keys/requests', requireSupabaseJwt, async (c) => {
   const reason = cleanText(raw?.reason, REASON_MIN, REASON_MAX);
   if (!name) return c.json({ error: `name must be ${NAME_MIN}-${NAME_MAX} characters` }, 400);
   if (!reason) return c.json({ error: `tell us what the key is for (${REASON_MIN}-${REASON_MAX} characters)` }, 400);
+  // Optional: what they would like it to read. Staff choose what it gets.
+  const asked = validateScopes(raw?.scopes, { allowLegacy: false, allowEmpty: true });
+  if (!asked.ok) return c.json({ error: asked.error }, 400);
 
   const pool = await getPool();
   if (!pool) return c.json({ error: 'database unavailable' }, 503);
@@ -359,8 +410,9 @@ apiKeysRouter.post('/api/api-keys/requests', requireSupabaseJwt, async (c) => {
       return c.json({ error: `you already hold ${MAX_ACTIVE_KEYS_PER_USER} active keys — revoke one first` }, 409);
     }
     const ins = await client.query<RequestRow>(
-      'INSERT INTO api_key_requests (user_id, user_name, name, reason) VALUES ($1, $2, $3, $4) RETURNING *',
-      [userId, userName, name, reason],
+      `INSERT INTO api_key_requests (user_id, user_name, name, reason, requested_scopes)
+       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [userId, userName, name, reason, asked.scopes],
     );
     row = ins.rows[0]!;
     await client.query('COMMIT');
@@ -386,6 +438,7 @@ apiKeysRouter.post('/api/api-keys/requests', requireSupabaseJwt, async (c) => {
     fields: [
       { name: 'From', value: userName ?? userId.slice(0, 8), inline: true },
       { name: 'For', value: excerpt(reason) },
+      { name: 'Scopes asked for', value: scopesLine(asked.scopes) },
     ],
   });
   log.info({ requestId: row.id, userId }, 'api key requested');
@@ -441,6 +494,7 @@ apiKeysRouter.post('/api/api-keys/requests/:id/claim', requireSupabaseJwt, async
       {
         userId,
         name: req.name,
+        scopes: grantedScopes(req),
         rateLimitPerMin: req.rate_limit_per_min ?? DEFAULT_RATE_LIMIT_PER_MIN,
         expiresAt: req.expires_at ? new Date(req.expires_at) : null,
       },
@@ -574,6 +628,10 @@ apiKeysRouter.post('/api/staff/api-keys/requests/:id/approve', async (c) => {
   const id = Number(c.req.param('id'));
   if (!Number.isInteger(id) || id <= 0) return c.json({ error: 'invalid id' }, 400);
   const raw = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+  // What the key will read. Required: a grant has to say what it grants.
+  // `read` is allowed here, for staff who mean the old feed list on purpose.
+  const scopes = validateScopes(raw?.scopes, { allowLegacy: true, allowEmpty: false });
+  if (!scopes.ok) return c.json({ error: scopes.error }, 400);
   const rpm = cleanRpm(raw?.rateLimitPerMin);
   if (!rpm.ok) return c.json({ error: `rateLimitPerMin must be a whole number from 1 to ${RPM_MAX}` }, 400);
   const exp = cleanExpires(raw?.expiresAt, Date.now());
@@ -589,10 +647,10 @@ apiKeysRouter.post('/api/staff/api-keys/requests/:id/approve', async (c) => {
     const { rows } = await pool.query<RequestRow>(
       `UPDATE api_key_requests
           SET status = 'approved', rate_limit_per_min = $2, expires_at = $3, review_note = $4,
-              reviewed_by = $5, reviewed_by_name = $6, reviewed_at = now()
+              reviewed_by = $5, reviewed_by_name = $6, reviewed_at = now(), scopes = $7
         WHERE id = $1 AND status = 'pending'
         RETURNING *`,
-      [id, rpm.rpm, exp.at, note.note, userId, name],
+      [id, rpm.rpm, exp.at, note.note, userId, name, scopes.scopes],
     );
     const req = rows[0];
     if (!req) {
@@ -617,7 +675,7 @@ apiKeysRouter.post('/api/staff/api-keys/requests/:id/approve', async (c) => {
       status: 'approved',
       actor: name,
     });
-    log.info({ requestId: id, by: userId, rpm: rpm.rpm, expiresAt: exp.at }, 'api key request approved');
+    log.info({ requestId: id, by: userId, rpm: rpm.rpm, expiresAt: exp.at, scopes: scopes.scopes }, 'api key request approved');
     return c.json({ ok: true, request: mapRequest(req, Date.now()) });
   } catch (err) {
     log.error({ err, id }, 'api key request approve failed');
@@ -845,6 +903,50 @@ apiKeysRouter.get('/api/staff/api-keys/:id/usage', async (c) => {
   } catch (err) {
     log.error({ err, id }, 'api key usage failed');
     return c.json({ error: 'failed to load usage' }, 500);
+  }
+});
+
+// A live key's scopes, changed after the fact — widened when the owner asks
+// for more, narrowed when a key reads more than it needs. The resolve cache
+// holds the row for up to a minute, so the prefix is forgotten to make the
+// change bite on the next request.
+apiKeysRouter.post('/api/staff/api-keys/:id/scopes', async (c) => {
+  const userId = c.get('userId') as string;
+  const id = c.req.param('id');
+  if (!UUID_RE.test(id)) return c.json({ error: 'invalid key id' }, 400);
+  const raw = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+  const scopes = validateScopes(raw?.scopes, { allowLegacy: true, allowEmpty: false });
+  if (!scopes.ok) return c.json({ error: scopes.error }, 400);
+  const pool = await getPool();
+  if (!pool) return c.json({ error: 'database unavailable' }, 503);
+  try {
+    const { rows } = await pool.query<ApiKeyRow>(
+      `UPDATE api_keys SET scopes = $2
+        WHERE id = $1 AND revoked_at IS NULL AND deleted_at IS NULL
+          AND (expires_at IS NULL OR expires_at > now())
+        RETURNING *`,
+      [id, scopes.scopes],
+    );
+    const key = rows[0];
+    if (!key) {
+      const cur = await pool.query<{ id: string }>('SELECT id FROM api_keys WHERE id = $1', [id]);
+      if (!cur.rows[0]) return c.json({ error: 'key not found' }, 404);
+      return c.json({ error: 'this key is not live — revoked, expired or deleted' }, 409);
+    }
+    forgetApiKeyPrefix(key.prefix);
+    await notify(pool, {
+      userId: key.user_id,
+      type: 'api_key_scopes_changed',
+      title: `What API key "${key.name}" can read was changed by staff`,
+      body: `It now reads: ${scopesLine(key.scopes)}.`,
+      link: KEYS_LINK,
+      exceptUserId: userId,
+    });
+    log.info({ id, by: userId, scopes: key.scopes }, 'api key scopes changed');
+    return c.json({ ok: true, key: mapKey(key, Date.now()) });
+  } catch (err) {
+    log.error({ err, id }, 'api key scopes change failed');
+    return c.json({ error: 'Failed to change scopes' }, 500);
   }
 });
 

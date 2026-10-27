@@ -19,12 +19,16 @@ import {
   saCfsActiveSnapshot,
   saMfsActiveSnapshot,
 } from '../sources/saFire.js';
+import { scoped } from '../services/auth/apiKeyScopes.js';
 
 export const saFireRouter = new Hono();
 
-saFireRouter.get('/api/sa-fire/cfs', (c) =>
+// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
+const SCOPE_INCIDENTS = scoped({ source: 'safire', type: 'incidents', window: 'live' });
+
+saFireRouter.get('/api/sa-fire/cfs', SCOPE_INCIDENTS, (c) =>
   c.json(c.req.query('all') === '1' ? saCfsSnapshot() : saCfsActiveSnapshot()),
 );
-saFireRouter.get('/api/sa-fire/mfs', (c) =>
+saFireRouter.get('/api/sa-fire/mfs', SCOPE_INCIDENTS, (c) =>
   c.json(c.req.query('all') === '1' ? saMfsSnapshot() : saMfsActiveSnapshot()),
 );

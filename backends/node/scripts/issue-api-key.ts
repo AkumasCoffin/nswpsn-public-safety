@@ -5,8 +5,12 @@
  * the server, for keys that need no review.
  *
  * Usage (from backends/node):
- *   npx tsx --env-file=../.env scripts/issue-api-key.ts --user <supabase uid> --name "<label>" [--rpm 120] [--expires 2027-01-01] [--scopes read]
+ *   npx tsx --env-file=../.env scripts/issue-api-key.ts --user <supabase uid> --name "<label>" [--rpm 120] [--expires 2027-01-01] [--scopes source:rfs,type:incidents,window:live]
  *   npx tsx --env-file=../.env scripts/issue-api-key.ts --list [--user <uid>]
+ *
+ * --scopes is checked like a staff approval (services/auth/apiKeyScopes.ts):
+ * known source:/type:/window: scopes with at least one of each, or `read` on
+ * its own for the old feed list. Left out, the key gets `read`.
  *
  * The plaintext is printed ONCE and is not stored — hand it over and close
  * the terminal. Keys work from scripts and the command line only; the gate
@@ -14,6 +18,7 @@
  */
 import { closePool } from '../src/db/pool.js';
 import { createApiKey, listApiKeys } from '../src/services/auth/apiKeys.js';
+import { validateScopes } from '../src/services/auth/apiKeyScopes.js';
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -57,7 +62,17 @@ async function main(): Promise<void> {
     process.exitCode = 2;
     return;
   }
-  const scopes = arg('scopes')?.split(',').map((s) => s.trim()).filter(Boolean);
+  let scopes: string[] | undefined;
+  const scopesRaw = arg('scopes');
+  if (scopesRaw !== undefined) {
+    const checked = validateScopes(scopesRaw.split(','), { allowLegacy: true, allowEmpty: false });
+    if (!checked.ok) {
+      console.error(`--scopes: ${checked.error}`);
+      process.exitCode = 2;
+      return;
+    }
+    scopes = checked.scopes;
+  }
 
   const { plaintext, row } = await createApiKey({ userId, name, rateLimitPerMin: rpm, expiresAt, scopes });
   console.log('');

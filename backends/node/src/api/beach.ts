@@ -19,18 +19,22 @@ import {
 } from '../sources/beach.js';
 import { fetchJson, HttpError } from '../sources/shared/http.js';
 import { log } from '../lib/log.js';
+import { scoped } from '../services/auth/apiKeyScopes.js';
 
 export const beachRouter = new Hono();
 
-beachRouter.get('/api/beachwatch', (c) => c.json(beachwatchSnapshot()));
+// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
+const SCOPE_HAZARDS = scoped({ source: 'beach', type: 'hazards', window: 'live' });
 
-beachRouter.get('/api/beachsafe', (c) => c.json(beachsafeSnapshot()));
+beachRouter.get('/api/beachwatch', SCOPE_HAZARDS, (c) => c.json(beachwatchSnapshot()));
 
-beachRouter.get('/api/beachsafe/details', (c) =>
+beachRouter.get('/api/beachsafe', SCOPE_HAZARDS, (c) => c.json(beachsafeSnapshot()));
+
+beachRouter.get('/api/beachsafe/details', SCOPE_HAZARDS, (c) =>
   c.json(beachsafeDetailsSnapshot()),
 );
 
-beachRouter.get('/api/beachsafe/beach/:slug', async (c) => {
+beachRouter.get('/api/beachsafe/beach/:slug', SCOPE_HAZARDS, async (c) => {
   const rawSlug = c.req.param('slug') ?? '';
   const slug = rawSlug.trim().toLowerCase().replace(/\s+/g, '-');
   if (!slug || slug.length > 100) {

@@ -9,9 +9,13 @@
  */
 import { Hono } from 'hono';
 import { actAmbulanceSnapshot } from '../sources/actAmbulance.js';
+import { scoped } from '../services/auth/apiKeyScopes.js';
 
 export const actAmbulanceRouter = new Hono();
 
-actAmbulanceRouter.get('/api/act-ambulance/incidents', (c) =>
+// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
+const SCOPE_INCIDENTS = scoped({ source: 'actas', type: 'incidents', window: 'live' });
+
+actAmbulanceRouter.get('/api/act-ambulance/incidents', SCOPE_INCIDENTS, (c) =>
   c.json(actAmbulanceSnapshot()),
 );

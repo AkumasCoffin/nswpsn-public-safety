@@ -16,10 +16,14 @@
 import { Hono } from 'hono';
 import { liveStore } from '../store/live.js';
 import type { AusgridOutagesPayload } from '../sources/ausgrid.js';
+import { scoped } from '../services/auth/apiKeyScopes.js';
 
 export const ausgridRouter = new Hono();
 
-ausgridRouter.get('/api/ausgrid/outages', (c) => {
+// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
+const SCOPE_OUTAGES = scoped({ source: 'ausgrid', type: 'outages', window: 'live' });
+
+ausgridRouter.get('/api/ausgrid/outages', SCOPE_OUTAGES, (c) => {
   const data = liveStore.getData<AusgridOutagesPayload>('ausgrid');
   if (data && (data.Markers || data.Polygons)) {
     return c.json(data);
@@ -29,7 +33,7 @@ ausgridRouter.get('/api/ausgrid/outages', (c) => {
   return c.json({ Markers: [], Polygons: [] });
 });
 
-ausgridRouter.get('/api/ausgrid/stats', (c) => {
+ausgridRouter.get('/api/ausgrid/stats', SCOPE_OUTAGES, (c) => {
   const data = liveStore.getData<unknown>('ausgrid_stats');
   // Python's ausgrid_stats handler returns the upstream payload as-is
   // (whatever shape it happens to have); on missing cache it returns

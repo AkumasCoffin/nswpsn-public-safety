@@ -71,6 +71,8 @@ vi.mock('../../../src/api/users.js', () => ({
 }));
 
 const { apiKeysRouter, MAX_ACTIVE_KEYS_PER_USER } = await import('../../../src/api/apiKeys.js');
+const { resolveApiKey, _clearApiKeyCache } = await import('../../../src/services/auth/apiKeys.js');
+const { createHash } = await import('node:crypto');
 
 function makeApp(opts: { userId?: string | null; userName?: string | null } = {}) {
   const app = new Hono();
@@ -94,8 +96,12 @@ const json = (body: unknown) => ({
 const REQUEST = (over: Record<string, unknown> = {}) => ({
   id: 5, user_id: 'user-1', user_name: 'Test User', name: 'home-assistant', reason: 'Pull incidents into my dashboard',
   status: 'pending', rate_limit_per_min: null, expires_at: null, review_note: null,
-  reviewed_by: null, reviewed_by_name: null, reviewed_at: null, key_id: null, claimed_at: null, created_at: 't', ...over,
+  reviewed_by: null, reviewed_by_name: null, reviewed_at: null, key_id: null, claimed_at: null, created_at: 't',
+  requested_scopes: [], scopes: [], ...over,
 });
+
+/** A complete scope set in the new form: one of each dimension. */
+const RFS_LIVE = ['source:rfs', 'type:incidents', 'window:live'];
 
 const UUID = '0b6e1f6a-6d0c-4b8e-9a51-2f3c4d5e6f70';
 
@@ -190,13 +196,44 @@ describe('user routes', () => {
     expect(calls[1]!.params).toEqual(['api-keys:user-1']);
     expect(order[order.length - 1]).toBe('COMMIT');
     const ins = calls.find((q) => q.sql.includes('INSERT INTO api_key_requests'));
-    expect(ins?.params).toEqual(['user-1', 'Test User', 'home-assistant', 'Pull incidents into my dashboard']);
+    expect(ins?.params).toEqual(['user-1', 'Test User', 'home-assistant', 'Pull incidents into my dashboard', []]);
     expect(discord).toHaveLength(1);
     expect(discord[0]).toMatchObject({ kind: 'api_key_request', event: 'new', ref: '5' });
     const fields = discord[0]!.fields as Array<{ name: string; value: string }>;
     expect(fields.find((f) => f.name === 'From')?.value).toBe('Test User');
+    expect(fields.find((f) => f.name === 'Scopes asked for')?.value).toBe('none asked for');
     expect(JSON.stringify(discord[0])).not.toContain('user-1');
     expect(bells).toHaveLength(0);
+  });
+
+  it('a request may ask for scopes: stored canonically, shown to staff; nonsense and `read` are refused', async () => {
+    resultQueue = [{ rows: [{ n: '0' }] }, { rows: [{ n: '0' }] }, { rows: [REQUEST({ requested_scopes: RFS_LIVE })] }];
+    const res = await makeApp().request('/api/api-keys/requests',
+      json({ name: 'home-assistant', reason: 'Pull incidents into my dashboard', scopes: ['window:live', 'Source:RFS', 'type:incidents', 'source:rfs'] }));
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { request: Record<string, unknown> }).request).toMatchObject({ requestedScopes: RFS_LIVE, scopes: [] });
+    const ins = calls.find((q) => q.sql.includes('INSERT INTO api_key_requests'));
+    expect(ins?.params?.[4]).toEqual(RFS_LIVE);
+    const fields = discord[0]!.fields as Array<{ name: string; value: string }>;
+    expect(fields.find((f) => f.name === 'Scopes asked for')?.value).toBe(RFS_LIVE.join(', '));
+
+    calls.length = 0;
+    const app = makeApp();
+    for (const scopes of [['source:nope', 'type:incidents', 'window:live'], ['read'], ['source:rfs'], 'source:rfs']) {
+      const bad = await app.request('/api/api-keys/requests', json({ name: 'fine', reason: 'long enough reason', scopes }));
+      expect(bad.status).toBe(400);
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it('GET /scope-catalog lists every source, type and window for the pickers; 401 without a session', async () => {
+    expect((await makeApp({ userId: null }).request('/api/api-keys/scope-catalog')).status).toBe(401);
+    const body = (await (await makeApp().request('/api/api-keys/scope-catalog')).json()) as Record<string, Array<{ key: string }>>;
+    expect(body.sources!.map((s) => s.key)).toContain('rfs');
+    expect(body.types!.map((s) => s.key)).toContain('incidents');
+    expect(body.windows!.map((s) => s.key)).toEqual(['live', 'history']);
+    expect(body).toHaveProperty('combos');
+    expect(body.legacy).toBe('read');
   });
 
   it('a nameless account is identified to Discord by an id fragment, never the whole id', async () => {
@@ -269,6 +306,20 @@ describe('user routes', () => {
       expect(calls.some((q) => q.sql.includes('INSERT INTO api_keys'))).toBe(false);
     });
 
+    it('mints the key with the scopes staff granted', async () => {
+      resultQueue = [
+        { rows: [REQUEST({ status: 'approved', requested_scopes: ['source:*', 'type:*', 'window:*'], scopes: RFS_LIVE })] },
+        { rows: [{ n: '0' }] },
+        { rows: [KEY({ scopes: RFS_LIVE })] },
+        { rows: [] },
+      ];
+      const res = await makeApp().request('/api/api-keys/requests/5/claim', { method: 'POST' });
+      expect(res.status).toBe(200);
+      // The grant, not the ask.
+      expect(calls.find((q) => q.sql.includes('INSERT INTO api_keys'))!.params![4]).toEqual(RFS_LIVE);
+      expect(((await res.json()) as { key: Record<string, unknown> }).key).toMatchObject({ scopes: RFS_LIVE });
+    });
+
     it('mints inside the transaction with the granted limit/expiry, links the key, returns the plaintext once', async () => {
       resultQueue = [
         { rows: [REQUEST({ status: 'approved', rate_limit_per_min: 30, expires_at: '2027-01-01T00:00:00.000Z' })] },
@@ -287,6 +338,8 @@ describe('user routes', () => {
       // userId, name, prefix, hash, scopes, rpm, expires
       expect(ins!.params![0]).toBe('user-1');
       expect(ins!.params![1]).toBe('home-assistant');
+      // A grant with no scopes recorded (approved before scopes existed) means the old feed list.
+      expect(ins!.params![4]).toEqual(['read']);
       expect(ins!.params![5]).toBe(30);
       expect(ins!.params![6]).toBeInstanceOf(Date);
       // The hash is sha256 of the plaintext, and the plaintext itself never reaches SQL.
@@ -409,6 +462,7 @@ describe('staff routes', () => {
     expect((await app.request('/api/staff/api-keys')).status).toBe(403);
     expect((await app.request('/api/staff/api-keys/requests/5/approve', json({}))).status).toBe(403);
     expect((await app.request(`/api/staff/api-keys/${UUID}/revoke`, { method: 'POST' })).status).toBe(403);
+    expect((await app.request(`/api/staff/api-keys/${UUID}/scopes`, json({ scopes: RFS_LIVE }))).status).toBe(403);
     expect((await app.request(`/api/staff/api-keys/${UUID}/usage`)).status).toBe(403);
     expect((await makeApp({ userId: null }).request('/api/staff/api-keys/requests')).status).toBe(401);
     expect(calls).toHaveLength(0);
@@ -447,7 +501,7 @@ describe('staff routes', () => {
     resultQueue = [{ rows: [REQUEST({ status: 'approved', rate_limit_per_min: 60, review_note: 'enjoy' })] }];
     const res = await makeApp({ userId: 'staff-1' }).request(
       '/api/staff/api-keys/requests/5/approve',
-      json({ rateLimitPerMin: 60, expiresAt: in1y.toISOString(), note: 'enjoy' }),
+      json({ scopes: RFS_LIVE, rateLimitPerMin: 60, expiresAt: in1y.toISOString(), note: 'enjoy' }),
     );
     expect(res.status).toBe(200);
     const upd = calls.find((q) => q.sql.includes("SET status = 'approved'"));
@@ -457,6 +511,7 @@ describe('staff routes', () => {
     expect(upd?.params?.[2]).toBeInstanceOf(Date);
     expect(upd?.params?.[3]).toBe('enjoy');
     expect(upd?.params?.[4]).toBe('staff-1');
+    expect(upd?.params?.[6]).toEqual(RFS_LIVE);
     expect(bells).toHaveLength(1);
     expect(bells[0]).toMatchObject({ userId: 'user-1', type: 'api_key_approved', link: '/#api-keys' });
     expect(String(bells[0]!.body)).toContain('enjoy');
@@ -469,12 +524,25 @@ describe('staff routes', () => {
     staff = true;
     const app = makeApp({ userId: 'staff-1' });
     resultQueue = [{ rows: [] }, { rows: [{ status: 'rejected' }] }];
-    const lost = await app.request('/api/staff/api-keys/requests/5/approve', json({}));
+    const lost = await app.request('/api/staff/api-keys/requests/5/approve', json({ scopes: ['read'] }));
     expect(lost.status).toBe(409);
     expect(((await lost.json()) as { error: string }).error).toBe('already rejected');
     resultQueue = [{ rows: [] }, { rows: [] }];
-    expect((await app.request('/api/staff/api-keys/requests/5/approve', json({}))).status).toBe(404);
+    expect((await app.request('/api/staff/api-keys/requests/5/approve', json({ scopes: ['read'] }))).status).toBe(404);
     expect(bells).toHaveLength(0);
+  });
+
+  it('approve must say what the key reads: scopes are required and checked; `read` alone is a deliberate legacy grant', async () => {
+    staff = true;
+    const app = makeApp({ userId: 'staff-1' });
+    for (const scopes of [undefined, [], ['read', 'source:rfs'], ['source:rfs', 'type:incidents'], ['source:rfs', 'type:nope', 'window:live']]) {
+      const res = await app.request('/api/staff/api-keys/requests/5/approve', json({ scopes }));
+      expect(res.status).toBe(400);
+    }
+    expect(calls).toHaveLength(0);
+    resultQueue = [{ rows: [REQUEST({ status: 'approved', scopes: ['read'] })] }];
+    expect((await app.request('/api/staff/api-keys/requests/5/approve', json({ scopes: ['read'] }))).status).toBe(200);
+    expect(calls.find((q) => q.sql.includes("SET status = 'approved'"))?.params?.[6]).toEqual(['read']);
   });
 
   it('reject stores the note and sends it to the user; 409 when not pending', async () => {
@@ -614,6 +682,50 @@ describe('staff routes', () => {
       resultQueue = [{ rows: [KEY({ id: UUID })] }, { rows: [] }, { rows: [] }, { rows: [{ n: 0 }] }];
       body = (await (await app.request(`/api/staff/api-keys/${UUID}/usage?window=1y`)).json()) as Record<string, unknown>;
       expect(body).toMatchObject({ window: '24h', bucket: 'hour' });
+    });
+  });
+
+  describe('edit scopes', () => {
+    it('sets a live key\'s scopes, tells the owner, and drops the cached row so it bites at once', async () => {
+      staff = true;
+      const plain = 'ak_abcdefghij_' + 'S'.repeat(32);
+      const hash = createHash('sha256').update(plain).digest('hex');
+      _clearApiKeyCache();
+      // Cache the key as it is now ({read}).
+      resultQueue = [{ rows: [KEY({ id: UUID, key_hash: hash })] }];
+      expect((await resolveApiKey(plain)).ok).toBe(true);
+      calls.length = 0;
+
+      resultQueue = [{ rows: [KEY({ id: UUID, key_hash: hash, scopes: RFS_LIVE })] }];
+      const res = await makeApp({ userId: 'staff-1' }).request(`/api/staff/api-keys/${UUID}/scopes`, json({ scopes: RFS_LIVE }));
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { key: Record<string, unknown> }).key).toMatchObject({ scopes: RFS_LIVE });
+      const upd = calls.find((q) => q.sql.includes('SET scopes'));
+      expect(upd?.params).toEqual([UUID, RFS_LIVE]);
+      // Only a live key: revoked, expired and deleted keys are not edited.
+      expect(upd?.sql).toContain('revoked_at IS NULL AND deleted_at IS NULL');
+      expect(bells[0]).toMatchObject({ userId: 'user-1', type: 'api_key_scopes_changed', link: '/#api-keys', exceptUserId: 'staff-1' });
+      expect(String(bells[0]!.body)).toContain('source:rfs');
+
+      // The next use reads the table again rather than the cached {read} row.
+      calls.length = 0;
+      resultQueue = [{ rows: [KEY({ id: UUID, key_hash: hash, scopes: RFS_LIVE })] }];
+      const again = await resolveApiKey(plain);
+      expect(again.ok && again.row.scopes).toEqual(RFS_LIVE);
+      expect(calls.some((q) => q.sql.includes('FROM api_keys WHERE prefix'))).toBe(true);
+    });
+
+    it('400 on a bad id or bad scopes, 404 for no such key, 409 for a dead one', async () => {
+      staff = true;
+      const app = makeApp({ userId: 'staff-1' });
+      expect((await app.request('/api/staff/api-keys/abcdefghij/scopes', json({ scopes: RFS_LIVE }))).status).toBe(400);
+      expect((await app.request(`/api/staff/api-keys/${UUID}/scopes`, json({ scopes: ['type:incidents'] }))).status).toBe(400);
+      expect(calls).toHaveLength(0);
+      resultQueue = [{ rows: [] }, { rows: [] }];
+      expect((await app.request(`/api/staff/api-keys/${UUID}/scopes`, json({ scopes: RFS_LIVE }))).status).toBe(404);
+      resultQueue = [{ rows: [] }, { rows: [{ id: UUID }] }];
+      expect((await app.request(`/api/staff/api-keys/${UUID}/scopes`, json({ scopes: RFS_LIVE }))).status).toBe(409);
+      expect(bells).toHaveLength(0);
     });
   });
 

@@ -20,6 +20,7 @@ vi.mock('../../../src/lib/log.js', () => ({
 import { requireApiKey } from '../../../src/services/auth/apiKey.js';
 import { mintBrowserToken } from '../../../src/services/auth/browserToken.js';
 import { _clearApiKeyCache, lookupPrefix } from '../../../src/services/auth/apiKeys.js';
+import { scoped } from '../../../src/services/auth/apiKeyScopes.js';
 
 const SITE = 'https://nswpsn.forcequit.xyz';
 const UA = 'Mozilla/5.0 gate-test';
@@ -186,8 +187,7 @@ describe('requireApiKey', () => {
       });
 
       it('refuses a WRITE even to a path it may read', async () => {
-        // Scopes are recorded on the key but nothing enforces them, so the
-        // method is what holds the line.
+        // A `read` key: the method and the old feed list hold the line.
         const res = await makeApp().request(FEED, { method: 'POST', ...h });
         expect(res.status).toBe(403);
         expect(await res.json()).toMatchObject({ error: 'api_key_path_forbidden' });
@@ -213,6 +213,103 @@ describe('requireApiKey', () => {
           headers: { Authorization: 'Bearer test-api-key' },
         });
         expect(bot.status).toBe(200);
+      });
+
+      it('reaches the versioned twin of a feed it can read', async () => {
+        const app = new Hono();
+        app.use('*', requireApiKey);
+        app.get('/api/v1/rfs/incidents', (c) => c.json(body(c)));
+        app.get('/api/v1/summaries', (c) => c.json(body(c)));
+        expect((await app.request('/api/v1/rfs/incidents', h)).status).toBe(200);
+        expect((await app.request('/api/v1/summaries', h)).status).toBe(403);
+      });
+    });
+
+    // A key with scopes in the new form reads what its scopes cover, and the
+    // routes say what they serve (scoped(), apiKeyScopes.ts).
+    describe('scoped keys', () => {
+      const h = { headers: { Authorization: `Bearer ${KEY}` } };
+      function scopedApp() {
+        const app = new Hono();
+        app.use('*', requireApiKey);
+        app.get('/api/rfs/incidents', scoped({ source: 'rfs', type: 'incidents', window: 'live' }), (c) => c.json(body(c)));
+        app.get('/api/rfs/fdr', scoped({ source: 'rfs', type: 'warnings', window: 'live' }), (c) => c.json(body(c)));
+        app.get('/api/adsb/history', scoped({ source: 'adsb', type: 'aircraft', window: 'history' }), (c) => c.json(body(c)));
+        app.get('/api/pager/hits', scoped({ source: 'pager', type: 'pager', window: 'any' }), (c) => c.json(body(c)));
+        // Node status: declared by nothing, so no scope reaches it.
+        app.get('/api/adsb/receivers', (c) => c.json(body(c)));
+        return app;
+      }
+      function withScopes(scopes: string[], over: Record<string, unknown> = {}) {
+        queryMock.mockResolvedValue({ rows: [{ ...keyRow(), scopes, rate_limit_per_min: 100, ...over }], rowCount: 1 });
+      }
+
+      it('reads a route its scopes cover', async () => {
+        withScopes(['source:rfs', 'type:incidents', 'window:live']);
+        const res = await scopedApp().request('/api/rfs/incidents', h);
+        expect(res.status).toBe(200);
+        expect(await res.json()).toMatchObject({ auth: 'apikey', key: 'abcdefghij' });
+      });
+
+      it('is refused on each dimension it lacks, with the scopes the route needs', async () => {
+        withScopes(['source:rfs', 'type:incidents', 'window:live']);
+        const app = scopedApp();
+        for (const path of ['/api/rfs/fdr', '/api/adsb/history', '/api/pager/hits']) {
+          const res = await app.request(path, h);
+          expect(res.status).toBe(403);
+          expect(await res.json()).toMatchObject({ error: 'api_key_scope_forbidden' });
+        }
+        const res = await app.request('/api/rfs/fdr', h);
+        expect(((await res.json()) as { message: string }).message).toContain('type:warnings');
+      });
+
+      it('wildcards, and window "any" for reference data', async () => {
+        withScopes(['source:*', 'type:*', 'window:history']);
+        const app = scopedApp();
+        expect((await app.request('/api/adsb/history', h)).status).toBe(200);
+        expect((await app.request('/api/pager/hits', h)).status).toBe(200);
+        expect((await app.request('/api/rfs/incidents', h)).status).toBe(403);
+      });
+
+      it('never reaches an undeclared route, however wide its scopes', async () => {
+        withScopes(['source:*', 'type:*', 'window:*']);
+        const res = await scopedApp().request('/api/adsb/receivers', h);
+        expect(res.status).toBe(403);
+        expect(await res.json()).toMatchObject({ error: 'api_key_scope_forbidden' });
+      });
+
+      it('never writes', async () => {
+        withScopes(['source:*', 'type:*', 'window:*']);
+        const app = scopedApp();
+        app.post('/api/rfs/incidents', (c) => c.json(body(c)));
+        const res = await app.request('/api/rfs/incidents', { method: 'POST', ...h });
+        expect(res.status).toBe(403);
+        expect(await res.json()).toMatchObject({ error: 'api_key_scope_forbidden' });
+      });
+
+      it('a path no route serves is a 404, not a refusal', async () => {
+        withScopes(['source:rfs', 'type:incidents', 'window:live']);
+        expect((await scopedApp().request('/api/rfs/nope', h)).status).toBe(404);
+      });
+
+      it('still spends the budget on refusals', async () => {
+        withScopes(['source:rfs', 'type:incidents', 'window:live'], { rate_limit_per_min: 2 });
+        const app = scopedApp();
+        expect((await app.request('/api/rfs/fdr', h)).status).toBe(403);
+        expect((await app.request('/api/rfs/fdr', h)).status).toBe(403);
+        expect((await app.request('/api/rfs/incidents', h)).status).toBe(429);
+      });
+
+      it('is still refused from a web page, but not from a same-origin read with no Origin', async () => {
+        withScopes(['source:rfs', 'type:incidents', 'window:live']);
+        const app = scopedApp();
+        const page = await app.request('/api/rfs/incidents', { headers: { ...h.headers, Origin: 'https://someone-elses.site' } });
+        expect(page.status).toBe(403);
+        expect(await page.json()).toMatchObject({ error: 'api_key_browser_use' });
+        // A same-origin GET carries no Origin header (Fetch spec) — what the
+        // API's own docs page relies on to load the spec with a key.
+        const same = await app.request('/api/rfs/incidents', { headers: { ...h.headers, 'Sec-Fetch-Site': 'same-origin' } });
+        expect(same.status).toBe(200);
       });
     });
   });

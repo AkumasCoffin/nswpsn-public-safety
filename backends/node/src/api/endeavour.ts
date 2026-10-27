@@ -26,8 +26,12 @@ import { liveStore } from '../store/live.js';
 import type { EndeavourOutage } from '../sources/endeavour.js';
 import { callSupabase } from '../sources/endeavour.js';
 import { log } from '../lib/log.js';
+import { scoped } from '../services/auth/apiKeyScopes.js';
 
 export const endeavourRouter = new Hono();
+
+// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
+const SCOPE_OUTAGES = scoped({ source: 'endeavour', type: 'outages', window: 'live' });
 
 interface SupabaseAreaRaw {
   outage_type?: string;
@@ -47,11 +51,11 @@ function readArray(key: string): EndeavourOutage[] {
   return Array.isArray(data) ? data : [];
 }
 
-endeavourRouter.get('/api/endeavour/current', (c) =>
+endeavourRouter.get('/api/endeavour/current', SCOPE_OUTAGES, (c) =>
   c.json(readArray('endeavour_current')),
 );
 
-endeavourRouter.get('/api/endeavour/maintenance', (c) =>
+endeavourRouter.get('/api/endeavour/maintenance', SCOPE_OUTAGES, (c) =>
   c.json(readArray('endeavour_maintenance')),
 );
 
@@ -59,13 +63,13 @@ endeavourRouter.get('/api/endeavour/maintenance', (c) =>
 // which we store under the LiveStore key `endeavour_planned` (matching
 // Python's source-name registry). The route name stays `future` so the
 // frontend keeps working.
-endeavourRouter.get('/api/endeavour/future', (c) =>
+endeavourRouter.get('/api/endeavour/future', SCOPE_OUTAGES, (c) =>
   c.json(readArray('endeavour_planned')),
 );
 
 // `/planned` is the bot-canonical alias: current maintenance + future
 // scheduled, flat list. Mirrors Python line 5348-5364.
-endeavourRouter.get('/api/endeavour/planned', (c) => {
+endeavourRouter.get('/api/endeavour/planned', SCOPE_OUTAGES, (c) => {
   const items: EndeavourOutage[] = [];
   for (const k of ['endeavour_maintenance', 'endeavour_planned'] as const) {
     items.push(...readArray(k));
@@ -78,7 +82,7 @@ endeavourRouter.get('/api/endeavour/planned', (c) => {
 // the same — no LiveStore involvement — for clients that need the un-
 // normalised area record. Failures degrade to [] so a Supabase blip
 // doesn't 500 the route.
-endeavourRouter.get('/api/endeavour/current/raw', async (c) => {
+endeavourRouter.get('/api/endeavour/current/raw', SCOPE_OUTAGES, async (c) => {
   try {
     const areas = await fetchAreas();
     return c.json(
@@ -90,7 +94,7 @@ endeavourRouter.get('/api/endeavour/current/raw', async (c) => {
   }
 });
 
-endeavourRouter.get('/api/endeavour/current/all', async (c) => {
+endeavourRouter.get('/api/endeavour/current/all', SCOPE_OUTAGES, async (c) => {
   try {
     const areas = await fetchAreas();
     return c.json(
@@ -102,7 +106,7 @@ endeavourRouter.get('/api/endeavour/current/all', async (c) => {
   }
 });
 
-endeavourRouter.get('/api/endeavour/future/raw', async (c) => {
+endeavourRouter.get('/api/endeavour/future/raw', SCOPE_OUTAGES, async (c) => {
   try {
     const areas = await fetchAreas();
     return c.json(
@@ -114,7 +118,7 @@ endeavourRouter.get('/api/endeavour/future/raw', async (c) => {
   }
 });
 
-endeavourRouter.get('/api/endeavour/future/all', async (c) => {
+endeavourRouter.get('/api/endeavour/future/all', SCOPE_OUTAGES, async (c) => {
   try {
     const areas = await fetchAreas();
     return c.json(
@@ -134,7 +138,7 @@ const POSTCODE_TTL_MS = 60 * 60_000;
 
 interface OutagePointRow { postcode?: string | null }
 
-endeavourRouter.get('/api/endeavour/postcodes', async (c) => {
+endeavourRouter.get('/api/endeavour/postcodes', SCOPE_OUTAGES, async (c) => {
   const now = Date.now();
   if (postcodesCache && now < postcodesCache.expiresAt) {
     return c.json(postcodesCache.data);

@@ -30,8 +30,13 @@ import {
 } from '../sources/traffic.js';
 import { fetchJson } from '../sources/shared/http.js';
 import { log } from '../lib/log.js';
+import { scoped } from '../services/auth/apiKeyScopes.js';
 
 export const trafficRouter = new Hono();
+
+// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
+const SCOPE_HAZARDS = scoped({ source: 'livetraffic', type: 'hazards', window: 'live' });
+const SCOPE_CAMERAS = scoped({ source: 'livetraffic', type: 'cameras', window: 'live' });
 
 interface AllFeedsItem {
   eventType?: string;
@@ -54,10 +59,10 @@ const HAZARDS: Array<{ path: string; storeKey: string; rawEndpoint: string }> = 
 ];
 
 for (const h of HAZARDS) {
-  trafficRouter.get(`/api/traffic/${h.path}`, (c) =>
+  trafficRouter.get(`/api/traffic/${h.path}`, SCOPE_HAZARDS, (c) =>
     c.json(trafficHazardSnapshot(h.storeKey)),
   );
-  trafficRouter.get(`/api/traffic/${h.path}/raw`, async (c) => {
+  trafficRouter.get(`/api/traffic/${h.path}/raw`, SCOPE_HAZARDS, async (c) => {
     try {
       const raw = await fetchHazardRaw(h.rawEndpoint);
       return c.json(raw);
@@ -71,7 +76,7 @@ for (const h of HAZARDS) {
   });
 }
 
-trafficRouter.get('/api/traffic/cameras', (c) =>
+trafficRouter.get('/api/traffic/cameras', SCOPE_CAMERAS, (c) =>
   c.json(trafficCamerasSnapshot()),
 );
 
@@ -79,7 +84,7 @@ trafficRouter.get('/api/traffic/cameras', (c) =>
 // that whole file is already served verbatim by /api/traffic/all-feeds
 // below, and pointing a raw route at a hazards endpoint would return a
 // different feed entirely.
-trafficRouter.get('/api/traffic/works', (c) =>
+trafficRouter.get('/api/traffic/works', SCOPE_HAZARDS, (c) =>
   c.json(trafficHazardSnapshot('traffic_works')),
 );
 
@@ -88,7 +93,7 @@ trafficRouter.get('/api/traffic/works', (c) =>
 // at the HTTP layer; for now we fetch each call — we can add a TTL cache
 // later if upstream complains). Response is a FeatureCollection with
 // minimal parsing; the upstream is already JSON-shaped per-incident.
-trafficRouter.get('/api/traffic/lga-incidents', async (c) => {
+trafficRouter.get('/api/traffic/lga-incidents', SCOPE_HAZARDS, async (c) => {
   try {
     const data = await fetchJson<unknown>(
       'https://www.livetraffic.com/traffic/hazards/regional/lga-incidents.json',
@@ -111,7 +116,7 @@ trafficRouter.get('/api/traffic/lga-incidents', async (c) => {
 
 // /api/traffic/all-feeds — pass-through with eventType grouping.
 // Mirrors python line 9132-9162.
-trafficRouter.get('/api/traffic/all-feeds', async (c) => {
+trafficRouter.get('/api/traffic/all-feeds', SCOPE_HAZARDS, async (c) => {
   try {
     const data = await fetchJson<AllFeedsItem[]>(
       'https://www.livetraffic.com/datajson/all-feeds-web.json',

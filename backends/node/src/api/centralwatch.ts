@@ -24,8 +24,12 @@ import {
   STALE_AFTER_MS_EXPORT,
 } from '../services/centralwatchImageCache.js';
 import { log } from '../lib/log.js';
+import { scoped } from '../services/auth/apiKeyScopes.js';
 
 export const centralwatchRouter = new Hono();
+
+// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
+const SCOPE_CAMERAS = scoped({ source: 'centralwatch', type: 'cameras', window: 'live' });
 
 // Cameras that the batch image worker can't reach (offline towers, upstream
 // 404s, etc.) get dropped from the public list so the map doesn't show
@@ -38,7 +42,7 @@ function filterOnline<T extends { id: string }>(list: T[]): T[] {
   return list.filter((cam) => hasImage(cam.id));
 }
 
-centralwatchRouter.get('/api/centralwatch/cameras', async (c) => {
+centralwatchRouter.get('/api/centralwatch/cameras', SCOPE_CAMERAS, async (c) => {
   try {
     const cameras = await getCentralwatchCameras();
     return c.json(filterOnline(cameras));
@@ -51,7 +55,7 @@ centralwatchRouter.get('/api/centralwatch/cameras', async (c) => {
   }
 });
 
-centralwatchRouter.get('/api/centralwatch/sites', async (c) => {
+centralwatchRouter.get('/api/centralwatch/sites', SCOPE_CAMERAS, async (c) => {
   try {
     const sites = await getCentralwatchSites();
     // Drop offline cameras within each site, then drop sites with no
@@ -76,7 +80,7 @@ const PLACEHOLDER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="640" hei
       <text x="320" y="260" text-anchor="middle" fill="#64748b" font-family="sans-serif" font-size="14">Image loading... please wait</text>
     </svg>`;
 
-centralwatchRouter.get('/api/centralwatch/image/:cameraId', (c) => {
+centralwatchRouter.get('/api/centralwatch/image/:cameraId', SCOPE_CAMERAS, (c) => {
   const cameraId = c.req.param('cameraId');
   const cached = getImage(cameraId);
 

@@ -14,6 +14,7 @@ import {
   type AggregateResponse,
 } from '../sources/news.js';
 import { log } from '../lib/log.js';
+import { scoped } from '../services/auth/apiKeyScopes.js';
 
 const CACHE_TTL_MS = 5 * 60_000;
 /**
@@ -48,7 +49,10 @@ function pruneCache(now: number): void {
 
 export const newsRouter = new Hono();
 
-newsRouter.get('/api/news/rss', async (c) => {
+// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
+const SCOPE_NEWS = scoped({ source: 'news', type: 'news', window: 'live' });
+
+newsRouter.get('/api/news/rss', SCOPE_NEWS, async (c) => {
   const url = new URL(c.req.url);
   const sources = url.searchParams.get('sources') ?? '';
   const category = url.searchParams.get('category') ?? '';
@@ -78,7 +82,7 @@ newsRouter.get('/api/news/rss', async (c) => {
   }
 });
 
-newsRouter.get('/api/news/sources', (c) =>
+newsRouter.get('/api/news/sources', SCOPE_NEWS, (c) =>
   c.json({
     sources: RSS_FEEDS,
     categories: ['general', 'emergency', 'weather'],

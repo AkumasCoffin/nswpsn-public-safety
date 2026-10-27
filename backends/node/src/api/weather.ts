@@ -23,14 +23,18 @@ import { readGridBytes, readManifest } from '../services/weatherStore.js';
 import { SwrCache } from '../services/swrCache.js';
 import { fetchJson } from '../sources/shared/http.js';
 import { log } from '../lib/log.js';
+import { scoped } from '../services/auth/apiKeyScopes.js';
 
 export const weatherRouter = new Hono();
 
-weatherRouter.get('/api/weather/current', (c) =>
+// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
+const SCOPE_WEATHER = scoped({ source: 'weather', type: 'weather', window: 'live' });
+
+weatherRouter.get('/api/weather/current', SCOPE_WEATHER, (c) =>
   c.json(weatherCurrentSnapshot()),
 );
 
-weatherRouter.get('/api/weather/radar', (c) => c.json(weatherRadarSnapshot()));
+weatherRouter.get('/api/weather/radar', SCOPE_WEATHER, (c) => c.json(weatherRadarSnapshot()));
 
 // ---------------------------------------------------------------------------
 // The gridded field
@@ -41,7 +45,7 @@ weatherRouter.get('/api/weather/radar', (c) => c.json(weatherRadarSnapshot()));
  * time axis, and each variable's scale. Fetched once per page load, then the
  * client pulls individual grids against it.
  */
-weatherRouter.get('/api/weather/grid/manifest', async (c) => {
+weatherRouter.get('/api/weather/grid/manifest', SCOPE_WEATHER, async (c) => {
   const m = await readManifest();
   if (!m) {
     // Distinguishable from a server fault: the field simply has not been
@@ -64,7 +68,7 @@ weatherRouter.get('/api/weather/grid/manifest', async (c) => {
  * roughly six times the bytes and needs parsing; as Int16 it is ~11.7 KB that
  * goes straight into a typed array.
  */
-weatherRouter.get('/api/weather/grid', async (c) => {
+weatherRouter.get('/api/weather/grid', SCOPE_WEATHER, async (c) => {
   const v = (c.req.query('var') ?? '').trim() as GridVar;
   const t = (c.req.query('t') ?? '').trim();
 
@@ -132,7 +136,7 @@ const POINT_SWR = {
     log.warn({ err: (err as Error).message }, 'weather point lookup failed'),
 };
 
-weatherRouter.get('/api/weather/point', async (c) => {
+weatherRouter.get('/api/weather/point', SCOPE_WEATHER, async (c) => {
   const lat = Number(c.req.query('lat'));
   const lon = Number(c.req.query('lon'));
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) {

@@ -14,12 +14,17 @@ import { rfsSnapshot, fetchRfsRaw } from '../sources/rfs.js';
 import { fetchText } from '../sources/shared/http.js';
 import { parseXml, asArray, textOf } from '../sources/shared/xml.js';
 import { log } from '../lib/log.js';
+import { scoped } from '../services/auth/apiKeyScopes.js';
 
 export const rfsRouter = new Hono();
 
-rfsRouter.get('/api/rfs/incidents', (c) => c.json(rfsSnapshot()));
+// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
+const SCOPE_INCIDENTS = scoped({ source: 'rfs', type: 'incidents', window: 'live' });
+const SCOPE_WARNINGS = scoped({ source: 'rfs', type: 'warnings', window: 'live' });
 
-rfsRouter.get('/api/rfs/incidents/raw', async (c) => {
+rfsRouter.get('/api/rfs/incidents', SCOPE_INCIDENTS, (c) => c.json(rfsSnapshot()));
+
+rfsRouter.get('/api/rfs/incidents/raw', SCOPE_INCIDENTS, async (c) => {
   try {
     const raw = await fetchRfsRaw();
     return c.json(raw);
@@ -33,7 +38,7 @@ rfsRouter.get('/api/rfs/incidents/raw', async (c) => {
 // Fetched per request because the cadence is slow (daily) and the
 // payload is small; not worth a poller slot. Description's HTML is
 // stripped to match python's re.sub(r'<[^>]+>', '', ...) behaviour.
-rfsRouter.get('/api/rfs/fdr', async (c) => {
+rfsRouter.get('/api/rfs/fdr', SCOPE_WARNINGS, async (c) => {
   try {
     const xml = await fetchText('https://www.rfs.nsw.gov.au/feeds/fdrToban.xml', {
       timeoutMs: 15_000,

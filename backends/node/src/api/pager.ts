@@ -15,8 +15,12 @@ import { log } from '../lib/log.js';
 import { pagerSnapshot, stripLeadingPagerDate, type PagerMessage } from '../sources/pager.js';
 import { inAuBbox } from '../sources/adsb.js';
 import { SwrCache } from '../services/swrCache.js';
+import { scoped } from '../services/auth/apiKeyScopes.js';
 
 export const pagerRouter = new Hono();
+
+// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
+const SCOPE_PAGER = scoped({ source: 'pager', type: 'pager', window: 'any' });
 
 // SWR cache for the archive_misc-backed query. archive_misc is a heavy
 // partitioned table and the JSON-extract WHERE clause regularly takes
@@ -275,7 +279,7 @@ async function fetchPagerHitsFromDb(opts: {
   return { type: 'FeatureCollection', features, count: features.length, hours };
 }
 
-pagerRouter.get('/api/pager/hits', async (c) => {
+pagerRouter.get('/api/pager/hits', SCOPE_PAGER, async (c) => {
   const url = new URL(c.req.url);
   const hoursParam = url.searchParams.get('hours');
   const limitParam = url.searchParams.get('limit');

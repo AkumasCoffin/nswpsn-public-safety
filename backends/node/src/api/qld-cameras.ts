@@ -9,9 +9,13 @@
  */
 import { Hono } from 'hono';
 import { qldCamerasSnapshot, qldFloodCamerasSnapshot } from '../sources/qldCameras.js';
+import { scoped } from '../services/auth/apiKeyScopes.js';
 
 export const qldCamerasRouter = new Hono();
 
-qldCamerasRouter.get('/api/qld/cameras', (c) => c.json(qldCamerasSnapshot()));
+// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
+const SCOPE_CAMERAS = scoped({ source: 'qldtraffic', type: 'cameras', window: 'live' });
 
-qldCamerasRouter.get('/api/qld/flood-cameras', (c) => c.json(qldFloodCamerasSnapshot()));
+qldCamerasRouter.get('/api/qld/cameras', SCOPE_CAMERAS, (c) => c.json(qldCamerasSnapshot()));
+
+qldCamerasRouter.get('/api/qld/flood-cameras', SCOPE_CAMERAS, (c) => c.json(qldFloodCamerasSnapshot()));

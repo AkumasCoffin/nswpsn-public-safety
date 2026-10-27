@@ -33,8 +33,12 @@ import { Hono } from 'hono';
 import { log } from '../lib/log.js';
 import { getPool } from '../db/pool.js';
 import { marinetrafficBrowser } from '../services/marinetrafficBrowser.js';
+import { scoped } from '../services/auth/apiKeyScopes.js';
 
 export const marinetrafficRouter = new Hono();
+
+// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
+const SCOPE_VESSELS = scoped({ source: 'marinetraffic', type: 'vessels', window: 'live' });
 
 // User-verified working tiles (paste one in a browser and you get vessel
 // JSON back). Together they cover the major shipping basins worldwide
@@ -294,7 +298,7 @@ async function backgroundRefresh(): Promise<void> {
 refreshTimer = setTimeout(backgroundRefresh, REFRESH_INITIAL_DELAY_MS);
 refreshTimer.unref?.();
 
-marinetrafficRouter.get('/api/marinetraffic/vessels', async (c) => {
+marinetrafficRouter.get('/api/marinetraffic/vessels', SCOPE_VESSELS, async (c) => {
   lastUserHitMs = Date.now();
 
   // Always serve whatever's in the cache — stale data beats blocking the
@@ -361,7 +365,7 @@ marinetrafficRouter.get('/api/marinetraffic/vessels', async (c) => {
 //        promoted into the Map on hit.
 //     3. MT origin via the headless browser worker — slow (~2-3 s),
 //        result is written back to both caches.
-marinetrafficRouter.get('/api/marinetraffic/vessel/:id', async (c) => {
+marinetrafficRouter.get('/api/marinetraffic/vessel/:id', SCOPE_VESSELS, async (c) => {
   const id = c.req.param('id');
   if (!/^\d+$/.test(id)) {
     return c.json({ error: 'invalid ship id' }, 400);
@@ -409,7 +413,7 @@ marinetrafficRouter.get('/api/marinetraffic/vessel/:id', async (c) => {
 //   when loaded directly via <img src="https://images.marinetraffic.com/...">.
 //   Bytes are cached in memory for 6 h; misses (no photo for the
 //   vessel) are negative-cached for 30 min.
-marinetrafficRouter.get('/api/marinetraffic/vessel-image/:id', async (c) => {
+marinetrafficRouter.get('/api/marinetraffic/vessel-image/:id', SCOPE_VESSELS, async (c) => {
   const id = c.req.param('id');
   if (!/^\d+$/.test(id)) {
     return c.text('invalid id', 400);

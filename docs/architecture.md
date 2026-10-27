@@ -647,10 +647,11 @@ any of it.
    Supabase user; otherwise it accepts one of three classes — a browser
    session token (`bt1.…`, valid only with a first-party `Origin` and only
    for the browser it was minted for), a named API key (`ak_…`, from the
-   `api_keys` table, refused whenever a browser `Origin` is present; a user
-   requests one from their profile, staff approve it, and the user then
-   generates it so only they ever see the plaintext — `src/api/apiKeys.ts`),
-   or the
+   `api_keys` table, refused whenever a browser `Origin` is present, and
+   GET-only on what its scopes cover — `src/services/auth/apiKeyScopes.ts`;
+   a user requests one from their profile, staff approve it and choose its
+   scopes, and the user then generates it so only they ever see the
+   plaintext — `src/api/apiKeys.ts`), or the
    static `NSWPSN_API_KEY` for the Discord bot and rdio's transcripts
    plugin. Browsers are never given the static key.
 3. Role checks (`src/services/auth/roles.ts`) gate the staff surfaces. Roles

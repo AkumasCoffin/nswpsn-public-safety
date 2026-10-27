@@ -335,18 +335,20 @@ People who need scripted access get a **named API key** from the `api_keys`
 table (migration 120; the request flow below is the usual route, and
 `scripts/issue-api-key.ts` / `scripts/revoke-api-key.ts` are the server-side
 shortcuts). Only the sha256 and a lookup prefix are stored.
-A key carries scopes, its own per-minute limit, an optional expiry and a
-`revoked_at`. **Keys are refused from web pages**: a request presenting one
-with a browser `Origin` header is a 403, so a key cannot be used from another
-site, nor pasted into ours.
+A key carries scopes (what it may read — below), its own per-minute limit, an
+optional expiry and a `revoked_at`. **Keys are refused from web pages**: a
+request presenting one with a browser `Origin` header is a 403, so a key cannot
+be used from another site, nor pasted into ours.
 
 Keys are normally **requested, not issued**. A logged-in user asks from their
-profile (`POST /api/api-keys/requests`, a name and a reason; one open request
-at a time — pending, or approved and not yet generated), which raises a staff
-Discord alert (`api_key_request`). Owner or staff approve or reject it on the
-staff page (Moderation → API keys; `/api/staff/api-keys/*`), and approval sets
-the per-minute limit and an optional expiry — but approval does not create the
-key. The **user** mints it (`POST /api/api-keys/requests/:id/claim`), so the
+profile (`POST /api/api-keys/requests`, a name, a reason and, optionally, the
+scopes they would like; one open request at a time — pending, or approved and
+not yet generated), which raises a staff Discord alert (`api_key_request`,
+with the scopes asked for). Owner or staff approve or reject it on the staff
+page (Moderation → API keys; `/api/staff/api-keys/*`), and approval sets the
+scopes the key gets (required — `api_key_requests` keeps the ask in
+`requested_scopes` and the grant in `scopes`, migration 129), the per-minute
+limit and an optional expiry — but approval does not create the key. The **user** mints it (`POST /api/api-keys/requests/:id/claim`), so the
 plaintext is shown once to its owner and never to staff; nothing stores it.
 Until they do, staff can withdraw the approval (`…/withdraw`), and a grant
 whose expiry passes before it is generated lapses on its own. A user holds at
@@ -355,7 +357,10 @@ most three active keys. From the profile they can **re-issue** a live key
 row, so its limit, expiry and history carry on; the plaintext is shown once,
 and the old key stops resolving once the change commits) or **delete** one
 (`…/delete`: revoked if live, and gone from their list; staff still see it).
-Staff list and revoke any key from the staff page. The caps are checked under
+Staff list and revoke any key from the staff page, and change a live key's
+scopes (`POST /api/staff/api-keys/:id/scopes`; the owner gets a bell, and the
+key's cached row is dropped so the change applies to its next request). The
+pickers on both pages read `GET /api/api-keys/scope-catalog`. The caps are checked under
 a per-user advisory lock, with a partial unique index on pending requests as
 the backstop. The requests live in `api_key_requests` (migration 121); the
 routes are in `api/apiKeys.ts`.
@@ -386,7 +391,7 @@ returned by `/api/config` or carried in `config.js`.
 | Caller | Credential | Where |
 |---|---|---|
 | Browser page | session token `bt1.…` from `POST /api/session/token` | `services/auth/browserToken.ts`, `api/session.ts` |
-| Script / CLI user | named key `ak_<prefix>_…` (DB, hashed), CLI-only, **GET on the data feeds only** | `services/auth/apiKeys.ts`, `api/apiKeys.ts` |
+| Script / CLI user | named key `ak_<prefix>_…` (DB, hashed), CLI-only, **GET on what its scopes cover** | `services/auth/apiKeys.ts`, `services/auth/apiKeyScopes.ts`, `api/apiKeys.ts` |
 | Discord bot, rdio plugin | static `NSWPSN_API_KEY` | `services/auth/apiKey.ts` |
 | Logged-in user | Supabase JWT (HS256, `SUPABASE_JWT_SECRET`) | `services/auth/supabaseJwt.ts` |
 | Staff | role check on top of the JWT | `services/auth/roles.ts` |
@@ -400,32 +405,59 @@ returned by `/api/config` or carried in `config.js`.
 they do their own token auth, and an enrolling agent has no credential of any
 kind yet.
 
-### A named key reaches the data feeds, and nothing else
+### What a named key can read: scopes
 
 Passing the credential gate is not an authorisation decision — most routes have
 nothing but the gate, so "credentialed" used to mean "everything a signed-in
-page can see". For a key that was wrong: an audit of all 344 registered routes
+page can see". For a key that was wrong: an audit of the registered routes
 found one could read any account's complete role matrix
 (`/api/check-admin/:userId`), read anyone's profile, enumerate every live
-visitor session, walk the whole rdio call corpus with its transcripts and audio
+visitor session, walk the whole rdio corpus with its transcripts and audio
 links, spend the server's paid what3words quota, post an unbounded takedown
 notice into the private staff Discord channel, inflate a contributor's view
-counts, and push 25 MB of audio at the GPU transcription backends.
+counts, and push 25 MB of audio at the GPU transcription backends. So a key is
+confined at the gate itself, and it only ever reads: **GET or HEAD**, nothing
+else.
 
-So the class is confined at the gate itself (`API_KEY_PATH_PREFIXES` in
-`services/auth/apiKey.ts`): a key may make a **GET or HEAD** and only to an
-upstream data feed — the emergency-service, traffic, transport, aviation, AIS,
-weather, power, camera, news, shark-report and boundary routes, plus
-`/api/pager/` and `/api/radio/`. Anything else is `403 api_key_path_forbidden`, including every
-write. Refused requests still spend the key's per-minute budget, so scanning for
-an opening is not free.
+What it reads is its **scopes** (`services/auth/apiKeyScopes.ts`, migration
+129). A scope is one of three dimensions, `main:sub` like the role names:
 
-Deliberately NOT reachable with a key: profiles and accounts, user-submitted
-incidents, radio summaries and transcripts, site statistics, the cache and
-collection internals, and the archive history. Adding a prefix to that list
-widens what every existing key can read, so it is a decision, not a tidy-up.
-`apiKeyScopes` is recorded on each key but nothing reads it — the method and
-the path list are what hold the line today.
+| Dimension | Values |
+|---|---|
+| `source:` | whose data — `rfs`, `firms`, `vic`, `qfd`, `dfes`, `safire`, `ntfrs`, `actas`, `bom`, `livetraffic`, `transport`, `adsb`, `aviation`, `marinetraffic`, `weather`, `beach`, `dorsal`, `endeavour`, `ausgrid`, `essential`, `centralwatch`, `qldtraffic`, `news`, `boundaries`, `pager`, `radio`, `rdio` |
+| `type:` | what kind — `incidents`, `warnings`, `outages`, `hazards`, `cameras`, `weather`, `transit`, `aircraft`, `vessels`, `pager`, `radio`, `summaries`, `transcripts`, `news`, `boundaries` |
+| `window:` | `live` — what the map shows now, polled each minute and cached; `history` — stored records over time |
+
+Any dimension may be `*`. Each route a key may reach **declares** the source,
+type and window it serves with `scoped({…})` as its first middleware (e.g.
+`rfs.ts`, `adsb.ts`); a key passes when it holds a matching scope in every
+dimension (`window: 'any'` on reference data — boundaries, the radio site list,
+pager hits — takes either window). The gate reads the declaration off the
+matched route (`routeNeed`, Hono's `matchedRoutes`), so there is no second list
+to keep in step. A route with no declaration is out of reach of every scoped
+key, however wide its scopes: `403 api_key_scope_forbidden`, with the scopes the
+route needs in the message. A path no route serves is the ordinary 404.
+
+Never declared, so never readable with a key: anything about people or nodes —
+profiles and accounts, user-submitted incidents, site statistics, the cache and
+collection internals, and node status (`/api/adsb/receivers`,
+`/api/radio/monitored-sites`). Live data means what the public map shows; the
+only node-derived data in it is aircraft and pager traffic. A source list lives
+here and not in `shared/alert-catalog.json`, which is what the bot alerts on (a
+test keeps the shared keys aligned).
+
+**`read` is the old rule, kept.** Every key made before scopes holds `read`, and
+`read` still means exactly what a key could reach then: GET or HEAD on a fixed
+list of upstream-feed prefixes (`LEGACY_READ_PREFIXES` — the emergency-service,
+traffic, transport, aviation, AIS, weather, power, camera, news, shark-report
+and boundary routes, plus `/api/pager/` and `/api/radio/`), anything else
+`403 api_key_path_forbidden`. A key holding `read`, or holding nothing in the
+new form, is judged by that list alone, so turning scopes on changed nothing
+for existing keys. Staff may still grant `read` on purpose; a user cannot ask
+for it.
+
+Refused requests of either kind still spend the key's per-minute budget, so
+scanning for an opening is not free.
 
 **Roles live in the backend's own PostgreSQL, not in Supabase.** Supabase is
 authentication and identity only. Never propose row-level security on the

@@ -8,7 +8,11 @@
  */
 import { Hono } from 'hono';
 import { firmsSnapshot } from '../sources/firms.js';
+import { scoped } from '../services/auth/apiKeyScopes.js';
 
 export const firmsRouter = new Hono();
 
-firmsRouter.get('/api/firms/hotspots', (c) => c.json(firmsSnapshot()));
+// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
+const SCOPE_HAZARDS = scoped({ source: 'firms', type: 'hazards', window: 'live' });
+
+firmsRouter.get('/api/firms/hotspots', SCOPE_HAZARDS, (c) => c.json(firmsSnapshot()));

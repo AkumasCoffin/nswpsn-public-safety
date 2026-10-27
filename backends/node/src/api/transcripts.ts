@@ -23,6 +23,7 @@ import {
 } from '../services/rdio.js';
 import { config } from '../config.js';
 import { log } from '../lib/log.js';
+import { scoped } from '../services/auth/apiKeyScopes.js';
 
 interface RdioCallRow {
   id: number;
@@ -90,7 +91,10 @@ async function rowToShape(row: RdioCallRow): Promise<Record<string, unknown>> {
 
 export const transcriptsRouter = new Hono();
 
-transcriptsRouter.get('/api/rdio/calls/:callId', async (c) => {
+// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
+const SCOPE_TRANSCRIPTS_HISTORY = scoped({ source: 'rdio', type: 'transcripts', window: 'history' });
+
+transcriptsRouter.get('/api/rdio/calls/:callId', SCOPE_TRANSCRIPTS_HISTORY, async (c) => {
   if (!isRdioConfigured()) {
     return c.json({ error: 'RDIO_DATABASE_URL not configured' }, 503);
   }

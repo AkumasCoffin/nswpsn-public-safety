@@ -11,9 +11,13 @@
  */
 import { Hono } from 'hono';
 import { ntFireSnapshot, ntFireActiveSnapshot } from '../sources/ntFire.js';
+import { scoped } from '../services/auth/apiKeyScopes.js';
 
 export const ntFireRouter = new Hono();
 
-ntFireRouter.get('/api/nt-fire/incidents', (c) =>
+// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
+const SCOPE_INCIDENTS = scoped({ source: 'ntfrs', type: 'incidents', window: 'live' });
+
+ntFireRouter.get('/api/nt-fire/incidents', SCOPE_INCIDENTS, (c) =>
   c.json(c.req.query('all') === '1' ? ntFireSnapshot() : ntFireActiveSnapshot()),
 );

@@ -8,7 +8,11 @@
  */
 import { Hono } from 'hono';
 import { vicSnapshot } from '../sources/vicEmergency.js';
+import { scoped } from '../services/auth/apiKeyScopes.js';
 
 export const vicEmergencyRouter = new Hono();
 
-vicEmergencyRouter.get('/api/vic-emergency/events', (c) => c.json(vicSnapshot()));
+// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
+const SCOPE_INCIDENTS = scoped({ source: 'vic', type: 'incidents', window: 'live' });
+
+vicEmergencyRouter.get('/api/vic-emergency/events', SCOPE_INCIDENTS, (c) => c.json(vicSnapshot()));

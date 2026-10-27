@@ -35,10 +35,15 @@ import { hub } from '../services/nodes/hub.js';
 import { fetchJson } from '../sources/shared/http.js';
 import { SwrCache } from '../services/swrCache.js';
 import { log } from '../lib/log.js';
+import { scoped } from '../services/auth/apiKeyScopes.js';
 
 export const adsbRouter = new Hono();
 
-adsbRouter.get('/api/adsb/aircraft', (c) => {
+// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
+const SCOPE_AIRCRAFT = scoped({ source: 'adsb', type: 'aircraft', window: 'live' });
+const SCOPE_AIRCRAFT_HISTORY = scoped({ source: 'adsb', type: 'aircraft', window: 'history' });
+
+adsbRouter.get('/api/adsb/aircraft', SCOPE_AIRCRAFT, (c) => {
   // The history block rides along on the live poll rather than getting its own
   // endpoint: the map already fetches this every 15s, and the date picker
   // needs the window bounds before it can offer a first scrub.
@@ -98,7 +103,7 @@ adsbRouter.get('/api/adsb/receivers', requireRole(canViewNodeData), async (c) =>
 // cache entry. The client interpolates within the bucket, so the coarse grid
 // costs nothing on screen.
 // ---------------------------------------------------------------------------
-adsbRouter.get('/api/adsb/history', async (c) => {
+adsbRouter.get('/api/adsb/history', SCOPE_AIRCRAFT_HISTORY, async (c) => {
   const url = new URL(c.req.url);
   const atRaw = Number(url.searchParams.get('at') ?? '');
   const at = Number.isFinite(atRaw) ? atRaw : Date.now();
@@ -138,7 +143,7 @@ adsbRouter.get('/api/adsb/history', async (c) => {
 // updateTrails in sources/adsb.ts). Fixed path with no query — listed
 // in CACHEABLE_PATHS so the CDN/browser 30s cache absorbs any number
 // of clients; the frontend polls it at the same 30s cadence.
-adsbRouter.get('/api/adsb/trails', (c) => c.json(adsbTrailsSnapshot()));
+adsbRouter.get('/api/adsb/trails', SCOPE_AIRCRAFT, (c) => c.json(adsbTrailsSnapshot()));
 
 interface PlanespottersPhoto {
   id?: string;
@@ -202,7 +207,7 @@ async function lookupPhoto(hex: string, reg: string): Promise<AdsbPhoto | null> 
   return null;
 }
 
-adsbRouter.get('/api/adsb/photo/:hex', async (c) => {
+adsbRouter.get('/api/adsb/photo/:hex', SCOPE_AIRCRAFT, async (c) => {
   const hex = c.req.param('hex').trim().toLowerCase();
   const reg = (c.req.query('reg') ?? '').trim().toUpperCase();
   if (!/^~?[0-9a-f]{4,8}$/.test(hex)) {
