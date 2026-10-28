@@ -76,15 +76,24 @@ interface SummaryShape {
   created_at: string | null;
 }
 
+/**
+ * A Postgres DATE as YYYY-MM-DD. node-pg reads a DATE as midnight in the
+ * process's own time zone, so the date is in the local fields: taking it from
+ * toISOString() gave the day before wherever the zone is ahead of UTC — every
+ * day_date one day early on the production host, which runs in Sydney time.
+ */
+function dateOnly(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 function rowToSummary(row: SummaryRow): SummaryShape {
   return {
     id: row.id,
     type: row.summary_type,
     period_start: row.period_start ? row.period_start.toISOString() : null,
     period_end: row.period_end ? row.period_end.toISOString() : null,
-    day_date: row.day_date
-      ? row.day_date.toISOString().slice(0, 10)
-      : null,
+    day_date: row.day_date ? dateOnly(row.day_date) : null,
     hour_slot: row.hour_slot,
     summary: row.summary,
     call_count: row.call_count,

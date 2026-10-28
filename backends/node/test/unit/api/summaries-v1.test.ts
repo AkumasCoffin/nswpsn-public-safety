@@ -41,7 +41,10 @@ const ROW = {
   summary_type: 'hourly',
   period_start: new Date('2026-10-28T03:00:00Z'),
   period_end: new Date('2026-10-28T04:00:00Z'),
-  day_date: new Date('2026-10-28T00:00:00Z'),
+  // As node-pg reads a DATE: midnight in the process's own zone. Taking the
+  // date from toISOString() turned this into 2026-10-27 in any zone ahead of
+  // UTC (the production host runs in Sydney time).
+  day_date: new Date(2026, 9, 28),
   hour_slot: 15,
   summary: 'A quiet hour: two grass fires near Galston, both contained.',
   call_count: 12,
