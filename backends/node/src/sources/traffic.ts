@@ -542,9 +542,11 @@ export async function fetchTrafficWorks(): Promise<TrafficSnapshot> {
     const key = cat.toLowerCase().replace(/[^a-z]/g, '');
     const kindKey = kind.toLowerCase().replace(/[^a-z]/g, '');
     if (WEB_FEED_SKIP.has(key) || WEB_FEED_SKIP.has(kindKey)) continue;
-    // eventType 'Fire' marks RFS incidents re-published into this
+    // apiSource 'rfsNSW' is the RFS's incident list re-published into this
     // aggregate — our own rfs source already ingests the same incidents.
-    if (kind === 'Fire') continue;
+    // Other agencies' eventType 'Fire' records stay: QLD's are road
+    // hazards ("Hazard: Fire"), which nothing else here carries.
+    if (asString(it['apiSource']) === 'rfsNSW') continue;
 
     const geom = it['geometry'] as Record<string, unknown> | undefined;
     if (!geom) continue;

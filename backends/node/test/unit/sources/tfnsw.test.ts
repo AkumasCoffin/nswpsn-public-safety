@@ -421,6 +421,35 @@ describe('alerts', () => {
     configMock.TFNSW_API_KEY = undefined;
     expect(await fetchTfnswAlerts()).toEqual([]);
   });
+
+  it('falls back to the per-mode feeds, and takes what answers', async () => {
+    fetchBufferMock.mockImplementation(async (url: string) => {
+      if (url.endsWith('/sydneytrains')) return encodeAlertFeed();
+      throw new Error('boom');
+    });
+    expect(await fetchTfnswAlerts()).toHaveLength(1);
+  });
+
+  it('when no feed answers, keeps the last good alerts — never caches an empty list', async () => {
+    vi.useFakeTimers();
+    try {
+      fetchBufferMock.mockResolvedValueOnce(encodeAlertFeed());
+      expect(await fetchTfnswAlerts()).toHaveLength(1);
+      vi.advanceTimersByTime(90_000); // past fresh, inside stale
+      fetchBufferMock.mockRejectedValue(new Error('boom'));
+      expect(await fetchTfnswAlerts()).toHaveLength(1); // stale value, refresh in background
+      await vi.waitFor(() => expect(fetchBufferMock).toHaveBeenCalledTimes(8)); // primary + 6 fallbacks
+      await Promise.resolve();
+      expect(await fetchTfnswAlerts()).toHaveLength(1); // the failed refresh stored nothing
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('when no feed answers and nothing is cached, it throws', async () => {
+    fetchBufferMock.mockRejectedValue(new Error('boom'));
+    await expect(fetchTfnswAlerts()).rejects.toThrow(/no alert feed answered/);
+  });
 });
 
 describe('/api/transport/alerts endpoint', () => {
@@ -432,5 +461,13 @@ describe('/api/transport/alerts endpoint', () => {
     const body = (await res.json()) as { configured: boolean; alerts: unknown[] };
     expect(body.configured).toBe(false);
     expect(body.alerts).toEqual([]);
+  });
+
+  it('502 when no TfNSW feed answers, so the map keeps the alerts it has', async () => {
+    fetchBufferMock.mockRejectedValue(new Error('boom'));
+    const { transportRouter } = await import('../../../src/api/transport.js');
+    const res = await transportRouter.request('/api/transport/alerts');
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: 'alerts upstream unavailable' });
   });
 });

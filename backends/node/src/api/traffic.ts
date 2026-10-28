@@ -380,7 +380,7 @@ trafficRouter.get(
     tags: ['Hazards'],
     summary: 'Road works and hazards from the Live Traffic aggregate feed',
     description:
-      "Roadwork, hazards, flooding and events from Live Traffic NSW's aggregate web feed, which carries other states' and territories' road agencies, in the same record shape as the hazard feeds. Cameras, rest areas, heavy vehicle checking stations, fire records (eventType Fire, which carries the RFS's own incidents) and records marked ended are left out. When every record from one upstream source (apiSource) drops out of the feed at once, the last ones seen are kept for up to six hours. Refreshed every five minutes.",
+      "Roadwork, hazards, flooding and events from Live Traffic NSW's aggregate web feed, which carries other states' and territories' road agencies, in the same record shape as the hazard feeds. Cameras, rest areas, heavy vehicle checking stations, the RFS's own incidents (apiSource rfsNSW, which the RFS endpoints already carry) and records marked ended are left out. When every record from one upstream source (apiSource) drops out of the feed at once, the last ones seen are kept for up to six hours. Refreshed every five minutes.",
     responses: { ...okJson(TrafficHazards, 'A GeoJSON FeatureCollection of records'), ...GATED_ERRORS },
   }),
   (c) => geo(c, trafficHazardSnapshot('traffic_works')),

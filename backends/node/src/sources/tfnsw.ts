@@ -635,12 +635,16 @@ export async function fetchTfnswAlerts(): Promise<TfnswAlert[]> {
       const parts = await Promise.all(
         ALERT_FEEDS_FALLBACK.map(async (path) => {
           const msg = await fetchFeed(path);
-          return msg ? decodeAlerts(msg) : [];
+          return msg ? decodeAlerts(msg) : null;
         }),
       );
+      // THROW when no feed answered — returning [] would cache "no alerts"
+      // as a successful refresh and wipe the last good set. The throw makes
+      // SwrCache keep serving it through the stale window.
+      if (parts.every((p) => p === null)) throw new Error('tfnsw: no alert feed answered');
       // Dedupe by id across per-mode feeds.
       const seen = new Map<string, TfnswAlert>();
-      for (const a of parts.flat()) {
+      for (const a of parts.flatMap((p) => p ?? [])) {
         if (!seen.has(a.id)) seen.set(a.id, a);
       }
       return Array.from(seen.values());

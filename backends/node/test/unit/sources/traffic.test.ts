@@ -334,7 +334,11 @@ describe('traffic archive facet (lowercase subcategory)', () => {
 });
 
 describe('traffic works drops RFS re-publications', () => {
-  beforeEach(() => fetchJsonMock.mockReset());
+  beforeEach(async () => {
+    fetchJsonMock.mockReset();
+    const { _resetWorksCarryForward } = await import('../../../src/sources/traffic.js');
+    _resetWorksCarryForward();
+  });
 
   it('skips static infrastructure — checking stations and rest areas', async () => {
     const { fetchTrafficWorks } = await import('../../../src/sources/traffic.js');
@@ -352,10 +356,10 @@ describe('traffic works drops RFS re-publications', () => {
     expect(snap.features[0]?.properties.upstreamId).toBe('w1');
   });
 
-  it("skips eventType 'Fire' items — the rfs source already has them", async () => {
+  it("skips the RFS's re-published incidents — the rfs source already has them", async () => {
     const { fetchTrafficWorks } = await import('../../../src/sources/traffic.js');
     fetchJsonMock.mockResolvedValueOnce([
-      { id: '1', eventCategory: 'Not Applicable', eventType: 'Fire',
+      { id: '1', apiSource: 'rfsNSW', eventCategory: 'Not Applicable', eventType: 'Fire',
         geometry: { type: 'Point', coordinates: [151, -33] }, properties: { title: 'Grass fire' } },
       { id: '2', eventCategory: 'Roadwork', eventType: 'Roadwork',
         geometry: { type: 'Point', coordinates: [151, -33] }, properties: { title: 'Sewer works' } },
@@ -365,6 +369,20 @@ describe('traffic works drops RFS re-publications', () => {
     expect(snap.features[0]?.properties.upstreamId).toBe('2');
     // and works' facet key is its category
     expect(snap.features[0]?.properties.subcategory).toBe('Roadwork');
+  });
+
+  it("keeps other agencies' fire records — QLD's are road hazards", async () => {
+    const { fetchTrafficWorks } = await import('../../../src/sources/traffic.js');
+    fetchJsonMock.mockResolvedValueOnce([
+      { id: '837869', apiSource: 'qldRoad', eventCategory: 'Fire', eventType: 'Fire',
+        geometry: { type: 'POINT', coordinates: [152.4, -27.6] },
+        properties: { title: 'Hazard: Fire', displayName: 'Plainland Exit' } },
+    ]);
+    const snap = await fetchTrafficWorks();
+    expect(snap.count).toBe(1);
+    expect(snap.features[0]?.properties).toMatchObject({
+      upstreamId: '837869', mainCategory: 'Fire', incidentKind: 'Fire', subcategory: 'Fire',
+    });
   });
 });
 
