@@ -410,8 +410,14 @@ export function createApp() {
     '/api/traffic/lga-incidents', '/api/traffic/all-feeds',
   ]);
   app.route('/', beachRouter);
+  // Not /api/beachsafe/details: nothing fills its store; it goes when old paths are retired.
+  mirror(app, beachRouter, ['/api/beachwatch', '/api/beachsafe', '/api/beachsafe/beach/:slug']);
   app.route('/', dorsalRouter);
+  mirror(app, dorsalRouter, ['/api/dorsal/reports']);
   app.route('/', weatherRouter);
+  mirror(app, weatherRouter, [
+    '/api/weather/current', '/api/weather/radar', '/api/weather/grid/manifest', '/api/weather/grid', '/api/weather/point',
+  ]);
   app.route('/', pagerRouter);
   app.route('/', firmsRouter);
   mirror(app, firmsRouter, ['/api/firms/hotspots']);
@@ -421,8 +427,19 @@ export function createApp() {
   app.route('/', radioPublicRouter);
   // Power + heartbeat + stats
   app.route('/', endeavourRouter);
+  // Not /current/raw or /future/raw: byte-for-byte the same as /current/all and /future/all.
+  mirror(app, endeavourRouter, [
+    '/api/endeavour/current', '/api/endeavour/maintenance', '/api/endeavour/future', '/api/endeavour/planned',
+    '/api/endeavour/current/all', '/api/endeavour/future/all', '/api/endeavour/postcodes',
+  ]);
   app.route('/', ausgridRouter);
+  mirror(app, ausgridRouter, ['/api/ausgrid/outages', '/api/ausgrid/stats']);
   app.route('/', essentialRouter);
+  // Not /api/essential/outages/future: byte-for-byte the same as /api/essential/future.
+  mirror(app, essentialRouter, [
+    '/api/essential/outages', '/api/essential/planned', '/api/essential/future',
+    '/api/essential/outages/current', '/api/essential/outages/raw',
+  ]);
   app.route('/', heartbeatRouter);
   app.route('/', statsRouter);
   // Incidents + editor + users (W5)
@@ -445,12 +462,14 @@ export function createApp() {
   app.route('/', aviationRouter);
   mirror(app, aviationRouter, ['/api/aviation/cameras', '/api/aviation/cameras/:airport']);
   app.route('/', qldCamerasRouter);
+  mirror(app, qldCamerasRouter, ['/api/qld/cameras', '/api/qld/flood-cameras']);
   app.route('/', ntFireRouter);
   // The NT feed asks not to be re-published (sources/ntFire.ts); the owner
   // decided to carry it on v1, with NTFRS credited in its description.
   mirror(app, ntFireRouter, ['/api/nt-fire/incidents']);
   app.route('/', boundariesRouter);
-  mirror(app, boundariesRouter, ['/api/boundaries/lga-names']);
+  // One call, lga-names first: it is registered before /:kind, which would otherwise shadow it.
+  mirror(app, boundariesRouter, ['/api/boundaries/lga-names', '/api/boundaries/:kind']);
   app.route('/', whisperRouter);
   app.route('/', qldFireRouter);
   mirror(app, qldFireRouter, ['/api/qld-fire/incidents', '/api/qld-fire/warnings']);
@@ -466,10 +485,12 @@ export function createApp() {
   // Not /api/marinetraffic/vessel-image/:id: nothing uses it, and it goes when old paths are retired.
   mirror(app, marinetrafficRouter, ['/api/marinetraffic/vessels', '/api/marinetraffic/vessel/:id']);
   app.route('/', newsRouter);
+  mirror(app, newsRouter, ['/api/news/rss', '/api/news/sources']);
   app.route('/', summariesRouter);
   app.route('/', transcriptsRouter);
   // Centralwatch reads + dashboard 503 stubs (W8)
   app.route('/', centralwatchRouter);
+  mirror(app, centralwatchRouter, ['/api/centralwatch/cameras', '/api/centralwatch/sites', '/api/centralwatch/image/:cameraId']);
   app.route('/', dashboardRouter);
   // Uptime-Kuma-shaped status endpoint
   app.route('/', statusRouter);

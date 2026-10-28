@@ -21,7 +21,15 @@
     },
     {
       "name": "Hazards",
-      "description": "Hazards on the ground: road incidents and works, satellite hotspots"
+      "description": "Hazards on the ground and in the water: road incidents and works, satellite hotspots, beach conditions, shark reports"
+    },
+    {
+      "name": "Outages",
+      "description": "Electricity outages, unplanned and planned"
+    },
+    {
+      "name": "Weather",
+      "description": "Current conditions, forecasts and radar"
     },
     {
       "name": "Cameras",
@@ -40,8 +48,12 @@
       "description": "Vessel positions from AIS"
     },
     {
+      "name": "News",
+      "description": "Headlines from news outlets"
+    },
+    {
       "name": "Reference",
-      "description": "Slow-changing reference data"
+      "description": "Slow-changing reference data: boundaries and agencies"
     },
     {
       "name": "Service",
@@ -1303,6 +1315,1032 @@
         ],
         "additionalProperties": false
       },
+      "BeachwatchSites": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "FeatureCollection"
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "Feature"
+                },
+                "geometry": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "Point"
+                    },
+                    "coordinates": {
+                      "type": "array",
+                      "prefixItems": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ],
+                      "items": false,
+                      "minItems": 2,
+                      "maxItems": 2,
+                      "description": "[longitude, latitude] (WGS84)"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "coordinates"
+                  ],
+                  "additionalProperties": {}
+                },
+                "properties": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "description": "Beachwatch's id for the site",
+                      "type": "string"
+                    },
+                    "siteName": {
+                      "type": "string"
+                    },
+                    "latestResult": {
+                      "description": "The latest water-quality result in words, as Beachwatch gives it (Good, Fair, Poor or Bad in the samples seen)",
+                      "type": "string"
+                    },
+                    "latestResultRating": {
+                      "description": "The same result as a number, as Beachwatch gives it (4 for Good down to 1 for Bad in the samples seen)",
+                      "type": "number"
+                    },
+                    "latestResultObservationDate": {
+                      "description": "When the latest result was observed, ISO 8601 with an offset",
+                      "type": "string"
+                    },
+                    "pollutionForecast": {
+                      "description": "As Beachwatch words it: Unlikely, Possible, Likely or \"Forecast not available\" in the samples seen",
+                      "type": "string"
+                    },
+                    "pollutionForecastTimeStamp": {
+                      "description": "When the forecast was issued, ISO 8601 with an offset",
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": {}
+                }
+              },
+              "required": [
+                "type",
+                "geometry",
+                "properties"
+              ],
+              "additionalProperties": {}
+            }
+          }
+        },
+        "required": [
+          "type",
+          "features"
+        ],
+        "additionalProperties": {}
+      },
+      "BeachsafeBeaches": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "description": "BeachSafe's id for the beach (a number in the samples seen)"
+            },
+            "name": {
+              "type": "string",
+              "description": "\"Unknown Beach\" when BeachSafe gives none"
+            },
+            "lat": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "lng": {
+              "description": "Longitude",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "url": {
+              "type": "string",
+              "description": "The beach's path on beachsafe.org.au, e.g. /nsw/waverley/bondi-beach"
+            },
+            "slug": {
+              "type": "string",
+              "description": "The last part of url — what /beachsafe/beach/{slug} takes"
+            },
+            "patrolled": {
+              "type": "boolean",
+              "description": "true when status reads \"Patrolled\", in any case"
+            },
+            "status": {
+              "type": "string",
+              "description": "As BeachSafe words it (Open or Unpatrolled in the samples seen); \"Unknown\" when it gives none"
+            },
+            "hasToilet": {
+              "type": "boolean"
+            },
+            "hasParking": {
+              "type": "boolean"
+            },
+            "dogsAllowed": {
+              "type": "boolean"
+            },
+            "image": {
+              "type": "string",
+              "description": "A photo of the beach, as a URL; empty when there is none"
+            },
+            "weather": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {},
+              "description": "BeachSafe's weather fields for the beach, as published"
+            },
+            "hazards": {
+              "type": "array",
+              "items": {},
+              "description": "BeachSafe's hazards for the beach, as published; empty when there are none"
+            },
+            "isPatrolledToday": {
+              "type": "boolean"
+            },
+            "patrolStart": {
+              "type": "string",
+              "description": "Today's patrol start, as BeachSafe gives it (e.g. 09:00); empty when there is none"
+            },
+            "patrolEnd": {
+              "type": "string",
+              "description": "Today's patrol end, as BeachSafe gives it; empty when there is none"
+            },
+            "patrol": {
+              "description": "As BeachSafe gives it; 0 when it gives none",
+              "type": [
+                "number",
+                "string"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "lat",
+            "lng",
+            "url",
+            "slug",
+            "patrolled",
+            "status",
+            "hasToilet",
+            "hasParking",
+            "dogsAllowed",
+            "image",
+            "weather",
+            "hazards",
+            "isPatrolledToday",
+            "patrolStart",
+            "patrolEnd",
+            "patrol"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "BeachsafeBeachDetail": {
+        "type": "object",
+        "properties": {
+          "weather": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {},
+            "description": "BeachSafe's weather fields for the beach, as published"
+          },
+          "currentTide": {
+            "description": "BeachSafe's current tide record, as published; null when there is none"
+          },
+          "currentUV": {
+            "description": "BeachSafe's current UV record, as published; null when there is none"
+          },
+          "latestAttendance": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "date": {
+                    "type": "string",
+                    "description": "The record's key in BeachSafe's attendance records"
+                  },
+                  "entries": {
+                    "description": "The record, as published"
+                  }
+                },
+                "required": [
+                  "date",
+                  "entries"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The last of BeachSafe's attendance records for the beach; null when there are none"
+          },
+          "todays_marine_warnings": {
+            "type": "array",
+            "items": {},
+            "description": "As published; empty when there are none"
+          },
+          "patrol": {
+            "description": "As BeachSafe gives it; 0 when it gives none",
+            "type": [
+              "number",
+              "string"
+            ]
+          },
+          "patrolStart": {
+            "type": "string",
+            "description": "Today's patrol start, as BeachSafe gives it; empty when there is none"
+          },
+          "patrolEnd": {
+            "type": "string",
+            "description": "Today's patrol end, as BeachSafe gives it; empty when there is none"
+          },
+          "isPatrolledToday": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "description": "As BeachSafe words it; \"Unknown\" when it gives none"
+          },
+          "hazard": {
+            "description": "BeachSafe's hazard rating for the beach, as published; 0 when it gives none",
+            "type": [
+              "number",
+              "string"
+            ]
+          }
+        },
+        "required": [
+          "weather",
+          "currentTide",
+          "currentUV",
+          "latestAttendance",
+          "todays_marine_warnings",
+          "patrol",
+          "patrolStart",
+          "patrolEnd",
+          "isPatrolledToday",
+          "status",
+          "hazard"
+        ],
+        "additionalProperties": false
+      },
+      "DorsalReports": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "FeatureCollection"
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "Feature"
+                },
+                "geometry": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "Point"
+                    },
+                    "coordinates": {
+                      "type": "array",
+                      "prefixItems": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ],
+                      "items": false,
+                      "minItems": 2,
+                      "maxItems": 2,
+                      "description": "[longitude, latitude] (WGS84)"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "coordinates"
+                  ],
+                  "additionalProperties": false
+                },
+                "properties": {
+                  "type": "object",
+                  "properties": {
+                    "report_id": {
+                      "type": "string",
+                      "description": "Dorsal's id for the report"
+                    },
+                    "title": {
+                      "type": "string",
+                      "description": "species — location, or the species alone when there is no location"
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "detection",
+                        "sighting",
+                        "drone",
+                        "incident",
+                        "tagging",
+                        "closure",
+                        "advisory",
+                        "carcass"
+                      ],
+                      "description": "What kind of report it is, from Dorsal's encounter type: a receiver detection of a tagged shark, a sighting, a drone report, an incident (a bite or a bump), a tagging (tagged and released, or caught and released), a closure (a beach closed or the water evacuated), an advisory (a general warning, a precautionary report or an unconfirmed sighting) or a carcass (whale or shark). An encounter type not recognised is a sighting"
+                    },
+                    "encounter": {
+                      "type": "string",
+                      "description": "Dorsal's own encounter type, as published"
+                    },
+                    "species": {
+                      "type": "string",
+                      "description": "The species, with common spellings made one (tiger, tiger shark and tiger sharks all read as Tiger Shark); \"Unknown\" when not given, unknown or \"other\""
+                    },
+                    "shark_length_m": {
+                      "description": "The reported length of the shark, metres; null when not given",
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "distance_from_shore_m": {
+                      "description": "Metres; null when not given",
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "location": {
+                      "type": "string",
+                      "description": "Where, as the report gives it"
+                    },
+                    "zone": {
+                      "type": "string",
+                      "description": "Dorsal's zone for the report"
+                    },
+                    "state": {
+                      "type": "string",
+                      "description": "State, as Dorsal gives it, e.g. NSW"
+                    },
+                    "reported_at": {
+                      "type": "string",
+                      "description": "When it was reported, ISO 8601 (UTC)"
+                    },
+                    "reported_at_unix": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991,
+                      "description": "The same, unix seconds"
+                    },
+                    "official": {
+                      "type": "boolean",
+                      "description": "true for a report Dorsal marks official (posted by Dorsal itself), false for a community report"
+                    },
+                    "provenance": {
+                      "type": "string",
+                      "enum": [
+                        "Official",
+                        "Community report"
+                      ],
+                      "description": "official, in words"
+                    },
+                    "comment": {
+                      "type": "string",
+                      "description": "The reporter's comment; empty when there is none"
+                    },
+                    "photo_url": {
+                      "description": "A small photo from the report, hosted by Dorsal; null when there is none",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "url": {
+                      "type": "string",
+                      "description": "Dorsal's website — the same for every report"
+                    }
+                  },
+                  "required": [
+                    "report_id",
+                    "title",
+                    "category",
+                    "encounter",
+                    "species",
+                    "shark_length_m",
+                    "distance_from_shore_m",
+                    "location",
+                    "zone",
+                    "state",
+                    "reported_at",
+                    "reported_at_unix",
+                    "official",
+                    "provenance",
+                    "comment",
+                    "photo_url",
+                    "url"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "type",
+                "geometry",
+                "properties"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "count": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Number of features"
+          },
+          "hours": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "The window served, hours"
+          },
+          "fetched_at": {
+            "type": "string",
+            "description": "When Dorsal was last read, ISO 8601 (the epoch when nothing has been read from it yet)"
+          }
+        },
+        "required": [
+          "type",
+          "features",
+          "count",
+          "hours",
+          "fetched_at"
+        ],
+        "additionalProperties": false
+      },
+      "WeatherCurrent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "FeatureCollection"
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "Feature"
+                },
+                "geometry": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "Point"
+                    },
+                    "coordinates": {
+                      "type": "array",
+                      "prefixItems": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ],
+                      "items": false,
+                      "minItems": 2,
+                      "maxItems": 2,
+                      "description": "[longitude, latitude] (WGS84)"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "coordinates"
+                  ],
+                  "additionalProperties": false
+                },
+                "properties": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "description": "The town or place"
+                    },
+                    "temperature": {
+                      "description": "Air temperature 2 m above the ground, °C",
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "feelsLike": {
+                      "description": "Apparent temperature, °C",
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "humidity": {
+                      "description": "Relative humidity 2 m above the ground, %",
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "windSpeed": {
+                      "description": "Wind speed 10 m above the ground, km/h",
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "windGusts": {
+                      "description": "Wind gusts 10 m above the ground, km/h",
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "windDirection": {
+                      "description": "Wind direction 10 m above the ground, degrees",
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "precipitation": {
+                      "type": "number",
+                      "description": "Precipitation, mm; 0 when Open-Meteo gives none"
+                    },
+                    "weatherCode": {
+                      "type": "number",
+                      "description": "WMO weather code, as Open-Meteo gives it; 0 when it gives none"
+                    },
+                    "weatherDescription": {
+                      "type": "string",
+                      "description": "The code in words, e.g. \"Partly Cloudy\" or \"Light Rain\"; \"Unknown\" for a code without words"
+                    },
+                    "weatherIcon": {
+                      "type": "string",
+                      "description": "An emoji for the code"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "temperature",
+                    "feelsLike",
+                    "humidity",
+                    "windSpeed",
+                    "windGusts",
+                    "windDirection",
+                    "precipitation",
+                    "weatherCode",
+                    "weatherDescription",
+                    "weatherIcon"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "type",
+                "geometry",
+                "properties"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "type",
+          "features"
+        ],
+        "additionalProperties": false
+      },
+      "WeatherRadar": {
+        "type": "object",
+        "properties": {
+          "generated": {
+            "type": "number"
+          },
+          "host": {
+            "type": "string"
+          },
+          "radar": {
+            "type": "object",
+            "properties": {
+              "past": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "time": {
+                      "type": "number",
+                      "description": "The time the frame shows, unix seconds"
+                    },
+                    "path": {
+                      "type": "string",
+                      "description": "The frame's path on RainViewer's tile server, to build its tile URLs from"
+                    }
+                  },
+                  "required": [
+                    "time",
+                    "path"
+                  ],
+                  "additionalProperties": {}
+                },
+                "description": "Radar frames already observed, oldest first"
+              },
+              "nowcast": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "time": {
+                      "type": "number",
+                      "description": "The time the frame shows, unix seconds"
+                    },
+                    "path": {
+                      "type": "string",
+                      "description": "The frame's path on RainViewer's tile server, to build its tile URLs from"
+                    }
+                  },
+                  "required": [
+                    "time",
+                    "path"
+                  ],
+                  "additionalProperties": {}
+                },
+                "description": "Frames forecast ahead, where RainViewer gives any"
+              }
+            },
+            "required": [
+              "past",
+              "nowcast"
+            ],
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "radar"
+        ],
+        "additionalProperties": {}
+      },
+      "WeatherGridManifest": {
+        "type": "object",
+        "properties": {
+          "issuedAt": {
+            "type": "string",
+            "description": "When the land field was last fetched, ISO 8601"
+          },
+          "geometry": {
+            "type": "object",
+            "properties": {
+              "west": {
+                "type": "number",
+                "description": "Longitude of the grid's south-west point, degrees"
+              },
+              "south": {
+                "type": "number",
+                "description": "Latitude of the grid's south-west point, degrees"
+              },
+              "stepDeg": {
+                "type": "number",
+                "description": "Spacing between points, degrees, east-west and north-south alike"
+              },
+              "cols": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991,
+                "description": "Points across, west to east"
+              },
+              "rows": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991,
+                "description": "Points down, south to north"
+              }
+            },
+            "required": [
+              "west",
+              "south",
+              "stepDeg",
+              "cols",
+              "rows"
+            ],
+            "additionalProperties": false,
+            "description": "The land grid"
+          },
+          "timesteps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The land variables' time axis: UTC instants, ISO 8601, oldest first, three hours apart. The values `t` takes for a land variable"
+          },
+          "vars": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "enum": [
+                    "temperature_2m",
+                    "apparent_temperature",
+                    "relative_humidity_2m",
+                    "precipitation",
+                    "pressure_msl",
+                    "cape",
+                    "wind_speed_10m",
+                    "wind_direction_10m",
+                    "wind_gusts_10m",
+                    "wave_height",
+                    "wave_direction",
+                    "wave_period",
+                    "swell_wave_height",
+                    "swell_wave_direction",
+                    "swell_wave_period",
+                    "ocean_current_velocity",
+                    "ocean_current_direction",
+                    "river_discharge",
+                    "river_discharge_median",
+                    "pm2_5",
+                    "pm10",
+                    "us_aqi",
+                    "uv_index"
+                  ]
+                },
+                "scale": {
+                  "type": "number",
+                  "description": "A stored value divided by this is the real value"
+                },
+                "unit": {
+                  "type": "string",
+                  "description": "The real value's unit; empty where it has none (UV index)"
+                },
+                "marine": {
+                  "type": "boolean",
+                  "description": "On the marine grid and axis (marineGeometry, marineTimesteps), with values over the sea only"
+                },
+                "flood": {
+                  "description": "River discharge, on the flood grid and its daily axis (floodGeometry, floodTimesteps), with values over land only",
+                  "type": "boolean"
+                },
+                "air": {
+                  "description": "Air quality or UV, on the air grid and axis (airGeometry, airTimesteps)",
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "name",
+                "scale",
+                "unit",
+                "marine"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Every variable stored; a variable with none of marine, flood or air set is a land variable"
+          },
+          "nodata": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "The stored value that means \"no value here\""
+          },
+          "marineGeometry": {
+            "type": "object",
+            "properties": {
+              "west": {
+                "type": "number",
+                "description": "Longitude of the grid's south-west point, degrees"
+              },
+              "south": {
+                "type": "number",
+                "description": "Latitude of the grid's south-west point, degrees"
+              },
+              "stepDeg": {
+                "type": "number",
+                "description": "Spacing between points, degrees, east-west and north-south alike"
+              },
+              "cols": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991,
+                "description": "Points across, west to east"
+              },
+              "rows": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991,
+                "description": "Points down, south to north"
+              }
+            },
+            "required": [
+              "west",
+              "south",
+              "stepDeg",
+              "cols",
+              "rows"
+            ],
+            "additionalProperties": false
+          },
+          "marineTimesteps": {
+            "description": "UTC instants, ISO 8601, oldest first, three hours apart",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "floodGeometry": {
+            "description": "Built at the same spacing as marineGeometry",
+            "type": "object",
+            "properties": {
+              "west": {
+                "type": "number",
+                "description": "Longitude of the grid's south-west point, degrees"
+              },
+              "south": {
+                "type": "number",
+                "description": "Latitude of the grid's south-west point, degrees"
+              },
+              "stepDeg": {
+                "type": "number",
+                "description": "Spacing between points, degrees, east-west and north-south alike"
+              },
+              "cols": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991,
+                "description": "Points across, west to east"
+              },
+              "rows": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991,
+                "description": "Points down, south to north"
+              }
+            },
+            "required": [
+              "west",
+              "south",
+              "stepDeg",
+              "cols",
+              "rows"
+            ],
+            "additionalProperties": false
+          },
+          "marineIssuedAt": {
+            "description": "When the marine field was last fetched, ISO 8601",
+            "type": "string"
+          },
+          "floodIssuedAt": {
+            "description": "When the river discharge was last fetched, ISO 8601",
+            "type": "string"
+          },
+          "airIssuedAt": {
+            "description": "When the air field was last fetched, ISO 8601",
+            "type": "string"
+          },
+          "floodTimesteps": {
+            "description": "UTC instants, ISO 8601, oldest first, one per day at 00:00 UTC",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "airGeometry": {
+            "type": "object",
+            "properties": {
+              "west": {
+                "type": "number",
+                "description": "Longitude of the grid's south-west point, degrees"
+              },
+              "south": {
+                "type": "number",
+                "description": "Latitude of the grid's south-west point, degrees"
+              },
+              "stepDeg": {
+                "type": "number",
+                "description": "Spacing between points, degrees, east-west and north-south alike"
+              },
+              "cols": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991,
+                "description": "Points across, west to east"
+              },
+              "rows": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991,
+                "description": "Points down, south to north"
+              }
+            },
+            "required": [
+              "west",
+              "south",
+              "stepDeg",
+              "cols",
+              "rows"
+            ],
+            "additionalProperties": false
+          },
+          "airTimesteps": {
+            "description": "UTC instants, ISO 8601, oldest first, three hours apart",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "issuedAt",
+          "geometry",
+          "timesteps",
+          "vars",
+          "nodata"
+        ],
+        "additionalProperties": false
+      },
+      "WeatherPoint": {
+        "type": "object",
+        "properties": {
+          "hourly_units": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "The unit of each series"
+          },
+          "hourly": {
+            "type": "object",
+            "properties": {
+              "time": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The hours, UTC, written without a zone, e.g. \"2026-10-28T03:00\""
+              }
+            },
+            "required": [
+              "time"
+            ],
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "description": "One series per variable, a value for each hour in `time`; null where there is none"
+          }
+        },
+        "required": [
+          "hourly_units",
+          "hourly"
+        ],
+        "additionalProperties": {}
+      },
       "FirmsHotspots": {
         "type": "object",
         "properties": {
@@ -2039,6 +3077,786 @@
         ],
         "additionalProperties": false
       },
+      "EndeavourOutages": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/EndeavourOutage"
+        }
+      },
+      "EndeavourOutage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Endeavour Energy's incident id; empty when it gives none"
+          },
+          "suburb": {
+            "type": "string",
+            "description": "Title case. When Endeavour Energy stops giving one for an outage, the last it gave; \"Unknown\" when there has been none"
+          },
+          "streets": {
+            "type": "string",
+            "description": "The street affected, as Endeavour Energy gives it; kept from earlier when it stops giving one, else empty"
+          },
+          "customersAffected": {
+            "type": "number",
+            "description": "Customers without power; 0 when not given"
+          },
+          "status": {
+            "type": "string",
+            "description": "Endeavour Energy's status in words: Active, Scheduled, Crew Dispatched or Damage Assessed, otherwise its own status in title case"
+          },
+          "cause": {
+            "type": "string",
+            "description": "The cause (else the sub-cause), as Endeavour Energy gives it; for planned work with none, \"Planned maintenance\"; otherwise empty when not given"
+          },
+          "outageType": {
+            "type": "string",
+            "enum": [
+              "Unplanned",
+              "Current Maintenance",
+              "Future Maintenance"
+            ],
+            "description": "Unplanned; Current Maintenance (planned work under way — its status says so, or its start has passed); Future Maintenance (planned work not yet started)"
+          },
+          "startTime": {
+            "description": "When it started or starts, as Endeavour Energy gives it; null when not given or not a usable date",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "estimatedRestoration": {
+            "description": "When power is due back — the end time, else the estimated time of restoration — as Endeavour Energy gives it; null when not given or not a usable date",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lastUpdated": {
+            "type": "string",
+            "description": "When the record was last updated, as Endeavour Energy gives it; empty when not given"
+          },
+          "latitude": {
+            "description": "Centre of the affected area; null when not given",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "longitude": {
+            "description": "Centre of the affected area; null when not given",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "postcode": {
+            "type": "string",
+            "description": "As Endeavour Energy gives it; kept from earlier when it stops giving one, else empty"
+          },
+          "hasGPS": {
+            "type": "boolean",
+            "description": "true when latitude and longitude are both given"
+          },
+          "endTime": {
+            "description": "Planned work only: the same as estimatedRestoration",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "duration": {
+            "description": "Planned work only; empty",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "suburb",
+          "streets",
+          "customersAffected",
+          "status",
+          "cause",
+          "outageType",
+          "startTime",
+          "estimatedRestoration",
+          "lastUpdated",
+          "latitude",
+          "longitude",
+          "postcode",
+          "hasGPS"
+        ],
+        "additionalProperties": false
+      },
+      "EndeavourAreas": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "incident_id": {
+              "description": "The id the processed outage lists carry as `id`",
+              "type": "string"
+            },
+            "outage_type": {
+              "description": "PLANNED for planned work, in some letter case",
+              "type": "string"
+            },
+            "incident_status": {
+              "type": "string"
+            },
+            "customers_affected": {
+              "description": "Customers without power",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "center_lat": {
+              "description": "Centre of the affected area",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "center_lng": {
+              "description": "Centre of the affected area",
+              "type": [
+                "number",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": {},
+          "description": "An outage area exactly as Endeavour Energy publishes it"
+        }
+      },
+      "EndeavourPostcodes": {
+        "type": "object",
+        "properties": {
+          "postcodes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Each once, sorted"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Number of postcodes"
+          }
+        },
+        "required": [
+          "postcodes",
+          "count"
+        ],
+        "additionalProperties": false
+      },
+      "AusgridOutages": {
+        "type": "object",
+        "properties": {
+          "Markers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "OutageId": {
+                  "description": "Ausgrid's id for the outage",
+                  "type": [
+                    "string",
+                    "number",
+                    "null"
+                  ]
+                },
+                "JobId": {
+                  "type": "string",
+                  "description": "Empty: the outage's details are not read from Ausgrid"
+                },
+                "Suburb": {
+                  "type": "string",
+                  "description": "The area Ausgrid names; empty when not given"
+                },
+                "StreetName": {
+                  "type": "string",
+                  "description": "Empty: the outage's details are not read from Ausgrid"
+                },
+                "Streets": {
+                  "type": "string",
+                  "description": "Empty: the outage's details are not read from Ausgrid"
+                },
+                "Postcode": {
+                  "type": "string",
+                  "description": "Empty: the outage's details are not read from Ausgrid"
+                },
+                "CustomersAffected": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991,
+                  "description": "Customers without power; 0 when not given"
+                },
+                "OutageType": {
+                  "type": "string",
+                  "enum": [
+                    "Planned",
+                    "Unplanned"
+                  ],
+                  "description": "Planned when Ausgrid shows it as planned, otherwise Unplanned"
+                },
+                "Cause": {
+                  "type": "string",
+                  "description": "As Ausgrid gives it; empty when not given"
+                },
+                "Reason": {
+                  "type": "string",
+                  "description": "Empty: the outage's details are not read from Ausgrid"
+                },
+                "Detail": {
+                  "type": "string",
+                  "description": "Empty: the outage's details are not read from Ausgrid"
+                },
+                "StatusText": {
+                  "type": "string",
+                  "description": "Empty: the outage's details are not read from Ausgrid"
+                },
+                "StartTime": {
+                  "type": "string",
+                  "description": "When it started. As Ausgrid gives it; empty when not given"
+                },
+                "EstRestoration": {
+                  "type": "string",
+                  "description": "When power is expected back. As Ausgrid gives it; empty when not given"
+                },
+                "EndDateTime": {
+                  "type": "string",
+                  "description": "The same as EstRestoration"
+                },
+                "Latitude": {
+                  "description": "The outage's marker; null when not given",
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "Longitude": {
+                  "description": "The outage's marker; null when not given",
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "Status": {
+                  "description": "As Ausgrid gives it",
+                  "type": [
+                    "string",
+                    "number",
+                    "null"
+                  ]
+                },
+                "Classification": {
+                  "description": "As Ausgrid gives it",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "Polygons": {
+                  "type": "array",
+                  "items": {},
+                  "description": "The outage's areas, as Ausgrid gives them"
+                },
+                "outageId": {
+                  "description": "The same as OutageId",
+                  "type": [
+                    "string",
+                    "number",
+                    "null"
+                  ]
+                },
+                "suburb": {
+                  "type": "string",
+                  "description": "The same as Suburb"
+                },
+                "streetName": {
+                  "type": "string",
+                  "description": "The same as StreetName"
+                },
+                "streets": {
+                  "type": "string",
+                  "description": "The same as Streets"
+                },
+                "postcode": {
+                  "type": "string",
+                  "description": "The same as Postcode"
+                },
+                "customersAffected": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991,
+                  "description": "The same as CustomersAffected"
+                },
+                "outageType": {
+                  "type": "string",
+                  "enum": [
+                    "Planned",
+                    "Unplanned"
+                  ],
+                  "description": "The same as OutageType"
+                },
+                "cause": {
+                  "type": "string",
+                  "description": "The same as Cause"
+                },
+                "startTime": {
+                  "type": "string",
+                  "description": "The same as StartTime"
+                },
+                "estRestoration": {
+                  "type": "string",
+                  "description": "The same as EstRestoration"
+                },
+                "endDateTime": {
+                  "type": "string",
+                  "description": "The same as EndDateTime"
+                },
+                "latitude": {
+                  "description": "The same as Latitude",
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "longitude": {
+                  "description": "The same as Longitude",
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "OutageId",
+                "JobId",
+                "Suburb",
+                "StreetName",
+                "Streets",
+                "Postcode",
+                "CustomersAffected",
+                "OutageType",
+                "Cause",
+                "Reason",
+                "Detail",
+                "StatusText",
+                "StartTime",
+                "EstRestoration",
+                "EndDateTime",
+                "Latitude",
+                "Longitude",
+                "Status",
+                "Classification",
+                "Polygons",
+                "outageId",
+                "suburb",
+                "streetName",
+                "streets",
+                "postcode",
+                "customersAffected",
+                "outageType",
+                "cause",
+                "startTime",
+                "estRestoration",
+                "endDateTime",
+                "latitude",
+                "longitude"
+              ],
+              "additionalProperties": false
+            },
+            "description": "One record per outage, each field under two names: PascalCase and camelCase"
+          },
+          "Polygons": {
+            "type": "array",
+            "items": {},
+            "description": "Every outage's areas together, as Ausgrid gives them"
+          }
+        },
+        "required": [
+          "Markers",
+          "Polygons"
+        ],
+        "additionalProperties": false
+      },
+      "AusgridStats": {
+        "description": "Ausgrid's outage counters, exactly as Ausgrid publishes them; null when there are none to give"
+      },
+      "EssentialOutages": {
+        "type": "object",
+        "properties": {
+          "outages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "incidentId": {
+                  "type": "string",
+                  "description": "Essential Energy's id for the outage"
+                },
+                "title": {
+                  "type": "string",
+                  "description": "The locality, else the reason, else \"Power Outage\""
+                },
+                "suburb": {
+                  "type": "string",
+                  "description": "The locality the outage is named after, as published; may be empty"
+                },
+                "outageType": {
+                  "type": "string",
+                  "enum": [
+                    "planned",
+                    "unplanned"
+                  ],
+                  "description": "As Essential Energy marks it; unplanned when it marks neither"
+                },
+                "feedType": {
+                  "type": "string",
+                  "enum": [
+                    "current",
+                    "future"
+                  ],
+                  "description": "Which of Essential Energy's feeds it is in: outages now, or outages to come"
+                },
+                "latitude": {
+                  "description": "The outage's marker; null when the feed gives none",
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "longitude": {
+                  "description": "The outage's marker; null when the feed gives none",
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "cause": {
+                  "type": "string",
+                  "description": "The reason Essential Energy gives; \"Unknown\" when it gives none"
+                },
+                "customersAffected": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991,
+                  "description": "Customers without power; 0 when not given"
+                },
+                "timeOff": {
+                  "type": "string",
+                  "description": "When the power went or goes off, as Essential Energy writes it (normally DD/MM/YYYY HH:mm:ss); empty when not given"
+                },
+                "estTimeOn": {
+                  "type": "string",
+                  "description": "When the power is expected back. As Essential Energy writes it; empty when not given"
+                },
+                "lastUpdated": {
+                  "type": "string",
+                  "description": "As Essential Energy writes it; empty when not given"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "active",
+                    "scheduled"
+                  ],
+                  "description": "active in the current feed, scheduled in the future feed"
+                },
+                "source": {
+                  "type": "string",
+                  "enum": [
+                    "essential_current",
+                    "essential_planned",
+                    "essential_future"
+                  ],
+                  "description": "essential_current: unplanned, in the current feed; essential_planned: planned, in the current feed; essential_future: in the future feed"
+                },
+                "sourceTimestamp": {
+                  "description": "timeOff rewritten as YYYY-MM-DDTHH:mm:ss, with no time zone; timeOff unchanged when it is not in the usual form; null when there is none",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "polygon": {
+                  "description": "The outage area's outline as [longitude, latitude] points; null when the feed gives none. Left out when lite=1",
+                  "anyOf": [
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "array",
+                        "prefixItems": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "number"
+                          }
+                        ],
+                        "items": false,
+                        "minItems": 2,
+                        "maxItems": 2,
+                        "description": "[longitude, latitude] (WGS84)"
+                      }
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "provider": {
+                  "type": "string",
+                  "const": "Essential Energy"
+                }
+              },
+              "required": [
+                "incidentId",
+                "title",
+                "suburb",
+                "outageType",
+                "feedType",
+                "latitude",
+                "longitude",
+                "cause",
+                "customersAffected",
+                "timeOff",
+                "estTimeOn",
+                "lastUpdated",
+                "status",
+                "source",
+                "sourceTimestamp",
+                "provider"
+              ],
+              "additionalProperties": false
+            },
+            "description": "The current feed, then the future feed, each in its own order"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Number of outages"
+          },
+          "planned": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "How many of them are planned"
+          },
+          "unplanned": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "How many of them are unplanned"
+          },
+          "future": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "How many of them are in the future feed"
+          },
+          "totalCustomersAffected": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "customersAffected summed over the outages"
+          }
+        },
+        "required": [
+          "outages",
+          "count",
+          "planned",
+          "unplanned",
+          "future",
+          "totalCustomersAffected"
+        ],
+        "additionalProperties": false
+      },
+      "EssentialOutageList": {
+        "type": "object",
+        "properties": {
+          "outages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EssentialOutage"
+            }
+          },
+          "count": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Number of outages"
+          },
+          "totalCustomersAffected": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "customersAffected summed over the outages"
+          }
+        },
+        "required": [
+          "outages",
+          "count",
+          "totalCustomersAffected"
+        ],
+        "additionalProperties": false
+      },
+      "EssentialOutage": {
+        "type": "object",
+        "properties": {
+          "incidentId": {
+            "type": "string",
+            "description": "Essential Energy's id for the outage"
+          },
+          "title": {
+            "type": "string",
+            "description": "The locality, else the reason, else \"Power Outage\""
+          },
+          "suburb": {
+            "type": "string",
+            "description": "The locality the outage is named after, as published; may be empty"
+          },
+          "outageType": {
+            "type": "string",
+            "enum": [
+              "planned",
+              "unplanned"
+            ],
+            "description": "As Essential Energy marks it; unplanned when it marks neither"
+          },
+          "feedType": {
+            "type": "string",
+            "enum": [
+              "current",
+              "future"
+            ],
+            "description": "Which of Essential Energy's feeds it is in: outages now, or outages to come"
+          },
+          "latitude": {
+            "description": "The outage's marker; null when the feed gives none",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "longitude": {
+            "description": "The outage's marker; null when the feed gives none",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cause": {
+            "type": "string",
+            "description": "The reason Essential Energy gives; \"Unknown\" when it gives none"
+          },
+          "customersAffected": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Customers without power; 0 when not given"
+          },
+          "timeOff": {
+            "type": "string",
+            "description": "When the power went or goes off, as Essential Energy writes it (normally DD/MM/YYYY HH:mm:ss); empty when not given"
+          },
+          "estTimeOn": {
+            "type": "string",
+            "description": "When the power is expected back. As Essential Energy writes it; empty when not given"
+          },
+          "lastUpdated": {
+            "type": "string",
+            "description": "As Essential Energy writes it; empty when not given"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "scheduled"
+            ],
+            "description": "active in the current feed, scheduled in the future feed"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "essential_current",
+              "essential_planned",
+              "essential_future"
+            ],
+            "description": "essential_current: unplanned, in the current feed; essential_planned: planned, in the current feed; essential_future: in the future feed"
+          },
+          "sourceTimestamp": {
+            "description": "timeOff rewritten as YYYY-MM-DDTHH:mm:ss, with no time zone; timeOff unchanged when it is not in the usual form; null when there is none",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "polygon": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "prefixItems": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "items": false,
+                  "minItems": 2,
+                  "maxItems": 2,
+                  "description": "[longitude, latitude] (WGS84)"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The outage area's outline as [longitude, latitude] points; null when the feed gives none"
+          },
+          "provider": {
+            "type": "string",
+            "const": "Essential Energy"
+          }
+        },
+        "required": [
+          "incidentId",
+          "title",
+          "suburb",
+          "outageType",
+          "feedType",
+          "latitude",
+          "longitude",
+          "cause",
+          "customersAffected",
+          "timeOff",
+          "estTimeOn",
+          "lastUpdated",
+          "status",
+          "source",
+          "sourceTimestamp",
+          "polygon",
+          "provider"
+        ],
+        "additionalProperties": false
+      },
+      "EssentialOutagesRaw": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/EssentialOutage"
+        }
+      },
       "AviationCameras": {
         "type": "object",
         "properties": {
@@ -2224,6 +4042,136 @@
           "state",
           "name",
           "cameras",
+          "count"
+        ],
+        "additionalProperties": false
+      },
+      "QldCameras": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "FeatureCollection"
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "Feature"
+                },
+                "geometry": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "Point"
+                    },
+                    "coordinates": {
+                      "type": "array",
+                      "prefixItems": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ],
+                      "items": false,
+                      "minItems": 2,
+                      "maxItems": 2,
+                      "description": "[longitude, latitude] (WGS84)"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "coordinates"
+                  ],
+                  "additionalProperties": false
+                },
+                "properties": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "description": "QLDTraffic's id for the camera, after qld: (roadside) or qldflood: (flood), so the two feeds never share one"
+                    },
+                    "title": {
+                      "type": "string",
+                      "description": "The camera's description as QLDTraffic writes it, e.g. \"Mossman - Mossman Daintree Rd at Foxton bridge - North\"; \"QLD Traffic Camera\" when it gives none"
+                    },
+                    "view": {
+                      "type": "string",
+                      "description": "The locality the camera is in, as QLDTraffic gives it"
+                    },
+                    "direction": {
+                      "type": "string",
+                      "description": "The way the camera looks, as QLDTraffic words it, e.g. NorthEast"
+                    },
+                    "region": {
+                      "type": "string",
+                      "description": "QLDTraffic's district for the camera, e.g. Metropolitan or Far North"
+                    },
+                    "imageUrl": {
+                      "type": "string",
+                      "description": "The camera's image (a JPEG), as QLDTraffic links it"
+                    },
+                    "path": {
+                      "type": "string",
+                      "description": "Always empty: QLDTraffic has no counterpart of the NSW cameras' path"
+                    },
+                    "credit": {
+                      "type": "string",
+                      "description": "Who supplies the image — an agency or council — when QLDTraffic names one; empty otherwise"
+                    },
+                    "note": {
+                      "type": "string",
+                      "description": "QLDTraffic's own caveat for the camera, such as how often its image updates; empty when there is none"
+                    },
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "qldtraffic_cameras",
+                        "qldtraffic_floodcameras"
+                      ],
+                      "description": "qldtraffic_cameras on /qld/cameras, qldtraffic_floodcameras on /qld/flood-cameras"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "title",
+                    "view",
+                    "direction",
+                    "region",
+                    "imageUrl",
+                    "path",
+                    "credit",
+                    "note",
+                    "source"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "type",
+                "geometry",
+                "properties"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "count": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Number of features"
+          }
+        },
+        "required": [
+          "type",
+          "features",
           "count"
         ],
         "additionalProperties": false
@@ -2463,6 +4411,157 @@
         "required": [
           "state",
           "names"
+        ],
+        "additionalProperties": false
+      },
+      "Boundaries": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "FeatureCollection"
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "Feature"
+                },
+                "geometry": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "Polygon"
+                        },
+                        "coordinates": {
+                          "type": "array",
+                          "items": {
+                            "type": "array",
+                            "items": {
+                              "type": "array",
+                              "items": {
+                                "type": "number"
+                              }
+                            }
+                          },
+                          "description": "Rings of [longitude, latitude] points: the outline, then any holes"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "coordinates"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "MultiPolygon"
+                        },
+                        "coordinates": {
+                          "type": "array",
+                          "items": {
+                            "type": "array",
+                            "items": {
+                              "type": "array",
+                              "items": {
+                                "type": "array",
+                                "items": {
+                                  "type": "number"
+                                }
+                              }
+                            }
+                          },
+                          "description": "Polygons, each as rings of [longitude, latitude] points: the outline, then any holes"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "coordinates"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "properties": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "description": "The dataset's persistent id for the place. A place drawn in several parts (islands, mostly) has a feature per part, its id suffixed #0 (the largest), #1, …"
+                    },
+                    "kind": {
+                      "type": "string",
+                      "description": "locality, lga or state, as asked for"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "shortName": {
+                      "description": "A council's abbreviated name, or a state's abbreviation (NSW, …); null for a locality",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "state": {
+                      "description": "The state or territory it is in, abbreviated (NSW, VIC, …)",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "class": {
+                      "description": "A locality's class in the dataset (e.g. Gazetted Locality, District); null for the other kinds",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "kind",
+                    "name",
+                    "shortName",
+                    "state",
+                    "class"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "type",
+                "geometry",
+                "properties"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "count": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Number of features"
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "true when more boundaries met the view than `limit`; the largest are the ones kept"
+          }
+        },
+        "required": [
+          "type",
+          "features",
+          "count",
+          "truncated"
         ],
         "additionalProperties": false
       },
@@ -3484,6 +5583,346 @@
         },
         "additionalProperties": {},
         "description": "MarineTraffic's own record for the vessel, as its vessel page loads it: the fields are MarineTraffic's, vary between vessels and are not described here"
+      },
+      "NewsHeadlines": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "link": {
+                  "type": "string",
+                  "description": "The story on the publisher's own site"
+                },
+                "description": {
+                  "type": "string",
+                  "description": "The feed's summary as plain text (its HTML removed), cut to 300 characters; empty when it has none"
+                },
+                "published": {
+                  "type": "string",
+                  "description": "When it was published, as the feed writes it"
+                },
+                "source": {
+                  "type": "string",
+                  "description": "The feed's name, as in /news/sources"
+                },
+                "icon": {
+                  "type": "string",
+                  "description": "An emoji for the feed"
+                },
+                "category": {
+                  "type": "string",
+                  "description": "general, emergency or weather: AusAware's own reading of keywords in the title and summary, not the publisher's"
+                },
+                "timestamp": {
+                  "description": "`published` as unix seconds; 0 when it cannot be read",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "title",
+                "link",
+                "description",
+                "published",
+                "source",
+                "icon",
+                "category"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Newest first"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Number of items"
+          },
+          "sources": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991,
+                  "description": "Items taken from its feed"
+                },
+                "status": {
+                  "type": "string",
+                  "description": "ok when its feed gave items; empty when it gave none, including when it could not be read or is being rested after failing twice in a row; error when reading it failed in some other way"
+                },
+                "error": {
+                  "description": "With status error, what went wrong",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "count",
+                "status"
+              ],
+              "additionalProperties": false
+            },
+            "description": "How each feed asked for fared, by feed key"
+          },
+          "category_counts": {
+            "type": "object",
+            "properties": {
+              "general": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "emergency": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "weather": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "general",
+              "emergency",
+              "weather"
+            ],
+            "additionalProperties": false,
+            "description": "Items in each category, before the category filter"
+          },
+          "available_sources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every feed key"
+          },
+          "available_categories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "items",
+          "count",
+          "sources",
+          "category_counts",
+          "available_sources",
+          "available_categories"
+        ],
+        "additionalProperties": false
+      },
+      "NewsSources": {
+        "type": "object",
+        "properties": {
+          "sources": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string",
+                  "description": "The publisher's public RSS feed"
+                },
+                "icon": {
+                  "type": "string",
+                  "description": "An emoji for the feed"
+                }
+              },
+              "required": [
+                "name",
+                "url",
+                "icon"
+              ],
+              "additionalProperties": false
+            },
+            "description": "By feed key, the keys /news/rss takes in `sources`"
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "sources",
+          "categories"
+        ],
+        "additionalProperties": false
+      },
+      "CentralwatchCameras": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "Central Watch's id for the camera"
+            },
+            "name": {
+              "type": "string",
+              "description": "\"Fire Watch Camera\" when Central Watch gives none"
+            },
+            "siteName": {
+              "type": "string",
+              "description": "The tower the camera is on; empty when Central Watch gives none"
+            },
+            "siteId": {
+              "type": "string",
+              "description": "Central Watch's id for the tower"
+            },
+            "latitude": {
+              "description": "The tower's; null when Central Watch gives none",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "longitude": {
+              "description": "The tower's; null when Central Watch gives none",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "altitude": {
+              "description": "The tower's, as Central Watch gives it; null when it gives none",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "state": {
+              "type": "string",
+              "description": "The tower's state, as Central Watch gives it (e.g. NSW); empty when it gives none"
+            },
+            "imageUrl": {
+              "type": "string",
+              "description": "The camera's latest image (see /centralwatch/image/{cameraId}): a path on this API, to be joined to its origin — /api/v1/centralwatch/image/<id>"
+            },
+            "time": {
+              "type": "string",
+              "description": "Central Watch's timestamp for the camera, ISO 8601, with a +hh:mm offset rewritten as Z; empty when it gives none"
+            },
+            "source": {
+              "type": "string",
+              "const": "centralwatch"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "siteName",
+            "siteId",
+            "latitude",
+            "longitude",
+            "altitude",
+            "state",
+            "imageUrl",
+            "time",
+            "source"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "CentralwatchSites": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "siteId": {
+              "type": "string",
+              "description": "Central Watch's id for the tower (the camera's id when it gives none)"
+            },
+            "siteName": {
+              "type": "string",
+              "description": "\"Unknown Site\" when Central Watch gives none"
+            },
+            "latitude": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "longitude": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "altitude": {
+              "description": "As Central Watch gives it",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "state": {
+              "type": "string",
+              "description": "As Central Watch gives it (e.g. NSW); empty when it gives none"
+            },
+            "cameras": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "description": "Central Watch's id for the camera"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "imageUrl": {
+                    "type": "string",
+                    "description": "The camera's latest image (see /centralwatch/image/{cameraId}): a path on this API, to be joined to its origin — /api/v1/centralwatch/image/<id>"
+                  }
+                },
+                "required": [
+                  "id",
+                  "name",
+                  "imageUrl"
+                ],
+                "additionalProperties": false
+              },
+              "description": "Never empty: a tower with no camera to show is left out"
+            }
+          },
+          "required": [
+            "siteId",
+            "siteName",
+            "latitude",
+            "longitude",
+            "altitude",
+            "state",
+            "cameras"
+          ],
+          "additionalProperties": false
+        }
       },
       "Status": {
         "type": "object",
@@ -6336,6 +8775,886 @@
         ]
       }
     },
+    "/api/v1/beachwatch": {
+      "get": {
+        "operationId": "getBeachwatch",
+        "tags": [
+          "Hazards"
+        ],
+        "summary": "NSW beach water quality",
+        "description": "Water quality at NSW swimming sites from Beachwatch, the NSW Government's water-quality programme: each site's latest sampled result and its pollution forecast, passed on as Beachwatch publishes them. Refreshed from Beachwatch every ten minutes; empty until the first refresh after a restart.",
+        "responses": {
+          "200": {
+            "description": "A GeoJSON FeatureCollection of sites, as Beachwatch publishes it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BeachwatchSites"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:beach",
+          "type:hazards",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/beachsafe": {
+      "get": {
+        "operationId": "getBeachsafe",
+        "tags": [
+          "Hazards"
+        ],
+        "summary": "NSW beaches: patrols and hazards",
+        "description": "NSW beaches from BeachSafe, Surf Life Saving Australia's beach information service: patrol status and today's patrol hours, hazards, facilities and weather, as BeachSafe's beach map lists them for NSW. /beachsafe/beach/{slug} has more on one beach. Refreshed from BeachSafe every ten minutes; empty until the first refresh after a restart.",
+        "responses": {
+          "200": {
+            "description": "The beaches",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/BeachsafeBeaches"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:beach",
+          "type:hazards",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/beachsafe/beach/{slug}": {
+      "get": {
+        "operationId": "getBeachsafeBeach",
+        "tags": [
+          "Hazards"
+        ],
+        "summary": "One beach from BeachSafe",
+        "description": "Today's conditions at one beach from BeachSafe, Surf Life Saving Australia's beach information service: weather, tide, UV, patrol hours, marine warnings and its hazard rating. Read from BeachSafe on each request.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The beach's slug, as /beachsafe lists it (e.g. bondi-beach); upper case and spaces are taken as lower case and hyphens. At most 100 characters."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The beach",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/BeachsafeBeachDetail"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The slug is empty or longer than 100 characters (validation_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "BeachSafe has no beach by that slug (not_found)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:beach",
+          "type:hazards",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/dorsal/reports": {
+      "get": {
+        "operationId": "getDorsalReports",
+        "tags": [
+          "Hazards"
+        ],
+        "summary": "Shark reports",
+        "description": "Shark reports around Australia from Dorsal, the community shark-reporting app: sightings by the public and by drone, detections of tagged sharks by receivers, beach closures, bites and other incidents, newest first. Dorsal is read every five minutes and the last 14 days are kept; reports placed outside Australia are left out. Asked with no `hours`, the window is the last 48 hours.",
+        "responses": {
+          "200": {
+            "description": "A GeoJSON FeatureCollection of reports",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DorsalReports"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "hours",
+            "schema": {
+              "type": "number"
+            },
+            "description": "Hours back to go, whole hours (a fraction is rounded down), at most 336 (14 days). Default 48; a value that is not a positive number reads as the default."
+          },
+          {
+            "in": "query",
+            "name": "category",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only these categories, comma-separated, in any case: detection, sighting, drone, incident, tagging, closure, advisory, carcass. Absent or empty: all."
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only reports in these states, comma-separated, in any case, as the reports name them (e.g. NSW,WA). Absent or empty: all."
+          }
+        ],
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:dorsal",
+          "type:hazards",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/weather/current": {
+      "get": {
+        "operationId": "getWeatherCurrent",
+        "tags": [
+          "Weather"
+        ],
+        "summary": "Current conditions in NSW towns",
+        "description": "Current conditions at about 100 towns across NSW, and Canberra, from Open-Meteo forecast data. Refreshed every 30 minutes. A town Open-Meteo gives no current conditions for is left out, and the collection is empty until the first refresh after a restart.",
+        "responses": {
+          "200": {
+            "description": "A GeoJSON FeatureCollection, one point per town",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WeatherCurrent"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:weather",
+          "type:weather",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/weather/radar": {
+      "get": {
+        "operationId": "getWeatherRadar",
+        "tags": [
+          "Weather"
+        ],
+        "summary": "Rain radar frames",
+        "description": "RainViewer's list of rain radar frames, as RainViewer publishes it: the time of each frame and the path its map tiles are served under. The tiles themselves come from RainViewer. Refreshed every five minutes; until the first refresh after a restart both lists are empty.",
+        "responses": {
+          "200": {
+            "description": "RainViewer's frame list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/WeatherRadar"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:weather",
+          "type:weather",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/weather/grid/manifest": {
+      "get": {
+        "operationId": "getWeatherGridManifest",
+        "tags": [
+          "Weather"
+        ],
+        "summary": "What the gridded weather field holds",
+        "description": "The gridded weather field: Open-Meteo forecast data sampled on regular latitude/longitude grids — one for land weather, one shared by sea state and river discharge, one for air quality and UV — over the recent past and the days ahead. This lists each grid, its time axis and the variables on it, with how to read their stored values; /weather/grid serves the values. Refreshed about once a day.",
+        "responses": {
+          "200": {
+            "description": "The grids, time axes and variables",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/WeatherGridManifest"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The gridded field has not been built yet, as after a first start, or (with a key) the key could not be checked just now; try again later (service_unavailable, auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:weather",
+          "type:weather",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/weather/grid": {
+      "get": {
+        "operationId": "getWeatherGrid",
+        "tags": [
+          "Weather"
+        ],
+        "summary": "One variable of the gridded weather field at one time",
+        "description": "The values of one variable at one timestep, as raw binary: the grid's cols × rows points as little-endian signed 16-bit integers, row by row from the south-west corner — the first row is the southernmost, each row west to east. A stored value divided by X-Grid-Scale is the real value, in the unit the manifest gives; the manifest's nodata (-32768) means no value there. The grid's size comes from the manifest (the variable's grid) and from X-Grid-Cols and X-Grid-Rows. A stored grid never changes, so it may be cached for a day.",
+        "responses": {
+          "200": {
+            "description": "The values, cols × rows little-endian Int16",
+            "headers": {
+              "X-Grid-Cols": {
+                "description": "Points across, west to east",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-Grid-Rows": {
+                "description": "Points down, south to north",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-Grid-Scale": {
+                "description": "A stored value divided by this is the real value",
+                "schema": {
+                  "type": "number"
+                }
+              }
+            },
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A query parameter is not valid (validation_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The timestep is not on the variable's axis, or its grid is not stored (not_found)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The gridded field has not been built yet, as after a first start, or (with a key) the key could not be checked just now; try again later (service_unavailable, auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "var",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "temperature_2m",
+                "apparent_temperature",
+                "relative_humidity_2m",
+                "precipitation",
+                "pressure_msl",
+                "cape",
+                "wind_speed_10m",
+                "wind_direction_10m",
+                "wind_gusts_10m",
+                "wave_height",
+                "wave_direction",
+                "wave_period",
+                "swell_wave_height",
+                "swell_wave_direction",
+                "swell_wave_period",
+                "ocean_current_velocity",
+                "ocean_current_direction",
+                "river_discharge",
+                "river_discharge_median",
+                "pm2_5",
+                "pm10",
+                "us_aqi",
+                "uv_index"
+              ]
+            },
+            "required": true,
+            "description": "The variable, a name from the manifest"
+          },
+          {
+            "in": "query",
+            "name": "t",
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "description": "A timestep from the manifest, exactly as written there, on the variable's own axis"
+          }
+        ],
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:weather",
+          "type:weather",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/weather/point": {
+      "get": {
+        "operationId": "getWeatherPoint",
+        "tags": [
+          "Weather"
+        ],
+        "summary": "Hourly forecast for one place",
+        "description": "Seven days of hourly weather for one place — temperature, apparent temperature, humidity, precipitation, sea-level pressure, CAPE and wind — from Open-Meteo forecast data, passed through as Open-Meteo answers it. The coordinates are rounded to two decimal places first, so nearby points share an answer. Read from Open-Meteo when asked; an answer is kept for 15 minutes and may be served up to an hour old while a fresh one is fetched.",
+        "responses": {
+          "200": {
+            "description": "Open-Meteo's hourly forecast for the point",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/WeatherPoint"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A query parameter is not valid (validation_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Open-Meteo could not be read just now (service_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "lat",
+            "schema": {
+              "type": "number",
+              "minimum": -90,
+              "maximum": 90
+            },
+            "required": true,
+            "description": "Latitude, degrees"
+          },
+          {
+            "in": "query",
+            "name": "lon",
+            "schema": {
+              "type": "number",
+              "minimum": -180,
+              "maximum": 180
+            },
+            "required": true,
+            "description": "Longitude, degrees"
+          }
+        ],
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:weather",
+          "type:weather",
+          "window:live"
+        ]
+      }
+    },
     "/api/v1/firms/hotspots": {
       "get": {
         "operationId": "getFirmsHotspots",
@@ -6799,6 +10118,1178 @@
         ]
       }
     },
+    "/api/v1/endeavour/current": {
+      "get": {
+        "operationId": "getEndeavourCurrent",
+        "tags": [
+          "Outages"
+        ],
+        "summary": "Endeavour Energy unplanned outages",
+        "description": "Unplanned electricity outages on Endeavour Energy's network now, from Endeavour Energy's public outage data, with the address, cause and timing joined onto each outage area. Refreshed every minute.",
+        "responses": {
+          "200": {
+            "description": "Every unplanned outage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/EndeavourOutages"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:endeavour",
+          "type:outages",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/endeavour/maintenance": {
+      "get": {
+        "operationId": "getEndeavourMaintenance",
+        "tags": [
+          "Outages"
+        ],
+        "summary": "Endeavour Energy planned work under way",
+        "description": "Planned outages on Endeavour Energy's network that are under way: the work's status says so, or its start time has passed. From Endeavour Energy's public outage data; refreshed every five minutes.",
+        "responses": {
+          "200": {
+            "description": "Every planned outage under way",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/EndeavourOutages"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:endeavour",
+          "type:outages",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/endeavour/future": {
+      "get": {
+        "operationId": "getEndeavourFuture",
+        "tags": [
+          "Outages"
+        ],
+        "summary": "Endeavour Energy planned work to come",
+        "description": "Planned outages on Endeavour Energy's network that have not started yet. From Endeavour Energy's public outage data; refreshed every five minutes.",
+        "responses": {
+          "200": {
+            "description": "Every planned outage still to come",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/EndeavourOutages"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:endeavour",
+          "type:outages",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/endeavour/planned": {
+      "get": {
+        "operationId": "getEndeavourPlanned",
+        "tags": [
+          "Outages"
+        ],
+        "summary": "Endeavour Energy planned outages",
+        "description": "Every planned outage on Endeavour Energy's network: the work under way (as /endeavour/maintenance) followed by the work still to come (as /endeavour/future). Refreshed every five minutes.",
+        "responses": {
+          "200": {
+            "description": "Planned work under way, then planned work to come",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/EndeavourOutages"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:endeavour",
+          "type:outages",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/endeavour/current/all": {
+      "get": {
+        "operationId": "getEndeavourCurrentAreas",
+        "tags": [
+          "Outages"
+        ],
+        "summary": "Endeavour Energy outage areas other than planned work, unprocessed",
+        "description": "Endeavour Energy's outage areas that are not planned work, exactly as Endeavour Energy publishes them, for clients that process them themselves — no address, cause or timing joined on (/endeavour/current has those). Read from Endeavour Energy on each request.",
+        "responses": {
+          "200": {
+            "description": "Every outage area not marked PLANNED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/EndeavourAreas"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:endeavour",
+          "type:outages",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/endeavour/future/all": {
+      "get": {
+        "operationId": "getEndeavourPlannedAreas",
+        "tags": [
+          "Outages"
+        ],
+        "summary": "Endeavour Energy planned-work outage areas, unprocessed",
+        "description": "Endeavour Energy's outage areas marked as planned work, exactly as Endeavour Energy publishes them, for clients that process them themselves. Despite the path, this includes planned work already under way, not only work to come. Read from Endeavour Energy on each request.",
+        "responses": {
+          "200": {
+            "description": "Every outage area marked PLANNED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/EndeavourAreas"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:endeavour",
+          "type:outages",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/endeavour/postcodes": {
+      "get": {
+        "operationId": "getEndeavourPostcodes",
+        "tags": [
+          "Outages"
+        ],
+        "summary": "Postcodes in Endeavour Energy outages",
+        "description": "The postcodes in Endeavour Energy's outage data — taken from its outage points, at most 5,000 of them read — each once, sorted. Read from Endeavour Energy when asked, and a good answer is kept for an hour.",
+        "responses": {
+          "200": {
+            "description": "The postcodes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/EndeavourPostcodes"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:endeavour",
+          "type:outages",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/ausgrid/outages": {
+      "get": {
+        "operationId": "getAusgridOutages",
+        "tags": [
+          "Outages"
+        ],
+        "summary": "Ausgrid outages",
+        "description": "Electricity outages on Ausgrid's network, from Ausgrid's public outage map, polled every two minutes when polling is on. Polling is off for now because Ausgrid's outage map service has stopped answering, so this is empty or out of date until it returns.",
+        "responses": {
+          "200": {
+            "description": "The outages and their areas",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AusgridOutages"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:ausgrid",
+          "type:outages",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/ausgrid/stats": {
+      "get": {
+        "operationId": "getAusgridStats",
+        "tags": [
+          "Outages"
+        ],
+        "summary": "Ausgrid outage counts",
+        "description": "Ausgrid's own outage counters, as its public outage map publishes them, polled every two minutes when polling is on. Polling is off for now because Ausgrid's outage map service has stopped answering, so this is empty or out of date until it returns.",
+        "responses": {
+          "200": {
+            "description": "Ausgrid's counters, or null",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AusgridStats"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:ausgrid",
+          "type:outages",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/essential/outages": {
+      "get": {
+        "operationId": "getEssentialOutages",
+        "tags": [
+          "Outages"
+        ],
+        "summary": "Essential Energy outages",
+        "description": "Electricity outages on Essential Energy's network — unplanned and planned, now and to come — from Essential Energy's public outage feeds (current and future), with counts. feed and type narrow the list (the counts are of what is left), and lite=1 leaves out the polygons. Refreshed every three minutes.",
+        "responses": {
+          "200": {
+            "description": "The outages, with counts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/EssentialOutages"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "feed",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "current",
+                "future"
+              ]
+            },
+            "description": "Only the outages in this feed: current (outages now) or future (outages to come). Letter case does not matter; any other value is ignored."
+          },
+          {
+            "in": "query",
+            "name": "type",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "planned",
+                "unplanned"
+              ]
+            },
+            "description": "Only outages of this kind. Letter case does not matter; any other value is ignored."
+          },
+          {
+            "in": "query",
+            "name": "lite",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "0",
+                "1"
+              ]
+            },
+            "description": "1 leaves out each outage's polygon, the heaviest field"
+          }
+        ],
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:essential",
+          "type:outages",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/essential/planned": {
+      "get": {
+        "operationId": "getEssentialPlanned",
+        "tags": [
+          "Outages"
+        ],
+        "summary": "Essential Energy planned outages",
+        "description": "Planned outages on Essential Energy's network, under way and to come: the outages marked planned in Essential Energy's public outage feeds, the current feed's first. Refreshed every three minutes.",
+        "responses": {
+          "200": {
+            "description": "Every planned outage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/EssentialOutageList"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:essential",
+          "type:outages",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/essential/future": {
+      "get": {
+        "operationId": "getEssentialFuture",
+        "tags": [
+          "Outages"
+        ],
+        "summary": "Essential Energy outages to come",
+        "description": "Outages on Essential Energy's network that are still to come: everything in Essential Energy's future-outages feed. Refreshed every three minutes.",
+        "responses": {
+          "200": {
+            "description": "Every outage in the future feed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/EssentialOutageList"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:essential",
+          "type:outages",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/essential/outages/current": {
+      "get": {
+        "operationId": "getEssentialCurrent",
+        "tags": [
+          "Outages"
+        ],
+        "summary": "Essential Energy outages now",
+        "description": "Outages on Essential Energy's network now, unplanned and planned: everything in Essential Energy's current-outages feed. Refreshed every three minutes.",
+        "responses": {
+          "200": {
+            "description": "Every outage in the current feed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/EssentialOutageList"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:essential",
+          "type:outages",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/essential/outages/raw": {
+      "get": {
+        "operationId": "getEssentialOutagesRaw",
+        "tags": [
+          "Outages"
+        ],
+        "summary": "Essential Energy outages, read now",
+        "description": "Every outage in both of Essential Energy's public outage feeds, read from Essential Energy on this request rather than taken from the last poll: the current feed's outages, then the future feed's, in the same record shape as the other Essential Energy endpoints. When only one feed can be read, the answer is what that one gave, with nothing to say the other failed; when neither can be read, the answer is 503.",
+        "responses": {
+          "200": {
+            "description": "The outages in both feeds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/EssentialOutagesRaw"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:essential",
+          "type:outages",
+          "window:live"
+        ]
+      }
+    },
     "/api/v1/aviation/cameras": {
       "get": {
         "operationId": "getAviationCameras",
@@ -6962,6 +11453,150 @@
         ]
       }
     },
+    "/api/v1/qld/cameras": {
+      "get": {
+        "operationId": "getQldCameras",
+        "tags": [
+          "Cameras"
+        ],
+        "summary": "Queensland traffic cameras",
+        "description": "Roadside traffic cameras across Queensland from QLDTraffic (Queensland Department of Transport and Main Roads), in the same property shape as /traffic/cameras, each with a link to its image. Cameras without an image are left out. QLDTraffic gives coordinates in GDA2020, passed through as they are (within a metre of WGS84). The list is refreshed every minute, and is empty until the first refresh after a restart; the images are QLDTraffic's and update on their own schedule.",
+        "responses": {
+          "200": {
+            "description": "A GeoJSON FeatureCollection of cameras",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QldCameras"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:qldtraffic",
+          "type:cameras",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/qld/flood-cameras": {
+      "get": {
+        "operationId": "getQldFloodCameras",
+        "tags": [
+          "Cameras"
+        ],
+        "summary": "Queensland flood cameras",
+        "description": "Cameras watching flood-prone roads and crossings in Queensland from QLDTraffic (Queensland Department of Transport and Main Roads), many of them supplied by councils (`credit`), in the same property shape as /traffic/cameras, each with a link to its image. Cameras without an image are left out. QLDTraffic gives coordinates in GDA2020, passed through as they are (within a metre of WGS84). The list is refreshed every minute, and is empty until the first refresh after a restart; the images are QLDTraffic's and update on their own schedule. Some update only every 30 minutes, which `note` says where QLDTraffic does.",
+        "responses": {
+          "200": {
+            "description": "A GeoJSON FeatureCollection of cameras",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QldCameras"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:qldtraffic",
+          "type:cameras",
+          "window:live"
+        ]
+      }
+    },
     "/api/v1/nt-fire/incidents": {
       "get": {
         "operationId": "getNtFireIncidents",
@@ -7109,6 +11744,130 @@
           }
         ],
         "security": []
+      }
+    },
+    "/api/v1/boundaries/{kind}": {
+      "get": {
+        "operationId": "getBoundaries",
+        "tags": [
+          "Reference"
+        ],
+        "summary": "Suburb, council and state boundaries",
+        "description": "The outlines of Australia's suburbs and localities, local government areas, or states and territories that fall in a view, from national administrative-boundary datasets imported into this API — they change only when the import is re-run. The view is widened to the next twentieth of a degree on each side. Outlines are drawn for the view: simplified to about a 3,000th of its width (half a pixel on a typical screen), with parts too small to see at that scale left out, so ask for the area you are drawing; zooming in brings the detail back, and a view under about 1.5° wide, or none, gets the outlines as stored. Answers may be reused for an hour (Cache-Control: private, max-age=3600).",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "locality",
+                "lga",
+                "state"
+              ]
+            },
+            "description": "locality (suburbs and localities), lga (local government areas) or state (states and territories)"
+          },
+          {
+            "in": "query",
+            "name": "bbox",
+            "schema": {
+              "type": "string"
+            },
+            "description": "The view, as west,south,east,north in degrees (corners given the other way round are taken as meant). Required for locality and lga; without it, state answers the whole country."
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "number"
+            },
+            "description": "The most boundaries to answer, largest first: 1 to 40,000 (rounded down, and held to that range). Absent or not a number: 20,000."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A GeoJSON FeatureCollection of boundaries, largest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Boundaries"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "kind is not locality, lga or state; or, for locality and lga, bbox is missing or is not four numbers (validation_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The boundaries could not be read (internal_error)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:boundaries",
+          "type:boundaries",
+          "window:live|history"
+        ]
       }
     },
     "/api/v1/qld-fire/incidents": {
@@ -7933,6 +12692,369 @@
           "type:vessels",
           "window:live"
         ]
+      }
+    },
+    "/api/v1/news/rss": {
+      "get": {
+        "operationId": "getNewsHeadlines",
+        "tags": [
+          "News"
+        ],
+        "summary": "News headlines",
+        "description": "Headlines, summaries and links from the public RSS feeds of the Australian news outlets and NSW agencies listed in /news/sources, newest first, each sorted into a category by keyword. AusAware is not affiliated with any of them; `link` leads to the story on their own site. The feeds are read when asked, and each combination of parameters is answered from a five-minute cache. A feed that keeps failing is rested for a while before it is tried again.",
+        "responses": {
+          "200": {
+            "description": "The headlines, with how each feed fared",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/NewsHeadlines"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "sources",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated feed keys from /news/sources, e.g. abc,sbs; unknown keys are ignored. Every feed when absent or empty"
+          },
+          {
+            "in": "query",
+            "name": "category",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only items in this category: general, emergency or weather; any other value matches nothing. Every category when absent or empty"
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 20
+            },
+            "description": "Most items to take from each feed, 1–20; default 8, as is 0 or anything not a number. Less than 1 is read as 1 and more than 20 as 20. A feed gives at most its first 10"
+          }
+        ],
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:news",
+          "type:news",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/news/sources": {
+      "get": {
+        "operationId": "getNewsSources",
+        "tags": [
+          "News"
+        ],
+        "summary": "News feeds and categories",
+        "description": "The news outlets and agencies /news/rss reads, each with its public RSS feed, and the categories it sorts headlines into. AusAware is not affiliated with any of them.",
+        "responses": {
+          "200": {
+            "description": "The feeds and categories",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/NewsSources"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:news",
+          "type:news",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/centralwatch/cameras": {
+      "get": {
+        "operationId": "getCentralwatchCameras",
+        "tags": [
+          "Cameras"
+        ],
+        "summary": "Fire-tower cameras",
+        "description": "Fire-watch cameras from Central Watch, one record per camera, with the position of the tower it is on. Once images are being fetched, a camera with no recent image is left out, so the list holds only cameras with a picture to show. The roster is refreshed from Central Watch every six hours. No key is needed.",
+        "responses": {
+          "200": {
+            "description": "The cameras",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/CentralwatchCameras"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/v1/centralwatch/sites": {
+      "get": {
+        "operationId": "getCentralwatchSites",
+        "tags": [
+          "Cameras"
+        ],
+        "summary": "Fire-tower cameras by tower",
+        "description": "The Central Watch fire-watch cameras grouped by the tower they are on, one record per tower. Once images are being fetched, a camera with no recent image is left out, so the list holds only cameras with a picture to show. The roster is refreshed from Central Watch every six hours.",
+        "responses": {
+          "200": {
+            "description": "The towers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/CentralwatchSites"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:centralwatch",
+          "type:cameras",
+          "window:live"
+        ]
+      }
+    },
+    "/api/v1/centralwatch/image/{cameraId}": {
+      "get": {
+        "operationId": "getCentralwatchImage",
+        "tags": [
+          "Cameras"
+        ],
+        "summary": "A fire-tower camera's latest image",
+        "description": "The latest image from a Central Watch camera — the image itself, not JSON. Images are fetched from Central Watch for every camera about every 30 seconds (less often while it is refusing) and dropped once they are about five minutes old; this answers from what has been fetched and never reads Central Watch itself. A camera with no image to hand (an unknown id, a camera offline, or one not fetched yet) answers a 640×480 SVG placeholder, also with status 200; X-Cache says which you got. Sent with headers that tell browsers not to reuse it without asking again. No key is needed.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cameraId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The camera, by its id from /centralwatch/cameras"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The image (JPEG), or the SVG placeholder when there is none to hand",
+            "headers": {
+              "X-Cache": {
+                "description": "HIT: an image fetched in the last two minutes. STALE: an older one. PLACEHOLDER: no image to hand; the body is the SVG placeholder",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "HIT",
+                    "STALE",
+                    "PLACEHOLDER"
+                  ]
+                }
+              },
+              "X-Cache-Age": {
+                "description": "How old the image is, whole seconds. Not sent with the placeholder",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/svg+xml": {
+                "schema": {
+                  "type": "string",
+                  "description": "The placeholder"
+                }
+              }
+            }
+          }
+        },
+        "security": []
       }
     },
     "/api/v1/status": {

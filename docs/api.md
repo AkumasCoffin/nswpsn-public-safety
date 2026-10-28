@@ -101,15 +101,35 @@ Staff may still grant `read`; a request cannot ask for it.
 | Aircraft | `GET /api/v1/adsb/aircraft` · `/adsb/trails` · `/adsb/photo/{hex}` | `source:adsb type:aircraft window:live` |
 | Aircraft | `GET /api/v1/adsb/history` | `source:adsb type:aircraft window:history` |
 | Ships | `GET /api/v1/marinetraffic/vessels` · `/marinetraffic/vessel/{id}` | `source:marinetraffic type:vessels window:live` |
+| Hazards | `GET /api/v1/beachwatch` · `/beachsafe` · `/beachsafe/beach/{slug}` | `source:beach type:hazards window:live` |
+| Hazards | `GET /api/v1/dorsal/reports` | `source:dorsal type:hazards window:live` |
+| Outages | `GET /api/v1/endeavour/{current,maintenance,future,planned}` · `/endeavour/current/all` · `/endeavour/future/all` · `/endeavour/postcodes` | `source:endeavour type:outages window:live` |
+| Outages | `GET /api/v1/essential/{outages,planned,future}` · `/essential/outages/current` · `/essential/outages/raw` | `source:essential type:outages window:live` |
+| Outages | `GET /api/v1/ausgrid/outages` · `/ausgrid/stats` | `source:ausgrid type:outages window:live` |
+| Weather | `GET /api/v1/weather/{current,radar,point}` · `/weather/grid/manifest` · `/weather/grid` | `source:weather type:weather window:live` |
+| Cameras | `GET /api/v1/qld/cameras` · `/qld/flood-cameras` | `source:qldtraffic type:cameras window:live` |
+| Cameras | `GET /api/v1/centralwatch/sites` | `source:centralwatch type:cameras window:live` |
+| Cameras | `GET /api/v1/centralwatch/cameras` · `/centralwatch/image/{cameraId}` | none — public |
+| News | `GET /api/v1/news/rss` · `/news/sources` | `source:news type:news window:live` |
+| Reference | `GET /api/v1/boundaries/{kind}` | `source:boundaries type:boundaries`, either window |
 | Reference | `GET /api/v1/agency/extended` · `/agency/extended/{slug}` · `/boundaries/lga-names` | none — public |
 | Service | `GET /api/v1/health` · `/api/v1/status` | none — public |
 | — | `GET /api/v1/openapi.json` | any valid key |
 
-The other feeds a key can read — weather, beaches, shark reports, power, the
-fire-tower and QLD traffic cameras, news, boundaries, pager traffic, the radio
-site list, the radio summaries and reception transcripts — are still on their
-unversioned `/api/…` paths, and keys read them there with the same scopes. They
-move to `/api/v1/` group by group.
+The other feeds a key can read — pager traffic, the radio site list, the
+stored history, the radio summaries and reception transcripts — are still on
+their unversioned `/api/…` paths, and keys read them there with the same
+scopes. They move to `/api/v1/` next.
+
+A few old paths have no `/api/v1/` twin because another endpoint already
+answers the same thing: `/api/endeavour/current/raw` and `/future/raw` (use
+`/endeavour/current/all` and `/future/all`), `/api/essential/outages/future`
+(use `/essential/future`) and `/api/beachsafe/details`, which is always empty
+(use `/beachsafe/beach/{slug}`). They go when the old paths are retired.
+
+The fire-tower cameras' `imageUrl` is a path on this API, to be joined to its
+origin: `/api/v1/centralwatch/image/{id}` from `/api/v1/`, and the old
+`/api/centralwatch/image/{id}` from the old path.
 
 `/rfs/incidents/raw` on v1 is the RFS's own `majorIncidents.json`, exactly as
 published at the last poll; the old `/api/rfs/incidents/raw` keeps its RSS-based

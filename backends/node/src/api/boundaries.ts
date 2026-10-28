@@ -38,11 +38,21 @@
  */
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { describeRoute } from 'hono-openapi';
+import { describeRoute, resolver } from 'hono-openapi';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { fail, ok } from './v1/respond.js';
-import { envelope, okJson, queryValidator, UNAVAILABLE_ERROR, VALIDATION_ERROR } from './v1/schemas.js';
+import {
+  envelope,
+  ErrorBody,
+  feature,
+  featureCollection,
+  GATED_ERRORS,
+  okJson,
+  queryValidator,
+  UNAVAILABLE_ERROR,
+  VALIDATION_ERROR,
+} from './v1/schemas.js';
 import { scoped } from '../services/auth/apiKeyScopes.js';
 
 export const boundariesRouter = new Hono();
@@ -360,7 +370,7 @@ function toFeature(r: BoundaryRow, kind: string, geom: unknown) {
       shortName: r.short_name,
       state: r.state,
       class: r.class,
-    },
+    } satisfies z.infer<typeof BoundaryProperties>,
   };
 }
 
@@ -425,100 +435,220 @@ boundariesRouter.get(
   },
 );
 
-boundariesRouter.get('/api/boundaries/:kind', SCOPE_BOUNDARIES, async (c) => {
-  const kind = c.req.param('kind');
-  if (!KINDS.has(kind)) {
-    return c.json({ error: 'unknown_kind', kinds: [...KINDS] }, 400);
-  }
+// GET /api/boundaries/:kind — also served at /api/v1/ (server.ts mirrors it
+// together with lga-names, which is registered first so that it is not taken
+// for a kind on either path). The body is GeoJSON, so the same bytes go out
+// on both paths; only the errors take the v1 shape there.
+const BoundaryGeometry = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('Polygon'),
+    coordinates: z
+      .array(z.array(z.array(z.number())))
+      .describe('Rings of [longitude, latitude] points: the outline, then any holes'),
+  }),
+  z.object({
+    type: z.literal('MultiPolygon'),
+    coordinates: z
+      .array(z.array(z.array(z.array(z.number()))))
+      .describe('Polygons, each as rings of [longitude, latitude] points: the outline, then any holes'),
+  }),
+]);
 
-  const bbox = parseBbox(c.req.query('bbox'));
-  if (NEEDS_BBOX.has(kind) && !bbox) {
-    return c.json({ error: 'bbox_required', kind }, 400);
-  }
-
-  const limitRaw = Number(c.req.query('limit'));
-  const limit = Number.isFinite(limitRaw)
-    ? Math.min(Math.max(1, Math.floor(limitRaw)), MAX_LIMIT)
-    : DEFAULT_LIMIT;
-
-  // Snap the viewport to the cache's own grid, so a request that differs
-  // by metres is answered from memory rather than re-queried. Snapping
-  // outwards keeps the answer a superset of what was asked for.
-  const snapped: [number, number, number, number] | null = bbox
-    ? [
-        Math.floor(bbox[0] * 20) / 20,
-        Math.floor(bbox[1] * 20) / 20,
-        Math.ceil(bbox[2] * 20) / 20,
-        Math.ceil(bbox[3] * 20) / 20,
-      ]
-    : null;
-  const key = viewKey(kind, snapped, limit);
-  const cached = cacheGet(key);
-  if (cached) {
-    return c.body(cached, 200, {
-      'Content-Type': 'application/json; charset=UTF-8',
-      'Cache-Control': 'private, max-age=3600',
-      'X-Cache': 'hit',
-    });
-  }
-
-  const pool = await getPool();
-  if (!pool) return c.json({ error: 'database unavailable' }, 503);
-
-  try {
-    // Ask for one more than the cap so "there were more" is knowable
-    // without a second COUNT.
-    const params: unknown[] = [kind, limit + 1];
-    let where = 'kind = $1';
-    if (snapped) {
-      const [w, s, e, n] = snapped;
-      // Standard box overlap: two boxes miss only if one is wholly left,
-      // right, above or below the other.
-      where += ' AND min_lon <= $3 AND max_lon >= $4 AND min_lat <= $5 AND max_lat >= $6';
-      params.push(e, w, n, s);
-    }
-    const { rows } = await pool.query<BoundaryRow>(
-      `SELECT ext_id, name, short_name, state, class, geom
-         FROM boundaries
-        WHERE ${where}
-        ORDER BY (max_lat - min_lat) * (max_lon - min_lon) DESC
-        LIMIT $2`,
-      params,
-    );
-
-    const truncated = rows.length > limit;
-    const kept = truncated ? rows.slice(0, limit) : rows;
-    // Drawn at the view's own resolution — see the note at the top. A
-    // shape that simplifies away entirely was too small to see. The
-    // tolerance comes off the snapped box for the same reason the query
-    // does: the cached body has to match its key.
-    const tol = toleranceFor(snapped);
-    const features = [];
-    for (const r of kept) {
-      const geom = simplifyGeometry(r.geom, tol);
-      if (geom) features.push(toFeature(r, kind, geom));
-    }
-    const body = JSON.stringify({
-      type: 'FeatureCollection',
-      features,
-      count: features.length,
-      // Largest-first ordering means a truncated response still shows the
-      // shapes that dominate the view, and the caller can say so.
-      truncated,
-    });
-    cachePut(key, body);
-    return c.body(body, 200, {
-      'Content-Type': 'application/json; charset=UTF-8',
-      // The data only moves when the import is re-run, so let the browser
-      // keep it rather than re-asking on every pan back.
-      'Cache-Control': 'private, max-age=3600',
-      'X-Cache': 'miss',
-    });
-  } catch (err) {
-    log.warn({ err: (err as Error).message, kind }, 'boundaries query failed');
-    return c.json({ error: 'query_failed' }, 500);
-  }
+const BoundaryProperties = z.object({
+  id: z
+    .string()
+    .describe(
+      "The dataset's persistent id for the place. A place drawn in several parts (islands, mostly) has a feature per part, its id suffixed #0 (the largest), #1, …",
+    ),
+  kind: z.string().describe('locality, lga or state, as asked for'),
+  name: z.string(),
+  shortName: z
+    .string()
+    .nullable()
+    .describe("A council's abbreviated name, or a state's abbreviation (NSW, …); null for a locality"),
+  state: z.string().nullable().describe('The state or territory it is in, abbreviated (NSW, VIC, …)'),
+  class: z
+    .string()
+    .nullable()
+    .describe("A locality's class in the dataset (e.g. Gazetted Locality, District); null for the other kinds"),
 });
+
+const Boundaries = featureCollection(feature(BoundaryGeometry, BoundaryProperties), {
+  truncated: z
+    .boolean()
+    .describe('true when more boundaries met the view than `limit`; the largest are the ones kept'),
+}).meta({ id: 'Boundaries' });
+
+// Read by hand below, exactly as it always was; the validator only describes
+// the parameters and never refuses. Whether bbox is required depends on the
+// kind, so that check stays in the handler, after the kind's own.
+const BoundariesQuery = z.object({
+  bbox: z
+    .string()
+    .optional()
+    .catch(undefined)
+    .describe(
+      'The view, as west,south,east,north in degrees (corners given the other way round are taken as meant). Required for locality and lga; without it, state answers the whole country.',
+    ),
+  limit: z.coerce
+    .number()
+    .optional()
+    .catch(undefined)
+    .describe('The most boundaries to answer, largest first: 1 to 40,000 (rounded down, and held to that range). Absent or not a number: 20,000.'),
+});
+
+const boundaryErrorJson = (description: string) => ({
+  description,
+  content: { 'application/json': { schema: resolver(ErrorBody) } },
+});
+
+const KIND_ISSUE = `must be one of ${[...KINDS].join(', ')}`;
+
+boundariesRouter.get(
+  '/api/boundaries/:kind',
+  SCOPE_BOUNDARIES,
+  describeRoute({
+    operationId: 'getBoundaries',
+    tags: ['Reference'],
+    summary: 'Suburb, council and state boundaries',
+    description:
+      "The outlines of Australia's suburbs and localities, local government areas, or states and territories that fall in a view, from national administrative-boundary datasets imported into this API — they change only when the import is re-run. The view is widened to the next twentieth of a degree on each side. Outlines are drawn for the view: simplified to about a 3,000th of its width (half a pixel on a typical screen), with parts too small to see at that scale left out, so ask for the area you are drawing; zooming in brings the detail back, and a view under about 1.5° wide, or none, gets the outlines as stored. Answers may be reused for an hour (Cache-Control: private, max-age=3600).",
+    parameters: [
+      {
+        in: 'path',
+        name: 'kind',
+        required: true,
+        schema: { type: 'string', enum: [...KINDS] },
+        description: 'locality (suburbs and localities), lga (local government areas) or state (states and territories)',
+      },
+    ],
+    responses: {
+      ...okJson(Boundaries, 'A GeoJSON FeatureCollection of boundaries, largest first'),
+      ...GATED_ERRORS,
+      400: boundaryErrorJson(
+        'kind is not locality, lga or state; or, for locality and lga, bbox is missing or is not four numbers (validation_failed)',
+      ),
+      ...UNAVAILABLE_ERROR,
+      500: boundaryErrorJson('The boundaries could not be read (internal_error)'),
+    },
+  }),
+  queryValidator(BoundariesQuery),
+  async (c) => {
+    const kind = c.req.param('kind');
+    if (!KINDS.has(kind)) {
+      return fail(
+        c,
+        400,
+        'validation_failed',
+        `kind: ${KIND_ISSUE}`,
+        { error: 'unknown_kind', kinds: [...KINDS] },
+        { issues: [{ path: 'kind', message: KIND_ISSUE }] },
+      );
+    }
+
+    const bbox = parseBbox(c.req.query('bbox'));
+    if (NEEDS_BBOX.has(kind) && !bbox) {
+      const issue = `required for ${kind}, as west,south,east,north`;
+      return fail(
+        c,
+        400,
+        'validation_failed',
+        `bbox: ${issue}`,
+        { error: 'bbox_required', kind },
+        { issues: [{ path: 'bbox', message: issue }] },
+      );
+    }
+
+    const limitRaw = Number(c.req.query('limit'));
+    const limit = Number.isFinite(limitRaw)
+      ? Math.min(Math.max(1, Math.floor(limitRaw)), MAX_LIMIT)
+      : DEFAULT_LIMIT;
+
+    // Snap the viewport to the cache's own grid, so a request that differs
+    // by metres is answered from memory rather than re-queried. Snapping
+    // outwards keeps the answer a superset of what was asked for.
+    const snapped: [number, number, number, number] | null = bbox
+      ? [
+          Math.floor(bbox[0] * 20) / 20,
+          Math.floor(bbox[1] * 20) / 20,
+          Math.ceil(bbox[2] * 20) / 20,
+          Math.ceil(bbox[3] * 20) / 20,
+        ]
+      : null;
+    const key = viewKey(kind, snapped, limit);
+    const cached = cacheGet(key);
+    if (cached) {
+      return c.body(cached, 200, {
+        'Content-Type': 'application/json; charset=UTF-8',
+        'Cache-Control': 'private, max-age=3600',
+        'X-Cache': 'hit',
+      });
+    }
+
+    const pool = await getPool();
+    if (!pool) {
+      return fail(c, 503, 'service_unavailable', 'The boundaries database is not available just now.', {
+        error: 'database unavailable',
+      });
+    }
+
+    try {
+      // Ask for one more than the cap so "there were more" is knowable
+      // without a second COUNT.
+      const params: unknown[] = [kind, limit + 1];
+      let where = 'kind = $1';
+      if (snapped) {
+        const [w, s, e, n] = snapped;
+        // Standard box overlap: two boxes miss only if one is wholly left,
+        // right, above or below the other.
+        where += ' AND min_lon <= $3 AND max_lon >= $4 AND min_lat <= $5 AND max_lat >= $6';
+        params.push(e, w, n, s);
+      }
+      const { rows } = await pool.query<BoundaryRow>(
+        `SELECT ext_id, name, short_name, state, class, geom
+           FROM boundaries
+          WHERE ${where}
+          ORDER BY (max_lat - min_lat) * (max_lon - min_lon) DESC
+          LIMIT $2`,
+        params,
+      );
+
+      const truncated = rows.length > limit;
+      const kept = truncated ? rows.slice(0, limit) : rows;
+      // Drawn at the view's own resolution — see the note at the top. A
+      // shape that simplifies away entirely was too small to see. The
+      // tolerance comes off the snapped box for the same reason the query
+      // does: the cached body has to match its key.
+      const tol = toleranceFor(snapped);
+      const features = [];
+      for (const r of kept) {
+        const geom = simplifyGeometry(r.geom, tol);
+        if (geom) features.push(toFeature(r, kind, geom));
+      }
+      // The geometry is the stored GeoJSON (or a simplified copy), typed
+      // unknown here; the rest of the body is checked against Boundaries.
+      const body = JSON.stringify({
+        type: 'FeatureCollection',
+        features,
+        count: features.length,
+        // Largest-first ordering means a truncated response still shows the
+        // shapes that dominate the view, and the caller can say so.
+        truncated,
+      } satisfies Omit<z.infer<typeof Boundaries>, 'features'> & { features: unknown[] });
+      cachePut(key, body);
+      return c.body(body, 200, {
+        'Content-Type': 'application/json; charset=UTF-8',
+        // The data only moves when the import is re-run, so let the browser
+        // keep it rather than re-asking on every pan back.
+        'Cache-Control': 'private, max-age=3600',
+        'X-Cache': 'miss',
+      });
+    } catch (err) {
+      log.warn({ err: (err as Error).message, kind }, 'boundaries query failed');
+      return fail(c, 500, 'internal_error', 'The boundaries could not be read.', { error: 'query_failed' });
+    }
+  },
+);
 
 /**
  * Which boundary of `kind` contains this point, or null.

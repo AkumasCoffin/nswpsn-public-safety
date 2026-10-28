@@ -63,12 +63,15 @@ export const DOCUMENTATION = {
   tags: [
     { name: 'Incidents', description: 'Fire, rescue and ambulance incidents happening now' },
     { name: 'Warnings', description: 'Public warnings: emergency warnings, fire danger, weather' },
-    { name: 'Hazards', description: 'Hazards on the ground: road incidents and works, satellite hotspots' },
+    { name: 'Hazards', description: 'Hazards on the ground and in the water: road incidents and works, satellite hotspots, beach conditions, shark reports' },
+    { name: 'Outages', description: 'Electricity outages, unplanned and planned' },
+    { name: 'Weather', description: 'Current conditions, forecasts and radar' },
     { name: 'Cameras', description: 'Traffic, airport and fire-tower cameras' },
     { name: 'Transport', description: 'Public transport vehicles, stops, lines and alerts' },
     { name: 'Aircraft', description: 'Aircraft positions and tracks from ADS-B' },
     { name: 'Ships', description: 'Vessel positions from AIS' },
-    { name: 'Reference', description: 'Slow-changing reference data' },
+    { name: 'News', description: 'Headlines from news outlets' },
+    { name: 'Reference', description: 'Slow-changing reference data: boundaries and agencies' },
     { name: 'Service', description: 'Whether the API is up' },
   ],
   components: {
