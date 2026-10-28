@@ -10692,7 +10692,7 @@
           "Outages"
         ],
         "summary": "Ausgrid outages",
-        "description": "Electricity outages on Ausgrid's network, from Ausgrid's public outage map, polled every two minutes when polling is on. Polling is off for now because Ausgrid's outage map service has stopped answering, so this is empty or out of date until it returns.",
+        "description": "Electricity outages on Ausgrid's network, from Ausgrid's public outage map, polled every two minutes when polling is on. Polling is off for now because Ausgrid's outage map service has stopped answering, so this is empty until it returns.",
         "responses": {
           "200": {
             "description": "The outages and their areas",
@@ -10773,7 +10773,7 @@
           "Outages"
         ],
         "summary": "Ausgrid outage counts",
-        "description": "Ausgrid's own outage counters, as its public outage map publishes them, polled every two minutes when polling is on. Polling is off for now because Ausgrid's outage map service has stopped answering, so this is empty or out of date until it returns.",
+        "description": "Ausgrid's own outage counters, as its public outage map publishes them, polled every two minutes when polling is on. Polling is off for now because Ausgrid's outage map service has stopped answering, so this is empty until it returns.",
         "responses": {
           "200": {
             "description": "Ausgrid's counters, or null",

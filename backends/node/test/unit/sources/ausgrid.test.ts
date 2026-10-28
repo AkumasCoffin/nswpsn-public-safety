@@ -120,3 +120,15 @@ describe('fetchAusgridOutages', () => {
     expect(out).toEqual({ Markers: [], Polygons: [] });
   });
 });
+
+describe('register() with polling off (the default)', () => {
+  it('drops the snapshots loaded from disk, so stale outages are never served as current', async () => {
+    const { liveStore } = await import('../../../src/store/live.js');
+    const { register } = await import('../../../src/sources/ausgrid.js');
+    liveStore.set('ausgrid', { Markers: [{ OutageId: 1 }], Polygons: [] });
+    liveStore.set('ausgrid_stats', { total: 3 });
+    register();
+    expect(liveStore.get('ausgrid')).toBeNull();
+    expect(liveStore.get('ausgrid_stats')).toBeNull();
+  });
+});

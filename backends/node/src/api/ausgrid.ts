@@ -92,7 +92,7 @@ const AusgridStats = z.unknown().meta({
 });
 
 const POLLING_OFF =
-  "Polling is off for now because Ausgrid's outage map service has stopped answering, so this is empty or out of date until it returns.";
+  "Polling is off for now because Ausgrid's outage map service has stopped answering, so this is empty until it returns.";
 
 // ---------------------------------------------------------------------------
 // Routes
