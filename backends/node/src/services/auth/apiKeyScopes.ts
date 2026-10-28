@@ -193,7 +193,72 @@ export function needScopes(need: RouteNeed): string[] {
 function dimAllows(held: ReadonlySet<string>, dim: ScopeDim, value: string): boolean {
   if (held.has(`${dim}:*`)) return true;
   if (dim === 'window' && value === 'any') return [...held].some((s) => s.startsWith('window:'));
+  // A route that spans that dimension (stored history spans sources and
+  // types): any scope in it gets in, and the route serves only what the
+  // key's scopes cover (historySourcesFor below).
+  if (value === '*') return [...held].some((s) => s.startsWith(`${dim}:`));
   return held.has(`${dim}:${value}`);
+}
+
+// ---------------------------------------------------------------------------
+// Stored history: which archived sources a key may read.
+// ---------------------------------------------------------------------------
+
+/**
+ * Every `source` value the archive stores (archive_* tables, the column
+ * /api/data/history filters on), and the scope source and type it is the
+ * history of. A key reads an archived source's records when its scopes cover
+ * that source and type, and window:history — the same rule as a live route.
+ *
+ * Left out on purpose, so no key ever reads them through history:
+ * `user_incident` (people's own reports, carrying user ids),
+ * `radio_summary` (served by /api/summaries under its own scope), and the
+ * retired `essential_energy_cancelled`.
+ */
+export const HISTORY_SOURCES: Readonly<Record<string, { source: string; type: string }>> = {
+  rfs: { source: 'rfs', type: 'incidents' },
+  nt_fire: { source: 'ntfrs', type: 'incidents' },
+  qld_fire: { source: 'qfd', type: 'incidents' },
+  qld_warning: { source: 'qfd', type: 'warnings' },
+  vic_emergency: { source: 'vic', type: 'incidents' },
+  wa_incident: { source: 'dfes', type: 'incidents' },
+  wa_warning: { source: 'dfes', type: 'warnings' },
+  sa_cfs: { source: 'safire', type: 'incidents' },
+  sa_mfs: { source: 'safire', type: 'incidents' },
+  act_ambulance: { source: 'actas', type: 'incidents' },
+  bom_land: { source: 'bom', type: 'warnings' },
+  bom_marine: { source: 'bom', type: 'warnings' },
+  traffic_incident: { source: 'livetraffic', type: 'hazards' },
+  traffic_roadwork: { source: 'livetraffic', type: 'hazards' },
+  traffic_flood: { source: 'livetraffic', type: 'hazards' },
+  traffic_fire: { source: 'livetraffic', type: 'hazards' },
+  traffic_majorevent: { source: 'livetraffic', type: 'hazards' },
+  traffic_alpine: { source: 'livetraffic', type: 'hazards' },
+  traffic_lga: { source: 'livetraffic', type: 'hazards' },
+  traffic_works: { source: 'livetraffic', type: 'hazards' },
+  endeavour_current: { source: 'endeavour', type: 'outages' },
+  endeavour_planned: { source: 'endeavour', type: 'outages' },
+  endeavour_maintenance: { source: 'endeavour', type: 'outages' },
+  ausgrid: { source: 'ausgrid', type: 'outages' },
+  essential_current: { source: 'essential', type: 'outages' },
+  essential_planned: { source: 'essential', type: 'outages' },
+  essential_future: { source: 'essential', type: 'outages' },
+  dorsal: { source: 'dorsal', type: 'hazards' },
+  pager: { source: 'pager', type: 'pager' },
+};
+
+/**
+ * The archived sources a key in the new form may read through stored history:
+ * those whose scope source and type it covers, when it holds window:history.
+ * Empty for a `read` key — the old feed list never included history.
+ */
+export function historySourcesFor(scopes: readonly string[]): string[] {
+  if (isLegacyScopes(scopes)) return [];
+  const held = new Set(scopes);
+  if (!dimAllows(held, 'window', 'history')) return [];
+  return Object.entries(HISTORY_SOURCES)
+    .filter(([, s]) => dimAllows(held, 'source', s.source) && dimAllows(held, 'type', s.type))
+    .map(([archived]) => archived);
 }
 
 /** Does a key in the new form satisfy this need? */
@@ -291,6 +356,8 @@ const COMPOSED_HANDLER = '__COMPOSED_HANDLER';
 type ScopedHandler = MiddlewareHandler & { [SCOPE]?: RouteNeed };
 
 const declared = new Map<string, ScopeNeed>();
+/** Whether a route spanning sources (stored history) has been declared. */
+let spanning = false;
 
 /**
  * Declare what a route serves, as its first middleware:
@@ -312,13 +379,26 @@ export function scoped(need: RouteNeed): MiddlewareHandler {
     await next();
   };
   mw[SCOPE] = need;
-  if (!('anyKey' in need)) declared.set(`${need.source}|${need.type}|${need.window}`, need);
+  if ('anyKey' in need) return mw;
+  if (need.source === '*' || need.type === '*') spanning = true;
+  else declared.set(`${need.source}|${need.type}|${need.window}`, need);
   return mw;
 }
 
-/** Every need declared on a route so far — the combinations a key can actually use. */
+/**
+ * Every need declared on a route so far — the combinations a key can actually
+ * use. A route spanning sources (stored history) stands for the history of
+ * each archived source, so it is listed as those, each a plain combination a
+ * scope picker can match.
+ */
 export function declaredNeeds(): ScopeNeed[] {
-  return [...declared.values()];
+  const out = new Map(declared);
+  if (spanning) {
+    for (const s of Object.values(HISTORY_SOURCES)) {
+      out.set(`${s.source}|${s.type}|history`, { source: s.source, type: s.type, window: 'history' });
+    }
+  }
+  return [...out.values()];
 }
 
 /** The need a handler declares, if it is a scoped() label (through Hono's wrapper). */
@@ -388,10 +468,13 @@ export function keyMayRequest(
     };
   }
   if (scopesSatisfy(scopes, route.need)) return { ok: true };
+  // A spanning dimension (`source:*` on stored history) is met by any scope
+  // in it, so it is never what is missing — name only what is.
+  const missing = needScopes(route.need).filter((s) => !s.endsWith(':*'));
   return {
     ok: false,
     error: 'api_key_scope_forbidden',
-    message: `This key's scopes do not cover this endpoint. It needs ${needScopes(route.need).join(', ')}.`,
+    message: `This key's scopes do not cover this endpoint. It needs ${missing.join(', ')}.`,
   };
 }
 

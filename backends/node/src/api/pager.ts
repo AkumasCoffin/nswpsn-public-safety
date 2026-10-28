@@ -8,14 +8,34 @@
  * against data_history. Without this DB pass, earlier revisions only
  * served the latest 100 in-memory messages and silently no-op'd
  * `?capcode=` / `?incident_id=` filters.
+ *
+ * Also served at /api/v1/ (server.ts mirrors it). The body is GeoJSON, so it
+ * goes out bare on both paths. They part only when the database gives no
+ * answer: the old path falls back to the poller's last snapshot (the latest
+ * hundred messages), as it always has; /api/v1/ answers 503 instead, rather
+ * than pass a partial list off as the window asked for.
  */
 import { Hono } from 'hono';
+import { z } from 'zod';
+import { describeRoute } from 'hono-openapi';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { pagerSnapshot, stripLeadingPagerDate, type PagerMessage } from '../sources/pager.js';
 import { inAuBbox } from '../sources/adsb.js';
 import { SwrCache } from '../services/swrCache.js';
 import { scoped } from '../services/auth/apiKeyScopes.js';
+import { fail, geo, isV1 } from './v1/respond.js';
+import {
+  assertShape,
+  feature,
+  featureCollection,
+  GATED_ERRORS,
+  okJson,
+  PointGeometry,
+  queryValidator,
+  UNAVAILABLE_ERROR,
+  type SameShape,
+} from './v1/schemas.js';
 
 export const pagerRouter = new Hono();
 
@@ -81,6 +101,86 @@ interface PagerFeature {
     lon: number;
   };
 }
+
+// ---------------------------------------------------------------------------
+// What /api/v1/ documents (api/v1/openapi.ts)
+// ---------------------------------------------------------------------------
+
+const PagerHitProperties = z.object({
+  id: z.string().describe("Pagermon's id for the message, as a string"),
+  pager_msg_id: z
+    .union([z.string(), z.number()])
+    .nullable()
+    .describe("The same id as Pagermon gives it, in its own type"),
+  incident_id: z
+    .string()
+    .nullable()
+    .describe(
+      'The incident number in the message (e.g. 26-121910 or 0053-6653, or an FRNSW turnout number such as 146685-28072026). A message with none is given one built from its time and capcode, noid-<unix seconds>-<capcode>.',
+    ),
+  capcode: z.string().nullable().describe('The pager address (capcode) the message was sent to'),
+  alias: z
+    .string()
+    .nullable()
+    .describe("A name for the capcode, usually the brigade or unit: Pagermon's, or else AusAware's own capcode list's; empty when neither has one"),
+  agency: z
+    .string()
+    .nullable()
+    .describe(
+      "The service the message is for: NSWRFS, FRNSW, NSWAS, SES, POLICE or VRA, from Pagermon's tag or inferred from the message; any other tag Pagermon gives is passed through. Empty or null when unknown.",
+    ),
+  message: z.string().describe('The message text, with any leading dispatch date removed'),
+  type: z.string().describe('The incident type read from the message, e.g. "Bush Fire" or "MVA"; empty when it could not be read'),
+  call_class: z
+    .string()
+    .describe('The call class that follows the type, e.g. FIRECALL or INCIDENT CALL; empty when there is none'),
+  is_stop: z.boolean().describe('true when the message is a stop message or stand-down (STOP MESSAGE, STAND DOWN, NNTA)'),
+  incident_time: z
+    .string()
+    .nullable()
+    .describe("The message's time as Sydney local time, YYYY-MM-DDTHH:mm:ss with no offset"),
+  fetched_at: z.number().int().describe('When AusAware recorded the message, unix seconds'),
+  timestamp: z.number().nullable().describe("The message's time from Pagermon, unix seconds"),
+  is_live: z.boolean().describe('Always true'),
+  lat: z.number(),
+  lon: z.number(),
+});
+
+const PagerHits = featureCollection(feature(PointGeometry, PagerHitProperties), {
+  hours: z.number().int().describe('The window served, in hours, after the default and the 168-hour cap'),
+}).meta({ id: 'PagerHits' });
+assertShape<SameShape<z.infer<typeof PagerHits>, PagerHitsBody>>();
+
+// Read by hand in the handler, exactly as it always was; the validator only
+// describes the parameters and never refuses (every field falls back).
+const PagerHitsQuery = z.object({
+  hours: z.coerce
+    .number()
+    .optional()
+    .catch(undefined)
+    .describe(
+      "How far back to look, in hours, by each message's time: read as a whole number (12.5 is 12), and held to at most 168 (seven days). Default 24, which is also what zero, a negative number or something that is not a number reads as.",
+    ),
+  limit: z.coerce
+    .number()
+    .optional()
+    .catch(undefined)
+    .describe(
+      'The most messages to answer, newest first: read as a whole number, and held to at most 2,000. Default 500, which is also what zero, a negative number or something that is not a number reads as.',
+    ),
+  capcode: z
+    .string()
+    .optional()
+    .catch(undefined)
+    .describe('Only messages sent to this capcode, matched exactly. Empty means no filter.'),
+  incident_id: z
+    .string()
+    .optional()
+    .catch(undefined)
+    .describe('Only messages with this incident number, matched exactly. Empty means no filter.'),
+});
+
+const PAGER_UNAVAILABLE = 'The pager message history could not be read just now; try again shortly.';
 
 interface PagerArchiveRow {
   source_id: string | null;
@@ -279,121 +379,149 @@ async function fetchPagerHitsFromDb(opts: {
   return { type: 'FeatureCollection', features, count: features.length, hours };
 }
 
-pagerRouter.get('/api/pager/hits', SCOPE_PAGER, async (c) => {
-  const url = new URL(c.req.url);
-  const hoursParam = url.searchParams.get('hours');
-  const limitParam = url.searchParams.get('limit');
-  const capcode = url.searchParams.get('capcode');
-  const incidentId = url.searchParams.get('incident_id');
+pagerRouter.get(
+  '/api/pager/hits',
+  SCOPE_PAGER,
+  describeRoute({
+    operationId: 'getPagerHits',
+    tags: ['Pager'],
+    summary: 'Pager messages on the map',
+    description:
+      "Emergency-service pager messages that carry a map position, newest first, as a GeoJSON FeatureCollection with one feature per message. AusAware receives them through its own Pagermon relay, reads it every minute and stores each message; this endpoint reads that store. A message without coordinates of its own may take the position of another message about the same incident; messages with no position at all (FRNSW turnout pages, for example) are left out. Answers are cached for each combination of parameters and refreshed in the background once they are a minute old, so one can be a few minutes behind. When the store cannot be read the answer is 503; try again shortly.",
+    responses: {
+      ...okJson(PagerHits, 'A GeoJSON FeatureCollection of pager messages'),
+      ...GATED_ERRORS,
+      ...UNAVAILABLE_ERROR,
+    },
+  }),
+  queryValidator(PagerHitsQuery),
+  async (c) => {
+    const url = new URL(c.req.url);
+    const hoursParam = url.searchParams.get('hours');
+    const limitParam = url.searchParams.get('limit');
+    const capcode = url.searchParams.get('capcode');
+    const incidentId = url.searchParams.get('incident_id');
 
-  let hours = Number.parseInt(hoursParam ?? '24', 10);
-  if (!Number.isFinite(hours) || hours <= 0) hours = 24;
-  hours = Math.min(hours, 168); // 7-day cap, matches python.
+    let hours = Number.parseInt(hoursParam ?? '24', 10);
+    if (!Number.isFinite(hours) || hours <= 0) hours = 24;
+    hours = Math.min(hours, 168); // 7-day cap, matches python.
 
-  let limit = Number.parseInt(limitParam ?? '500', 10);
-  if (!Number.isFinite(limit) || limit <= 0) limit = 500;
-  limit = Math.min(limit, 2000);
+    let limit = Number.parseInt(limitParam ?? '500', 10);
+    if (!Number.isFinite(limit) || limit <= 0) limit = 500;
+    limit = Math.min(limit, 2000);
 
-  // Cache key — same combination of params returns the same body, so
-  // the bot's repeated calls coalesce onto a single DB read per minute.
-  const key = `h${hours}|l${limit}|c${capcode ?? ''}|i${incidentId ?? ''}`;
-  const inDbBackoff = Date.now() < pagerHitsDbBackoffUntil;
+    // Cache key — same combination of params returns the same body, so
+    // the bot's repeated calls coalesce onto a single DB read per minute.
+    const key = `h${hours}|l${limit}|c${capcode ?? ''}|i${incidentId ?? ''}`;
+    const inDbBackoff = Date.now() < pagerHitsDbBackoffUntil;
 
-  // Try-DB wrapper that tracks failures so we can back off.
-  const tryRefresh = (): Promise<PagerHitsBody> => {
-    return fetchPagerHitsFromDb({ hours, limit, capcode, incidentId }).catch((err) => {
-      pagerHitsDbBackoffUntil = Date.now() + PAGER_HITS_DB_BACKOFF_MS;
-      throw err;
-    });
-  };
-  const swrOpts = {
-    fresh: PAGER_HITS_FRESH_MS,
-    stale: PAGER_HITS_STALE_MS,
-    onError: (err: unknown) =>
-      log.warn(
-        { err: (err as Error).message },
-        'pager/hits: archive_misc refresh failed; backing off 5 min',
-      ),
-  };
-
-  // Diagnostic: tag every response with the branch that served it and the row
-  // count, so "why does the map show N pins at this window" is answerable from
-  // the server log alone. `snapshot-*` lines are the degraded paths to watch for.
-  const served = (src: string, count: number, extra?: Record<string, unknown>) =>
-    log.info({ src, hours, count, key, ...extra }, `pager/hits served (${src})`);
-
-  // Cold path: no cached value for this window yet. The query is now
-  // partition-pruned and typically a few ms (was 30 s+, which is why this used
-  // to return the tiny LiveStore snapshot and only warm the cache in the
-  // background — that made the FIRST request for every slider value show ~3
-  // incidents until a second pass warmed the key). Now we AWAIT the DB and serve
-  // real data, guarded by a short timeout: if the DB is genuinely slow we fall
-  // back to the snapshot for THIS request while the background refresh (still in
-  // flight inside .get, since SwrCache coalesces + keeps running) warms the key.
-  // Skip the DB entirely during the post-failure backoff window.
-  if (!pagerHitsCache.has(key)) {
-    if (!inDbBackoff) {
-      const COLD_DB_WAIT_MS = 4000;
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      // .catch → null so a late rejection (after the timeout already won the
-      // race) can't surface as an unhandled rejection; backoff is set by
-      // tryRefresh either way.
-      const dbPromise = pagerHitsCache
-        .get(key, tryRefresh, swrOpts)
-        .then((r) => r.value)
-        .catch(() => null);
-      const timeout = new Promise<null>((resolve) => {
-        timer = setTimeout(() => resolve(null), COLD_DB_WAIT_MS);
+    // Try-DB wrapper that tracks failures so we can back off.
+    const tryRefresh = (): Promise<PagerHitsBody> => {
+      return fetchPagerHitsFromDb({ hours, limit, capcode, incidentId }).catch((err) => {
+        pagerHitsDbBackoffUntil = Date.now() + PAGER_HITS_DB_BACKOFF_MS;
+        throw err;
       });
-      try {
-        const body = await Promise.race([dbPromise, timeout]);
-        if (body) {
-          served('db-cold', body.count);
-          return c.json(body);
+    };
+    const swrOpts = {
+      fresh: PAGER_HITS_FRESH_MS,
+      stale: PAGER_HITS_STALE_MS,
+      onError: (err: unknown) =>
+        log.warn(
+          { err: (err as Error).message },
+          'pager/hits: archive_misc refresh failed; backing off 5 min',
+        ),
+    };
+
+    // Diagnostic: tag every response with the branch that served it and the row
+    // count, so "why does the map show N pins at this window" is answerable from
+    // the server log alone. `snapshot-*` lines are the degraded paths to watch for.
+    const served = (src: string, count: number, extra?: Record<string, unknown>) =>
+      log.info({ src, hours, count, key, ...extra }, `pager/hits served (${src})`);
+
+    // Cold path: no cached value for this window yet. The query is now
+    // partition-pruned and typically a few ms (was 30 s+, which is why this used
+    // to return the tiny LiveStore snapshot and only warm the cache in the
+    // background — that made the FIRST request for every slider value show ~3
+    // incidents until a second pass warmed the key). Now we AWAIT the DB and serve
+    // real data, guarded by a short timeout: if the DB is genuinely slow we fall
+    // back to the snapshot for THIS request while the background refresh (still in
+    // flight inside .get, since SwrCache coalesces + keeps running) warms the key.
+    // Skip the DB entirely during the post-failure backoff window.
+    if (!pagerHitsCache.has(key)) {
+      if (!inDbBackoff) {
+        const COLD_DB_WAIT_MS = 4000;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        // .catch → null so a late rejection (after the timeout already won the
+        // race) can't surface as an unhandled rejection; backoff is set by
+        // tryRefresh either way.
+        const dbPromise = pagerHitsCache
+          .get(key, tryRefresh, swrOpts)
+          .then((r) => r.value)
+          .catch(() => null);
+        const timeout = new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), COLD_DB_WAIT_MS);
+        });
+        try {
+          const body = await Promise.race([dbPromise, timeout]);
+          if (body) {
+            served('db-cold', body.count);
+            return geo(c, body);
+          }
+        } finally {
+          if (timer) clearTimeout(timer);
         }
-      } finally {
-        if (timer) clearTimeout(timer);
+      }
+      // No answer from the database: it failed, it is slow (the refresh keeps
+      // running and warms the key), or it failed within the backoff window.
+      // The old path serves the snapshot, as it always has; v1 says so instead.
+      if (isV1(c)) {
+        served(inDbBackoff ? 'unavailable-backoff' : 'unavailable-cold-slow', 0);
+        return fail(c, 503, 'service_unavailable', PAGER_UNAVAILABLE);
+      }
+      const features = snapshotFallback(hours, limit, capcode, incidentId);
+      served(inDbBackoff ? 'snapshot-backoff' : 'snapshot-cold-slow', features.length);
+      return geo(c, {
+        type: 'FeatureCollection',
+        features,
+        count: features.length,
+        hours,
+      } satisfies PagerHitsBody);
+    }
+
+    // Warm path: cache has a value. If we're in DB backoff, skip the
+    // SwrCache.get() (which would trigger a background refresh past
+    // `fresh`) and read the cached body directly. Otherwise let SwrCache
+    // do its normal stale-while-revalidate dance.
+    if (inDbBackoff) {
+      const peeked = pagerHitsCache._peek(key);
+      if (peeked) {
+        served('cache-backoff', peeked.value.count);
+        return geo(c, peeked.value);
       }
     }
-    const features = snapshotFallback(hours, limit, capcode, incidentId);
-    served(inDbBackoff ? 'snapshot-backoff' : 'snapshot-cold-slow', features.length);
-    return c.json({
-      type: 'FeatureCollection',
-      features,
-      count: features.length,
-      hours,
-    });
-  }
-
-  // Warm path: cache has a value. If we're in DB backoff, skip the
-  // SwrCache.get() (which would trigger a background refresh past
-  // `fresh`) and read the cached body directly. Otherwise let SwrCache
-  // do its normal stale-while-revalidate dance.
-  if (inDbBackoff) {
-    const peeked = pagerHitsCache._peek(key);
-    if (peeked) {
-      served('cache-backoff', peeked.value.count);
-      return c.json(peeked.value);
+    try {
+      const { value, warming } = await pagerHitsCache.get(key, tryRefresh, swrOpts);
+      // Only log the interesting warm case (a stale-while-revalidate refresh);
+      // plain fresh hits fire ~1/s from the map poll and would bury the log.
+      if (warming) served('cache-stale-revalidate', value.count);
+      return geo(c, value);
+    } catch (err) {
+      log.warn(
+        { err: (err as Error).message },
+        'pager/hits: cache miss + DB refetch failed; falling back to snapshot',
+      );
+      if (isV1(c)) {
+        served('unavailable-error', 0);
+        return fail(c, 503, 'service_unavailable', PAGER_UNAVAILABLE);
+      }
+      const features = snapshotFallback(hours, limit, capcode, incidentId);
+      served('snapshot-error', features.length);
+      return geo(c, {
+        type: 'FeatureCollection',
+        features,
+        count: features.length,
+        hours,
+      } satisfies PagerHitsBody);
     }
-  }
-  try {
-    const { value, warming } = await pagerHitsCache.get(key, tryRefresh, swrOpts);
-    // Only log the interesting warm case (a stale-while-revalidate refresh);
-    // plain fresh hits fire ~1/s from the map poll and would bury the log.
-    if (warming) served('cache-stale-revalidate', value.count);
-    return c.json(value);
-  } catch (err) {
-    log.warn(
-      { err: (err as Error).message },
-      'pager/hits: cache miss + DB refetch failed; falling back to snapshot',
-    );
-    const features = snapshotFallback(hours, limit, capcode, incidentId);
-    served('snapshot-error', features.length);
-    return c.json({
-      type: 'FeatureCollection',
-      features,
-      count: features.length,
-      hours,
-    });
-  }
-});
+  },
+);

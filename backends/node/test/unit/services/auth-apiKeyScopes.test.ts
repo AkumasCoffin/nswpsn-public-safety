@@ -7,9 +7,12 @@ import { describe, it, expect } from 'vitest';
 import { Hono } from 'hono';
 import {
   ANY_KEY,
+  HISTORY_SOURCES,
   SCOPE_SOURCES,
+  SCOPE_TYPES,
   canonicalScopes,
   declaredNeeds,
+  historySourcesFor,
   isLegacyScopes,
   keyCanRead,
   keyMayRequest,
@@ -251,5 +254,62 @@ describe('the sources stay aligned with the alert catalog', () => {
       .map((p) => p.key)
       .filter((k) => !NOT_KEY_SOURCES.has(k) && !Object.prototype.hasOwnProperty.call(SCOPE_SOURCES, k));
     expect(missing).toEqual([]);
+  });
+
+  it('every archived source the catalog names is readable through history under its provider', () => {
+    // Never key-readable: people's own reports, and summaries (their own route).
+    const NEVER = new Set(['user_incident', 'radio_summary']);
+    for (const t of catalog.types) {
+      if (!t.archiveSource || NEVER.has(t.archiveSource) || NOT_KEY_SOURCES.has(t.provider)) continue;
+      expect(HISTORY_SOURCES[t.archiveSource], t.archiveSource).toBeDefined();
+      expect(HISTORY_SOURCES[t.archiveSource]!.source, t.archiveSource).toBe(t.provider);
+    }
+    for (const never of NEVER) expect(HISTORY_SOURCES[never]).toBeUndefined();
+  });
+
+  it('every history source names a real scope source and type', () => {
+    for (const [archived, s] of Object.entries(HISTORY_SOURCES)) {
+      expect(Object.prototype.hasOwnProperty.call(SCOPE_SOURCES, s.source), archived).toBe(true);
+      expect(Object.prototype.hasOwnProperty.call(SCOPE_TYPES, s.type), archived).toBe(true);
+    }
+  });
+});
+
+describe('stored history: a route spanning sources, narrowed per key', () => {
+  const HISTORY: RouteNeed = { source: '*', type: '*', window: 'history' };
+
+  it('any source and type scope gets in; the window must still be history', () => {
+    expect(scopesSatisfy(['source:rfs', 'type:incidents', 'window:history'], HISTORY)).toBe(true);
+    expect(scopesSatisfy(['source:pager', 'type:outages', 'window:*'], HISTORY)).toBe(true);
+    expect(scopesSatisfy(['source:rfs', 'type:incidents', 'window:live'], HISTORY)).toBe(false);
+  });
+
+  it('a refusal names only what is missing', () => {
+    const r = keyMayRequest(RFS_LIVE, 'GET', '/api/v1/data/history', { matched: true, need: HISTORY });
+    expect(r).toEqual({
+      ok: false,
+      error: 'api_key_scope_forbidden',
+      message: "This key's scopes do not cover this endpoint. It needs window:history.",
+    });
+  });
+
+  it('historySourcesFor: the archived sources whose scope source and type the key covers', () => {
+    expect(historySourcesFor(['source:rfs', 'type:incidents', 'window:history'])).toEqual(['rfs']);
+    expect(historySourcesFor(['source:qfd', 'type:*', 'window:history']).sort()).toEqual(['qld_fire', 'qld_warning']);
+    expect(historySourcesFor(['source:qfd', 'type:warnings', 'window:*'])).toEqual(['qld_warning']);
+    expect(historySourcesFor(['source:*', 'type:outages', 'window:history']).sort()).toEqual(
+      ['ausgrid', 'endeavour_current', 'endeavour_maintenance', 'endeavour_planned', 'essential_current', 'essential_future', 'essential_planned'],
+    );
+    expect(historySourcesFor(['source:rfs', 'type:incidents', 'window:live'])).toEqual([]);
+    expect(historySourcesFor(['read'])).toEqual([]);
+    expect(historySourcesFor(['source:*', 'type:*', 'window:*'])).not.toContain('user_incident');
+  });
+
+  it('declared, it lists each archived source as a history combination — never a `*` — for scope pickers', () => {
+    scoped(HISTORY);
+    const needs = declaredNeeds();
+    expect(needs.some((n) => n.source === '*' || n.type === '*')).toBe(false);
+    expect(needs).toContainEqual({ source: 'rfs', type: 'incidents', window: 'history' });
+    expect(needs).toContainEqual({ source: 'pager', type: 'pager', window: 'history' });
   });
 });

@@ -130,6 +130,14 @@ describe('filterSpecForKey', () => {
     expect(both).toBe(ops(fresh).length);
   });
 
+  it('stored history: one source scope with window:history is enough to see it', () => {
+    const seen = ops(filterSpecForKey(fresh, ['source:rfs', 'type:incidents', 'window:history'])).map((o) => o.path);
+    expect(seen).toContain('/api/v1/data/history');
+    expect(seen).toContain('/api/v1/data/history/incident/{source}/{source_id}');
+    expect(seen).not.toContain('/api/v1/adsb/history'); // another source
+    expect(seen).not.toContain('/api/v1/rfs/incidents'); // live
+  });
+
   it('a `read` key sees the feeds on the old list', () => {
     const seen = ops(filterSpecForKey(fresh, ['read'])).map((o) => o.path);
     expect(seen).toContain('/api/v1/bom/warnings');

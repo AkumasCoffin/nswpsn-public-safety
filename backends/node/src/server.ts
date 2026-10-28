@@ -419,12 +419,15 @@ export function createApp() {
     '/api/weather/current', '/api/weather/radar', '/api/weather/grid/manifest', '/api/weather/grid', '/api/weather/point',
   ]);
   app.route('/', pagerRouter);
+  mirror(app, pagerRouter, ['/api/pager/hits']);
   app.route('/', firmsRouter);
   mirror(app, firmsRouter, ['/api/firms/hotspots']);
   app.route('/', adsbRouter);
   // Not /api/adsb/receivers: node status, never part of the public API.
   mirror(app, adsbRouter, ['/api/adsb/aircraft', '/api/adsb/history', '/api/adsb/trails', '/api/adsb/photo/:hex']);
   app.route('/', radioPublicRouter);
+  // Not /api/radio/monitored-sites (node status) or PATCH grn-sites/:id (staff edit).
+  mirror(app, radioPublicRouter, ['/api/radio/grn-sites']);
   // Power + heartbeat + stats
   app.route('/', endeavourRouter);
   // Not /current/raw or /future/raw: byte-for-byte the same as /current/all and /future/all.
@@ -458,6 +461,11 @@ export function createApp() {
   app.route('/', apiKeysRouter);
   // Data-history archive reads (W6)
   app.route('/', dataHistoryRouter);
+  // Not /sources or /stats: counts across every source, for this site's own
+  // pages; no key reaches them.
+  mirror(app, dataHistoryRouter, [
+    '/api/data/history', '/api/data/history/filters', '/api/data/history/incident/:source/:source_id',
+  ]);
   // Aviation cameras + news RSS + summaries (W7)
   app.route('/', aviationRouter);
   mirror(app, aviationRouter, ['/api/aviation/cameras', '/api/aviation/cameras/:airport']);
@@ -487,7 +495,10 @@ export function createApp() {
   app.route('/', newsRouter);
   mirror(app, newsRouter, ['/api/news/rss', '/api/news/sources']);
   app.route('/', summariesRouter);
+  // Not /api/summaries/trigger: owner tooling.
+  mirror(app, summariesRouter, ['/api/summaries/latest', '/api/summaries']);
   app.route('/', transcriptsRouter);
+  mirror(app, transcriptsRouter, ['/api/rdio/calls/:callId']);
   // Centralwatch reads + dashboard 503 stubs (W8)
   app.route('/', centralwatchRouter);
   mirror(app, centralwatchRouter, ['/api/centralwatch/cameras', '/api/centralwatch/sites', '/api/centralwatch/image/:cameraId']);

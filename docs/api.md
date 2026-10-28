@@ -113,13 +113,17 @@ Staff may still grant `read`; a request cannot ask for it.
 | News | `GET /api/v1/news/rss` · `/news/sources` | `source:news type:news window:live` |
 | Reference | `GET /api/v1/boundaries/{kind}` | `source:boundaries type:boundaries`, either window |
 | Reference | `GET /api/v1/agency/extended` · `/agency/extended/{slug}` · `/boundaries/lga-names` | none — public |
+| Pager | `GET /api/v1/pager/hits` | `source:pager type:pager`, either window |
+| Radio | `GET /api/v1/radio/grn-sites` — radio sites as AusAware records them | `source:radio type:radio`, either window |
+| Radio | `GET /api/v1/summaries` · `/summaries/latest` | `source:rdio type:summaries window:history` |
+| Radio | `GET /api/v1/rdio/calls/{callId}` — one reception's transcript | `source:rdio type:transcripts window:history` |
+| History | `GET /api/v1/data/history` · `/data/history/incident/{source}/{source_id}` | `window:history`, and each source's own scopes — see [Stored history](#stored-history) |
+| History | `GET /api/v1/data/history/filters` | none — public |
 | Service | `GET /api/v1/health` · `/api/v1/status` | none — public |
 | — | `GET /api/v1/openapi.json` | any valid key |
 
-The other feeds a key can read — pager traffic, the radio site list, the
-stored history, the radio summaries and reception transcripts — are still on
-their unversioned `/api/…` paths, and keys read them there with the same
-scopes. They move to `/api/v1/` next.
+Every feed a key can read is on `/api/v1/`; each is still served at its old
+`/api/…` path as well, with the same scopes, until that path is retired.
 
 A few old paths have no `/api/v1/` twin because another endpoint already
 answers the same thing: `/api/endeavour/current/raw` and `/future/raw` (use
@@ -134,6 +138,51 @@ origin: `/api/v1/centralwatch/image/{id}` from `/api/v1/`, and the old
 `/rfs/incidents/raw` on v1 is the RFS's own `majorIncidents.json`, exactly as
 published at the last poll; the old `/api/rfs/incidents/raw` keeps its RSS-based
 shape until it is retired.
+
+### Stored history
+
+`/data/history` serves what this server stored from each source over time —
+by default one record per incident, its latest, newest first — and
+`/data/history/incident/{source}/{source_id}` every stored snapshot of one
+incident. Records carry the archived source they came from (`source`), and a
+key reads an archived source's history when its scopes cover that source's
+scope source and type, with `window:history`:
+
+| Archived `source` | Scopes |
+|---|---|
+| `rfs` | `source:rfs type:incidents` |
+| `nt_fire` | `source:ntfrs type:incidents` |
+| `qld_fire` · `qld_warning` | `source:qfd`, `type:incidents` · `type:warnings` |
+| `vic_emergency` | `source:vic type:incidents` |
+| `wa_incident` · `wa_warning` | `source:dfes`, `type:incidents` · `type:warnings` |
+| `sa_cfs` · `sa_mfs` | `source:safire type:incidents` |
+| `act_ambulance` | `source:actas type:incidents` |
+| `bom_land` · `bom_marine` | `source:bom type:warnings` |
+| `traffic_incident`, `traffic_roadwork`, `traffic_flood`, `traffic_fire`, `traffic_majorevent`, `traffic_alpine`, `traffic_lga`, `traffic_works` | `source:livetraffic type:hazards` |
+| `endeavour_current` · `endeavour_planned` · `endeavour_maintenance` | `source:endeavour type:outages` |
+| `essential_current` · `essential_planned` · `essential_future` | `source:essential type:outages` |
+| `ausgrid` | `source:ausgrid type:outages` |
+| `dorsal` | `source:dorsal type:hazards` |
+| `pager` | `source:pager type:pager` |
+
+So `source:rfs source:qfd type:incidents window:history` reads the stored
+history of `rfs` and `qld_fire`, but not `qld_warning`. Without `?source=`, a
+key's answer holds only the sources it covers; naming one it does not is a
+`403 api_key_scope_forbidden` that says which. People's own reports
+(`user_incident`) are never readable through a key. Because the answer depends
+on the key, it comes with `Cache-Control: private, no-store`.
+
+In the reference these endpoints list `source:*` and `type:*` in their
+`x-scopes`: here that means *any* source or type scope gets in, and the answer
+is narrowed to what the key covers — not that the key must hold `source:*`.
+
+Page with `cursor` (the previous page's `next_cursor`); `offset` works too, up
+to 10,000. `total` is the number of matching records, or 0 when they could not
+be counted in time, and is not computed for a page fetched by cursor. A page
+that some part of the archive did not answer in time is not served: it is a
+`503 service_unavailable` naming the tables in `details.failed_tables`, so a
+short page never reads as the whole answer. `/data/history/filters` (public)
+lists the sources, categories, statuses and states there are to filter by.
 
 ## Versions
 
@@ -183,7 +232,10 @@ does not rename them.
 **Times** take the form each feed gives them, and the reference says which:
 an ISO 8601 timestamp (with its offset), unix seconds, or text for display
 (`updated`, `issued`). Where a record has both, the ISO field (`updatedISO`,
-`acq_datetime`) is the one to compute with.
+`acq_datetime`) is the one to compute with. Times this API writes itself —
+stored history's `fetched_at_iso` and `last_seen_iso`, the filters' date range —
+are ISO 8601 in UTC (`…Z`) on `/api/v1/`. (The old paths write those as Sydney
+wall-clock time with no offset, and still do.)
 
 **Query parameters** are listed per endpoint; a parameter given twice is read by
 its first value. An optional switch such as `all=1` reads anything else as

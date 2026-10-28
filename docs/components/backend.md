@@ -187,8 +187,10 @@ immediately unless `AUSGRID_DISABLED` is explicitly set to `false`, and the
 default is `'true'` — the upstream `webapi/*` endpoints have returned 404 for
 months, and the default keeps the dead poll from firing even on a fresh deploy.
 So `ausgrid` and `ausgrid_stats` are the two declared-but-unregistered sources,
-and there is no `ausgrid` key in `/api/status`. Setting
-`AUSGRID_DISABLED=false` brings them back at 2m each.
+and there is no `ausgrid` key in `/api/status`. With polling off, `register()`
+also drops the two snapshots LiveStore loaded from disk at startup, so the
+routes answer empty rather than with whatever was fetched before polling
+stopped. Setting `AUSGRID_DISABLED=false` brings them back at 2m each.
 
 The seven LiveTraffic hazard kinds come from one table in
 `src/sources/traffic.ts:428`. `traffic_lga` is council-submitted local-road
@@ -474,6 +476,17 @@ matched route (`routeNeed`, Hono's `matchedRoutes`), so there is no second list
 to keep in step. A route with no declaration is out of reach of every scoped
 key, however wide its scopes: `403 api_key_scope_forbidden`, with the scopes the
 route needs in the message. A path no route serves is the ordinary 404.
+
+Stored history spans sources, so `/api/data/history` and its `/incident` route
+declare `source: '*', type: '*', window: 'history'`, which any source and type
+scope satisfies; the handler then narrows the query to `historySourcesFor(...)`,
+the archived sources whose scope source and type the key covers
+(`HISTORY_SOURCES` maps each archived `source` to its pair — `wa_warning` is
+`dfes`/`warnings`). Naming another source is a 403; a key's history answer is
+`Cache-Control: private, no-store`. Callers that are not named keys (the site,
+the static key) are not narrowed. In the staff scope picker the declaration
+shows as each archived source's own history combination, never as `*`
+(`declaredNeeds`). `user_incident` is not in the map, so no key reads it.
 
 Never declared, so never readable with a key: anything about people or nodes —
 profiles and accounts, user-submitted incidents, site statistics, the cache and

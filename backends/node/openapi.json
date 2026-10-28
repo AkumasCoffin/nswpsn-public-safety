@@ -52,6 +52,18 @@
       "description": "Headlines from news outlets"
     },
     {
+      "name": "Pager",
+      "description": "Emergency service pager messages"
+    },
+    {
+      "name": "Radio",
+      "description": "Radio site reference, reception summaries and transcripts"
+    },
+    {
+      "name": "History",
+      "description": "Stored records of every source over time"
+    },
+    {
       "name": "Reference",
       "description": "Slow-changing reference data: boundaries and agencies"
     },
@@ -2341,6 +2353,191 @@
         ],
         "additionalProperties": {}
       },
+      "PagerHits": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "FeatureCollection"
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "Feature"
+                },
+                "geometry": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "Point"
+                    },
+                    "coordinates": {
+                      "type": "array",
+                      "prefixItems": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ],
+                      "items": false,
+                      "minItems": 2,
+                      "maxItems": 2,
+                      "description": "[longitude, latitude] (WGS84)"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "coordinates"
+                  ],
+                  "additionalProperties": false
+                },
+                "properties": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "description": "Pagermon's id for the message, as a string"
+                    },
+                    "pager_msg_id": {
+                      "description": "The same id as Pagermon gives it, in its own type",
+                      "type": [
+                        "string",
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "incident_id": {
+                      "description": "The incident number in the message (e.g. 26-121910 or 0053-6653, or an FRNSW turnout number such as 146685-28072026). A message with none is given one built from its time and capcode, noid-<unix seconds>-<capcode>.",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "capcode": {
+                      "description": "The pager address (capcode) the message was sent to",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "alias": {
+                      "description": "A name for the capcode, usually the brigade or unit: Pagermon's, or else AusAware's own capcode list's; empty when neither has one",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "agency": {
+                      "description": "The service the message is for: NSWRFS, FRNSW, NSWAS, SES, POLICE or VRA, from Pagermon's tag or inferred from the message; any other tag Pagermon gives is passed through. Empty or null when unknown.",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "message": {
+                      "type": "string",
+                      "description": "The message text, with any leading dispatch date removed"
+                    },
+                    "type": {
+                      "type": "string",
+                      "description": "The incident type read from the message, e.g. \"Bush Fire\" or \"MVA\"; empty when it could not be read"
+                    },
+                    "call_class": {
+                      "type": "string",
+                      "description": "The call class that follows the type, e.g. FIRECALL or INCIDENT CALL; empty when there is none"
+                    },
+                    "is_stop": {
+                      "type": "boolean",
+                      "description": "true when the message is a stop message or stand-down (STOP MESSAGE, STAND DOWN, NNTA)"
+                    },
+                    "incident_time": {
+                      "description": "The message's time as Sydney local time, YYYY-MM-DDTHH:mm:ss with no offset",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "fetched_at": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991,
+                      "description": "When AusAware recorded the message, unix seconds"
+                    },
+                    "timestamp": {
+                      "description": "The message's time from Pagermon, unix seconds",
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "is_live": {
+                      "type": "boolean",
+                      "description": "Always true"
+                    },
+                    "lat": {
+                      "type": "number"
+                    },
+                    "lon": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "pager_msg_id",
+                    "incident_id",
+                    "capcode",
+                    "alias",
+                    "agency",
+                    "message",
+                    "type",
+                    "call_class",
+                    "is_stop",
+                    "incident_time",
+                    "fetched_at",
+                    "timestamp",
+                    "is_live",
+                    "lat",
+                    "lon"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "type",
+                "geometry",
+                "properties"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "count": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Number of features"
+          },
+          "hours": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "The window served, in hours, after the default and the 168-hour cap"
+          }
+        },
+        "required": [
+          "type",
+          "features",
+          "count",
+          "hours"
+        ],
+        "additionalProperties": false
+      },
       "FirmsHotspots": {
         "type": "object",
         "properties": {
@@ -3074,6 +3271,122 @@
         },
         "required": [
           "photo"
+        ],
+        "additionalProperties": false
+      },
+      "RadioGrnSites": {
+        "type": "object",
+        "properties": {
+          "sites": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991,
+                  "description": "AusAware's id for the record"
+                },
+                "NAME": {
+                  "description": "The site name or address as recorded; in a few records, a list of lines",
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  ]
+                },
+                "Latitude": {
+                  "description": "Degrees; null when the position is not known",
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "Longitude": {
+                  "description": "Degrees; null when the position is not known",
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "SITE_ID": {
+                  "type": "string"
+                },
+                "GRN Site ID #": {
+                  "description": "The site number as RFSS-site, zero-padded (e.g. \"001-067\"); free text, sometimes with a note",
+                  "type": "string"
+                },
+                "Previous Site ID #": {
+                  "description": "An earlier site number, in the same form",
+                  "type": "string"
+                },
+                "SYSTEM NAME": {
+                  "type": "string"
+                },
+                "System #": {
+                  "type": "string"
+                },
+                "Zone Assignment": {
+                  "type": "string"
+                },
+                "NAC Code": {
+                  "description": "The P25 network access code, as hex text (e.g. \"2D0\"), or a word such as \"Unknown\"",
+                  "type": "string"
+                },
+                "Control Channel": {
+                  "description": "Control channel frequency in MHz, as text; free text",
+                  "type": "string"
+                },
+                "Alt Control Channel": {
+                  "description": "Alternate control channel frequency in MHz, as text; free text",
+                  "type": "string"
+                },
+                "POSTCODE": {
+                  "type": "string"
+                },
+                "FAV NAME & QK#": {
+                  "type": "string"
+                },
+                "Notes": {
+                  "description": "Free text",
+                  "type": "string"
+                },
+                "Frequencies": {
+                  "description": "Frequencies in MHz, as text, some with a note such as \"ALT CC\"; in a few records one string",
+                  "anyOf": [
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ]
+                },
+                "Last Update": {
+                  "description": "When the record was last changed, DD/MM/YYYY",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "additionalProperties": {}
+            },
+            "description": "Every site, in id order"
+          }
+        },
+        "required": [
+          "sites"
         ],
         "additionalProperties": false
       },
@@ -3856,6 +4169,656 @@
         "items": {
           "$ref": "#/components/schemas/EssentialOutage"
         }
+      },
+      "HistoryPage": {
+        "type": "object",
+        "properties": {
+          "records": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HistoryRecord"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "How many records match across every page; 0 when they could not be counted, and always 0 on a page fetched by cursor"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "count": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Records on this page"
+          },
+          "next_cursor": {
+            "description": "Pass as `cursor` for the next page; null on the last page",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "query": {
+            "type": "object",
+            "properties": {
+              "filters_applied": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {},
+                "description": "The filters given, as understood: lists split on commas, and since/until as ISO 8601 UTC"
+              }
+            },
+            "required": [
+              "filters_applied"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "records",
+          "total",
+          "limit",
+          "offset",
+          "count",
+          "next_cursor",
+          "query"
+        ],
+        "additionalProperties": false
+      },
+      "HistoryRecord": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "The stored snapshot's id"
+          },
+          "fetched_at": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "When this snapshot was stored, unix seconds"
+          },
+          "fetched_at_iso": {
+            "description": "fetched_at, ISO 8601 UTC",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source_timestamp": {
+            "description": "The source's own time for the record, as the source writes it; null when it gives none",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source_timestamp_unix": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The source's own time for the record, unix seconds; null when it gives none"
+          },
+          "latitude": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "longitude": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "location_text": {
+            "description": "Where, in words, when the source gives it",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "description": "The record's title, else its street or location, as the source gives it",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "subcategory": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "description": "The record's status, as the source words it",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "severity": {
+            "description": "The record's severity or alert level, as the source words it",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "is_active": {
+            "type": "boolean",
+            "description": "Whether the source still listed it as active when this snapshot was stored"
+          },
+          "last_seen": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The last poll that still found the incident, unix seconds"
+          },
+          "last_seen_iso": {
+            "description": "last_seen, ISO 8601 UTC",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "description": "The archived source: one of rfs, nt_fire, qld_fire, qld_warning, vic_emergency, wa_incident, wa_warning, sa_cfs, sa_mfs, act_ambulance, bom_land, bom_marine, traffic_incident, traffic_roadwork, traffic_flood, traffic_fire, traffic_majorevent, traffic_alpine, traffic_lga, traffic_works, endeavour_current, endeavour_planned, endeavour_maintenance, ausgrid, essential_current, essential_planned, essential_future, dorsal, pager"
+          },
+          "source_id": {
+            "description": "The source's own id for the incident",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "State or territory code (NSW, VIC, …), from the position; null when it has none",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "data": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {},
+            "description": "The record exactly as the source gave it, with full=1; otherwise empty"
+          }
+        },
+        "required": [
+          "id",
+          "fetched_at",
+          "fetched_at_iso",
+          "source_timestamp",
+          "source_timestamp_unix",
+          "latitude",
+          "longitude",
+          "location_text",
+          "title",
+          "category",
+          "subcategory",
+          "status",
+          "severity",
+          "is_active",
+          "last_seen",
+          "last_seen_iso",
+          "source",
+          "source_id",
+          "state",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "HistoryFilters": {
+        "type": "object",
+        "properties": {
+          "providers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "description": "The provider, e.g. rfs or livetraffic"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "icon": {
+                  "type": "string",
+                  "description": "A Font Awesome class for it"
+                },
+                "color": {
+                  "type": "string",
+                  "description": "Its colour on this site"
+                },
+                "count": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991,
+                  "description": "Records in the window"
+                },
+                "types": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "alert_type": {
+                        "type": "string",
+                        "description": "The archived source: what /data/history takes as source"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "count": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      "categories": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "type": "string"
+                            },
+                            "count": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "count"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "subcategories": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "type": "string"
+                            },
+                            "count": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "count"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "statuses": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "type": "string"
+                            },
+                            "count": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "count"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "severities": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "type": "string"
+                            },
+                            "count": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "count"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "states": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "type": "string"
+                            },
+                            "count": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "count"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "description": "Empty for a source with no placeable records"
+                      }
+                    },
+                    "required": [
+                      "alert_type",
+                      "name",
+                      "count",
+                      "categories",
+                      "subcategories",
+                      "statuses",
+                      "severities",
+                      "states"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "key",
+                "name",
+                "icon",
+                "color",
+                "count",
+                "types"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Every provider with records in the window, and each of its sources with the values found"
+          },
+          "date_range": {
+            "type": "object",
+            "properties": {
+              "oldest": {
+                "description": "The oldest record, ISO 8601 UTC",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "newest": {
+                "description": "The newest record, ISO 8601 UTC",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "oldest_unix": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "newest_unix": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "oldest",
+              "newest",
+              "oldest_unix",
+              "newest_unix"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "providers",
+          "date_range"
+        ],
+        "additionalProperties": false
+      },
+      "HistoryIncident": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string",
+            "description": "The archived source, as asked for"
+          },
+          "source_id": {
+            "type": "string",
+            "description": "The incident's id, as asked for"
+          },
+          "snapshots": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "How many snapshots follow"
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991,
+                  "description": "The stored snapshot's id"
+                },
+                "fetched_at": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991,
+                  "description": "When this snapshot was stored, unix seconds"
+                },
+                "fetched_at_iso": {
+                  "description": "fetched_at, ISO 8601 UTC",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "source_timestamp": {
+                  "description": "The source's own time for the record, as the source writes it; null when it gives none",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "source_timestamp_unix": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The source's own time for the record, unix seconds; null when it gives none"
+                },
+                "latitude": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "longitude": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "location_text": {
+                  "description": "Where, in words, when the source gives it",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "title": {
+                  "description": "The record's title, else its street or location, as the source gives it",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "category": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "subcategory": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "status": {
+                  "description": "The record's status, as the source words it",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "severity": {
+                  "description": "The record's severity or alert level, as the source words it",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "is_active": {
+                  "type": "boolean",
+                  "description": "Whether the source still listed it as active when this snapshot was stored"
+                },
+                "last_seen": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The last poll that still found the incident, unix seconds"
+                },
+                "last_seen_iso": {
+                  "description": "last_seen, ISO 8601 UTC",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "data": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {},
+                  "description": "The record exactly as the source gave it"
+                }
+              },
+              "required": [
+                "id",
+                "fetched_at",
+                "fetched_at_iso",
+                "source_timestamp",
+                "source_timestamp_unix",
+                "latitude",
+                "longitude",
+                "location_text",
+                "title",
+                "category",
+                "subcategory",
+                "status",
+                "severity",
+                "is_active",
+                "last_seen",
+                "last_seen_iso",
+                "data"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Every stored snapshot of the incident, oldest first, at most 5,000"
+          }
+        },
+        "required": [
+          "source",
+          "source_id",
+          "snapshots",
+          "history"
+        ],
+        "additionalProperties": false
       },
       "AviationCameras": {
         "type": "object",
@@ -5771,6 +6734,270 @@
         "required": [
           "sources",
           "categories"
+        ],
+        "additionalProperties": false
+      },
+      "RadioLatestSummary": {
+        "type": "object",
+        "properties": {
+          "hourly": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RadioSummary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The most recently written summary that has been released, hourly or ad-hoc despite the name; null when there is none"
+          }
+        },
+        "required": [
+          "hourly"
+        ],
+        "additionalProperties": false
+      },
+      "RadioSummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "type": {
+            "type": "string",
+            "description": "hourly: one local hour, written on the hourly schedule; adhoc: the latest transcripts, written on demand"
+          },
+          "period_start": {
+            "description": "ISO 8601. For an hourly summary, the start of its hour; for an ad-hoc one, when it was asked for",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "period_end": {
+            "description": "ISO 8601. For an hourly summary, the end of its hour; for an ad-hoc one, the same as period_start",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "day_date": {
+            "description": "The local (Australia/Sydney) date the summary belongs to, YYYY-MM-DD: the day its hour starts on, or for an ad-hoc summary the day of its first transcript",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "hour_slot": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The local hour an hourly summary covers, numbered by the hour it ends: 1 is 00:00 to 01:00 and 24 is 23:00 to midnight. null for an ad-hoc summary"
+          },
+          "summary": {
+            "type": "string",
+            "description": "The summary text; empty when the model gave none that could be read"
+          },
+          "call_count": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "How many transcribed receptions it was written from"
+          },
+          "transcript_chars": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Total characters of transcript it was written from"
+          },
+          "model": {
+            "description": "The language model asked to write it",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "details": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {},
+            "description": "Further detail, which varies by summary. Current ones carry period_label (the period in words) and tz (the time zone used); ad-hoc ones also source, n, requested_n, transcripts_start and transcripts_end; and, when the model answered in the expected structure, structured — the incidents it found, each with the receptions it grouped (member_call_ids) and up to ten of their transcripts. An empty object when there is none."
+          },
+          "release_at": {
+            "description": "ISO 8601. Before this time the summary is held back; null when it was never held",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "description": "When it was written, ISO 8601",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "period_start",
+          "period_end",
+          "day_date",
+          "hour_slot",
+          "summary",
+          "call_count",
+          "transcript_chars",
+          "model",
+          "details",
+          "release_at",
+          "created_at"
+        ],
+        "additionalProperties": false
+      },
+      "RadioSummaries": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "How many summaries match, across all pages"
+          },
+          "limit": {
+            "type": "number",
+            "description": "The page size used"
+          },
+          "offset": {
+            "type": "number",
+            "description": "The offset used"
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RadioSummary"
+            },
+            "description": "This page, newest period first"
+          }
+        },
+        "required": [
+          "total",
+          "limit",
+          "offset",
+          "results"
+        ],
+        "additionalProperties": false
+      },
+      "RadioReceptionTranscript": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "The reception's id in AusAware's radio scanner"
+          },
+          "datetime": {
+            "description": "When the reception began, ISO 8601 in UTC, to the second",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "system": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The radio system's id in AusAware's radio scanner"
+          },
+          "system_label": {
+            "description": "The radio system's name there; null when it has none",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "talkgroup": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The talkgroup's id"
+          },
+          "talkgroup_label": {
+            "description": "The talkgroup's name in AusAware's radio scanner; null when it has none",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "transcript": {
+            "description": "The machine transcript as stored: usually plain text, in some cases a JSON document with the text in `text`. An empty string when the audio was transcribed and held nothing usable; null when there is no transcript, or none yet. Speech recognition makes mistakes.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "radio_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The transmitting radio's unit id, when the reception carries one"
+          },
+          "radio_label": {
+            "description": "AusAware's name for that unit, such as a brigade, station or callsign; null when it has none",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "call_url": {
+            "type": "string",
+            "description": "A link to the reception in AusAware's radio scanner, where it can be played"
+          }
+        },
+        "required": [
+          "id",
+          "datetime",
+          "system",
+          "system_label",
+          "talkgroup",
+          "talkgroup_label",
+          "transcript",
+          "radio_id",
+          "radio_label",
+          "call_url"
         ],
         "additionalProperties": false
       },
@@ -9655,6 +10882,112 @@
         ]
       }
     },
+    "/api/v1/pager/hits": {
+      "get": {
+        "operationId": "getPagerHits",
+        "tags": [
+          "Pager"
+        ],
+        "summary": "Pager messages on the map",
+        "description": "Emergency-service pager messages that carry a map position, newest first, as a GeoJSON FeatureCollection with one feature per message. AusAware receives them through its own Pagermon relay, reads it every minute and stores each message; this endpoint reads that store. A message without coordinates of its own may take the position of another message about the same incident; messages with no position at all (FRNSW turnout pages, for example) are left out. Answers are cached for each combination of parameters and refreshed in the background once they are a minute old, so one can be a few minutes behind. When the store cannot be read the answer is 503; try again shortly.",
+        "responses": {
+          "200": {
+            "description": "A GeoJSON FeatureCollection of pager messages",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PagerHits"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "hours",
+            "schema": {
+              "type": "number"
+            },
+            "description": "How far back to look, in hours, by each message's time: read as a whole number (12.5 is 12), and held to at most 168 (seven days). Default 24, which is also what zero, a negative number or something that is not a number reads as."
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "number"
+            },
+            "description": "The most messages to answer, newest first: read as a whole number, and held to at most 2,000. Default 500, which is also what zero, a negative number or something that is not a number reads as."
+          },
+          {
+            "in": "query",
+            "name": "capcode",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only messages sent to this capcode, matched exactly. Empty means no filter."
+          },
+          {
+            "in": "query",
+            "name": "incident_id",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only messages with this incident number, matched exactly. Empty means no filter."
+          }
+        ],
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:pager",
+          "type:pager",
+          "window:live|history"
+        ]
+      }
+    },
     "/api/v1/firms/hotspots": {
       "get": {
         "operationId": "getFirmsHotspots",
@@ -10115,6 +11448,97 @@
           "source:adsb",
           "type:aircraft",
           "window:live"
+        ]
+      }
+    },
+    "/api/v1/radio/grn-sites": {
+      "get": {
+        "operationId": "getGrnSites",
+        "tags": [
+          "Radio"
+        ],
+        "summary": "NSW Government Radio Network sites",
+        "description": "Reference data about the sites of the NSW Government Radio Network (GRN) — names, positions, site numbers, network access codes and frequencies — as AusAware records them: a community-compiled list that AusAware has corrected by hand since. It is not an official list. AusAware is not part of, does not run and is not affiliated with that network. Answers are cached for 30 seconds; a correction shows on the next read. When the list cannot be read, the last copy read is served if there is one.",
+        "responses": {
+          "200": {
+            "description": "Every site",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/RadioGrnSites"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The list could not be read and there is no earlier copy to serve (internal_error)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:radio",
+          "type:radio",
+          "window:live|history"
         ]
       }
     },
@@ -11287,6 +12711,504 @@
           "source:essential",
           "type:outages",
           "window:live"
+        ]
+      }
+    },
+    "/api/v1/data/history": {
+      "get": {
+        "operationId": "getHistory",
+        "tags": [
+          "History"
+        ],
+        "summary": "Stored records",
+        "description": "Every source's records as this server stored them over time: by default one record per incident (its latest), newest first. Filter by source, time, place and text; page with cursor (or offset, up to 10,000). Records are kept for the server's retention window. A key reads only the archived sources its scopes cover — each source's stored history needs that source's own scope and type, with window:history.",
+        "responses": {
+          "200": {
+            "description": "A page of records",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/HistoryPage"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "cursor is malformed, or offset is past 10,000 (validation_failed; details.max_offset)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The archive could not be read, or part of it did not answer in time (service_unavailable; details.failed_tables) — retry, or narrow the window; or (auth_unavailable) the key could not be checked just now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "source",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only these archived sources, comma-separated: rfs, nt_fire, qld_fire, qld_warning, vic_emergency, wa_incident, wa_warning, sa_cfs, sa_mfs, act_ambulance, bom_land, bom_marine, traffic_incident, traffic_roadwork, traffic_flood, traffic_fire, traffic_majorevent, traffic_alpine, traffic_lga, traffic_works, endeavour_current, endeavour_planned, endeavour_maintenance, ausgrid, essential_current, essential_planned, essential_future, dorsal, pager. A key reads only the sources its scopes cover; naming another is refused (403), and leaving this out means all of them"
+          },
+          {
+            "in": "query",
+            "name": "source_id",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only the incident with this id (the source's own)"
+          },
+          {
+            "in": "query",
+            "name": "category",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only these categories, comma-separated"
+          },
+          {
+            "in": "query",
+            "name": "subcategory",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only these subcategories, comma-separated"
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only these statuses, comma-separated"
+          },
+          {
+            "in": "query",
+            "name": "severity",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only these severities, comma-separated"
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only these states or territories, comma-separated codes (NSW, VIC, …); unknown codes are ignored"
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Stored at or after this time, unix seconds"
+          },
+          {
+            "in": "query",
+            "name": "until",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Stored at or before this time, unix seconds"
+          },
+          {
+            "in": "query",
+            "name": "date_from",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Stored on or after this date or time when since is not given: YYYY-MM-DD (midnight) or YYYY-MM-DDTHH:mm[:ss], read as Sydney time; with an offset or Z, as written"
+          },
+          {
+            "in": "query",
+            "name": "date_to",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Stored on or before this date or time when until is not given; a bare date means the end of that day, Sydney time"
+          },
+          {
+            "in": "query",
+            "name": "hours",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Stored in the last this many hours, when neither since nor date_from is given"
+          },
+          {
+            "in": "query",
+            "name": "days",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Stored in the last this many days, when no earlier time parameter is given"
+          },
+          {
+            "in": "query",
+            "name": "today",
+            "schema": {
+              "type": "string"
+            },
+            "description": "1: stored today, Sydney time, when no earlier time parameter is given"
+          },
+          {
+            "in": "query",
+            "name": "since_source",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only records whose own source time is at or after this, unix seconds"
+          },
+          {
+            "in": "query",
+            "name": "until_source",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only records whose own source time is at or before this, unix seconds"
+          },
+          {
+            "in": "query",
+            "name": "search",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only records matching this text"
+          },
+          {
+            "in": "query",
+            "name": "title",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only records whose title matches this text"
+          },
+          {
+            "in": "query",
+            "name": "location",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only records whose location matches this text"
+          },
+          {
+            "in": "query",
+            "name": "lat",
+            "schema": {
+              "type": "string"
+            },
+            "description": "With lon: only records within radius of this point"
+          },
+          {
+            "in": "query",
+            "name": "lon",
+            "schema": {
+              "type": "string"
+            },
+            "description": "With lat: only records within radius of this point (lng works too)"
+          },
+          {
+            "in": "query",
+            "name": "radius",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Kilometres around lat/lon; 10 when not given"
+          },
+          {
+            "in": "query",
+            "name": "unique",
+            "schema": {
+              "type": "string"
+            },
+            "description": "0: every stored snapshot. Otherwise one record per incident, its latest"
+          },
+          {
+            "in": "query",
+            "name": "active_only",
+            "schema": {
+              "type": "string"
+            },
+            "description": "1: only records still active when stored"
+          },
+          {
+            "in": "query",
+            "name": "order",
+            "schema": {
+              "type": "string"
+            },
+            "description": "asc: oldest first. Otherwise newest first"
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Records per page, 1 to 1000; 100 when not given"
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Skip this many records, at most 10000; for later pages use cursor"
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "type": "string"
+            },
+            "description": "next_cursor from the previous page"
+          },
+          {
+            "in": "query",
+            "name": "full",
+            "schema": {
+              "type": "string"
+            },
+            "description": "1: include each record as the source gave it, in data"
+          }
+        ],
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:*",
+          "type:*",
+          "window:history"
+        ]
+      }
+    },
+    "/api/v1/data/history/filters": {
+      "get": {
+        "operationId": "getHistoryFilters",
+        "tags": [
+          "History"
+        ],
+        "summary": "What stored history can be filtered by",
+        "description": "For each provider and archived source with records in the window, the categories, subcategories, statuses, severities and states found, with counts; and the oldest and newest record. The window is the server's whole retention when no parameter narrows it. No key is needed.",
+        "responses": {
+          "200": {
+            "description": "The filter values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/HistoryFilters"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "source",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only this archived source"
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "schema": {
+              "type": "string"
+            },
+            "description": "The window starts at this time, unix seconds"
+          },
+          {
+            "in": "query",
+            "name": "date_from",
+            "schema": {
+              "type": "string"
+            },
+            "description": "The window starts on this date or time when since is not given (as /data/history reads it)"
+          },
+          {
+            "in": "query",
+            "name": "hours",
+            "schema": {
+              "type": "string"
+            },
+            "description": "The window is the last this many hours, when neither since nor date_from is given"
+          },
+          {
+            "in": "query",
+            "name": "days",
+            "schema": {
+              "type": "string"
+            },
+            "description": "The window is the last this many days, when no earlier parameter is given"
+          }
+        ],
+        "security": []
+      }
+    },
+    "/api/v1/data/history/incident/{source}/{source_id}": {
+      "get": {
+        "operationId": "getHistoryIncident",
+        "tags": [
+          "History"
+        ],
+        "summary": "One incident's stored snapshots",
+        "description": "Every snapshot this server stored of one incident, oldest first, each with the record exactly as the source gave it: how the incident changed over time. {source} is an archived source (as /data/history returns it) and {source_id} the incident's id from that source. An incident with no snapshots answers an empty list. A key reads only the sources its scopes cover.",
+        "responses": {
+          "200": {
+            "description": "The incident's snapshots",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/HistoryIncident"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The archive could not be read just now (service_unavailable); or (auth_unavailable) the key could not be checked just now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "source",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "source_id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:*",
+          "type:*",
+          "window:history"
         ]
       }
     },
@@ -12881,6 +14803,381 @@
           "source:news",
           "type:news",
           "window:live"
+        ]
+      }
+    },
+    "/api/v1/summaries/latest": {
+      "get": {
+        "operationId": "getLatestSummary",
+        "tags": [
+          "Radio"
+        ],
+        "summary": "The latest radio summary",
+        "description": "The most recent AI-written summary of the radio traffic AusAware receives. AusAware records each reception and transcribes it by speech recognition; once an hour, at five minutes to the hour (Sydney time), a language model summarises that hour's transcripts, and the summary is released on the hour — so the last few minutes of an hour may not be in it. Summaries can also be written on demand from the latest transcripts. A summary is a model's reading of machine transcripts: it can be wrong.",
+        "responses": {
+          "200": {
+            "description": "The latest summary, or null",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/RadioLatestSummary"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The summaries could not be read (internal_error)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:rdio",
+          "type:summaries",
+          "window:history"
+        ]
+      }
+    },
+    "/api/v1/summaries": {
+      "get": {
+        "operationId": "getSummaries",
+        "tags": [
+          "Radio"
+        ],
+        "summary": "Radio summaries",
+        "description": "The AI-written summaries of the radio traffic AusAware receives (see the latest summary), newest period first, a page at a time. Summaries not yet released are left out. Filter by type, by hour, or by date.",
+        "responses": {
+          "200": {
+            "description": "A page of summaries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/RadioSummaries"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "hour is not 1 to 24, or type is not hourly or adhoc (validation_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The summaries could not be read, or a parameter could not be used as given, such as a date that is not one (internal_error)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "type",
+            "schema": {
+              "type": "string"
+            },
+            "description": "hourly or adhoc; anything else is a 400. Empty means both. With hour and no type, hourly."
+          },
+          {
+            "in": "query",
+            "name": "hour",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 24
+            },
+            "description": "Only hourly summaries for this hour_slot, 1 to 24; anything else, empty included, is a 400"
+          },
+          {
+            "in": "query",
+            "name": "date",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only this day_date, YYYY-MM-DD"
+          },
+          {
+            "in": "query",
+            "name": "date_from",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only day_date on or after this, YYYY-MM-DD"
+          },
+          {
+            "in": "query",
+            "name": "date_to",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only day_date on or before this, YYYY-MM-DD"
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "number"
+            },
+            "description": "Page size, held to 1 to 500. Default 50, which is also what 0 or something that is not a number reads as."
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "schema": {
+              "type": "number"
+            },
+            "description": "How many to skip. Default 0, which is also what a negative number or something that is not a number reads as."
+          }
+        ],
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:rdio",
+          "type:summaries",
+          "window:history"
+        ]
+      }
+    },
+    "/api/v1/rdio/calls/{callId}": {
+      "get": {
+        "operationId": "getReceptionTranscript",
+        "tags": [
+          "Radio"
+        ],
+        "summary": "One radio reception and its transcript",
+        "description": "One reception recorded by AusAware's own radio scanner, with its time, radio system, talkgroup, transmitting unit and its transcript, made by speech recognition.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "callId",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "description": "The reception's id: digits only (as in the receptions a summary lists, member_call_ids)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The reception",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/RadioReceptionTranscript"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "callId is not a whole number (validation_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Nothing by that name (not_found)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The reception could not be read (internal_error)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "source:rdio",
+          "type:transcripts",
+          "window:history"
         ]
       }
     },

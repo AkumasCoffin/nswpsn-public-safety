@@ -33,17 +33,24 @@
  * how many nodes hold it and when it was last confirmed. Never node identity
  * or location: which RECEIVERS exist and where stays role-gated
  * (/api/adsb/receivers is the precedent).
+ *
+ * GET /api/radio/grn-sites is also served at /api/v1/ (server.ts mirrors it),
+ * wrapped in `data` there (api/v1/respond.ts). monitored-sites is not — it is
+ * node status, for the site's own map — and neither is the owner's PATCH.
  */
 import { Hono } from 'hono';
 import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
+import { describeRoute, resolver } from 'hono-openapi';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { requireRole, isOwner } from '../services/auth/roles.js';
 import { hub } from '../services/nodes/hub.js';
 import { scoped } from '../services/auth/apiKeyScopes.js';
+import { fail, ok } from './v1/respond.js';
+import { envelope, ErrorBody, GATED_ERRORS, okJson, UNAVAILABLE_ERROR } from './v1/schemas.js';
 
 export const radioPublicRouter = new Hono();
 
@@ -245,26 +252,92 @@ export async function seedGrnSitesIfEmpty(): Promise<void> {
   }
 }
 
+// What /api/v1/ documents (api/v1/openapi.ts). Each site is the stored record
+// as it is, under the dataset's own field names; a field is absent when the
+// record has no value for it. The seed file's values are not all of one type,
+// so the schema says what each field has actually held.
+const GrnSite = z
+  .object({
+    id: z.number().int().describe("AusAware's id for the record"),
+    NAME: z
+      .union([z.string(), z.array(z.string())])
+      .optional()
+      .describe('The site name or address as recorded; in a few records, a list of lines'),
+    Latitude: z.number().nullable().optional().describe('Degrees; null when the position is not known'),
+    Longitude: z.number().nullable().optional().describe('Degrees; null when the position is not known'),
+    SITE_ID: z.string().optional(),
+    'GRN Site ID #': z
+      .string()
+      .optional()
+      .describe('The site number as RFSS-site, zero-padded (e.g. "001-067"); free text, sometimes with a note'),
+    'Previous Site ID #': z.string().optional().describe('An earlier site number, in the same form'),
+    'SYSTEM NAME': z.string().optional(),
+    'System #': z.string().optional(),
+    'Zone Assignment': z.string().optional(),
+    'NAC Code': z.string().optional().describe('The P25 network access code, as hex text (e.g. "2D0"), or a word such as "Unknown"'),
+    'Control Channel': z.string().optional().describe('Control channel frequency in MHz, as text; free text'),
+    'Alt Control Channel': z.string().optional().describe('Alternate control channel frequency in MHz, as text; free text'),
+    POSTCODE: z.string().optional(),
+    'FAV NAME & QK#': z.string().optional(),
+    Notes: z.string().optional().describe('Free text'),
+    Frequencies: z
+      .union([z.array(z.string()), z.string()])
+      .optional()
+      .describe('Frequencies in MHz, as text, some with a note such as "ALT CC"; in a few records one string'),
+    'Last Update': z.string().optional().describe('When the record was last changed, DD/MM/YYYY'),
+  })
+  .catchall(z.unknown());
+
+const GrnSites = z
+  .object({ sites: z.array(GrnSite).describe('Every site, in id order') })
+  .meta({ id: 'RadioGrnSites' });
+
+const grnErrorJson = (description: string) => ({
+  description,
+  content: { 'application/json': { schema: resolver(ErrorBody) } },
+});
+
 let _grnCache: { at: number; body: Record<string, unknown> } | null = null;
 
-radioPublicRouter.get('/api/radio/grn-sites', SCOPE_RADIO, async (c) => {
-  const now = Date.now();
-  if (_grnCache && now - _grnCache.at < CACHE_TTL_MS) return c.json(_grnCache.body);
-  const pool = await getPool();
-  if (!pool) return c.json({ error: 'database unavailable' }, 503);
-  try {
-    const r = await pool.query<{ id: number; data: Record<string, unknown> }>(
-      'SELECT id, data FROM grn_sites ORDER BY id',
-    );
-    const body = { sites: r.rows.map((row) => ({ id: row.id, ...row.data })) };
-    _grnCache = { at: now, body };
-    return c.json(body);
-  } catch (err) {
-    log.warn({ err }, 'grn-sites read failed');
-    if (_grnCache) return c.json(_grnCache.body);
-    return c.json({ error: 'query failed' }, 500);
-  }
-});
+radioPublicRouter.get(
+  '/api/radio/grn-sites',
+  SCOPE_RADIO,
+  describeRoute({
+    operationId: 'getGrnSites',
+    tags: ['Radio'],
+    summary: 'NSW Government Radio Network sites',
+    description:
+      "Reference data about the sites of the NSW Government Radio Network (GRN) — names, positions, site numbers, network access codes and frequencies — as AusAware records them: a community-compiled list that AusAware has corrected by hand since. It is not an official list. AusAware is not part of, does not run and is not affiliated with that network. Answers are cached for 30 seconds; a correction shows on the next read. When the list cannot be read, the last copy read is served if there is one.",
+    responses: {
+      ...okJson(envelope(GrnSites), 'Every site'),
+      ...GATED_ERRORS,
+      ...UNAVAILABLE_ERROR,
+      500: grnErrorJson('The list could not be read and there is no earlier copy to serve (internal_error)'),
+    },
+  }),
+  async (c) => {
+    const now = Date.now();
+    if (_grnCache && now - _grnCache.at < CACHE_TTL_MS) return ok(c, _grnCache.body);
+    const pool = await getPool();
+    if (!pool) {
+      return fail(c, 503, 'service_unavailable', 'The radio site list is not available just now.', {
+        error: 'database unavailable',
+      });
+    }
+    try {
+      const r = await pool.query<{ id: number; data: Record<string, unknown> }>(
+        'SELECT id, data FROM grn_sites ORDER BY id',
+      );
+      const body = { sites: r.rows.map((row) => ({ id: row.id, ...row.data })) } satisfies z.infer<typeof GrnSites>;
+      _grnCache = { at: now, body };
+      return ok(c, body);
+    } catch (err) {
+      log.warn({ err }, 'grn-sites read failed');
+      if (_grnCache) return ok(c, _grnCache.body);
+      return fail(c, 500, 'internal_error', 'The radio site list could not be read.', { error: 'query failed' });
+    }
+  },
+);
 
 // The editable surface IS the dataset's own vocabulary — every key the file
 // uses, nothing else. A new field means adding it here deliberately, not
