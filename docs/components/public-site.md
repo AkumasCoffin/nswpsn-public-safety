@@ -203,26 +203,30 @@ request links to `/#api-keys`, which opens that card.
 map.html  ──►  /api/v1/rfs/incidents     (RFS fires)
           ──►  /api/v1/{qld-fire,nt-fire,sa-fire,vic-emergency,wa-emergency,act-ambulance}/*
                                          (the other states' fire and emergency feeds)
-          ──►  /api/traffic/*            (seven hazard kinds + cameras)
+          ──►  /api/v1/traffic/*         (seven hazard kinds, works + cameras)
           ──►  /api/endeavour/*, /api/ausgrid/outages, /api/essential/*
           ──►  /api/pager/hits           (pager pins — map.html:6265)
           ──►  /api/v1/firms/hotspots    (satellite hotspots)
-          ──►  /api/adsb/aircraft, /api/adsb/trails
-          ──►  /api/transport/*          (public transport)
+          ──►  /api/v1/adsb/{aircraft,trails,history,photo/:hex}
+          ──►  /api/adsb/receivers       (node status — never on /api/v1/)
+          ──►  /api/v1/transport/*       (public transport)
+          ──►  /api/v1/aviation/cameras, /api/v1/marinetraffic/*
           ──►  /api/radio/grn-sites      (repeater site geography — 18474)
           ──►  /api/radio/monitored-sites  (repeater "Monitoring" badges — 18451)
           ──►  /api/dorsal/reports?hours=168  (SharkSmart layer)
           ──►  /api/incidents            (community-added)
 
 live.html ──►  per-source counts, /api/v1/rfs/incidents, /api/v1/bom/warnings
-               (weather), /api/summaries/latest, /api/news/rss,
-               /api/stats/history, /api/heartbeat
+               (weather), /api/v1/traffic/*, /api/summaries/latest,
+               /api/news/rss, /api/stats/history, /api/heartbeat
 ```
 
 The feeds on `/api/v1/` answer as they do on `/api/`, except that a non-GeoJSON
 body is wrapped in `data` — so `live.html` reads BOM's warnings from
-`response.data`. The rest move to `/api/v1/` group by group
-([`../api.md`](../api.md)).
+`response.data`, and `map.html` unwraps the transport, ADS-B, MarineTraffic
+and airport-camera detail answers the same way (transport lines, traffic and
+the airport list are GeoJSON, so bare). The rest move to `/api/v1/` group by
+group ([`../api.md`](../api.md)).
 
 **SharkSmart is its own layer, not a beach feed, and that is deliberate.**
 Beachwatch and BeachSafe both describe the standing state of a beach and merge

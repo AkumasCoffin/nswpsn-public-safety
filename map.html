@@ -31,7 +31,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
-  <script src="livetraffic-vocab.js?v=1"></script>
+  <script src="livetraffic-vocab.js?v=2"></script>
   <script src="fire-vocab.js?v=3"></script>
   <script src="fleet-vocab.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js" integrity="sha384-948ahk4ZmxYVYOc+rxN1H2gM1EJ2Duhp7uHtZ4WSLkV4Vtx5MUqnV+l7u9B+jFv+" crossorigin="anonymous"></script>
@@ -4530,8 +4530,8 @@
       
       try {
         // Fetch all camera angles from the API
-        const res = await apiFetch(`${PROXY_BASE}/api/aviation/cameras/${encodeURIComponent(airportProps.name)}`);
-        const data = await res.json();
+        const res = await apiFetch(`${PROXY_BASE}/api/v1/aviation/cameras/${encodeURIComponent(airportProps.name)}`);
+        const data = (await res.json()).data;
         
         if (data && data.cameras && data.cameras.length > 0) {
           isGridView = true;
@@ -10501,12 +10501,12 @@ function initPagerHoursFromStorage() {
             .then((r) => r.json())
             .catch(() => ({ features: [] }));
           const [inc, alp, fir, maj, lgaHz, wrkHz, ntHz, qldHz, vicHz, waHz, waHzW, saHzC, saHzM] = await Promise.all([
-            j('/api/traffic/incidents'),
-            j('/api/traffic/alpine'),
-            j('/api/traffic/fire'),
-            j('/api/traffic/majorevent'),
-            j('/api/traffic/lga'),
-            j('/api/traffic/works'),
+            j('/api/v1/traffic/incidents'),
+            j('/api/v1/traffic/alpine'),
+            j('/api/v1/traffic/fire'),
+            j('/api/v1/traffic/majorevent'),
+            j('/api/v1/traffic/lga'),
+            j('/api/v1/traffic/works'),
             j('/api/v1/nt-fire/incidents'),
             j('/api/v1/qld-fire/incidents'),
             j('/api/v1/vic-emergency/events'),
@@ -11281,9 +11281,9 @@ function initPagerHoursFromStorage() {
             .then((r) => r.json())
             .catch(() => ({ features: [] }));
           const [rw, lgaRw, wrkRw] = await Promise.all([
-            jr('/api/traffic/roadwork'),
-            jr('/api/traffic/lga'),
-            jr('/api/traffic/works'),
+            jr('/api/v1/traffic/roadwork'),
+            jr('/api/v1/traffic/lga'),
+            jr('/api/v1/traffic/works'),
           ]);
           trafficData = {
             type: 'FeatureCollection',
@@ -11764,8 +11764,8 @@ function initPagerHoursFromStorage() {
             .then((r) => r.json())
             .catch(() => ({ features: [] }));
           const [fl, wrkFl, vicFl, waFl, waFlW] = await Promise.all([
-            jf('/api/traffic/flood'),
-            jf('/api/traffic/works'),
+            jf('/api/v1/traffic/flood'),
+            jf('/api/v1/traffic/works'),
             jf('/api/v1/vic-emergency/events'),
             jf('/api/v1/wa-emergency/incidents'),
             jf('/api/v1/wa-emergency/warnings'),
@@ -14246,9 +14246,9 @@ function initPagerHoursFromStorage() {
       _aisDetailCache.set(shipId, '__loading__');
       aisListRender();
       try {
-        const res = await apiFetch(`${PROXY_BASE}/api/marinetraffic/vessel/${encodeURIComponent(shipId)}`);
+        const res = await apiFetch(`${PROXY_BASE}/api/v1/marinetraffic/vessel/${encodeURIComponent(shipId)}`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
+        const data = (await res.json()).data;
         _aisDetailCache.set(shipId, data);
       } catch (e) {
         console.warn('[ais] vessel detail fetch failed', e);
@@ -14362,9 +14362,9 @@ function initPagerHoursFromStorage() {
       const hadData = _aisVessels.length > 0;
       if (line && !hadData) line.textContent = 'Loading vessels…';
       try {
-        const res = await apiFetch(`${PROXY_BASE}/api/marinetraffic/vessels`);
+        const res = await apiFetch(`${PROXY_BASE}/api/v1/marinetraffic/vessels`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
+        const data = (await res.json()).data;
         const vessels = aisExtractVessels(data);
         // Don't blow away populated markers if a refresh comes back
         // empty (backend cache mid-replace, transient upstream failure,
@@ -14378,12 +14378,12 @@ function initPagerHoursFromStorage() {
         console.log('[ais] loaded', vessels.length, 'vessels');
       } catch (e) {
         console.warn('[ais] failed to load:', e);
-        if (line && !hadData) line.textContent = 'Failed to load AIS data — backend proxy /api/marinetraffic/vessels not available.';
+        if (line && !hadData) line.textContent = 'Failed to load AIS data — backend proxy /api/v1/marinetraffic/vessels not available.';
       }
     }
 
     // ==================== ADS-B AIRCRAFT LAYER ====================
-    // Live positions from /api/adsb/aircraft (backend merge of adsb.lol,
+    // Live positions from /api/v1/adsb/aircraft (backend merge of adsb.lol,
     // adsb.fi, airplanes.live and adsb.one, deduped by ICAO hex). The
     // feed is Australia-wide, so markers are culled to the padded
     // viewport (pinned aircraft exempt) and rebuilt on moveend.
@@ -14402,7 +14402,7 @@ function initPagerHoursFromStorage() {
     // hex → '__loading__' | '__none__' | {src, link, photographer}.
     // Filled by a throttled prefetch queue for listed aircraft (plus
     // on-demand when pinning), via the backend Planespotters proxy
-    // (/api/adsb/photo/:hex). Persisted to localStorage so revisits
+    // (/api/v1/adsb/photo/:hex). Persisted to localStorage so revisits
     // don't re-fetch — an airframe's photo essentially never changes.
     const _adsbPhotoCache = new Map();
     const ADSB_PHOTO_LS_KEY = 'adsbPhotoCache-v1';
@@ -15218,9 +15218,9 @@ function initPagerHoursFromStorage() {
       if (adsbHistoryMode) return;
       const hadData = _adsbAircraft.length > 0;
       try {
-        const res = await apiFetch(`${PROXY_BASE}/api/adsb/aircraft`);
+        const res = await apiFetch(`${PROXY_BASE}/api/v1/adsb/aircraft`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
+        const data = (await res.json()).data;
         const aircraft = Array.isArray(data.aircraft) ? data.aircraft : [];
         // Keep stale markers over a blank map on transient upstream
         // failures — same guard as the AIS layer.
@@ -15274,9 +15274,9 @@ function initPagerHoursFromStorage() {
       if (adsbHistoryMode) return;   // trails come from the history response
       if (!adsbTrailsEnabled && !_adsbPinnedHex) return;
       try {
-        const res = await apiFetch(`${PROXY_BASE}/api/adsb/trails`);
+        const res = await apiFetch(`${PROXY_BASE}/api/v1/adsb/trails`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
+        const data = (await res.json()).data;
         _adsbTrails = data.trails || {};
         _rebuildAdsbTrails();
         // The trend arrow and track summary are both derived from the trail,
@@ -15455,7 +15455,7 @@ function initPagerHoursFromStorage() {
     let _adsbPlaying = false;
     let _adsbPlaySpeed = 1;
     let _adsbPlayTimer = null;
-    // Filled from /api/adsb/aircraft, which the live poll already fetches — the
+    // Filled from /api/v1/adsb/aircraft, which the live poll already fetches — the
     // date picker needs its bounds before it can offer a first scrub.
     let _adsbHistWindow = { retentionDays: null, oldestMs: null };
     const ADSB_HIST_TRAIL_MIN = 15;
@@ -15776,9 +15776,9 @@ function initPagerHoursFromStorage() {
       _adsbHistSyncControls();
       try {
         const res = await apiFetch(
-          `${PROXY_BASE}/api/adsb/history?at=${at}&trail=${ADSB_HIST_TRAIL_MIN}`);
+          `${PROXY_BASE}/api/v1/adsb/history?at=${at}&trail=${ADSB_HIST_TRAIL_MIN}`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
+        const data = (await res.json()).data;
         // A slower earlier request must not overwrite a newer scrub.
         if (seq !== _adsbHistSeq || !adsbHistoryMode) return;
 
@@ -16041,11 +16041,11 @@ function initPagerHoursFromStorage() {
       _adsbPhotoCache.set(a.hex, '__loading__');
       adsbListRender();
       try {
-        const url = `${PROXY_BASE}/api/adsb/photo/${encodeURIComponent(a.hex)}` +
+        const url = `${PROXY_BASE}/api/v1/adsb/photo/${encodeURIComponent(a.hex)}` +
           (a.reg ? `?reg=${encodeURIComponent(a.reg)}` : '');
         const res = await apiFetch(url);
         if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
+        const data = (await res.json()).data;
         _adsbPhotoCache.set(a.hex, data.photo ? data.photo : '__none__');
         saveAdsbPhotoCache();
         // Refresh the marker's tooltip now rather than waiting for the
@@ -16129,7 +16129,7 @@ function initPagerHoursFromStorage() {
 
     /** Points held and the highest altitude among them.
      *
-     *  No "tracked for N minutes": /api/adsb/trails drops the timestamp from
+     *  No "tracked for N minutes": /api/v1/adsb/trails drops the timestamp from
      *  every point on the way out (it draws paths, and a third number per
      *  point would inflate the response for something nothing renders), so a
      *  duration here would have to be invented. Point count is the honest
@@ -17132,7 +17132,7 @@ function initPagerHoursFromStorage() {
 
     // ==================== PUBLIC TRANSPORT LAYER ====================
     // Live vehicles + stations from the backend AnyTrip proxy
-    // (/api/transport/*). The upstream is viewport-scoped, so data is
+    // (/api/v1/transport/*). The upstream is viewport-scoped, so data is
     // fetched for the current (padded) bounds on enable, every 10 s,
     // and on debounced moveend — never network-wide. Five AnyTrip
     // regions are served — au2 (NSW), au3 (VIC), au4 (SEQ/QLD), au5
@@ -17458,9 +17458,9 @@ function initPagerHoursFromStorage() {
       // render what succeeded. Only when EVERY region fails do we keep
       // the previous markers (the old single-fetch catch behaviour).
       const results = await Promise.allSettled(queries.map((q) =>
-        apiFetch(`${PROXY_BASE}/api/transport/vehicles?` + bboxQ + q).then(async (res) => {
+        apiFetch(`${PROXY_BASE}/api/v1/transport/vehicles?` + bboxQ + q).then(async (res) => {
           if (!res.ok) throw new Error('HTTP ' + res.status);
-          return res.json();
+          return (await res.json()).data;
         })));
       if (seq !== _transportFetchSeq) return; // superseded by a newer fetch
       const vehicles = [];
@@ -17757,9 +17757,9 @@ function initPagerHoursFromStorage() {
         .map((r) => STOP_REGION_MODES[r.id]).filter(Boolean);
       try {
         const results = await Promise.allSettled(stopQueries.map((q) =>
-          apiFetch(`${PROXY_BASE}/api/transport/stops?` + key + q).then(async (res) => {
+          apiFetch(`${PROXY_BASE}/api/v1/transport/stops?` + key + q).then(async (res) => {
             if (!res.ok) throw new Error('HTTP ' + res.status);
-            return res.json();
+            return (await res.json()).data;
           })));
         const stops = [];
         let anyOk = false;
@@ -17971,7 +17971,7 @@ function initPagerHoursFromStorage() {
       if (_transportLinesLoaded) return;
       _transportLinesLoaded = true; // set first so a failure doesn't refire every tick
       try {
-        const res = await apiFetch(`${PROXY_BASE}/api/transport/lines`);
+        const res = await apiFetch(`${PROXY_BASE}/api/v1/transport/lines`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const geo = await res.json();
         _transportLanes = _transportBuildLanes(geo);
@@ -18212,9 +18212,9 @@ function initPagerHoursFromStorage() {
         _transportShapeFailed.delete(shapeId); // stale — retry
       }
       try {
-        const res = await apiFetch(`${PROXY_BASE}/api/transport/shape/${encodeURIComponent(shapeId)}`);
+        const res = await apiFetch(`${PROXY_BASE}/api/v1/transport/shape/${encodeURIComponent(shapeId)}`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
+        const data = (await res.json()).data;
         if (!data.enc) { _transportShapeFailed.set(shapeId, Date.now()); return null; }
         // Two smoothing passes — GTFS shapes are often sparse and render
         // with visibly sharp corners otherwise. Cached smoothed.
@@ -18477,9 +18477,9 @@ function initPagerHoursFromStorage() {
       const body = document.getElementById('transport-info-body');
       if (body && !body.dataset.tripId) body.innerHTML = '<div class="ais-list-empty">Loading trip…</div>';
       try {
-        const res = await apiFetch(`${PROXY_BASE}/api/transport/trip/${ref.startDate}/${encodeURIComponent(ref.tripId)}/${ref.inst}`);
+        const res = await apiFetch(`${PROXY_BASE}/api/v1/transport/trip/${ref.startDate}/${encodeURIComponent(ref.tripId)}/${ref.inst}`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
-        const trip = await res.json();
+        const trip = (await res.json()).data;
         // A newer click may have replaced this request.
         if (!_transportInfo || _transportInfo.kind !== 'trip' || _transportInfo.ref.tripId !== ref.tripId) return;
         const route = trip.route && trip.route.name ? trip.route : (fallbackRoute || trip.route);
@@ -18605,9 +18605,9 @@ function initPagerHoursFromStorage() {
       const body = document.getElementById('transport-info-body');
       if (body) { delete body.dataset.tripId; body.innerHTML = '<div class="ais-list-empty">Loading departures…</div>'; }
       try {
-        const res = await apiFetch(`${PROXY_BASE}/api/transport/departures/${encodeURIComponent(stopId)}?limit=12`);
+        const res = await apiFetch(`${PROXY_BASE}/api/v1/transport/departures/${encodeURIComponent(stopId)}?limit=12`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
+        const data = (await res.json()).data;
         if (!_transportInfo || _transportInfo.kind !== 'departures' || _transportInfo.stopId !== stopId) return;
         _setTransportInfoHeader('fa-train', '#f18500', data.stopName || stopName || 'Departures',
           data.departures.length + ' services');
@@ -18654,9 +18654,9 @@ function initPagerHoursFromStorage() {
 
     async function loadTransportAlerts() {
       try {
-        const res = await apiFetch(`${PROXY_BASE}/api/transport/alerts`);
+        const res = await apiFetch(`${PROXY_BASE}/api/v1/transport/alerts`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
+        const data = (await res.json()).data;
         _transportAlerts = Array.isArray(data.alerts) ? data.alerts : [];
         _transportAlertsConfigured = data.configured !== false;
         _transportAlertsAt = Date.now();
@@ -19356,8 +19356,8 @@ function initPagerHoursFromStorage() {
       
       if (needTraffic || needQld || needQldFlood || needAviation || needCentralwatch) {
         const fetches = await Promise.all([
-          needTraffic ? apiFetch(`${PROXY_BASE}/api/traffic/cameras`).then(r => r.json()).catch(() => ({ features: [] })) : Promise.resolve(trafficCached.data),
-          needAviation ? apiFetch(`${PROXY_BASE}/api/aviation/cameras`).then(r => r.json()).catch(() => ({ features: [] })) : Promise.resolve(aviationCached.data),
+          needTraffic ? apiFetch(`${PROXY_BASE}/api/v1/traffic/cameras`).then(r => r.json()).catch(() => ({ features: [] })) : Promise.resolve(trafficCached.data),
+          needAviation ? apiFetch(`${PROXY_BASE}/api/v1/aviation/cameras`).then(r => r.json()).catch(() => ({ features: [] })) : Promise.resolve(aviationCached.data),
           needCentralwatch ? apiFetch(`${PROXY_BASE}/api/centralwatch/cameras`).then(r => r.json()).catch(() => []) : Promise.resolve(centralwatchCached.data),
           needQld ? apiFetch(`${PROXY_BASE}/api/qld/cameras`).then(r => r.json()).catch(() => ({ features: [] })) : Promise.resolve(qldCached.data),
           needQldFlood ? apiFetch(`${PROXY_BASE}/api/qld/flood-cameras`).then(r => r.json()).catch(() => ({ features: [] })) : Promise.resolve(qldFloodCached.data)
@@ -20932,16 +20932,16 @@ function initPagerHoursFromStorage() {
         // Waze prefetches removed — the ingest is retired (see docs/waze-userscript.md).
         const stage1 = [
           { key: 'rfs_incidents', url: '/api/v1/rfs/incidents' },
-          { key: 'traffic_incidents', url: '/api/traffic/incidents' },
+          { key: 'traffic_incidents', url: '/api/v1/traffic/incidents' },
         ];
         totalLoaded += await fetchBatch(stage1, 'Stage 1');
         console.log(`⚡ Stage 1: ${totalLoaded} critical layers loaded (${Date.now() - startTime}ms)`);
         
         // STAGE 2: Secondary - roadwork, floods, cameras (commonly used)
         const stage2 = [
-          { key: 'traffic_roadwork', url: '/api/traffic/roadwork' },
-          { key: 'traffic_flood', url: '/api/traffic/flood' },
-          { key: 'traffic_cameras', url: '/api/traffic/cameras' },
+          { key: 'traffic_roadwork', url: '/api/v1/traffic/roadwork' },
+          { key: 'traffic_flood', url: '/api/v1/traffic/flood' },
+          { key: 'traffic_cameras', url: '/api/v1/traffic/cameras' },
             { key: 'qld_cameras', url: '/api/qld/cameras' },
             { key: 'qld_flood_cameras', url: '/api/qld/flood-cameras' },
         ];
@@ -20950,7 +20950,7 @@ function initPagerHoursFromStorage() {
         
         // STAGE 3: Tertiary - beaches, weather, aviation, outages (less common)
         const stage3 = [
-          { key: 'aviation_cameras', url: '/api/aviation/cameras' },
+          { key: 'aviation_cameras', url: '/api/v1/aviation/cameras' },
           { key: 'beachwatch', url: '/api/beachwatch' },
           { key: 'beachsafe', url: '/api/beachsafe' },
           { key: 'dorsal_reports', url: '/api/dorsal/reports?hours=168' },
@@ -21037,11 +21037,11 @@ function initPagerHoursFromStorage() {
         // Core emergency data (always needs to be fresh)
         apiFetch(`${PROXY_BASE}/api/v1/rfs/incidents`).then(r => r.json()).then(d => { layerCache.rfs_incidents = { data: d, timestamp: Date.now() }; }).catch(() => {}),
         // Traffic hazards (most used toggleable layers)
-        apiFetch(`${PROXY_BASE}/api/traffic/incidents`).then(r => r.json()).then(d => { layerCache.traffic_incidents = { data: d, timestamp: Date.now() }; }).catch(() => {}),
+        apiFetch(`${PROXY_BASE}/api/v1/traffic/incidents`).then(r => r.json()).then(d => { layerCache.traffic_incidents = { data: d, timestamp: Date.now() }; }).catch(() => {}),
         // Waze prefetches removed with the retired ingest — the hazards and
         // roadwork layers are fed by LiveTraffic, which is unaffected.
-        apiFetch(`${PROXY_BASE}/api/traffic/roadwork`).then(r => r.json()).then(d => { layerCache.traffic_roadwork = { data: d, timestamp: Date.now() }; }).catch(() => {}),
-        apiFetch(`${PROXY_BASE}/api/traffic/flood`).then(r => r.json()).then(d => { layerCache.traffic_flood = { data: d, timestamp: Date.now() }; }).catch(() => {}),
+        apiFetch(`${PROXY_BASE}/api/v1/traffic/roadwork`).then(r => r.json()).then(d => { layerCache.traffic_roadwork = { data: d, timestamp: Date.now() }; }).catch(() => {}),
+        apiFetch(`${PROXY_BASE}/api/v1/traffic/flood`).then(r => r.json()).then(d => { layerCache.traffic_flood = { data: d, timestamp: Date.now() }; }).catch(() => {}),
       ];
       
       // Wait for all cache pre-warming to complete

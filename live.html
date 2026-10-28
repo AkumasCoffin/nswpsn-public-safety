@@ -35,7 +35,7 @@
   <link rel="apple-touch-icon" sizes="180x180" href="./assets/ausaware-icon-180.png">
   <link rel="manifest" href="./site.webmanifest">
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
-  <script src="livetraffic-vocab.js?v=1"></script>
+  <script src="livetraffic-vocab.js?v=2"></script>
 
   <style>
     /* Prevent horizontal overflow */
@@ -4249,7 +4249,7 @@
         
         // Traffic endpoints - categorize by type (and cache for loadLatestTraffic)
         // API now returns pre-filtered active incidents with count field
-        apiFetch(`${API_BASE}/api/traffic/incidents`).then(r => r.json()).then(d => {
+        apiFetch(`${API_BASE}/api/v1/traffic/incidents`).then(r => r.json()).then(d => {
           apiDataCache.traffic = apiDataCache.traffic || {};
           apiDataCache.traffic.incidents = d;
           
@@ -4284,26 +4284,26 @@
           setDotStatus('dot-traffic', true);
         }).catch(() => setDotStatus('dot-traffic', false)),
         
-        apiFetch(`${API_BASE}/api/traffic/roadwork`).then(r => r.json()).then(d => {
+        apiFetch(`${API_BASE}/api/v1/traffic/roadwork`).then(r => r.json()).then(d => {
           apiDataCache.traffic = apiDataCache.traffic || {};
           apiDataCache.traffic.roadwork = d;
           // Use count from API if available
           results.traffic.roadwork = d.count !== undefined ? d.count : (d.features?.length || 0);
         }).catch(() => {}),
         
-        apiFetch(`${API_BASE}/api/traffic/fire`).then(r => r.json()).then(d => {
+        apiFetch(`${API_BASE}/api/v1/traffic/fire`).then(r => r.json()).then(d => {
           apiDataCache.traffic = apiDataCache.traffic || {};
           apiDataCache.traffic.fire = d;
           results.traffic.fires = d.count !== undefined ? d.count : (d.features?.length || 0);
         }).catch(() => {}),
         
-        apiFetch(`${API_BASE}/api/traffic/flood`).then(r => r.json()).then(d => {
+        apiFetch(`${API_BASE}/api/v1/traffic/flood`).then(r => r.json()).then(d => {
           apiDataCache.traffic = apiDataCache.traffic || {};
           apiDataCache.traffic.flood = d;
           results.traffic.floods = d.count !== undefined ? d.count : (d.features?.length || 0);
         }).catch(() => {}),
         
-        apiFetch(`${API_BASE}/api/traffic/majorevent`).then(r => r.json()).then(d => {
+        apiFetch(`${API_BASE}/api/v1/traffic/majorevent`).then(r => r.json()).then(d => {
           apiDataCache.traffic = apiDataCache.traffic || {};
           apiDataCache.traffic.majorevent = d;
           results.traffic.major_events = d.count !== undefined ? d.count : (d.features?.length || 0);
@@ -4872,9 +4872,9 @@
           // demand instead of inheriting a gap.
           const jc = (path) => apiFetch(`${API_BASE}${path}`).then(r => r.json()).catch(() => ({ features: [] }));
           [alpine, council, works] = await Promise.all([
-            apiDataCache.traffic.alpine || jc('/api/traffic/alpine'),
-            apiDataCache.traffic.lga || jc('/api/traffic/lga'),
-            apiDataCache.traffic.works || jc('/api/traffic/works')
+            apiDataCache.traffic.alpine || jc('/api/v1/traffic/alpine'),
+            apiDataCache.traffic.lga || jc('/api/v1/traffic/lga'),
+            apiDataCache.traffic.works || jc('/api/v1/traffic/works')
           ]);
           apiDataCache.traffic.alpine = alpine;
           apiDataCache.traffic.lga = council;
@@ -4882,13 +4882,13 @@
         } else {
           const j = (path) => apiFetch(`${API_BASE}${path}`).then(r => r.json()).catch(() => ({ features: [] }));
           [incidents, fires, floods, majorEvents, alpine, council, works] = await Promise.all([
-            j('/api/traffic/incidents'),
-            j('/api/traffic/fire'),
-            j('/api/traffic/flood'),
-            j('/api/traffic/majorevent'),
-            j('/api/traffic/alpine'),
-            j('/api/traffic/lga'),
-            j('/api/traffic/works')
+            j('/api/v1/traffic/incidents'),
+            j('/api/v1/traffic/fire'),
+            j('/api/v1/traffic/flood'),
+            j('/api/v1/traffic/majorevent'),
+            j('/api/v1/traffic/alpine'),
+            j('/api/v1/traffic/lga'),
+            j('/api/v1/traffic/works')
           ]);
           // Cache all seven, not just the new three: the branch above reads
           // every key back, so a partial write here would make the next

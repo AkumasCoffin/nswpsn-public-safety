@@ -22,7 +22,7 @@
       short: 'Incidents',
       icon: 'fa-car-burst',
       color: '#f97316',
-      endpoint: '/api/traffic/incidents',
+      endpoint: '/api/v1/traffic/incidents',
       blurb: 'Crashes, breakdowns and hazards on the state road network.',
     },
     {
@@ -32,7 +32,7 @@
       short: 'Roadwork',
       icon: 'fa-road',
       color: '#eab308',
-      endpoint: '/api/traffic/roadwork',
+      endpoint: '/api/v1/traffic/roadwork',
       blurb: 'Planned and emergency roadwork on state roads.',
     },
     {
@@ -42,7 +42,7 @@
       short: 'Floods',
       icon: 'fa-water',
       color: '#3b82f6',
-      endpoint: '/api/traffic/flood',
+      endpoint: '/api/v1/traffic/flood',
       blurb: 'Road closures and hazards caused by flooding.',
     },
     {
@@ -52,7 +52,7 @@
       short: 'Fire',
       icon: 'fa-fire',
       color: '#ef4444',
-      endpoint: '/api/traffic/fire',
+      endpoint: '/api/v1/traffic/fire',
       blurb: 'Fire activity affecting the road network.',
     },
     {
@@ -62,7 +62,7 @@
       short: 'Events',
       icon: 'fa-star',
       color: '#8b5cf6',
-      endpoint: '/api/traffic/majorevent',
+      endpoint: '/api/v1/traffic/majorevent',
       blurb: 'Sporting fixtures, marches and other planned closures.',
     },
     {
@@ -72,7 +72,7 @@
       short: 'Alpine',
       icon: 'fa-snowflake',
       color: '#7dd3fc',
-      endpoint: '/api/traffic/alpine',
+      endpoint: '/api/v1/traffic/alpine',
       blurb: 'Snow, ice and chain-fitting conditions on alpine roads.',
     },
     {
@@ -82,7 +82,7 @@
       short: 'Council',
       icon: 'fa-building-columns',
       color: '#a3e635',
-      endpoint: '/api/traffic/lga',
+      endpoint: '/api/v1/traffic/lga',
       blurb:
         'Local-road records submitted by councils. Not a layer of its own ' +
         'on the map — roadwork joins the Roadwork layer and the rest join ' +
@@ -95,7 +95,7 @@
       short: 'Works',
       icon: 'fa-helmet-safety',
       color: '#fb923c',
-      endpoint: '/api/traffic/works',
+      endpoint: '/api/v1/traffic/works',
       blurb:
         'Works, utilities and light-rail closures from the aggregate web ' +
         'feed. The only Live Traffic source with ACT/Canberra coverage.',
