@@ -11,14 +11,8 @@ import { execSync } from 'node:child_process';
  * entry is a promise that we've verified the finding is not exploitable here.
  */
 const ALLOWLIST = {
-  // brace-expansion DoS (GHSA-mh99-v99m-4gvg). The advisory's vulnerable range
-  // is published as `<=5.0.7`, but brace-expansion never shipped past 4.x, so
-  // the range flags EVERY version — including the already-patched ones. Our
-  // tree resolves 1.1.16 and 2.1.2, both ABOVE the real fixed versions
-  // (1.1.12 / 2.0.2), i.e. not actually vulnerable. npm's only "fix" is a
-  // semver-major downgrade of gtfs-realtime-bindings to 0.0.6, which we will
-  // not do. Remove this entry once GitHub corrects the advisory range.
-  'GHSA-mh99-v99m-4gvg': 'brace-expansion: malformed advisory range flags already-patched versions',
+  // Empty. The last entry, brace-expansion's misfiled GHSA-mh99-v99m-4gvg range,
+  // stopped being reported and came out on 2026-11-02.
 };
 
 const HIGH = new Set(['high', 'critical']);
