@@ -1,7 +1,7 @@
 /* ==========================================================================
    NSW PSN — Map Weather Field Module
    ==========================================================================
-   Renders the gridded weather field from /api/weather/grid as a continuous
+   Renders the gridded weather field from /api/v1/weather/grid as a continuous
    Windy-style colour wash on the Leaflet map, with animated wind particles
    on top. Self-contained: include it with a <script> tag after Leaflet and
    call WeatherField.create(map, opts). Nothing here touches the DOM or

@@ -204,29 +204,45 @@ map.html  ──►  /api/v1/rfs/incidents     (RFS fires)
           ──►  /api/v1/{qld-fire,nt-fire,sa-fire,vic-emergency,wa-emergency,act-ambulance}/*
                                          (the other states' fire and emergency feeds)
           ──►  /api/v1/traffic/*         (seven hazard kinds, works + cameras)
-          ──►  /api/endeavour/*, /api/ausgrid/outages, /api/essential/*
-          ──►  /api/pager/hits           (pager pins — map.html:6265)
+          ──►  /api/v1/endeavour/{current,maintenance,future}, /api/v1/essential/outages
+          ──►  /api/v1/pager/hits        (pager pins; a 503 keeps the last pins)
+          ──►  /api/v1/data/history      (an incident's change trail)
           ──►  /api/v1/firms/hotspots    (satellite hotspots)
           ──►  /api/v1/adsb/{aircraft,trails,history,photo/:hex}
           ──►  /api/adsb/receivers       (node status — never on /api/v1/)
           ──►  /api/v1/transport/*       (public transport)
           ──►  /api/v1/aviation/cameras, /api/v1/marinetraffic/*
-          ──►  /api/radio/grn-sites      (repeater site geography — 18474)
-          ──►  /api/radio/monitored-sites  (repeater "Monitoring" badges — 18451)
-          ──►  /api/dorsal/reports?hours=168  (SharkSmart layer)
+          ──►  /api/v1/{centralwatch/cameras,qld/cameras,qld/flood-cameras}
+          ──►  /api/v1/{beachwatch,beachsafe,beachsafe/beach/:slug}
+          ──►  /api/v1/weather/{current,radar,point,grid/manifest,grid}
+          ──►  /api/boundaries/:kind     (boundary overlays — site-only, not /api/v1/)
+          ──►  /api/radio/grn-sites      (repeater site geography)
+          ──►  /api/radio/monitored-sites  (repeater "Monitoring" badges)
+          ──►  /api/v1/dorsal/reports?hours=168  (SharkSmart layer)
           ──►  /api/incidents            (community-added)
 
 live.html ──►  per-source counts, /api/v1/rfs/incidents, /api/v1/bom/warnings
-               (weather), /api/v1/traffic/*, /api/summaries/latest,
-               /api/news/rss, /api/stats/history, /api/heartbeat
+               (weather), /api/v1/traffic/*, /api/v1/{endeavour,essential}/*,
+               /api/v1/ausgrid/stats, /api/v1/{beachwatch,beachsafe},
+               /api/v1/summaries/latest, /api/v1/news/rss, /api/stats/history,
+               /api/heartbeat
+
+logs.html ──►  /api/v1/data/history, /api/v1/data/history/filters,
+               /api/v1/pager/hits, /api/v1/summaries
 ```
 
 The feeds on `/api/v1/` answer as they do on `/api/`, except that a non-GeoJSON
-body is wrapped in `data` — so `live.html` reads BOM's warnings from
-`response.data`, and `map.html` unwraps the transport, ADS-B, MarineTraffic
-and airport-camera detail answers the same way (transport lines, traffic and
-the airport list are GeoJSON, so bare). The rest move to `/api/v1/` group by
-group ([`../api.md`](../api.md)).
+body is wrapped in `data` — so `live.html` reads BOM's warnings, the power
+lists, BeachSafe, news and the latest summary from `response.data`, and
+`map.html` and `logs.html` unwrap the rest the same way (GeoJSON — traffic,
+transport lines, cameras, beaches, sharks, current weather, pager hits — stays
+bare). `map.html`'s staged prefetch marks the wrapped feeds `unwrap: true` so
+`layerCache` holds what the layer loaders fetch themselves. Stored history's
+`*_iso` times are UTC on `/api/v1/`, and a page past the 10,000 offset cap is a
+`validation_failed` carrying `details.max_offset`, which `logs.html` checks for.
+The council-name list (`/api/boundaries/lga-names`, used by the signup and
+location forms) and the boundary overlays stay on `/api/` as site routes
+([`../api.md`](../api.md)).
 
 **SharkSmart is its own layer, not a beach feed, and that is deliberate.**
 Beachwatch and BeachSafe both describe the standing state of a beach and merge

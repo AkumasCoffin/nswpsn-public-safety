@@ -3033,7 +3033,7 @@ const _DASH_SEVERITY_TYPE_LABELS = {};
 const _DASH_FILTER_SEVERITY_TYPES = new Set();
 const _DASH_SUBTYPE_AWARE_TYPES = new Set();
 
-// Lazy-fetched + cached `/api/data/history/filters` providers tree.
+// Lazy-fetched + cached `/api/v1/data/history/filters` providers tree.
 // First call kicks off a request; subsequent calls reuse the same promise.
 // Used to populate the subtype filter chip lists with whatever values
 // have actually been observed in data_history.
@@ -3051,8 +3051,8 @@ function fetchFilterCatalogue() {
   // {providers: []} forever. On error we surface the empty result
   // to the caller but clear the cached promise so the next call
   // retries.
-  _dashFilterFetchPromise = fetch(API + '/api/data/history/filters')
-    .then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)))
+  _dashFilterFetchPromise = fetch(API + '/api/v1/data/history/filters')
+    .then(r => r.ok ? r.json().then(j => j.data) : Promise.reject(new Error('HTTP ' + r.status)))
     .catch((err) => {
       _dashFilterFetchPromise = null;
       console.warn('[dash] filter catalogue fetch failed:', err);

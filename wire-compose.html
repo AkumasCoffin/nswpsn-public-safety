@@ -1064,7 +1064,7 @@
 
     // ---- incidents ----
     function haversine(a, b, c, d) { const R = 6371, r = Math.PI / 180; const dLat = (c - a) * r, dLng = (d - b) * r; const s = Math.sin(dLat / 2) ** 2 + Math.cos(a * r) * Math.cos(c * r) * Math.sin(dLng / 2) ** 2; return 2 * R * Math.asin(Math.sqrt(s)); }
-    // Pull the same incident feed the logs page uses (/api/data/history): RFS,
+    // Pull the same incident feed the logs page uses (/api/v1/data/history): RFS,
     // traffic, pager, user incidents, etc. — not just user-created ones. full=1
     // so titles/locations are populated; keep only rows we can link (source_id).
     // Sources that aren't scene "incidents" you'd link a photo to (power
@@ -1076,8 +1076,8 @@
     const SCHEDULED_TITLE = /^\s*(scheduled|planned)\b/i;
     async function loadIncidents() {
       try {
-        const r = await fetch(`${API_BASE}/api/data/history?limit=300&unique=1&full=1&order=desc`, { headers: await keyHeaders() });
-        const j = await r.json();
+        const r = await fetch(`${API_BASE}/api/v1/data/history?limit=300&unique=1&full=1&order=desc`, { headers: await keyHeaders() });
+        const j = (await r.json()).data;
         const recs = (j && Array.isArray(j.records)) ? j.records : [];
         allIncidents = recs
           .filter((x) => x && x.source_id && !INCIDENT_BLOCK.test(x.source || '') && !SCHEDULED_TITLE.test(x.title || x.location_text || ''))

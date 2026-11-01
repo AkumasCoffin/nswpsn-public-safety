@@ -3088,9 +3088,9 @@
 
     async function loadRdioSummaries() {
       try {
-        const res = await apiFetch(`${API_BASE}/api/summaries/latest`);
+        const res = await apiFetch(`${API_BASE}/api/v1/summaries/latest`);
         if (!res.ok) throw new Error(`status ${res.status}`);
-        const data = await res.json();
+        const data = (await res.json()).data;
 
         const hourlyEl = document.getElementById('rdio-hourly-summary');
         const hourlyMeta = document.getElementById('rdio-hourly-meta');
@@ -3304,13 +3304,13 @@
       if (!container) return;
       
       try {
-        const response = await apiFetch(`${API_BASE}/api/news/rss?limit=10`);
+        const response = await apiFetch(`${API_BASE}/api/v1/news/rss?limit=10`);
         
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}`);
         }
         
-        const data = await response.json();
+        const data = (await response.json()).data;
         newsCache = data.items || [];
         
         // Store category counts from API or calculate locally
@@ -4174,7 +4174,7 @@
       // Parallel fetch all endpoints
       const fetches = [
         // Ausgrid stats
-        apiFetch(`${API_BASE}/api/ausgrid/stats`).then(r => r.json()).then(d => {
+        apiFetch(`${API_BASE}/api/v1/ausgrid/stats`).then(r => r.json()).then(j => j.data).then(d => {
           results.power.ausgrid.unplanned = (d.OutageUnplannedPdoCount || 0) + (d.OutageUnplannedRdoCount || 0);
           results.power.ausgrid.planned = d.OutagePlannedTodayCount || 0;
           results.power.ausgrid.customers = (d.OutageUnplannedPdoCustomers || 0) + (d.OutageUnplannedRdoCustomers || 0);
@@ -4182,7 +4182,7 @@
         }).catch(() => setDotStatus('dot-ausgrid', false)),
         
         // Endeavour current - API now filters invalid dates and returns count
-        apiFetch(`${API_BASE}/api/endeavour/current`).then(r => r.json()).then(d => {
+        apiFetch(`${API_BASE}/api/v1/endeavour/current`).then(r => r.json()).then(j => j.data).then(d => {
           apiDataCache.endeavour = apiDataCache.endeavour || {};
           apiDataCache.endeavour.current = d;
           
@@ -4201,7 +4201,7 @@
         }).catch(() => setDotStatus('dot-endeavour', false)),
         
         // Endeavour maintenance (active planned maintenance)
-        apiFetch(`${API_BASE}/api/endeavour/maintenance`).then(r => r.json()).then(d => {
+        apiFetch(`${API_BASE}/api/v1/endeavour/maintenance`).then(r => r.json()).then(j => j.data).then(d => {
           apiDataCache.endeavour = apiDataCache.endeavour || {};
           apiDataCache.endeavour.maintenance = d;
           
@@ -4218,7 +4218,7 @@
         }).catch(() => {}),
         
         // Endeavour future (planned outages)
-        apiFetch(`${API_BASE}/api/endeavour/future`).then(r => r.json()).then(d => {
+        apiFetch(`${API_BASE}/api/v1/endeavour/future`).then(r => r.json()).then(j => j.data).then(d => {
           apiDataCache.endeavour = apiDataCache.endeavour || {};
           apiDataCache.endeavour.future = d;
           
@@ -4227,7 +4227,7 @@
         }).catch(() => {}),
         
         // Essential Energy outages (current + future)
-        apiFetch(`${API_BASE}/api/essential/outages`).then(r => r.json()).then(d => {
+        apiFetch(`${API_BASE}/api/v1/essential/outages`).then(r => r.json()).then(j => j.data).then(d => {
           apiDataCache.essential = d;
           const outages = d?.outages || (Array.isArray(d) ? d : []);
           outages.forEach(o => {
@@ -4348,7 +4348,7 @@
         }).catch(() => setDotStatus('dot-bom', false)),
         
         // Beachwatch - cache for loadLatestBeaches
-        apiFetch(`${API_BASE}/api/beachwatch`).then(r => r.json()).then(d => {
+        apiFetch(`${API_BASE}/api/v1/beachwatch`).then(r => r.json()).then(d => {
           apiDataCache.beachwatch = d;
           const features = d.features || [];
           results.environment.beaches = features.length;
@@ -4369,7 +4369,7 @@
         }).catch(() => setDotStatus('dot-beachwatch', false)),
         
         // BeachSafe - surf conditions and patrol data
-        apiFetch(`${API_BASE}/api/beachsafe`).then(r => r.json()).then(d => {
+        apiFetch(`${API_BASE}/api/v1/beachsafe`).then(r => r.json()).then(j => j.data).then(d => {
           apiDataCache.beachsafe = d;
           const beaches = Array.isArray(d) ? d : [];
           results.environment.beachsafeCount = beaches.length;
@@ -4592,10 +4592,10 @@
       
       try {
         const [endeavourCurrent, endeavourMaintenance, endeavourFuture, essentialOutages] = await Promise.all([
-          apiFetch(`${API_BASE}/api/endeavour/current`).then(r => r.json()).catch(() => []),
-          apiFetch(`${API_BASE}/api/endeavour/maintenance`).then(r => r.json()).catch(() => []),
-          apiFetch(`${API_BASE}/api/endeavour/future`).then(r => r.json()).catch(() => []),
-          apiFetch(`${API_BASE}/api/essential/outages`).then(r => r.json()).catch(() => [])
+          apiFetch(`${API_BASE}/api/v1/endeavour/current`).then(r => r.json()).then(j => j.data).catch(() => []),
+          apiFetch(`${API_BASE}/api/v1/endeavour/maintenance`).then(r => r.json()).then(j => j.data).catch(() => []),
+          apiFetch(`${API_BASE}/api/v1/endeavour/future`).then(r => r.json()).then(j => j.data).catch(() => []),
+          apiFetch(`${API_BASE}/api/v1/essential/outages`).then(r => r.json()).then(j => j.data).catch(() => [])
         ]);
         
         const items = [];
@@ -5373,8 +5373,8 @@
       try {
         // Fetch both data sources in parallel
         const [beachwatchData, beachsafeData] = await Promise.all([
-          apiFetch(`${API_BASE}/api/beachwatch`).then(r => r.json()).catch(() => ({ features: [] })),
-          apiFetch(`${API_BASE}/api/beachsafe`).then(r => r.json()).catch(() => [])
+          apiFetch(`${API_BASE}/api/v1/beachwatch`).then(r => r.json()).catch(() => ({ features: [] })),
+          apiFetch(`${API_BASE}/api/v1/beachsafe`).then(r => r.json()).then(j => j.data).catch(() => [])
         ]);
         
         const features = beachwatchData.features || [];
