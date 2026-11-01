@@ -189,17 +189,25 @@ page keeps its own `apiFetch`/`userHeaders` helper and reads the token from
 on the public site reads a database directly.
 
 The profile modal (`auth-common.js`) also carries an **API keys** card where a
-logged-in user requests a personal key — optionally saying which feeds it
-should read, live or history (staff choose the key's actual scopes when they
-approve) — generates it once staff approve (the plaintext is shown once and
-never again), re-issues it or deletes it. Each key and approved request says
-what it reads, in words, from `GET /api/api-keys/scope-catalog`; against an API
-that predates scopes the card simply leaves that out. With an active key the
-card offers **API docs**, which opens `https://api.forcequit.xyz/api/docs` in a
-new tab — the API's own reference page, which asks for the key there and shows
-what it can read ([`../api.md`](../api.md)); the one-time reveal of a new key
-says the same, beside a curl example on `/api/v1/`. A bell notification about a
-request links to `/#api-keys`, which opens that card.
+logged-in user requests a personal key — optionally ticking which feeds it
+should read, live or history, in the same feed table staff grant from (staff
+choose the key's actual feeds when they approve) — generates it once staff
+approve (the plaintext is shown once and never again), re-issues it or deletes
+it. Each key and request says what it reads, in words ("Fires · live, history;
+Weather · live"), from `GET /api/api-keys/scope-catalog`; against an API that
+predates the feed table the card leaves the table out. With an active key the
+card offers **API docs**, which opens this site's `/api-docs` in a new tab — the
+reference as far as the person's active keys reach, read signed in
+([`../api.md`](../api.md)); the one-time reveal of a new key links to it too,
+beside a curl example on `/api/v1/fires`. A bell notification about a request
+links to `/#api-keys`, which opens that card.
+
+The staff page's API keys tab (`staff.html`) grants from the same table: a row
+per feed with what it covers, a box for each window the feed has, All live /
+All history / Clear, and the member's ask pre-ticked and marked so it stays
+visible after the ticks change. The same table edits a live key's feeds
+(`POST /api/staff/api-keys/:id/scopes`); a key on the old `read` list opens on
+an empty table, ticking which replaces it.
 
 ```
 map.html  ──►  /api/rfs/incidents        (RFS fires)

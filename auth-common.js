@@ -263,11 +263,33 @@ function createProfileModal() {
       #profile-modal .ak-reveal { border:1px solid rgba(34,197,94,0.4); background:rgba(34,197,94,0.07); border-radius:10px; padding:0.75rem 0.85rem; margin-bottom:0.9rem; }
       #profile-modal .ak-scopes { color:#94a3b8; font-size:0.72rem; margin-top:0.25rem; line-height:1.45; }
       #profile-modal .ak-scopes b { color:#cbd5e1; font-weight:600; }
-      #profile-modal .ak-ask-h { color:#94a3b8; font-size:0.74rem; margin-top:0.2rem; }
-      #profile-modal .ak-pills { display:flex; flex-wrap:wrap; gap:0.3rem; }
-      #profile-modal .ak-pill { display:inline-flex; align-items:center; padding:0.2rem 0.6rem; border-radius:999px; border:1px solid rgba(148,163,184,0.25); color:#94a3b8; font-size:0.74rem; cursor:pointer; user-select:none; }
-      #profile-modal .ak-pill input { display:none; }
-      #profile-modal .ak-pill.on { border-color:rgba(249,115,22,0.6); background:rgba(249,115,22,0.14); color:#fdba74; }
+      /* The request form's feed table (apiKeyScopeAsk): a row per feed, a box per window it has. */
+      #profile-modal .ak-ft { margin-top:0.2rem; }
+      #profile-modal .ak-ft-bar { display:flex; align-items:center; gap:0.4rem 0.5rem; flex-wrap:wrap; margin-bottom:0.35rem; }
+      #profile-modal .ak-ft-title { color:#94a3b8; font-size:0.74rem; }
+      #profile-modal .ak-ft-acts { display:inline-flex; gap:0.3rem; flex-wrap:wrap; margin-left:auto; }
+      #profile-modal .ak-ft-act { padding:0.16rem 0.55rem; border-radius:999px; border:1px solid rgba(148,163,184,0.25); background:rgba(148,163,184,0.08); color:#94a3b8; font-family:inherit; font-size:0.7rem; cursor:pointer; }
+      #profile-modal .ak-ft-act:hover { color:#e2e8f0; background:rgba(148,163,184,0.16); }
+      #profile-modal .ak-ft-scroll { overflow-x:auto; border:1px solid rgba(148,163,184,0.15); border-radius:8px; background:rgba(2,6,23,0.4); }
+      #profile-modal .ak-ft-table { width:100%; min-width:16rem; border-collapse:collapse; table-layout:fixed; font-size:0.78rem; }
+      #profile-modal .ak-ft-table col.ak-ft-wcol { width:4.2rem; }
+      #profile-modal .ak-ft-table th, #profile-modal .ak-ft-table td { padding:0.28rem 0.55rem; border-bottom:1px solid rgba(148,163,184,0.08); }
+      #profile-modal .ak-ft-table tbody tr:last-child > * { border-bottom:none; }
+      #profile-modal .ak-ft-table thead th { color:#64748b; font-size:0.62rem; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; text-align:left; border-bottom-color:rgba(148,163,184,0.15); white-space:nowrap; }
+      #profile-modal .ak-ft-table thead th.ak-ft-w { text-align:center; }
+      #profile-modal .ak-ft-table th.ak-ft-feed { text-align:left; font-weight:400; }
+      #profile-modal .ak-ft-fl { display:flex; align-items:baseline; gap:0.5rem; min-width:0; }
+      #profile-modal .ak-ft-name { color:#e2e8f0; font-weight:600; white-space:nowrap; flex-shrink:0; }
+      #profile-modal .ak-ft-covers { color:#64748b; font-size:0.7rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+      #profile-modal .ak-ft-table td.ak-ft-c { padding:0; text-align:center; }
+      #profile-modal .ak-ft-c label { display:flex; align-items:center; justify-content:center; min-height:1.9rem; cursor:pointer; }
+      #profile-modal .ak-ft-c input { width:15px; height:15px; margin:0; accent-color:#f97316; cursor:pointer; }
+      #profile-modal .ak-ft-na { color:#475569; }
+      @media (max-width: 640px) {
+        #profile-modal .ak-ft-fl { flex-direction:column; align-items:stretch; gap:0; }
+        #profile-modal .ak-ft-covers { font-size:0.66rem; }
+        #profile-modal .ak-ft-table col.ak-ft-wcol { width:3.6rem; }
+      }
     </style>
     <div style="background:#0f172a; width:100%; height:100%; overflow-y:auto; padding:1.6rem clamp(1rem, 4vw, 3rem) 3rem; box-sizing:border-box;">
       <div style="max-width:1180px; margin:0 auto;">
@@ -362,7 +384,7 @@ function createProfileModal() {
 
       <div id="profile-apikeys-section" class="pf-card">
         <label style="display:block; color:#cbd5e1; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem; font-weight:600;">API keys</label>
-        <div style="color:#64748b; font-size:0.72rem; margin-bottom:0.7rem;">For scripts and the command line — a key is refused from web pages by design. It <strong>reads only what it is scoped to</strong>: which data feeds (RFS, traffic, transport, aircraft, ships, weather, power, cameras, pager and more), and whether live, history or both. Never account data, and never writes. Staff approve a request and set its scopes; you then generate the key here and see it exactly once (nothing stores it, staff never see it). Lost one? Re-issue it — same key, new secret. One pending request at a time, up to 3 active keys.</div>
+        <div style="color:#64748b; font-size:0.72rem; margin-bottom:0.7rem;">For scripts and the command line — a key is refused from web pages by design. It <strong>reads only the feeds it is granted</strong> (fires, warnings, roads, transport, aircraft, ships, weather, power, cameras, pager and more), each live, history or both. Never account data, and never writes. Staff approve a request and choose its feeds; you then generate the key here and see it exactly once (nothing stores it, staff never see it). Lost one? Re-issue it — same key, new secret. One pending request at a time, up to 3 active keys.</div>
         <div id="profile-apikeys-body"></div>
         <div id="profile-apikeys-msg" style="margin-top:0.5rem; font-size:0.8rem; min-height:1.2em;"></div>
       </div>
@@ -1185,26 +1207,42 @@ async function loadApiKeyScopeCatalog(session) {
   return _apiKeyScopeCatalog;
 }
 
-// What a scope set reads, in words: "NSW Rural Fire Service, Live Traffic NSW
-// · incidents · live". `read` is the set every key had before scopes.
-function apiKeyScopeText(scopes) {
+// The catalogue's feeds (table order) and windows; feeds is null against an
+// API that predates the feed table.
+function apiKeyFeeds(cat) {
+  return cat && Array.isArray(cat.feeds) && cat.feeds.length ? cat.feeds : null;
+}
+function apiKeyWindows(cat) {
+  return apiKeyFeeds(cat) && Array.isArray(cat.windows) && cat.windows.length ? cat.windows
+    : [{ key: 'live', label: 'Live' }, { key: 'history', label: 'History' }];
+}
+
+// What a scope set reads, in words, in the table's order: "Fires · live,
+// history; Weather · live". `read` is the old feed list every key had before
+// feeds were granted one by one; for a key or a grant (`granted`), a set with
+// no feed in it is read the same way by the API, so it says so too.
+function apiKeyScopeText(scopes, granted) {
   const list = Array.isArray(scopes) ? scopes : [];
   if (!list.length) return '';
-  if (list.includes('read')) return 'the original set of live data feeds';
-  const cat = _apiKeyScopeCatalog;
-  const by = (dim) => list.filter((s) => s.startsWith(dim + ':')).map((s) => s.slice(dim.length + 1));
-  const label = (dim, v) => {
-    const pool = cat && (dim === 'source' ? cat.sources : cat.types);
-    const hit = pool && pool.find((x) => x.key === v);
-    return hit ? hit.label : v;
+  const feeds = apiKeyFeeds(_apiKeyScopeCatalog);
+  const wins = apiKeyWindows(_apiKeyScopeCatalog).map((w) => w.key);
+  const by = new Map();
+  list.forEach((s) => {
+    const m = /^([a-z_]+):([a-z_]+)$/.exec(String(s));
+    if (!m || !wins.includes(m[2]) || (feeds && !feeds.some((f) => f.key === m[1]))) return;
+    if (!by.has(m[1])) by.set(m[1], new Set());
+    by.get(m[1]).add(m[2]);
+  });
+  if (list.includes('read') || (granted && !by.size)) return 'the old feed list';
+  const order = (feeds || []).map((f) => f.key);
+  const rank = (k) => { const i = order.indexOf(k); return i === -1 ? order.length : i; };
+  const label = (k) => {
+    const hit = (feeds || []).find((f) => f.key === k);
+    return hit ? hit.label : k.charAt(0).toUpperCase() + k.slice(1);
   };
-  const src = by('source');
-  const typ = by('type');
-  const win = by('window');
-  const s = src.includes('*') ? 'all sources' : src.map((v) => label('source', v)).join(', ');
-  const t = typ.includes('*') ? 'all kinds' : typ.map((v) => label('type', v).toLowerCase()).join(', ');
-  const w = win.includes('*') ? 'live and history' : win.join(' and ');
-  return `${s} · ${t} · ${w}`;
+  return [...by.keys()].sort((a, b) => rank(a) - rank(b))
+    .map((k) => `${label(k)} · ${[...by.get(k)].sort((a, b) => wins.indexOf(a) - wins.indexOf(b)).join(', ')}`)
+    .join('; ');
 }
 
 async function loadProfileApiKeys(session) {
@@ -1247,8 +1285,8 @@ async function loadProfileApiKeys(session) {
           <input type="text" id="profile-apikey-plain" readonly class="ak-input" style="flex:1; min-width:0; font-size:0.78rem; font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;">
           <button type="button" data-ak-copy title="Copy key" class="ak-btn"><i class="fas fa-copy"></i></button>
         </div>
-        <div class="ak-meta" style="margin-top:0.5rem; word-break:break-all; font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;">curl -H "Authorization: Bearer ak_..." https://api.forcequit.xyz/api/v1/rfs/incidents</div>
-        <div class="ak-meta">Paste it into the <a href="${API_BASE_URL}/api/docs" target="_blank" rel="noopener" style="color:#fdba74;">API docs</a> to see what it can read, with “Try it” on each endpoint.</div>
+        <div class="ak-meta" style="margin-top:0.5rem; word-break:break-all; font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;">curl -H "Authorization: Bearer ak_..." https://api.forcequit.xyz/api/v1/fires</div>
+        <div class="ak-meta">The <a href="/api-docs" target="_blank" rel="noopener" style="color:#fdba74;">API docs</a> list every endpoint and the feed it needs.</div>
         <button type="button" data-ak-done class="ak-btn" style="margin-top:0.6rem;">Done</button>
       </div>`);
   }
@@ -1257,10 +1295,10 @@ async function loadProfileApiKeys(session) {
   //    A live key can be re-issued (new secret, same key) or deleted; a dead
   //    one can only be deleted, which takes it off this list.
   if (keys.length) {
-    // The reference opens in its own tab on the API's origin and asks for the
-    // key there; it is only worth offering to someone with a key that works.
+    // The reference is this site's own page, opened in its own tab; it is
+    // only worth offering to someone with a key that works.
     const docs = keys.some((k) => k.active)
-      ? `<a href="${API_BASE_URL}/api/docs" target="_blank" rel="noopener" class="ak-btn" title="What your keys can read, with “Try it” on each endpoint"><i class="fas fa-book"></i> API docs</a>`
+      ? `<a href="/api-docs" target="_blank" rel="noopener" class="ak-btn" title="Every endpoint and the feed it needs"><i class="fas fa-book"></i> API docs</a>`
       : '';
     parts.push(`<div class="ak-h ak-h-row"><span>Your keys</span>${docs}</div>`);
     keys.forEach((k) => {
@@ -1286,7 +1324,7 @@ async function loadProfileApiKeys(session) {
             </span>
           </div>
           <div class="ak-prefix">ak_${escNotif(k.prefix)}_…</div>
-          ${apiKeyScopeText(k.scopes) ? `<div class="ak-scopes"><b>Reads</b> ${escNotif(apiKeyScopeText(k.scopes))}</div>` : ''}
+          ${apiKeyScopeText(k.scopes, true) ? `<div class="ak-scopes"><b>Reads</b> ${escNotif(apiKeyScopeText(k.scopes, true))}</div>` : ''}
           <div class="ak-meta">${escNotif(meta.join(' · '))}</div>
         </div>`);
     });
@@ -1320,8 +1358,10 @@ async function loadProfileApiKeys(session) {
         line = `Sent ${apiKeyDate(r.createdAt)}`;
       }
       // What it will read once generated (the grant), else what was asked for.
-      const granted = r.status === 'approved' ? apiKeyScopeText(r.scopes) : '';
-      const asked = apiKeyScopeText(r.requestedScopes);
+      // A grant with no scopes predates them; generating it gives the old list.
+      const granted = r.status !== 'approved' ? ''
+        : (Array.isArray(r.scopes) && !r.scopes.length ? 'the old feed list' : apiKeyScopeText(r.scopes, true));
+      const asked = apiKeyScopeText(r.requestedScopes, false);
       const scopeLine = granted
         ? `<div class="ak-scopes"><b>Will read</b> ${escNotif(granted)}</div>`
         : (asked ? `<div class="ak-scopes"><b>Asked for</b> ${escNotif(asked)}</div>` : '');
@@ -1383,8 +1423,13 @@ async function loadProfileApiKeys(session) {
     openBtn.hidden = false;
     setApiKeysMsg('', false);
   });
-  body.querySelectorAll('.ak-pill input').forEach((i) => i.addEventListener('change', () => {
-    i.closest('.ak-pill').classList.toggle('on', i.checked);
+  // "All live" / "All history" tick that column; Clear unticks every box.
+  body.querySelectorAll('[data-ak-ask-all]').forEach((b) => b.addEventListener('click', () => {
+    const win = b.dataset.akAskAll;
+    body.querySelectorAll('[data-ak-ask]').forEach((i) => {
+      if (!win) i.checked = false;
+      else if (i.value.endsWith(':' + win)) i.checked = true;
+    });
   }));
   // Disabled on click: a second click would be a second claim, which the
   // server refuses — and that refusal would then print under the key.
@@ -1459,28 +1504,40 @@ async function claimProfileApiKey(id) {
   loadProfileApiKeys();
 }
 
-// The optional "what should it read?" on the request form: feeds and
-// live/history. It is an ask — staff choose the scopes — so it stays simple:
-// every kind of data from the feeds picked. Empty without a catalogue.
+// The optional "what should it read?" on the request form: the same feed
+// table staff grant from — a row per feed, a box per window it has, each box
+// the scope `<feed>:<window>`. It is an ask; staff decide what the key gets.
+// Empty against an API that predates the feed table.
 function apiKeyScopeAsk(cat) {
-  if (!cat || !Array.isArray(cat.sources)) return '';
-  const pill = (attr, value, label) =>
-    `<label class="ak-pill"><input type="checkbox" ${attr} value="${escNotif(value)}">${escNotif(label)}</label>`;
+  const feeds = apiKeyFeeds(cat);
+  if (!feeds) return '';
+  const wins = apiKeyWindows(cat);
+  const rows = feeds.map((f) => {
+    const offered = new Set(f.windows || []);
+    const cells = wins.map((w) => offered.has(w.key)
+      ? `<td class="ak-ft-c"><label title="${escNotif(f.key + ':' + w.key)}"><input type="checkbox" data-ak-ask value="${escNotif(f.key + ':' + w.key)}" aria-label="${escNotif(f.label)}, ${escNotif(w.label)}"></label></td>`
+      : `<td class="ak-ft-c"><span class="ak-ft-na" title="${escNotif(f.label)} has no ${escNotif(String(w.label).toLowerCase())} feed">–</span></td>`).join('');
+    return `<tr><th scope="row" class="ak-ft-feed" title="${escNotif(f.covers || '')}"><div class="ak-ft-fl">`
+      + `<span class="ak-ft-name">${escNotif(f.label)}</span><span class="ak-ft-covers">${escNotif(f.covers || '')}</span></div></th>${cells}</tr>`;
+  }).join('');
+  const acts = wins.map((w) => `<button type="button" class="ak-ft-act" data-ak-ask-all="${escNotif(w.key)}">All ${escNotif(String(w.label).toLowerCase())}</button>`).join('')
+    + '<button type="button" class="ak-ft-act" data-ak-ask-all="">Clear</button>';
   return `
-    <div class="ak-ask-h">What should it read? Optional — staff decide what the key gets.</div>
-    <div class="ak-pills">${cat.sources.map((s) => pill('data-ak-ask-src', s.key, s.label)).join('')}</div>
-    <div class="ak-pills">${pill('data-ak-ask-win', 'live', 'Live — what the map shows now')}${pill('data-ak-ask-win', 'history', 'History — stored records')}</div>`;
+    <div class="ak-ft">
+      <div class="ak-ft-bar"><span class="ak-ft-title">What should it read? Optional — staff decide what the key gets.</span><span class="ak-ft-acts">${acts}</span></div>
+      <div class="ak-ft-scroll"><table class="ak-ft-table">
+        <colgroup><col>${wins.map(() => '<col class="ak-ft-wcol">').join('')}</colgroup>
+        <thead><tr><th scope="col">Feed</th>${wins.map((w) => `<th scope="col" class="ak-ft-w" title="${escNotif(w.description || '')}">${escNotif(w.label)}</th>`).join('')}</tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+    </div>`;
 }
 
-// The ask as scopes, or none when nothing was picked.
+// The ask as scopes (`fires:live`, …), or none when nothing was ticked.
 function apiKeyScopeAskValue() {
-  const picked = (sel) => Array.from(document.querySelectorAll(sel)).filter((i) => i.checked).map((i) => i.value);
-  const src = picked('[data-ak-ask-src]');
-  if (!src.length) return null;
-  const win = picked('[data-ak-ask-win]');
-  return src.map((s) => `source:${s}`)
-    .concat(['type:*'])
-    .concat((win.length ? win : ['live']).map((w) => `window:${w}`));
+  const picked = Array.from(document.querySelectorAll('#profile-apikeys-body [data-ak-ask]'))
+    .filter((i) => i.checked).map((i) => i.value);
+  return picked.length ? picked : null;
 }
 
 async function requestProfileApiKey() {
