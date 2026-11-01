@@ -1,13 +1,10 @@
 /**
- * The news routes on /api/v1/ and on their old /api/ paths.
+ * The news routes, for the live page. Not on /api/v1/: news outlets' feeds
+ * are not part of the API (v1.test.ts checks they are absent there).
  *
- * One handler serves both (api/v1/mirror.ts), answering through
- * api/v1/respond.ts: JSON wrapped in `data` on v1, the old bodies byte for
- * byte on /api/. The aggregator turns a feed it cannot read into an empty
- * one, so when no feed asked for gives anything the old path still answers
- * its empty 200 and v1 answers 503 service_unavailable.
- *
- * Both news routes are mirrored; nothing in this router is left off v1.
+ * The bodies are checked byte for byte. The aggregator turns a feed it cannot
+ * read into an empty one, so when no feed asked for gives anything /rss still
+ * answers its empty 200, as it always has.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Hono } from 'hono';
@@ -21,17 +18,10 @@ vi.mock('../../../src/sources/shared/http.js', () => ({
   HttpError: class extends Error {},
 }));
 
-const IN_SCOPE = ['/api/news/rss', '/api/news/sources'];
-
 async function app() {
   const { newsRouter } = await import('../../../src/api/news.js');
-  const { mirror } = await import('../../../src/api/v1/mirror.js');
-  const { notFound, onError } = await import('../../../src/api/v1/respond.js');
   const a = new Hono();
   a.route('/', newsRouter);
-  mirror(a, newsRouter, IN_SCOPE);
-  a.notFound(notFound);
-  a.onError(onError);
   return a;
 }
 
@@ -91,15 +81,12 @@ beforeEach(async () => {
 });
 
 describe('/news/rss', () => {
-  it('the aggregate — bare on the old path, in data on v1', async () => {
+  it('the aggregate, as it always was', async () => {
     upstream(() => 'ok');
     const want = await aggregate({ sources: '', category: '', limit: 8 });
     expect(JSON.parse(want).count).toBe(16);
     const a = await app();
-    const old = await get(a, '/api/news/rss');
-    expect(old).toEqual({ status: 200, headers: [['content-type', JSON_TYPE]], text: want });
-    const now = await get(a, '/api/v1/news/rss');
-    expect(now).toEqual({ status: 200, headers: [['content-type', JSON_TYPE]], text: `{"data":${want}}` });
+    expect(await get(a, '/api/news/rss')).toEqual({ status: 200, headers: [['content-type', JSON_TYPE]], text: want });
   });
 
   it('parameters are read as they always were — junk is never a 400', async () => {
@@ -107,7 +94,7 @@ describe('/news/rss', () => {
     const a = await app();
     const cases: Array<[string, { sources?: string; category?: string; limit?: number }]> = [
       ['sources=abc,sbs&category=emergency&limit=1', { sources: 'abc,sbs', category: 'emergency', limit: 1 }],
-      ['sources=nope', { sources: 'nope', category: '', limit: 8 }], // asked for nothing: an empty 200 on both
+      ['sources=nope', { sources: 'nope', category: '', limit: 8 }], // asked for nothing: an empty 200
       ['limit=abc', { sources: '', category: '', limit: 8 }],
       ['limit=0', { sources: '', category: '', limit: 8 }],
       ['limit=-5', { sources: '', category: '', limit: 1 }],
@@ -116,30 +103,27 @@ describe('/news/rss', () => {
     ];
     for (const [qs, q] of cases) {
       const want = await aggregate(q);
-      const old = await get(a, `/api/news/rss?${qs}`);
-      expect(old.status, qs).toBe(200);
-      expect(old.text, qs).toBe(want);
-      const now = await get(a, `/api/v1/news/rss?${qs}`);
-      expect(now.status, qs).toBe(200);
-      expect(now.text, qs).toBe(`{"data":${want}}`);
+      const res = await get(a, `/api/news/rss?${qs}`);
+      expect(res.status, qs).toBe(200);
+      expect(res.text, qs).toBe(want);
     }
   });
 
-  it('some feeds failing: a 200 on both paths, with how each fared', async () => {
+  it('some feeds failing: a 200, with how each fared', async () => {
     upstream((key) => (key === 'abc' ? 'ok' : key === 'nine' ? 'throw' : 503));
     const a = await app();
-    const res = await get(a, '/api/v1/news/rss?sources=abc,nine,sbs');
+    const res = await get(a, '/api/news/rss?sources=abc,nine,sbs');
     expect(res.status).toBe(200);
-    const body = JSON.parse(res.text) as { data: { count: number; sources: Record<string, { status: string }> } };
-    expect(body.data.count).toBe(2);
-    expect(Object.fromEntries(Object.entries(body.data.sources).map(([k, s]) => [k, s.status]))).toEqual({
+    const body = JSON.parse(res.text) as { count: number; sources: Record<string, { status: string }> };
+    expect(body.count).toBe(2);
+    expect(Object.fromEntries(Object.entries(body.sources).map(([k, s]) => [k, s.status]))).toEqual({
       abc: 'ok',
       nine: 'empty',
       sbs: 'empty',
     });
   });
 
-  it('every feed failing: the old path its empty 200 (cached as always), v1 a 503', async () => {
+  it('every feed failing: the empty 200, cached as always', async () => {
     upstream(() => 'throw');
     const a = await app();
     const empty = {
@@ -150,23 +134,17 @@ describe('/news/rss', () => {
       available_sources: KEYS,
       available_categories: ['general', 'emergency', 'weather'],
     };
-    const old = await get(a, '/api/news/rss');
-    expect(old.status).toBe(200);
-    expect(old.headers).toEqual([['content-type', JSON_TYPE]]);
-    expect(JSON.parse(old.text)).toEqual(empty);
+    const res = await get(a, '/api/news/rss');
+    expect(res.status).toBe(200);
+    expect(res.headers).toEqual([['content-type', JSON_TYPE]]);
+    expect(JSON.parse(res.text)).toEqual(empty);
     expect(fetchRawMock).toHaveBeenCalledTimes(KEYS.length);
-
-    // Same query on v1: answered from the cache, as a 503.
-    const now = await get(a, '/api/v1/news/rss');
-    expect(now.status).toBe(503);
-    expect(JSON.parse(now.text)).toEqual({ error: { code: 'service_unavailable', message: expect.any(String) } });
+    // The same query again: answered from the cache.
+    expect(JSON.parse((await get(a, '/api/news/rss')).text)).toEqual(empty);
     expect(fetchRawMock).toHaveBeenCalledTimes(KEYS.length);
-
-    // Cold on v1 as well: a 503.
-    expect((await get(a, '/api/v1/news/rss?limit=3')).status).toBe(503);
   });
 
-  it('the aggregator itself failing: the old path its fallback 200, v1 a 503', async () => {
+  it('the aggregator itself failing: the fallback 200', async () => {
     const { RSS_FEEDS } = await import('../../../src/sources/news.js');
     const feeds = RSS_FEEDS as Record<string, unknown>;
     feeds['broken'] = {
@@ -178,9 +156,9 @@ describe('/news/rss', () => {
     };
     try {
       const a = await app();
-      const old = await get(a, '/api/news/rss?sources=broken');
-      expect(old.status).toBe(200);
-      expect(old.text).toBe(
+      const res = await get(a, '/api/news/rss?sources=broken');
+      expect(res.status).toBe(200);
+      expect(res.text).toBe(
         JSON.stringify({
           items: [],
           count: 0,
@@ -190,9 +168,6 @@ describe('/news/rss', () => {
           available_categories: ['general', 'emergency', 'weather'],
         }),
       );
-      const now = await get(a, '/api/v1/news/rss?sources=broken');
-      expect(now.status).toBe(503);
-      expect((JSON.parse(now.text) as { error: { code: string } }).error.code).toBe('service_unavailable');
     } finally {
       delete feeds['broken'];
     }
@@ -200,36 +175,19 @@ describe('/news/rss', () => {
 });
 
 describe('/news/sources', () => {
-  it('the feeds and categories — bare on the old path, in data on v1', async () => {
+  it('the feeds and categories', async () => {
     const { RSS_FEEDS } = await import('../../../src/sources/news.js');
     const want = JSON.stringify({ sources: RSS_FEEDS, categories: ['general', 'emergency', 'weather'] });
     const a = await app();
     expect(await get(a, '/api/news/sources')).toEqual({ status: 200, headers: [['content-type', JSON_TYPE]], text: want });
-    expect(await get(a, '/api/v1/news/sources')).toEqual({
-      status: 200,
-      headers: [['content-type', JSON_TYPE]],
-      text: `{"data":${want}}`,
-    });
   });
-});
 
-describe('the mirror', () => {
-  it('an unknown v1 path is a v1 404; the old 404 is untouched', async () => {
+  it('an unknown path keeps the plain-text 404', async () => {
     const a = await app();
-    const miss = await get(a, '/api/v1/news/nope');
-    expect(miss.status).toBe(404);
-    expect(JSON.parse(miss.text)).toEqual({ error: { code: 'not_found', message: 'No endpoint at this path.' } });
     expect(await get(a, '/api/news/nope')).toEqual({
       status: 404,
       headers: [['content-type', 'text/plain; charset=UTF-8']],
       text: '404 Not Found',
     });
-  });
-
-  it('mirroring the in-scope paths registers exactly those', async () => {
-    const { mirroredRoutes } = await import('../../../src/api/v1/mirror.js');
-    await app();
-    const news = mirroredRoutes().filter((r) => r.path.startsWith('/api/v1/news/'));
-    expect(news.map((r) => `${r.method} ${r.legacyPath}`).sort()).toEqual(IN_SCOPE.map((p) => `GET ${p}`).sort());
   });
 });

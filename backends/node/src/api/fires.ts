@@ -1,28 +1,30 @@
 /**
- * GET /api/v1/fires — every fire service's incidents in one feed.
+ * GET /api/v1/fires — every fire service's incidents and warnings in one feed.
  *
  * NSW RFS, the QLD Fire Department, VIC Emergency, WA DFES, SA CFS and MFS
  * and NT Fire and Rescue, read from the same LiveStore snapshots the
- * per-agency routes serve (sources/*.ts), in one shape. The per-agency routes
- * (/api/rfs/incidents, /api/qld-fire/incidents, …) stay /api/ routes for this
- * site's map and the Discord bot, which draw each agency its own way; an API
- * key reads this one (feed `fires`, apiKeyScopes.ts).
+ * per-agency routes serve (sources/*.ts), in one shape — and the public
+ * warnings QFD and DFES publish beside their incidents, each record saying
+ * which it is in `kind`. The per-agency routes (/api/rfs/incidents,
+ * /api/qld-fire/warnings, …) stay /api/ routes for this site's map and the
+ * Discord bot, which draw each agency its own way; an API key reads this one
+ * (feed `fires`, apiKeyScopes.ts).
  *
  * Every feature carries the same properties, snake_case like the rest of
- * /api/v1/: an id, which service and state it came from, the map layer, the
- * title, status, location, category and warning level as the agency words
- * them, when it was last updated (UTC), whether it is still open, any
- * fire-ground polygons as [longitude, latitude] rings, and `details` — the
- * agency's own extra fields, under their own names, so nothing the
- * per-agency feed carries is lost.
+ * /api/v1/: an id, which service and state it came from, whether it is an
+ * incident or a warning, the map layer, the title, status, location, category
+ * and warning level as the agency words them, when it was last updated (UTC),
+ * whether it is still open, any fire-ground or warning-area polygons as
+ * [longitude, latitude] rings, and `details` — the agency's own extra fields,
+ * under their own names, so nothing the per-agency feed carries is lost.
  *
  * The services publish more than fires: VIC Emergency carries floods and
  * other hazards, WA and SA floods, the QLD and NT services rescues and
  * hazmat. Those come too, each tagged by `layer` (fire, flood or hazard), and
- * `layer=fire` keeps only fires. Closed incidents are left out unless all=1,
- * as on the NT and SA routes. `sources` says, per service, how many records
- * it gave and when it was last read, so a missing state shows as a missing
- * state rather than as no fires.
+ * `layer=fire` keeps only fires; `kind=incident` leaves the warnings out.
+ * Closed records are left out unless all=1, as on the NT and SA routes.
+ * `sources` says, per feed, how many records it gave and when it was last
+ * read, so a missing state shows as a missing state rather than as no fires.
  *
  * Registered at /api/fires and mirrored to /api/v1/ like every other feed;
  * the old path is nobody's and goes when old paths are retired.
@@ -33,9 +35,9 @@ import { describeRoute } from 'hono-openapi';
 import { liveStore } from '../store/live.js';
 import { rfsSnapshot } from '../sources/rfs.js';
 import { ntFireSnapshot } from '../sources/ntFire.js';
-import { qldIncidentsSnapshot } from '../sources/qldFire.js';
+import { qldIncidentsSnapshot, qldWarningsSnapshot } from '../sources/qldFire.js';
 import { vicSnapshot } from '../sources/vicEmergency.js';
-import { waIncidentsSnapshot } from '../sources/waEmergency.js';
+import { waIncidentsSnapshot, waWarningsSnapshot } from '../sources/waEmergency.js';
 import { saCfsSnapshot, saMfsSnapshot } from '../sources/saFire.js';
 import { scoped } from '../services/auth/apiKeyScopes.js';
 import { geo } from './v1/respond.js';
@@ -69,8 +71,9 @@ interface AnyCollection {
 const STATES = ['NSW', 'QLD', 'VIC', 'NT', 'WA', 'SA'] as const;
 type State = (typeof STATES)[number];
 const LAYERS = ['fire', 'flood', 'hazard'] as const;
+const KINDS = ['incident', 'warning'] as const;
 
-/** One fire service: its source key, state, LiveStore key and snapshot. */
+/** One feed of a fire service: its source key, state, LiveStore key and snapshot. */
 interface Service {
   source: string;
   name: string;
@@ -78,18 +81,22 @@ interface Service {
   /** The agency when the feed does not say (RFS's records carry none). */
   agency: string;
   store: string;
+  /** What crews attend, or a public warning the service publishes. */
+  kind: (typeof KINDS)[number];
   snapshot: () => AnyCollection;
 }
 
 /** In the order the answer lists them. */
 const SERVICES: readonly Service[] = [
-  { source: 'rfs', name: 'NSW Rural Fire Service', state: 'NSW', agency: 'RFS', store: 'rfs_incidents', snapshot: rfsSnapshot },
-  { source: 'qld_fire', name: 'QLD Fire Department', state: 'QLD', agency: 'QFD', store: 'qld_fire', snapshot: qldIncidentsSnapshot },
-  { source: 'vic_emergency', name: 'VIC Emergency', state: 'VIC', agency: 'EMV', store: 'vic_emergency', snapshot: vicSnapshot },
-  { source: 'nt_fire', name: 'NT Fire and Rescue', state: 'NT', agency: 'NTFRS', store: 'nt_fire', snapshot: ntFireSnapshot },
-  { source: 'wa_incident', name: 'WA DFES', state: 'WA', agency: 'DFES', store: 'wa_incident', snapshot: waIncidentsSnapshot },
-  { source: 'sa_cfs', name: 'SA Country Fire Service', state: 'SA', agency: 'SACFS', store: 'sa_cfs', snapshot: saCfsSnapshot },
-  { source: 'sa_mfs', name: 'SA Metropolitan Fire Service', state: 'SA', agency: 'SAMFS', store: 'sa_mfs', snapshot: saMfsSnapshot },
+  { source: 'rfs', name: 'NSW Rural Fire Service', state: 'NSW', agency: 'RFS', store: 'rfs_incidents', kind: 'incident', snapshot: rfsSnapshot },
+  { source: 'qld_fire', name: 'QLD Fire Department', state: 'QLD', agency: 'QFD', store: 'qld_fire', kind: 'incident', snapshot: qldIncidentsSnapshot },
+  { source: 'qld_warning', name: 'QLD Fire Department warnings', state: 'QLD', agency: 'QFD', store: 'qld_warning', kind: 'warning', snapshot: qldWarningsSnapshot },
+  { source: 'vic_emergency', name: 'VIC Emergency', state: 'VIC', agency: 'EMV', store: 'vic_emergency', kind: 'incident', snapshot: vicSnapshot },
+  { source: 'nt_fire', name: 'NT Fire and Rescue', state: 'NT', agency: 'NTFRS', store: 'nt_fire', kind: 'incident', snapshot: ntFireSnapshot },
+  { source: 'wa_incident', name: 'WA DFES', state: 'WA', agency: 'DFES', store: 'wa_incident', kind: 'incident', snapshot: waIncidentsSnapshot },
+  { source: 'wa_warning', name: 'WA DFES warnings', state: 'WA', agency: 'DFES', store: 'wa_warning', kind: 'warning', snapshot: waWarningsSnapshot },
+  { source: 'sa_cfs', name: 'SA Country Fire Service', state: 'SA', agency: 'SACFS', store: 'sa_cfs', kind: 'incident', snapshot: saCfsSnapshot },
+  { source: 'sa_mfs', name: 'SA Metropolitan Fire Service', state: 'SA', agency: 'SAMFS', store: 'sa_mfs', kind: 'incident', snapshot: saMfsSnapshot },
 ];
 
 const SOURCES = SERVICES.map((s) => s.source) as [string, ...string[]];
@@ -164,6 +171,7 @@ export function toFire(f: AnyFeature, svc: Service): FireFeature {
     properties: {
       id: str(p['guid']),
       source: svc.source,
+      kind: svc.kind,
       agency: str(p['agency']) || svc.agency,
       state: svc.state,
       layer: layerOf(p['layer'], svc),
@@ -185,13 +193,16 @@ export function toFire(f: AnyFeature, svc: Service): FireFeature {
 const FireProperties = z.object({
   id: z.string().describe("Stable across polls, built from the agency's own id"),
   source: z.enum(SOURCES).describe('Which feed the record came from; also the name stored history uses'),
+  kind: z
+    .enum(KINDS)
+    .describe('incident: something a service is attending. warning: a public warning QFD or DFES has issued for an area (source qld_warning or wa_warning), often for an incident also listed here'),
   agency: z.string().describe('The publishing service, e.g. RFS, QFD, CFA, SES, DFES, SACFS, SAMFS, NTFRS'),
   state: z.enum(STATES),
   layer: z.enum(LAYERS).describe('fire, or flood or hazard for the other incidents these services publish (hazard too for any kind of record not yet known)'),
   title: z.string(),
   status: z.string().describe('As the agency words it'),
   location: z.string(),
-  category: z.string().describe('Kind of incident as the agency classes it, e.g. "Grass Fire", "Building Fire"'),
+  category: z.string().describe('What it is as the agency classes it, e.g. "Grass Fire", "Building Fire"; for a warning, the hazard, e.g. "Bushfire"'),
   alert_level: z.string().describe('Warning level as published (Advice, Watch and Act, Emergency Warning); empty or "Not Applicable" when none'),
   responsible_agency: z.string(),
   updated_at: z.string().nullable().describe("Last update, ISO 8601 UTC; null when the agency gives no time with a zone, and then details.updated has the agency's own wording"),
@@ -211,8 +222,9 @@ const ServiceStatus = z.object({
   source: z.enum(SOURCES),
   name: z.string(),
   state: z.enum(STATES),
-  count: z.number().int().describe('Records from this service in this answer, after the filters'),
-  updated_at: z.string().nullable().describe('When this server last read the service, ISO 8601 UTC; null if it has not yet'),
+  kind: z.enum(KINDS),
+  count: z.number().int().describe('Records from this feed in this answer, after the filters'),
+  updated_at: z.string().nullable().describe('When this server last read the feed, ISO 8601 UTC; null if it has not yet'),
 });
 
 const Fires = featureCollection(
@@ -223,7 +235,7 @@ const Fires = featureCollection(
     ]),
     FireProperties,
   ),
-  { sources: z.array(ServiceStatus).describe('One entry per fire service asked for, in this order') },
+  { sources: z.array(ServiceStatus).describe('One entry per feed asked for — each service, and the QFD and DFES warnings — in this order') },
 ).meta({ id: 'Fires' });
 
 /** A comma list of allowed values, case-insensitive; empty means all. */
@@ -246,7 +258,8 @@ const Query = z.object({
   source: list(SOURCES, 'source'),
   state: list(STATES, 'state', true),
   layer: list(LAYERS, 'layer'),
-  all: flag('1 includes closed incidents as well'),
+  kind: list(KINDS, 'kind'),
+  all: flag('1 includes closed records as well'),
 });
 
 firesRouter.get(
@@ -258,19 +271,25 @@ firesRouter.get(
     summary: 'Every fire service, one feed',
     description:
       'Current incidents from NSW RFS, the QLD Fire Department, VIC Emergency, WA DFES, SA CFS and MFS and NT Fire and Rescue, ' +
-      "in one shape: the common fields every service has, plus `details` for each agency's own. The services also publish " +
+      'and the public warnings the QLD Fire Department and WA DFES issue, ' +
+      "in one shape: the common fields every service has, plus `details` for each agency's own. `kind` says whether a " +
+      'record is an incident or a warning, and kind=incident leaves the warnings out. The services also publish ' +
       'floods and other hazards they attend; each record says which in `layer`, and layer=fire keeps only fires. Closed ' +
-      'incidents are left out unless all=1. `sources` says per service how many records it gave and when this server last ' +
+      'records are left out unless all=1. `sources` says per feed how many records it gave and when this server last ' +
       'read it. Records from NT Fire and Rescue are theirs: credit NTFRS if you republish them.',
-    responses: { ...okJson(Fires, 'A GeoJSON FeatureCollection of incidents'), ...VALIDATION_ERROR, ...GATED_ERRORS },
+    responses: { ...okJson(Fires, 'A GeoJSON FeatureCollection of incidents and warnings'), ...VALIDATION_ERROR, ...GATED_ERRORS },
   }),
   queryValidator(Query),
   (c) => {
     const q = c.req.valid('query');
     const states = new Set<string>(q.state ?? []);
     const layers = new Set<string>(q.layer ?? []);
+    const kinds = new Set<string>(q.kind ?? []);
     const wanted = SERVICES.filter(
-      (s) => (!q.source?.length || q.source.includes(s.source)) && (!states.size || states.has(s.state)),
+      (s) =>
+        (!q.source?.length || q.source.includes(s.source)) &&
+        (!states.size || states.has(s.state)) &&
+        (!kinds.size || kinds.has(s.kind)),
     );
     const features: FireFeature[] = [];
     const sources: Array<z.infer<typeof ServiceStatus>> = [];
@@ -288,6 +307,7 @@ firesRouter.get(
         source: svc.source as z.infer<typeof ServiceStatus>['source'],
         name: svc.name,
         state: svc.state,
+        kind: svc.kind,
         count,
         updated_at: ts ? new Date(ts * 1000).toISOString() : null,
       });

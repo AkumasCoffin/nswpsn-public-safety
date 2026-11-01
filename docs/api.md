@@ -56,18 +56,16 @@ this server stored over time. Each ticked cell is one scope, written
 
 | Feed | Scope(s) | Covers |
 |---|---|---|
-| Fires | `fires:live` · `fires:history` | Every fire service in one feed — NSW RFS, QLD Fire Department, VIC Emergency, WA DFES, SA CFS and MFS, NT Fire and Rescue — plus satellite hotspots and fire danger ratings |
-| Warnings | `warnings:live` · `warnings:history` | Bureau of Meteorology warnings and the QLD and WA emergency warnings |
+| Fires | `fires:live` · `fires:history` | Every fire service in one feed — NSW RFS, QLD Fire Department, VIC Emergency, WA DFES, SA CFS and MFS, NT Fire and Rescue — with the QLD Fire Department and WA DFES public warnings, plus satellite hotspots and fire danger ratings |
+| Weather warnings | `warnings:live` · `warnings:history` | Bureau of Meteorology land and marine warnings |
 | ACT Ambulance | `ambulance:live` · `ambulance:history` | ACT Ambulance Service incidents |
 | Power outages | `outages:live` · `outages:history` | Endeavour Energy, Ausgrid and Essential Energy |
 | Road hazards | `roads:live` · `roads:history` | Live Traffic NSW incidents, roadworks, floods, fires, major events, alpine conditions, council works |
-| Cameras | `cameras:live` | Traffic, QLD traffic and flood, airport and fire-tower cameras |
 | Public transport | `transport:live` | Vehicles, stops, lines, trips, departures, alerts |
 | Aircraft | `aircraft:live` · `aircraft:history` | ADS-B positions, trails, photos; history replays past positions |
 | Ships | `ships:live` | AIS vessel positions and details |
 | Weather | `weather:live` | Current conditions, radar, the forecast grid, point forecasts |
 | Beaches & sharks | `beaches:live` · `beaches:history` | Beachwatch, BeachSafe, SharkSmart reports |
-| News | `news:live` | Emergency and weather news from public RSS feeds |
 | Pager messages | `pager:live` · `pager:history` | Pager hits from the Pagermon relay |
 | Radio summaries | `summaries:history` | The hourly and ad-hoc radio summaries |
 
@@ -84,38 +82,40 @@ as `x-scopes`. A refusal names what was missing:
 No feed reaches anything about people or the receiving nodes — accounts and
 profiles, user-submitted incidents, site statistics, node status — nor this
 site's own reference data: boundaries, the radio site list and reception
-transcripts are not part of the API.
+transcripts are not part of the API. Nor are other people's pictures and words:
+no key reads a camera image (traffic, QLD traffic and flood, airport or
+fire-tower cameras) or the news outlets' RSS feeds, and `/traffic/all-feeds`
+leaves out the camera records Live Traffic's aggregate feed carries.
 
 **`read`** is the rule every key made before scopes still holds: GET on the
 fixed list of paths keys could always read, on `/api/` and on `/api/v1/` alike.
 That list is by path prefix and predates scopes, so it is broader in places: it
 includes the per-agency fire feeds at their old paths, `/api/boundaries/` and
 everything under `/api/radio/` — and it reaches `/api/v1/fires`, the fire feeds
-it already read, merged. A scope that is neither `read` nor a cell of the table
-grants nothing. New keys are granted feeds; a request cannot ask for `read`.
+it already read, merged. It once held the camera and news routes too; those
+came off it with the cameras and news (2026-11-02). A scope that is neither
+`read` nor a cell of the table grants nothing. New keys are granted feeds; a
+request cannot ask for `read`.
 
 ## What is on `/api/v1/`
 
 | Tag | Endpoint | Scope |
 |---|---|---|
-| Fires | `GET /api/v1/fires` — every fire service, one feed ([below](#fires)) | `fires:live` |
+| Fires | `GET /api/v1/fires` — every fire service and the QFD and DFES warnings, one feed ([below](#fires)) | `fires:live` |
 | Fires | `GET /api/v1/firms/hotspots` — satellite hotspots | `fires:live` |
 | Fires | `GET /api/v1/rfs/fdr` — fire danger ratings and total fire bans by district | `fires:live` |
-| Warnings | `GET /api/v1/bom/warnings` · `/qld-fire/warnings` · `/wa-emergency/warnings` | `warnings:live` |
+| Weather warnings | `GET /api/v1/bom/warnings` | `warnings:live` |
 | Ambulance | `GET /api/v1/act-ambulance/incidents` | `ambulance:live` |
 | Power outages | `GET /api/v1/endeavour/{current,maintenance,future,planned}` · `/endeavour/current/all` · `/endeavour/future/all` · `/endeavour/postcodes` | `outages:live` |
 | Power outages | `GET /api/v1/essential/{outages,planned,future}` · `/essential/outages/current` · `/essential/outages/raw` | `outages:live` |
 | Power outages | `GET /api/v1/ausgrid/outages` · `/ausgrid/stats` | `outages:live` |
 | Road hazards | `GET /api/v1/traffic/{incidents,roadwork,flood,fire,majorevent,alpine,lga}` and each one's `/raw` · `/traffic/works` · `/traffic/lga-incidents` · `/traffic/all-feeds` | `roads:live` |
-| Cameras | `GET /api/v1/traffic/cameras` · `/aviation/cameras` · `/aviation/cameras/{airport}` · `/qld/cameras` · `/qld/flood-cameras` · `/centralwatch/sites` | `cameras:live` |
-| Cameras | `GET /api/v1/centralwatch/cameras` · `/centralwatch/image/{cameraId}` | none — public |
 | Public transport | `GET /api/v1/transport/{vehicles,lines,stops,alerts}` · `/transport/shape/{id}` · `/transport/trip/{date}/{tripId}/{instance}` · `/transport/departures/{stopId}` | `transport:live` |
 | Aircraft | `GET /api/v1/adsb/aircraft` · `/adsb/trails` · `/adsb/photo/{hex}` | `aircraft:live` |
 | Aircraft | `GET /api/v1/adsb/history` | `aircraft:history` |
 | Ships | `GET /api/v1/marinetraffic/vessels` · `/marinetraffic/vessel/{id}` | `ships:live` |
 | Weather | `GET /api/v1/weather/{current,radar,point}` · `/weather/grid/manifest` · `/weather/grid` | `weather:live` |
 | Beaches & sharks | `GET /api/v1/beachwatch` · `/beachsafe` · `/beachsafe/beach/{slug}` · `/dorsal/reports` | `beaches:live` |
-| News | `GET /api/v1/news/rss` · `/news/sources` | `news:live` |
 | Pager | `GET /api/v1/pager/hits` | `pager:live` |
 | Radio summaries | `GET /api/v1/summaries` · `/summaries/latest` | `summaries:history` |
 | History | `GET /api/v1/data/history` · `/data/history/incident/{source}/{source_id}` | the history of at least one stored feed (`*:history`) — see [Stored history](#stored-history) |
@@ -126,12 +126,15 @@ grants nothing. New keys are granted feeds; a request cannot ask for `read`.
 
 Most of these are still served at their old `/api/…` path as well, the same
 handler with the same scope, until that path is retired. Not on `/api/v1/`, and
-not readable by a key in the feed form: the per-agency fire incident feeds
-(`/api/rfs/incidents`, `/api/qld-fire/incidents`, `/api/vic-emergency/events`,
-`/api/nt-fire/incidents`, `/api/wa-emergency/incidents`, `/api/sa-fire/cfs` and
-`/mfs`), which this site's map and the Discord bot read — keys read them merged,
-at `/api/v1/fires` — and boundaries (`/api/boundaries/…`, the council names
-included), the radio site list and reception transcripts.
+not readable by a key in the feed form: the per-agency fire incident and
+warning feeds (`/api/rfs/incidents`, `/api/qld-fire/incidents` and `/warnings`,
+`/api/vic-emergency/events`, `/api/nt-fire/incidents`,
+`/api/wa-emergency/incidents` and `/warnings`, `/api/sa-fire/cfs` and `/mfs`),
+which this site's map and the Discord bot read — keys read them merged, at
+`/api/v1/fires` — boundaries (`/api/boundaries/…`, the council names included),
+the radio site list, reception transcripts, and the camera and news routes
+(`/api/traffic/cameras`, `/api/qld/…`, `/api/aviation/…`,
+`/api/centralwatch/…`, `/api/news/…`), which no key reads at all.
 
 A few old paths have no `/api/v1/` twin because another endpoint already
 answers the same thing: `/api/endeavour/current/raw` and `/future/raw` (use
@@ -139,25 +142,23 @@ answers the same thing: `/api/endeavour/current/raw` and `/future/raw` (use
 (use `/essential/future`) and `/api/beachsafe/details`, which is always empty
 (use `/beachsafe/beach/{slug}`). They go when the old paths are retired.
 
-The fire-tower cameras' `imageUrl` is a path on this API, to be joined to its
-origin: `/api/v1/centralwatch/image/{id}` from `/api/v1/`, and the old
-`/api/centralwatch/image/{id}` from the old path.
-
 ### Fires
 
 `GET /api/v1/fires` is every fire service's incidents in one GeoJSON
 FeatureCollection — NSW RFS, the QLD Fire Department, VIC Emergency, WA DFES,
-SA CFS and MFS and NT Fire and Rescue — each record in the same shape:
+SA CFS and MFS and NT Fire and Rescue — together with the public warnings the
+QLD Fire Department and WA DFES issue, each record in the same shape:
 
 | Property | |
 |---|---|
 | `id` | Stable across polls, built from the agency's own id |
-| `source` | `rfs`, `qld_fire`, `vic_emergency`, `nt_fire`, `wa_incident`, `sa_cfs` or `sa_mfs` — the same names stored history uses |
+| `source` | `rfs`, `qld_fire`, `qld_warning`, `vic_emergency`, `nt_fire`, `wa_incident`, `wa_warning`, `sa_cfs` or `sa_mfs` — the same names stored history uses |
+| `kind` | `incident` — something a service is attending — or `warning`, a public warning QFD or DFES has issued for an area (`qld_warning`, `wa_warning`), often for an incident also in the feed |
 | `agency` | The publishing service: `RFS`, `QFD`, `CFA`, `SES`, `DFES`, `SACFS`, `SAMFS`, `NTFRS`, … |
 | `state` | `NSW`, `QLD`, `VIC`, `NT`, `WA` or `SA` |
 | `layer` | `fire`, or `flood` / `hazard` for the other incidents these services publish (and `hazard` for any kind of record not known yet) |
 | `title`, `status`, `location` | As the agency words them |
-| `category` | Kind of incident as the agency classes it — "Grass Fire", "Building Fire", … |
+| `category` | What it is as the agency classes it — "Grass Fire", "Building Fire", …; for a warning, the hazard ("Bushfire") |
 | `alert_level` | Advice, Watch and Act, Emergency Warning — or empty / "Not Applicable" |
 | `responsible_agency` | As the agency gives it |
 | `updated_at` | Last update, ISO 8601 UTC; `null` when the agency gives no time with a zone — then `details.updated` has its own wording |
@@ -167,14 +168,15 @@ SA CFS and MFS and NT Fire and Rescue — each record in the same shape:
 
 The services publish more than fires — VIC Emergency carries floods and other
 hazards, the QLD and NT services rescues and hazmat — and those come too,
-tagged by `layer`. Filters, each a comma list: `source=`, `state=` (any case)
-and `layer=` (`layer=fire` for fires only); an unknown value is a
-`400 validation_failed` naming it. Closed incidents are left out unless
-`all=1`. The collection also carries `sources`, one entry per service asked
-for, with how many records it gave (after the filters) and when this server
-last read it (`updated_at`, `null` if it has not yet) — so a service that is
-down shows as missing, not as having no fires. Records from NT Fire and Rescue
-are theirs: credit NTFRS if you republish them.
+tagged by `layer`. Filters, each a comma list: `source=`, `state=` (any case),
+`layer=` (`layer=fire` for fires only) and `kind=` (`kind=incident` leaves the
+warnings out); an unknown value is a `400 validation_failed` naming it. Closed
+records are left out unless `all=1`. The collection also carries `sources`,
+one entry per feed asked for — each service, and the QFD and DFES warnings —
+with its `kind`, how many records it gave (after the filters) and when this
+server last read it (`updated_at`, `null` if it has not yet) — so a service
+that is down shows as missing, not as having no fires. Records from NT Fire and
+Rescue are theirs: credit NTFRS if you republish them.
 
 ### Stored history
 
@@ -186,16 +188,16 @@ key reads an archived source when it holds that feed's history:
 
 | Feed | Archived `source` |
 |---|---|
-| `fires:history` | `rfs`, `qld_fire`, `vic_emergency`, `nt_fire`, `wa_incident`, `sa_cfs`, `sa_mfs` |
-| `warnings:history` | `bom_land`, `bom_marine`, `qld_warning`, `wa_warning` |
+| `fires:history` | `rfs`, `qld_fire`, `qld_warning`, `vic_emergency`, `nt_fire`, `wa_incident`, `wa_warning`, `sa_cfs`, `sa_mfs` |
+| `warnings:history` | `bom_land`, `bom_marine` |
 | `ambulance:history` | `act_ambulance` |
 | `roads:history` | `traffic_incident`, `traffic_roadwork`, `traffic_flood`, `traffic_fire`, `traffic_majorevent`, `traffic_alpine`, `traffic_lga`, `traffic_works` |
 | `outages:history` | `endeavour_current`, `endeavour_planned`, `endeavour_maintenance`, `ausgrid`, `essential_current`, `essential_planned`, `essential_future` |
 | `beaches:history` | `dorsal` |
 | `pager:history` | `pager` |
 
-So `fires:history` reads the stored history of every fire service, but not
-`qld_warning`. Without `?source=`, a key's answer holds only the sources it
+So `fires:history` reads the stored history of every fire service and the QFD
+and DFES warnings, but not the BOM's (`bom_land`). Without `?source=`, a key's answer holds only the sources it
 covers; naming one it does not is a `403 api_key_scope_forbidden` that says
 which. People's own reports (`user_incident`) are never readable through a key.
 Because the answer depends on the key, it comes with
@@ -276,9 +278,8 @@ its own cadence — every fifteen seconds or so for aircraft, every one to fifte
 minutes for the rest — so asking more often than that gains nothing. The fire
 danger ratings change a few times a day and are read from the RFS at most every
 ten minutes. Some endpoints read their source when asked instead — the traffic
-`/raw` feeds, a single airport's cameras, a vessel's details, and the transport
-endpoints, which keep each answer for a few seconds; the reference says so on
-each. Some responses carry their
+`/raw` feeds, a vessel's details, and the transport endpoints, which keep each
+answer for a few seconds; the reference says so on each. Some responses carry their
 own `Cache-Control`; an error is never marked cacheable.
 
 **When a source can't be read.** A feed served from memory keeps answering with

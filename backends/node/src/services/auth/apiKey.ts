@@ -91,11 +91,6 @@ export const PUBLIC_ENDPOINTS = new Set<string>([
   '/api/editor-requests',
   '/api/data/history/filters',
   '/api/status',
-  // The cameras collection endpoint itself is public; sub-paths are
-  // covered by the '/api/centralwatch/cameras/' prefix. Listed here as
-  // an exact match so the prefix doesn't over-match sibling routes like
-  // '/api/centralwatch/cameras-admin'.
-  '/api/centralwatch/cameras',
   // Agency reference tables — replaces the public static agency-extended.json,
   // so the read stays public (the agency page needs no login). Write/edit
   // endpoints under /api/agency/ are gated per-handler, NOT listed here.
@@ -105,8 +100,9 @@ export const PUBLIC_ENDPOINTS = new Set<string>([
 // Prefix-match public endpoints.
 export const PUBLIC_ENDPOINT_PREFIXES: readonly string[] = [
   '/api/check-editor/',
+  // Fire-tower images: the map shows them with a plain <img src>, which
+  // cannot carry a credential. The camera list they come from needs one.
   '/api/centralwatch/image/',
-  '/api/centralwatch/cameras/',
   '/api/dashboard/',
   // Vessel image proxy is loaded via <img src> which can't add a header, so
   // it has to be public (the upstream MT photo is itself public anyway).

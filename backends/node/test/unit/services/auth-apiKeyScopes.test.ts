@@ -434,11 +434,12 @@ describe('stored history: a route spanning feeds, narrowed per key', () => {
   });
 
   it('historySourcesFor: the archived sources of every feed whose history the key holds', () => {
+    // The QFD and DFES warnings are part of the fires feed; warnings is the BOM's.
     expect(historySourcesFor(['fires:history']).sort()).toEqual(
-      ['nt_fire', 'qld_fire', 'rfs', 'sa_cfs', 'sa_mfs', 'vic_emergency', 'wa_incident'],
+      ['nt_fire', 'qld_fire', 'qld_warning', 'rfs', 'sa_cfs', 'sa_mfs', 'vic_emergency', 'wa_incident', 'wa_warning'],
     );
     expect(historySourcesFor(['warnings:history', 'pager:history']).sort()).toEqual(
-      ['bom_land', 'bom_marine', 'pager', 'qld_warning', 'wa_warning'],
+      ['bom_land', 'bom_marine', 'pager'],
     );
     expect(historySourcesFor(['outages:history']).sort()).toEqual(
       ['ausgrid', 'endeavour_current', 'endeavour_maintenance', 'endeavour_planned', 'essential_current', 'essential_future', 'essential_planned'],

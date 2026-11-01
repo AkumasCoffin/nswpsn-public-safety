@@ -16,7 +16,8 @@
     "The logs page groups by archiveSource; Discord alerts key on `key`.",
     "",
     "endpoint is what the bot polls. A feed on /api/v1/ is polled there; the",
-    "per-agency fire feeds and The Wire are not on /api/v1/ and stay on /api/.",
+    "per-agency fire incident and warning feeds and The Wire are not on",
+    "/api/v1/ and stay on /api/.",
     "/api/v1/ wraps a body that is not GeoJSON in {data: ...}, so itemsPath",
     "is a dotted path into it ('data.warnings'; 'data' for a bare list)."
   ],
@@ -149,7 +150,7 @@
       "key": "qfd_warning", "provider": "qfd", "label": "Warnings", "botLabel": "QFD Warnings",
       "agency": "QFD", "agencyLabel": "QLD Fire Dept",
       "feedShape": "geo_fire_warning",
-      "archiveSource": "qld_warning", "endpoint": "/api/v1/qld-fire/warnings", "itemsPath": "features",
+      "archiveSource": "qld_warning", "endpoint": "/api/qld-fire/warnings", "itemsPath": "features",
       "aliases": ["qld_warning"],
       "color": "#dc2626", "icon": "⚠️", "severityScale": "fire", "subtypeAware": true
     },
@@ -165,7 +166,7 @@
       "key": "dfes_warning", "provider": "dfes", "label": "Warnings", "botLabel": "DFES Warnings",
       "agency": "DFES", "agencyLabel": "DFES (WA)",
       "feedShape": "geo_fire_warning",
-      "archiveSource": "wa_warning", "endpoint": "/api/v1/wa-emergency/warnings", "itemsPath": "features",
+      "archiveSource": "wa_warning", "endpoint": "/api/wa-emergency/warnings", "itemsPath": "features",
       "aliases": ["wa_warning"],
       "color": "#e11d48", "icon": "⚠️", "severityScale": "fire", "subtypeAware": true
     },

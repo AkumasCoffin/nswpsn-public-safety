@@ -7,9 +7,11 @@
  * fetches on demand with a 2 min in-process cache, matching python's
  * `@cached(ttl=120)` decorator.
  *
- * Both are also served at /api/v1/ (server.ts mirrors them). When
- * Airservices cannot be read, the detail answers an empty list (200) on the
- * old path, as it always has, and 503 service_unavailable on /api/v1/.
+ * When Airservices cannot be read, the detail answers an empty list (200), as
+ * it always has.
+ *
+ * This site's routes, for the map: neither is on /api/v1/ nor declares a
+ * scope, so no API key reaches them — camera images are not part of the API.
  */
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -21,8 +23,7 @@ import {
   type AviationSnapshot,
 } from '../sources/aviation.js';
 import { log } from '../lib/log.js';
-import { scoped } from '../services/auth/apiKeyScopes.js';
-import { fail, geo, isV1, ok } from './v1/respond.js';
+import { geo, ok } from './v1/respond.js';
 import {
   assertShape,
   envelope,
@@ -31,16 +32,12 @@ import {
   GATED_ERRORS,
   okJson,
   PointGeometry,
-  UNAVAILABLE_ERROR,
   type SameShape,
 } from './v1/schemas.js';
 
 export const aviationRouter = new Hono();
 
-// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
-const SCOPE_CAMERAS = scoped({ feed: 'cameras', window: 'live' });
-
-// What /api/v1/ documents (api/v1/openapi.ts).
+// The answers' shapes.
 const AviationCameras = featureCollection(
   feature(
     PointGeometry,
@@ -86,7 +83,6 @@ assertShape<SameShape<z.infer<typeof AviationCamera>, AviationDetail>>();
 
 aviationRouter.get(
   '/api/aviation/cameras',
-  SCOPE_CAMERAS,
   describeRoute({
     operationId: 'getAviationCameras',
     tags: ['Cameras'],
@@ -100,7 +96,6 @@ aviationRouter.get(
 
 aviationRouter.get(
   '/api/aviation/cameras/:airport',
-  SCOPE_CAMERAS,
   describeRoute({
     operationId: 'getAviationCamera',
     tags: ['Cameras'],
@@ -110,7 +105,6 @@ aviationRouter.get(
     responses: {
       ...okJson(envelope(AviationCamera), "The airport's cameras"),
       ...GATED_ERRORS,
-      ...UNAVAILABLE_ERROR,
     },
   }),
   async (c) => {
@@ -123,9 +117,8 @@ aviationRouter.get(
         { err: (err as Error).message, airport },
         'aviation camera detail fetch failed',
       );
-      // The old path has always answered an empty list (200) rather than an error.
-      if (!isV1(c)) return ok(c, { airport, cameras: [], count: 0 });
-      return fail(c, 503, 'service_unavailable', 'Airservices could not be read just now.');
+      // An empty list (200) rather than an error, as it has always answered.
+      return ok(c, { airport, cameras: [], count: 0 });
     }
   },
 );

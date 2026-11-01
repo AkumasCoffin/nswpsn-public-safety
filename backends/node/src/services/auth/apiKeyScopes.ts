@@ -21,11 +21,13 @@
  * by that list and nothing else — so turning scopes on changed nothing for
  * existing keys. A scope this table does not know grants nothing.
  *
- * What is deliberately NOT a feed: anything about people or nodes, and this
- * site's own reference data. Live data is what the public map shows; node
- * status (receivers, monitored sites), profiles, accounts, user-submitted
- * incidents, site statistics, boundaries, the radio site list and reception
- * transcripts are never declared, so no scope reaches them.
+ * What is deliberately NOT a feed: anything about people or nodes, this
+ * site's own reference data, and other people's pictures and words. Live data
+ * is what the public map shows; node status (receivers, monitored sites),
+ * profiles, accounts, user-submitted incidents, site statistics, boundaries,
+ * the radio site list, reception transcripts, camera images (traffic, flood,
+ * fire-tower, airport) and news outlets' RSS feeds are never declared, so no
+ * scope reaches them.
  *
  * The feed list lives here, not in shared/alert-catalog.json: that file is
  * what the Discord bot and its dashboard alert on, and not every source is an
@@ -51,12 +53,12 @@ export const FEEDS = {
   fires: {
     label: 'Fires',
     covers:
-      'Every fire service in one feed (NSW RFS, QLD Fire Department, VIC Emergency, WA DFES, SA CFS and MFS, NT Fire and Rescue), satellite hotspots and fire danger ratings',
+      'Every fire service in one feed (NSW RFS, QLD Fire Department, VIC Emergency, WA DFES, SA CFS and MFS, NT Fire and Rescue) with the QLD Fire Department and WA DFES public warnings, satellite hotspots and fire danger ratings',
     windows: ['live', 'history'],
   },
   warnings: {
-    label: 'Warnings',
-    covers: 'Bureau of Meteorology warnings and the QLD and WA emergency warnings',
+    label: 'Weather warnings',
+    covers: 'Bureau of Meteorology land and marine warnings',
     windows: ['live', 'history'],
   },
   ambulance: { label: 'ACT Ambulance', covers: 'ACT Ambulance Service incidents', windows: ['live', 'history'] },
@@ -70,11 +72,6 @@ export const FEEDS = {
     covers: 'Live Traffic NSW incidents, roadworks, floods, fires, major events, alpine conditions and council works',
     windows: ['live', 'history'],
   },
-  cameras: {
-    label: 'Cameras',
-    covers: 'Traffic, QLD traffic and flood, airport and fire-tower cameras',
-    windows: ['live'],
-  },
   transport: { label: 'Public transport', covers: 'Vehicles, stops, lines, trips, departures and alerts', windows: ['live'] },
   aircraft: { label: 'Aircraft', covers: 'ADS-B positions, trails and photos; history replays past positions', windows: ['live', 'history'] },
   ships: { label: 'Ships', covers: 'AIS vessel positions and details', windows: ['live'] },
@@ -84,7 +81,6 @@ export const FEEDS = {
     covers: 'Beachwatch water quality, BeachSafe conditions and SharkSmart reports',
     windows: ['live', 'history'],
   },
-  news: { label: 'News', covers: 'Emergency and weather news from public RSS feeds', windows: ['live'] },
   pager: { label: 'Pager messages', covers: 'Pager hits from the Pagermon relay', windows: ['live', 'history'] },
   summaries: { label: 'Radio summaries', covers: 'The hourly and ad-hoc radio summaries', windows: ['history'] },
 } as const satisfies Readonly<Record<string, Feed>>;
@@ -214,8 +210,8 @@ export const HISTORY_SOURCES: Readonly<Record<string, FeedKey>> = {
   wa_incident: 'fires',
   sa_cfs: 'fires',
   sa_mfs: 'fires',
-  qld_warning: 'warnings',
-  wa_warning: 'warnings',
+  qld_warning: 'fires',
+  wa_warning: 'fires',
   bom_land: 'warnings',
   bom_marine: 'warnings',
   act_ambulance: 'ambulance',
@@ -291,24 +287,26 @@ const SPANNED_FEEDS: ReadonlySet<FeedKey> = new Set(Object.values(HISTORY_SOURCE
  * HEAD, and only to a path on this list. The list is upstream sources — what
  * the feeds publish — plus two the owner asked for by name. It deliberately
  * does NOT include this site's own content or telemetry. Scoped keys replaced
- * it for new keys; this list is frozen as what `read` means.
+ * it for new keys; this list is frozen as what `read` means, but for one
+ * narrowing (owner, 2026-11-02): no key reads camera images or news outlets'
+ * feeds, so the camera and news routes left it (/api/qld/ held only the QLD
+ * cameras, /api/aviation/ only the airport ones).
  */
 const LEGACY_READ_PREFIXES: readonly string[] = [
   // Emergency services, state by state.
   '/api/rfs/',
   '/api/act-ambulance/',
   '/api/qld-fire/',
-  '/api/qld/',
   '/api/nt-fire/',
   '/api/sa-fire/',
   '/api/vic-emergency/',
   '/api/wa-emergency/',
   '/api/firms/',
-  // Roads, transport, aviation, marine (AIS).
+  // Roads (not /api/traffic/cameras: LEGACY_READ_EXCLUDED), transport,
+  // aircraft, marine (AIS).
   '/api/traffic/',
   '/api/transport/',
   '/api/adsb/',
-  '/api/aviation/',
   '/api/marinetraffic/',
   // Weather, fire danger, water.
   '/api/weather/',
@@ -320,9 +318,7 @@ const LEGACY_READ_PREFIXES: readonly string[] = [
   '/api/ausgrid/',
   '/api/endeavour/',
   '/api/essential/',
-  // Fire-tower cameras, news, reference geometry.
-  '/api/centralwatch/',
-  '/api/news/',
+  // Reference geometry.
   '/api/boundaries/',
   // Pager traffic from the owner's own Pagermon relay, and the public radio
   // site reference — both included at the owner's request.
@@ -339,10 +335,14 @@ const LEGACY_READ_PATHS: ReadonlySet<string> = new Set([
   '/api/fires',
 ]);
 
+/** Under a prefix above, but camera images: no key reads them. */
+const LEGACY_READ_EXCLUDED: readonly string[] = ['/api/traffic/cameras'];
+
 function legacyReadAllows(method: string, path: string): boolean {
   if (method !== 'GET' && method !== 'HEAD') return false;
   // The versioned path of a feed is the same feed: `read` reaches both.
   const p = unversionedPath(path);
+  if (LEGACY_READ_EXCLUDED.some((x) => p === x || p.startsWith(`${x}/`))) return false;
   if (LEGACY_READ_PATHS.has(p)) return true;
   return LEGACY_READ_PREFIXES.some((prefix) => p.startsWith(prefix));
 }

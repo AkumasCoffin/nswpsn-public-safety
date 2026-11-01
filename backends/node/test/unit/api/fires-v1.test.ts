@@ -1,13 +1,15 @@
 /**
- * GET /api/v1/fires — every fire service's incidents in one feed (api/fires.ts).
+ * GET /api/v1/fires — every fire service's incidents and the QFD and DFES
+ * warnings in one feed (api/fires.ts).
  *
  * Read from the same LiveStore snapshots the per-agency routes serve, one
- * small fixture per service, the way each source writes it. Pinned here: the
- * shared snake_case shape and what goes in `details`; RFS's GeoRSS polygon
- * strings as [lon, lat] rings; times in UTC only when the agency gave one with
- * a zone (and its own wording kept otherwise); closed records only with all=1;
- * the source/state/layer filters and their refusals; `sources` per service;
- * the bare FeatureCollection on both paths; and what a key needs to read it.
+ * small fixture per feed, the way each source writes it. Pinned here: the
+ * shared snake_case shape and what goes in `details`; `kind`; RFS's GeoRSS
+ * polygon strings as [lon, lat] rings; times in UTC only when the agency gave
+ * one with a zone (and its own wording kept otherwise); closed records only
+ * with all=1; the source/state/layer/kind filters and their refusals;
+ * `sources` per feed; the bare FeatureCollection on both paths; and what a key
+ * needs to read it.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Hono } from 'hono';
@@ -31,15 +33,17 @@ import { _clearApiKeyCache, lookupPrefix } from '../../../src/services/auth/apiK
 const NOW = Date.UTC(2026, 10, 1, 6, 30, 0); // 2026-11-01T06:30:00Z
 const READ_AT = new Date(NOW).toISOString();
 
-const STORES = ['rfs_incidents', 'qld_fire', 'vic_emergency', 'nt_fire', 'wa_incident', 'sa_cfs', 'sa_mfs'];
+const STORES = ['rfs_incidents', 'qld_fire', 'qld_warning', 'vic_emergency', 'nt_fire', 'wa_incident', 'wa_warning', 'sa_cfs', 'sa_mfs'];
 const SERVICES = [
-  { source: 'rfs', name: 'NSW Rural Fire Service', state: 'NSW' },
-  { source: 'qld_fire', name: 'QLD Fire Department', state: 'QLD' },
-  { source: 'vic_emergency', name: 'VIC Emergency', state: 'VIC' },
-  { source: 'nt_fire', name: 'NT Fire and Rescue', state: 'NT' },
-  { source: 'wa_incident', name: 'WA DFES', state: 'WA' },
-  { source: 'sa_cfs', name: 'SA Country Fire Service', state: 'SA' },
-  { source: 'sa_mfs', name: 'SA Metropolitan Fire Service', state: 'SA' },
+  { source: 'rfs', name: 'NSW Rural Fire Service', state: 'NSW', kind: 'incident' },
+  { source: 'qld_fire', name: 'QLD Fire Department', state: 'QLD', kind: 'incident' },
+  { source: 'qld_warning', name: 'QLD Fire Department warnings', state: 'QLD', kind: 'warning' },
+  { source: 'vic_emergency', name: 'VIC Emergency', state: 'VIC', kind: 'incident' },
+  { source: 'nt_fire', name: 'NT Fire and Rescue', state: 'NT', kind: 'incident' },
+  { source: 'wa_incident', name: 'WA DFES', state: 'WA', kind: 'incident' },
+  { source: 'wa_warning', name: 'WA DFES warnings', state: 'WA', kind: 'warning' },
+  { source: 'sa_cfs', name: 'SA Country Fire Service', state: 'SA', kind: 'incident' },
+  { source: 'sa_mfs', name: 'SA Metropolitan Fire Service', state: 'SA', kind: 'incident' },
 ];
 
 const point = (lon: number, lat: number) => ({ type: 'Point', coordinates: [lon, lat] });
@@ -230,6 +234,36 @@ const WA = {
   },
 };
 
+/** A DFES warning, as the warnings feed writes it: an area, and a time at +08:00. */
+const WA_RING = [[117.2, -33.3], [117.3, -33.3], [117.3, -33.4], [117.2, -33.3]];
+const WA_WARNING_EXTRA = {
+  eventRef: 'ev-7', incidentRef: 'ev-7', headline: 'WEDGECARRUP', alertLine: 'A Bushfire Advice is in place.',
+  whatToDo: 'Stay alert and monitor your surroundings.', peopleAffected: '', action: 'Stay informed', actionType: 'Escalating',
+  capSeverity: 'Minor - minimal threat', capUrgency: 'Future - act in near future', capCertainty: 'Observed - occurred or ongoing',
+  cadId: '', region: '',
+};
+const WA_WARNING = {
+  type: 'Feature',
+  geometry: point(117.25, -33.39),
+  properties: {
+    polygons: [WA_RING],
+    ...WA_WARNING_EXTRA,
+    title: 'STAY INFORMED - WEDGECARRUP',
+    guid: 'waw:1',
+    status: '',
+    location: 'Wedgecarrup, SHIRE OF WAGIN',
+    alertLevel: 'Advice',
+    fireType: 'Bushfire',
+    responsibleAgency: 'DFES',
+    updated: '01/11/2026, 3:37:13 pm',
+    updatedISO: '2026-11-01T15:37:13.608+08:00',
+    layer: 'fire',
+    is_active: true,
+    agency: 'DFES',
+    source: 'wa_warning',
+  },
+};
+
 const SA_CFS = {
   type: 'Feature',
   geometry: point(138.7, -34.9),
@@ -263,11 +297,11 @@ type Answer = {
   type: string;
   features: Array<{ type: string; geometry: unknown; properties: Props }>;
   count: number;
-  sources: Array<{ source: string; name: string; state: string; count: number; updated_at: string | null }>;
+  sources: Array<{ source: string; name: string; state: string; kind: string; count: number; updated_at: string | null }>;
 };
 
 const PROPERTY_NAMES = [
-  'agency', 'alert_level', 'category', 'details', 'id', 'is_active', 'layer', 'location', 'polygons',
+  'agency', 'alert_level', 'category', 'details', 'id', 'is_active', 'kind', 'layer', 'location', 'polygons',
   'responsible_agency', 'source', 'state', 'status', 'title', 'updated_at',
 ].sort();
 
@@ -294,9 +328,12 @@ beforeEach(() => {
   vi.setSystemTime(NOW);
   liveStore.set('rfs_incidents', fc([RFS_TEXT_TIME, RFS_ZONED_TIME]));
   liveStore.set('qld_fire', fc([QLD]));
+  // Read, with no warning in force.
+  liveStore.set('qld_warning', fc([]));
   liveStore.set('vic_emergency', fc([VIC_FIRE, VIC_HAZARD]));
   liveStore.set('nt_fire', fc([NT_OPEN, NT_CLOSED]));
   liveStore.set('wa_incident', fc([WA]));
+  liveStore.set('wa_warning', fc([WA_WARNING]));
   liveStore.set('sa_cfs', fc([SA_CFS]));
   // The MFS has not been read since this server started.
   liveStore.delete('sa_mfs');
@@ -317,11 +354,11 @@ describe('GET /api/v1/fires', () => {
     expect(body).not.toHaveProperty('data');
     expect(Object.keys(body).sort()).toEqual(['count', 'features', 'sources', 'type']);
     expect(body.type).toBe('FeatureCollection');
-    // Every service in order, open records only: RFS 2, QLD 1, VIC 2, NT 1, WA 1, SA CFS 1.
+    // Every feed in order, open records only: RFS 2, QLD 1, VIC 2, NT 1, WA 1 and a warning, SA CFS 1.
     expect(ids(body)).toEqual([
-      RFS_TEXT_TIME.properties.guid, RFS_ZONED_TIME.properties.guid, 'qfd:7781', 'vic:1001', 'vic:2002', 'nt:abc', 'wa:55', 'sa:cfs:1',
+      RFS_TEXT_TIME.properties.guid, RFS_ZONED_TIME.properties.guid, 'qfd:7781', 'vic:1001', 'vic:2002', 'nt:abc', 'wa:55', 'waw:1', 'sa:cfs:1',
     ]);
-    expect(body.count).toBe(8);
+    expect(body.count).toBe(9);
   });
 
   it('every feature has the same snake_case properties, its geometry as the agency placed it', async () => {
@@ -336,6 +373,7 @@ describe('GET /api/v1/fires', () => {
       properties: {
         id: 'qfd:7781',
         source: 'qld_fire',
+        kind: 'incident',
         agency: 'QFD',
         state: 'QLD',
         layer: 'fire',
@@ -358,6 +396,47 @@ describe('GET /api/v1/fires', () => {
     expect(byId(body, RFS_ZONED_TIME.properties.guid).properties).toMatchObject({ agency: 'RFS', layer: 'fire', state: 'NSW', source: 'rfs' });
     // VIC names the agency per record.
     expect(byId(body, 'vic:2002').properties).toMatchObject({ agency: 'SES', layer: 'hazard', category: 'Building Damage' });
+  });
+
+  it('a QFD or DFES warning comes in the same shape, as kind warning', async () => {
+    const body = await read('/api/v1/fires');
+    expect(byId(body, 'waw:1')).toEqual({
+      type: 'Feature',
+      geometry: point(117.25, -33.39),
+      properties: {
+        id: 'waw:1',
+        source: 'wa_warning',
+        kind: 'warning',
+        agency: 'DFES',
+        state: 'WA',
+        layer: 'fire',
+        title: 'STAY INFORMED - WEDGECARRUP',
+        status: '',
+        location: 'Wedgecarrup, SHIRE OF WAGIN',
+        category: 'Bushfire',
+        alert_level: 'Advice',
+        responsible_agency: 'DFES',
+        updated_at: '2026-11-01T07:37:13.608Z',
+        is_active: true,
+        polygons: [WA_RING],
+        details: WA_WARNING_EXTRA,
+      },
+    });
+    expect(body.features.filter((f) => f.properties.kind === 'warning').map((f) => f.properties.id)).toEqual(['waw:1']);
+  });
+
+  it('kind=incident leaves the warnings out, kind=warning keeps only them, and the sources list follows', async () => {
+    const incidents = await read('/api/v1/fires?kind=incident');
+    expect(ids(incidents)).not.toContain('waw:1');
+    expect(incidents.count).toBe(8);
+    expect(incidents.sources.map((s) => s.source)).not.toContain('wa_warning');
+
+    const warnings = await read('/api/v1/fires?kind=WARNING');
+    expect(ids(warnings)).toEqual(['waw:1']);
+    expect(warnings.sources.map((s) => `${s.source}:${s.count}`)).toEqual(['qld_warning:0', 'wa_warning:1']);
+
+    expect(ids(await read('/api/v1/fires?kind=incident,warning'))).toEqual(ids(await read('/api/v1/fires')));
+    expect(ids(await read('/api/v1/fires?kind=warning&state=qld'))).toEqual([]);
   });
 
   it('details carries only the agency\'s own fields, under their own names', async () => {
@@ -418,7 +497,7 @@ describe('GET /api/v1/fires', () => {
 
     const all = await read('/api/v1/fires?all=1');
     expect(byId(all, 'nt:def').properties).toMatchObject({ is_active: false, status: 'Closed' });
-    expect(all.count).toBe(9);
+    expect(all.count).toBe(10);
     expect(all.sources.find((s) => s.source === 'nt_fire')!.count).toBe(2);
 
     // Anything but 1 leaves them out, as the NT and SA routes always read it.
@@ -435,14 +514,15 @@ describe('GET /api/v1/fires', () => {
     expect(nsw.sources.map((s) => s.source)).toEqual(['rfs']);
 
     const westAndNorth = await read('/api/v1/fires?state=Wa,nt');
-    expect(ids(westAndNorth)).toEqual(['nt:abc', 'wa:55']);
+    expect(ids(westAndNorth)).toEqual(['nt:abc', 'wa:55', 'waw:1']);
 
-    // layer=fire keeps fires only: VIC's building damage and WA's flood go.
+    // layer=fire keeps fires only: VIC's building damage and WA's flood go; the bushfire warning stays.
     const fires = await read('/api/v1/fires?layer=fire');
     expect(ids(fires)).not.toContain('vic:2002');
     expect(ids(fires)).not.toContain('wa:55');
+    expect(ids(fires)).toContain('waw:1');
     expect(fires.features.every((f) => f.properties.layer === 'fire')).toBe(true);
-    expect(fires.count).toBe(6);
+    expect(fires.count).toBe(7);
 
     const other = await read('/api/v1/fires?layer=hazard,FLOOD');
     expect(ids(other)).toEqual(['vic:2002', 'wa:55']);
@@ -467,34 +547,35 @@ describe('GET /api/v1/fires', () => {
     expect(fires).toContain(RFS_TEXT_TIME.properties.guid);
   });
 
-  it('`sources`: one entry per service asked for, counted after the filters, null when never read', async () => {
+  it('`sources`: one entry per feed asked for, counted after the filters, null when never read', async () => {
     const body = await read('/api/v1/fires?layer=fire');
     expect(body.sources).toEqual(
       SERVICES.map((s) => ({
         ...s,
-        count: { rfs: 2, qld_fire: 1, vic_emergency: 1, nt_fire: 1, wa_incident: 0, sa_cfs: 1, sa_mfs: 0 }[s.source],
+        count: { rfs: 2, qld_fire: 1, qld_warning: 0, vic_emergency: 1, nt_fire: 1, wa_incident: 0, wa_warning: 1, sa_cfs: 1, sa_mfs: 0 }[s.source],
         updated_at: s.source === 'sa_mfs' ? null : READ_AT,
       })),
     );
     // A state with a service that has not been read shows that, rather than "no fires".
     const sa = await read('/api/v1/fires?state=sa');
     expect(sa.sources.find((s) => s.source === 'sa_mfs')).toEqual({
-      source: 'sa_mfs', name: 'SA Metropolitan Fire Service', state: 'SA', count: 0, updated_at: null,
+      source: 'sa_mfs', name: 'SA Metropolitan Fire Service', state: 'SA', kind: 'incident', count: 0, updated_at: null,
     });
   });
 
   it('an unknown value is refused: 400 validation_failed, naming each bad field', async () => {
-    const res = await app().request('/api/v1/fires?source=rfs,nope&state=XX&layer=smoke&all=1');
+    const res = await app().request('/api/v1/fires?source=rfs,nope&state=XX&layer=smoke&kind=alert&all=1');
     expect(res.status).toBe(400);
     const { error } = (await res.json()) as { error: { code: string; message: string; details: { issues: Array<{ path: string; message: string }> } } };
     expect(error.code).toBe('validation_failed');
-    expect(error.details.issues.map((i) => i.path)).toEqual(['source', 'state', 'layer']);
+    expect(error.details.issues.map((i) => i.path)).toEqual(['source', 'state', 'layer', 'kind']);
     expect(error.details.issues[0]!.message).toContain('nope');
     expect(error.details.issues[0]!.message).not.toContain('unknown source: rfs');
     expect(error.details.issues[1]!.message).toContain('XX');
     expect(error.details.issues[2]!.message).toContain('smoke');
+    expect(error.details.issues[3]!.message).toBe('unknown kind: alert (one of incident, warning)');
     expect(error.message).toBe(
-      'source: unknown source: nope (one of rfs, qld_fire, vic_emergency, nt_fire, wa_incident, sa_cfs, sa_mfs)',
+      'source: unknown source: nope (one of rfs, qld_fire, qld_warning, vic_emergency, nt_fire, wa_incident, wa_warning, sa_cfs, sa_mfs)',
     );
     // The old path: the first issue, plainly.
     const old = await app().request('/api/fires?layer=smoke');
@@ -523,7 +604,7 @@ describe('what a key needs to read it', () => {
     withScopes(['fires:live']);
     const res = await app({ gate: true }).request('/api/v1/fires', asKey);
     expect(res.status).toBe(200);
-    expect(((await res.json()) as Answer).count).toBe(8);
+    expect(((await res.json()) as Answer).count).toBe(9);
   });
 
   it('a key with only another feed is refused, told what it needs', async () => {

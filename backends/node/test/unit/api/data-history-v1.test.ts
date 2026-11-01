@@ -157,7 +157,7 @@ describe('a named key reads only the history of the feeds it holds', () => {
   const FIRES_HISTORY = ['fires:history'];
   /** Every cell of the staff table. */
   const EVERY_CELL = Object.entries(FEEDS).flatMap(([feed, f]) => f.windows.map((w) => `${feed}:${w}`));
-  const FIRE_SOURCES = ['nt_fire', 'qld_fire', 'rfs', 'sa_cfs', 'sa_mfs', 'vic_emergency', 'wa_incident'];
+  const FIRE_SOURCES = ['nt_fire', 'qld_fire', 'qld_warning', 'rfs', 'sa_cfs', 'sa_mfs', 'vic_emergency', 'wa_incident', 'wa_warning'];
 
   it('with no source given, only its own feeds\' sources are asked for, and the answer is not cached', async () => {
     const res = await app(['fires:history', 'pager:history']).request('/api/v1/data/history');
@@ -168,15 +168,16 @@ describe('a named key reads only the history of the feeds it holds', () => {
     for (const p of params) expect(askedSources(p)).toEqual([...FIRE_SOURCES, 'pager'].sort());
   });
 
-  it('a feed it does not hold is not read: fire incidents but not QLD warnings', async () => {
+  it('a feed it does not hold is not read: fire incidents and warnings, but not weather warnings', async () => {
     const a = app(FIRES_HISTORY);
-    const res = await a.request('/api/v1/data/history?source=qld_warning');
+    const res = await a.request('/api/v1/data/history?source=bom_land');
     expect(res.status).toBe(403);
     expect((await res.json()).error).toEqual({
       code: 'api_key_scope_forbidden',
-      message: "This key's scopes do not cover the stored history of: qld_warning.",
+      message: "This key's scopes do not cover the stored history of: bom_land.",
     });
-    expect((await a.request('/api/v1/data/history?source=qld_fire,rfs')).status).toBe(200);
+    // The QFD and DFES warnings are part of the fires feed.
+    expect((await a.request('/api/v1/data/history?source=qld_fire,rfs,qld_warning,wa_warning')).status).toBe(200);
   });
 
   it('the live cell of a feed reads none of its history', async () => {

@@ -196,7 +196,7 @@ describe('filterSpecForKey', () => {
   it('a `read` key sees the feeds on the old list, the merged fire feed among them', () => {
     const seen = ops(filterSpecForKey(fresh, ['read'])).map((o) => o.path);
     expect(seen).toContain('/api/v1/bom/warnings');
-    expect(seen).toContain('/api/v1/qld-fire/warnings');
+    expect(seen).toContain('/api/v1/traffic/incidents');
     expect(seen).toContain('/api/v1/rfs/fdr');
     expect(seen).toContain('/api/v1/fires');
     expect(seen).not.toContain('/api/v1/summaries');

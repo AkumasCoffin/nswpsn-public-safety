@@ -1,11 +1,10 @@
 /**
- * Airservices weather cameras on /api/v1/ and on their old /api/ paths.
+ * Airservices weather cameras, for the map. Not on /api/v1/: camera images
+ * are not part of the API (v1.test.ts checks they are absent there).
  *
- * One handler serves both (api/v1/mirror.ts). The list is GeoJSON, bare on
- * both paths; one airport's cameras are wrapped in `data` on v1. When
- * Airservices cannot be read, the old path keeps the empty 200 it always
- * sent and v1 answers 503 service_unavailable. The old paths are checked
- * byte for byte.
+ * The list is GeoJSON; one airport's cameras are a plain object. When
+ * Airservices cannot be read, the detail keeps the empty 200 it always sent.
+ * Checked byte for byte.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Hono } from 'hono';
@@ -66,13 +65,8 @@ const DETAIL = {
 
 async function app() {
   const { aviationRouter } = await import('../../../src/api/aviation.js');
-  const { mirror } = await import('../../../src/api/v1/mirror.js');
-  const { notFound, onError } = await import('../../../src/api/v1/respond.js');
   const a = new Hono();
   a.route('/', aviationRouter);
-  mirror(a, aviationRouter, ['/api/aviation/cameras', '/api/aviation/cameras/:airport']);
-  a.notFound(notFound);
-  a.onError(onError);
   return a;
 }
 
@@ -91,12 +85,8 @@ beforeEach(async () => {
   mod._resetDetailCacheForTests();
 });
 
-async function resetDetailCache() {
-  (await import('../../../src/sources/aviation.js'))._resetDetailCacheForTests();
-}
-
 describe('/aviation/cameras', () => {
-  it('answers the snapshot bare, on both paths', async () => {
+  it('answers the snapshot', async () => {
     const snap = {
       type: 'FeatureCollection',
       features: [
@@ -116,19 +106,16 @@ describe('/aviation/cameras', () => {
     const a = await app();
     const want = JSON.stringify(snap);
     expect(await get(a, '/api/aviation/cameras')).toEqual({ status: 200, type: 'application/json', text: want });
-    expect(await get(a, '/api/v1/aviation/cameras')).toEqual({ status: 200, type: 'application/json', text: want });
   });
 
   it('answers an empty collection before the first poll', async () => {
     const a = await app();
-    const want = '{"type":"FeatureCollection","features":[],"count":0}';
-    expect((await get(a, '/api/aviation/cameras')).text).toBe(want);
-    expect((await get(a, '/api/v1/aviation/cameras')).text).toBe(want);
+    expect((await get(a, '/api/aviation/cameras')).text).toBe('{"type":"FeatureCollection","features":[],"count":0}');
   });
 });
 
 describe('/aviation/cameras/{airport}', () => {
-  it("answers the airport's cameras — wrapped in data on v1", async () => {
+  it("answers the airport's cameras", async () => {
     fetchJsonMock.mockResolvedValue(MODAL);
     const a = await app();
     expect(await get(a, '/api/aviation/cameras/albury-airport')).toEqual({
@@ -136,25 +123,17 @@ describe('/aviation/cameras/{airport}', () => {
       type: 'application/json',
       text: JSON.stringify(DETAIL),
     });
-    await resetDetailCache();
-    expect(await get(a, '/api/v1/aviation/cameras/albury-airport')).toEqual({
-      status: 200,
-      type: 'application/json',
-      text: JSON.stringify({ data: DETAIL }),
-    });
     expect(String(fetchJsonMock.mock.calls[0]?.[0])).toContain('airport=albury-airport');
   });
 
-  it('an airport Airservices does not know is an empty list on both paths', async () => {
+  it('an airport Airservices does not know is an empty list', async () => {
     fetchJsonMock.mockResolvedValue({ modal: '' });
     const a = await app();
     const want = { airport: 'sydney', title: 'sydney', state: '', name: 'sydney', cameras: [], count: 0 };
     expect((await get(a, '/api/aviation/cameras/sydney')).text).toBe(JSON.stringify(want));
-    await resetDetailCache();
-    expect((await get(a, '/api/v1/aviation/cameras/sydney')).text).toBe(JSON.stringify({ data: want }));
   });
 
-  it('when Airservices cannot be read: the old path its empty 200, v1 a 503', async () => {
+  it('when Airservices cannot be read: the empty 200 it always sent', async () => {
     fetchJsonMock.mockRejectedValue(new Error('HTTP 502'));
     const a = await app();
     expect(await get(a, '/api/aviation/cameras/albury-airport')).toEqual({
@@ -162,9 +141,6 @@ describe('/aviation/cameras/{airport}', () => {
       type: 'application/json',
       text: '{"airport":"albury-airport","cameras":[],"count":0}',
     });
-    const res = await get(a, '/api/v1/aviation/cameras/albury-airport');
-    expect(res.status).toBe(503);
-    expect(JSON.parse(res.text)).toEqual({ error: { code: 'service_unavailable', message: expect.any(String) } });
   });
 
   it('reads the airport from the path as decoded text', async () => {

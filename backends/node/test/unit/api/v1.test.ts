@@ -62,20 +62,49 @@ const ACT = {
 };
 const BOM = { warnings: [{ title: 'Flood Watch' }], count: 1, counts: { land: 1, marine: 0 } };
 
-/** Per-agency incident routes, boundaries, the radio site list and transcripts: this site's routes, not the API's. */
+/**
+ * Per-agency incident and warning routes, boundaries, the radio site list,
+ * transcripts, camera images and news outlets' feeds: this site's routes, not
+ * the API's.
+ */
 const NOT_ON_V1 = [
   '/api/v1/rfs/incidents',
   '/api/v1/rfs/incidents/raw',
   '/api/v1/nt-fire/incidents',
   '/api/v1/qld-fire/incidents',
+  '/api/v1/qld-fire/warnings',
   '/api/v1/vic-emergency/events',
   '/api/v1/wa-emergency/incidents',
+  '/api/v1/wa-emergency/warnings',
   '/api/v1/sa-fire/cfs',
   '/api/v1/sa-fire/mfs',
   '/api/v1/boundaries/lga-names',
   '/api/v1/boundaries/lga',
   '/api/v1/radio/grn-sites',
   '/api/v1/rdio/calls/7',
+  '/api/v1/traffic/cameras',
+  '/api/v1/qld/cameras',
+  '/api/v1/qld/flood-cameras',
+  '/api/v1/aviation/cameras',
+  '/api/v1/aviation/cameras/albury-airport',
+  '/api/v1/centralwatch/cameras',
+  '/api/v1/centralwatch/sites',
+  '/api/v1/centralwatch/image/cam-1',
+  '/api/v1/news/rss',
+  '/api/v1/news/sources',
+];
+
+/** Camera images and news outlets' feeds on /api/: the site's, read by no key. */
+const CAMERAS_AND_NEWS = [
+  '/api/traffic/cameras',
+  '/api/qld/cameras',
+  '/api/qld/flood-cameras',
+  '/api/aviation/cameras',
+  '/api/aviation/cameras/albury-airport',
+  '/api/centralwatch/cameras',
+  '/api/centralwatch/sites',
+  '/api/news/rss',
+  '/api/news/sources',
 ];
 
 let app: Hono;
@@ -200,7 +229,7 @@ describe('not found and errors', () => {
     expect((await get('/api/v1/heartbeat')).status).toBe(404);
   });
 
-  it('the per-agency fire routes, boundaries, the radio site list and transcripts are not on v1', async () => {
+  it('the per-agency fire routes, boundaries, the radio site list, transcripts, cameras and news are not on v1', async () => {
     for (const path of NOT_ON_V1) {
       const res = await get(path);
       expect(res.status, path).toBe(404);
@@ -262,13 +291,16 @@ describe('the gate on /api/v1/', () => {
       '/api/rfs/incidents',
       '/api/nt-fire/incidents',
       '/api/qld-fire/incidents',
+      '/api/qld-fire/warnings',
       '/api/vic-emergency/events',
       '/api/wa-emergency/incidents',
+      '/api/wa-emergency/warnings',
       '/api/sa-fire/cfs',
       '/api/boundaries/lga',
       '/api/radio/grn-sites',
       '/api/rdio/calls/7',
       '/api/adsb/receivers',
+      ...CAMERAS_AND_NEWS,
     ];
     for (const path of own) {
       const res = await get(path, asKey);
@@ -279,6 +311,33 @@ describe('the gate on /api/v1/', () => {
     for (const path of NOT_ON_V1.filter((p) => !p.includes('lga-names'))) {
       expect((await get(path, asKey)).status, path).toBe(404);
     }
+  });
+
+  it('no key reads camera images or news: not a scoped key, not a `read` key', async () => {
+    keyScopes = EVERY_CELL;
+    for (const path of CAMERAS_AND_NEWS) {
+      const res = await get(path, asKey);
+      expect(res.status, path).toBe(403);
+      expect(await res.json(), path).toMatchObject({ error: 'api_key_scope_forbidden' });
+    }
+    keyScopes = ['read'];
+    _clearApiKeyCache();
+    for (const path of CAMERAS_AND_NEWS) {
+      const res = await get(path, asKey);
+      expect(res.status, path).toBe(403);
+      expect(await res.json(), path).toMatchObject({ error: 'api_key_path_forbidden' });
+    }
+    // The rest of what `read` had stays, the QFD and DFES warnings with it.
+    for (const path of ['/api/traffic/incidents', '/api/qld-fire/warnings', '/api/wa-emergency/warnings']) {
+      expect((await get(path, asKey)).status, path).toBe(200);
+    }
+  });
+
+  it('the fire-tower camera list needs a credential now; its images stay public, for <img src>', async () => {
+    expect((await get('/api/centralwatch/cameras', {})).status).toBe(401);
+    const img = await get('/api/centralwatch/image/cam-1', {});
+    expect(img.status).toBe(200);
+    expect(img.headers.get('X-Cache')).toBe('PLACEHOLDER');
   });
 
   it('a `read` key reaches the v1 twins of the old feed list', async () => {

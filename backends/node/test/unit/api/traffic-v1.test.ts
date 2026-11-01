@@ -5,7 +5,8 @@
  * api/v1/respond.ts. GeoJSON is bare on both paths; all-feeds is wrapped in
  * `data` on v1. Where upstream cannot be read, the old path keeps the 200 it
  * always sent and v1 answers 503 service_unavailable. The old paths are
- * checked byte for byte.
+ * checked byte for byte. /cameras is the site's alone — camera images are not
+ * part of the API — and all-feeds leaves out the camera records it carries.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Hono } from 'hono';
@@ -31,9 +32,9 @@ const HAZARDS = [
   ['lga', 'traffic_lga', 'regional/lga-incidents'],
 ] as const;
 
+// What server.ts mirrors: everything but /cameras.
 const PATHS = [
   ...HAZARDS.flatMap(([p]) => [`/api/traffic/${p}`, `/api/traffic/${p}/raw`]),
-  '/api/traffic/cameras',
   '/api/traffic/works',
   '/api/traffic/lga-incidents',
   '/api/traffic/all-feeds',
@@ -127,7 +128,7 @@ describe('the parsed hazard feeds and works (LiveStore)', () => {
 });
 
 describe('/traffic/cameras', () => {
-  it('answers the snapshot bare, on both paths', async () => {
+  it('answers the snapshot on /api/ only', async () => {
     const cams = {
       type: 'FeatureCollection',
       features: [
@@ -142,13 +143,12 @@ describe('/traffic/cameras', () => {
     liveStore.set('traffic_cameras', cams);
     const a = await app();
     expect((await get(a, '/api/traffic/cameras')).text).toBe(JSON.stringify(cams));
-    expect((await get(a, '/api/v1/traffic/cameras')).text).toBe(JSON.stringify(cams));
+    expect((await get(a, '/api/v1/traffic/cameras')).status).toBe(404);
   });
 
   it('answers an empty collection before the first poll', async () => {
     const a = await app();
     expect((await get(a, '/api/traffic/cameras')).text).toBe(EMPTY_SNAPSHOT);
-    expect((await get(a, '/api/v1/traffic/cameras')).text).toBe(EMPTY_SNAPSHOT);
   });
 });
 
@@ -224,19 +224,19 @@ describe('/traffic/all-feeds', () => {
     { id: '4' },
     { id: '5', eventType: 'Roadwork', eventCategory: 'Roadwork' },
   ];
+  // The camera record (liveCams) is left out everywhere.
   const BODY = {
-    raw: FEED,
+    raw: [FEED[0], FEED[2], FEED[3], FEED[4]],
     grouped: {
       Roadwork: [FEED[0], FEED[4]],
-      liveCams: [FEED[1]],
       LGACouncilParticipation: [FEED[2]],
       unknown: [FEED[3]],
     },
-    eventTypes: ['Roadwork', 'liveCams', 'LGACouncilParticipation', 'unknown'],
-    totalCount: 5,
+    eventTypes: ['Roadwork', 'LGACouncilParticipation', 'unknown'],
+    totalCount: 4,
   };
 
-  it('answers the records and the records grouped — wrapped in data on v1', async () => {
+  it('answers the records and the records grouped, cameras left out — wrapped in data on v1', async () => {
     fetchJsonMock.mockResolvedValue(FEED);
     const a = await app();
     expect(await get(a, '/api/traffic/all-feeds')).toEqual({ status: 200, type: 'application/json', text: JSON.stringify(BODY) });

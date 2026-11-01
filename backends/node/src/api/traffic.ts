@@ -25,11 +25,15 @@
  * variants hit upstream every time (Python caches them at HTTP TTL
  * level); the parsed variants serve out of LiveStore.
  *
- * All of them are also served at /api/v1/ (server.ts mirrors them). The
- * routes that read upstream per request (/raw, lga-incidents, all-feeds)
- * answer an empty body (200) on the old path when upstream cannot be read,
- * as they always have; on /api/v1/ they answer 503 service_unavailable, so
- * an outage does not read as "nothing on the roads".
+ * All of them but /cameras are also served at /api/v1/ (server.ts mirrors
+ * them). The routes that read upstream per request (/raw, lga-incidents,
+ * all-feeds) answer an empty body (200) on the old path when upstream cannot
+ * be read, as they always have; on /api/v1/ they answer 503
+ * service_unavailable, so an outage does not read as "nothing on the roads".
+ *
+ * /cameras is this site's route, for the map: camera images are not part of
+ * the API, so it declares no scope and no API key reaches it, and all-feeds
+ * leaves out the camera records Live Traffic's aggregate feed carries.
  */
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -60,8 +64,11 @@ import {
 export const trafficRouter = new Hono();
 
 // What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
+// /cameras declares nothing, so no scoped key reaches it.
 const SCOPE_HAZARDS = scoped({ feed: 'roads', window: 'live' });
-const SCOPE_CAMERAS = scoped({ feed: 'cameras', window: 'live' });
+
+/** Live Traffic's eventType for its camera records, which all-feeds leaves out. */
+const CAMERA_EVENT_TYPE = 'liveCams';
 
 interface AllFeedsItem {
   eventType?: string;
@@ -357,7 +364,6 @@ for (const h of HAZARDS) {
 
 trafficRouter.get(
   '/api/traffic/cameras',
-  SCOPE_CAMERAS,
   describeRoute({
     operationId: 'getTrafficCameras',
     tags: ['Cameras'],
@@ -446,7 +452,7 @@ trafficRouter.get(
     tags: ['Road hazards'],
     summary: 'The Live Traffic aggregate feed, unparsed',
     description:
-      "Every record in Live Traffic NSW's aggregate web feed (all-feeds-web.json) as published — other states' and territories' road events, NSW RFS fires, traffic cameras, rest areas and more — and the same records grouped by eventType. Read from Live Traffic NSW on each request; a large response.",
+      "Every record in Live Traffic NSW's aggregate web feed (all-feeds-web.json) as published — other states' and territories' road events, NSW RFS fires, rest areas and more — and the same records grouped by eventType. Its traffic cameras (eventType liveCams) are left out. Read from Live Traffic NSW on each request; a large response.",
     responses: {
       ...okJson(envelope(TrafficAllFeeds), 'The records, and the records grouped'),
       ...GATED_ERRORS,
@@ -464,17 +470,19 @@ trafficRouter.get(
         log.warn('traffic all-feeds fetch: not a list');
         return fail(c, 503, 'service_unavailable', NOT_THE_FEED);
       }
+      // Camera images are not part of what this API hands on.
+      const records = data.filter((item) => item.eventType !== CAMERA_EVENT_TYPE);
       const grouped: Record<string, AllFeedsItem[]> = {};
-      for (const item of data) {
+      for (const item of records) {
         const key = item.eventType ?? item.eventCategory ?? 'unknown';
         if (!grouped[key]) grouped[key] = [];
         grouped[key].push(item);
       }
       return ok(c, {
-        raw: data,
+        raw: records,
         grouped,
         eventTypes: Object.keys(grouped),
-        totalCount: data.length,
+        totalCount: records.length,
       } satisfies z.infer<typeof TrafficAllFeeds>);
     } catch (err) {
       log.warn({ err: (err as Error).message }, 'traffic all-feeds fetch failed');

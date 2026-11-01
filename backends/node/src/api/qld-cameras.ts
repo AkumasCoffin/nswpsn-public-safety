@@ -7,8 +7,8 @@
  * property shape as /api/traffic/cameras so the map renders every camera
  * layer through one code path.
  *
- * Both are also served at /api/v1/ (server.ts mirrors them), bare there too:
- * GeoJSON is never wrapped (api/v1/respond.ts).
+ * This site's routes, for the map: neither is on /api/v1/ nor declares a
+ * scope, so no API key reaches them — camera images are not part of the API.
  */
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -18,7 +18,6 @@ import {
   qldFloodCamerasSnapshot,
   type QldCamerasSnapshot,
 } from '../sources/qldCameras.js';
-import { scoped } from '../services/auth/apiKeyScopes.js';
 import { geo } from './v1/respond.js';
 import {
   assertShape,
@@ -32,11 +31,7 @@ import {
 
 export const qldCamerasRouter = new Hono();
 
-// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
-const SCOPE_CAMERAS = scoped({ feed: 'cameras', window: 'live' });
-
-// What /api/v1/ documents (api/v1/openapi.ts). One shape for both feeds;
-// `source` tells them apart.
+// The answers' shape. One shape for both feeds; `source` tells them apart.
 const QldCameras = featureCollection(
   feature(
     PointGeometry,
@@ -65,7 +60,6 @@ const COMMON =
 
 qldCamerasRouter.get(
   '/api/qld/cameras',
-  SCOPE_CAMERAS,
   describeRoute({
     operationId: 'getQldCameras',
     tags: ['Cameras'],
@@ -78,7 +72,6 @@ qldCamerasRouter.get(
 
 qldCamerasRouter.get(
   '/api/qld/flood-cameras',
-  SCOPE_CAMERAS,
   describeRoute({
     operationId: 'getQldFloodCameras',
     tags: ['Cameras'],

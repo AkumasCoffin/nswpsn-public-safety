@@ -406,6 +406,7 @@ export function createApp() {
   app.route('/', bomRouter);
   mirror(app, bomRouter, ['/api/bom/warnings']);
   app.route('/', trafficRouter);
+  // Not /api/traffic/cameras: camera images are not part of the API.
   mirror(app, trafficRouter, [
     '/api/traffic/incidents', '/api/traffic/incidents/raw',
     '/api/traffic/roadwork', '/api/traffic/roadwork/raw',
@@ -414,7 +415,7 @@ export function createApp() {
     '/api/traffic/majorevent', '/api/traffic/majorevent/raw',
     '/api/traffic/alpine', '/api/traffic/alpine/raw',
     '/api/traffic/lga', '/api/traffic/lga/raw',
-    '/api/traffic/cameras', '/api/traffic/works',
+    '/api/traffic/works',
     '/api/traffic/lga-incidents', '/api/traffic/all-feeds',
   ]);
   app.route('/', beachRouter);
@@ -474,23 +475,22 @@ export function createApp() {
   mirror(app, dataHistoryRouter, [
     '/api/data/history', '/api/data/history/filters', '/api/data/history/incident/:source/:source_id',
   ]);
-  // Aviation cameras + news RSS + summaries (W7)
+  // Aviation cameras + news RSS + summaries (W7). No camera and no news
+  // route is on /api/v1/: camera images and other outlets' news are not part
+  // of the API.
   app.route('/', aviationRouter);
-  mirror(app, aviationRouter, ['/api/aviation/cameras', '/api/aviation/cameras/:airport']);
   app.route('/', qldCamerasRouter);
-  mirror(app, qldCamerasRouter, ['/api/qld/cameras', '/api/qld/flood-cameras']);
   app.route('/', ntFireRouter);
   app.route('/', boundariesRouter);
   // Not on /api/v1/: boundaries are this site's own reference data, which API keys do not read.
   app.route('/', whisperRouter);
   app.route('/', qldFireRouter);
-  mirror(app, qldFireRouter, ['/api/qld-fire/warnings']);
   app.route('/', vicEmergencyRouter);
   app.route('/', waEmergencyRouter);
-  mirror(app, waEmergencyRouter, ['/api/wa-emergency/warnings']);
   app.route('/', saFireRouter);
-  // Every fire service in one feed (api/fires.ts). The per-agency incident
-  // routes above are this site's and the bot's; API keys read this one. The NT
+  // Every fire service in one feed (api/fires.ts), with the QFD and DFES
+  // warnings. The per-agency incident and warning routes above are this
+  // site's and the bot's; API keys read this one. The NT
   // feed asks not to be re-published (sources/ntFire.ts); the owner decided to
   // carry it, with NTFRS credited in the description.
   app.route('/', firesRouter);
@@ -501,7 +501,6 @@ export function createApp() {
   // Not /api/marinetraffic/vessel-image/:id: nothing uses it, and it goes when old paths are retired.
   mirror(app, marinetrafficRouter, ['/api/marinetraffic/vessels', '/api/marinetraffic/vessel/:id']);
   app.route('/', newsRouter);
-  mirror(app, newsRouter, ['/api/news/rss', '/api/news/sources']);
   app.route('/', summariesRouter);
   // Not /api/summaries/trigger: owner tooling.
   mirror(app, summariesRouter, ['/api/summaries/latest', '/api/summaries']);
@@ -509,7 +508,6 @@ export function createApp() {
   // Not on /api/v1/: API keys read the summaries, not transcripts.
   // Centralwatch reads + dashboard 503 stubs (W8)
   app.route('/', centralwatchRouter);
-  mirror(app, centralwatchRouter, ['/api/centralwatch/cameras', '/api/centralwatch/sites', '/api/centralwatch/image/:cameraId']);
   app.route('/', dashboardRouter);
   // Uptime-Kuma-shaped status endpoint
   app.route('/', statusRouter);

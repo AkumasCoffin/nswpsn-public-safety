@@ -12,12 +12,13 @@
  * in-memory cache that the batch worker (services/centralwatchImageCache.ts)
  * populates every 30 s.
  *
- * All three are also served at /api/v1/ (server.ts mirrors them). There the
- * camera lists are wrapped in `data`, and each camera's imageUrl names the
- * /api/v1/ image path, so a v1 client never depends on an unversioned one.
- * The old paths keep /api/centralwatch/image/<id>.
+ * This site's routes, for the map: none is on /api/v1/ or declares a scope,
+ * so no API key reaches them — camera images are not part of the API. The
+ * image proxy is public (auth/apiKey.ts) because the map shows each image
+ * with a plain <img src>, which cannot carry a credential; the camera list,
+ * the only place an id comes from, needs one like any other feed.
  */
-import { Hono, type Context } from 'hono';
+import { Hono } from 'hono';
 import { z } from 'zod';
 import { describeRoute } from 'hono-openapi';
 import {
@@ -32,15 +33,10 @@ import {
   STALE_AFTER_MS_EXPORT,
 } from '../services/centralwatchImageCache.js';
 import { log } from '../lib/log.js';
-import { toV1Path } from '../lib/apiVersion.js';
-import { scoped } from '../services/auth/apiKeyScopes.js';
-import { isV1, ok } from './v1/respond.js';
+import { ok } from './v1/respond.js';
 import { assertShape, envelope, GATED_ERRORS, okJson, type SameShape } from './v1/schemas.js';
 
 export const centralwatchRouter = new Hono();
-
-// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
-const SCOPE_CAMERAS = scoped({ feed: 'cameras', window: 'live' });
 
 // Cameras that the batch image worker can't reach (offline towers, upstream
 // 404s, etc.) get dropped from the public list so the map doesn't show
@@ -53,25 +49,12 @@ function filterOnline<T extends { id: string }>(list: T[]): T[] {
   return list.filter((cam) => hasImage(cam.id));
 }
 
-/**
- * The source builds each imageUrl as /api/centralwatch/image/<id>. On
- * /api/v1/ it names the v1 twin of that path instead; on the old path it is
- * left exactly as built.
- */
-const LEGACY_IMAGE_PREFIX = '/api/centralwatch/image/';
-function imageUrlsFor<T extends { imageUrl: string }>(c: Context, list: T[]): T[] {
-  if (!isV1(c)) return list;
-  return list.map((cam) =>
-    cam.imageUrl.startsWith(LEGACY_IMAGE_PREFIX) ? { ...cam, imageUrl: toV1Path(cam.imageUrl) } : cam,
-  );
-}
-
 // ---------------------------------------------------------------------------
-// What /api/v1/ documents (api/v1/openapi.ts)
+// The answers' shapes
 // ---------------------------------------------------------------------------
 
 const IMAGE_URL =
-  "The camera's latest image (see /centralwatch/image/{cameraId}): a path on this API, to be joined to its origin — /api/v1/centralwatch/image/<id>";
+  "The camera's latest image (see /centralwatch/image/{cameraId}): a path on this API, to be joined to its origin — /api/centralwatch/image/<id>";
 
 const CentralwatchCameraSchema = z.object({
   id: z.string().describe("Central Watch's id for the camera"),
@@ -122,21 +105,20 @@ const ONLINE_ONLY =
 
 // getCentralwatchCameras/Sites read a local file (through a one-minute
 // memory cache) and swallow their own read errors, so the catch below is a
-// last resort, not an upstream outage: both paths answer the empty list.
+// last resort, not an upstream outage: both answer the empty list.
 centralwatchRouter.get(
   '/api/centralwatch/cameras',
-  SCOPE_CAMERAS,
   describeRoute({
     operationId: 'getCentralwatchCameras',
     tags: ['Cameras'],
     summary: 'Fire-tower cameras',
-    description: `Fire-watch cameras from Central Watch, one record per camera, with the position of the tower it is on. ${ONLINE_ONLY} No key is needed.`,
-    responses: okJson(envelope(CentralwatchCameras), 'The cameras'),
+    description: `Fire-watch cameras from Central Watch, one record per camera, with the position of the tower it is on. ${ONLINE_ONLY}`,
+    responses: { ...okJson(envelope(CentralwatchCameras), 'The cameras'), ...GATED_ERRORS },
   }),
   async (c) => {
     try {
       const cameras = await getCentralwatchCameras();
-      return ok(c, imageUrlsFor(c, filterOnline(cameras)));
+      return ok(c, filterOnline(cameras));
     } catch (err) {
       log.warn(
         { err: (err as Error).message },
@@ -149,7 +131,6 @@ centralwatchRouter.get(
 
 centralwatchRouter.get(
   '/api/centralwatch/sites',
-  SCOPE_CAMERAS,
   describeRoute({
     operationId: 'getCentralwatchSites',
     tags: ['Cameras'],
@@ -164,7 +145,7 @@ centralwatchRouter.get(
       // remaining cameras — a tower with all-offline cameras shouldn't
       // produce a marker.
       const filtered = sites
-        .map((s) => ({ ...s, cameras: imageUrlsFor(c, filterOnline(s.cameras)) }))
+        .map((s) => ({ ...s, cameras: filterOnline(s.cameras) }))
         .filter((s) => s.cameras.length > 0);
       return ok(c, filtered);
     } catch (err) {
@@ -190,13 +171,12 @@ const xCache = (values: string[], description: string) => ({
 
 centralwatchRouter.get(
   '/api/centralwatch/image/:cameraId',
-  SCOPE_CAMERAS,
   describeRoute({
     operationId: 'getCentralwatchImage',
     tags: ['Cameras'],
     summary: "A fire-tower camera's latest image",
     description:
-      "The latest image from a Central Watch camera — the image itself, not JSON. Images are fetched from Central Watch for every camera about every 30 seconds (less often while it is refusing) and dropped once they are about five minutes old; this answers from what has been fetched and never reads Central Watch itself. A camera with no image to hand (an unknown id, a camera offline, or one not fetched yet) answers a 640×480 SVG placeholder, also with status 200; X-Cache says which you got. Sent with headers that tell browsers not to reuse it without asking again. No key is needed.",
+      "The latest image from a Central Watch camera — the image itself, not JSON. Images are fetched from Central Watch for every camera about every 30 seconds (less often while it is refusing) and dropped once they are about five minutes old; this answers from what has been fetched and never reads Central Watch itself. A camera with no image to hand (an unknown id, a camera offline, or one not fetched yet) answers a 640×480 SVG placeholder, also with status 200; X-Cache says which you got. Sent with headers that tell browsers not to reuse it without asking again. Public, so an <img> can show it.",
     parameters: [
       {
         in: 'path',

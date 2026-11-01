@@ -461,14 +461,15 @@ else.
 What it reads is its **scopes** (`services/auth/apiKeyScopes.ts`, migration
 129): a set of **feed** × **window** cells, written `<feed>:<window>` like the
 role names (`fires:live`, `fires:history`). `FEEDS` lists the feeds in the order
-the staff and profile tables show them — Fires, Warnings, ACT Ambulance, Power
-outages, Road hazards, Cameras, Public transport, Aircraft, Ships, Weather,
-Beaches & sharks, News, Pager messages, Radio summaries — each with a label, a
-line saying what it covers, and the windows it has (`live` — what the map shows
-now, polled and cached; `history` — stored records over time). A feed groups
-the sources a person would ask for together: Fires is every fire service (read
-merged at `/api/v1/fires`, `api/fires.ts`), satellite hotspots and fire danger
-ratings; Power outages is all three distributors.
+the staff and profile tables show them — Fires, Weather warnings, ACT
+Ambulance, Power outages, Road hazards, Public transport, Aircraft, Ships,
+Weather, Beaches & sharks, Pager messages, Radio summaries — each with a label,
+a line saying what it covers, and the windows it has (`live` — what the map
+shows now, polled and cached; `history` — stored records over time). A feed
+groups the sources a person would ask for together: Fires is every fire service
+and the QFD and DFES public warnings (read merged at `/api/v1/fires`,
+`api/fires.ts`, each record's `kind` saying which), satellite hotspots and fire
+danger ratings; Power outages is all three distributors.
 
 Each route a key may reach **declares** the one cell it serves with
 `scoped({ feed, window })` as its first middleware; a key passes when it holds
@@ -486,7 +487,7 @@ declare `scoped({ feed: '*', window: 'history' })`, which any `<feed>:history`
 cell satisfies; the handler then narrows the query to `historySourcesFor(...)`,
 the archived sources of the feeds whose history the key holds
 (`HISTORY_SOURCES` maps each archived `source` to its feed — `wa_warning` is
-`warnings`, `traffic_fire` is `roads`). Naming another source is a 403; a key's
+`fires`, `bom_land` is `warnings`, `traffic_fire` is `roads`). Naming another source is a 403; a key's
 history answer is `Cache-Control: private, no-store`. Callers that are not
 named keys (the site, the static key) are not narrowed. `user_incident` is not
 in the map, so no key reads it.
@@ -495,12 +496,19 @@ Never declared, so never readable with a key: anything about people or nodes —
 profiles and accounts, user-submitted incidents, site statistics, the cache and
 collection internals, and node status (`/api/adsb/receivers`,
 `/api/radio/monitored-sites`) — and this site's own reference data: boundaries
-(the council names too), the radio site list and reception transcripts. The
-per-agency fire incident routes (`/api/rfs/incidents`, `/api/qld-fire/incidents`,
-`/api/vic-emergency/events`, `/api/nt-fire/incidents`,
-`/api/wa-emergency/incidents`, `/api/sa-fire/{cfs,mfs}`) are undeclared too and
-off `/api/v1/`: the map and the bot read them in each agency's own shape, keys
-read the merged feed. Live data means what the public map shows; the only
+(the council names too), the radio site list and reception transcripts — and
+other people's pictures and words: the camera routes (`/api/traffic/cameras`,
+`/api/qld/…`, `/api/aviation/…`, `/api/centralwatch/…`) and the news outlets'
+feeds (`/api/news/…`), which the map and the live page read and which are off
+`/api/v1/`; `/api/traffic/all-feeds` drops Live Traffic's camera records
+(`liveCams`). The fire-tower image route stays public for the map's
+`<img src>`; the camera list it is reached from needs a credential. The
+per-agency fire incident and warning routes (`/api/rfs/incidents`,
+`/api/qld-fire/{incidents,warnings}`, `/api/vic-emergency/events`,
+`/api/nt-fire/incidents`, `/api/wa-emergency/{incidents,warnings}`,
+`/api/sa-fire/{cfs,mfs}`) are undeclared too and off `/api/v1/`: the map and
+the bot read them in each agency's own shape, keys read the merged feed. Live
+data means what the public map shows; the only
 node-derived data in it is aircraft and pager traffic. The feed list lives here
 and not in `shared/alert-catalog.json`, which is what the bot alerts on (a test
 keeps every archived source the catalog names mapped to a feed).
@@ -508,9 +516,11 @@ keeps every archived source the catalog names mapped to a feed).
 **`read` is the old rule, kept.** Every key made before scopes holds `read`, and
 `read` still means exactly what a key could reach then: GET or HEAD on a fixed
 list of upstream-feed prefixes (`LEGACY_READ_PREFIXES` — the emergency-service,
-traffic, transport, aviation, AIS, weather, power, camera, news, shark-report
-and boundary routes, plus `/api/pager/` and `/api/radio/`), anything else
-`403 api_key_path_forbidden`. A key holding `read`, or holding nothing in the
+traffic, transport, aircraft, AIS, weather, power, shark-report and boundary
+routes, plus `/api/pager/` and `/api/radio/`), anything else
+`403 api_key_path_forbidden`. The list had the camera and news routes too until
+the owner took cameras and news out of what keys read (2026-11-02);
+`/api/traffic/cameras`, under the traffic prefix, is excluded by name. A key holding `read`, or holding nothing in the
 new form, is judged by that list alone, so turning scopes on changed nothing
 for existing keys. New keys are granted feeds — the staff table does not offer
 `read`, though the approve route still accepts it from staff — and a user

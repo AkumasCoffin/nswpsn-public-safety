@@ -7,13 +7,14 @@
  * (sources, category, limit) triple so different queries don't trample
  * each other.
  *
- * Both are also served at /api/v1/ (server.ts mirrors them), wrapped in
- * `data` there (api/v1/respond.ts). When none of the feeds asked for gives
- * anything, the old path answers the empty aggregate (200), as it always
- * has; /api/v1/ answers 503 service_unavailable, so an outage does not read
- * as "no news".
+ * When none of the feeds asked for gives anything, /rss answers the empty
+ * aggregate (200), as it always has.
+ *
+ * This site's routes, for the live page: neither is on /api/v1/ nor declares
+ * a scope, so no API key reaches them — other outlets' news is not part of
+ * the API.
  */
-import { Hono, type Context } from 'hono';
+import { Hono } from 'hono';
 import { z } from 'zod';
 import { describeRoute } from 'hono-openapi';
 import {
@@ -22,15 +23,13 @@ import {
   type AggregateResponse,
 } from '../sources/news.js';
 import { log } from '../lib/log.js';
-import { scoped } from '../services/auth/apiKeyScopes.js';
-import { fail, isV1, ok } from './v1/respond.js';
+import { ok } from './v1/respond.js';
 import {
   assertShape,
   envelope,
   GATED_ERRORS,
   okJson,
   queryValidator,
-  UNAVAILABLE_ERROR,
   type SameShape,
 } from './v1/schemas.js';
 
@@ -67,11 +66,8 @@ function pruneCache(now: number): void {
 
 export const newsRouter = new Hono();
 
-// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
-const SCOPE_NEWS = scoped({ feed: 'news', window: 'live' });
-
 // ---------------------------------------------------------------------------
-// What /api/v1/ documents (api/v1/openapi.ts)
+// The answers' shapes
 // ---------------------------------------------------------------------------
 
 const CATEGORIES = 'general, emergency or weather';
@@ -163,26 +159,8 @@ const NewsSources = z
 // Routes
 // ---------------------------------------------------------------------------
 
-/**
- * Did no feed asked for give anything? The aggregator turns a feed it cannot
- * read into an empty one, so this is the only sign of an outage it leaves. A
- * request naming no known feed asked for nothing, and is not one.
- */
-function nothingRead(res: AggregateResponse): boolean {
-  const feeds = Object.values(res.sources);
-  return feeds.length > 0 && feeds.every((f) => f.status !== 'ok');
-}
-
-const UNREADABLE = 'None of the news feeds could be read just now.';
-
-function answer(c: Context, res: AggregateResponse): Response {
-  if (isV1(c) && nothingRead(res)) return fail(c, 503, 'service_unavailable', UNREADABLE);
-  return ok(c, res);
-}
-
 newsRouter.get(
   '/api/news/rss',
-  SCOPE_NEWS,
   describeRoute({
     operationId: 'getNewsHeadlines',
     tags: ['News'],
@@ -192,7 +170,6 @@ newsRouter.get(
     responses: {
       ...okJson(envelope(NewsHeadlines), 'The headlines, with how each feed fared'),
       ...GATED_ERRORS,
-      ...UNAVAILABLE_ERROR,
     },
   }),
   queryValidator(NewsHeadlinesQuery),
@@ -206,34 +183,30 @@ newsRouter.get(
     const key = cacheKey(sources, category, limit);
     const now = Date.now();
     const hit = cache.get(key);
-    if (hit && hit.expiresAt > now) return answer(c, hit.res);
+    if (hit && hit.expiresAt > now) return ok(c, hit.res);
 
     try {
       const res = await aggregateNews({ sources, category, limit });
       cache.set(key, { res, expiresAt: now + CACHE_TTL_MS });
       pruneCache(now);
-      return answer(c, res);
+      return ok(c, res);
     } catch (err) {
       log.warn({ err: (err as Error).message }, 'news aggregation failed');
-      // The old path has always answered an empty aggregate (200) rather than an error.
-      if (!isV1(c)) {
-        return ok(c, {
-          items: [],
-          count: 0,
-          sources: {},
-          category_counts: { general: 0, emergency: 0, weather: 0 },
-          available_sources: Object.keys(RSS_FEEDS),
-          available_categories: ['general', 'emergency', 'weather'],
-        } satisfies z.infer<typeof NewsHeadlines>);
-      }
-      return fail(c, 503, 'service_unavailable', UNREADABLE);
+      // An empty aggregate (200) rather than an error, as it has always answered.
+      return ok(c, {
+        items: [],
+        count: 0,
+        sources: {},
+        category_counts: { general: 0, emergency: 0, weather: 0 },
+        available_sources: Object.keys(RSS_FEEDS),
+        available_categories: ['general', 'emergency', 'weather'],
+      } satisfies z.infer<typeof NewsHeadlines>);
     }
   },
 );
 
 newsRouter.get(
   '/api/news/sources',
-  SCOPE_NEWS,
   describeRoute({
     operationId: 'getNewsSources',
     tags: ['News'],

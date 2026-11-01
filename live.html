@@ -3304,13 +3304,13 @@
       if (!container) return;
       
       try {
-        const response = await apiFetch(`${API_BASE}/api/v1/news/rss?limit=10`);
-        
+        const response = await apiFetch(`${API_BASE}/api/news/rss?limit=10`);
+
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}`);
         }
-        
-        const data = (await response.json()).data;
+
+        const data = await response.json();
         newsCache = data.items || [];
         
         // Store category counts from API or calculate locally

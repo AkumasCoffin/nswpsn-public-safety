@@ -4530,8 +4530,8 @@
       
       try {
         // Fetch all camera angles from the API
-        const res = await apiFetch(`${PROXY_BASE}/api/v1/aviation/cameras/${encodeURIComponent(airportProps.name)}`);
-        const data = (await res.json()).data;
+        const res = await apiFetch(`${PROXY_BASE}/api/aviation/cameras/${encodeURIComponent(airportProps.name)}`);
+        const data = await res.json();
         
         if (data && data.cameras && data.cameras.length > 0) {
           isGridView = true;
@@ -5980,7 +5980,7 @@ function initPagerHoursFromStorage() {
       try {
         const [incRes, warnRes] = await Promise.all([
           fetchFireFeed('qld_fire_incidents', '/api/qld-fire/incidents'),
-          fetchFireFeed('qld_fire_warnings', '/api/v1/qld-fire/warnings'),
+          fetchFireFeed('qld_fire_warnings', '/api/qld-fire/warnings'),
         ]);
         // When upstream does populate the reference, the warning's alert
         // level belongs on the incident and the separate warning pin is
@@ -6155,7 +6155,7 @@ function initPagerHoursFromStorage() {
       try {
         const [waIncRes, waWarnRes] = await Promise.all([
           fetchFireFeed('wa_emergency_incidents', '/api/wa-emergency/incidents'),
-          fetchFireFeed('wa_emergency_warnings', '/api/v1/wa-emergency/warnings'),
+          fetchFireFeed('wa_emergency_warnings', '/api/wa-emergency/warnings'),
         ]);
         const waWarnByEvent = new Map();
         (waWarnRes.features || []).forEach(f => {
@@ -10517,7 +10517,7 @@ function initPagerHoursFromStorage() {
             j('/api/qld-fire/incidents'),
             j('/api/vic-emergency/events'),
             j('/api/wa-emergency/incidents'),
-            j('/api/v1/wa-emergency/warnings'),
+            j('/api/wa-emergency/warnings'),
             j('/api/sa-fire/cfs'),
             j('/api/sa-fire/mfs'),
           ]);
@@ -11774,7 +11774,7 @@ function initPagerHoursFromStorage() {
             jf('/api/v1/traffic/works'),
             jf('/api/vic-emergency/events'),
             jf('/api/wa-emergency/incidents'),
-            jf('/api/v1/wa-emergency/warnings'),
+            jf('/api/wa-emergency/warnings'),
           ]);
           // Victoria's water: the EMV warning layer is mostly riverine
           // flood advices issued for the SES, and routing is by event, so
@@ -19362,11 +19362,11 @@ function initPagerHoursFromStorage() {
       
       if (needTraffic || needQld || needQldFlood || needAviation || needCentralwatch) {
         const fetches = await Promise.all([
-          needTraffic ? apiFetch(`${PROXY_BASE}/api/v1/traffic/cameras`).then(r => r.json()).catch(() => ({ features: [] })) : Promise.resolve(trafficCached.data),
-          needAviation ? apiFetch(`${PROXY_BASE}/api/v1/aviation/cameras`).then(r => r.json()).catch(() => ({ features: [] })) : Promise.resolve(aviationCached.data),
-          needCentralwatch ? apiFetch(`${PROXY_BASE}/api/v1/centralwatch/cameras`).then(r => r.json()).then(j => j.data).catch(() => []) : Promise.resolve(centralwatchCached.data),
-          needQld ? apiFetch(`${PROXY_BASE}/api/v1/qld/cameras`).then(r => r.json()).catch(() => ({ features: [] })) : Promise.resolve(qldCached.data),
-          needQldFlood ? apiFetch(`${PROXY_BASE}/api/v1/qld/flood-cameras`).then(r => r.json()).catch(() => ({ features: [] })) : Promise.resolve(qldFloodCached.data)
+          needTraffic ? apiFetch(`${PROXY_BASE}/api/traffic/cameras`).then(r => r.json()).catch(() => ({ features: [] })) : Promise.resolve(trafficCached.data),
+          needAviation ? apiFetch(`${PROXY_BASE}/api/aviation/cameras`).then(r => r.json()).catch(() => ({ features: [] })) : Promise.resolve(aviationCached.data),
+          needCentralwatch ? apiFetch(`${PROXY_BASE}/api/centralwatch/cameras`).then(r => r.json()).catch(() => []) : Promise.resolve(centralwatchCached.data),
+          needQld ? apiFetch(`${PROXY_BASE}/api/qld/cameras`).then(r => r.json()).catch(() => ({ features: [] })) : Promise.resolve(qldCached.data),
+          needQldFlood ? apiFetch(`${PROXY_BASE}/api/qld/flood-cameras`).then(r => r.json()).catch(() => ({ features: [] })) : Promise.resolve(qldFloodCached.data)
         ]);
         trafficRes = fetches[0];
         aviationRes = fetches[1];
@@ -19472,7 +19472,7 @@ function initPagerHoursFromStorage() {
             siteGroups[siteId].cameras.push({
               id: camera.id,
               name: camera.name,
-              imageUrl: `${PROXY_BASE}${camera.imageUrl || '/api/v1/centralwatch/image/' + camera.id}`,
+              imageUrl: `${PROXY_BASE}${camera.imageUrl || '/api/centralwatch/image/' + camera.id}`,
               time: camera.time
             });
           }
@@ -20937,16 +20937,16 @@ function initPagerHoursFromStorage() {
         const stage2 = [
           { key: 'traffic_roadwork', url: '/api/v1/traffic/roadwork' },
           { key: 'traffic_flood', url: '/api/v1/traffic/flood' },
-          { key: 'traffic_cameras', url: '/api/v1/traffic/cameras' },
-            { key: 'qld_cameras', url: '/api/v1/qld/cameras' },
-            { key: 'qld_flood_cameras', url: '/api/v1/qld/flood-cameras' },
+          { key: 'traffic_cameras', url: '/api/traffic/cameras' },
+            { key: 'qld_cameras', url: '/api/qld/cameras' },
+            { key: 'qld_flood_cameras', url: '/api/qld/flood-cameras' },
         ];
         totalLoaded += await fetchBatch(stage2, 'Stage 2');
         console.log(`📍 Stage 2: ${totalLoaded} layers loaded (${Date.now() - startTime}ms)`);
         
         // STAGE 3: Tertiary - beaches, weather, aviation, outages (less common)
         const stage3 = [
-          { key: 'aviation_cameras', url: '/api/v1/aviation/cameras' },
+          { key: 'aviation_cameras', url: '/api/aviation/cameras' },
           { key: 'beachwatch', url: '/api/v1/beachwatch' },
           { key: 'beachsafe', url: '/api/v1/beachsafe', unwrap: true },
           { key: 'dorsal_reports', url: '/api/v1/dorsal/reports?hours=168' },

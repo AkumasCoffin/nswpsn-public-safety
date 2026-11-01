@@ -49,7 +49,7 @@ bomRouter.get(
   SCOPE_WARNINGS,
   describeRoute({
     operationId: 'getBomWarnings',
-    tags: ['Warnings'],
+    tags: ['Weather warnings'],
     summary: 'Bureau of Meteorology warnings for NSW',
     description: 'Current Bureau of Meteorology land and marine warnings for NSW.',
     responses: { ...okJson(envelope(BomWarnings), 'Current warnings, with counts'), ...GATED_ERRORS },

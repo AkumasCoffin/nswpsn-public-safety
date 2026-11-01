@@ -252,9 +252,11 @@ describe('user routes', () => {
     expect(windows['warnings']).toEqual(['history']);
     expect(windows['pager']).toEqual(['history']);
     // Offered by the table but served by nothing here: not offered.
-    expect(windows['cameras']).toEqual([]);
     expect(windows['aircraft']).toEqual([]);
     expect(windows['summaries']).toEqual([]);
+    // Camera images and news outlets' feeds are no feed at all.
+    expect(Object.keys(windows)).not.toContain('cameras');
+    expect(Object.keys(windows)).not.toContain('news');
     expect(body.windows.map((w) => w.key)).toEqual(['live', 'history']);
     expect(body.legacy).toBe('read');
   });

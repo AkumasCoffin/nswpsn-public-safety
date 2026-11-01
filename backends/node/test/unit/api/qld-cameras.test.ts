@@ -1,25 +1,17 @@
 /**
- * The QLDTraffic camera routes on /api/v1/ and on their old /api/ paths.
+ * The QLDTraffic camera routes, for the map. Not on /api/v1/: camera images
+ * are not part of the API (v1.test.ts checks they are absent there).
  *
- * Both read the poller's snapshot and answer GeoJSON, which is bare on both
- * paths (api/v1/respond.ts), so the two must answer the same bytes. Both are
- * mirrored; nothing in this router is left off v1.
+ * Both read the poller's snapshot and answer GeoJSON, byte for byte.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { Hono } from 'hono';
 import { liveStore } from '../../../src/store/live.js';
 
-const IN_SCOPE = ['/api/qld/cameras', '/api/qld/flood-cameras'];
-
 async function app() {
   const { qldCamerasRouter } = await import('../../../src/api/qld-cameras.js');
-  const { mirror } = await import('../../../src/api/v1/mirror.js');
-  const { notFound, onError } = await import('../../../src/api/v1/respond.js');
   const a = new Hono();
   a.route('/', qldCamerasRouter);
-  mirror(a, qldCamerasRouter, IN_SCOPE);
-  a.notFound(notFound);
-  a.onError(onError);
   return a;
 }
 
@@ -66,41 +58,25 @@ beforeEach(() => {
   liveStore.delete('qld_flood_cameras');
 });
 
-describe('the camera snapshots, bare on both paths', () => {
+describe('the camera snapshots', () => {
   it.each(ROUTES)('%s answers the snapshot byte for byte', async (path, key, source, id) => {
     const snap = snapshot(source, id);
     liveStore.set(key, snap);
     const a = await app();
-    for (const p of [path, path.replace('/api/', '/api/v1/')]) {
-      expect(await get(a, p), p).toEqual({ status: 200, headers: [['content-type', JSON_TYPE]], text: JSON.stringify(snap) });
-    }
+    expect(await get(a, path)).toEqual({ status: 200, headers: [['content-type', JSON_TYPE]], text: JSON.stringify(snap) });
   });
 
   it.each(ROUTES)('%s answers an empty collection before the first poll', async (path) => {
     const a = await app();
-    for (const p of [path, path.replace('/api/', '/api/v1/')]) {
-      expect(await get(a, p), p).toEqual({ status: 200, headers: [['content-type', JSON_TYPE]], text: EMPTY });
-    }
+    expect(await get(a, path)).toEqual({ status: 200, headers: [['content-type', JSON_TYPE]], text: EMPTY });
   });
-});
 
-describe('the mirror', () => {
-  it('an unknown v1 path is a v1 404; the old 404 is untouched', async () => {
+  it('an unknown path keeps the plain-text 404', async () => {
     const a = await app();
-    const miss = await get(a, '/api/v1/qld/nope');
-    expect(miss.status).toBe(404);
-    expect(JSON.parse(miss.text)).toEqual({ error: { code: 'not_found', message: 'No endpoint at this path.' } });
     expect(await get(a, '/api/qld/nope')).toEqual({
       status: 404,
       headers: [['content-type', 'text/plain; charset=UTF-8']],
       text: '404 Not Found',
     });
-  });
-
-  it('mirroring the in-scope paths registers exactly those', async () => {
-    const { mirroredRoutes } = await import('../../../src/api/v1/mirror.js');
-    await app();
-    const qld = mirroredRoutes().filter((r) => r.path.startsWith('/api/v1/qld/'));
-    expect(qld.map((r) => `${r.method} ${r.legacyPath}`).sort()).toEqual(IN_SCOPE.map((p) => `GET ${p}`).sort());
   });
 });

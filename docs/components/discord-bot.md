@@ -116,8 +116,8 @@ types share one backend fetch and are split apart at extraction:
 
 A feed is polled on `/api/v1/` where it is there, and on `/api/` where it is not.
 The per-agency fire incident feeds (RFS, the Victorian feed, QFD, DFES, SA and NT)
-are not on `/api/v1/` — API keys read them merged, at `/api/v1/fires` — and nor is
-The Wire, which is this site's own content. `/api/v1/` wraps a body that is not
+and the QFD and DFES warnings are not on `/api/v1/` — API keys read them merged,
+at `/api/v1/fires` — and nor is The Wire, which is this site's own content. `/api/v1/` wraps a body that is not
 GeoJSON in `{data: …}`, so `itemsPath` in the catalog is a dotted path
 (`data.warnings`, or `data` for a bare list), and an empty `{data: []}` counts as
 no data, as an empty bare list always has, so a source's bootstrap waits for a

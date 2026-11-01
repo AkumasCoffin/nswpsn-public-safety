@@ -214,8 +214,10 @@ map.html  ──►  /api/rfs/incidents        (RFS fires)
           ──►  /api/{qld-fire/incidents,nt-fire,sa-fire,vic-emergency,wa-emergency/incidents}
                                          (the other states' fire services — site routes;
                                           API keys read them merged, at /api/v1/fires)
-          ──►  /api/v1/{qld-fire,wa-emergency}/warnings, /api/v1/act-ambulance/incidents
-          ──►  /api/v1/traffic/*         (seven hazard kinds, works + cameras)
+          ──►  /api/{qld-fire,wa-emergency}/warnings  (site routes; keys read them in /api/v1/fires)
+          ──►  /api/v1/act-ambulance/incidents
+          ──►  /api/v1/traffic/*         (seven hazard kinds, works)
+          ──►  /api/traffic/cameras      (cameras: site routes, never on /api/v1/)
           ──►  /api/v1/endeavour/{current,maintenance,future}, /api/v1/essential/outages
           ──►  /api/v1/pager/hits        (pager pins; a 503 keeps the last pins)
           ──►  /api/v1/data/history      (an incident's change trail)
@@ -223,8 +225,9 @@ map.html  ──►  /api/rfs/incidents        (RFS fires)
           ──►  /api/v1/adsb/{aircraft,trails,history,photo/:hex}
           ──►  /api/adsb/receivers       (node status — never on /api/v1/)
           ──►  /api/v1/transport/*       (public transport)
-          ──►  /api/v1/aviation/cameras, /api/v1/marinetraffic/*
-          ──►  /api/v1/{centralwatch/cameras,qld/cameras,qld/flood-cameras}
+          ──►  /api/aviation/cameras, /api/v1/marinetraffic/*
+          ──►  /api/{centralwatch/cameras,qld/cameras,qld/flood-cameras}
+          ──►  /api/centralwatch/image/:id  (public, for <img src>)
           ──►  /api/v1/{beachwatch,beachsafe,beachsafe/beach/:slug}
           ──►  /api/v1/weather/{current,radar,point,grid/manifest,grid}
           ──►  /api/boundaries/:kind     (boundary overlays — site-only, not /api/v1/)
@@ -236,7 +239,7 @@ map.html  ──►  /api/rfs/incidents        (RFS fires)
 live.html ──►  per-source counts, /api/rfs/incidents, /api/v1/bom/warnings
                (weather), /api/v1/traffic/*, /api/v1/{endeavour,essential}/*,
                /api/v1/ausgrid/stats, /api/v1/{beachwatch,beachsafe},
-               /api/v1/summaries/latest, /api/v1/news/rss, /api/stats/history,
+               /api/v1/summaries/latest, /api/news/rss (site route), /api/stats/history,
                /api/heartbeat
 
 logs.html ──►  /api/v1/data/history, /api/v1/data/history/filters,
