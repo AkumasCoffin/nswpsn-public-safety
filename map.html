@@ -31,7 +31,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
-  <script src="livetraffic-vocab.js?v=2"></script>
+  <script src="livetraffic-vocab.js?v=3"></script>
   <script src="fire-vocab.js?v=3"></script>
   <script src="fleet-vocab.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js" integrity="sha384-948ahk4ZmxYVYOc+rxN1H2gM1EJ2Duhp7uHtZ4WSLkV4Vtx5MUqnV+l7u9B+jFv+" crossorigin="anonymous"></script>
@@ -3963,7 +3963,6 @@
       // Live Traffic feeds that were never ingested until now
       traffic_alpine: { data: null, timestamp: 0 },
       traffic_lga: { data: null, timestamp: 0 },
-      traffic_works: { data: null, timestamp: 0 },
       // The hazards layer serves a MERGED payload (incidents + alpine +
       // fire + major events). It needs its own slot: the startup
       // prefetch fills traffic_incidents with the raw incidents feed,
@@ -10400,8 +10399,12 @@ function initPagerHoursFromStorage() {
       html += `<div style="display:flex; align-items:center; gap:6px; margin-bottom:8px; flex-wrap:wrap;">`;
       html += `<span style="color:#f97316; font-size:13px; font-weight:600;">Traffic Alert</span>`;
       html += `<span style="background:${typeColor}; color:#fff; font-size:9px; padding:2px 6px; border-radius:3px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px;">${escapeHtml(typeText)}</span>`;
+      // Interstate records (QLD, SA, VIC, ACT) say whose they are.
+      if (props.state && props.state !== 'NSW') {
+        html += `<span style="background:rgba(148,163,184,0.25); color:#e2e8f0; font-size:9px; padding:2px 6px; border-radius:3px; font-weight:600; letter-spacing:0.3px;">${escapeHtml(props.state)}</span>`;
+      }
       html += `</div>`;
-      
+
       // Title (with type prefix removed) - fallback to roads, then generic label
       let displayTitle = cleanTitle;
       if (isLowQualityText(displayTitle)) {
@@ -10477,7 +10480,12 @@ function initPagerHoursFromStorage() {
         if (props.lastUpdated) html += `<div style="color:#64748b; font-size:10px; margin-top:3px;"><i class="fa-solid fa-rotate" style="margin-right:4px;"></i>Updated: ${new Date(props.lastUpdated).toLocaleString()}</div>`;
         html += `</div>`;
       }
-      
+
+      // The publisher's attribution — the QLD, SA and VIC data is CC BY.
+      if (props.credit) {
+        html += `<div style="color:#64748b; font-size:9px; margin-top:6px;">${escapeHtml(props.credit)}</div>`;
+      }
+
       html += `</div>`;
       return html;
     }
@@ -10506,13 +10514,14 @@ function initPagerHoursFromStorage() {
           const j = (path) => apiFetch(`${PROXY_BASE}${path}`)
             .then((r) => r.json())
             .catch(() => ({ features: [] }));
-          const [inc, alp, fir, maj, lgaHz, wrkHz, ntHz, qldHz, vicHz, waHz, waHzW, saHzC, saHzM] = await Promise.all([
+          // Incidents and major events carry QLD, SA, VIC and ACT records
+          // as well as NSW's, each from its own state's feed.
+          const [inc, alp, fir, maj, lgaHz, ntHz, qldHz, vicHz, waHz, waHzW, saHzC, saHzM] = await Promise.all([
             j('/api/v1/traffic/incidents'),
             j('/api/v1/traffic/alpine'),
             j('/api/v1/traffic/fire'),
             j('/api/v1/traffic/majorevent'),
             j('/api/v1/traffic/lga'),
-            j('/api/v1/traffic/works'),
             j('/api/nt-fire/incidents'),
             j('/api/qld-fire/incidents'),
             j('/api/vic-emergency/events'),
@@ -10650,8 +10659,6 @@ function initPagerHoursFromStorage() {
               // The council records that aren't roadwork: hazards, adverse
               // weather, flooding, changed traffic conditions.
               ...(lgaHz.features || []).filter((f) => !_isCouncilRoadwork(f.properties)),
-              // The works aggregate's hazard-ish share.
-              ...(wrkHz.features || []).filter((f) => _worksTarget(f.properties) === 'hazard'),
               ...ntCrashes,
               ...qldCrashes,
               ...vicHazards,
@@ -11282,22 +11289,21 @@ function initPagerHoursFromStorage() {
           trafficData = cached.data;
         } else {
           // Council roadwork joins state-road roadwork here rather than
-          // sitting on a layer of its own.
+          // sitting on a layer of its own. /traffic/roadwork carries QLD,
+          // SA, VIC and ACT roadwork (construction, utilities, light rail)
+          // as well as NSW's.
           const jr = (path) => apiFetch(`${PROXY_BASE}${path}`)
             .then((r) => r.json())
             .catch(() => ({ features: [] }));
-          const [rw, lgaRw, wrkRw] = await Promise.all([
+          const [rw, lgaRw] = await Promise.all([
             jr('/api/v1/traffic/roadwork'),
             jr('/api/v1/traffic/lga'),
-            jr('/api/v1/traffic/works'),
           ]);
           trafficData = {
             type: 'FeatureCollection',
             features: [
               ...(rw.features || []),
               ...(lgaRw.features || []).filter((f) => _isCouncilRoadwork(f.properties)),
-              // Works: roadwork, construction, utilities, light rail.
-              ...(wrkRw.features || []).filter((f) => _worksTarget(f.properties) === 'roadwork'),
             ],
           };
           layerCache.roadwork_merged = { data: trafficData, timestamp: now };
@@ -11650,24 +11656,6 @@ function initPagerHoursFromStorage() {
       return c.includes('ROADWORK');
     }
 
-    // Which existing layer a works-aggregate record belongs to. The feed
-    // is a mixed bag — roadwork, construction, utilities, light rail,
-    // hazards, flooding, events — so it is split by category rather than
-    // being given a layer of its own.
-    function _worksTarget(props) {
-      const c = String((props && (props.mainCategory || props.type)) || '').toLowerCase();
-      // Static infrastructure, not road events: heavy vehicle checking
-      // stations and rest areas never change and don't belong on any
-      // incident layer. The backend skips them at ingest too; this guard
-      // keeps them hidden even against an older API.
-      if (/hvcs|checking station|restarea|rest area/.test(c)) return null;
-      if (c.includes('flood')) return 'flood';
-      if (/roadwork|construction|utilit|lightrail|light rail|telecommunication|charitable/.test(c)) {
-        return 'roadwork';
-      }
-      return 'hazard';
-    }
-
     async function loadActAmbulanceData() {
       actAmbulanceLayer.clearLayers();
       try {
@@ -11763,15 +11751,13 @@ function initPagerHoursFromStorage() {
         if (cached.data && (Date.now() - cached.timestamp) < LAYER_CACHE_TTL) {
           data = cached.data;
         } else {
-          // The works aggregate carries its own flooding records (long-term
-          // flooding, heavy rain), so they join this layer rather than
-          // sitting under a separate Works toggle.
+          // /traffic/flood carries QLD, SA, VIC and ACT flooded roads as
+          // well as NSW's.
           const jf = (path) => apiFetch(`${PROXY_BASE}${path}`)
             .then((r) => r.json())
             .catch(() => ({ features: [] }));
-          const [fl, wrkFl, vicFl, waFl, waFlW] = await Promise.all([
+          const [fl, vicFl, waFl, waFlW] = await Promise.all([
             jf('/api/v1/traffic/flood'),
-            jf('/api/v1/traffic/works'),
             jf('/api/vic-emergency/events'),
             jf('/api/wa-emergency/incidents'),
             jf('/api/wa-emergency/warnings'),
@@ -11832,7 +11818,6 @@ function initPagerHoursFromStorage() {
             type: 'FeatureCollection',
             features: [
               ...(fl.features || []),
-              ...(wrkFl.features || []).filter((f) => _worksTarget(f.properties) === 'flood'),
               ...vicFloods,
               ...waFloods,
             ],

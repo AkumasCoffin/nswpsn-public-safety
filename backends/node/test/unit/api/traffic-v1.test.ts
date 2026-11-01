@@ -1,5 +1,5 @@
 /**
- * Live Traffic NSW on /api/v1/ and on its old /api/ paths.
+ * The road endpoints on /api/v1/ and on their old /api/ paths.
  *
  * One handler serves both (api/v1/mirror.ts), answering through
  * api/v1/respond.ts. GeoJSON is bare on both paths; all-feeds is wrapped in
@@ -7,6 +7,8 @@
  * always sent and v1 answers 503 service_unavailable. The old paths are
  * checked byte for byte. /cameras is the site's alone — camera images are not
  * part of the API — and all-feeds leaves out the camera records it carries.
+ * Incidents, roadwork, flood and major events carry the other states'
+ * records after NSW's, and every feed takes ?state=; /traffic/works is gone.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Hono } from 'hono';
@@ -35,10 +37,11 @@ const HAZARDS = [
 // What server.ts mirrors: everything but /cameras.
 const PATHS = [
   ...HAZARDS.flatMap(([p]) => [`/api/traffic/${p}`, `/api/traffic/${p}/raw`]),
-  '/api/traffic/works',
   '/api/traffic/lga-incidents',
   '/api/traffic/all-feeds',
 ];
+
+const INTERSTATE = ['roads_qld', 'roads_sa', 'roads_vic', 'roads_act'];
 
 async function app() {
   const { trafficRouter } = await import('../../../src/api/traffic.js');
@@ -62,6 +65,8 @@ const v1 = (path: string) => path.replace(/^\/api\//, '/api/v1/');
 const EMPTY_SNAPSHOT = '{"type":"FeatureCollection","features":[],"count":0}';
 const EMPTY_FC = '{"type":"FeatureCollection","features":[]}';
 
+const LT_CREDIT = 'Live Traffic NSW (Transport for NSW)';
+
 function snapshot(id: string) {
   return {
     type: 'FeatureCollection',
@@ -69,12 +74,22 @@ function snapshot(id: string) {
       {
         type: 'Feature',
         geometry: { type: 'Point', coordinates: [151.1, -33.9] },
-        properties: { id, title: 'Crash on West Botany Street', source: 'livetraffic' },
+        properties: { id, title: 'Crash on West Botany Street', state: 'NSW', source: 'livetraffic', credit: LT_CREDIT },
       },
     ],
     count: 1,
   };
 }
+
+/** Another state's record on the feed for `type`, as sources/interstateRoads.ts stores it. */
+function other(id: string, state: string, type: string) {
+  return {
+    type: 'Feature',
+    geometry: { type: 'Point', coordinates: [153, -27.5] },
+    properties: { id, type, title: `${state} ${type}`, state, source: 'qldtraffic', credit: 'QLDTraffic' },
+  };
+}
+const fc = (features: unknown[]) => ({ type: 'FeatureCollection', features, count: features.length });
 
 // The hazard feeds as Transport for NSW publishes them.
 function upstreamFeed() {
@@ -103,12 +118,12 @@ async function expectUnavailable(a: Hono, path: string) {
 beforeEach(() => {
   fetchJsonMock.mockReset();
   for (const [, key] of HAZARDS) liveStore.delete(key);
-  liveStore.delete('traffic_works');
+  for (const key of INTERSTATE) liveStore.delete(key);
   liveStore.delete('traffic_cameras');
 });
 
-describe('the parsed hazard feeds and works (LiveStore)', () => {
-  const ROUTES = [...HAZARDS.map(([p, key]) => [p, key] as const), ['works', 'traffic_works'] as const];
+describe('the parsed hazard feeds (LiveStore)', () => {
+  const ROUTES = HAZARDS.map(([p, key]) => [p, key] as const);
 
   it.each(ROUTES)('/traffic/%s answers the snapshot bare, on both paths', async (path, key) => {
     liveStore.set(key, snapshot(key));
@@ -124,6 +139,72 @@ describe('the parsed hazard feeds and works (LiveStore)', () => {
     const a = await app();
     expect((await get(a, `/api/traffic/${path}`)).text).toBe(EMPTY_SNAPSHOT);
     expect((await get(a, `/api/v1/traffic/${path}`)).text).toBe(EMPTY_SNAPSHOT);
+  });
+
+  it('a snapshot saved before records named their state reads as NSW, credited to Live Traffic', async () => {
+    liveStore.set('traffic_roadwork', fc([{ type: 'Feature', geometry: { type: 'Point', coordinates: [151, -33] }, properties: { id: 'old', source: 'livetraffic' } }]));
+    const a = await app();
+    const body = JSON.parse((await get(a, '/api/v1/traffic/roadwork?state=nsw')).text) as { features: Array<{ properties: Record<string, unknown> }> };
+    expect(body.features.map((f) => f.properties)).toEqual([{ id: 'old', source: 'livetraffic', state: 'NSW', credit: LT_CREDIT }]);
+  });
+});
+
+describe("the other states' records", () => {
+  beforeEach(() => {
+    liveStore.set('traffic_roadwork', snapshot('nsw-rw'));
+    liveStore.set('traffic_incidents', snapshot('nsw-inc'));
+    liveStore.set('traffic_fire', snapshot('nsw-fire'));
+    liveStore.set('roads_qld', fc([other('qld:1', 'QLD', 'Roadwork'), other('qld:2', 'QLD', 'Flood'), other('qld:3', 'QLD', 'Incident')]));
+    liveStore.set('roads_sa', fc([other('sa:1', 'SA', 'Roadwork'), other('sa:2', 'SA', 'Incident')]));
+    liveStore.set('roads_act', fc([other('act:1', 'ACT', 'Major Event'), other('act:2', 'ACT', 'Roadwork')]));
+    liveStore.set('roads_vic', fc([other('vic:1', 'VIC', 'Flood')]));
+  });
+  const ids = (text: string) => (JSON.parse(text) as { features: Array<{ properties: { id: string } }> }).features.map((f) => f.properties.id);
+
+  it('each feed carries NSW first, then every state\'s records of its type, on both paths', async () => {
+    const a = await app();
+    for (const p of ['/api/traffic/roadwork', '/api/v1/traffic/roadwork']) {
+      const res = await get(a, p);
+      expect(ids(res.text), p).toEqual(['nsw-rw', 'qld:1', 'sa:1', 'act:2']);
+      expect(JSON.parse(res.text).count, p).toBe(4);
+    }
+    expect(ids((await get(a, '/api/v1/traffic/incidents')).text)).toEqual(['nsw-inc', 'qld:3', 'sa:2']);
+    expect(ids((await get(a, '/api/v1/traffic/flood')).text)).toEqual(['qld:2', 'vic:1']);
+    expect(ids((await get(a, '/api/v1/traffic/majorevent')).text)).toEqual(['act:1']);
+  });
+
+  it('fire, alpine and the council feed stay NSW-only', async () => {
+    const a = await app();
+    expect(ids((await get(a, '/api/v1/traffic/fire')).text)).toEqual(['nsw-fire']);
+    expect(ids((await get(a, '/api/v1/traffic/alpine')).text)).toEqual([]);
+    expect(ids((await get(a, '/api/v1/traffic/lga')).text)).toEqual([]);
+  });
+
+  it('?state= keeps the states asked for, in any case, with the count to match', async () => {
+    const a = await app();
+    const res = await get(a, '/api/v1/traffic/roadwork?state=qld,Act');
+    expect(ids(res.text)).toEqual(['qld:1', 'act:2']);
+    expect(JSON.parse(res.text).count).toBe(2);
+    expect(ids((await get(a, '/api/traffic/roadwork?state=NSW')).text)).toEqual(['nsw-rw']);
+    expect(ids((await get(a, '/api/v1/traffic/fire?state=QLD')).text)).toEqual([]);
+  });
+
+  it('an unknown state is a 400 naming it', async () => {
+    const a = await app();
+    const v1res = await get(a, '/api/v1/traffic/roadwork?state=QLD,WA');
+    expect(v1res.status).toBe(400);
+    const v1body = JSON.parse(v1res.text) as { error: { code: string; message: string } };
+    expect(v1body.error.code).toBe('validation_failed');
+    expect(v1body.error.message).toBe('state: unknown state: WA (one of NSW, QLD, VIC, SA, ACT)');
+    const old = await get(a, '/api/traffic/roadwork?state=WA');
+    expect(old.status).toBe(400);
+    expect(JSON.parse(old.text)).toEqual({ error: 'state: unknown state: WA (one of NSW, QLD, VIC, SA, ACT)' });
+  });
+
+  it('/traffic/works is gone, on both paths', async () => {
+    const a = await app();
+    expect((await get(a, '/api/traffic/works')).status).toBe(404);
+    expect((await get(a, '/api/v1/traffic/works')).status).toBe(404);
   });
 });
 

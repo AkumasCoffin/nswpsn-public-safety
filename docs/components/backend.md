@@ -174,7 +174,8 @@ backend holds **37**.
 | `endeavour_planned`, `endeavour_maintenance` | power | 5m |
 | `nt_fire` | rfs | 5m |
 | `traffic_roadwork`, `traffic_flood`, `traffic_fire`, `traffic_majorevent`, `traffic_alpine`, `traffic_lga` | traffic | 5m |
-| `traffic_works` | traffic | 5m |
+| `roads_qld`, `roads_vic` | traffic | 2m |
+| `roads_sa`, `roads_act` | traffic | 5m |
 | `weather_radar` | misc | 5m |
 | `dorsal_reports` | misc | 5m |
 | `beachwatch`, `beachsafe` | misc | 10m |
@@ -196,13 +197,30 @@ The seven LiveTraffic hazard kinds come from one table in
 records — a genuinely separate reporting stream with verified zero overlap
 against the others on id, coordinate and street-plus-suburb.
 
-`traffic_works` is **not** an eighth hazard kind and not a duplicate of
-`traffic_roadwork`. It is a separate upstream feed: `fetchTrafficWorks`
-(`src/sources/traffic.ts:502`) reads the LiveTraffic web feed rather than the
-`HAZARD_BASE/<endpoint>.json` the seven hazard kinds share, groups records by
-`apiSource`, restores groups that vanish between polls, and archives each
-record under the type its category implies instead of into a single bucket.
-`src/services/sourceHealth.ts:45` labels it "LiveTraffic — works & ACT".
+**The other states' roads** come from each state's own feed
+(`src/sources/interstateRoads.ts`), one source per state: QLD from
+QLDTraffic's `events_v2.geojson` (leaving out what Transport for NSW supplies
+to it), SA from the Department for Infrastructure and Transport's open-data
+roadworks and incidents plus Traffic SA's closures and detours and the
+outback road report, ACT from Roads ACT's traffic-management plans and
+unplanned closures, VIC from Transport Victoria's planned and unplanned
+disruption APIs when `VIC_TRANSPORT_API_KEY` is set (else from the Live
+Traffic aggregate's `vicRoadInfo` group, through `fetchTrafficWorks`). Each
+record takes the Live Traffic shape with `state`, `source` and `credit`, and
+its `type` (Incident, Roadwork, Flood, Major Event) decides the feed it is
+served on: `/api/traffic/{incidents,roadwork,flood,majorevent}` answer NSW's
+records then every state's of that type (`interstateRecords`), with `?state=`
+to narrow. History files each under the NSW feed's source for its type
+(`archiveByType`). Records whose end has passed are left out: Traffic SA's
+map layer keeps closures for months after they end. A state read with several
+requests keeps each part's last good records for 30 minutes when one fails.
+
+These used to be `traffic_works`: Live Traffic NSW's aggregate web feed, which
+re-shares SA, QLD, VIC and ACT road events — late, and cut off (it carried
+exactly 1,000 of SA's 1,446 roadworks). That source and `/api/traffic/works`
+are gone; `traffic_works` remains only as an archive source for older records
+and as an alias of the `traffic_roadwork` alert type, so presets that held it
+keep their roadwork alerts.
 
 #### `dorsal_reports` writes once per report, not once per poll
 

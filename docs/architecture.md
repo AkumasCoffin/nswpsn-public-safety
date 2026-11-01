@@ -147,7 +147,7 @@ Take NSW RFS incidents.
 
 ### Registry contents
 
-36 entries on a default boot — 38 are declared, and the two Ausgrid sources do
+39 entries on a default boot — 41 are declared, and the two Ausgrid sources do
 not register unless `AUSGRID_DISABLED` is set to `false`
 (`backends/node/src/sources/ausgrid.ts:262`), which it is not by default.
 Cadences range from 8s (`adsb_aircraft`) to 30m (`weather_current`). The full

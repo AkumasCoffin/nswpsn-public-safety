@@ -1,22 +1,20 @@
 /**
- * Live Traffic NSW endpoints.
+ * Road endpoints: Live Traffic NSW, and the other states' road events.
  *
- *   GET /api/traffic/incidents        — parsed FeatureCollection
- *   GET /api/traffic/incidents/raw    — upstream JSON pass-through
- *   GET /api/traffic/roadwork         — parsed
+ *   GET /api/traffic/incidents        — parsed FeatureCollection, every state
+ *   GET /api/traffic/incidents/raw    — upstream JSON pass-through (NSW)
+ *   GET /api/traffic/roadwork         — parsed, every state
  *   GET /api/traffic/roadwork/raw     — pass-through
- *   GET /api/traffic/flood            — parsed
+ *   GET /api/traffic/flood            — parsed, every state
  *   GET /api/traffic/flood/raw        — pass-through
- *   GET /api/traffic/fire             — parsed
+ *   GET /api/traffic/fire             — parsed (NSW)
  *   GET /api/traffic/fire/raw         — pass-through
- *   GET /api/traffic/majorevent       — parsed
+ *   GET /api/traffic/majorevent       — parsed, every state
  *   GET /api/traffic/majorevent/raw   — pass-through
- *   GET /api/traffic/alpine           — parsed
+ *   GET /api/traffic/alpine           — parsed (NSW)
  *   GET /api/traffic/alpine/raw       — pass-through
- *   GET /api/traffic/lga              — council-submitted local-road records
+ *   GET /api/traffic/lga              — council-submitted local-road records (NSW)
  *   GET /api/traffic/lga/raw          — pass-through
- *   GET /api/traffic/works            — works + ACT records from all-feeds-web
- *                                       (no /raw — see /api/traffic/all-feeds)
  *   GET /api/traffic/cameras          — camera FeatureCollection
  *   GET /api/traffic/lga-incidents    — the council feed's records, unparsed
  *   GET /api/traffic/all-feeds        — all-feeds-web.json, grouped by eventType
@@ -24,6 +22,12 @@
  * Mirrors python's routes at external_api_proxy.py:7239+. The /raw
  * variants hit upstream every time (Python caches them at HTTP TTL
  * level); the parsed variants serve out of LiveStore.
+ *
+ * Incidents, roadwork, flood and major events carry QLD, SA, VIC and ACT
+ * records too, each from that state's own feed (sources/interstateRoads.ts),
+ * after NSW's; every record says its `state`, and `?state=` keeps the ones
+ * asked for. Those records used to have a feed of their own, /traffic/works,
+ * read from Live Traffic's aggregate; it is gone.
  *
  * All of them but /cameras are also served at /api/v1/ (server.ts mirrors
  * them). The routes that read upstream per request (/raw, lga-incidents,
@@ -42,9 +46,12 @@ import {
   trafficCamerasSnapshot,
   trafficHazardSnapshot,
   fetchHazardRaw,
+  LIVE_TRAFFIC_CREDIT,
   type TrafficCamerasSnapshot,
+  type TrafficFeature,
   type TrafficSnapshot,
 } from '../sources/traffic.js';
+import { interstateRecords, type RoadType } from '../sources/interstateRoads.js';
 import { fetchJson } from '../sources/shared/http.js';
 import { log } from '../lib/log.js';
 import { scoped } from '../services/auth/apiKeyScopes.js';
@@ -57,7 +64,9 @@ import {
   GATED_ERRORS,
   okJson,
   PointGeometry,
+  queryValidator,
   UNAVAILABLE_ERROR,
+  VALIDATION_ERROR,
   type SameShape,
 } from './v1/schemas.js';
 
@@ -84,10 +93,11 @@ interface LgaItem {
 // What /api/v1/ documents (api/v1/openapi.ts)
 // ---------------------------------------------------------------------------
 
-// The seven hazard feeds and /traffic/works share one record shape
-// (sources/traffic.ts parseTrafficItem); where works fills a field
-// differently, the field says so.
-const TIME = 'On the hazard feeds, unix milliseconds written as a string; on /traffic/works, ISO 8601. Empty when the feed has none';
+// The NSW hazard feeds and the other states' records share one record shape
+// (sources/traffic.ts parseTrafficItem, sources/interstateRoads.ts
+// roadRecord); where another state's record fills a field differently, the
+// field says so.
+const TIME = "On the NSW feeds, unix milliseconds written as a string; on other states' records, ISO 8601 in UTC. Empty when the feed has none";
 const FIRST_ROAD = "From the record's first road";
 const PROSE = 'Plain text (the HTML the feed writes is removed)';
 
@@ -98,35 +108,37 @@ const TrafficHazards = featureCollection(
       id: z
         .string()
         .describe(
-          "The feed's own id for the record. On /traffic/works, an id made from the record's position, title and category instead, because that feed issues new ids each time it is rebuilt",
+          "The feed's own id for the record. Other states' ids start with the state (qld:, sa:, vic:, act:); a VIC record read from Live Traffic's aggregate (until a Transport Victoria key is set) has an id made from its position, title and category (ltw:), because that feed issues new ids each time it is rebuilt",
         ),
       type: z
         .string()
         .describe(
-          "Which feed the record came from: Incident, Roadwork, Flood, Fire, Major Event, Alpine or Council. On /traffic/works, the record's eventCategory (else its eventType, else Works)",
+          "Which feed the record is on: Incident, Roadwork, Flood, Fire, Major Event, Alpine or Council. Another state's record takes the feed it belongs on",
         ),
       incidentType: z
         .string()
         .describe(
-          'The kind of incident named at the start of the title, upper case (CRASH, BREAKDOWN, HAZARD, FLOODING, ROADWORK, …); empty when the title starts with none of them',
+          "The kind of incident, upper case (CRASH, BREAKDOWN, HAZARD, FLOODING, ROADWORK, ROAD CLOSURE, …): on the NSW feeds, named at the start of the title; for other states, from the publisher's own type. Empty when there is none",
         ),
       mainCategory: z
         .string()
         .describe(
-          "The feed's own category, e.g. CRASH or SCHEDULED ROADWORK. On /traffic/works, its eventCategory (Roadwork, Flood, generalHazards, …)",
+          "The feed's own category, e.g. CRASH or SCHEDULED ROADWORK; for other states, the publisher's own word (Hazard, Roadworks, Road closure, Outback road conditions, …)",
         ),
       subCategory: z
         .string()
-        .describe('The feed\'s sub-category (its subCategoryA, else subCategoryB) as published — sometimes the text "null"'),
+        .describe('The feed\'s sub-category (its subCategoryA, else subCategoryB) as published — sometimes the text "null"; for other states, the publisher\'s subtype'),
       subcategory: z
         .string()
-        .describe('A filter key: incidentType, else mainCategory. On /traffic/works: mainCategory, else incidentKind'),
+        .describe('A filter key: incidentType, else mainCategory'),
       incidentKind: z
         .string()
-        .describe("As the hazard feeds give it — Planned or Unplanned in the samples seen. On /traffic/works, the record's eventType"),
+        .describe('Planned or Unplanned'),
       title: z
         .string()
-        .describe('The headline, else the title, else the display name, with a leading incidentType taken off when enough is left to stand as a title'),
+        .describe(
+          "The headline, else the title, else the display name, with a leading incidentType taken off when enough is left to stand as a title; for other states, the publisher's title, or its type and subtype",
+        ),
       headline: z.string(),
       displayName: z.string(),
       subtitle: z.string(),
@@ -173,12 +185,20 @@ const TrafficHazards = featureCollection(
       upstreamId: z
         .string()
         .optional()
-        .describe("/traffic/works only: that feed's own id for the record, which changes when the feed is rebuilt"),
-      orgName: z.string().describe('The council that submitted the record — Council feed only, empty elsewhere'),
-      orgContact: z.string().describe("The council's phone number — Council feed only"),
-      orgEmail: z.string().describe('Council feed only'),
-      orgWebsite: z.string().describe('Council feed only'),
-      source: z.literal('livetraffic'),
+        .describe("A VIC record read from Live Traffic's aggregate only: that feed's own id for it, which changes when the feed is rebuilt"),
+      orgName: z.string().describe('The council that submitted the record — the NSW Council feed, and QLD records a council supplied; empty elsewhere'),
+      orgContact: z.string().describe("The council's phone number — NSW Council feed only"),
+      orgEmail: z.string().describe('NSW Council feed only'),
+      orgWebsite: z.string().describe('The NSW Council feed, and QLD records a council supplied'),
+      state: z.enum(['NSW', 'QLD', 'VIC', 'SA', 'ACT']).describe('The state or territory the record is in'),
+      source: z
+        .enum(['livetraffic', 'qldtraffic', 'traffic_sa', 'roads_act', 'transport_vic'])
+        .describe(
+          "Who publishes it: livetraffic (Live Traffic NSW, Transport for NSW), qldtraffic (QLDTraffic, Queensland Department of Transport and Main Roads), traffic_sa (South Australia's Department for Infrastructure and Transport), roads_act (Roads ACT), transport_vic (Victoria's Department of Transport and Planning)",
+        ),
+      credit: z
+        .string()
+        .describe("The attribution its publisher asks for — show it with the record. The QLD, SA and VIC data is published under CC BY 4.0"),
     }),
   ),
 ).meta({ id: 'TrafficHazards' });
@@ -279,18 +299,23 @@ const HAZARDS: Array<{
   what: string;
   /** How often the poller refreshes it (sources/traffic.ts HAZARD_KINDS). */
   every: string;
+  /** The other states' records this feed carries too (sources/interstateRoads.ts); NSW only when absent. */
+  interstate?: RoadType;
 }> = [
   {
     path: 'incidents', storeKey: 'traffic_incidents', rawEndpoint: 'incident', op: 'Incidents',
-    summary: 'NSW road incidents', what: 'Crashes, breakdowns, hazards and changed traffic conditions on NSW roads', every: 'minute',
+    summary: 'Road incidents', what: 'Crashes, breakdowns, hazards, closures and changed traffic conditions', every: 'minute',
+    interstate: 'Incident',
   },
   {
     path: 'roadwork', storeKey: 'traffic_roadwork', rawEndpoint: 'roadwork', op: 'Roadwork',
-    summary: 'NSW roadwork', what: 'Roadwork on NSW roads', every: 'five minutes',
+    summary: 'Roadwork', what: 'Roadwork, and other works on and beside the road', every: 'five minutes',
+    interstate: 'Roadwork',
   },
   {
     path: 'flood', storeKey: 'traffic_flood', rawEndpoint: 'flood', op: 'Flood',
-    summary: 'NSW roads affected by flooding', what: 'Road closures and hazards on NSW roads caused by flooding', every: 'five minutes',
+    summary: 'Roads affected by flooding', what: 'Road closures and hazards caused by flooding', every: 'five minutes',
+    interstate: 'Flood',
   },
   {
     path: 'fire', storeKey: 'traffic_fire', rawEndpoint: 'fire', op: 'Fire',
@@ -298,7 +323,8 @@ const HAZARDS: Array<{
   },
   {
     path: 'majorevent', storeKey: 'traffic_majorevent', rawEndpoint: 'majorevent', op: 'MajorEvents',
-    summary: 'NSW major events on the roads', what: 'Special events that close or change NSW roads', every: 'five minutes',
+    summary: 'Major events on the roads', what: 'Special events that close or change roads', every: 'five minutes',
+    interstate: 'Major Event',
   },
   {
     path: 'alpine', storeKey: 'traffic_alpine', rawEndpoint: 'alpine', op: 'Alpine',
@@ -312,6 +338,27 @@ const HAZARDS: Array<{
   },
 ];
 
+const ROAD_STATES = ['NSW', 'QLD', 'VIC', 'SA', 'ACT'] as const;
+
+const RoadQuery = z.object({
+  state: z
+    .string()
+    .optional()
+    .transform((v, ctx) => {
+      const items = (v ?? '').split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
+      const bad = items.filter((s) => !(ROAD_STATES as readonly string[]).includes(s));
+      if (bad.length) {
+        ctx.addIssue({ code: 'custom', message: `unknown state: ${bad.join(', ')} (one of ${ROAD_STATES.join(', ')})` });
+        return z.NEVER;
+      }
+      return items;
+    })
+    .describe(`Comma-separated; any of ${ROAD_STATES.join(', ')}, in any case. Leave out for every state the feed has.`),
+});
+
+const OTHER_STATES =
+  "in NSW from Live Traffic NSW (Transport for NSW), and in Queensland, Victoria, South Australia and the ACT from each one's own feed (QLDTraffic; Transport Victoria; the SA Department for Infrastructure and Transport, outback road conditions included; Roads ACT), NSW's first. Every record says its state and carries its publisher's credit";
+
 for (const h of HAZARDS) {
   trafficRouter.get(
     `/api/traffic/${h.path}`,
@@ -320,10 +367,23 @@ for (const h of HAZARDS) {
       operationId: `getTraffic${h.op}`,
       tags: ['Road hazards'],
       summary: h.summary,
-      description: `${h.what}, from Live Traffic NSW (Transport for NSW), in one record shape across the Live Traffic feeds. Records the feed marks ended are left out. Refreshed every ${h.every}.`,
-      responses: { ...okJson(TrafficHazards, 'A GeoJSON FeatureCollection of records'), ...GATED_ERRORS },
+      description: h.interstate
+        ? `${h.what}, ${OTHER_STATES}; ?state= keeps the states asked for. One record shape across them all. Records a feed marks ended are left out. NSW's are refreshed every ${h.every}, the other states' every two to five minutes.`
+        : `${h.what}, from Live Traffic NSW (Transport for NSW), in one record shape across the Live Traffic feeds. Records the feed marks ended are left out. Refreshed every ${h.every}.`,
+      responses: { ...okJson(TrafficHazards, 'A GeoJSON FeatureCollection of records'), ...VALIDATION_ERROR, ...GATED_ERRORS },
     }),
-    (c) => geo(c, trafficHazardSnapshot(h.storeKey)),
+    queryValidator(RoadQuery),
+    (c) => {
+      const states = new Set<string>(c.req.valid('query').state ?? []);
+      // A snapshot saved before records named their state (LiveStore
+      // reloads it from disk on restart) is NSW's all the same.
+      const nsw = trafficHazardSnapshot(h.storeKey).features.map((f) =>
+        f.properties.state ? f : { ...f, properties: { ...f.properties, state: 'NSW' as const, credit: f.properties.credit ?? LIVE_TRAFFIC_CREDIT } },
+      );
+      const all: TrafficFeature[] = h.interstate ? [...nsw, ...interstateRecords(h.interstate)] : nsw;
+      const features = states.size ? all.filter((f) => states.has(f.properties.state)) : all;
+      return geo(c, { type: 'FeatureCollection', features, count: features.length });
+    },
   );
   trafficRouter.get(
     `/api/traffic/${h.path}/raw`,
@@ -372,24 +432,6 @@ trafficRouter.get(
     responses: { ...okJson(TrafficCameras, 'A GeoJSON FeatureCollection of cameras'), ...GATED_ERRORS },
   }),
   (c) => geo(c, trafficCamerasSnapshot()),
-);
-
-// Works + ACT records lifted out of all-feeds-web.json. No /raw variant —
-// that whole file is already served verbatim by /api/traffic/all-feeds
-// below, and pointing a raw route at a hazards endpoint would return a
-// different feed entirely.
-trafficRouter.get(
-  '/api/traffic/works',
-  SCOPE_HAZARDS,
-  describeRoute({
-    operationId: 'getTrafficWorks',
-    tags: ['Road hazards'],
-    summary: 'Road works and hazards from the Live Traffic aggregate feed',
-    description:
-      "Roadwork, hazards, flooding and events from Live Traffic NSW's aggregate web feed, which carries other states' and territories' road agencies, in the same record shape as the hazard feeds. Cameras, rest areas, heavy vehicle checking stations, the RFS's own incidents (apiSource rfsNSW, which the RFS endpoints already carry) and records marked ended are left out. When every record from one upstream source (apiSource) drops out of the feed at once, the last ones seen are kept for up to six hours. Refreshed every five minutes.",
-    responses: { ...okJson(TrafficHazards, 'A GeoJSON FeatureCollection of records'), ...GATED_ERRORS },
-  }),
-  (c) => geo(c, trafficHazardSnapshot('traffic_works')),
 );
 
 // /api/traffic/lga-incidents — regional LGA incident feed. Mirrors python

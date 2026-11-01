@@ -216,7 +216,9 @@ map.html  ──►  /api/rfs/incidents        (RFS fires)
                                           API keys read them merged, at /api/v1/fires)
           ──►  /api/{qld-fire,wa-emergency}/warnings  (site routes; keys read them in /api/v1/fires)
           ──►  /api/v1/act-ambulance/incidents
-          ──►  /api/v1/traffic/*         (seven hazard kinds, works)
+          ──►  /api/v1/traffic/*         (seven hazard kinds; incidents, roadwork,
+                                          flood and major events for NSW, QLD,
+                                          VIC, SA and ACT)
           ──►  /api/traffic/cameras      (cameras: site routes, never on /api/v1/)
           ──►  /api/v1/endeavour/{current,maintenance,future}, /api/v1/essential/outages
           ──►  /api/v1/pager/hits        (pager pins; a 503 keeps the last pins)

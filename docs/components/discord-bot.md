@@ -112,7 +112,15 @@ types share one backend fetch and are split apart at extraction:
 - `endeavour_planned` uses `/api/v1/endeavour/planned`; current outages come back
   as `endeavour_current`;
 - the interstate feeds are all RFS-shaped GeoJSON and refresh upstream every
-  2 minutes (NT: 5), so the 60s cycle mostly sees no change.
+  2 minutes (NT: 5), so the 60s cycle mostly sees no change;
+- the road types `traffic_incident`, `traffic_roadwork`, `traffic_flood` and
+  `traffic_majorevent` carry QLD, VIC, SA and ACT records as well as NSW's,
+  each from its own state's feed, so they alert for every state; a preset's
+  States filter keeps the ones a channel wants. The embed says the state when
+  it is not NSW and credits the record's own publisher (`credit`) rather than
+  Live Traffic NSW. `traffic_works`, Live Traffic's re-share of the other
+  states, is retired: it is an alias of `traffic_roadwork`, so a preset that
+  held it still gets roadwork.
 
 A feed is polled on `/api/v1/` where it is there, and on `/api/` where it is not.
 The per-agency fire incident feeds (RFS, the Victorian feed, QFD, DFES, SA and NT)

@@ -421,6 +421,12 @@ const Schema = z.object({
   // and an empty alerts endpoint, exactly the pre-TfNSW behaviour.
   TFNSW_API_KEY: z.string().optional(),
 
+  // Transport Victoria open data (opendata.transport.vic.gov.au): the planned
+  // and unplanned road disruption APIs behind the VIC road records
+  // (sources/interstateRoads.ts). Optional — unset, VIC's records come from
+  // the Live Traffic NSW aggregate instead, as they always did.
+  VIC_TRANSPORT_API_KEY: z.string().optional(),
+
   // Kill switch for the TfNSW feeds specifically (key stays configured).
   TFNSW_DISABLED: z
     .enum(['true', 'false'])

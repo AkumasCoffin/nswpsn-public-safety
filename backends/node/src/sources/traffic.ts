@@ -16,16 +16,23 @@ import { htmlToProse } from './shared/prose.js';
 import { registerSource } from '../services/sourceRegistry.js';
 import { liveStore } from '../store/live.js';
 import { log } from '../lib/log.js';
-import { defaultArchiveItems } from '../services/archiveExtract.js';
-import type { ArchiveRow } from '../store/archive.js';
 
 const HAZARD_BASE = 'https://www.livetraffic.com/traffic/hazards';
-// all-feeds-web.json is the site's own aggregate layer. We read it twice:
-// once for the live cameras, once for the works/hazard records that appear
-// nowhere else — including the ACT works, Canberra light-rail closures and
-// council roadworks that the five hazard feeds have no coverage of.
+// all-feeds-web.json is the site's own aggregate layer: its live cameras, and
+// other jurisdictions' road events re-shared to NSW (SA, QLD, VIC, ACT). The
+// interstate road records now come from each state's own feed
+// (sources/interstateRoads.ts); this aggregate is read for the cameras, and
+// for VIC while no Transport Victoria key is set (fetchTrafficWorks).
 const CAMERAS_URL = 'https://www.livetraffic.com/datajson/all-feeds-web.json';
 const WEB_FEED_URL = CAMERAS_URL;
+
+/** The aggregate's `apiSource` for each state it re-shares. */
+export const AGGREGATE_GROUP_STATE: Readonly<Record<string, RoadState>> = {
+  saRoadInfo: 'SA',
+  qldRoad: 'QLD',
+  vicRoadInfo: 'VIC',
+  actRoadInfo: 'ACT',
+};
 
 /** Categories served by their own dedicated source already, or that are
  *  facilities rather than road events. Rest areas (850) and heavy vehicle
@@ -129,9 +136,22 @@ export interface TrafficFeature {
     orgContact: string;
     orgEmail: string;
     orgWebsite: string;
-    source: 'livetraffic';
+    /** Where the record is: NSW for the Live Traffic NSW feeds, the state's own for interstate records. */
+    state: RoadState;
+    /** Who publishes it: Live Traffic NSW, or another state's own feed (sources/interstateRoads.ts). */
+    source: RoadSource;
+    /** The attribution its publisher asks for, to show beside it. */
+    credit: string;
   };
 }
+
+/** The states road records come from. */
+export type RoadState = 'NSW' | 'QLD' | 'VIC' | 'SA' | 'ACT';
+
+/** Publishers of road records, in the `source` field. */
+export type RoadSource = 'livetraffic' | 'qldtraffic' | 'traffic_sa' | 'roads_act' | 'transport_vic';
+
+export const LIVE_TRAFFIC_CREDIT = 'Live Traffic NSW (Transport for NSW)';
 
 export interface TrafficSnapshot {
   type: 'FeatureCollection';
@@ -409,7 +429,11 @@ export function parseTrafficItem(item: unknown, hazardType: string): TrafficFeat
       orgContact: asString(props['OrgContact']),
       orgEmail: asString(props['OrgEmail']),
       orgWebsite: asString(props['OrgWebsite']),
+      // The Live Traffic NSW feeds are NSW's. The aggregate's interstate
+      // records are re-labelled by their caller (fetchTrafficWorks).
+      state: 'NSW',
       source: 'livetraffic',
+      credit: LIVE_TRAFFIC_CREDIT,
     },
   };
 }
@@ -483,7 +507,10 @@ export async function fetchHazardRaw(endpoint: string): Promise<unknown> {
 }
 
 /**
- * Works + hazards out of all-feeds-web.json.
+ * Works + hazards out of all-feeds-web.json — the other states' road events
+ * Live Traffic NSW re-shares. `only` keeps just those apiSource groups (VIC,
+ * while sources/interstateRoads.ts has no Transport Victoria key); each record
+ * is labelled with its group's state.
  *
  * This file is Python-serialised: nested values arrive as `str()` output
  * ("[{'suburb': 'MOLONGLO'}]", "False", epoch-millis as strings), so the
@@ -499,11 +526,14 @@ export function _resetWorksCarryForward(): void {
   _worksBySource.clear();
 }
 
-export async function fetchTrafficWorks(): Promise<TrafficSnapshot> {
+export async function fetchTrafficWorks(only?: ReadonlySet<string>): Promise<TrafficSnapshot> {
   const data = await fetchJson<unknown>(WEB_FEED_URL, {
     headers: { 'User-Agent': 'Mozilla/5.0' },
   });
-  const fetched = Array.isArray(data) ? data : [];
+  const all = Array.isArray(data) ? data : [];
+  const fetched = only
+    ? all.filter((it) => it && typeof it === 'object' && only.has(asString((it as Record<string, unknown>)['apiSource'])))
+    : all;
 
   // Group this poll by apiSource, then restore any group that has gone
   // missing entirely since the last poll (see _worksBySource).
@@ -521,7 +551,7 @@ export async function fetchTrafficWorks(): Promise<TrafficSnapshot> {
   }
   const items: unknown[] = [...fetched];
   for (const [key, remembered] of _worksBySource) {
-    if (seen.has(key)) continue;
+    if (seen.has(key) || (only && !only.has(key))) continue;
     if (now - remembered.at > WORKS_CARRY_TTL_MS) {
       _worksBySource.delete(key);
       continue;
@@ -587,6 +617,9 @@ export async function fetchTrafficWorks(): Promise<TrafficSnapshot> {
     // Facet key: eventCategory is the only complete dimension this feed
     // has, so it doubles as the logs-filter subcategory.
     f.properties.subcategory = cat || kind;
+    // A re-shared record is its own state's, credited through Live Traffic.
+    const state = AGGREGATE_GROUP_STATE[asString(it['apiSource'])];
+    if (state) f.properties.state = state;
     features.push(f);
   }
   return { type: 'FeatureCollection', features, count: features.length };
@@ -643,19 +676,13 @@ export async function fetchTrafficCameras(): Promise<TrafficCamerasSnapshot> {
 }
 
 /**
- * Which existing archive source a works record belongs to.
+ * Which hazard feed (by its archive source) an aggregate record belongs to.
  *
  * The all-feeds-web aggregate is a mixed bag — roadwork, construction,
- * utilities, light rail, hazards, flooding, events — and filing it all
- * under one "Works" type meant the logs page offered a type whose
- * contents were really Incidents, Roadwork, Flooding and Major Events
- * wearing one label. These are the same buckets map.html's
- * `_worksTarget()` uses to split the feed across its layers; keep the
- * two in step.
- *
- * The LIVE snapshot is untouched — /api/traffic/works still serves the
- * whole feed, which is what the map's merges read. Only the archive
- * filing changes.
+ * utilities, light rail, hazards, flooding, events — so its records are
+ * split by category onto the incident, roadwork, flood and major-event
+ * feeds rather than given one of their own (sources/interstateRoads.ts,
+ * for VIC while it is read from here).
  */
 export function worksArchiveSource(mainCategory: string): string {
   const c = mainCategory.toLowerCase().replace(/[^a-z]/g, '');
@@ -665,27 +692,6 @@ export function worksArchiveSource(mainCategory: string): string {
   }
   if (/majorevent|specialevent/.test(c)) return 'traffic_majorevent';
   return 'traffic_incident';
-}
-
-/**
- * Archive fan-out for the works feed: same rows defaultArchiveItems
- * would produce, re-pointed per record.
- *
- * `archiveSource` on the registration is a single constant applied to
- * every row, so splitting one feed across several sources needs this
- * hook (sourceRegistry.ts). Ids stay `ltw:`-prefixed and so cannot
- * collide with the state feeds' own upstream ids in the same tables.
- */
-export function worksArchiveItems(
-  data: unknown,
-  fetched_at: number,
-  source: string,
-): ArchiveRow[] {
-  return defaultArchiveItems(source, data, fetched_at).map((row) => {
-    const d = (row.data ?? {}) as Record<string, unknown>;
-    const cat = asString(d['mainCategory']) || asString(row.category);
-    return { ...row, source: worksArchiveSource(cat) };
-  });
 }
 
 export default function register(): void {
@@ -698,15 +704,9 @@ export default function register(): void {
       fetch: () => fetchHazard(k),
     });
   }
-  registerSource<TrafficSnapshot>({
-    name: 'traffic_works',
-    family: 'traffic',
-    intervalMs: 300_000,
-    fetch: fetchTrafficWorks,
-    // Archive each record under the type its category already implies,
-    // rather than a 'Works' bucket of its own. See worksArchiveItems.
-    archiveItems: worksArchiveItems,
-  });
+  // No traffic_works source any more: the other states' road events come
+  // from their own feeds (sources/interstateRoads.ts), each record on the
+  // endpoint for its kind.
   registerSource<TrafficCamerasSnapshot>({
     name: 'traffic_cameras',
     family: 'traffic',

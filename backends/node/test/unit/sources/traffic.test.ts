@@ -484,39 +484,34 @@ describe('traffic.worksArchiveSource', () => {
   });
 });
 
-describe('traffic.worksArchiveItems', () => {
-  it('re-points each row without disturbing anything else about it', async () => {
-    const { worksArchiveItems } = await import('../../../src/sources/traffic.js');
-    const snapshot = {
-      type: 'FeatureCollection',
-      features: [
-        {
-          type: 'Feature',
-          geometry: { type: 'Point', coordinates: [151.2, -33.8] },
-          properties: { id: 'ltw:aaa', title: 'Pit works', mainCategory: 'Roadwork' },
-        },
-        {
-          type: 'Feature',
-          geometry: { type: 'Point', coordinates: [151.3, -33.9] },
-          properties: { id: 'ltw:bbb', title: 'Water over road', mainCategory: 'Flood' },
-        },
-        {
-          type: 'Feature',
-          geometry: { type: 'Point', coordinates: [151.4, -34.0] },
-          properties: { id: 'ltw:ccc', title: 'Debris', mainCategory: 'generalHazards' },
-        },
-      ],
-      count: 3,
-    };
-    const rows = worksArchiveItems(snapshot, 1_700_000_000, 'traffic_works');
-    expect(rows.map((r) => r.source)).toEqual([
-      'traffic_roadwork',
-      'traffic_flood',
-      'traffic_incident',
+describe('traffic works for one state (VIC, until it is read from Transport Victoria)', () => {
+  beforeEach(async () => {
+    fetchJsonMock.mockReset();
+    const { _resetWorksCarryForward } = await import('../../../src/sources/traffic.js');
+    _resetWorksCarryForward();
+  });
+
+  const rec = (id: string, apiSource: string, lon: number) => ({
+    id, apiSource, eventCategory: 'Roadwork',
+    geometry: { type: 'POINT', coordinates: [lon, -36] },
+    properties: { title: 'Works ' + id },
+  });
+
+  it('keeps only the groups asked for, each labelled with its state', async () => {
+    const { fetchTrafficWorks } = await import('../../../src/sources/traffic.js');
+    fetchJsonMock.mockResolvedValueOnce([rec('v', 'vicRoadInfo', 145), rec('q', 'qldRoad', 152), rec('a', 'actRoadInfo', 149)]);
+    const snap = await fetchTrafficWorks(new Set(['vicRoadInfo']));
+    expect(snap.features.map((f) => [f.properties.upstreamId, f.properties.state, f.properties.credit])).toEqual([
+      ['v', 'VIC', 'Live Traffic NSW (Transport for NSW)'],
     ]);
-    // ids stay ltw:-prefixed so they cannot collide with the state
-    // feeds' own upstream ids now sharing these sources
-    expect(rows.every((r) => String(r.source_id).startsWith('ltw:'))).toBe(true);
-    expect(rows[0]!.fetched_at).toBe(1_700_000_000);
+  });
+
+  it('carries forward only the groups asked for', async () => {
+    const { fetchTrafficWorks } = await import('../../../src/sources/traffic.js');
+    fetchJsonMock.mockResolvedValueOnce([rec('v', 'vicRoadInfo', 145), rec('q', 'qldRoad', 152)]);
+    await fetchTrafficWorks();
+    fetchJsonMock.mockResolvedValueOnce([]);
+    const snap = await fetchTrafficWorks(new Set(['vicRoadInfo']));
+    expect(snap.features.map((f) => f.properties.upstreamId)).toEqual(['v']);
   });
 });

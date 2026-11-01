@@ -2052,7 +2052,8 @@ class EmbedBuilder:
 
     # ---- Traffic -----------------------------------------------
     def build_traffic_container(self, data: Dict[str, Any], alert_type: str):
-        """Components V2 container for Live Traffic NSW incidents."""
+        """Components V2 container for road records: Live Traffic NSW, and
+        the other states' own feeds (their `state` and `credit` say whose)."""
         props = data.get('properties', {})
         incident_type = props.get('incidentType', '')
         title = props.get('title') or props.get('headline') or props.get('displayName', 'Traffic Alert')
@@ -2090,9 +2091,11 @@ class EmbedBuilder:
                 content=self._clip_text('\n'.join(body_bits))
             ))
 
+        state = str(props.get('state') or '')
         if is_valid_value(roads):
+            where = roads[:1500] if state in ('', 'NSW') else f"{roads[:1500]} · {state}"
             container.add_item(discord.ui.TextDisplay(
-                content=self._clip_text(f"📍 {roads[:1500]}")
+                content=self._clip_text(f"📍 {where}")
             ))
 
         meta_bits = []
@@ -2134,7 +2137,10 @@ class EmbedBuilder:
                 map_url = build_map_url(lat, lon, label=title, layer="incidents")
                 footer_bits.append(f"[🗺️ Map]({map_url})")
 
-        self._append_container_footer(container, footer_bits, source="Live Traffic NSW")
+        # The publisher's own attribution (the interstate feeds' licences ask
+        # for it); Live Traffic NSW's records predate the field.
+        credit = strip_html(str(props.get('credit') or '')) or "Live Traffic NSW"
+        self._append_container_footer(container, footer_bits, source=credit)
         return container
 
     # ---- Interstate fire services -------------------------------

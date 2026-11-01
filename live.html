@@ -35,7 +35,7 @@
   <link rel="apple-touch-icon" sizes="180x180" href="./assets/ausaware-icon-180.png">
   <link rel="manifest" href="./site.webmanifest">
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
-  <script src="livetraffic-vocab.js?v=2"></script>
+  <script src="livetraffic-vocab.js?v=3"></script>
 
   <style>
     /* Prevent horizontal overflow */
@@ -4857,40 +4857,38 @@
         // Use cached data if available, otherwise fetch
         let incidents, fires, floods, majorEvents;
         
-        // alpine/council/works were added after the original four. They are
+        // alpine/council were added after the original four. They are
         // separate reporting streams (council roads especially — it shares no
         // records at all with the state-road feeds), so they widen this list
-        // rather than duplicating it.
-        let alpine, council, works;
+        // rather than duplicating it. Incidents, floods and major events
+        // carry QLD, SA, VIC and ACT records as well as NSW's.
+        let alpine, council;
         if (isCacheValid() && apiDataCache.traffic) {
           incidents = apiDataCache.traffic.incidents || { features: [] };
           fires = apiDataCache.traffic.fire || { features: [] };
           floods = apiDataCache.traffic.flood || { features: [] };
           majorEvents = apiDataCache.traffic.majorevent || { features: [] };
           // loadAllStats() only ever primes the original four keys, so on a
-          // cache hit these three would be permanently empty. Fetch them on
+          // cache hit these two would be permanently empty. Fetch them on
           // demand instead of inheriting a gap.
           const jc = (path) => apiFetch(`${API_BASE}${path}`).then(r => r.json()).catch(() => ({ features: [] }));
-          [alpine, council, works] = await Promise.all([
+          [alpine, council] = await Promise.all([
             apiDataCache.traffic.alpine || jc('/api/v1/traffic/alpine'),
-            apiDataCache.traffic.lga || jc('/api/v1/traffic/lga'),
-            apiDataCache.traffic.works || jc('/api/v1/traffic/works')
+            apiDataCache.traffic.lga || jc('/api/v1/traffic/lga')
           ]);
           apiDataCache.traffic.alpine = alpine;
           apiDataCache.traffic.lga = council;
-          apiDataCache.traffic.works = works;
         } else {
           const j = (path) => apiFetch(`${API_BASE}${path}`).then(r => r.json()).catch(() => ({ features: [] }));
-          [incidents, fires, floods, majorEvents, alpine, council, works] = await Promise.all([
+          [incidents, fires, floods, majorEvents, alpine, council] = await Promise.all([
             j('/api/v1/traffic/incidents'),
             j('/api/v1/traffic/fire'),
             j('/api/v1/traffic/flood'),
             j('/api/v1/traffic/majorevent'),
             j('/api/v1/traffic/alpine'),
-            j('/api/v1/traffic/lga'),
-            j('/api/v1/traffic/works')
+            j('/api/v1/traffic/lga')
           ]);
-          // Cache all seven, not just the new three: the branch above reads
+          // Cache all six, not just the new two: the branch above reads
           // every key back, so a partial write here would make the next
           // cached call render an empty list.
           apiDataCache.traffic = apiDataCache.traffic || {};
@@ -4900,7 +4898,6 @@
           apiDataCache.traffic.majorevent = majorEvents;
           apiDataCache.traffic.alpine = alpine;
           apiDataCache.traffic.lga = council;
-          apiDataCache.traffic.works = works;
         }
         
         // `let`: the render below caps this to a top slice.
@@ -5122,7 +5119,6 @@
         // blanket 'Council' — most are roadwork, and the planned vs
         // emergency split is the useful distinction.
         processFeatures(council, 'Roadwork', 'pill-green', 'lga');
-        processFeatures(works, 'Works', 'pill-orange', 'works');
         
         // Sort by: priority (major first), then unplanned before planned, then by time (newest first)
         items.sort((a, b) => {
@@ -5153,11 +5149,10 @@
         const floodCount = items.filter(i => i.type.toUpperCase().includes('FLOOD') || i.type.toUpperCase().includes('ADVERSE WEATHER')).length;
         const majorCount = items.filter(i => i.isMajor || i.type.toUpperCase().includes('MAJOR EVENT') || i.type.toUpperCase().includes('SPECIAL')).length;
         
-        // Council, Works and Alpine matched none of the buckets above, so
-        // ~2,500 items counted toward Total while appearing in no chip.
-        // These are tagged by the label passed to processFeatures.
+        // Council and Alpine matched none of the buckets above, so they
+        // counted toward Total while appearing in no chip. These are tagged
+        // by the label passed to processFeatures.
         const councilCount = items.filter(i => i.feed === 'lga').length;
-        const worksCount = items.filter(i => i.feed === 'works').length;
         const alpineCount = items.filter(i => i.feed === 'alpine').length;
         const ltColor = (id) => (window.LiveTrafficVocab ? LiveTrafficVocab.color(id) : '#94a3b8');
 
@@ -5181,7 +5176,6 @@
             ${majorCount > 0 ? `<span style="color: #ef4444;"><strong><i class="fas fa-exclamation-circle"></i> Major:</strong> ${majorCount}</span>` : ''}
             ${alpineCount > 0 ? `<span style="color: ${ltColor('alpine')};"><strong><i class="fas fa-snowflake"></i> Alpine:</strong> ${alpineCount}</span>` : ''}
             ${councilCount > 0 ? `<span style="color: ${ltColor('lga')};"><strong><i class="fas fa-building-columns"></i> Council:</strong> ${councilCount}</span>` : ''}
-            ${worksCount > 0 ? `<span style="color: ${ltColor('works')};"><strong><i class="fas fa-helmet-safety"></i> Works:</strong> ${worksCount}</span>` : ''}
             ${withGPS > 0 ? `<span style="color: #60a5fa;"><i class="fas fa-map-marker-alt"></i> ${withGPS} mappable</span>` : ''}
           </div>
           <div class="collapsible-list ${items.length > showCount ? 'collapsed' : ''}" id="traffic-list">

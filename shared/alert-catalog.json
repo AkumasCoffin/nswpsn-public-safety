@@ -77,7 +77,7 @@
     { "key": "ntfrs",       "label": "NT Emergency",           "icon": "fire",          "color": "#f97316" },
     { "key": "actas",       "label": "ACT Ambulance",          "icon": "truck-medical", "color": "#38bdf8" },
     { "key": "bom",         "label": "Bureau of Meteorology",  "icon": "cloud",         "color": "#3b82f6" },
-    { "key": "livetraffic", "label": "LiveTraffic NSW",        "icon": "road",          "color": "#f97316" },
+    { "key": "livetraffic", "label": "Roads (NSW, QLD, VIC, SA, ACT)", "icon": "road",   "color": "#f97316" },
     { "key": "endeavour",   "label": "Endeavour Energy",       "icon": "bolt",          "color": "#fbbf24" },
     { "key": "ausgrid",     "label": "Ausgrid",                "icon": "plug",          "color": "#f59e0b" },
     { "key": "essential",   "label": "Essential Energy",       "icon": "bolt",          "color": "#06b6d4" },
@@ -236,21 +236,22 @@
 
     {
       "key": "traffic_incident", "provider": "livetraffic", "label": "Incidents", "botLabel": "Traffic Incidents",
-      "agency": "TFNSW", "agencyLabel": "Transport for NSW",
+      "agency": "TFNSW", "agencyLabel": "NSW, QLD, VIC, SA and ACT road agencies",
       "feedShape": "geo_traffic",
       "archiveSource": "traffic_incident", "endpoint": "/api/v1/traffic/incidents", "itemsPath": "features",
       "color": "#ffa500", "icon": "🚗", "severityScale": null, "subtypeAware": true
     },
     {
       "key": "traffic_roadwork", "provider": "livetraffic", "label": "Roadwork", "botLabel": "Traffic Roadwork",
-      "agency": "TFNSW", "agencyLabel": "Transport for NSW",
+      "agency": "TFNSW", "agencyLabel": "NSW, QLD, VIC, SA and ACT road agencies",
       "feedShape": "geo_traffic",
       "archiveSource": "traffic_roadwork", "endpoint": "/api/v1/traffic/roadwork", "itemsPath": "features",
+      "aliases": ["traffic_works"],
       "color": "#ffd700", "icon": "🚧", "severityScale": null, "subtypeAware": true
     },
     {
       "key": "traffic_flood", "provider": "livetraffic", "label": "Flooding", "botLabel": "Flood Hazards",
-      "agency": "TFNSW", "agencyLabel": "Transport for NSW",
+      "agency": "TFNSW", "agencyLabel": "NSW, QLD, VIC, SA and ACT road agencies",
       "feedShape": "geo_traffic",
       "archiveSource": "traffic_flood", "endpoint": "/api/v1/traffic/flood", "itemsPath": "features",
       "color": "#00ced1", "icon": "🌊", "severityScale": null, "subtypeAware": true
@@ -264,7 +265,7 @@
     },
     {
       "key": "traffic_majorevent", "provider": "livetraffic", "label": "Major Events", "botLabel": "Major Events",
-      "agency": "TFNSW", "agencyLabel": "Transport for NSW",
+      "agency": "TFNSW", "agencyLabel": "NSW, QLD, VIC, SA and ACT road agencies",
       "feedShape": "geo_traffic",
       "archiveSource": "traffic_majorevent", "endpoint": "/api/v1/traffic/majorevent", "itemsPath": "features",
       "color": "#ff8c00", "icon": "🎉", "severityScale": null, "subtypeAware": true
@@ -282,13 +283,6 @@
       "feedShape": "geo_traffic",
       "archiveSource": "traffic_lga", "endpoint": "/api/v1/traffic/lga", "itemsPath": "features",
       "color": "#ffd700", "icon": "🚧", "severityScale": null, "subtypeAware": true
-    },
-    {
-      "key": "traffic_works", "provider": "livetraffic", "label": "Works & ACT", "botLabel": "Roadwork & Works",
-      "agency": "TFNSW", "agencyLabel": "Transport for NSW",
-      "feedShape": "geo_traffic",
-      "archiveSource": "traffic_works", "endpoint": "/api/v1/traffic/works", "itemsPath": "features",
-      "color": "#facc15", "icon": "🚧", "severityScale": null, "subtypeAware": true
     },
 
     {

@@ -60,7 +60,7 @@ this server stored over time. Each ticked cell is one scope, written
 | Weather warnings | `warnings:live` · `warnings:history` | Bureau of Meteorology land and marine warnings |
 | ACT Ambulance | `ambulance:live` · `ambulance:history` | ACT Ambulance Service incidents |
 | Power outages | `outages:live` · `outages:history` | Endeavour Energy, Ausgrid and Essential Energy |
-| Road hazards | `roads:live` · `roads:history` | Live Traffic NSW incidents, roadworks, floods, fires, major events, alpine conditions, council works |
+| Road hazards | `roads:live` · `roads:history` | Road incidents, roadworks, flooded roads and major events in NSW, QLD, VIC, SA and the ACT ([below](#roads)); NSW road fires, alpine conditions and council works |
 | Public transport | `transport:live` | Vehicles, stops, lines, trips, departures, alerts |
 | Aircraft | `aircraft:live` · `aircraft:history` | ADS-B positions, trails, photos; history replays past positions |
 | Ships | `ships:live` | AIS vessel positions and details |
@@ -109,7 +109,7 @@ request cannot ask for `read`.
 | Power outages | `GET /api/v1/endeavour/{current,maintenance,future,planned}` · `/endeavour/current/all` · `/endeavour/future/all` · `/endeavour/postcodes` | `outages:live` |
 | Power outages | `GET /api/v1/essential/{outages,planned,future}` · `/essential/outages/current` · `/essential/outages/raw` | `outages:live` |
 | Power outages | `GET /api/v1/ausgrid/outages` · `/ausgrid/stats` | `outages:live` |
-| Road hazards | `GET /api/v1/traffic/{incidents,roadwork,flood,fire,majorevent,alpine,lga}` and each one's `/raw` · `/traffic/works` · `/traffic/lga-incidents` · `/traffic/all-feeds` | `roads:live` |
+| Road hazards | `GET /api/v1/traffic/{incidents,roadwork,flood,fire,majorevent,alpine,lga}` ([below](#roads)) and each one's `/raw` · `/traffic/lga-incidents` · `/traffic/all-feeds` | `roads:live` |
 | Public transport | `GET /api/v1/transport/{vehicles,lines,stops,alerts}` · `/transport/shape/{id}` · `/transport/trip/{date}/{tripId}/{instance}` · `/transport/departures/{stopId}` | `transport:live` |
 | Aircraft | `GET /api/v1/adsb/aircraft` · `/adsb/trails` · `/adsb/photo/{hex}` | `aircraft:live` |
 | Aircraft | `GET /api/v1/adsb/history` | `aircraft:history` |
@@ -141,6 +141,29 @@ answers the same thing: `/api/endeavour/current/raw` and `/future/raw` (use
 `/endeavour/current/all` and `/future/all`), `/api/essential/outages/future`
 (use `/essential/future`) and `/api/beachsafe/details`, which is always empty
 (use `/beachsafe/beach/{slug}`). They go when the old paths are retired.
+
+### Roads
+
+`/traffic/incidents`, `/traffic/roadwork`, `/traffic/flood` and
+`/traffic/majorevent` carry every state the site reads, NSW's records first:
+
+| State | From | Licence |
+|---|---|---|
+| NSW | Live Traffic NSW (Transport for NSW) | |
+| QLD | QLDTraffic (Department of Transport and Main Roads), councils' events credited to the council | CC BY 4.0 |
+| VIC | Transport Victoria's planned and unplanned road disruptions | CC BY 4.0 |
+| SA | The Department for Infrastructure and Transport: roadworks, incidents, the closures and detours on Traffic SA's map, and the outback road report | CC BY 4.0 |
+| ACT | Roads ACT: approved traffic-management plans and unplanned closures | |
+
+Every record says its `state`, its publisher (`source`) and the attribution
+that publisher asks for (`credit`) — show the credit with the record.
+`?state=QLD,SA` keeps only those states (`400 validation_failed` for one the
+feed does not know). Each record sits on the feed for its kind — a QLD flooded
+road on `/traffic/flood`, an ACT event closure on `/traffic/majorevent` — and
+other states' times are ISO 8601 in UTC where NSW's are unix milliseconds
+written as text. `/traffic/fire`, `/traffic/alpine` and `/traffic/lga` are
+NSW's alone. There used to be a `/traffic/works`, Live Traffic's re-share of
+the other states; it is gone, its records now on the feed for their kind.
 
 ### Fires
 
@@ -191,7 +214,7 @@ key reads an archived source when it holds that feed's history:
 | `fires:history` | `rfs`, `qld_fire`, `qld_warning`, `vic_emergency`, `nt_fire`, `wa_incident`, `wa_warning`, `sa_cfs`, `sa_mfs` |
 | `warnings:history` | `bom_land`, `bom_marine` |
 | `ambulance:history` | `act_ambulance` |
-| `roads:history` | `traffic_incident`, `traffic_roadwork`, `traffic_flood`, `traffic_fire`, `traffic_majorevent`, `traffic_alpine`, `traffic_lga`, `traffic_works` |
+| `roads:history` | `traffic_incident`, `traffic_roadwork`, `traffic_flood`, `traffic_fire`, `traffic_majorevent`, `traffic_alpine`, `traffic_lga` (every state's, each under its kind), and `traffic_works` (older records only) |
 | `outages:history` | `endeavour_current`, `endeavour_planned`, `endeavour_maintenance`, `ausgrid`, `essential_current`, `essential_planned`, `essential_future` |
 | `beaches:history` | `dorsal` |
 | `pager:history` | `pager` |

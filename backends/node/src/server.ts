@@ -415,7 +415,6 @@ export function createApp() {
     '/api/traffic/majorevent', '/api/traffic/majorevent/raw',
     '/api/traffic/alpine', '/api/traffic/alpine/raw',
     '/api/traffic/lga', '/api/traffic/lga/raw',
-    '/api/traffic/works',
     '/api/traffic/lga-incidents', '/api/traffic/all-feeds',
   ]);
   app.route('/', beachRouter);

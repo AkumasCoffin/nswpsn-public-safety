@@ -89,16 +89,19 @@
         'Hazards, so planned and emergency work stay distinguishable.',
     },
     {
+      // Retired 2026-11-02: kept so stored records still get their label.
+      // Other states' road events now come from each state's own feed, on
+      // the incident, roadwork, flood and major-event feeds above.
       id: 'works',
       archiveSource: 'traffic_works',
       label: 'Works & ACT',
       short: 'Works',
       icon: 'fa-helmet-safety',
       color: '#fb923c',
-      endpoint: '/api/v1/traffic/works',
+      endpoint: null,
       blurb:
-        'Works, utilities and light-rail closures from the aggregate web ' +
-        'feed. The only Live Traffic source with ACT/Canberra coverage.',
+        'Older records of interstate works and hazards, from the Live ' +
+        'Traffic aggregate feed. No longer collected.',
     },
   ];
 

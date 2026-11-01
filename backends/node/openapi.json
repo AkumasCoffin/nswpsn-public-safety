@@ -539,35 +539,35 @@
                   "properties": {
                     "id": {
                       "type": "string",
-                      "description": "The feed's own id for the record. On /traffic/works, an id made from the record's position, title and category instead, because that feed issues new ids each time it is rebuilt"
+                      "description": "The feed's own id for the record. Other states' ids start with the state (qld:, sa:, vic:, act:); a VIC record read from Live Traffic's aggregate (until a Transport Victoria key is set) has an id made from its position, title and category (ltw:), because that feed issues new ids each time it is rebuilt"
                     },
                     "type": {
                       "type": "string",
-                      "description": "Which feed the record came from: Incident, Roadwork, Flood, Fire, Major Event, Alpine or Council. On /traffic/works, the record's eventCategory (else its eventType, else Works)"
+                      "description": "Which feed the record is on: Incident, Roadwork, Flood, Fire, Major Event, Alpine or Council. Another state's record takes the feed it belongs on"
                     },
                     "incidentType": {
                       "type": "string",
-                      "description": "The kind of incident named at the start of the title, upper case (CRASH, BREAKDOWN, HAZARD, FLOODING, ROADWORK, …); empty when the title starts with none of them"
+                      "description": "The kind of incident, upper case (CRASH, BREAKDOWN, HAZARD, FLOODING, ROADWORK, ROAD CLOSURE, …): on the NSW feeds, named at the start of the title; for other states, from the publisher's own type. Empty when there is none"
                     },
                     "mainCategory": {
                       "type": "string",
-                      "description": "The feed's own category, e.g. CRASH or SCHEDULED ROADWORK. On /traffic/works, its eventCategory (Roadwork, Flood, generalHazards, …)"
+                      "description": "The feed's own category, e.g. CRASH or SCHEDULED ROADWORK; for other states, the publisher's own word (Hazard, Roadworks, Road closure, Outback road conditions, …)"
                     },
                     "subCategory": {
                       "type": "string",
-                      "description": "The feed's sub-category (its subCategoryA, else subCategoryB) as published — sometimes the text \"null\""
+                      "description": "The feed's sub-category (its subCategoryA, else subCategoryB) as published — sometimes the text \"null\"; for other states, the publisher's subtype"
                     },
                     "subcategory": {
                       "type": "string",
-                      "description": "A filter key: incidentType, else mainCategory. On /traffic/works: mainCategory, else incidentKind"
+                      "description": "A filter key: incidentType, else mainCategory"
                     },
                     "incidentKind": {
                       "type": "string",
-                      "description": "As the hazard feeds give it — Planned or Unplanned in the samples seen. On /traffic/works, the record's eventType"
+                      "description": "Planned or Unplanned"
                     },
                     "title": {
                       "type": "string",
-                      "description": "The headline, else the title, else the display name, with a leading incidentType taken off when enough is left to stand as a title"
+                      "description": "The headline, else the title, else the display name, with a leading incidentType taken off when enough is left to stand as a title; for other states, the publisher's title, or its type and subtype"
                     },
                     "headline": {
                       "type": "string"
@@ -638,19 +638,19 @@
                     },
                     "created": {
                       "type": "string",
-                      "description": "When the record was created (else its start). On the hazard feeds, unix milliseconds written as a string; on /traffic/works, ISO 8601. Empty when the feed has none"
+                      "description": "When the record was created (else its start). On the NSW feeds, unix milliseconds written as a string; on other states' records, ISO 8601 in UTC. Empty when the feed has none"
                     },
                     "lastUpdated": {
                       "type": "string",
-                      "description": "When the record was last updated (else its end). On the hazard feeds, unix milliseconds written as a string; on /traffic/works, ISO 8601. Empty when the feed has none"
+                      "description": "When the record was last updated (else its end). On the NSW feeds, unix milliseconds written as a string; on other states' records, ISO 8601 in UTC. Empty when the feed has none"
                     },
                     "start": {
                       "type": "string",
-                      "description": "On the hazard feeds, unix milliseconds written as a string; on /traffic/works, ISO 8601. Empty when the feed has none"
+                      "description": "On the NSW feeds, unix milliseconds written as a string; on other states' records, ISO 8601 in UTC. Empty when the feed has none"
                     },
                     "end": {
                       "type": "string",
-                      "description": "On the hazard feeds, unix milliseconds written as a string; on /traffic/works, ISO 8601. Empty when the feed has none"
+                      "description": "On the NSW feeds, unix milliseconds written as a string; on other states' records, ISO 8601 in UTC. Empty when the feed has none"
                     },
                     "isEnded": {
                       "type": "boolean"
@@ -706,28 +706,50 @@
                       "description": "Links the feed gives for the record, as published"
                     },
                     "upstreamId": {
-                      "description": "/traffic/works only: that feed's own id for the record, which changes when the feed is rebuilt",
+                      "description": "A VIC record read from Live Traffic's aggregate only: that feed's own id for it, which changes when the feed is rebuilt",
                       "type": "string"
                     },
                     "orgName": {
                       "type": "string",
-                      "description": "The council that submitted the record — Council feed only, empty elsewhere"
+                      "description": "The council that submitted the record — the NSW Council feed, and QLD records a council supplied; empty elsewhere"
                     },
                     "orgContact": {
                       "type": "string",
-                      "description": "The council's phone number — Council feed only"
+                      "description": "The council's phone number — NSW Council feed only"
                     },
                     "orgEmail": {
                       "type": "string",
-                      "description": "Council feed only"
+                      "description": "NSW Council feed only"
                     },
                     "orgWebsite": {
                       "type": "string",
-                      "description": "Council feed only"
+                      "description": "The NSW Council feed, and QLD records a council supplied"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "NSW",
+                        "QLD",
+                        "VIC",
+                        "SA",
+                        "ACT"
+                      ],
+                      "description": "The state or territory the record is in"
                     },
                     "source": {
                       "type": "string",
-                      "const": "livetraffic"
+                      "enum": [
+                        "livetraffic",
+                        "qldtraffic",
+                        "traffic_sa",
+                        "roads_act",
+                        "transport_vic"
+                      ],
+                      "description": "Who publishes it: livetraffic (Live Traffic NSW, Transport for NSW), qldtraffic (QLDTraffic, Queensland Department of Transport and Main Roads), traffic_sa (South Australia's Department for Infrastructure and Transport), roads_act (Roads ACT), transport_vic (Victoria's Department of Transport and Planning)"
+                    },
+                    "credit": {
+                      "type": "string",
+                      "description": "The attribution its publisher asks for — show it with the record. The QLD, SA and VIC data is published under CC BY 4.0"
                     }
                   },
                   "required": [
@@ -773,7 +795,9 @@
                     "orgContact",
                     "orgEmail",
                     "orgWebsite",
-                    "source"
+                    "state",
+                    "source",
+                    "credit"
                   ],
                   "additionalProperties": false
                 }
@@ -6416,8 +6440,8 @@
         "tags": [
           "Road hazards"
         ],
-        "summary": "NSW road incidents",
-        "description": "Crashes, breakdowns, hazards and changed traffic conditions on NSW roads, from Live Traffic NSW (Transport for NSW), in one record shape across the Live Traffic feeds. Records the feed marks ended are left out. Refreshed every minute.",
+        "summary": "Road incidents",
+        "description": "Crashes, breakdowns, hazards, closures and changed traffic conditions, in NSW from Live Traffic NSW (Transport for NSW), and in Queensland, Victoria, South Australia and the ACT from each one's own feed (QLDTraffic; Transport Victoria; the SA Department for Infrastructure and Transport, outback road conditions included; Roads ACT), NSW's first. Every record says its state and carries its publisher's credit; ?state= keeps the states asked for. One record shape across them all. Records a feed marks ended are left out. NSW's are refreshed every minute, the other states' every two to five minutes.",
         "responses": {
           "200": {
             "description": "A GeoJSON FeatureCollection of records",
@@ -6425,6 +6449,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TrafficHazards"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A query parameter is not valid (validation_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -6470,6 +6504,16 @@
             }
           }
         },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "state",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated; any of NSW, QLD, VIC, SA, ACT, in any case. Leave out for every state the feed has."
+          }
+        ],
         "security": [
           {
             "ApiKey": []
@@ -6486,7 +6530,7 @@
         "tags": [
           "Road hazards"
         ],
-        "summary": "NSW road incidents, unparsed",
+        "summary": "Road incidents, unparsed",
         "description": "The Live Traffic NSW feed behind /traffic/incidents, exactly as Transport for NSW publishes it, for clients that parse it themselves. Read from Live Traffic NSW on each request, and ended records are not removed.",
         "responses": {
           "200": {
@@ -6556,8 +6600,8 @@
         "tags": [
           "Road hazards"
         ],
-        "summary": "NSW roadwork",
-        "description": "Roadwork on NSW roads, from Live Traffic NSW (Transport for NSW), in one record shape across the Live Traffic feeds. Records the feed marks ended are left out. Refreshed every five minutes.",
+        "summary": "Roadwork",
+        "description": "Roadwork, and other works on and beside the road, in NSW from Live Traffic NSW (Transport for NSW), and in Queensland, Victoria, South Australia and the ACT from each one's own feed (QLDTraffic; Transport Victoria; the SA Department for Infrastructure and Transport, outback road conditions included; Roads ACT), NSW's first. Every record says its state and carries its publisher's credit; ?state= keeps the states asked for. One record shape across them all. Records a feed marks ended are left out. NSW's are refreshed every five minutes, the other states' every two to five minutes.",
         "responses": {
           "200": {
             "description": "A GeoJSON FeatureCollection of records",
@@ -6565,6 +6609,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TrafficHazards"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A query parameter is not valid (validation_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -6610,6 +6664,16 @@
             }
           }
         },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "state",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated; any of NSW, QLD, VIC, SA, ACT, in any case. Leave out for every state the feed has."
+          }
+        ],
         "security": [
           {
             "ApiKey": []
@@ -6626,7 +6690,7 @@
         "tags": [
           "Road hazards"
         ],
-        "summary": "NSW roadwork, unparsed",
+        "summary": "Roadwork, unparsed",
         "description": "The Live Traffic NSW feed behind /traffic/roadwork, exactly as Transport for NSW publishes it, for clients that parse it themselves. Read from Live Traffic NSW on each request, and ended records are not removed.",
         "responses": {
           "200": {
@@ -6696,8 +6760,8 @@
         "tags": [
           "Road hazards"
         ],
-        "summary": "NSW roads affected by flooding",
-        "description": "Road closures and hazards on NSW roads caused by flooding, from Live Traffic NSW (Transport for NSW), in one record shape across the Live Traffic feeds. Records the feed marks ended are left out. Refreshed every five minutes.",
+        "summary": "Roads affected by flooding",
+        "description": "Road closures and hazards caused by flooding, in NSW from Live Traffic NSW (Transport for NSW), and in Queensland, Victoria, South Australia and the ACT from each one's own feed (QLDTraffic; Transport Victoria; the SA Department for Infrastructure and Transport, outback road conditions included; Roads ACT), NSW's first. Every record says its state and carries its publisher's credit; ?state= keeps the states asked for. One record shape across them all. Records a feed marks ended are left out. NSW's are refreshed every five minutes, the other states' every two to five minutes.",
         "responses": {
           "200": {
             "description": "A GeoJSON FeatureCollection of records",
@@ -6705,6 +6769,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TrafficHazards"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A query parameter is not valid (validation_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -6750,6 +6824,16 @@
             }
           }
         },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "state",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated; any of NSW, QLD, VIC, SA, ACT, in any case. Leave out for every state the feed has."
+          }
+        ],
         "security": [
           {
             "ApiKey": []
@@ -6766,7 +6850,7 @@
         "tags": [
           "Road hazards"
         ],
-        "summary": "NSW roads affected by flooding, unparsed",
+        "summary": "Roads affected by flooding, unparsed",
         "description": "The Live Traffic NSW feed behind /traffic/flood, exactly as Transport for NSW publishes it, for clients that parse it themselves. Read from Live Traffic NSW on each request, and ended records are not removed.",
         "responses": {
           "200": {
@@ -6849,6 +6933,16 @@
               }
             }
           },
+          "400": {
+            "description": "A query parameter is not valid (validation_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "401": {
             "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
             "content": {
@@ -6890,6 +6984,16 @@
             }
           }
         },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "state",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated; any of NSW, QLD, VIC, SA, ACT, in any case. Leave out for every state the feed has."
+          }
+        ],
         "security": [
           {
             "ApiKey": []
@@ -6976,8 +7080,8 @@
         "tags": [
           "Road hazards"
         ],
-        "summary": "NSW major events on the roads",
-        "description": "Special events that close or change NSW roads, from Live Traffic NSW (Transport for NSW), in one record shape across the Live Traffic feeds. Records the feed marks ended are left out. Refreshed every five minutes.",
+        "summary": "Major events on the roads",
+        "description": "Special events that close or change roads, in NSW from Live Traffic NSW (Transport for NSW), and in Queensland, Victoria, South Australia and the ACT from each one's own feed (QLDTraffic; Transport Victoria; the SA Department for Infrastructure and Transport, outback road conditions included; Roads ACT), NSW's first. Every record says its state and carries its publisher's credit; ?state= keeps the states asked for. One record shape across them all. Records a feed marks ended are left out. NSW's are refreshed every five minutes, the other states' every two to five minutes.",
         "responses": {
           "200": {
             "description": "A GeoJSON FeatureCollection of records",
@@ -6985,6 +7089,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TrafficHazards"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A query parameter is not valid (validation_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -7030,6 +7144,16 @@
             }
           }
         },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "state",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated; any of NSW, QLD, VIC, SA, ACT, in any case. Leave out for every state the feed has."
+          }
+        ],
         "security": [
           {
             "ApiKey": []
@@ -7046,7 +7170,7 @@
         "tags": [
           "Road hazards"
         ],
-        "summary": "NSW major events on the roads, unparsed",
+        "summary": "Major events on the roads, unparsed",
         "description": "The Live Traffic NSW feed behind /traffic/majorevent, exactly as Transport for NSW publishes it, for clients that parse it themselves. Read from Live Traffic NSW on each request, and ended records are not removed.",
         "responses": {
           "200": {
@@ -7129,6 +7253,16 @@
               }
             }
           },
+          "400": {
+            "description": "A query parameter is not valid (validation_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "401": {
             "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
             "content": {
@@ -7170,6 +7304,16 @@
             }
           }
         },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "state",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated; any of NSW, QLD, VIC, SA, ACT, in any case. Leave out for every state the feed has."
+          }
+        ],
         "security": [
           {
             "ApiKey": []
@@ -7269,6 +7413,16 @@
               }
             }
           },
+          "400": {
+            "description": "A query parameter is not valid (validation_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "401": {
             "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
             "content": {
@@ -7310,6 +7464,16 @@
             }
           }
         },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "state",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated; any of NSW, QLD, VIC, SA, ACT, in any case. Leave out for every state the feed has."
+          }
+        ],
         "security": [
           {
             "ApiKey": []
@@ -7371,76 +7535,6 @@
           },
           "503": {
             "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "ApiKey": []
-          }
-        ],
-        "x-scopes": [
-          "roads:live"
-        ]
-      }
-    },
-    "/api/v1/traffic/works": {
-      "get": {
-        "operationId": "getTrafficWorks",
-        "tags": [
-          "Road hazards"
-        ],
-        "summary": "Road works and hazards from the Live Traffic aggregate feed",
-        "description": "Roadwork, hazards, flooding and events from Live Traffic NSW's aggregate web feed, which carries other states' and territories' road agencies, in the same record shape as the hazard feeds. Cameras, rest areas, heavy vehicle checking stations, the RFS's own incidents (apiSource rfsNSW, which the RFS endpoints already carry) and records marked ended are left out. When every record from one upstream source (apiSource) drops out of the feed at once, the last ones seen are kept for up to six hours. Refreshed every five minutes.",
-        "responses": {
-          "200": {
-            "description": "A GeoJSON FeatureCollection of records",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TrafficHazards"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "The key is over its per-minute limit (rate_limited)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
             "content": {
               "application/json": {
                 "schema": {

@@ -6,6 +6,7 @@
 import registerRfs from './rfs.js';
 import registerBom from './bom.js';
 import registerTraffic from './traffic.js';
+import registerInterstateRoads from './interstateRoads.js';
 import registerBeach from './beach.js';
 import registerWeather from './weather.js';
 import { registerWeatherGridSource } from './weatherGridSource.js';
@@ -30,6 +31,7 @@ export function registerAllSources(): void {
   registerRfs();
   registerBom();
   registerTraffic();
+  registerInterstateRoads();
   registerBeach();
   registerWeather();
   registerWeatherGridSource();

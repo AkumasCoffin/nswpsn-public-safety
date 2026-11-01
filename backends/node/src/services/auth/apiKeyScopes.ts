@@ -69,7 +69,8 @@ export const FEEDS = {
   },
   roads: {
     label: 'Road hazards',
-    covers: 'Live Traffic NSW incidents, roadworks, floods, fires, major events, alpine conditions and council works',
+    covers:
+      'Road incidents, roadworks, flooded roads and major events in NSW (Live Traffic NSW), QLD, VIC, SA and the ACT (each from its own feed), and NSW road fires, alpine conditions and council works',
     windows: ['live', 'history'],
   },
   transport: { label: 'Public transport', covers: 'Vehicles, stops, lines, trips, departures and alerts', windows: ['live'] },
