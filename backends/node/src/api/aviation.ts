@@ -38,7 +38,7 @@ import {
 export const aviationRouter = new Hono();
 
 // What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
-const SCOPE_CAMERAS = scoped({ source: 'aviation', type: 'cameras', window: 'live' });
+const SCOPE_CAMERAS = scoped({ feed: 'cameras', window: 'live' });
 
 // What /api/v1/ documents (api/v1/openapi.ts).
 const AviationCameras = featureCollection(

@@ -36,7 +36,7 @@ import {
 export const dorsalRouter = new Hono();
 
 // What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
-const SCOPE_HAZARDS = scoped({ source: 'dorsal', type: 'hazards', window: 'live' });
+const SCOPE_HAZARDS = scoped({ feed: 'beaches', window: 'live' });
 
 const DEFAULT_HOURS = 48;
 /** 14 days — the most the source's rolling window can actually supply. */
@@ -131,7 +131,7 @@ dorsalRouter.get(
   SCOPE_HAZARDS,
   describeRoute({
     operationId: 'getDorsalReports',
-    tags: ['Hazards'],
+    tags: ['Beaches & sharks'],
     summary: 'Shark reports',
     description:
       'Shark reports around Australia from Dorsal, the community shark-reporting app: sightings by the public and by drone, detections of tagged sharks by receivers, beach closures, bites and other incidents, newest first. Dorsal is read every five minutes and the last 14 days are kept; reports placed outside Australia are left out. Asked with no `hours`, the window is the last 48 hours.',

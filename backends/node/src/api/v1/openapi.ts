@@ -14,12 +14,16 @@
  * GET /api/v1/openapi.json serves: read once, filtered per request.
  *
  *   a named key   only the operations its scopes reach (a `read` key: the old
- *                 feed list) plus the public ones — what the docs page shows
+ *                 feed list) plus the public ones
  *   anyone else   who got past the gate (a signed-in person, the site's own
  *                 pages, the static key): the whole document
  *
  * The route is declared ANY_KEY, so every valid key may fetch it — what it
  * gets back is the filtering above.
+ *
+ * The site's API reference page (/api-docs) reads the same document through
+ * GET /api/api-keys/openapi.json (api/apiKeys.ts) instead: signed in, filtered
+ * to every active key the person holds (filterSpecForKeys), whole for staff.
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -30,6 +34,7 @@ import {
   ANY_KEY,
   declaredNeedOf,
   keyCanRead,
+  needFromScope,
   needScopes,
   scoped,
   type ScopeNeed,
@@ -47,7 +52,7 @@ const DESCRIPTION = `Live and recent public-safety data for Australia — fire a
 
 **Keys.** Every feed needs an API key (the reference and service endpoints are public), sent as \`X-API-Key: <key>\` or \`Authorization: Bearer <key>\`. Request one from your profile at nswpsn.forcequit.xyz (API keys); staff choose what it may read. Keys are for scripts and servers — a request carrying a browser \`Origin\` header is refused.
 
-**Scopes.** A key reads an endpoint when its scopes cover the endpoint's source, type and window — listed on each operation as \`x-scopes\`. This document shows the public endpoints and the ones your key's scopes reach.
+**Scopes.** A key is granted feeds, each live, history or both — written \`fires:live\`, \`fires:history\`. Each operation lists the one it needs as \`x-scopes\`; stored history needs the history of at least one stored feed (\`*:history\`) and answers only for the feeds the key holds. This document shows the public endpoints and the ones your keys reach.
 
 **Responses.** GeoJSON endpoints answer with a bare FeatureCollection. Everything else answers \`{ "data": … }\`. Errors are \`{ "error": { "code", "message" } }\` with a stable \`code\`.
 
@@ -60,21 +65,25 @@ export const DOCUMENTATION = {
     description: DESCRIPTION,
   },
   servers: [{ url: 'https://api.forcequit.xyz' }],
+  // One tag per feed a key is granted (FEEDS in services/auth/apiKeyScopes.ts),
+  // in the same order, so the reference reads like the table on the profile.
   tags: [
-    { name: 'Incidents', description: 'Fire, rescue and ambulance incidents happening now' },
-    { name: 'Warnings', description: 'Public warnings: emergency warnings, fire danger, weather' },
-    { name: 'Hazards', description: 'Hazards on the ground and in the water: road incidents and works, satellite hotspots, beach conditions, shark reports' },
-    { name: 'Outages', description: 'Electricity outages, unplanned and planned' },
-    { name: 'Weather', description: 'Current conditions, forecasts and radar' },
+    { name: 'Fires', description: 'Every fire service in one feed, satellite hotspots and fire danger ratings' },
+    { name: 'Warnings', description: 'Bureau of Meteorology warnings and the QLD and WA emergency warnings' },
+    { name: 'Ambulance', description: 'ACT Ambulance Service incidents' },
+    { name: 'Power outages', description: 'Endeavour Energy, Ausgrid and Essential Energy outages, unplanned and planned' },
+    { name: 'Road hazards', description: 'Live Traffic NSW incidents, roadworks, floods, fires and events' },
     { name: 'Cameras', description: 'Traffic, airport and fire-tower cameras' },
-    { name: 'Transport', description: 'Public transport vehicles, stops, lines and alerts' },
+    { name: 'Public transport', description: 'Public transport vehicles, stops, lines and alerts' },
     { name: 'Aircraft', description: 'Aircraft positions and tracks from ADS-B' },
     { name: 'Ships', description: 'Vessel positions from AIS' },
+    { name: 'Weather', description: 'Current conditions, forecasts and radar' },
+    { name: 'Beaches & sharks', description: 'Beach water quality and conditions, and shark reports' },
     { name: 'News', description: 'Headlines from news outlets' },
     { name: 'Pager', description: 'Emergency service pager messages' },
-    { name: 'Radio', description: 'Radio site reference, reception summaries and transcripts' },
-    { name: 'History', description: 'Stored records of every source over time' },
-    { name: 'Reference', description: 'Slow-changing reference data: boundaries and agencies' },
+    { name: 'Radio summaries', description: 'Hourly and ad-hoc summaries of radio receptions' },
+    { name: 'History', description: 'Stored records over time, for every feed your key holds the history of' },
+    { name: 'Reference', description: 'Slow-changing reference data: agencies' },
     { name: 'Service', description: 'Whether the API is up' },
   ],
   components: {
@@ -126,15 +135,10 @@ export async function buildSpec(app: Hono): Promise<OpenApiDoc> {
 // Filtering for a key
 // ---------------------------------------------------------------------------
 
-/** x-scopes back into a need: ['source:rfs', 'type:incidents', 'window:live|history']. */
+/** x-scopes back into a need: ['fires:live'], or ['*:history'] for stored history. */
 function needFromXScopes(x: unknown): ScopeNeed | null {
-  if (!Array.isArray(x)) return null;
-  const get = (dim: string) => x.find((s): s is string => typeof s === 'string' && s.startsWith(`${dim}:`))?.slice(dim.length + 1);
-  const source = get('source');
-  const type = get('type');
-  const window = get('window');
-  if (!source || !type || !window) return null;
-  return { source, type, window: window.includes('|') ? 'any' : (window as 'live' | 'history') };
+  if (!Array.isArray(x) || typeof x[0] !== 'string') return null;
+  return needFromScope(x[0]);
 }
 
 function collectRefs(node: unknown, into: Set<string>): void {
@@ -183,6 +187,17 @@ function pruneComponents(components: Record<string, any> | undefined, paths: unk
 
 /** The document as a key with these scopes may see it. */
 export function filterSpecForKey(doc: OpenApiDoc, scopes: readonly string[]): OpenApiDoc {
+  return filterSpecForKeys(doc, [scopes]);
+}
+
+/**
+ * The document as someone holding these keys may see it: an operation stays
+ * when at least one of the keys reaches it. Judged key by key rather than on
+ * the keys' scopes pooled into one list — a `read` key's scope next to
+ * another key's `fires:live` would make the pooled list a `read` list, and
+ * hide what the second key reads.
+ */
+export function filterSpecForKeys(doc: OpenApiDoc, keys: ReadonlyArray<readonly string[]>): OpenApiDoc {
   const paths: OpenApiDoc['paths'] = {};
   const tags = new Set<string>();
   for (const [p, item] of Object.entries(doc.paths)) {
@@ -194,7 +209,8 @@ export function filterSpecForKey(doc: OpenApiDoc, scopes: readonly string[]): Op
         continue;
       }
       const isPublic = Array.isArray(op?.security) && op.security.length === 0;
-      if (!isPublic && !keyCanRead(scopes, p, needFromXScopes(op?.['x-scopes']))) continue;
+      const need = needFromXScopes(op?.['x-scopes']);
+      if (!isPublic && !keys.some((scopes) => keyCanRead(scopes, p, need))) continue;
       kept[m] = op;
       ops++;
       for (const t of op?.tags ?? []) tags.add(t);
@@ -219,7 +235,8 @@ export const SPEC_FILE = path.resolve(HERE, '../../../openapi.json');
 
 let committed: OpenApiDoc | null | undefined;
 
-function committedSpec(): OpenApiDoc | null {
+/** The committed document, read on first use and kept; null when it is missing. Never mutate it. */
+export function committedSpec(): OpenApiDoc | null {
   if (committed !== undefined) return committed;
   try {
     committed = JSON.parse(readFileSync(SPEC_FILE, 'utf8')) as OpenApiDoc;

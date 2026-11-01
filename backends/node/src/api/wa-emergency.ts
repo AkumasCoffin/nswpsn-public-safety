@@ -4,8 +4,12 @@
  *
  * Both serve out of LiveStore in the same property shape as
  * /api/rfs/incidents, so the map renders every agency on the Fires
- * layer through one path. Both are also served at /api/v1/ (server.ts
- * mirrors them).
+ * layer through one path.
+ *
+ * /warnings is also served at /api/v1/ (server.ts mirrors it), under the
+ * warnings feed. /incidents is this site's route, for the map and the
+ * Discord bot, and is not on /api/v1/: API keys read DFES's incidents
+ * alongside every other fire service at /api/v1/fires (api/fires.ts).
  */
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -28,11 +32,11 @@ import {
 
 export const waEmergencyRouter = new Hono();
 
-// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
-const SCOPE_INCIDENTS = scoped({ source: 'dfes', type: 'incidents', window: 'live' });
-const SCOPE_WARNINGS = scoped({ source: 'dfes', type: 'warnings', window: 'live' });
+// What a scoped API key needs to read /warnings (services/auth/apiKeyScopes.ts).
+// /incidents declares nothing, so no scoped key reaches it.
+const SCOPE_WARNINGS = scoped({ feed: 'warnings', window: 'live' });
 
-// What /api/v1/ documents (api/v1/openapi.ts). Incidents and warnings share
+// What /api/v1/ documents for /warnings (api/v1/openapi.ts). Incidents and warnings share
 // one record shape; the fields that belong to only one are empty in the other.
 const WaRecords = featureCollection(
   feature(
@@ -63,7 +67,6 @@ assertShape<SameShape<z.infer<typeof WaRecords>, WaSnapshot>>();
 
 waEmergencyRouter.get(
   '/api/wa-emergency/incidents',
-  SCOPE_INCIDENTS,
   describeRoute({
     operationId: 'getWaEmergencyIncidents',
     tags: ['Incidents'],

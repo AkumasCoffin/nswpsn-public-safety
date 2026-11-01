@@ -61,8 +61,8 @@ declare module 'hono' {
 }
 
 // What a named key may reach is decided by its scopes, in apiKeyScopes.ts:
-// a key in the new form reads the routes whose declared source, type and
-// window it holds; a key holding `read` (every key made before scopes) reads
+// a key in the new form reads the routes whose declared feed and window
+// (`fires:live`, `pager:history`, …) it holds; a key holding `read` (every key made before scopes) reads
 // the fixed list of upstream feeds it always could. Either way, GET or HEAD
 // only. Public endpoints (PUBLIC_ENDPOINTS below) never reach that check —
 // they take no credential from anyone — so nothing there is about hiding them.
@@ -144,10 +144,6 @@ export const PUBLIC_ENDPOINT_PREFIXES: readonly string[] = [
   // LGA names for the signup form's State -> LGA flow. Signup runs before any
   // auth exists, and the list is ABS public data.
   '/api/boundaries/lga-names',
-  // The API documentation page and the viewer it loads (api/v1/docs.ts). The
-  // page asks for a key itself and sends it to /api/v1/openapi.json, which is
-  // NOT public — what it shows depends on the key.
-  '/api/docs',
 ];
 
 /**
@@ -251,13 +247,14 @@ export const requireApiKey: MiddlewareHandler = async (c, next) => {
     // site's — is trying to use a key, and that is exactly what keys are not
     // for. Answered before the key's own state, as it always was.
     //
-    // The one page that may: the API's own documentation (/api/docs), served
-    // from this origin, where the holder pastes their key to read the
-    // reference and try it. Chrome and Firefox send no Origin on a same-origin
-    // GET; Safari does. Sec-Fetch-Site is set by the browser and a page cannot
-    // forge it, so `same-origin` there is a page on this API's own origin —
-    // never nswpsn.forcequit.xyz (same-site) and never anyone else's.
-    if (c.req.header('Origin') && c.req.header('Sec-Fetch-Site') !== 'same-origin') {
+    // Sec-Fetch-Site counts too: every current browser sends it on every
+    // request (a page can neither forge nor drop it) and no script or
+    // command-line client does, so it also catches a same-origin GET, which
+    // carries no Origin. There used to be an exception for a page on this
+    // API's own origin — the documentation page once served at /api/docs,
+    // where the holder pasted their key. The reference is now on the site
+    // (/api-docs), read signed in with no key, and this origin serves no pages.
+    if (c.req.header('Origin') || c.req.header('Sec-Fetch-Site')) {
       return refuse(c, 403, 'api_key_browser_use', {
         error: 'api_key_browser_use',
         message: 'API keys are for scripts and the command line, not web pages',

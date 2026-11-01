@@ -66,11 +66,12 @@ import {
 export const dataHistoryRouter = new Hono();
 
 // What a scoped API key needs to read stored history (services/auth/
-// apiKeyScopes.ts). It spans sources and types: a key with window:history
-// gets in, and is answered only from the archived sources its scopes cover
+// apiKeyScopes.ts). It spans feeds: a key holding the history cell of any
+// feed (`fires:history`, `pager:history`, …) gets in, and is answered only
+// from the archived sources of the feeds whose history it holds
 // (historySourcesFor). /sources and /stats — counts across every source —
 // declare nothing, so no key reaches them; they are not on /api/v1/.
-const SCOPE_HISTORY = scoped({ source: '*', type: '*', window: 'history' });
+const SCOPE_HISTORY = scoped({ feed: '*', window: 'history' });
 
 /**
  * The archived sources a request may read: those its key's scopes cover, or
@@ -509,7 +510,7 @@ dataHistoryRouter.get(
     tags: ['History'],
     summary: 'Stored records',
     description:
-      "Every source's records as this server stored them over time: by default one record per incident (its latest), newest first. Filter by source, time, place and text; page with cursor (or offset, up to 10,000). Records are kept for the server's retention window. A key reads only the archived sources its scopes cover — each source's stored history needs that source's own scope and type, with window:history.",
+      "Every source's records as this server stored them over time: by default one record per incident (its latest), newest first. Filter by source, time, place and text; page with cursor (or offset, up to 10,000). Records are kept for the server's retention window. A key reads only the archived sources of the feeds whose history it holds — fires:history the fire services' sources, warnings:history the warnings', and so on.",
     responses: {
       ...okJson(envelope(HistoryPage), 'A page of records'),
       ...GATED_ERRORS,

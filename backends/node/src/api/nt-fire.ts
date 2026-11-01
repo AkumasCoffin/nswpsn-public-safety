@@ -9,15 +9,16 @@
  * logs page shows how each one progressed — but a closed job does not
  * belong on a live map. `?all=1` returns them too, for debugging.
  *
- * Also served at /api/v1/ (server.ts mirrors it). The feed asks not to be
- * re-published (sources/ntFire.ts); the owner chose to carry it, so its
- * description credits NTFRS and asks API users to do the same.
+ * This site's route, for the map and the Discord bot; it is not on /api/v1/.
+ * API keys read NTFRS alongside every other fire service at /api/v1/fires
+ * (api/fires.ts). The feed asks not to be re-published (sources/ntFire.ts);
+ * the owner chose to carry it there, so that description credits NTFRS and
+ * asks API users to do the same.
  */
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { describeRoute } from 'hono-openapi';
 import { ntFireSnapshot, ntFireActiveSnapshot, type NtFireSnapshot } from '../sources/ntFire.js';
-import { scoped } from '../services/auth/apiKeyScopes.js';
 import { geo } from './v1/respond.js';
 import {
   assertShape,
@@ -36,10 +37,10 @@ import {
 
 export const ntFireRouter = new Hono();
 
-// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
-const SCOPE_INCIDENTS = scoped({ source: 'ntfrs', type: 'incidents', window: 'live' });
+// No scope: API keys read the fire services together, through /api/v1/fires (api/fires.ts).
 
-// What /api/v1/ documents (api/v1/openapi.ts).
+// The answer's shape, for describeRoute() below. The route is not on /api/v1/,
+// so the API description (api/v1/openapi.ts) leaves it out.
 const NtFireIncidents = featureCollection(
   feature(
     z.union([
@@ -66,7 +67,6 @@ const Query = z.object({ all: flag('1 includes closed incidents as well') });
 
 ntFireRouter.get(
   '/api/nt-fire/incidents',
-  SCOPE_INCIDENTS,
   describeRoute({
     operationId: 'getNtFireIncidents',
     tags: ['Incidents'],

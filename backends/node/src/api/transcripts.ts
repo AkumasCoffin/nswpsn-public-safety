@@ -11,9 +11,10 @@
  * whisper throughput dashboard (api/whisper.ts /history) that never
  * touches the rdio DB, and the bot's /ts command was retired with it.
  *
- * Also served at /api/v1/ (server.ts mirrors it), wrapped in `data` there
- * (api/v1/respond.ts). The path keeps rdio-scanner's word, "call"; what it
- * serves is one reception.
+ * This site's route; it is not on /api/v1/. API keys read the radio
+ * summaries (api/summaries.ts), not transcripts. The ok()/fail() v1 shapes
+ * in it date from when it was mirrored. The path keeps rdio-scanner's word,
+ * "call"; what it serves is one reception.
  */
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -29,7 +30,6 @@ import {
 } from '../services/rdio.js';
 import { config } from '../config.js';
 import { log } from '../lib/log.js';
-import { scoped } from '../services/auth/apiKeyScopes.js';
 import { fail, ok } from './v1/respond.js';
 import {
   assertShape,
@@ -122,11 +122,11 @@ async function rowToShape(row: RdioCallRow): Promise<ReceptionTranscript> {
 
 export const transcriptsRouter = new Hono();
 
-// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
-const SCOPE_TRANSCRIPTS_HISTORY = scoped({ source: 'rdio', type: 'transcripts', window: 'history' });
+// No scope: API keys read the radio summaries (api/summaries.ts), not transcripts.
 
 // ---------------------------------------------------------------------------
-// What /api/v1/ documents (api/v1/openapi.ts)
+// The answer's shape, for describeRoute() below. The route is not on /api/v1/,
+// so the API description (api/v1/openapi.ts) leaves it out.
 // ---------------------------------------------------------------------------
 
 const errorJson = (description: string) => ({
@@ -162,7 +162,6 @@ const RECEPTIONS_UNAVAILABLE = 'Radio receptions are not available on this serve
 
 transcriptsRouter.get(
   '/api/rdio/calls/:callId',
-  SCOPE_TRANSCRIPTS_HISTORY,
   describeRoute({
     operationId: 'getReceptionTranscript',
     tags: ['Radio'],

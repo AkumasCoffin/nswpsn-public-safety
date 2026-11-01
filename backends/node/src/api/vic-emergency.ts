@@ -6,13 +6,14 @@
  * `layer` of fire / flood / hazard so the map can route it — Victoria
  * publishes fires, floods and hazmat through one endpoint.
  *
- * Also served at /api/v1/ (server.ts mirrors it).
+ * This site's route, for the map and the Discord bot; it is not on /api/v1/.
+ * API keys read Victoria alongside every other fire service at
+ * /api/v1/fires (api/fires.ts).
  */
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { describeRoute } from 'hono-openapi';
 import { vicSnapshot, type VicSnapshot } from '../sources/vicEmergency.js';
-import { scoped } from '../services/auth/apiKeyScopes.js';
 import { geo } from './v1/respond.js';
 import {
   assertShape,
@@ -29,10 +30,10 @@ import {
 
 export const vicEmergencyRouter = new Hono();
 
-// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
-const SCOPE_INCIDENTS = scoped({ source: 'vic', type: 'incidents', window: 'live' });
+// No scope: API keys read the fire services together, through /api/v1/fires (api/fires.ts).
 
-// What /api/v1/ documents (api/v1/openapi.ts).
+// The answer's shape, for describeRoute() below. The route is not on /api/v1/,
+// so the API description (api/v1/openapi.ts) leaves it out.
 const VicEvents = featureCollection(
   feature(
     PointGeometry,
@@ -60,7 +61,6 @@ assertShape<SameShape<z.infer<typeof VicEvents>, VicSnapshot>>();
 
 vicEmergencyRouter.get(
   '/api/vic-emergency/events',
-  SCOPE_INCIDENTS,
   describeRoute({
     operationId: 'getVicEmergencyEvents',
     tags: ['Incidents'],

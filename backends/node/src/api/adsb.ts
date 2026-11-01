@@ -65,8 +65,8 @@ import {
 export const adsbRouter = new Hono();
 
 // What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
-const SCOPE_AIRCRAFT = scoped({ source: 'adsb', type: 'aircraft', window: 'live' });
-const SCOPE_AIRCRAFT_HISTORY = scoped({ source: 'adsb', type: 'aircraft', window: 'history' });
+const SCOPE_AIRCRAFT = scoped({ feed: 'aircraft', window: 'live' });
+const SCOPE_AIRCRAFT_HISTORY = scoped({ feed: 'aircraft', window: 'history' });
 
 // ---------------------------------------------------------------------------
 // What /api/v1/ documents (api/v1/openapi.ts)

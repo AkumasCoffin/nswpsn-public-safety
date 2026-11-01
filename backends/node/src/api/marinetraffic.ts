@@ -54,7 +54,7 @@ import {
 export const marinetrafficRouter = new Hono();
 
 // What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
-const SCOPE_VESSELS = scoped({ source: 'marinetraffic', type: 'vessels', window: 'live' });
+const SCOPE_VESSELS = scoped({ feed: 'ships', window: 'live' });
 
 /** The merged tiles, as mergeUpstream() builds them. */
 interface MarineTiles {

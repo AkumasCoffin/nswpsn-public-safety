@@ -24,7 +24,7 @@ backends/node/
   src/config.ts         zod-validated env. The ONLY process.env reader
   src/api/*.ts          61 route modules, one per endpoint group
   src/api/v1/           the versioned public API: mirror, response shapes,
-                        zod schemas, the OpenAPI document, the docs page
+                        zod schemas, the OpenAPI document
   src/sources/*.ts      one module per polled upstream
   src/services/         pollers, node hub, whisper router, LLM, auth, …
   src/store/live.ts     LiveStore — current state, in memory
@@ -33,8 +33,7 @@ backends/node/
   src/db/migrate.ts     migration runner
   src/db/migrations/    129 numbered .sql files
   src/lib/              logger, timezone, masks, relay-error formatting
-  assets/               node-versions.json (agent manifest), rfs-zones.json,
-                        docs/ and scalar/ (the /api/docs page and its viewer)
+  assets/               node-versions.json (agent manifest), rfs-zones.json
   openapi.json          the API description, generated — `npm run openapi`
   scripts/deploy.sh     the deploy. The OWNER runs this. You do not
   test/unit/            Vitest, no database
@@ -367,12 +366,13 @@ table (migration 120; the request flow below is the usual route, and
 shortcuts). Only the sha256 and a lookup prefix are stored.
 A key carries scopes (what it may read — below), its own per-minute limit, an
 optional expiry and a `revoked_at`. **Keys are refused from web pages**: a
-request presenting one with a browser `Origin` header is a 403, so a key cannot
-be used from another site, nor pasted into ours. The exception is the API's own
-documentation page (`/api/docs`): a request the browser marks
-`Sec-Fetch-Site: same-origin` comes from a page on the API's own origin, which a
-page cannot forge — Safari sends `Origin` even then, where Chrome and Firefox
-send none.
+request presenting one with a browser `Origin` header, or any `Sec-Fetch-Site`
+header (every current browser sends it, a page cannot forge or drop it, and no
+script does — it also catches a same-origin GET, which has no `Origin`), is a
+403, so a key cannot be used from another site, nor pasted into ours. There was
+an exception for a page on the API's own origin, the documentation page once
+served at `/api/docs`; the reference is now on the site and reads the
+description signed in, and the API's origin serves no pages, so it is gone.
 
 Keys are normally **requested, not issued**. A logged-in user asks from their
 profile (`POST /api/api-keys/requests`, a name, a reason and, optionally, the
@@ -459,42 +459,51 @@ confined at the gate itself, and it only ever reads: **GET or HEAD**, nothing
 else.
 
 What it reads is its **scopes** (`services/auth/apiKeyScopes.ts`, migration
-129). A scope is one of three dimensions, `main:sub` like the role names:
+129): a set of **feed** × **window** cells, written `<feed>:<window>` like the
+role names (`fires:live`, `fires:history`). `FEEDS` lists the feeds in the order
+the staff and profile tables show them — Fires, Warnings, ACT Ambulance, Power
+outages, Road hazards, Cameras, Public transport, Aircraft, Ships, Weather,
+Beaches & sharks, News, Pager messages, Radio summaries — each with a label, a
+line saying what it covers, and the windows it has (`live` — what the map shows
+now, polled and cached; `history` — stored records over time). A feed groups
+the sources a person would ask for together: Fires is every fire service (read
+merged at `/api/v1/fires`, `api/fires.ts`), satellite hotspots and fire danger
+ratings; Power outages is all three distributors.
 
-| Dimension | Values |
-|---|---|
-| `source:` | whose data — `rfs`, `firms`, `vic`, `qfd`, `dfes`, `safire`, `ntfrs`, `actas`, `bom`, `livetraffic`, `transport`, `adsb`, `aviation`, `marinetraffic`, `weather`, `beach`, `dorsal`, `endeavour`, `ausgrid`, `essential`, `centralwatch`, `qldtraffic`, `news`, `boundaries`, `pager`, `radio`, `rdio` |
-| `type:` | what kind — `incidents`, `warnings`, `outages`, `hazards`, `cameras`, `weather`, `transit`, `aircraft`, `vessels`, `pager`, `radio`, `summaries`, `transcripts`, `news`, `boundaries` |
-| `window:` | `live` — what the map shows now, polled each minute and cached; `history` — stored records over time |
+Each route a key may reach **declares** the one cell it serves with
+`scoped({ feed, window })` as its first middleware; a key passes when it holds
+that cell. There are no wildcards, so a feed added later reaches nobody until
+staff tick it. The gate reads the declaration off the matched route
+(`routeNeed`, Hono's `matchedRoutes`), so there is no second list to keep in
+step. A route with no declaration is out of reach of every scoped key:
+`403 api_key_scope_forbidden`, with the cell the route needs in the message. A
+path no route serves is the ordinary 404. `GET /api/api-keys/scope-catalog`
+gives the pickers the feeds with only the windows some route declares
+(`declaredNeeds`), and a test keeps `FEEDS` and the declarations in step.
 
-Any dimension may be `*`. Each route a key may reach **declares** the source,
-type and window it serves with `scoped({…})` as its first middleware (e.g.
-`rfs.ts`, `adsb.ts`); a key passes when it holds a matching scope in every
-dimension (`window: 'any'` on reference data — boundaries, the radio site list,
-pager hits — takes either window). The gate reads the declaration off the
-matched route (`routeNeed`, Hono's `matchedRoutes`), so there is no second list
-to keep in step. A route with no declaration is out of reach of every scoped
-key, however wide its scopes: `403 api_key_scope_forbidden`, with the scopes the
-route needs in the message. A path no route serves is the ordinary 404.
-
-Stored history spans sources, so `/api/data/history` and its `/incident` route
-declare `source: '*', type: '*', window: 'history'`, which any source and type
-scope satisfies; the handler then narrows the query to `historySourcesFor(...)`,
-the archived sources whose scope source and type the key covers
-(`HISTORY_SOURCES` maps each archived `source` to its pair — `wa_warning` is
-`dfes`/`warnings`). Naming another source is a 403; a key's history answer is
-`Cache-Control: private, no-store`. Callers that are not named keys (the site,
-the static key) are not narrowed. In the staff scope picker the declaration
-shows as each archived source's own history combination, never as `*`
-(`declaredNeeds`). `user_incident` is not in the map, so no key reads it.
+Stored history spans feeds, so `/api/data/history` and its `/incident` route
+declare `scoped({ feed: '*', window: 'history' })`, which any `<feed>:history`
+cell satisfies; the handler then narrows the query to `historySourcesFor(...)`,
+the archived sources of the feeds whose history the key holds
+(`HISTORY_SOURCES` maps each archived `source` to its feed — `wa_warning` is
+`warnings`, `traffic_fire` is `roads`). Naming another source is a 403; a key's
+history answer is `Cache-Control: private, no-store`. Callers that are not
+named keys (the site, the static key) are not narrowed. `user_incident` is not
+in the map, so no key reads it.
 
 Never declared, so never readable with a key: anything about people or nodes —
 profiles and accounts, user-submitted incidents, site statistics, the cache and
 collection internals, and node status (`/api/adsb/receivers`,
-`/api/radio/monitored-sites`). Live data means what the public map shows; the
-only node-derived data in it is aircraft and pager traffic. A source list lives
-here and not in `shared/alert-catalog.json`, which is what the bot alerts on (a
-test keeps the shared keys aligned).
+`/api/radio/monitored-sites`) — and this site's own reference data: boundaries
+(the council names too), the radio site list and reception transcripts. The
+per-agency fire incident routes (`/api/rfs/incidents`, `/api/qld-fire/incidents`,
+`/api/vic-emergency/events`, `/api/nt-fire/incidents`,
+`/api/wa-emergency/incidents`, `/api/sa-fire/{cfs,mfs}`) are undeclared too and
+off `/api/v1/`: the map and the bot read them in each agency's own shape, keys
+read the merged feed. Live data means what the public map shows; the only
+node-derived data in it is aircraft and pager traffic. The feed list lives here
+and not in `shared/alert-catalog.json`, which is what the bot alerts on (a test
+keeps every archived source the catalog names mapped to a feed).
 
 **`read` is the old rule, kept.** Every key made before scopes holds `read`, and
 `read` still means exactly what a key could reach then: GET or HEAD on a fixed
@@ -503,8 +512,9 @@ traffic, transport, aviation, AIS, weather, power, camera, news, shark-report
 and boundary routes, plus `/api/pager/` and `/api/radio/`), anything else
 `403 api_key_path_forbidden`. A key holding `read`, or holding nothing in the
 new form, is judged by that list alone, so turning scopes on changed nothing
-for existing keys. Staff may still grant `read` on purpose; a user cannot ask
-for it.
+for existing keys. New keys are granted feeds — the staff table does not offer
+`read`, though the approve route still accepts it from staff — and a user
+cannot ask for it.
 
 Refused requests of either kind still spend the key's per-minute budget, so
 scanning for an opening is not free.
@@ -514,10 +524,13 @@ description. Every valid key may fetch it, `read` keys included, and what comes
 back is filtered to that key — the public operations plus those its scopes
 reach (`api/v1/openapi.ts`, which reuses the gate's own check). The document is
 generated from the routes by `npm run openapi` into `backends/node/openapi.json`
-and committed; `test/unit/api/openapi.test.ts` fails while it is stale. The page
-at `/api/docs` (public) asks for a key, fetches the document with it and shows
-it in Scalar, vendored under `assets/scalar/` and served pre-compressed; the
-page's Content-Security-Policy allows this origin only.
+and committed; `test/unit/api/openapi.test.ts` fails while it is stale. The
+reference page is on the site (`api-docs.html`, viewer vendored at
+`vendor/scalar/`), not here. It reads `GET /api/api-keys/openapi.json` with the
+Supabase session (`api/apiKeys.ts`): the same document filtered to the union of
+the person's active keys — an operation stays when any one of them reaches it
+(`filterSpecForKeys`) — the whole of it for owner and staff, and
+`403 no_active_key` for someone with no active key.
 
 **Roles live in the backend's own PostgreSQL, not in Supabase.** Supabase is
 authentication and identity only. Never propose row-level security on the

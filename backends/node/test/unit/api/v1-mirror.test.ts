@@ -21,7 +21,7 @@ describe('mirror', () => {
       c.header('X-Router-Mw', '1');
       await next();
     });
-    r.get('/api/mx/a', scoped({ source: 'rfs', type: 'incidents', window: 'live' }), (c) => ok(c, { a: 1 }));
+    r.get('/api/mx/a', scoped({ feed: 'fires', window: 'live' }), (c) => ok(c, { a: 1 }));
     r.get('/api/mx/b/:id', (c) => ok(c, { id: c.req.param('id') }));
     r.get('/api/mx/private', (c) => c.json({ secret: true }));
     r.post('/api/mx/a', (c) => c.json({ posted: true }));
@@ -50,7 +50,7 @@ describe('mirror', () => {
     mirror(new Hono(), r, ['/api/mx/a']);
     const route = mirroredRoutes().find((x) => x.method === 'GET' && x.path === '/api/v1/mx/a');
     expect(route?.legacyPath).toBe('/api/mx/a');
-    expect(declaredNeedOf(route!.handlers)).toEqual({ source: 'rfs', type: 'incidents', window: 'live' });
+    expect(declaredNeedOf(route!.handlers)).toEqual({ feed: 'fires', window: 'live' });
   });
 
   it('throws on a name the router does not have', () => {

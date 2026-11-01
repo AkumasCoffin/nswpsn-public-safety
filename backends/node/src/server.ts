@@ -55,6 +55,7 @@ import { qldFireRouter } from './api/qld-fire.js';
 import { vicEmergencyRouter } from './api/vic-emergency.js';
 import { waEmergencyRouter } from './api/wa-emergency.js';
 import { saFireRouter } from './api/sa-fire.js';
+import { firesRouter } from './api/fires.js';
 import { agencyRouter } from './api/agency.js';
 import { marinetrafficRouter } from './api/marinetraffic.js';
 import { newsRouter } from './api/news.js';
@@ -85,11 +86,11 @@ import { isFirstPartyOrigin } from './services/auth/firstParty.js';
 import { optionalSupabaseJwt } from './services/auth/supabaseJwt.js';
 import { sessionRouter } from './api/session.js';
 import { apiKeysRouter } from './api/apiKeys.js';
-// The versioned public data API (/api/v1/) and its documentation.
+// The versioned public data API (/api/v1/) and its description. The reference
+// page that renders it is on the site (api-docs.html), not here.
 import { mirror } from './api/v1/mirror.js';
 import { notFound, onError } from './api/v1/respond.js';
 import { openapiRouter } from './api/v1/openapi.js';
-import { docsRouter } from './api/v1/docs.js';
 import { unversionedPath } from './lib/apiVersion.js';
 import { log } from './lib/log.js';
 
@@ -289,6 +290,7 @@ export function createApp() {
     '/api/aviation/cameras',
     '/api/bom/warnings',
     '/api/rfs/incidents',
+    '/api/fires',
     '/api/traffic/incidents',
     '/api/traffic/cameras',
     '/api/beachwatch',
@@ -392,7 +394,8 @@ export function createApp() {
   app.route('/', sessionRouter);
   // Simple sources
   app.route('/', rfsRouter);
-  mirror(app, rfsRouter, ['/api/rfs/incidents', '/api/rfs/incidents/raw', '/api/rfs/fdr']);
+  // Not the incidents: API keys read every fire service together, at /api/v1/fires.
+  mirror(app, rfsRouter, ['/api/rfs/fdr']);
   app.route('/', actAmbulanceRouter);
   mirror(app, actAmbulanceRouter, ['/api/act-ambulance/incidents']);
   app.route('/', bomRouter);
@@ -426,8 +429,8 @@ export function createApp() {
   // Not /api/adsb/receivers: node status, never part of the public API.
   mirror(app, adsbRouter, ['/api/adsb/aircraft', '/api/adsb/history', '/api/adsb/trails', '/api/adsb/photo/:hex']);
   app.route('/', radioPublicRouter);
-  // Not /api/radio/monitored-sites (node status) or PATCH grn-sites/:id (staff edit).
-  mirror(app, radioPublicRouter, ['/api/radio/grn-sites']);
+  // Not on /api/v1/: the site list is this site's own reference data, and
+  // monitored-sites is node status.
   // Power + heartbeat + stats
   app.route('/', endeavourRouter);
   // Not /current/raw or /future/raw: byte-for-byte the same as /current/all and /future/all.
@@ -472,21 +475,21 @@ export function createApp() {
   app.route('/', qldCamerasRouter);
   mirror(app, qldCamerasRouter, ['/api/qld/cameras', '/api/qld/flood-cameras']);
   app.route('/', ntFireRouter);
-  // The NT feed asks not to be re-published (sources/ntFire.ts); the owner
-  // decided to carry it on v1, with NTFRS credited in its description.
-  mirror(app, ntFireRouter, ['/api/nt-fire/incidents']);
   app.route('/', boundariesRouter);
-  // One call, lga-names first: it is registered before /:kind, which would otherwise shadow it.
-  mirror(app, boundariesRouter, ['/api/boundaries/lga-names', '/api/boundaries/:kind']);
+  // Not on /api/v1/: boundaries are this site's own reference data, which API keys do not read.
   app.route('/', whisperRouter);
   app.route('/', qldFireRouter);
-  mirror(app, qldFireRouter, ['/api/qld-fire/incidents', '/api/qld-fire/warnings']);
+  mirror(app, qldFireRouter, ['/api/qld-fire/warnings']);
   app.route('/', vicEmergencyRouter);
-  mirror(app, vicEmergencyRouter, ['/api/vic-emergency/events']);
   app.route('/', waEmergencyRouter);
-  mirror(app, waEmergencyRouter, ['/api/wa-emergency/incidents', '/api/wa-emergency/warnings']);
+  mirror(app, waEmergencyRouter, ['/api/wa-emergency/warnings']);
   app.route('/', saFireRouter);
-  mirror(app, saFireRouter, ['/api/sa-fire/cfs', '/api/sa-fire/mfs']);
+  // Every fire service in one feed (api/fires.ts). The per-agency incident
+  // routes above are this site's and the bot's; API keys read this one. The NT
+  // feed asks not to be re-published (sources/ntFire.ts); the owner decided to
+  // carry it, with NTFRS credited in the description.
+  app.route('/', firesRouter);
+  mirror(app, firesRouter, ['/api/fires']);
   app.route('/', agencyRouter);
   mirror(app, agencyRouter, ['/api/agency/extended', '/api/agency/extended/:slug']);
   app.route('/', marinetrafficRouter);
@@ -498,7 +501,7 @@ export function createApp() {
   // Not /api/summaries/trigger: owner tooling.
   mirror(app, summariesRouter, ['/api/summaries/latest', '/api/summaries']);
   app.route('/', transcriptsRouter);
-  mirror(app, transcriptsRouter, ['/api/rdio/calls/:callId']);
+  // Not on /api/v1/: API keys read the summaries, not transcripts.
   // Centralwatch reads + dashboard 503 stubs (W8)
   app.route('/', centralwatchRouter);
   mirror(app, centralwatchRouter, ['/api/centralwatch/cameras', '/api/centralwatch/sites', '/api/centralwatch/image/:cameraId']);
@@ -535,9 +538,8 @@ export function createApp() {
   // Feeder node event analytics (staff Data tab, owner|dev only)
   app.route('/', nodeDataRouter);
 
-  // The API description (filtered per key) and the documentation page.
+  // The API description, filtered per key.
   app.route('/', openapiRouter);
-  app.route('/', docsRouter);
 
   // JSON for /api/v1/; every other path keeps Hono's plain-text answers.
   app.notFound(notFound);

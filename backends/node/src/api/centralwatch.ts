@@ -40,7 +40,7 @@ import { assertShape, envelope, GATED_ERRORS, okJson, type SameShape } from './v
 export const centralwatchRouter = new Hono();
 
 // What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
-const SCOPE_CAMERAS = scoped({ source: 'centralwatch', type: 'cameras', window: 'live' });
+const SCOPE_CAMERAS = scoped({ feed: 'cameras', window: 'live' });
 
 // Cameras that the batch image worker can't reach (offline towers, upstream
 // 404s, etc.) get dropped from the public list so the map doesn't show

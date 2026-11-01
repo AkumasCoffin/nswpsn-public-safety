@@ -15,6 +15,8 @@
  *   User (requireSupabaseJwt):
  *     GET  /api/api-keys/me                       own requests + undeleted keys + caps
  *     GET  /api/api-keys/scope-catalog            the scopes there are, for the pickers
+ *     GET  /api/api-keys/openapi.json             the API description, as far as their
+ *                                                 active keys reach (staff: all of it)
  *     POST /api/api-keys/requests                 {name, reason, scopes?} → pending
  *     POST /api/api-keys/requests/:id/claim       approved → mints, returns plaintext ONCE
  *     POST /api/api-keys/:prefix/reissue          own live key → new secret, plaintext ONCE
@@ -62,16 +64,15 @@ import {
   type ApiKeyRow,
 } from '../services/auth/apiKeys.js';
 import {
+  FEEDS,
   LEGACY_READ,
-  SCOPE_SOURCES,
-  SCOPE_TYPES,
-  SCOPE_WINDOWS,
   declaredNeeds,
   validateScopes,
 } from '../services/auth/apiKeyScopes.js';
 import { notify, displayNameMap } from '../services/wireComments.js';
 import { notifyStaff } from '../services/staffNotify.js';
 import { getUsername } from './users.js';
+import { committedSpec, filterSpecForKeys } from './v1/openapi.js';
 
 export const apiKeysRouter = new Hono();
 
@@ -386,19 +387,67 @@ apiKeysRouter.get('/api/api-keys/me', requireSupabaseJwt, async (c) => {
   }
 });
 
-// The scopes there are, for the request form on the profile and the staff
-// picker. `combos` is what routes actually declare, so a picker can say which
-// types a source has (asking for source:rfs with type:outages reads nothing).
+// The feeds there are, for the request form on the profile and the staff
+// table: one row per feed, a cell per window it has. A cell is the scope
+// `<feed>:<window>`. `windows` lists only cells some route actually serves
+// (declaredNeeds), so the table never offers one that reads nothing.
 apiKeysRouter.get('/api/api-keys/scope-catalog', requireSupabaseJwt, (c) => {
-  const list = (o: Readonly<Record<string, string>>) => Object.entries(o).map(([key, label]) => ({ key, label }));
+  const served = new Set(declaredNeeds().map((n) => `${n.feed}:${n.window}`));
   return c.json({
-    sources: list(SCOPE_SOURCES),
-    types: list(SCOPE_TYPES),
-    windows: list(SCOPE_WINDOWS),
-    combos: declaredNeeds().sort((a, b) =>
-      a.source.localeCompare(b.source) || a.type.localeCompare(b.type) || a.window.localeCompare(b.window)),
+    feeds: Object.entries(FEEDS).map(([key, f]) => ({
+      key,
+      label: f.label,
+      covers: f.covers,
+      windows: f.windows.filter((w) => served.has(`${key}:${w}`)),
+    })),
+    windows: [
+      { key: 'live', label: 'Live', description: 'What the map shows now' },
+      { key: 'history', label: 'History', description: 'Stored records over time' },
+    ],
     legacy: LEGACY_READ,
   });
+});
+
+// The API reference page on the site (/api-docs). Signed in, not with a key:
+// keys are refused from web pages by design. What it answers is the committed
+// description (api/v1/openapi.ts) as far as the person's active keys reach —
+// an operation stays when any one of them reads it — plus the public
+// endpoints. Owner and staff, who grant the scopes, see all of it. Someone
+// with no active key gets nothing to read yet, and the page says how to get
+// one. GET /api/v1/openapi.json stays for a key's own tooling.
+apiKeysRouter.get('/api/api-keys/openapi.json', requireSupabaseJwt, async (c) => {
+  const userId = currentUserId(c)!;
+  // Per person, so never cached by anything in between.
+  c.header('Cache-Control', 'private, no-store');
+  const doc = committedSpec();
+  if (!doc) return c.json({ error: 'unavailable', message: 'The API description is not available on this server.' }, 503);
+
+  const staff = await canManageUsers(userId).catch(() => false);
+  if (staff) return c.json(doc);
+
+  const pool = await getPool();
+  if (!pool) return c.json({ error: 'database unavailable' }, 503);
+  let keys: ApiKeyRow[];
+  try {
+    keys = (
+      await pool.query<ApiKeyRow>('SELECT * FROM api_keys WHERE user_id = $1 AND deleted_at IS NULL', [userId])
+    ).rows;
+  } catch (err) {
+    log.error({ err, userId }, 'api-keys/openapi.json failed');
+    return c.json({ error: 'Failed to load API keys' }, 500);
+  }
+  const now = Date.now();
+  const active = keys.filter((k) => isLiveKey(k, now));
+  if (!active.length) {
+    return c.json(
+      {
+        error: 'no_active_key',
+        message: 'The reference shows what your API keys can read. You have no active key yet — request one from your profile.',
+      },
+      403,
+    );
+  }
+  return c.json(filterSpecForKeys(doc, active.map((k) => k.scopes ?? [])));
 });
 
 apiKeysRouter.post('/api/api-keys/requests', requireSupabaseJwt, async (c) => {

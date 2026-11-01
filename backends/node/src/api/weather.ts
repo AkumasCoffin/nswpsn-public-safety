@@ -49,7 +49,7 @@ import {
 export const weatherRouter = new Hono();
 
 // What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
-const SCOPE_WEATHER = scoped({ source: 'weather', type: 'weather', window: 'live' });
+const SCOPE_WEATHER = scoped({ feed: 'weather', window: 'live' });
 
 // ---------------------------------------------------------------------------
 // What /api/v1/ documents (api/v1/openapi.ts)

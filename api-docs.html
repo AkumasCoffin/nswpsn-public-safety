@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script defer src="https://analytics.forcequit.xyz/script.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
+  <meta charset="UTF-8" />
+  <title>AusAware – API reference</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#0f172a">
+  <!-- What it shows depends on who is signed in — nothing here for search. -->
+  <meta name="robots" content="noindex">
+
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="./assets/ausaware-icon-192.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="./assets/ausaware-icon-180.png">
+  <link rel="manifest" href="./site.webmanifest">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <script src="auth-common.js"></script>
+
+  <style>
+    /* Scalar's sidebar and headers are sticky. styles.css clips sideways
+       overflow with `hidden`, which makes html, body and .main scroll
+       containers of their own, and a sticky element sticks to the nearest one
+       — here, boxes that never scroll. `clip` cuts the same overflow without
+       making a scroll container, so they stick to the window. */
+    html, body, .ad-main { overflow-x: clip; }
+    /* The site's card snapping would tug at a long reference. */
+    html { scroll-snap-type: none; }
+
+    .ad-main { padding-bottom: 0; }
+    /* The states below are switched with `hidden`; a display set here must not undo it. */
+    .ad-main [hidden] { display: none !important; }
+    .ad-note { max-width: 760px; }
+    .ad-note .card-body p + p { margin-top: 0.6rem; }
+    .ad-note .ad-actions { margin-top: 1rem; display: flex; flex-wrap: wrap; gap: 0.5rem; }
+    .ad-note code, .ad-bar code { font-size: 0.82em; background: rgba(148,163,184,0.12); padding: 0.05rem 0.35rem; border-radius: 5px; }
+    .ad-loading { color: var(--text-muted); padding: 2rem 0; font-size: 0.9rem; }
+    .ad-loading i { margin-right: 0.4rem; color: var(--accent); }
+    .ad-bar {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 1rem;
+      margin: 1.2rem 0 0; padding: 0.6rem 0.9rem; border: 1px solid var(--border-subtle); border-radius: 10px;
+      background: rgba(2,6,23,0.35); color: var(--text-muted); font-size: 0.8rem; line-height: 1.5;
+    }
+    .ad-bar a { white-space: nowrap; }
+    .ad-bar .ad-bar-text { flex: 1 1 22rem; min-width: 0; }
+
+    /* The reference itself: full width of the content column, under the header. */
+    #api-ref { margin: 1.2rem -3rem 0; border-top: 1px solid var(--border-subtle); }
+    @media (max-width: 900px) {
+      #api-ref { margin: 1rem -1rem 0; }
+      /* Below the site's fixed 60px mobile bar, not under it. */
+      :root { --scalar-custom-header-height: 60px; }
+    }
+    @media (max-width: 480px) {
+      #api-ref { margin: 1rem -0.5rem 0; }
+    }
+
+    /* Scalar in the site's colours, on the system fonts (nothing is fetched).
+       Doubled class: Scalar's own theme sets these on `.dark-mode` and is
+       injected after this sheet. */
+    .dark-mode.dark-mode {
+      --scalar-font: system-ui, -apple-system, BlinkMacSystemFont, "Inter", sans-serif;
+      --scalar-font-code: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      --scalar-background-1: #05070b;
+      --scalar-background-2: #10131b;
+      --scalar-background-3: #151925;
+      --scalar-background-accent: rgba(249, 115, 22, 0.14);
+      --scalar-color-1: #f9fafb;
+      --scalar-color-2: #a1a5b6;
+      --scalar-color-3: #6b7280;
+      --scalar-color-accent: #f97316;
+      --scalar-border-color: rgba(148, 163, 184, 0.22);
+      --scalar-sidebar-background-1: #070a10;
+      --scalar-sidebar-item-active-background: rgba(249, 115, 22, 0.14);
+      --scalar-sidebar-color-active: #fdba74;
+    }
+    /* Scalar's "Generate SDK" opens its hosted dashboard; nothing here goes there. */
+    .generate-sdk-button { display: none !important; }
+  </style>
+</head>
+<body>
+  <div class="mobile-header">
+    <div class="mobile-logo">Forcequit <span>API</span></div>
+    <button class="mobile-menu-btn" onclick="toggleSidebar()" aria-label="Menu">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+    </button>
+  </div>
+  <div class="menu-overlay" onclick="toggleSidebar()"></div>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo"><img src="./assets/ausaware-icon-192.png" alt="" class="sidebar-logo-mark"><span class="sidebar-logo-text">Aus<span>Aware</span></span></div>
+    <div class="sidebar-byline">by Forcequit</div>
+    <div class="sidebar-subtitle">Live emergency awareness for Australia — incidents, radio and public safety data.</div>
+    <div class="sidebar-section-label">Sections</div>
+    <nav class="sidebar-nav">
+      <a href="/">Home / Overview</a>
+      <a href="live" style="color: #fca5a5;">Live Data / Scanner</a>
+      <a href="map">Incident Map</a>
+      <a href="logs">Incident Logs</a>
+      <a href="links">Useful Links</a>
+      <a href="data-sources">Data Sources</a>
+      <a href="about">About &amp; Contact</a>
+    </nav>
+    <div id="agencies-nav-mount"></div>
+    <div class="sidebar-footer">AusAware · Run by Forcequit</div>
+  </aside>
+
+  <main class="main ad-main">
+    <header class="main-header">
+      <div class="breadcrumb">Developers</div>
+      <h1>📘 API reference</h1>
+      <p>The AusAware data API as your API keys see it: every endpoint they can read, plus the public ones, with an example request for each.</p>
+    </header>
+
+    <div class="ad-loading" id="ad-loading"><i class="fas fa-spinner fa-spin"></i> Loading the reference…</div>
+
+    <!-- Signed out -->
+    <article class="card ad-note" id="ad-signed-out" hidden style="margin-top:1.5rem;">
+      <div class="card-header">
+        <div class="card-title">Sign in to see the reference</div>
+        <div class="card-tag">Sign in</div>
+      </div>
+      <div class="card-body">
+        <p>The reference belongs to your account: it shows the endpoints your API keys can read. Sign in to open it.</p>
+        <p>No key yet? Any account can ask for one from its profile, under <strong>API keys</strong> — say what it is for, and staff choose what it may read.</p>
+        <div class="ad-actions">
+          <a class="btn btn-primary" href="login?redirect=/api-docs">Sign in</a>
+          <a class="btn btn-secondary" href="signup?as=user">Create an account</a>
+        </div>
+      </div>
+    </article>
+
+    <!-- Signed in, no active key -->
+    <article class="card ad-note" id="ad-no-key" hidden style="margin-top:1.5rem;">
+      <div class="card-header">
+        <div class="card-title">The reference shows once you have an active API key</div>
+        <div class="card-tag">No key</div>
+      </div>
+      <div class="card-body">
+        <p>It lists what your keys can read, and you hold no active key — none yet, or the ones you had were revoked or have expired.</p>
+        <p>Request one from your profile under <strong>API keys</strong>, saying what it is for. Staff review the request and choose what the key may read; once it is approved, generate it on the same card and come back here.</p>
+        <div class="ad-actions">
+          <a class="btn btn-primary" href="/#api-keys">Open API keys</a>
+        </div>
+      </div>
+    </article>
+
+    <!-- Could not load -->
+    <article class="card ad-note" id="ad-error" hidden style="margin-top:1.5rem;">
+      <div class="card-header">
+        <div class="card-title">The reference could not be loaded</div>
+        <div class="card-tag">Error</div>
+      </div>
+      <div class="card-body">
+        <p id="ad-error-text">Something went wrong.</p>
+        <div class="ad-actions">
+          <button type="button" class="btn btn-secondary" id="ad-retry">Try again</button>
+        </div>
+      </div>
+    </article>
+
+    <div class="ad-bar" id="ad-bar" hidden>
+      <span class="ad-bar-text" id="ad-bar-text"></span>
+      <a href="/#api-keys">Your API keys</a>
+    </div>
+
+    <div id="api-ref" hidden></div>
+  </main>
+
+  <script src="agencies.js"></script>
+  <script>
+    function toggleSidebar() {
+      document.getElementById('sidebar').classList.toggle('open');
+      document.querySelector('.menu-overlay').classList.toggle('active');
+    }
+
+    // The API reference. Signed in, this asks the backend for the API
+    // description as far as the person's ACTIVE keys reach (staff get all of
+    // it) — GET /api/api-keys/openapi.json with the Supabase session, never a
+    // key: keys are refused from web pages by design. The answer is handed to
+    // Scalar, vendored at vendor/scalar/ and loaded only once there is
+    // something to show.
+    (function () {
+      'use strict';
+
+      var API = (typeof API_BASE_URL !== 'undefined') ? API_BASE_URL : 'https://api.forcequit.xyz';
+      // ?v= is the vendored version (vendor/scalar/README.md); bump both together.
+      var SCALAR_SRC = 'vendor/scalar/standalone.js?v=1.76.0';
+      var STATES = ['ad-loading', 'ad-signed-out', 'ad-no-key', 'ad-error', 'api-ref'];
+
+      // Whose reference is on screen: a user id, '' for signed out, null for
+      // nothing settled yet. Auth events for the same person (a token
+      // refresh, a second tab) leave it alone.
+      var shownFor = null;
+      var reference = null;
+      var scalarLoading = null;
+
+      function show(id) {
+        STATES.forEach(function (s) { document.getElementById(s).hidden = s !== id; });
+        document.getElementById('ad-bar').hidden = id !== 'api-ref';
+      }
+
+      function showError(text) {
+        document.getElementById('ad-error-text').textContent = text;
+        shownFor = null; // so Try again, or the next auth event, loads afresh
+        show('ad-error');
+      }
+
+      function unmount() {
+        if (reference) {
+          try { reference.destroy(); } catch (e) { /* already gone */ }
+          reference = null;
+        }
+        document.getElementById('api-ref').innerHTML = '';
+      }
+
+      function loadScalar() {
+        if (window.Scalar) return Promise.resolve(window.Scalar);
+        if (scalarLoading) return scalarLoading;
+        scalarLoading = new Promise(function (resolve, reject) {
+          var s = document.createElement('script');
+          s.src = SCALAR_SRC;
+          s.onload = function () { window.Scalar ? resolve(window.Scalar) : reject(new Error('viewer did not start')); };
+          s.onerror = function () { reject(new Error('viewer did not load')); };
+          document.head.appendChild(s);
+        });
+        scalarLoading.catch(function () { scalarLoading = null; });
+        return scalarLoading;
+      }
+
+      function describe(doc, staff) {
+        var bar = document.getElementById('ad-bar-text');
+        var ops = 0;
+        Object.keys(doc.paths || {}).forEach(function (p) {
+          ops += Object.keys(doc.paths[p] || {}).filter(function (m) { return /^(get|put|post|delete|patch|head|options)$/.test(m); }).length;
+        });
+        bar.innerHTML = '';
+        bar.appendChild(document.createTextNode(
+          (staff ? 'Every endpoint (' + ops + '), as staff.' : ops + ' endpoint' + (ops === 1 ? '' : 's') + ': the ones your active keys can read, and the public ones.') +
+          ' “Try it” is off — keys work from scripts and the command line, not web pages — so copy an example request instead. Machine-readable: '));
+        var code = document.createElement('code');
+        code.textContent = 'GET ' + API + '/api/v1/openapi.json';
+        bar.appendChild(code);
+        bar.appendChild(document.createTextNode(' with your key.'));
+      }
+
+      function render(doc, staff) {
+        return loadScalar().then(function (Scalar) {
+          unmount();
+          describe(doc, staff);
+          show('api-ref');
+          reference = Scalar.createApiReference('#api-ref', {
+            content: doc,
+            // Nothing leaves for scalar.com or anyone else: no telemetry, no
+            // web fonts, no request proxy, no AI agent, no MCP generator, no
+            // developer toolbar (its Share and Deploy publish the document to
+            // Scalar's service). "Generate SDK" is hidden in the page CSS.
+            telemetry: false,
+            withDefaultFonts: false,
+            proxyUrl: '',
+            agent: { disabled: true },
+            mcp: { disabled: true },
+            showDeveloperTools: 'never',
+            // No "Test Request" and no API client: a key sent from a web page
+            // is refused (403 api_key_browser_use), so it could never work
+            // here. The example requests stay, to copy into a terminal.
+            hideTestRequestButton: true,
+            hideClientButton: true,
+            persistAuth: false,
+            // The site is dark only.
+            darkMode: true,
+            forceDarkModeState: 'dark',
+            hideDarkModeToggle: true,
+            metaData: { title: document.title },
+          });
+        });
+      }
+
+      function load(session) {
+        var uid = session && session.user ? session.user.id : '';
+        if (uid === shownFor) return;
+        shownFor = uid;
+        if (!session) {
+          unmount();
+          show('ad-signed-out');
+          return;
+        }
+        show('ad-loading');
+        fetch(API + '/api/api-keys/openapi.json', {
+          headers: { Authorization: 'Bearer ' + session.access_token },
+          cache: 'no-store',
+        })
+          .then(function (res) {
+            return res.json().catch(function () { return null; }).then(function (body) {
+              if (shownFor !== uid) return; // someone else signed in meanwhile
+              if (res.status === 403 && body && body.error === 'no_active_key') {
+                unmount();
+                show('ad-no-key');
+                return;
+              }
+              if (res.status === 401) {
+                showError('Your sign-in could not be checked. Sign out and in again, then reload this page.');
+                return;
+              }
+              if (!res.ok || !body || typeof body.paths !== 'object') {
+                showError('The API answered HTTP ' + res.status + '. Try again in a moment.');
+                return;
+              }
+              // Staff get the whole document; the bar says so.
+              return checkStaff(session).then(function (staff) {
+                if (shownFor !== uid) return;
+                return render(body, staff);
+              });
+            });
+          })
+          .catch(function (err) {
+            if (shownFor !== uid) return;
+            var msg = (err && err.message) || '';
+            if (/did not (load|start)/.test(msg)) showError('The reference viewer did not load. Check your connection and try again.');
+            else if (err instanceof TypeError && /fetch|network|load failed/i.test(msg)) showError('Could not reach the API. Check your connection and try again.');
+            else showError('The reference could not be shown' + (msg ? ' (' + msg + ')' : '') + '.');
+          });
+      }
+
+      // Whether the bar should say "every endpoint" (owner or staff — the same
+      // roles the backend gives the whole document to). Cosmetic only: the
+      // backend already decided what the document holds.
+      function checkStaff(session) {
+        return fetch(API + '/api/check-editor/' + encodeURIComponent(session.user.id))
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (d) { return !!(d && (d.is_owner || d.is_team_member)); })
+          .catch(function () { return false; });
+      }
+
+      document.getElementById('ad-retry').addEventListener('click', function () {
+        sb.auth.getSession().then(function (r) { load(r.data.session); });
+      });
+
+      // auth-common.js made `sb`. INITIAL_SESSION arrives on subscribing;
+      // sign-in and sign-out from the sidebar arrive here too.
+      sb.auth.onAuthStateChange(function (_event, session) { load(session); });
+      sb.auth.getSession().then(function (r) { load(r.data.session); });
+    })();
+  </script>
+</body>
+</html>

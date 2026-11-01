@@ -72,6 +72,7 @@ vi.mock('../../../src/api/users.js', () => ({
 
 const { apiKeysRouter, MAX_ACTIVE_KEYS_PER_USER } = await import('../../../src/api/apiKeys.js');
 const { resolveApiKey, _clearApiKeyCache } = await import('../../../src/services/auth/apiKeys.js');
+const { FEEDS, scoped } = await import('../../../src/services/auth/apiKeyScopes.js');
 const { createHash } = await import('node:crypto');
 
 function makeApp(opts: { userId?: string | null; userName?: string | null } = {}) {
@@ -100,8 +101,8 @@ const REQUEST = (over: Record<string, unknown> = {}) => ({
   requested_scopes: [], scopes: [], ...over,
 });
 
-/** A complete scope set in the new form: one of each dimension. */
-const RFS_LIVE = ['source:rfs', 'type:incidents', 'window:live'];
+/** A scope set in the new form, canonical: two cells of the staff table. */
+const GRANT = ['fires:live', 'warnings:history'];
 
 const UUID = '0b6e1f6a-6d0c-4b8e-9a51-2f3c4d5e6f70';
 
@@ -207,32 +208,54 @@ describe('user routes', () => {
   });
 
   it('a request may ask for scopes: stored canonically, shown to staff; nonsense and `read` are refused', async () => {
-    resultQueue = [{ rows: [{ n: '0' }] }, { rows: [{ n: '0' }] }, { rows: [REQUEST({ requested_scopes: RFS_LIVE })] }];
+    resultQueue = [{ rows: [{ n: '0' }] }, { rows: [{ n: '0' }] }, { rows: [REQUEST({ requested_scopes: GRANT })] }];
     const res = await makeApp().request('/api/api-keys/requests',
-      json({ name: 'home-assistant', reason: 'Pull incidents into my dashboard', scopes: ['window:live', 'Source:RFS', 'type:incidents', 'source:rfs'] }));
+      json({ name: 'home-assistant', reason: 'Pull incidents into my dashboard', scopes: ['Warnings:History', 'fires:live', ' FIRES:LIVE'] }));
     expect(res.status).toBe(200);
-    expect(((await res.json()) as { request: Record<string, unknown> }).request).toMatchObject({ requestedScopes: RFS_LIVE, scopes: [] });
+    expect(((await res.json()) as { request: Record<string, unknown> }).request).toMatchObject({ requestedScopes: GRANT, scopes: [] });
     const ins = calls.find((q) => q.sql.includes('INSERT INTO api_key_requests'));
-    expect(ins?.params?.[4]).toEqual(RFS_LIVE);
+    expect(ins?.params?.[4]).toEqual(GRANT);
     const fields = discord[0]!.fields as Array<{ name: string; value: string }>;
-    expect(fields.find((f) => f.name === 'Scopes asked for')?.value).toBe(RFS_LIVE.join(', '));
+    expect(fields.find((f) => f.name === 'Scopes asked for')?.value).toBe(GRANT.join(', '));
 
     calls.length = 0;
     const app = makeApp();
-    for (const scopes of [['source:nope', 'type:incidents', 'window:live'], ['read'], ['source:rfs'], 'source:rfs']) {
+    // An unknown feed, a window the feed does not offer, `read`, a wildcard,
+    // the retired source/type/window grammar, and not a list at all.
+    for (const scopes of [['nope:live'], ['cameras:history'], ['read'], ['*:history'], ['source:rfs', 'type:incidents', 'window:live'], 'fires:live']) {
       const bad = await app.request('/api/api-keys/requests', json({ name: 'fine', reason: 'long enough reason', scopes }));
-      expect(bad.status).toBe(400);
+      expect(bad.status, JSON.stringify(scopes)).toBe(400);
     }
     expect(calls).toHaveLength(0);
   });
 
-  it('GET /scope-catalog lists every source, type and window for the pickers; 401 without a session', async () => {
+  it('GET /scope-catalog lists every feed, with only the windows some route serves; 401 without a session', async () => {
     expect((await makeApp({ userId: null }).request('/api/api-keys/scope-catalog')).status).toBe(401);
-    const body = (await (await makeApp().request('/api/api-keys/scope-catalog')).json()) as Record<string, Array<{ key: string }>>;
-    expect(body.sources!.map((s) => s.key)).toContain('rfs');
-    expect(body.types!.map((s) => s.key)).toContain('incidents');
-    expect(body.windows!.map((s) => s.key)).toEqual(['live', 'history']);
-    expect(body).toHaveProperty('combos');
+    // Nothing in this file mounts a data route, so declare what is served here:
+    // the live fire feed, and stored history (every feed the archive holds).
+    scoped({ feed: 'fires', window: 'live' });
+    scoped({ feed: '*', window: 'history' });
+    type Catalog = {
+      feeds: Array<{ key: string; label: string; covers: string; windows: string[] }>;
+      windows: Array<{ key: string; label: string; description: string }>;
+      legacy: string;
+    };
+    const body = (await (await makeApp().request('/api/api-keys/scope-catalog')).json()) as Catalog;
+    // Every feed, in the table's order, labelled as the table labels it.
+    expect(body.feeds.map((f) => f.key)).toEqual(Object.keys(FEEDS));
+    for (const f of body.feeds) {
+      const feed = FEEDS[f.key as keyof typeof FEEDS];
+      expect(f, f.key).toMatchObject({ label: feed.label, covers: feed.covers });
+    }
+    const windows = Object.fromEntries(body.feeds.map((f) => [f.key, f.windows]));
+    expect(windows['fires']).toEqual(['live', 'history']);
+    expect(windows['warnings']).toEqual(['history']);
+    expect(windows['pager']).toEqual(['history']);
+    // Offered by the table but served by nothing here: not offered.
+    expect(windows['cameras']).toEqual([]);
+    expect(windows['aircraft']).toEqual([]);
+    expect(windows['summaries']).toEqual([]);
+    expect(body.windows.map((w) => w.key)).toEqual(['live', 'history']);
     expect(body.legacy).toBe('read');
   });
 
@@ -308,16 +331,16 @@ describe('user routes', () => {
 
     it('mints the key with the scopes staff granted', async () => {
       resultQueue = [
-        { rows: [REQUEST({ status: 'approved', requested_scopes: ['source:*', 'type:*', 'window:*'], scopes: RFS_LIVE })] },
+        { rows: [REQUEST({ status: 'approved', requested_scopes: ['fires:history', 'fires:live', 'pager:live', 'warnings:history'], scopes: GRANT })] },
         { rows: [{ n: '0' }] },
-        { rows: [KEY({ scopes: RFS_LIVE })] },
+        { rows: [KEY({ scopes: GRANT })] },
         { rows: [] },
       ];
       const res = await makeApp().request('/api/api-keys/requests/5/claim', { method: 'POST' });
       expect(res.status).toBe(200);
       // The grant, not the ask.
-      expect(calls.find((q) => q.sql.includes('INSERT INTO api_keys'))!.params![4]).toEqual(RFS_LIVE);
-      expect(((await res.json()) as { key: Record<string, unknown> }).key).toMatchObject({ scopes: RFS_LIVE });
+      expect(calls.find((q) => q.sql.includes('INSERT INTO api_keys'))!.params![4]).toEqual(GRANT);
+      expect(((await res.json()) as { key: Record<string, unknown> }).key).toMatchObject({ scopes: GRANT });
     });
 
     it('mints inside the transaction with the granted limit/expiry, links the key, returns the plaintext once', async () => {
@@ -462,7 +485,7 @@ describe('staff routes', () => {
     expect((await app.request('/api/staff/api-keys')).status).toBe(403);
     expect((await app.request('/api/staff/api-keys/requests/5/approve', json({}))).status).toBe(403);
     expect((await app.request(`/api/staff/api-keys/${UUID}/revoke`, { method: 'POST' })).status).toBe(403);
-    expect((await app.request(`/api/staff/api-keys/${UUID}/scopes`, json({ scopes: RFS_LIVE }))).status).toBe(403);
+    expect((await app.request(`/api/staff/api-keys/${UUID}/scopes`, json({ scopes: GRANT }))).status).toBe(403);
     expect((await app.request(`/api/staff/api-keys/${UUID}/usage`)).status).toBe(403);
     expect((await makeApp({ userId: null }).request('/api/staff/api-keys/requests')).status).toBe(401);
     expect(calls).toHaveLength(0);
@@ -501,7 +524,7 @@ describe('staff routes', () => {
     resultQueue = [{ rows: [REQUEST({ status: 'approved', rate_limit_per_min: 60, review_note: 'enjoy' })] }];
     const res = await makeApp({ userId: 'staff-1' }).request(
       '/api/staff/api-keys/requests/5/approve',
-      json({ scopes: RFS_LIVE, rateLimitPerMin: 60, expiresAt: in1y.toISOString(), note: 'enjoy' }),
+      json({ scopes: GRANT, rateLimitPerMin: 60, expiresAt: in1y.toISOString(), note: 'enjoy' }),
     );
     expect(res.status).toBe(200);
     const upd = calls.find((q) => q.sql.includes("SET status = 'approved'"));
@@ -511,7 +534,7 @@ describe('staff routes', () => {
     expect(upd?.params?.[2]).toBeInstanceOf(Date);
     expect(upd?.params?.[3]).toBe('enjoy');
     expect(upd?.params?.[4]).toBe('staff-1');
-    expect(upd?.params?.[6]).toEqual(RFS_LIVE);
+    expect(upd?.params?.[6]).toEqual(GRANT);
     expect(bells).toHaveLength(1);
     expect(bells[0]).toMatchObject({ userId: 'user-1', type: 'api_key_approved', link: '/#api-keys' });
     expect(String(bells[0]!.body)).toContain('enjoy');
@@ -535,9 +558,17 @@ describe('staff routes', () => {
   it('approve must say what the key reads: scopes are required and checked; `read` alone is a deliberate legacy grant', async () => {
     staff = true;
     const app = makeApp({ userId: 'staff-1' });
-    for (const scopes of [undefined, [], ['read', 'source:rfs'], ['source:rfs', 'type:incidents'], ['source:rfs', 'type:nope', 'window:live']]) {
+    const bad = [
+      undefined,
+      [],
+      ['read', 'fires:live'],
+      ['fires:live', 'summaries:live'], // a window the feed does not offer
+      ['fires:*'],
+      ['source:rfs', 'type:incidents', 'window:live'],
+    ];
+    for (const scopes of bad) {
       const res = await app.request('/api/staff/api-keys/requests/5/approve', json({ scopes }));
-      expect(res.status).toBe(400);
+      expect(res.status, JSON.stringify(scopes)).toBe(400);
     }
     expect(calls).toHaveLength(0);
     resultQueue = [{ rows: [REQUEST({ status: 'approved', scopes: ['read'] })] }];
@@ -700,35 +731,35 @@ describe('staff routes', () => {
       expect((await resolveApiKey(plain)).ok).toBe(true);
       calls.length = 0;
 
-      resultQueue = [{ rows: [KEY({ id: UUID, key_hash: hash, scopes: RFS_LIVE })] }];
-      const res = await makeApp({ userId: 'staff-1' }).request(`/api/staff/api-keys/${UUID}/scopes`, json({ scopes: RFS_LIVE }));
+      resultQueue = [{ rows: [KEY({ id: UUID, key_hash: hash, scopes: GRANT })] }];
+      const res = await makeApp({ userId: 'staff-1' }).request(`/api/staff/api-keys/${UUID}/scopes`, json({ scopes: GRANT }));
       expect(res.status).toBe(200);
-      expect(((await res.json()) as { key: Record<string, unknown> }).key).toMatchObject({ scopes: RFS_LIVE });
+      expect(((await res.json()) as { key: Record<string, unknown> }).key).toMatchObject({ scopes: GRANT });
       const upd = calls.find((q) => q.sql.includes('SET scopes'));
-      expect(upd?.params).toEqual([UUID, RFS_LIVE]);
+      expect(upd?.params).toEqual([UUID, GRANT]);
       // Only a live key: revoked, expired and deleted keys are not edited.
       expect(upd?.sql).toContain('revoked_at IS NULL AND deleted_at IS NULL');
       expect(bells[0]).toMatchObject({ userId: 'user-1', type: 'api_key_scopes_changed', link: '/#api-keys', exceptUserId: 'staff-1' });
-      expect(String(bells[0]!.body)).toContain('source:rfs');
+      expect(String(bells[0]!.body)).toBe('It now reads: fires:live, warnings:history.');
 
       // The next use reads the table again rather than the cached {read} row.
       calls.length = 0;
-      resultQueue = [{ rows: [KEY({ id: UUID, key_hash: hash, scopes: RFS_LIVE })] }];
+      resultQueue = [{ rows: [KEY({ id: UUID, key_hash: hash, scopes: GRANT })] }];
       const again = await resolveApiKey(plain);
-      expect(again.ok && again.row.scopes).toEqual(RFS_LIVE);
+      expect(again.ok && again.row.scopes).toEqual(GRANT);
       expect(calls.some((q) => q.sql.includes('FROM api_keys WHERE prefix'))).toBe(true);
     });
 
     it('400 on a bad id or bad scopes, 404 for no such key, 409 for a dead one', async () => {
       staff = true;
       const app = makeApp({ userId: 'staff-1' });
-      expect((await app.request('/api/staff/api-keys/abcdefghij/scopes', json({ scopes: RFS_LIVE }))).status).toBe(400);
-      expect((await app.request(`/api/staff/api-keys/${UUID}/scopes`, json({ scopes: ['type:incidents'] }))).status).toBe(400);
+      expect((await app.request('/api/staff/api-keys/abcdefghij/scopes', json({ scopes: GRANT }))).status).toBe(400);
+      expect((await app.request(`/api/staff/api-keys/${UUID}/scopes`, json({ scopes: ['ships:history'] }))).status).toBe(400);
       expect(calls).toHaveLength(0);
       resultQueue = [{ rows: [] }, { rows: [] }];
-      expect((await app.request(`/api/staff/api-keys/${UUID}/scopes`, json({ scopes: RFS_LIVE }))).status).toBe(404);
+      expect((await app.request(`/api/staff/api-keys/${UUID}/scopes`, json({ scopes: GRANT }))).status).toBe(404);
       resultQueue = [{ rows: [] }, { rows: [{ id: UUID }] }];
-      expect((await app.request(`/api/staff/api-keys/${UUID}/scopes`, json({ scopes: RFS_LIVE }))).status).toBe(409);
+      expect((await app.request(`/api/staff/api-keys/${UUID}/scopes`, json({ scopes: GRANT }))).status).toBe(409);
       expect(bells).toHaveLength(0);
     });
   });

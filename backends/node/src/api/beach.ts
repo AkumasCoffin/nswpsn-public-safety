@@ -44,7 +44,7 @@ import {
 export const beachRouter = new Hono();
 
 // What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
-const SCOPE_HAZARDS = scoped({ source: 'beach', type: 'hazards', window: 'live' });
+const SCOPE_HAZARDS = scoped({ feed: 'beaches', window: 'live' });
 
 // ---------------------------------------------------------------------------
 // What /api/v1/ documents (api/v1/openapi.ts)
@@ -150,7 +150,7 @@ beachRouter.get(
   SCOPE_HAZARDS,
   describeRoute({
     operationId: 'getBeachwatch',
-    tags: ['Hazards'],
+    tags: ['Beaches & sharks'],
     summary: 'NSW beach water quality',
     description:
       "Water quality at NSW swimming sites from Beachwatch, the NSW Government's water-quality programme: each site's latest sampled result and its pollution forecast, passed on as Beachwatch publishes them. Refreshed from Beachwatch every ten minutes; empty until the first refresh after a restart.",
@@ -164,7 +164,7 @@ beachRouter.get(
   SCOPE_HAZARDS,
   describeRoute({
     operationId: 'getBeachsafe',
-    tags: ['Hazards'],
+    tags: ['Beaches & sharks'],
     summary: 'NSW beaches: patrols and hazards',
     description:
       "NSW beaches from BeachSafe, Surf Life Saving Australia's beach information service: patrol status and today's patrol hours, hazards, facilities and weather, as BeachSafe's beach map lists them for NSW. /beachsafe/beach/{slug} has more on one beach. Refreshed from BeachSafe every ten minutes; empty until the first refresh after a restart.",
@@ -186,7 +186,7 @@ beachRouter.get(
   SCOPE_HAZARDS,
   describeRoute({
     operationId: 'getBeachsafeBeach',
-    tags: ['Hazards'],
+    tags: ['Beaches & sharks'],
     summary: 'One beach from BeachSafe',
     description:
       "Today's conditions at one beach from BeachSafe, Surf Life Saving Australia's beach information service: weather, tide, UV, patrol hours, marine warnings and its hazard rating. Read from BeachSafe on each request.",

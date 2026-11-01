@@ -60,8 +60,8 @@ import {
 export const trafficRouter = new Hono();
 
 // What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
-const SCOPE_HAZARDS = scoped({ source: 'livetraffic', type: 'hazards', window: 'live' });
-const SCOPE_CAMERAS = scoped({ source: 'livetraffic', type: 'cameras', window: 'live' });
+const SCOPE_HAZARDS = scoped({ feed: 'roads', window: 'live' });
+const SCOPE_CAMERAS = scoped({ feed: 'cameras', window: 'live' });
 
 interface AllFeedsItem {
   eventType?: string;
@@ -311,7 +311,7 @@ for (const h of HAZARDS) {
     SCOPE_HAZARDS,
     describeRoute({
       operationId: `getTraffic${h.op}`,
-      tags: ['Hazards'],
+      tags: ['Road hazards'],
       summary: h.summary,
       description: `${h.what}, from Live Traffic NSW (Transport for NSW), in one record shape across the Live Traffic feeds. Records the feed marks ended are left out. Refreshed every ${h.every}.`,
       responses: { ...okJson(TrafficHazards, 'A GeoJSON FeatureCollection of records'), ...GATED_ERRORS },
@@ -323,7 +323,7 @@ for (const h of HAZARDS) {
     SCOPE_HAZARDS,
     describeRoute({
       operationId: `getTraffic${h.op}Raw`,
-      tags: ['Hazards'],
+      tags: ['Road hazards'],
       summary: `${h.summary}, unparsed`,
       description: `The Live Traffic NSW feed behind /traffic/${h.path}, exactly as Transport for NSW publishes it, for clients that parse it themselves. Read from Live Traffic NSW on each request, and ended records are not removed.`,
       responses: {
@@ -377,7 +377,7 @@ trafficRouter.get(
   SCOPE_HAZARDS,
   describeRoute({
     operationId: 'getTrafficWorks',
-    tags: ['Hazards'],
+    tags: ['Road hazards'],
     summary: 'Road works and hazards from the Live Traffic aggregate feed',
     description:
       "Roadwork, hazards, flooding and events from Live Traffic NSW's aggregate web feed, which carries other states' and territories' road agencies, in the same record shape as the hazard feeds. Cameras, rest areas, heavy vehicle checking stations, the RFS's own incidents (apiSource rfsNSW, which the RFS endpoints already carry) and records marked ended are left out. When every record from one upstream source (apiSource) drops out of the feed at once, the last ones seen are kept for up to six hours. Refreshed every five minutes.",
@@ -396,7 +396,7 @@ trafficRouter.get(
   SCOPE_HAZARDS,
   describeRoute({
     operationId: 'getTrafficLgaIncidents',
-    tags: ['Hazards'],
+    tags: ['Road hazards'],
     summary: 'NSW council road records, unparsed',
     description:
       'The records NSW councils submit for their local roads, exactly as Transport for NSW publishes them, read from Live Traffic NSW on each request. /traffic/lga has the same records in the hazard record shape; /traffic/lga/raw has the feed with its own top-level fields.',
@@ -443,7 +443,7 @@ trafficRouter.get(
   SCOPE_HAZARDS,
   describeRoute({
     operationId: 'getTrafficAllFeeds',
-    tags: ['Hazards'],
+    tags: ['Road hazards'],
     summary: 'The Live Traffic aggregate feed, unparsed',
     description:
       "Every record in Live Traffic NSW's aggregate web feed (all-feeds-web.json) as published — other states' and territories' road events, NSW RFS fires, traffic cameras, rest areas and more — and the same records grouped by eventType. Read from Live Traffic NSW on each request; a large response.",

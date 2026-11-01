@@ -68,7 +68,7 @@ function pruneCache(now: number): void {
 export const newsRouter = new Hono();
 
 // What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
-const SCOPE_NEWS = scoped({ source: 'news', type: 'news', window: 'live' });
+const SCOPE_NEWS = scoped({ feed: 'news', window: 'live' });
 
 // ---------------------------------------------------------------------------
 // What /api/v1/ documents (api/v1/openapi.ts)

@@ -53,12 +53,10 @@ import {
   UNAVAILABLE_ERROR,
   VALIDATION_ERROR,
 } from './v1/schemas.js';
-import { scoped } from '../services/auth/apiKeyScopes.js';
 
 export const boundariesRouter = new Hono();
 
-// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
-const SCOPE_BOUNDARIES = scoped({ source: 'boundaries', type: 'boundaries', window: 'any' });
+// No scope: boundaries are this site's own reference data, which API keys do not read.
 
 const KINDS = new Set(['locality', 'lga', 'state']);
 /** Kinds where asking for the whole country would be absurd. */
@@ -387,7 +385,8 @@ function toFeature(r: BoundaryRow, kind: string, geom: unknown) {
 const LGA_STATES = ['NSW', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'NT', 'ACT'] as const;
 const _lgaNameCache = new Map<string, string[]>();
 
-// Also served at /api/v1/ (server.ts mirrors it), wrapped in `data` there.
+// This site's route, for the signup form; it is not on /api/v1/. The isV1()
+// shapes in ok()/fail() below date from when it was mirrored there.
 const LGA_STATE_ERROR = 'state must be one of NSW, VIC, QLD, SA, WA, TAS, NT, ACT';
 const LgaNamesQuery = z.object({
   state: z
@@ -403,7 +402,6 @@ const LgaNames = z
 
 boundariesRouter.get(
   '/api/boundaries/lga-names',
-  SCOPE_BOUNDARIES,
   describeRoute({
     operationId: 'getLgaNames',
     tags: ['Reference'],
@@ -435,10 +433,11 @@ boundariesRouter.get(
   },
 );
 
-// GET /api/boundaries/:kind — also served at /api/v1/ (server.ts mirrors it
-// together with lga-names, which is registered first so that it is not taken
-// for a kind on either path). The body is GeoJSON, so the same bytes go out
-// on both paths; only the errors take the v1 shape there.
+// GET /api/boundaries/:kind — this site's route, for the map; it is not on
+// /api/v1/ (boundaries are this site's own reference data, which API keys do
+// not read). lga-names is registered first so that it is not taken for a
+// kind. The body is GeoJSON; the v1 error shapes in fail() date from when the
+// route was mirrored.
 const BoundaryGeometry = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('Polygon'),
@@ -506,7 +505,6 @@ const KIND_ISSUE = `must be one of ${[...KINDS].join(', ')}`;
 
 boundariesRouter.get(
   '/api/boundaries/:kind',
-  SCOPE_BOUNDARIES,
   describeRoute({
     operationId: 'getBoundaries',
     tags: ['Reference'],

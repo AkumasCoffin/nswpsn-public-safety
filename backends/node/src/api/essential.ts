@@ -45,7 +45,7 @@ import {
 export const essentialRouter = new Hono();
 
 // What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
-const SCOPE_OUTAGES = scoped({ source: 'essential', type: 'outages', window: 'live' });
+const SCOPE_OUTAGES = scoped({ feed: 'outages', window: 'live' });
 
 function readArray(key: string): EssentialOutage[] {
   const data = liveStore.getData<EssentialOutage[]>(key);
@@ -159,7 +159,7 @@ essentialRouter.get(
   SCOPE_OUTAGES,
   describeRoute({
     operationId: 'getEssentialOutages',
-    tags: ['Outages'],
+    tags: ['Power outages'],
     summary: 'Essential Energy outages',
     description: `Electricity outages on Essential Energy's network — unplanned and planned, now and to come — from ${FEEDS} (current and future), with counts. feed and type narrow the list (the counts are of what is left), and lite=1 leaves out the polygons. ${EVERY}`,
     responses: {
@@ -221,7 +221,7 @@ essentialRouter.get(
   SCOPE_OUTAGES,
   describeRoute({
     operationId: 'getEssentialPlanned',
-    tags: ['Outages'],
+    tags: ['Power outages'],
     summary: 'Essential Energy planned outages',
     description: `Planned outages on Essential Energy's network, under way and to come: the outages marked planned in ${FEEDS}, the current feed's first. ${EVERY}`,
     responses: {
@@ -248,7 +248,7 @@ essentialRouter.get(
   SCOPE_OUTAGES,
   describeRoute({
     operationId: 'getEssentialFuture',
-    tags: ['Outages'],
+    tags: ['Power outages'],
     summary: 'Essential Energy outages to come',
     description: `Outages on Essential Energy's network that are still to come: everything in Essential Energy's future-outages feed. ${EVERY}`,
     responses: {
@@ -274,7 +274,7 @@ essentialRouter.get(
   SCOPE_OUTAGES,
   describeRoute({
     operationId: 'getEssentialCurrent',
-    tags: ['Outages'],
+    tags: ['Power outages'],
     summary: 'Essential Energy outages now',
     description: `Outages on Essential Energy's network now, unplanned and planned: everything in Essential Energy's current-outages feed. ${EVERY}`,
     responses: {
@@ -312,7 +312,7 @@ essentialRouter.get(
   SCOPE_OUTAGES,
   describeRoute({
     operationId: 'getEssentialOutagesRaw',
-    tags: ['Outages'],
+    tags: ['Power outages'],
     summary: 'Essential Energy outages, read now',
     description: `Every outage in both of ${FEEDS}, read from Essential Energy on this request rather than taken from the last poll: the current feed's outages, then the future feed's, in the same record shape as the other Essential Energy endpoints. When only one feed can be read, the answer is what that one gave, with nothing to say the other failed; when neither can be read, the answer is 503.`,
     responses: {

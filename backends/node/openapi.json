@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "AusAware API",
-    "description": "Live and recent public-safety data for Australia — fire and emergency incidents, warnings and hazards — as AusAware relays it from the agencies' own public feeds.\n\n**Keys.** Every feed needs an API key (the reference and service endpoints are public), sent as `X-API-Key: <key>` or `Authorization: Bearer <key>`. Request one from your profile at nswpsn.forcequit.xyz (API keys); staff choose what it may read. Keys are for scripts and servers — a request carrying a browser `Origin` header is refused.\n\n**Scopes.** A key reads an endpoint when its scopes cover the endpoint's source, type and window — listed on each operation as `x-scopes`. This document shows the public endpoints and the ones your key's scopes reach.\n\n**Responses.** GeoJSON endpoints answer with a bare FeatureCollection. Everything else answers `{ \"data\": … }`. Errors are `{ \"error\": { \"code\", \"message\" } }` with a stable `code`.\n\nAusAware is an independent project. It is not affiliated with, endorsed by or acting for any agency whose data it carries; the data is theirs, as published.",
+    "description": "Live and recent public-safety data for Australia — fire and emergency incidents, warnings and hazards — as AusAware relays it from the agencies' own public feeds.\n\n**Keys.** Every feed needs an API key (the reference and service endpoints are public), sent as `X-API-Key: <key>` or `Authorization: Bearer <key>`. Request one from your profile at nswpsn.forcequit.xyz (API keys); staff choose what it may read. Keys are for scripts and servers — a request carrying a browser `Origin` header is refused.\n\n**Scopes.** A key is granted feeds, each live, history or both — written `fires:live`, `fires:history`. Each operation lists the one it needs as `x-scopes`; stored history needs the history of at least one stored feed (`*:history`) and answers only for the feeds the key holds. This document shows the public endpoints and the ones your keys reach.\n\n**Responses.** GeoJSON endpoints answer with a bare FeatureCollection. Everything else answers `{ \"data\": … }`. Errors are `{ \"error\": { \"code\", \"message\" } }` with a stable `code`.\n\nAusAware is an independent project. It is not affiliated with, endorsed by or acting for any agency whose data it carries; the data is theirs, as published.",
     "version": "1"
   },
   "servers": [
@@ -12,31 +12,31 @@
   ],
   "tags": [
     {
-      "name": "Incidents",
-      "description": "Fire, rescue and ambulance incidents happening now"
+      "name": "Fires",
+      "description": "Every fire service in one feed, satellite hotspots and fire danger ratings"
     },
     {
       "name": "Warnings",
-      "description": "Public warnings: emergency warnings, fire danger, weather"
+      "description": "Bureau of Meteorology warnings and the QLD and WA emergency warnings"
     },
     {
-      "name": "Hazards",
-      "description": "Hazards on the ground and in the water: road incidents and works, satellite hotspots, beach conditions, shark reports"
+      "name": "Ambulance",
+      "description": "ACT Ambulance Service incidents"
     },
     {
-      "name": "Outages",
-      "description": "Electricity outages, unplanned and planned"
+      "name": "Power outages",
+      "description": "Endeavour Energy, Ausgrid and Essential Energy outages, unplanned and planned"
     },
     {
-      "name": "Weather",
-      "description": "Current conditions, forecasts and radar"
+      "name": "Road hazards",
+      "description": "Live Traffic NSW incidents, roadworks, floods, fires and events"
     },
     {
       "name": "Cameras",
       "description": "Traffic, airport and fire-tower cameras"
     },
     {
-      "name": "Transport",
+      "name": "Public transport",
       "description": "Public transport vehicles, stops, lines and alerts"
     },
     {
@@ -48,6 +48,14 @@
       "description": "Vessel positions from AIS"
     },
     {
+      "name": "Weather",
+      "description": "Current conditions, forecasts and radar"
+    },
+    {
+      "name": "Beaches & sharks",
+      "description": "Beach water quality and conditions, and shark reports"
+    },
+    {
       "name": "News",
       "description": "Headlines from news outlets"
     },
@@ -56,16 +64,16 @@
       "description": "Emergency service pager messages"
     },
     {
-      "name": "Radio",
-      "description": "Radio site reference, reception summaries and transcripts"
+      "name": "Radio summaries",
+      "description": "Hourly and ad-hoc summaries of radio receptions"
     },
     {
       "name": "History",
-      "description": "Stored records of every source over time"
+      "description": "Stored records over time, for every feed your key holds the history of"
     },
     {
       "name": "Reference",
-      "description": "Slow-changing reference data: boundaries and agencies"
+      "description": "Slow-changing reference data: agencies"
     },
     {
       "name": "Service",
@@ -118,155 +126,6 @@
         ],
         "additionalProperties": false
       },
-      "RfsIncidents": {
-        "type": "object",
-        "properties": {
-          "type": {
-            "type": "string",
-            "const": "FeatureCollection"
-          },
-          "features": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "type": {
-                  "type": "string",
-                  "const": "Feature"
-                },
-                "geometry": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "type": "string",
-                      "const": "Point"
-                    },
-                    "coordinates": {
-                      "type": "array",
-                      "prefixItems": [
-                        {
-                          "type": "number"
-                        },
-                        {
-                          "type": "number"
-                        }
-                      ],
-                      "items": false,
-                      "minItems": 2,
-                      "maxItems": 2,
-                      "description": "[longitude, latitude] (WGS84)"
-                    }
-                  },
-                  "required": [
-                    "type",
-                    "coordinates"
-                  ],
-                  "additionalProperties": false
-                },
-                "properties": {
-                  "type": "object",
-                  "properties": {
-                    "title": {
-                      "type": "string"
-                    },
-                    "guid": {
-                      "type": "string",
-                      "description": "A stable id for the record across polls, built from the agency's own id where it has one"
-                    },
-                    "status": {
-                      "type": "string",
-                      "description": "As the agency words it"
-                    },
-                    "location": {
-                      "type": "string"
-                    },
-                    "alertLevel": {
-                      "type": "string",
-                      "description": "Warning level as published (Advice, Watch and Act, Emergency Warning), or what the feed has in its place — RFS mostly says \"Not Applicable\""
-                    },
-                    "fireType": {
-                      "type": "string",
-                      "description": "Kind of incident as the agency classes it"
-                    },
-                    "responsibleAgency": {
-                      "type": "string"
-                    },
-                    "updated": {
-                      "type": "string",
-                      "description": "Last update for display: the agency's own wording (RFS, NT) or a local-time rendering of updatedISO (the others)"
-                    },
-                    "updatedISO": {
-                      "type": "string",
-                      "description": "Last update as an ISO 8601 timestamp; empty when there is none, and for RFS the agency text itself when it cannot be read as a time"
-                    },
-                    "link": {
-                      "type": "string"
-                    },
-                    "description": {
-                      "type": "string",
-                      "description": "The feed's HTML-free description block"
-                    },
-                    "size": {
-                      "type": "string",
-                      "description": "Fire size as the RFS writes it, e.g. \"12 ha\""
-                    },
-                    "councilArea": {
-                      "type": "string"
-                    },
-                    "polygons": {
-                      "type": "array",
-                      "items": {
-                        "type": "string"
-                      },
-                      "description": "Fire-ground polygons as GeoRSS writes them, one \"lat lon lat lon …\" string each"
-                    },
-                    "source": {
-                      "type": "string",
-                      "const": "rfs"
-                    }
-                  },
-                  "required": [
-                    "title",
-                    "guid",
-                    "status",
-                    "location",
-                    "alertLevel",
-                    "fireType",
-                    "responsibleAgency",
-                    "updated",
-                    "updatedISO",
-                    "link",
-                    "description",
-                    "size",
-                    "councilArea",
-                    "polygons",
-                    "source"
-                  ],
-                  "additionalProperties": false
-                }
-              },
-              "required": [
-                "type",
-                "geometry",
-                "properties"
-              ],
-              "additionalProperties": false
-            }
-          },
-          "count": {
-            "type": "integer",
-            "minimum": -9007199254740991,
-            "maximum": 9007199254740991,
-            "description": "Number of features"
-          }
-        },
-        "required": [
-          "type",
-          "features",
-          "count"
-        ],
-        "additionalProperties": false
-      },
       "Error": {
         "type": "object",
         "properties": {
@@ -311,95 +170,6 @@
         },
         "required": [
           "error"
-        ],
-        "additionalProperties": false
-      },
-      "RfsFeed": {
-        "type": "object",
-        "properties": {
-          "type": {
-            "type": "string",
-            "const": "FeatureCollection"
-          },
-          "features": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "type": {
-                  "type": "string",
-                  "const": "Feature"
-                },
-                "geometry": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "type": "string"
-                    },
-                    "coordinates": {},
-                    "geometries": {
-                      "type": "array",
-                      "items": {}
-                    }
-                  },
-                  "required": [
-                    "type"
-                  ],
-                  "additionalProperties": false,
-                  "description": "A Point, or a GeometryCollection of the Point and a GeometryCollection of the fire-ground Polygons"
-                },
-                "properties": {
-                  "type": "object",
-                  "properties": {
-                    "title": {
-                      "type": "string"
-                    },
-                    "link": {
-                      "type": "string"
-                    },
-                    "category": {
-                      "type": "string",
-                      "description": "The warning level"
-                    },
-                    "guid": {
-                      "type": "string"
-                    },
-                    "guid_isPermaLink": {
-                      "type": "string"
-                    },
-                    "pubDate": {
-                      "type": "string",
-                      "description": "As the RFS writes it, e.g. \"27/10/2026 6:46:00 AM\" — UTC in every sample seen"
-                    },
-                    "description": {
-                      "type": "string",
-                      "description": "HTML: ALERT LEVEL, LOCATION, COUNCIL AREA, STATUS, TYPE, FIRE, SIZE, RESPONSIBLE AGENCY and UPDATED, separated by <br />"
-                    }
-                  },
-                  "required": [
-                    "title",
-                    "link",
-                    "category",
-                    "guid",
-                    "guid_isPermaLink",
-                    "pubDate",
-                    "description"
-                  ],
-                  "additionalProperties": {}
-                }
-              },
-              "required": [
-                "type",
-                "geometry",
-                "properties"
-              ],
-              "additionalProperties": false
-            }
-          }
-        },
-        "required": [
-          "type",
-          "features"
         ],
         "additionalProperties": false
       },
@@ -3274,122 +3044,6 @@
         ],
         "additionalProperties": false
       },
-      "RadioGrnSites": {
-        "type": "object",
-        "properties": {
-          "sites": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "id": {
-                  "type": "integer",
-                  "minimum": -9007199254740991,
-                  "maximum": 9007199254740991,
-                  "description": "AusAware's id for the record"
-                },
-                "NAME": {
-                  "description": "The site name or address as recorded; in a few records, a list of lines",
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "array",
-                      "items": {
-                        "type": "string"
-                      }
-                    }
-                  ]
-                },
-                "Latitude": {
-                  "description": "Degrees; null when the position is not known",
-                  "type": [
-                    "number",
-                    "null"
-                  ]
-                },
-                "Longitude": {
-                  "description": "Degrees; null when the position is not known",
-                  "type": [
-                    "number",
-                    "null"
-                  ]
-                },
-                "SITE_ID": {
-                  "type": "string"
-                },
-                "GRN Site ID #": {
-                  "description": "The site number as RFSS-site, zero-padded (e.g. \"001-067\"); free text, sometimes with a note",
-                  "type": "string"
-                },
-                "Previous Site ID #": {
-                  "description": "An earlier site number, in the same form",
-                  "type": "string"
-                },
-                "SYSTEM NAME": {
-                  "type": "string"
-                },
-                "System #": {
-                  "type": "string"
-                },
-                "Zone Assignment": {
-                  "type": "string"
-                },
-                "NAC Code": {
-                  "description": "The P25 network access code, as hex text (e.g. \"2D0\"), or a word such as \"Unknown\"",
-                  "type": "string"
-                },
-                "Control Channel": {
-                  "description": "Control channel frequency in MHz, as text; free text",
-                  "type": "string"
-                },
-                "Alt Control Channel": {
-                  "description": "Alternate control channel frequency in MHz, as text; free text",
-                  "type": "string"
-                },
-                "POSTCODE": {
-                  "type": "string"
-                },
-                "FAV NAME & QK#": {
-                  "type": "string"
-                },
-                "Notes": {
-                  "description": "Free text",
-                  "type": "string"
-                },
-                "Frequencies": {
-                  "description": "Frequencies in MHz, as text, some with a note such as \"ALT CC\"; in a few records one string",
-                  "anyOf": [
-                    {
-                      "type": "array",
-                      "items": {
-                        "type": "string"
-                      }
-                    },
-                    {
-                      "type": "string"
-                    }
-                  ]
-                },
-                "Last Update": {
-                  "description": "When the record was last changed, DD/MM/YYYY",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "id"
-              ],
-              "additionalProperties": {}
-            },
-            "description": "Every site, in id order"
-          }
-        },
-        "required": [
-          "sites"
-        ],
-        "additionalProperties": false
-      },
       "EndeavourOutages": {
         "type": "array",
         "items": {
@@ -4357,7 +4011,7 @@
           },
           "source": {
             "type": "string",
-            "description": "The archived source: one of rfs, nt_fire, qld_fire, qld_warning, vic_emergency, wa_incident, wa_warning, sa_cfs, sa_mfs, act_ambulance, bom_land, bom_marine, traffic_incident, traffic_roadwork, traffic_flood, traffic_fire, traffic_majorevent, traffic_alpine, traffic_lga, traffic_works, endeavour_current, endeavour_planned, endeavour_maintenance, ausgrid, essential_current, essential_planned, essential_future, dorsal, pager"
+            "description": "The archived source: one of rfs, nt_fire, qld_fire, vic_emergency, wa_incident, sa_cfs, sa_mfs, qld_warning, wa_warning, bom_land, bom_marine, act_ambulance, traffic_incident, traffic_roadwork, traffic_flood, traffic_fire, traffic_majorevent, traffic_alpine, traffic_lga, traffic_works, endeavour_current, endeavour_planned, endeavour_maintenance, ausgrid, essential_current, essential_planned, essential_future, dorsal, pager"
           },
           "source_id": {
             "description": "The source's own id for the incident",
@@ -5139,395 +4793,6 @@
         ],
         "additionalProperties": false
       },
-      "NtFireIncidents": {
-        "type": "object",
-        "properties": {
-          "type": {
-            "type": "string",
-            "const": "FeatureCollection"
-          },
-          "features": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "type": {
-                  "type": "string",
-                  "const": "Feature"
-                },
-                "geometry": {
-                  "anyOf": [
-                    {
-                      "type": "object",
-                      "properties": {
-                        "type": {
-                          "type": "string",
-                          "const": "Point"
-                        },
-                        "coordinates": {
-                          "type": "array",
-                          "prefixItems": [
-                            {
-                              "type": "number"
-                            },
-                            {
-                              "type": "number"
-                            }
-                          ],
-                          "items": false,
-                          "minItems": 2,
-                          "maxItems": 2,
-                          "description": "[longitude, latitude] (WGS84)"
-                        }
-                      },
-                      "required": [
-                        "type",
-                        "coordinates"
-                      ],
-                      "additionalProperties": false
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "type": {
-                          "type": "string",
-                          "const": "Polygon"
-                        },
-                        "coordinates": {
-                          "type": "array",
-                          "items": {
-                            "type": "array",
-                            "items": {
-                              "type": "array",
-                              "items": {
-                                "type": "number"
-                              }
-                            }
-                          },
-                          "description": "Polygon outer rings, each a list of [longitude, latitude] points"
-                        }
-                      },
-                      "required": [
-                        "type",
-                        "coordinates"
-                      ],
-                      "additionalProperties": false
-                    }
-                  ]
-                },
-                "properties": {
-                  "type": "object",
-                  "properties": {
-                    "title": {
-                      "type": "string"
-                    },
-                    "guid": {
-                      "type": "string",
-                      "description": "A stable id for the record across polls, built from the agency's own id where it has one"
-                    },
-                    "status": {
-                      "type": "string",
-                      "description": "As the agency words it"
-                    },
-                    "location": {
-                      "type": "string"
-                    },
-                    "alertLevel": {
-                      "type": "string",
-                      "description": "Warning level as published (Advice, Watch and Act, Emergency Warning), or what the feed has in its place — RFS mostly says \"Not Applicable\""
-                    },
-                    "fireType": {
-                      "type": "string",
-                      "description": "Kind of incident as the agency classes it"
-                    },
-                    "responsibleAgency": {
-                      "type": "string"
-                    },
-                    "updated": {
-                      "type": "string",
-                      "description": "Last update for display: the agency's own wording (RFS, NT) or a local-time rendering of updatedISO (the others)"
-                    },
-                    "updatedISO": {
-                      "type": "string",
-                      "description": "Last update as an ISO 8601 timestamp; empty when there is none, and for RFS the agency text itself when it cannot be read as a time"
-                    },
-                    "layer": {
-                      "type": "string",
-                      "enum": [
-                        "fire",
-                        "hazard"
-                      ],
-                      "description": "Which map layer the record belongs on"
-                    },
-                    "polygons": {
-                      "type": "array",
-                      "items": {
-                        "type": "array",
-                        "items": {
-                          "type": "array",
-                          "items": {
-                            "type": "number"
-                          }
-                        }
-                      },
-                      "description": "The fire ground, as polygon outer rings of [longitude, latitude]"
-                    },
-                    "ntCategory": {
-                      "type": "string",
-                      "description": "The feed's own category"
-                    },
-                    "currentSituation": {
-                      "type": "string",
-                      "description": "Bushfires NT records only; empty otherwise"
-                    },
-                    "risks": {
-                      "type": "string"
-                    },
-                    "whatToDo": {
-                      "type": "string"
-                    },
-                    "adviceToPublic": {
-                      "type": "string"
-                    },
-                    "is_active": {
-                      "type": "boolean",
-                      "description": "False once the incident is closed (only with all=1)"
-                    },
-                    "agency": {
-                      "type": "string",
-                      "const": "NTFRS"
-                    },
-                    "source": {
-                      "type": "string",
-                      "const": "nt_fire"
-                    }
-                  },
-                  "required": [
-                    "title",
-                    "guid",
-                    "status",
-                    "location",
-                    "alertLevel",
-                    "fireType",
-                    "responsibleAgency",
-                    "updated",
-                    "updatedISO",
-                    "layer",
-                    "polygons",
-                    "ntCategory",
-                    "currentSituation",
-                    "risks",
-                    "whatToDo",
-                    "adviceToPublic",
-                    "is_active",
-                    "agency",
-                    "source"
-                  ],
-                  "additionalProperties": false
-                }
-              },
-              "required": [
-                "type",
-                "geometry",
-                "properties"
-              ],
-              "additionalProperties": false
-            }
-          },
-          "count": {
-            "type": "integer",
-            "minimum": -9007199254740991,
-            "maximum": 9007199254740991,
-            "description": "Number of features"
-          }
-        },
-        "required": [
-          "type",
-          "features",
-          "count"
-        ],
-        "additionalProperties": false
-      },
-      "LgaNames": {
-        "type": "object",
-        "properties": {
-          "state": {
-            "type": "string",
-            "enum": [
-              "NSW",
-              "VIC",
-              "QLD",
-              "SA",
-              "WA",
-              "TAS",
-              "NT",
-              "ACT"
-            ]
-          },
-          "names": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        },
-        "required": [
-          "state",
-          "names"
-        ],
-        "additionalProperties": false
-      },
-      "Boundaries": {
-        "type": "object",
-        "properties": {
-          "type": {
-            "type": "string",
-            "const": "FeatureCollection"
-          },
-          "features": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "type": {
-                  "type": "string",
-                  "const": "Feature"
-                },
-                "geometry": {
-                  "oneOf": [
-                    {
-                      "type": "object",
-                      "properties": {
-                        "type": {
-                          "type": "string",
-                          "const": "Polygon"
-                        },
-                        "coordinates": {
-                          "type": "array",
-                          "items": {
-                            "type": "array",
-                            "items": {
-                              "type": "array",
-                              "items": {
-                                "type": "number"
-                              }
-                            }
-                          },
-                          "description": "Rings of [longitude, latitude] points: the outline, then any holes"
-                        }
-                      },
-                      "required": [
-                        "type",
-                        "coordinates"
-                      ],
-                      "additionalProperties": false
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "type": {
-                          "type": "string",
-                          "const": "MultiPolygon"
-                        },
-                        "coordinates": {
-                          "type": "array",
-                          "items": {
-                            "type": "array",
-                            "items": {
-                              "type": "array",
-                              "items": {
-                                "type": "array",
-                                "items": {
-                                  "type": "number"
-                                }
-                              }
-                            }
-                          },
-                          "description": "Polygons, each as rings of [longitude, latitude] points: the outline, then any holes"
-                        }
-                      },
-                      "required": [
-                        "type",
-                        "coordinates"
-                      ],
-                      "additionalProperties": false
-                    }
-                  ]
-                },
-                "properties": {
-                  "type": "object",
-                  "properties": {
-                    "id": {
-                      "type": "string",
-                      "description": "The dataset's persistent id for the place. A place drawn in several parts (islands, mostly) has a feature per part, its id suffixed #0 (the largest), #1, …"
-                    },
-                    "kind": {
-                      "type": "string",
-                      "description": "locality, lga or state, as asked for"
-                    },
-                    "name": {
-                      "type": "string"
-                    },
-                    "shortName": {
-                      "description": "A council's abbreviated name, or a state's abbreviation (NSW, …); null for a locality",
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    "state": {
-                      "description": "The state or territory it is in, abbreviated (NSW, VIC, …)",
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    "class": {
-                      "description": "A locality's class in the dataset (e.g. Gazetted Locality, District); null for the other kinds",
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "kind",
-                    "name",
-                    "shortName",
-                    "state",
-                    "class"
-                  ],
-                  "additionalProperties": false
-                }
-              },
-              "required": [
-                "type",
-                "geometry",
-                "properties"
-              ],
-              "additionalProperties": false
-            }
-          },
-          "count": {
-            "type": "integer",
-            "minimum": -9007199254740991,
-            "maximum": 9007199254740991,
-            "description": "Number of features"
-          },
-          "truncated": {
-            "type": "boolean",
-            "description": "true when more boundaries met the view than `limit`; the largest are the ones kept"
-          }
-        },
-        "required": [
-          "type",
-          "features",
-          "count",
-          "truncated"
-        ],
-        "additionalProperties": false
-      },
       "QldFireRecords": {
         "type": "object",
         "properties": {
@@ -5710,209 +4975,6 @@
                     "vehiclesOnScene",
                     "is_active",
                     "agency",
-                    "source"
-                  ],
-                  "additionalProperties": false
-                }
-              },
-              "required": [
-                "type",
-                "geometry",
-                "properties"
-              ],
-              "additionalProperties": false
-            }
-          },
-          "count": {
-            "type": "integer",
-            "minimum": -9007199254740991,
-            "maximum": 9007199254740991,
-            "description": "Number of features"
-          }
-        },
-        "required": [
-          "type",
-          "features",
-          "count"
-        ],
-        "additionalProperties": false
-      },
-      "VicEmergencyEvents": {
-        "type": "object",
-        "properties": {
-          "type": {
-            "type": "string",
-            "const": "FeatureCollection"
-          },
-          "features": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "type": {
-                  "type": "string",
-                  "const": "Feature"
-                },
-                "geometry": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "type": "string",
-                      "const": "Point"
-                    },
-                    "coordinates": {
-                      "type": "array",
-                      "prefixItems": [
-                        {
-                          "type": "number"
-                        },
-                        {
-                          "type": "number"
-                        }
-                      ],
-                      "items": false,
-                      "minItems": 2,
-                      "maxItems": 2,
-                      "description": "[longitude, latitude] (WGS84)"
-                    }
-                  },
-                  "required": [
-                    "type",
-                    "coordinates"
-                  ],
-                  "additionalProperties": false
-                },
-                "properties": {
-                  "type": "object",
-                  "properties": {
-                    "title": {
-                      "type": "string"
-                    },
-                    "guid": {
-                      "type": "string",
-                      "description": "A stable id for the record across polls, built from the agency's own id where it has one"
-                    },
-                    "status": {
-                      "type": "string",
-                      "description": "As the agency words it"
-                    },
-                    "location": {
-                      "type": "string"
-                    },
-                    "alertLevel": {
-                      "type": "string",
-                      "description": "Warning level as published (Advice, Watch and Act, Emergency Warning), or what the feed has in its place — RFS mostly says \"Not Applicable\""
-                    },
-                    "fireType": {
-                      "type": "string",
-                      "description": "Kind of incident as the agency classes it"
-                    },
-                    "responsibleAgency": {
-                      "type": "string"
-                    },
-                    "updated": {
-                      "type": "string",
-                      "description": "Last update for display: the agency's own wording (RFS, NT) or a local-time rendering of updatedISO (the others)"
-                    },
-                    "updatedISO": {
-                      "type": "string",
-                      "description": "Last update as an ISO 8601 timestamp; empty when there is none, and for RFS the agency text itself when it cannot be read as a time"
-                    },
-                    "layer": {
-                      "type": "string",
-                      "enum": [
-                        "fire",
-                        "flood",
-                        "hazard"
-                      ],
-                      "description": "Which map layer the record belongs on"
-                    },
-                    "agency": {
-                      "type": "string",
-                      "description": "The publishing organisation: CFA, SES, DEECA, EMV or ESTA, else the feed's own name for it"
-                    },
-                    "polygons": {
-                      "type": "array",
-                      "items": {
-                        "type": "array",
-                        "items": {
-                          "type": "array",
-                          "items": {
-                            "type": "number"
-                          }
-                        }
-                      },
-                      "description": "Warning areas, as polygon outer rings of [longitude, latitude]"
-                    },
-                    "capEvent": {
-                      "type": "string",
-                      "description": "Warnings: the CAP event"
-                    },
-                    "capSeverity": {
-                      "type": "string"
-                    },
-                    "capUrgency": {
-                      "type": "string"
-                    },
-                    "capCertainty": {
-                      "type": "string"
-                    },
-                    "capResponseType": {
-                      "type": "string"
-                    },
-                    "capSender": {
-                      "type": "string"
-                    },
-                    "text": {
-                      "type": "string",
-                      "description": "Plain-text advice"
-                    },
-                    "action": {
-                      "type": "string"
-                    },
-                    "resources": {
-                      "type": "string"
-                    },
-                    "sizeFmt": {
-                      "type": "string",
-                      "description": "Size as the feed formats it"
-                    },
-                    "url": {
-                      "type": "string"
-                    },
-                    "is_active": {
-                      "type": "boolean"
-                    },
-                    "source": {
-                      "type": "string",
-                      "const": "vic_emergency"
-                    }
-                  },
-                  "required": [
-                    "title",
-                    "guid",
-                    "status",
-                    "location",
-                    "alertLevel",
-                    "fireType",
-                    "responsibleAgency",
-                    "updated",
-                    "updatedISO",
-                    "layer",
-                    "agency",
-                    "polygons",
-                    "capEvent",
-                    "capSeverity",
-                    "capUrgency",
-                    "capCertainty",
-                    "capResponseType",
-                    "capSender",
-                    "text",
-                    "action",
-                    "resources",
-                    "sizeFmt",
-                    "url",
-                    "is_active",
                     "source"
                   ],
                   "additionalProperties": false
@@ -6156,7 +5218,7 @@
         ],
         "additionalProperties": false
       },
-      "SaFireIncidents": {
+      "Fires": {
         "type": "object",
         "properties": {
           "type": {
@@ -6173,69 +5235,99 @@
                   "const": "Feature"
                 },
                 "geometry": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "type": "string",
-                      "const": "Point"
-                    },
-                    "coordinates": {
-                      "type": "array",
-                      "prefixItems": [
-                        {
-                          "type": "number"
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "Point"
                         },
-                        {
-                          "type": "number"
+                        "coordinates": {
+                          "type": "array",
+                          "prefixItems": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "number"
+                            }
+                          ],
+                          "items": false,
+                          "minItems": 2,
+                          "maxItems": 2,
+                          "description": "[longitude, latitude] (WGS84)"
                         }
+                      },
+                      "required": [
+                        "type",
+                        "coordinates"
                       ],
-                      "items": false,
-                      "minItems": 2,
-                      "maxItems": 2,
-                      "description": "[longitude, latitude] (WGS84)"
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "Polygon"
+                        },
+                        "coordinates": {
+                          "type": "array",
+                          "items": {
+                            "type": "array",
+                            "items": {
+                              "type": "array",
+                              "items": {
+                                "type": "number"
+                              }
+                            }
+                          },
+                          "description": "Polygon outer rings, each a list of [longitude, latitude] points"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "coordinates"
+                      ],
+                      "additionalProperties": false
                     }
-                  },
-                  "required": [
-                    "type",
-                    "coordinates"
-                  ],
-                  "additionalProperties": false
+                  ]
                 },
                 "properties": {
                   "type": "object",
                   "properties": {
-                    "title": {
-                      "type": "string"
-                    },
-                    "guid": {
+                    "id": {
                       "type": "string",
-                      "description": "A stable id for the record across polls, built from the agency's own id where it has one"
+                      "description": "Stable across polls, built from the agency's own id"
                     },
-                    "status": {
+                    "source": {
                       "type": "string",
-                      "description": "As the agency words it"
+                      "enum": [
+                        "rfs",
+                        "qld_fire",
+                        "vic_emergency",
+                        "nt_fire",
+                        "wa_incident",
+                        "sa_cfs",
+                        "sa_mfs"
+                      ],
+                      "description": "Which feed the record came from; also the name stored history uses"
                     },
-                    "location": {
-                      "type": "string"
-                    },
-                    "alertLevel": {
+                    "agency": {
                       "type": "string",
-                      "description": "Warning level as published (Advice, Watch and Act, Emergency Warning), or what the feed has in its place — RFS mostly says \"Not Applicable\""
+                      "description": "The publishing service, e.g. RFS, QFD, CFA, SES, DFES, SACFS, SAMFS, NTFRS"
                     },
-                    "fireType": {
+                    "state": {
                       "type": "string",
-                      "description": "Kind of incident as the agency classes it"
-                    },
-                    "responsibleAgency": {
-                      "type": "string"
-                    },
-                    "updated": {
-                      "type": "string",
-                      "description": "Last update for display: the agency's own wording (RFS, NT) or a local-time rendering of updatedISO (the others)"
-                    },
-                    "updatedISO": {
-                      "type": "string",
-                      "description": "Last update as an ISO 8601 timestamp; empty when there is none, and for RFS the agency text itself when it cannot be read as a time"
+                      "enum": [
+                        "NSW",
+                        "QLD",
+                        "VIC",
+                        "NT",
+                        "WA",
+                        "SA"
+                      ]
                     },
                     "layer": {
                       "type": "string",
@@ -6244,76 +5336,78 @@
                         "flood",
                         "hazard"
                       ],
-                      "description": "Which map layer the record belongs on"
+                      "description": "fire, or flood or hazard for the other incidents these services publish (hazard too for any kind of record not yet known)"
                     },
-                    "district": {
-                      "type": "string",
-                      "description": "Fire ban district"
-                    },
-                    "resources": {
-                      "description": "CFS: appliances turned out",
-                      "type": [
-                        "number",
-                        "null"
-                      ]
-                    },
-                    "aircraft": {
-                      "description": "CFS: aircraft turned out",
-                      "type": [
-                        "number",
-                        "null"
-                      ]
-                    },
-                    "resourcesText": {
-                      "type": "string",
-                      "description": "The two counts as one line, e.g. \"3 appliances, 1 aircraft\"; empty when none"
-                    },
-                    "text": {
-                      "type": "string",
-                      "description": "CFS: the public message, when one has been written"
-                    },
-                    "url": {
+                    "title": {
                       "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "description": "As the agency words it"
+                    },
+                    "location": {
+                      "type": "string"
+                    },
+                    "category": {
+                      "type": "string",
+                      "description": "Kind of incident as the agency classes it, e.g. \"Grass Fire\", \"Building Fire\""
+                    },
+                    "alert_level": {
+                      "type": "string",
+                      "description": "Warning level as published (Advice, Watch and Act, Emergency Warning); empty or \"Not Applicable\" when none"
+                    },
+                    "responsible_agency": {
+                      "type": "string"
+                    },
+                    "updated_at": {
+                      "description": "Last update, ISO 8601 UTC; null when the agency gives no time with a zone, and then details.updated has the agency's own wording",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
                     },
                     "is_active": {
                       "type": "boolean",
-                      "description": "False once the incident is complete (only with all=1)"
+                      "description": "False once closed (only with all=1)"
                     },
-                    "agency": {
-                      "type": "string",
-                      "enum": [
-                        "SACFS",
-                        "SAMFS"
-                      ]
+                    "polygons": {
+                      "type": "array",
+                      "items": {
+                        "type": "array",
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "number"
+                          }
+                        }
+                      },
+                      "description": "Fire grounds or warning areas, as outer rings of [longitude, latitude]; empty when none"
                     },
-                    "source": {
-                      "type": "string",
-                      "enum": [
-                        "sa_cfs",
-                        "sa_mfs"
-                      ]
+                    "details": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {},
+                      "description": "The agency's own extra fields, under the per-agency feed's names (RFS: size, councilArea, link; QFD: vehiclesOnScene; VIC: capEvent, text; …)"
                     }
                   },
                   "required": [
+                    "id",
+                    "source",
+                    "agency",
+                    "state",
+                    "layer",
                     "title",
-                    "guid",
                     "status",
                     "location",
-                    "alertLevel",
-                    "fireType",
-                    "responsibleAgency",
-                    "updated",
-                    "updatedISO",
-                    "layer",
-                    "district",
-                    "resources",
-                    "aircraft",
-                    "resourcesText",
-                    "text",
-                    "url",
+                    "category",
+                    "alert_level",
+                    "responsible_agency",
+                    "updated_at",
                     "is_active",
-                    "agency",
-                    "source"
+                    "polygons",
+                    "details"
                   ],
                   "additionalProperties": false
                 }
@@ -6331,12 +5425,69 @@
             "minimum": -9007199254740991,
             "maximum": 9007199254740991,
             "description": "Number of features"
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "enum": [
+                    "rfs",
+                    "qld_fire",
+                    "vic_emergency",
+                    "nt_fire",
+                    "wa_incident",
+                    "sa_cfs",
+                    "sa_mfs"
+                  ]
+                },
+                "name": {
+                  "type": "string"
+                },
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "NSW",
+                    "QLD",
+                    "VIC",
+                    "NT",
+                    "WA",
+                    "SA"
+                  ]
+                },
+                "count": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991,
+                  "description": "Records from this service in this answer, after the filters"
+                },
+                "updated_at": {
+                  "description": "When this server last read the service, ISO 8601 UTC; null if it has not yet",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "source",
+                "name",
+                "state",
+                "count",
+                "updated_at"
+              ],
+              "additionalProperties": false
+            },
+            "description": "One entry per fire service asked for, in this order"
           }
         },
         "required": [
           "type",
           "features",
-          "count"
+          "count",
+          "sources"
         ],
         "additionalProperties": false
       },
@@ -6896,108 +6047,6 @@
           "limit",
           "offset",
           "results"
-        ],
-        "additionalProperties": false
-      },
-      "RadioReceptionTranscript": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "integer",
-            "minimum": -9007199254740991,
-            "maximum": 9007199254740991,
-            "description": "The reception's id in AusAware's radio scanner"
-          },
-          "datetime": {
-            "description": "When the reception began, ISO 8601 in UTC, to the second",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "system": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "minimum": -9007199254740991,
-                "maximum": 9007199254740991
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The radio system's id in AusAware's radio scanner"
-          },
-          "system_label": {
-            "description": "The radio system's name there; null when it has none",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "talkgroup": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "minimum": -9007199254740991,
-                "maximum": 9007199254740991
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The talkgroup's id"
-          },
-          "talkgroup_label": {
-            "description": "The talkgroup's name in AusAware's radio scanner; null when it has none",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "transcript": {
-            "description": "The machine transcript as stored: usually plain text, in some cases a JSON document with the text in `text`. An empty string when the audio was transcribed and held nothing usable; null when there is no transcript, or none yet. Speech recognition makes mistakes.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "radio_id": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "minimum": -9007199254740991,
-                "maximum": 9007199254740991
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The transmitting radio's unit id, when the reception carries one"
-          },
-          "radio_label": {
-            "description": "AusAware's name for that unit, such as a brigade, station or callsign; null when it has none",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "call_url": {
-            "type": "string",
-            "description": "A link to the reception in AusAware's radio scanner, where it can be played"
-          }
-        },
-        "required": [
-          "id",
-          "datetime",
-          "system",
-          "system_label",
-          "talkgroup",
-          "talkgroup_label",
-          "transcript",
-          "radio_id",
-          "radio_label",
-          "call_url"
         ],
         "additionalProperties": false
       },
@@ -8319,155 +7368,11 @@
         "security": []
       }
     },
-    "/api/v1/rfs/incidents": {
-      "get": {
-        "operationId": "getRfsIncidents",
-        "tags": [
-          "Incidents"
-        ],
-        "summary": "NSW RFS incidents",
-        "description": "Current NSW Rural Fire Service incidents (major incidents feed).",
-        "responses": {
-          "200": {
-            "description": "A GeoJSON FeatureCollection of incidents",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RfsIncidents"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "The key is over its per-minute limit (rate_limited)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "ApiKey": []
-          }
-        ],
-        "x-scopes": [
-          "source:rfs",
-          "type:incidents",
-          "window:live"
-        ]
-      }
-    },
-    "/api/v1/rfs/incidents/raw": {
-      "get": {
-        "operationId": "getRfsIncidentsRaw",
-        "tags": [
-          "Incidents"
-        ],
-        "summary": "NSW RFS incidents, unparsed",
-        "description": "The RFS major incidents feed (majorIncidents.json) exactly as the RFS published it at the last poll, for clients that parse it themselves. Empty until the first poll after a restart.",
-        "responses": {
-          "200": {
-            "description": "The RFS GeoJSON FeatureCollection, unchanged",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RfsFeed"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "The key is over its per-minute limit (rate_limited)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "ApiKey": []
-          }
-        ],
-        "x-scopes": [
-          "source:rfs",
-          "type:incidents",
-          "window:live"
-        ]
-      }
-    },
     "/api/v1/rfs/fdr": {
       "get": {
         "operationId": "getRfsFireDanger",
         "tags": [
-          "Warnings"
+          "Fires"
         ],
         "summary": "NSW fire danger ratings and total fire bans",
         "description": "Today's and tomorrow's fire danger rating and total fire ban for each NSW fire weather district, from the RFS. Refreshed from the RFS at most every ten minutes.",
@@ -8538,9 +7443,7 @@
           }
         ],
         "x-scopes": [
-          "source:rfs",
-          "type:warnings",
-          "window:live"
+          "fires:live"
         ]
       }
     },
@@ -8548,7 +7451,7 @@
       "get": {
         "operationId": "getActAmbulanceIncidents",
         "tags": [
-          "Incidents"
+          "Ambulance"
         ],
         "summary": "ACT Ambulance Service responses",
         "description": "ACT Ambulance Service responses still running, from the ACT ESA feed.",
@@ -8610,9 +7513,7 @@
           }
         ],
         "x-scopes": [
-          "source:actas",
-          "type:incidents",
-          "window:live"
+          "ambulance:live"
         ]
       }
     },
@@ -8691,9 +7592,7 @@
           }
         ],
         "x-scopes": [
-          "source:bom",
-          "type:warnings",
-          "window:live"
+          "warnings:live"
         ]
       }
     },
@@ -8701,7 +7600,7 @@
       "get": {
         "operationId": "getTrafficIncidents",
         "tags": [
-          "Hazards"
+          "Road hazards"
         ],
         "summary": "NSW road incidents",
         "description": "Crashes, breakdowns, hazards and changed traffic conditions on NSW roads, from Live Traffic NSW (Transport for NSW), in one record shape across the Live Traffic feeds. Records the feed marks ended are left out. Refreshed every minute.",
@@ -8763,9 +7662,7 @@
           }
         ],
         "x-scopes": [
-          "source:livetraffic",
-          "type:hazards",
-          "window:live"
+          "roads:live"
         ]
       }
     },
@@ -8773,7 +7670,7 @@
       "get": {
         "operationId": "getTrafficIncidentsRaw",
         "tags": [
-          "Hazards"
+          "Road hazards"
         ],
         "summary": "NSW road incidents, unparsed",
         "description": "The Live Traffic NSW feed behind /traffic/incidents, exactly as Transport for NSW publishes it, for clients that parse it themselves. Read from Live Traffic NSW on each request, and ended records are not removed.",
@@ -8835,9 +7732,7 @@
           }
         ],
         "x-scopes": [
-          "source:livetraffic",
-          "type:hazards",
-          "window:live"
+          "roads:live"
         ]
       }
     },
@@ -8845,7 +7740,7 @@
       "get": {
         "operationId": "getTrafficRoadwork",
         "tags": [
-          "Hazards"
+          "Road hazards"
         ],
         "summary": "NSW roadwork",
         "description": "Roadwork on NSW roads, from Live Traffic NSW (Transport for NSW), in one record shape across the Live Traffic feeds. Records the feed marks ended are left out. Refreshed every five minutes.",
@@ -8907,9 +7802,7 @@
           }
         ],
         "x-scopes": [
-          "source:livetraffic",
-          "type:hazards",
-          "window:live"
+          "roads:live"
         ]
       }
     },
@@ -8917,7 +7810,7 @@
       "get": {
         "operationId": "getTrafficRoadworkRaw",
         "tags": [
-          "Hazards"
+          "Road hazards"
         ],
         "summary": "NSW roadwork, unparsed",
         "description": "The Live Traffic NSW feed behind /traffic/roadwork, exactly as Transport for NSW publishes it, for clients that parse it themselves. Read from Live Traffic NSW on each request, and ended records are not removed.",
@@ -8979,9 +7872,7 @@
           }
         ],
         "x-scopes": [
-          "source:livetraffic",
-          "type:hazards",
-          "window:live"
+          "roads:live"
         ]
       }
     },
@@ -8989,7 +7880,7 @@
       "get": {
         "operationId": "getTrafficFlood",
         "tags": [
-          "Hazards"
+          "Road hazards"
         ],
         "summary": "NSW roads affected by flooding",
         "description": "Road closures and hazards on NSW roads caused by flooding, from Live Traffic NSW (Transport for NSW), in one record shape across the Live Traffic feeds. Records the feed marks ended are left out. Refreshed every five minutes.",
@@ -9051,9 +7942,7 @@
           }
         ],
         "x-scopes": [
-          "source:livetraffic",
-          "type:hazards",
-          "window:live"
+          "roads:live"
         ]
       }
     },
@@ -9061,7 +7950,7 @@
       "get": {
         "operationId": "getTrafficFloodRaw",
         "tags": [
-          "Hazards"
+          "Road hazards"
         ],
         "summary": "NSW roads affected by flooding, unparsed",
         "description": "The Live Traffic NSW feed behind /traffic/flood, exactly as Transport for NSW publishes it, for clients that parse it themselves. Read from Live Traffic NSW on each request, and ended records are not removed.",
@@ -9123,9 +8012,7 @@
           }
         ],
         "x-scopes": [
-          "source:livetraffic",
-          "type:hazards",
-          "window:live"
+          "roads:live"
         ]
       }
     },
@@ -9133,7 +8020,7 @@
       "get": {
         "operationId": "getTrafficFire",
         "tags": [
-          "Hazards"
+          "Road hazards"
         ],
         "summary": "NSW roads affected by fire",
         "description": "Fire affecting NSW roads, from Live Traffic NSW (Transport for NSW), in one record shape across the Live Traffic feeds. Records the feed marks ended are left out. Refreshed every five minutes.",
@@ -9195,9 +8082,7 @@
           }
         ],
         "x-scopes": [
-          "source:livetraffic",
-          "type:hazards",
-          "window:live"
+          "roads:live"
         ]
       }
     },
@@ -9205,7 +8090,7 @@
       "get": {
         "operationId": "getTrafficFireRaw",
         "tags": [
-          "Hazards"
+          "Road hazards"
         ],
         "summary": "NSW roads affected by fire, unparsed",
         "description": "The Live Traffic NSW feed behind /traffic/fire, exactly as Transport for NSW publishes it, for clients that parse it themselves. Read from Live Traffic NSW on each request, and ended records are not removed.",
@@ -9267,9 +8152,7 @@
           }
         ],
         "x-scopes": [
-          "source:livetraffic",
-          "type:hazards",
-          "window:live"
+          "roads:live"
         ]
       }
     },
@@ -9277,7 +8160,7 @@
       "get": {
         "operationId": "getTrafficMajorEvents",
         "tags": [
-          "Hazards"
+          "Road hazards"
         ],
         "summary": "NSW major events on the roads",
         "description": "Special events that close or change NSW roads, from Live Traffic NSW (Transport for NSW), in one record shape across the Live Traffic feeds. Records the feed marks ended are left out. Refreshed every five minutes.",
@@ -9339,9 +8222,7 @@
           }
         ],
         "x-scopes": [
-          "source:livetraffic",
-          "type:hazards",
-          "window:live"
+          "roads:live"
         ]
       }
     },
@@ -9349,7 +8230,7 @@
       "get": {
         "operationId": "getTrafficMajorEventsRaw",
         "tags": [
-          "Hazards"
+          "Road hazards"
         ],
         "summary": "NSW major events on the roads, unparsed",
         "description": "The Live Traffic NSW feed behind /traffic/majorevent, exactly as Transport for NSW publishes it, for clients that parse it themselves. Read from Live Traffic NSW on each request, and ended records are not removed.",
@@ -9411,9 +8292,7 @@
           }
         ],
         "x-scopes": [
-          "source:livetraffic",
-          "type:hazards",
-          "window:live"
+          "roads:live"
         ]
       }
     },
@@ -9421,7 +8300,7 @@
       "get": {
         "operationId": "getTrafficAlpine",
         "tags": [
-          "Hazards"
+          "Road hazards"
         ],
         "summary": "NSW alpine road conditions",
         "description": "Conditions on NSW alpine roads, from Live Traffic NSW (Transport for NSW), in one record shape across the Live Traffic feeds. Records the feed marks ended are left out. Refreshed every five minutes.",
@@ -9483,9 +8362,7 @@
           }
         ],
         "x-scopes": [
-          "source:livetraffic",
-          "type:hazards",
-          "window:live"
+          "roads:live"
         ]
       }
     },
@@ -9493,7 +8370,7 @@
       "get": {
         "operationId": "getTrafficAlpineRaw",
         "tags": [
-          "Hazards"
+          "Road hazards"
         ],
         "summary": "NSW alpine road conditions, unparsed",
         "description": "The Live Traffic NSW feed behind /traffic/alpine, exactly as Transport for NSW publishes it, for clients that parse it themselves. Read from Live Traffic NSW on each request, and ended records are not removed.",
@@ -9555,9 +8432,7 @@
           }
         ],
         "x-scopes": [
-          "source:livetraffic",
-          "type:hazards",
-          "window:live"
+          "roads:live"
         ]
       }
     },
@@ -9565,7 +8440,7 @@
       "get": {
         "operationId": "getTrafficCouncil",
         "tags": [
-          "Hazards"
+          "Road hazards"
         ],
         "summary": "NSW council road records",
         "description": "Records NSW councils submit for their local roads — roadwork, hazards, weather and events — with the council's contact details, from Live Traffic NSW (Transport for NSW), in one record shape across the Live Traffic feeds. Records the feed marks ended are left out. Refreshed every five minutes.",
@@ -9627,9 +8502,7 @@
           }
         ],
         "x-scopes": [
-          "source:livetraffic",
-          "type:hazards",
-          "window:live"
+          "roads:live"
         ]
       }
     },
@@ -9637,7 +8510,7 @@
       "get": {
         "operationId": "getTrafficCouncilRaw",
         "tags": [
-          "Hazards"
+          "Road hazards"
         ],
         "summary": "NSW council road records, unparsed",
         "description": "The Live Traffic NSW feed behind /traffic/lga, exactly as Transport for NSW publishes it, for clients that parse it themselves. Read from Live Traffic NSW on each request, and ended records are not removed.",
@@ -9699,9 +8572,7 @@
           }
         ],
         "x-scopes": [
-          "source:livetraffic",
-          "type:hazards",
-          "window:live"
+          "roads:live"
         ]
       }
     },
@@ -9771,9 +8642,7 @@
           }
         ],
         "x-scopes": [
-          "source:livetraffic",
-          "type:cameras",
-          "window:live"
+          "cameras:live"
         ]
       }
     },
@@ -9781,7 +8650,7 @@
       "get": {
         "operationId": "getTrafficWorks",
         "tags": [
-          "Hazards"
+          "Road hazards"
         ],
         "summary": "Road works and hazards from the Live Traffic aggregate feed",
         "description": "Roadwork, hazards, flooding and events from Live Traffic NSW's aggregate web feed, which carries other states' and territories' road agencies, in the same record shape as the hazard feeds. Cameras, rest areas, heavy vehicle checking stations, the RFS's own incidents (apiSource rfsNSW, which the RFS endpoints already carry) and records marked ended are left out. When every record from one upstream source (apiSource) drops out of the feed at once, the last ones seen are kept for up to six hours. Refreshed every five minutes.",
@@ -9843,9 +8712,7 @@
           }
         ],
         "x-scopes": [
-          "source:livetraffic",
-          "type:hazards",
-          "window:live"
+          "roads:live"
         ]
       }
     },
@@ -9853,7 +8720,7 @@
       "get": {
         "operationId": "getTrafficLgaIncidents",
         "tags": [
-          "Hazards"
+          "Road hazards"
         ],
         "summary": "NSW council road records, unparsed",
         "description": "The records NSW councils submit for their local roads, exactly as Transport for NSW publishes them, read from Live Traffic NSW on each request. /traffic/lga has the same records in the hazard record shape; /traffic/lga/raw has the feed with its own top-level fields.",
@@ -9915,9 +8782,7 @@
           }
         ],
         "x-scopes": [
-          "source:livetraffic",
-          "type:hazards",
-          "window:live"
+          "roads:live"
         ]
       }
     },
@@ -9925,7 +8790,7 @@
       "get": {
         "operationId": "getTrafficAllFeeds",
         "tags": [
-          "Hazards"
+          "Road hazards"
         ],
         "summary": "The Live Traffic aggregate feed, unparsed",
         "description": "Every record in Live Traffic NSW's aggregate web feed (all-feeds-web.json) as published — other states' and territories' road events, NSW RFS fires, traffic cameras, rest areas and more — and the same records grouped by eventType. Read from Live Traffic NSW on each request; a large response.",
@@ -9996,9 +8861,7 @@
           }
         ],
         "x-scopes": [
-          "source:livetraffic",
-          "type:hazards",
-          "window:live"
+          "roads:live"
         ]
       }
     },
@@ -10006,7 +8869,7 @@
       "get": {
         "operationId": "getBeachwatch",
         "tags": [
-          "Hazards"
+          "Beaches & sharks"
         ],
         "summary": "NSW beach water quality",
         "description": "Water quality at NSW swimming sites from Beachwatch, the NSW Government's water-quality programme: each site's latest sampled result and its pollution forecast, passed on as Beachwatch publishes them. Refreshed from Beachwatch every ten minutes; empty until the first refresh after a restart.",
@@ -10068,9 +8931,7 @@
           }
         ],
         "x-scopes": [
-          "source:beach",
-          "type:hazards",
-          "window:live"
+          "beaches:live"
         ]
       }
     },
@@ -10078,7 +8939,7 @@
       "get": {
         "operationId": "getBeachsafe",
         "tags": [
-          "Hazards"
+          "Beaches & sharks"
         ],
         "summary": "NSW beaches: patrols and hazards",
         "description": "NSW beaches from BeachSafe, Surf Life Saving Australia's beach information service: patrol status and today's patrol hours, hazards, facilities and weather, as BeachSafe's beach map lists them for NSW. /beachsafe/beach/{slug} has more on one beach. Refreshed from BeachSafe every ten minutes; empty until the first refresh after a restart.",
@@ -10149,9 +9010,7 @@
           }
         ],
         "x-scopes": [
-          "source:beach",
-          "type:hazards",
-          "window:live"
+          "beaches:live"
         ]
       }
     },
@@ -10159,7 +9018,7 @@
       "get": {
         "operationId": "getBeachsafeBeach",
         "tags": [
-          "Hazards"
+          "Beaches & sharks"
         ],
         "summary": "One beach from BeachSafe",
         "description": "Today's conditions at one beach from BeachSafe, Surf Life Saving Australia's beach information service: weather, tide, UV, patrol hours, marine warnings and its hazard rating. Read from BeachSafe on each request.",
@@ -10261,9 +9120,7 @@
           }
         ],
         "x-scopes": [
-          "source:beach",
-          "type:hazards",
-          "window:live"
+          "beaches:live"
         ]
       }
     },
@@ -10271,7 +9128,7 @@
       "get": {
         "operationId": "getDorsalReports",
         "tags": [
-          "Hazards"
+          "Beaches & sharks"
         ],
         "summary": "Shark reports",
         "description": "Shark reports around Australia from Dorsal, the community shark-reporting app: sightings by the public and by drone, detections of tagged sharks by receivers, beach closures, bites and other incidents, newest first. Dorsal is read every five minutes and the last 14 days are kept; reports placed outside Australia are left out. Asked with no `hours`, the window is the last 48 hours.",
@@ -10359,9 +9216,7 @@
           }
         ],
         "x-scopes": [
-          "source:dorsal",
-          "type:hazards",
-          "window:live"
+          "beaches:live"
         ]
       }
     },
@@ -10431,9 +9286,7 @@
           }
         ],
         "x-scopes": [
-          "source:weather",
-          "type:weather",
-          "window:live"
+          "weather:live"
         ]
       }
     },
@@ -10512,9 +9365,7 @@
           }
         ],
         "x-scopes": [
-          "source:weather",
-          "type:weather",
-          "window:live"
+          "weather:live"
         ]
       }
     },
@@ -10593,9 +9444,7 @@
           }
         ],
         "x-scopes": [
-          "source:weather",
-          "type:weather",
-          "window:live"
+          "weather:live"
         ]
       }
     },
@@ -10751,9 +9600,7 @@
           }
         ],
         "x-scopes": [
-          "source:weather",
-          "type:weather",
-          "window:live"
+          "weather:live"
         ]
       }
     },
@@ -10876,9 +9723,7 @@
           }
         ],
         "x-scopes": [
-          "source:weather",
-          "type:weather",
-          "window:live"
+          "weather:live"
         ]
       }
     },
@@ -10982,9 +9827,7 @@
           }
         ],
         "x-scopes": [
-          "source:pager",
-          "type:pager",
-          "window:live|history"
+          "pager:live"
         ]
       }
     },
@@ -10992,7 +9835,7 @@
       "get": {
         "operationId": "getFirmsHotspots",
         "tags": [
-          "Hazards"
+          "Fires"
         ],
         "summary": "Satellite fire hotspots",
         "description": "NASA FIRMS VIIRS hotspot detections over Australia from the last 24 hours, each as its pixel footprint. A hotspot is a heat signature seen from orbit, not a confirmed fire.",
@@ -11054,9 +9897,7 @@
           }
         ],
         "x-scopes": [
-          "source:firms",
-          "type:hazards",
-          "window:live"
+          "fires:live"
         ]
       }
     },
@@ -11135,9 +9976,7 @@
           }
         ],
         "x-scopes": [
-          "source:adsb",
-          "type:aircraft",
-          "window:live"
+          "aircraft:live"
         ]
       }
     },
@@ -11254,9 +10093,7 @@
           }
         ],
         "x-scopes": [
-          "source:adsb",
-          "type:aircraft",
-          "window:history"
+          "aircraft:history"
         ]
       }
     },
@@ -11335,9 +10172,7 @@
           }
         ],
         "x-scopes": [
-          "source:adsb",
-          "type:aircraft",
-          "window:live"
+          "aircraft:live"
         ]
       }
     },
@@ -11445,100 +10280,7 @@
           }
         ],
         "x-scopes": [
-          "source:adsb",
-          "type:aircraft",
-          "window:live"
-        ]
-      }
-    },
-    "/api/v1/radio/grn-sites": {
-      "get": {
-        "operationId": "getGrnSites",
-        "tags": [
-          "Radio"
-        ],
-        "summary": "NSW Government Radio Network sites",
-        "description": "Reference data about the sites of the NSW Government Radio Network (GRN) — names, positions, site numbers, network access codes and frequencies — as AusAware records them: a community-compiled list that AusAware has corrected by hand since. It is not an official list. AusAware is not part of, does not run and is not affiliated with that network. Answers are cached for 30 seconds; a correction shows on the next read. When the list cannot be read, the last copy read is served if there is one.",
-        "responses": {
-          "200": {
-            "description": "Every site",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {
-                      "$ref": "#/components/schemas/RadioGrnSites"
-                    }
-                  },
-                  "required": [
-                    "data"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "The key is over its per-minute limit (rate_limited)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "The list could not be read and there is no earlier copy to serve (internal_error)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "ApiKey": []
-          }
-        ],
-        "x-scopes": [
-          "source:radio",
-          "type:radio",
-          "window:live|history"
+          "aircraft:live"
         ]
       }
     },
@@ -11546,7 +10288,7 @@
       "get": {
         "operationId": "getEndeavourCurrent",
         "tags": [
-          "Outages"
+          "Power outages"
         ],
         "summary": "Endeavour Energy unplanned outages",
         "description": "Unplanned electricity outages on Endeavour Energy's network now, from Endeavour Energy's public outage data, with the address, cause and timing joined onto each outage area. Refreshed every minute.",
@@ -11617,9 +10359,7 @@
           }
         ],
         "x-scopes": [
-          "source:endeavour",
-          "type:outages",
-          "window:live"
+          "outages:live"
         ]
       }
     },
@@ -11627,7 +10367,7 @@
       "get": {
         "operationId": "getEndeavourMaintenance",
         "tags": [
-          "Outages"
+          "Power outages"
         ],
         "summary": "Endeavour Energy planned work under way",
         "description": "Planned outages on Endeavour Energy's network that are under way: the work's status says so, or its start time has passed. From Endeavour Energy's public outage data; refreshed every five minutes.",
@@ -11698,9 +10438,7 @@
           }
         ],
         "x-scopes": [
-          "source:endeavour",
-          "type:outages",
-          "window:live"
+          "outages:live"
         ]
       }
     },
@@ -11708,7 +10446,7 @@
       "get": {
         "operationId": "getEndeavourFuture",
         "tags": [
-          "Outages"
+          "Power outages"
         ],
         "summary": "Endeavour Energy planned work to come",
         "description": "Planned outages on Endeavour Energy's network that have not started yet. From Endeavour Energy's public outage data; refreshed every five minutes.",
@@ -11779,9 +10517,7 @@
           }
         ],
         "x-scopes": [
-          "source:endeavour",
-          "type:outages",
-          "window:live"
+          "outages:live"
         ]
       }
     },
@@ -11789,7 +10525,7 @@
       "get": {
         "operationId": "getEndeavourPlanned",
         "tags": [
-          "Outages"
+          "Power outages"
         ],
         "summary": "Endeavour Energy planned outages",
         "description": "Every planned outage on Endeavour Energy's network: the work under way (as /endeavour/maintenance) followed by the work still to come (as /endeavour/future). Refreshed every five minutes.",
@@ -11860,9 +10596,7 @@
           }
         ],
         "x-scopes": [
-          "source:endeavour",
-          "type:outages",
-          "window:live"
+          "outages:live"
         ]
       }
     },
@@ -11870,7 +10604,7 @@
       "get": {
         "operationId": "getEndeavourCurrentAreas",
         "tags": [
-          "Outages"
+          "Power outages"
         ],
         "summary": "Endeavour Energy outage areas other than planned work, unprocessed",
         "description": "Endeavour Energy's outage areas that are not planned work, exactly as Endeavour Energy publishes them, for clients that process them themselves — no address, cause or timing joined on (/endeavour/current has those). Read from Endeavour Energy on each request.",
@@ -11941,9 +10675,7 @@
           }
         ],
         "x-scopes": [
-          "source:endeavour",
-          "type:outages",
-          "window:live"
+          "outages:live"
         ]
       }
     },
@@ -11951,7 +10683,7 @@
       "get": {
         "operationId": "getEndeavourPlannedAreas",
         "tags": [
-          "Outages"
+          "Power outages"
         ],
         "summary": "Endeavour Energy planned-work outage areas, unprocessed",
         "description": "Endeavour Energy's outage areas marked as planned work, exactly as Endeavour Energy publishes them, for clients that process them themselves. Despite the path, this includes planned work already under way, not only work to come. Read from Endeavour Energy on each request.",
@@ -12022,9 +10754,7 @@
           }
         ],
         "x-scopes": [
-          "source:endeavour",
-          "type:outages",
-          "window:live"
+          "outages:live"
         ]
       }
     },
@@ -12032,7 +10762,7 @@
       "get": {
         "operationId": "getEndeavourPostcodes",
         "tags": [
-          "Outages"
+          "Power outages"
         ],
         "summary": "Postcodes in Endeavour Energy outages",
         "description": "The postcodes in Endeavour Energy's outage data — taken from its outage points, at most 5,000 of them read — each once, sorted. Read from Endeavour Energy when asked, and a good answer is kept for an hour.",
@@ -12103,9 +10833,7 @@
           }
         ],
         "x-scopes": [
-          "source:endeavour",
-          "type:outages",
-          "window:live"
+          "outages:live"
         ]
       }
     },
@@ -12113,7 +10841,7 @@
       "get": {
         "operationId": "getAusgridOutages",
         "tags": [
-          "Outages"
+          "Power outages"
         ],
         "summary": "Ausgrid outages",
         "description": "Electricity outages on Ausgrid's network, from Ausgrid's public outage map, polled every two minutes when polling is on. Polling is off for now because Ausgrid's outage map service has stopped answering, so this is empty until it returns.",
@@ -12184,9 +10912,7 @@
           }
         ],
         "x-scopes": [
-          "source:ausgrid",
-          "type:outages",
-          "window:live"
+          "outages:live"
         ]
       }
     },
@@ -12194,7 +10920,7 @@
       "get": {
         "operationId": "getAusgridStats",
         "tags": [
-          "Outages"
+          "Power outages"
         ],
         "summary": "Ausgrid outage counts",
         "description": "Ausgrid's own outage counters, as its public outage map publishes them, polled every two minutes when polling is on. Polling is off for now because Ausgrid's outage map service has stopped answering, so this is empty until it returns.",
@@ -12265,9 +10991,7 @@
           }
         ],
         "x-scopes": [
-          "source:ausgrid",
-          "type:outages",
-          "window:live"
+          "outages:live"
         ]
       }
     },
@@ -12275,7 +10999,7 @@
       "get": {
         "operationId": "getEssentialOutages",
         "tags": [
-          "Outages"
+          "Power outages"
         ],
         "summary": "Essential Energy outages",
         "description": "Electricity outages on Essential Energy's network — unplanned and planned, now and to come — from Essential Energy's public outage feeds (current and future), with counts. feed and type narrow the list (the counts are of what is left), and lite=1 leaves out the polygons. Refreshed every three minutes.",
@@ -12384,9 +11108,7 @@
           }
         ],
         "x-scopes": [
-          "source:essential",
-          "type:outages",
-          "window:live"
+          "outages:live"
         ]
       }
     },
@@ -12394,7 +11116,7 @@
       "get": {
         "operationId": "getEssentialPlanned",
         "tags": [
-          "Outages"
+          "Power outages"
         ],
         "summary": "Essential Energy planned outages",
         "description": "Planned outages on Essential Energy's network, under way and to come: the outages marked planned in Essential Energy's public outage feeds, the current feed's first. Refreshed every three minutes.",
@@ -12465,9 +11187,7 @@
           }
         ],
         "x-scopes": [
-          "source:essential",
-          "type:outages",
-          "window:live"
+          "outages:live"
         ]
       }
     },
@@ -12475,7 +11195,7 @@
       "get": {
         "operationId": "getEssentialFuture",
         "tags": [
-          "Outages"
+          "Power outages"
         ],
         "summary": "Essential Energy outages to come",
         "description": "Outages on Essential Energy's network that are still to come: everything in Essential Energy's future-outages feed. Refreshed every three minutes.",
@@ -12546,9 +11266,7 @@
           }
         ],
         "x-scopes": [
-          "source:essential",
-          "type:outages",
-          "window:live"
+          "outages:live"
         ]
       }
     },
@@ -12556,7 +11274,7 @@
       "get": {
         "operationId": "getEssentialCurrent",
         "tags": [
-          "Outages"
+          "Power outages"
         ],
         "summary": "Essential Energy outages now",
         "description": "Outages on Essential Energy's network now, unplanned and planned: everything in Essential Energy's current-outages feed. Refreshed every three minutes.",
@@ -12627,9 +11345,7 @@
           }
         ],
         "x-scopes": [
-          "source:essential",
-          "type:outages",
-          "window:live"
+          "outages:live"
         ]
       }
     },
@@ -12637,7 +11353,7 @@
       "get": {
         "operationId": "getEssentialOutagesRaw",
         "tags": [
-          "Outages"
+          "Power outages"
         ],
         "summary": "Essential Energy outages, read now",
         "description": "Every outage in both of Essential Energy's public outage feeds, read from Essential Energy on this request rather than taken from the last poll: the current feed's outages, then the future feed's, in the same record shape as the other Essential Energy endpoints. When only one feed can be read, the answer is what that one gave, with nothing to say the other failed; when neither can be read, the answer is 503.",
@@ -12708,9 +11424,7 @@
           }
         ],
         "x-scopes": [
-          "source:essential",
-          "type:outages",
-          "window:live"
+          "outages:live"
         ]
       }
     },
@@ -12721,7 +11435,7 @@
           "History"
         ],
         "summary": "Stored records",
-        "description": "Every source's records as this server stored them over time: by default one record per incident (its latest), newest first. Filter by source, time, place and text; page with cursor (or offset, up to 10,000). Records are kept for the server's retention window. A key reads only the archived sources its scopes cover — each source's stored history needs that source's own scope and type, with window:history.",
+        "description": "Every source's records as this server stored them over time: by default one record per incident (its latest), newest first. Filter by source, time, place and text; page with cursor (or offset, up to 10,000). Records are kept for the server's retention window. A key reads only the archived sources of the feeds whose history it holds — fires:history the fire services' sources, warnings:history the warnings', and so on.",
         "responses": {
           "200": {
             "description": "A page of records",
@@ -12800,7 +11514,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "Only these archived sources, comma-separated: rfs, nt_fire, qld_fire, qld_warning, vic_emergency, wa_incident, wa_warning, sa_cfs, sa_mfs, act_ambulance, bom_land, bom_marine, traffic_incident, traffic_roadwork, traffic_flood, traffic_fire, traffic_majorevent, traffic_alpine, traffic_lga, traffic_works, endeavour_current, endeavour_planned, endeavour_maintenance, ausgrid, essential_current, essential_planned, essential_future, dorsal, pager. A key reads only the sources its scopes cover; naming another is refused (403), and leaving this out means all of them"
+            "description": "Only these archived sources, comma-separated: rfs, nt_fire, qld_fire, vic_emergency, wa_incident, sa_cfs, sa_mfs, qld_warning, wa_warning, bom_land, bom_marine, act_ambulance, traffic_incident, traffic_roadwork, traffic_flood, traffic_fire, traffic_majorevent, traffic_alpine, traffic_lga, traffic_works, endeavour_current, endeavour_planned, endeavour_maintenance, ausgrid, essential_current, essential_planned, essential_future, dorsal, pager. A key reads only the sources its scopes cover; naming another is refused (403), and leaving this out means all of them"
           },
           {
             "in": "query",
@@ -13033,9 +11747,7 @@
           }
         ],
         "x-scopes": [
-          "source:*",
-          "type:*",
-          "window:history"
+          "*:history"
         ]
       }
     },
@@ -13206,9 +11918,7 @@
           }
         ],
         "x-scopes": [
-          "source:*",
-          "type:*",
-          "window:history"
+          "*:history"
         ]
       }
     },
@@ -13278,9 +11988,7 @@
           }
         ],
         "x-scopes": [
-          "source:aviation",
-          "type:cameras",
-          "window:live"
+          "cameras:live"
         ]
       }
     },
@@ -13369,9 +12077,7 @@
           }
         ],
         "x-scopes": [
-          "source:aviation",
-          "type:cameras",
-          "window:live"
+          "cameras:live"
         ]
       }
     },
@@ -13441,9 +12147,7 @@
           }
         ],
         "x-scopes": [
-          "source:qldtraffic",
-          "type:cameras",
-          "window:live"
+          "cameras:live"
         ]
       }
     },
@@ -13513,354 +12217,7 @@
           }
         ],
         "x-scopes": [
-          "source:qldtraffic",
-          "type:cameras",
-          "window:live"
-        ]
-      }
-    },
-    "/api/v1/nt-fire/incidents": {
-      "get": {
-        "operationId": "getNtFireIncidents",
-        "tags": [
-          "Incidents"
-        ],
-        "summary": "NT Fire and Rescue incidents",
-        "description": "NT Fire and Rescue Service incidents from the NT Police, Fire and Emergency Services incident map feed, including Bushfires NT warnings. Closed incidents are left out unless all=1. The data is NTFRS’s: credit NT Fire and Rescue Service wherever you show it.",
-        "responses": {
-          "200": {
-            "description": "A GeoJSON FeatureCollection of incidents",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/NtFireIncidents"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "The key is over its per-minute limit (rate_limited)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "parameters": [
-          {
-            "in": "query",
-            "name": "all",
-            "schema": {
-              "type": "string",
-              "enum": [
-                "0",
-                "1"
-              ]
-            },
-            "description": "1 includes closed incidents as well"
-          }
-        ],
-        "security": [
-          {
-            "ApiKey": []
-          }
-        ],
-        "x-scopes": [
-          "source:ntfrs",
-          "type:incidents",
-          "window:live"
-        ]
-      }
-    },
-    "/api/v1/boundaries/lga-names": {
-      "get": {
-        "operationId": "getLgaNames",
-        "tags": [
-          "Reference"
-        ],
-        "summary": "Local government area names",
-        "description": "Every local government area in a state or territory, by name. The ACT has none, so its list is empty.",
-        "responses": {
-          "200": {
-            "description": "The names, sorted",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {
-                      "$ref": "#/components/schemas/LgaNames"
-                    }
-                  },
-                  "required": [
-                    "data"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "A query parameter is not valid (validation_failed)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "parameters": [
-          {
-            "in": "query",
-            "name": "state",
-            "schema": {
-              "type": "string"
-            },
-            "required": true,
-            "description": "NSW, VIC, QLD, SA, WA, TAS, NT or ACT, in any case"
-          }
-        ],
-        "security": []
-      }
-    },
-    "/api/v1/boundaries/{kind}": {
-      "get": {
-        "operationId": "getBoundaries",
-        "tags": [
-          "Reference"
-        ],
-        "summary": "Suburb, council and state boundaries",
-        "description": "The outlines of Australia's suburbs and localities, local government areas, or states and territories that fall in a view, from national administrative-boundary datasets imported into this API — they change only when the import is re-run. The view is widened to the next twentieth of a degree on each side. Outlines are drawn for the view: simplified to about a 3,000th of its width (half a pixel on a typical screen), with parts too small to see at that scale left out, so ask for the area you are drawing; zooming in brings the detail back, and a view under about 1.5° wide, or none, gets the outlines as stored. Answers may be reused for an hour (Cache-Control: private, max-age=3600).",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "kind",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "enum": [
-                "locality",
-                "lga",
-                "state"
-              ]
-            },
-            "description": "locality (suburbs and localities), lga (local government areas) or state (states and territories)"
-          },
-          {
-            "in": "query",
-            "name": "bbox",
-            "schema": {
-              "type": "string"
-            },
-            "description": "The view, as west,south,east,north in degrees (corners given the other way round are taken as meant). Required for locality and lga; without it, state answers the whole country."
-          },
-          {
-            "in": "query",
-            "name": "limit",
-            "schema": {
-              "type": "number"
-            },
-            "description": "The most boundaries to answer, largest first: 1 to 40,000 (rounded down, and held to that range). Absent or not a number: 20,000."
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "A GeoJSON FeatureCollection of boundaries, largest first",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Boundaries"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "kind is not locality, lga or state; or, for locality and lga, bbox is missing or is not four numbers (validation_failed)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "The key is over its per-minute limit (rate_limited)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "The boundaries could not be read (internal_error)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "ApiKey": []
-          }
-        ],
-        "x-scopes": [
-          "source:boundaries",
-          "type:boundaries",
-          "window:live|history"
-        ]
-      }
-    },
-    "/api/v1/qld-fire/incidents": {
-      "get": {
-        "operationId": "getQldFireIncidents",
-        "tags": [
-          "Incidents"
-        ],
-        "summary": "QLD Fire Department incidents",
-        "description": "Current Queensland Fire Department incidents.",
-        "responses": {
-          "200": {
-            "description": "A GeoJSON FeatureCollection of incidents",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/QldFireRecords"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "The key is over its per-minute limit (rate_limited)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "ApiKey": []
-          }
-        ],
-        "x-scopes": [
-          "source:qfd",
-          "type:incidents",
-          "window:live"
+          "cameras:live"
         ]
       }
     },
@@ -13930,153 +12287,7 @@
           }
         ],
         "x-scopes": [
-          "source:qfd",
-          "type:warnings",
-          "window:live"
-        ]
-      }
-    },
-    "/api/v1/vic-emergency/events": {
-      "get": {
-        "operationId": "getVicEmergencyEvents",
-        "tags": [
-          "Incidents"
-        ],
-        "summary": "VIC Emergency incidents and warnings",
-        "description": "Current incidents and warnings from the emergency.vic.gov.au feed (CFA, SES, DEECA, EMV and others). Each record says which map layer it belongs on — fire, flood or hazard.",
-        "responses": {
-          "200": {
-            "description": "A GeoJSON FeatureCollection of events",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/VicEmergencyEvents"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "The key is over its per-minute limit (rate_limited)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "ApiKey": []
-          }
-        ],
-        "x-scopes": [
-          "source:vic",
-          "type:incidents",
-          "window:live"
-        ]
-      }
-    },
-    "/api/v1/wa-emergency/incidents": {
-      "get": {
-        "operationId": "getWaEmergencyIncidents",
-        "tags": [
-          "Incidents"
-        ],
-        "summary": "WA DFES incidents",
-        "description": "Current WA Department of Fire and Emergency Services incidents.",
-        "responses": {
-          "200": {
-            "description": "A GeoJSON FeatureCollection of incidents",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WaEmergencyRecords"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "The key is over its per-minute limit (rate_limited)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "ApiKey": []
-          }
-        ],
-        "x-scopes": [
-          "source:dfes",
-          "type:incidents",
-          "window:live"
+          "warnings:live"
         ]
       }
     },
@@ -14146,27 +12357,35 @@
           }
         ],
         "x-scopes": [
-          "source:dfes",
-          "type:warnings",
-          "window:live"
+          "warnings:live"
         ]
       }
     },
-    "/api/v1/sa-fire/cfs": {
+    "/api/v1/fires": {
       "get": {
-        "operationId": "getSaCfsIncidents",
+        "operationId": "getFires",
         "tags": [
-          "Incidents"
+          "Fires"
         ],
-        "summary": "SA Country Fire Service incidents",
-        "description": "Current SA Country Fire Service incidents. Completed incidents are left out unless all=1.",
+        "summary": "Every fire service, one feed",
+        "description": "Current incidents from NSW RFS, the QLD Fire Department, VIC Emergency, WA DFES, SA CFS and MFS and NT Fire and Rescue, in one shape: the common fields every service has, plus `details` for each agency's own. The services also publish floods and other hazards they attend; each record says which in `layer`, and layer=fire keeps only fires. Closed incidents are left out unless all=1. `sources` says per service how many records it gave and when this server last read it. Records from NT Fire and Rescue are theirs: credit NTFRS if you republish them.",
         "responses": {
           "200": {
             "description": "A GeoJSON FeatureCollection of incidents",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SaFireIncidents"
+                  "$ref": "#/components/schemas/Fires"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A query parameter is not valid (validation_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -14215,90 +12434,28 @@
         "parameters": [
           {
             "in": "query",
-            "name": "all",
+            "name": "source",
             "schema": {
-              "type": "string",
-              "enum": [
-                "0",
-                "1"
-              ]
+              "type": "string"
             },
-            "description": "1 includes completed incidents as well"
-          }
-        ],
-        "security": [
+            "description": "Comma-separated; any of rfs, qld_fire, vic_emergency, nt_fire, wa_incident, sa_cfs, sa_mfs. Leave out for all."
+          },
           {
-            "ApiKey": []
-          }
-        ],
-        "x-scopes": [
-          "source:safire",
-          "type:incidents",
-          "window:live"
-        ]
-      }
-    },
-    "/api/v1/sa-fire/mfs": {
-      "get": {
-        "operationId": "getSaMfsIncidents",
-        "tags": [
-          "Incidents"
-        ],
-        "summary": "SA Metropolitan Fire Service incidents",
-        "description": "Current SA Metropolitan Fire Service incidents. Completed incidents are left out unless all=1.",
-        "responses": {
-          "200": {
-            "description": "A GeoJSON FeatureCollection of incidents",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SaFireIncidents"
-                }
-              }
-            }
+            "in": "query",
+            "name": "state",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated; any of NSW, QLD, VIC, NT, WA, SA. Leave out for all."
           },
-          "401": {
-            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
+          {
+            "in": "query",
+            "name": "layer",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated; any of fire, flood, hazard. Leave out for all."
           },
-          "403": {
-            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "The key is over its per-minute limit (rate_limited)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "parameters": [
           {
             "in": "query",
             "name": "all",
@@ -14309,7 +12466,7 @@
                 "1"
               ]
             },
-            "description": "1 includes completed incidents as well"
+            "description": "1 includes closed incidents as well"
           }
         ],
         "security": [
@@ -14318,9 +12475,7 @@
           }
         ],
         "x-scopes": [
-          "source:safire",
-          "type:incidents",
-          "window:live"
+          "fires:live"
         ]
       }
     },
@@ -14497,9 +12652,7 @@
           }
         ],
         "x-scopes": [
-          "source:marinetraffic",
-          "type:vessels",
-          "window:live"
+          "ships:live"
         ]
       }
     },
@@ -14610,9 +12763,7 @@
           }
         ],
         "x-scopes": [
-          "source:marinetraffic",
-          "type:vessels",
-          "window:live"
+          "ships:live"
         ]
       }
     },
@@ -14719,9 +12870,7 @@
           }
         ],
         "x-scopes": [
-          "source:news",
-          "type:news",
-          "window:live"
+          "news:live"
         ]
       }
     },
@@ -14800,9 +12949,7 @@
           }
         ],
         "x-scopes": [
-          "source:news",
-          "type:news",
-          "window:live"
+          "news:live"
         ]
       }
     },
@@ -14810,7 +12957,7 @@
       "get": {
         "operationId": "getLatestSummary",
         "tags": [
-          "Radio"
+          "Radio summaries"
         ],
         "summary": "The latest radio summary",
         "description": "The most recent AI-written summary of the radio traffic AusAware receives. AusAware records each reception and transcribes it by speech recognition; once an hour, at five minutes to the hour (Sydney time), a language model summarises that hour's transcripts, and the summary is released on the hour — so the last few minutes of an hour may not be in it. Summaries can also be written on demand from the latest transcripts. A summary is a model's reading of machine transcripts: it can be wrong.",
@@ -14891,9 +13038,7 @@
           }
         ],
         "x-scopes": [
-          "source:rdio",
-          "type:summaries",
-          "window:history"
+          "summaries:history"
         ]
       }
     },
@@ -14901,7 +13046,7 @@
       "get": {
         "operationId": "getSummaries",
         "tags": [
-          "Radio"
+          "Radio summaries"
         ],
         "summary": "Radio summaries",
         "description": "The AI-written summaries of the radio traffic AusAware receives (see the latest summary), newest period first, a page at a time. Summaries not yet released are left out. Filter by type, by hour, or by date.",
@@ -15052,132 +13197,7 @@
           }
         ],
         "x-scopes": [
-          "source:rdio",
-          "type:summaries",
-          "window:history"
-        ]
-      }
-    },
-    "/api/v1/rdio/calls/{callId}": {
-      "get": {
-        "operationId": "getReceptionTranscript",
-        "tags": [
-          "Radio"
-        ],
-        "summary": "One radio reception and its transcript",
-        "description": "One reception recorded by AusAware's own radio scanner, with its time, radio system, talkgroup, transmitting unit and its transcript, made by speech recognition.",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "callId",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "minimum": 0
-            },
-            "description": "The reception's id: digits only (as in the receptions a summary lists, member_call_ids)"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "The reception",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {
-                      "$ref": "#/components/schemas/RadioReceptionTranscript"
-                    }
-                  },
-                  "required": [
-                    "data"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "callId is not a whole number (validation_failed)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Nothing by that name (not_found)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "The key is over its per-minute limit (rate_limited)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "The reception could not be read (internal_error)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "ApiKey": []
-          }
-        ],
-        "x-scopes": [
-          "source:rdio",
-          "type:transcripts",
-          "window:history"
+          "summaries:history"
         ]
       }
     },
@@ -15288,9 +13308,7 @@
           }
         ],
         "x-scopes": [
-          "source:centralwatch",
-          "type:cameras",
-          "window:live"
+          "cameras:live"
         ]
       }
     },
@@ -15416,7 +13434,7 @@
       "get": {
         "operationId": "getTransportVehicles",
         "tags": [
-          "Transport"
+          "Public transport"
         ],
         "summary": "Public transport vehicles in an area",
         "description": "Live positions of trains, metro, light rail, trams, buses and ferries inside an area, for one region, from AnyTrip. The area is clamped to the region's coverage and widened outward to a 0.01° grid; after clamping it may span at most 2.5° each way, and an area outside the region is refused. Vehicles whose last report is more than ten minutes old are left out, and at most 1,500 are returned. Each area's answer is cached for 5 seconds and can be up to 30 seconds old.",
@@ -15576,9 +13594,7 @@
           }
         ],
         "x-scopes": [
-          "source:transport",
-          "type:transit",
-          "window:live"
+          "transport:live"
         ]
       }
     },
@@ -15586,7 +13602,7 @@
       "get": {
         "operationId": "getTransportShape",
         "tags": [
-          "Transport"
+          "Public transport"
         ],
         "summary": "A trip's route track",
         "description": "The track a trip follows, for a vehicle's shapeId, from AnyTrip. The region comes from the id's own prefix. Cached for a day; an answer can be up to a week old.",
@@ -15689,9 +13705,7 @@
           }
         ],
         "x-scopes": [
-          "source:transport",
-          "type:transit",
-          "window:live"
+          "transport:live"
         ]
       }
     },
@@ -15699,7 +13713,7 @@
       "get": {
         "operationId": "getTransportTrip",
         "tags": [
-          "Transport"
+          "Public transport"
         ],
         "summary": "One trip, stop by stop",
         "description": "One trip's stops with live times and delays, where its vehicle is, and the trips before and after it in the same block. Address it with a vehicle's startDate, tripId and instanceNumber; the region comes from the trip id's own prefix. From AnyTrip, cached for 15 seconds; an answer can be up to a minute old.",
@@ -15832,9 +13846,7 @@
           }
         ],
         "x-scopes": [
-          "source:transport",
-          "type:transit",
-          "window:live"
+          "transport:live"
         ]
       }
     },
@@ -15842,7 +13854,7 @@
       "get": {
         "operationId": "getTransportDepartures",
         "tags": [
-          "Transport"
+          "Public transport"
         ],
         "summary": "Departures from a stop",
         "description": "Departures from a stop or station as AnyTrip lists them, with delays and platforms. The region comes from the stop id's own prefix. Cached for 20 seconds; an answer can be up to a minute old.",
@@ -15965,9 +13977,7 @@
           }
         ],
         "x-scopes": [
-          "source:transport",
-          "type:transit",
-          "window:live"
+          "transport:live"
         ]
       }
     },
@@ -15975,7 +13985,7 @@
       "get": {
         "operationId": "getTransportLines",
         "tags": [
-          "Transport"
+          "Public transport"
         ],
         "summary": "Rail network lines",
         "description": "The rail, metro and light-rail network as AnyTrip draws it, each line in its official colour: greater Sydney, a few lines elsewhere such as Canberra light rail, and Queensland Rail's South East Queensland network. AnyTrip's GeoJSON is passed through unchanged; if one of its files cannot be read the others are still served. Cached for a day; an answer can be up to a week old.",
@@ -16047,9 +14057,7 @@
           }
         ],
         "x-scopes": [
-          "source:transport",
-          "type:transit",
-          "window:live"
+          "transport:live"
         ]
       }
     },
@@ -16057,7 +14065,7 @@
       "get": {
         "operationId": "getTransportStops",
         "tags": [
-          "Transport"
+          "Public transport"
         ],
         "summary": "Stations and stops in an area",
         "description": "Train, metro, light-rail, tram and ferry stops inside an area, for one region, from AnyTrip — bus stops are not included. The area is clamped to the region's coverage and widened outward to a 0.01° grid; after clamping it may span at most 2.5° each way, and an area outside the region is refused. At most 500 stops. Each area's answer is cached for an hour and can be up to a day old.",
@@ -16209,9 +14217,7 @@
           }
         ],
         "x-scopes": [
-          "source:transport",
-          "type:transit",
-          "window:live"
+          "transport:live"
         ]
       }
     },
@@ -16219,7 +14225,7 @@
       "get": {
         "operationId": "getTransportAlerts",
         "tags": [
-          "Transport"
+          "Public transport"
         ],
         "summary": "Transport for NSW service alerts",
         "description": "Service alerts from Transport for NSW's official GTFS-realtime alert feeds, for every mode. Cached for a minute; an answer can be up to ten minutes old. Empty, with configured false, when this server has no TfNSW access set up.",
@@ -16300,9 +14306,7 @@
           }
         ],
         "x-scopes": [
-          "source:transport",
-          "type:transit",
-          "window:live"
+          "transport:live"
         ]
       }
     }

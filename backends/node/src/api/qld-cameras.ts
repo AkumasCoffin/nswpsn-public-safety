@@ -33,7 +33,7 @@ import {
 export const qldCamerasRouter = new Hono();
 
 // What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
-const SCOPE_CAMERAS = scoped({ source: 'qldtraffic', type: 'cameras', window: 'live' });
+const SCOPE_CAMERAS = scoped({ feed: 'cameras', window: 'live' });
 
 // What /api/v1/ documents (api/v1/openapi.ts). One shape for both feeds;
 // `source` tells them apart.

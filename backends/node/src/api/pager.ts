@@ -40,7 +40,7 @@ import {
 export const pagerRouter = new Hono();
 
 // What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
-const SCOPE_PAGER = scoped({ source: 'pager', type: 'pager', window: 'any' });
+const SCOPE_PAGER = scoped({ feed: 'pager', window: 'live' });
 
 // SWR cache for the archive_misc-backed query. archive_misc is a heavy
 // partitioned table and the JSON-extract WHERE clause regularly takes

@@ -66,7 +66,7 @@ import {
 export const transportRouter = new Hono();
 
 // What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
-const SCOPE_TRANSIT = scoped({ source: 'transport', type: 'transit', window: 'live' });
+const SCOPE_TRANSIT = scoped({ feed: 'transport', window: 'live' });
 
 const ANYTRIP_HOST = 'https://api-cf-oc2.anytrip.com.au/api/v3/region';
 
@@ -749,7 +749,7 @@ transportRouter.get(
   SCOPE_TRANSIT,
   describeRoute({
     operationId: 'getTransportVehicles',
-    tags: ['Transport'],
+    tags: ['Public transport'],
     summary: 'Public transport vehicles in an area',
     description: `Live positions of trains, metro, light rail, trams, buses and ferries inside an area, for one region, from AnyTrip. ${BBOX_RULES} Vehicles whose last report is more than ten minutes old are left out, and at most 1,500 are returned. Each area's answer is cached for 5 seconds and can be up to 30 seconds old.`,
     responses: {
@@ -900,7 +900,7 @@ transportRouter.get(
   SCOPE_TRANSIT,
   describeRoute({
     operationId: 'getTransportShape',
-    tags: ['Transport'],
+    tags: ['Public transport'],
     summary: "A trip's route track",
     description:
       "The track a trip follows, for a vehicle's shapeId, from AnyTrip. The region comes from the id's own prefix. Cached for a day; an answer can be up to a week old.",
@@ -1230,7 +1230,7 @@ transportRouter.get(
   SCOPE_TRANSIT,
   describeRoute({
     operationId: 'getTransportTrip',
-    tags: ['Transport'],
+    tags: ['Public transport'],
     summary: 'One trip, stop by stop',
     description:
       "One trip's stops with live times and delays, where its vehicle is, and the trips before and after it in the same block. Address it with a vehicle's startDate, tripId and instanceNumber; the region comes from the trip id's own prefix. From AnyTrip, cached for 15 seconds; an answer can be up to a minute old.",
@@ -1428,7 +1428,7 @@ transportRouter.get(
   SCOPE_TRANSIT,
   describeRoute({
     operationId: 'getTransportDepartures',
-    tags: ['Transport'],
+    tags: ['Public transport'],
     summary: 'Departures from a stop',
     description:
       "Departures from a stop or station as AnyTrip lists them, with delays and platforms. The region comes from the stop id's own prefix. Cached for 20 seconds; an answer can be up to a minute old.",
@@ -1562,7 +1562,7 @@ transportRouter.get(
   SCOPE_TRANSIT,
   describeRoute({
     operationId: 'getTransportLines',
-    tags: ['Transport'],
+    tags: ['Public transport'],
     summary: 'Rail network lines',
     description:
       "The rail, metro and light-rail network as AnyTrip draws it, each line in its official colour: greater Sydney, a few lines elsewhere such as Canberra light rail, and Queensland Rail's South East Queensland network. AnyTrip's GeoJSON is passed through unchanged; if one of its files cannot be read the others are still served. Cached for a day; an answer can be up to a week old.",
@@ -1653,7 +1653,7 @@ transportRouter.get(
   SCOPE_TRANSIT,
   describeRoute({
     operationId: 'getTransportStops',
-    tags: ['Transport'],
+    tags: ['Public transport'],
     summary: 'Stations and stops in an area',
     description: `Train, metro, light-rail, tram and ferry stops inside an area, for one region, from AnyTrip — bus stops are not included. ${BBOX_RULES} At most 500 stops. Each area's answer is cached for an hour and can be up to a day old.`,
     responses: {
@@ -1761,7 +1761,7 @@ transportRouter.get(
   SCOPE_TRANSIT,
   describeRoute({
     operationId: 'getTransportAlerts',
-    tags: ['Transport'],
+    tags: ['Public transport'],
     summary: 'Transport for NSW service alerts',
     description:
       "Service alerts from Transport for NSW's official GTFS-realtime alert feeds, for every mode. Cached for a minute; an answer can be up to ten minutes old. Empty, with configured false, when this server has no TfNSW access set up.",

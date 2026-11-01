@@ -4,8 +4,9 @@
  *  - /api/v1/ wraps the page in `data`, writes every time in UTC, and answers
  *    errors in the v1 shape; the old path keeps its bodies and naive Sydney
  *    times (data-history.test.ts pins those).
- *  - A named key reads only the archived sources its scopes cover, on both
- *    paths, and its answers are never cached in between.
+ *  - A named key reads only the archived sources of the feeds whose history
+ *    cell it holds (`fires:history` → rfs, qld_fire, …), on both paths, and
+ *    its answers are never cached in between.
  *  - /sources and /stats are not on /api/v1/.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -28,7 +29,7 @@ vi.mock('../../../src/store/filterCache.js', () => ({
 import { _resetDataHistoryAggregateCache, dataHistoryRouter } from '../../../src/api/data-history.js';
 import { mirror } from '../../../src/api/v1/mirror.js';
 import { notFound, onError } from '../../../src/api/v1/respond.js';
-import { HISTORY_SOURCES } from '../../../src/services/auth/apiKeyScopes.js';
+import { FEEDS, HISTORY_SOURCES } from '../../../src/services/auth/apiKeyScopes.js';
 
 const FETCHED = 1_793_000_000; // 2026-10-26T07:33:20Z, 18:33:20 in Sydney
 
@@ -152,20 +153,23 @@ describe('GET /api/v1/data/history', () => {
   });
 });
 
-describe('a named key reads only the history its scopes cover', () => {
-  const RFS_HISTORY = ['source:rfs', 'type:incidents', 'window:history'];
+describe('a named key reads only the history of the feeds it holds', () => {
+  const FIRES_HISTORY = ['fires:history'];
+  /** Every cell of the staff table. */
+  const EVERY_CELL = Object.entries(FEEDS).flatMap(([feed, f]) => f.windows.map((w) => `${feed}:${w}`));
+  const FIRE_SOURCES = ['nt_fire', 'qld_fire', 'rfs', 'sa_cfs', 'sa_mfs', 'vic_emergency', 'wa_incident'];
 
-  it('with no source given, only its own sources are asked for, and the answer is not cached', async () => {
-    const res = await app(['source:rfs', 'source:pager', 'type:*', 'window:history']).request('/api/v1/data/history');
+  it('with no source given, only its own feeds\' sources are asked for, and the answer is not cached', async () => {
+    const res = await app(['fires:history', 'pager:history']).request('/api/v1/data/history');
     expect(res.status).toBe(200);
     expect(res.headers.get('Cache-Control')).toBe('private, no-store');
     const params = dataQueryParams();
     expect(params.length).toBe(2); // archive_rfs and archive_misc, nothing else
-    for (const p of params) expect(askedSources(p)).toEqual(['pager', 'rfs']);
+    for (const p of params) expect(askedSources(p)).toEqual([...FIRE_SOURCES, 'pager'].sort());
   });
 
-  it('a type it does not hold is not read: rfs incidents but not qfd warnings', async () => {
-    const a = app(['source:rfs', 'source:qfd', 'type:incidents', 'window:history']);
+  it('a feed it does not hold is not read: fire incidents but not QLD warnings', async () => {
+    const a = app(FIRES_HISTORY);
     const res = await a.request('/api/v1/data/history?source=qld_warning');
     expect(res.status).toBe(403);
     expect((await res.json()).error).toEqual({
@@ -175,8 +179,14 @@ describe('a named key reads only the history its scopes cover', () => {
     expect((await a.request('/api/v1/data/history?source=qld_fire,rfs')).status).toBe(200);
   });
 
+  it('the live cell of a feed reads none of its history', async () => {
+    const res = await app(['fires:live', 'warnings:live']).request('/api/v1/data/history?source=rfs');
+    expect(res.status).toBe(403);
+    expect((await res.json()).error.message).toBe("This key's scopes do not cover the stored history of: rfs.");
+  });
+
   it('refused on the old path too, with a plain body', async () => {
-    const res = await app(RFS_HISTORY).request('/api/data/history?source=pager');
+    const res = await app(FIRES_HISTORY).request('/api/data/history?source=pager');
     expect(res.status).toBe(403);
     expect(await res.json()).toEqual({
       error: 'api_key_scope_forbidden',
@@ -184,19 +194,32 @@ describe('a named key reads only the history its scopes cover', () => {
     });
   });
 
-  it('people\'s own reports are never readable, even with every scope', async () => {
-    const res = await app(['source:*', 'type:*', 'window:*']).request('/api/v1/data/history?source=user_incident');
-    expect(res.status).toBe(403);
+  it('people\'s own reports and the radio summaries are never readable here, even with every cell', async () => {
+    const a = app(EVERY_CELL);
+    for (const source of ['user_incident', 'radio_summary']) {
+      const res = await a.request(`/api/v1/data/history?source=${source}`);
+      expect(res.status, source).toBe(403);
+    }
+    // And with no source given, every cell asks for every archived source but those.
+    queryMock.mockClear();
+    expect((await a.request('/api/v1/data/history')).status).toBe(200);
+    const params = dataQueryParams();
+    expect(params.length).toBe(4); // every archive table
+    for (const p of params) {
+      expect(askedSources(p)).toEqual(Object.keys(HISTORY_SOURCES).sort());
+      expect(p).not.toContain('radio_summary');
+    }
   });
 
-  it('a key whose scopes cover no stored source is told so', async () => {
-    const res = await app(['source:rfs', 'type:outages', 'window:history']).request('/api/v1/data/history');
+  it('a key whose history cells have nothing archived is told so', async () => {
+    // Aircraft history is its own route, and summaries are theirs.
+    const res = await app(['aircraft:history', 'summaries:history']).request('/api/v1/data/history');
     expect(res.status).toBe(403);
     expect((await res.json()).error.message).toBe("This key's scopes cover no stored history.");
   });
 
-  it('one incident: only from a source it covers', async () => {
-    const a = app(RFS_HISTORY);
+  it('one incident: only from a feed it holds the history of', async () => {
+    const a = app(FIRES_HISTORY);
     const ok = await a.request('/api/v1/data/history/incident/rfs/inc-7');
     expect(ok.status).toBe(200);
     expect(ok.headers.get('Cache-Control')).toBe('private, no-store');

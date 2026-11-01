@@ -5,12 +5,13 @@
  * the server, for keys that need no review.
  *
  * Usage (from backends/node):
- *   npx tsx --env-file=../.env scripts/issue-api-key.ts --user <supabase uid> --name "<label>" [--rpm 120] [--expires 2027-01-01] [--scopes source:rfs,type:incidents,window:live]
+ *   npx tsx --env-file=../.env scripts/issue-api-key.ts --user <supabase uid> --name "<label>" [--rpm 120] [--expires 2027-01-01] [--scopes fires:live,fires:history]
  *   npx tsx --env-file=../.env scripts/issue-api-key.ts --list [--user <uid>]
  *
  * --scopes is checked like a staff approval (services/auth/apiKeyScopes.ts):
- * known source:/type:/window: scopes with at least one of each, or `read` on
- * its own for the old feed list. Left out, the key gets `read`.
+ * feed:window cells the staff table offers (fires:live, warnings:history,
+ * pager:live, … — FEEDS lists them), or `read` on its own for the old feed
+ * list. Left out, the key gets `read`.
  *
  * The plaintext is printed ONCE and is not stored — hand it over and close
  * the terminal. Keys work from scripts and the command line only; the gate
@@ -45,7 +46,7 @@ async function main(): Promise<void> {
   const userId = arg('user');
   const name = arg('name');
   if (!userId || !name) {
-    console.error('usage: issue-api-key.ts --user <uid> --name "<label>" [--rpm N] [--expires YYYY-MM-DD] [--scopes a,b]');
+    console.error('usage: issue-api-key.ts --user <uid> --name "<label>" [--rpm N] [--expires YYYY-MM-DD] [--scopes fires:live,warnings:live | read]');
     process.exitCode = 2;
     return;
   }
@@ -80,8 +81,8 @@ async function main(): Promise<void> {
   console.log('');
   console.log(`  ${plaintext}`);
   console.log('');
-  console.log('This is the only time it is shown. Use it as:');
-  console.log('  curl -H "Authorization: Bearer <key>" https://api.forcequit.xyz/api/rfs/incidents');
+  console.log('This is the only time it is shown. Use it as (this lists what the key can read):');
+  console.log('  curl -H "Authorization: Bearer <key>" https://api.forcequit.xyz/api/v1/openapi.json');
   console.log('It is refused from web pages by design.');
 }
 

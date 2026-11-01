@@ -1,6 +1,6 @@
 # The public data API — `/api/v1/`
 
-**Base URL: `https://api.forcequit.xyz`. Interactive reference: `https://api.forcequit.xyz/api/docs`.**
+**Base URL: `https://api.forcequit.xyz`. Reference: signed in at `https://nswpsn.forcequit.xyz/api-docs`.**
 
 The data AusAware shows on its map — fire and emergency incidents, warnings,
 hazards — available to scripts and servers with an API key. It is the same data,
@@ -10,7 +10,7 @@ AusAware is an independent project. It relays what agencies publish in their
 own public feeds; it is not affiliated with, endorsed by or acting for any of
 them, and the data stays theirs. Credit NT Fire and Rescue Service wherever you
 show its records — its feed asks not to be re-published, and the reference
-repeats this on that endpoint.
+repeats this on the fires endpoint.
 
 This document is for people using the API and for anyone changing it. How the
 backend is put together is in [`components/backend.md`](components/backend.md);
@@ -21,109 +21,117 @@ read [`../OPERATING-RULES.md`](../OPERATING-RULES.md) before changing anything.
 ## Getting a key
 
 1. Sign in at nswpsn.forcequit.xyz and open your profile → **API keys**.
-   Request a key: a name, what it is for, and optionally which feeds and whether
-   you want live data, history or both.
-2. Staff review the request and choose what the key may read — its **scopes**
+   Request a key: a name, what it is for, and optionally which feeds you want,
+   live, history or both.
+2. Staff review the request and choose what the key may read — its **feeds**
    (below) — its per-minute limit (120 unless set otherwise) and, optionally,
    an expiry.
 3. Once approved, press **Generate key** on the same card. The key
    (`ak_<prefix>_<secret>`) is shown **once**; only its hash is stored.
 
 From the same card you can re-issue a key (new secret, same settings and
-history) or delete it. A person holds at most three active keys.
+history) or delete it, and open the API reference. A person holds at most three
+active keys.
 
 Send the key on every request, either way:
 
 ```bash
-curl -H "X-API-Key: ak_…" https://api.forcequit.xyz/api/v1/rfs/incidents
-curl -H "Authorization: Bearer ak_…" https://api.forcequit.xyz/api/v1/rfs/incidents
+curl -H "X-API-Key: ak_…" https://api.forcequit.xyz/api/v1/fires
+curl -H "Authorization: Bearer ak_…" https://api.forcequit.xyz/api/v1/fires
 ```
 
 **Keys are for scripts and servers, not web pages.** A request that carries a
-key and a browser `Origin` header is refused (`403 api_key_browser_use`) —
-whichever site it comes from, nswpsn.forcequit.xyz included. A key in a web page
-would be a key anyone could copy. The one exception is the API's own reference
-page (below), on the API's own origin, where you paste your key yourself. Keys
-only read: GET (and HEAD), nothing else.
+key and a browser's `Origin` or `Sec-Fetch-Site` header is refused
+(`403 api_key_browser_use`) — whichever site it comes from,
+nswpsn.forcequit.xyz included. A key in a web page
+would be a key anyone could copy. Keys only read: GET (and HEAD), nothing else.
 
-## Scopes
+## Feeds and scopes
 
-A scope is one of three dimensions:
+A key is granted **feeds**, each **live**, **history** or both — on the staff
+page and the profile that is a table, one row per feed. *Live* is what the map
+shows now, polled from each source and held in memory; *history* is the records
+this server stored over time. Each ticked cell is one scope, written
+`<feed>:<window>`:
 
-| Scope | Means |
-|---|---|
-| `source:<key>` | whose data: `rfs`, `firms`, `vic`, `qfd`, `dfes`, `safire`, `ntfrs`, `actas`, `bom`, `livetraffic`, `transport`, `adsb`, `aviation`, `marinetraffic`, `weather`, `beach`, `dorsal`, `endeavour`, `ausgrid`, `essential`, `centralwatch`, `qldtraffic`, `news`, `boundaries`, `pager`, `radio`, `rdio` |
-| `type:<family>` | what kind: `incidents`, `warnings`, `outages`, `hazards`, `cameras`, `weather`, `transit`, `aircraft`, `vessels`, `pager`, `radio`, `summaries`, `transcripts`, `news`, `boundaries` |
-| `window:live` | what the map shows now — polled from each source and held in memory |
-| `window:history` | stored records over time |
+| Feed | Scope(s) | Covers |
+|---|---|---|
+| Fires | `fires:live` · `fires:history` | Every fire service in one feed — NSW RFS, QLD Fire Department, VIC Emergency, WA DFES, SA CFS and MFS, NT Fire and Rescue — plus satellite hotspots and fire danger ratings |
+| Warnings | `warnings:live` · `warnings:history` | Bureau of Meteorology warnings and the QLD and WA emergency warnings |
+| ACT Ambulance | `ambulance:live` · `ambulance:history` | ACT Ambulance Service incidents |
+| Power outages | `outages:live` · `outages:history` | Endeavour Energy, Ausgrid and Essential Energy |
+| Road hazards | `roads:live` · `roads:history` | Live Traffic NSW incidents, roadworks, floods, fires, major events, alpine conditions, council works |
+| Cameras | `cameras:live` | Traffic, QLD traffic and flood, airport and fire-tower cameras |
+| Public transport | `transport:live` | Vehicles, stops, lines, trips, departures, alerts |
+| Aircraft | `aircraft:live` · `aircraft:history` | ADS-B positions, trails, photos; history replays past positions |
+| Ships | `ships:live` | AIS vessel positions and details |
+| Weather | `weather:live` | Current conditions, radar, the forecast grid, point forecasts |
+| Beaches & sharks | `beaches:live` · `beaches:history` | Beachwatch, BeachSafe, SharkSmart reports |
+| News | `news:live` | Emergency and weather news from public RSS feeds |
+| Pager messages | `pager:live` · `pager:history` | Pager hits from the Pagermon relay |
+| Radio summaries | `summaries:history` | The hourly and ad-hoc radio summaries |
 
-Any dimension may be `*`. Every endpoint declares the source, type and window
-it serves; a key reads it when it holds a matching scope **in all three**. So
-`source:rfs type:* window:live` reads every live RFS endpoint, and
-`source:* type:warnings window:live` reads every live warning feed. Reference
-data (boundaries, the radio site list) fits either window. The reference lists
-each endpoint's needs as `x-scopes`, and shows a key the public endpoints and the
-ones its scopes reach. A refusal names what was missing:
+Every endpoint declares the one cell it serves, and a key reads it when it holds
+that cell — nothing broader: there are no wildcards, and a feed added later is
+granted to nobody until staff tick it. The reference lists each endpoint's cell
+as `x-scopes`. A refusal names what was missing:
 
 ```json
 { "error": { "code": "api_key_scope_forbidden",
-             "message": "This key's scopes do not cover this endpoint. It needs source:bom, type:warnings, window:live." } }
+             "message": "This key's scopes do not cover this endpoint. It needs warnings:live." } }
 ```
 
-No scope reaches anything about people or the receiving nodes — accounts and
-profiles, user-submitted incidents, site statistics, node status — however wide
-it is.
+No feed reaches anything about people or the receiving nodes — accounts and
+profiles, user-submitted incidents, site statistics, node status — nor this
+site's own reference data: boundaries, the radio site list and reception
+transcripts are not part of the API.
 
 **`read`** is the rule every key made before scopes still holds: GET on the
 fixed list of paths keys could always read, on `/api/` and on `/api/v1/` alike.
-That list is by path prefix and predates scopes, so it is broader in one place:
-it includes everything under `/api/radio/`, the receiving sites' list among it.
-Staff may still grant `read`; a request cannot ask for it.
+That list is by path prefix and predates scopes, so it is broader in places: it
+includes the per-agency fire feeds at their old paths, `/api/boundaries/` and
+everything under `/api/radio/` — and it reaches `/api/v1/fires`, the fire feeds
+it already read, merged. A scope that is neither `read` nor a cell of the table
+grants nothing. New keys are granted feeds; a request cannot ask for `read`.
 
 ## What is on `/api/v1/`
 
-| Tag | Endpoint | Scopes it needs |
+| Tag | Endpoint | Scope |
 |---|---|---|
-| Incidents | `GET /api/v1/rfs/incidents` · `/rfs/incidents/raw` | `source:rfs type:incidents window:live` |
-| Warnings | `GET /api/v1/rfs/fdr` — fire danger ratings and total fire bans by district | `source:rfs type:warnings window:live` |
-| Incidents | `GET /api/v1/act-ambulance/incidents` | `source:actas type:incidents window:live` |
-| Incidents · Warnings | `GET /api/v1/qld-fire/incidents` · `/qld-fire/warnings` | `source:qfd`, `type:incidents` or `type:warnings`, `window:live` |
-| Incidents | `GET /api/v1/nt-fire/incidents` | `source:ntfrs type:incidents window:live` |
-| Incidents | `GET /api/v1/sa-fire/cfs` · `/sa-fire/mfs` | `source:safire type:incidents window:live` |
-| Incidents | `GET /api/v1/vic-emergency/events` | `source:vic type:incidents window:live` |
-| Incidents · Warnings | `GET /api/v1/wa-emergency/incidents` · `/wa-emergency/warnings` | `source:dfes`, `type:incidents` or `type:warnings`, `window:live` |
-| Hazards | `GET /api/v1/firms/hotspots` | `source:firms type:hazards window:live` |
-| Warnings | `GET /api/v1/bom/warnings` | `source:bom type:warnings window:live` |
-| Hazards | `GET /api/v1/traffic/{incidents,roadwork,flood,fire,majorevent,alpine,lga}` and each one's `/raw` · `/traffic/works` · `/traffic/lga-incidents` · `/traffic/all-feeds` | `source:livetraffic type:hazards window:live` |
-| Cameras | `GET /api/v1/traffic/cameras` | `source:livetraffic type:cameras window:live` |
-| Cameras | `GET /api/v1/aviation/cameras` · `/aviation/cameras/{airport}` | `source:aviation type:cameras window:live` |
-| Transport | `GET /api/v1/transport/{vehicles,lines,stops,alerts}` · `/transport/shape/{id}` · `/transport/trip/{date}/{tripId}/{instance}` · `/transport/departures/{stopId}` | `source:transport type:transit window:live` |
-| Aircraft | `GET /api/v1/adsb/aircraft` · `/adsb/trails` · `/adsb/photo/{hex}` | `source:adsb type:aircraft window:live` |
-| Aircraft | `GET /api/v1/adsb/history` | `source:adsb type:aircraft window:history` |
-| Ships | `GET /api/v1/marinetraffic/vessels` · `/marinetraffic/vessel/{id}` | `source:marinetraffic type:vessels window:live` |
-| Hazards | `GET /api/v1/beachwatch` · `/beachsafe` · `/beachsafe/beach/{slug}` | `source:beach type:hazards window:live` |
-| Hazards | `GET /api/v1/dorsal/reports` | `source:dorsal type:hazards window:live` |
-| Outages | `GET /api/v1/endeavour/{current,maintenance,future,planned}` · `/endeavour/current/all` · `/endeavour/future/all` · `/endeavour/postcodes` | `source:endeavour type:outages window:live` |
-| Outages | `GET /api/v1/essential/{outages,planned,future}` · `/essential/outages/current` · `/essential/outages/raw` | `source:essential type:outages window:live` |
-| Outages | `GET /api/v1/ausgrid/outages` · `/ausgrid/stats` | `source:ausgrid type:outages window:live` |
-| Weather | `GET /api/v1/weather/{current,radar,point}` · `/weather/grid/manifest` · `/weather/grid` | `source:weather type:weather window:live` |
-| Cameras | `GET /api/v1/qld/cameras` · `/qld/flood-cameras` | `source:qldtraffic type:cameras window:live` |
-| Cameras | `GET /api/v1/centralwatch/sites` | `source:centralwatch type:cameras window:live` |
+| Fires | `GET /api/v1/fires` — every fire service, one feed ([below](#fires)) | `fires:live` |
+| Fires | `GET /api/v1/firms/hotspots` — satellite hotspots | `fires:live` |
+| Fires | `GET /api/v1/rfs/fdr` — fire danger ratings and total fire bans by district | `fires:live` |
+| Warnings | `GET /api/v1/bom/warnings` · `/qld-fire/warnings` · `/wa-emergency/warnings` | `warnings:live` |
+| Ambulance | `GET /api/v1/act-ambulance/incidents` | `ambulance:live` |
+| Power outages | `GET /api/v1/endeavour/{current,maintenance,future,planned}` · `/endeavour/current/all` · `/endeavour/future/all` · `/endeavour/postcodes` | `outages:live` |
+| Power outages | `GET /api/v1/essential/{outages,planned,future}` · `/essential/outages/current` · `/essential/outages/raw` | `outages:live` |
+| Power outages | `GET /api/v1/ausgrid/outages` · `/ausgrid/stats` | `outages:live` |
+| Road hazards | `GET /api/v1/traffic/{incidents,roadwork,flood,fire,majorevent,alpine,lga}` and each one's `/raw` · `/traffic/works` · `/traffic/lga-incidents` · `/traffic/all-feeds` | `roads:live` |
+| Cameras | `GET /api/v1/traffic/cameras` · `/aviation/cameras` · `/aviation/cameras/{airport}` · `/qld/cameras` · `/qld/flood-cameras` · `/centralwatch/sites` | `cameras:live` |
 | Cameras | `GET /api/v1/centralwatch/cameras` · `/centralwatch/image/{cameraId}` | none — public |
-| News | `GET /api/v1/news/rss` · `/news/sources` | `source:news type:news window:live` |
-| Reference | `GET /api/v1/boundaries/{kind}` | `source:boundaries type:boundaries`, either window |
-| Reference | `GET /api/v1/agency/extended` · `/agency/extended/{slug}` · `/boundaries/lga-names` | none — public |
-| Pager | `GET /api/v1/pager/hits` | `source:pager type:pager`, either window |
-| Radio | `GET /api/v1/radio/grn-sites` — radio sites as AusAware records them | `source:radio type:radio`, either window |
-| Radio | `GET /api/v1/summaries` · `/summaries/latest` | `source:rdio type:summaries window:history` |
-| Radio | `GET /api/v1/rdio/calls/{callId}` — one reception's transcript | `source:rdio type:transcripts window:history` |
-| History | `GET /api/v1/data/history` · `/data/history/incident/{source}/{source_id}` | `window:history`, and each source's own scopes — see [Stored history](#stored-history) |
+| Public transport | `GET /api/v1/transport/{vehicles,lines,stops,alerts}` · `/transport/shape/{id}` · `/transport/trip/{date}/{tripId}/{instance}` · `/transport/departures/{stopId}` | `transport:live` |
+| Aircraft | `GET /api/v1/adsb/aircraft` · `/adsb/trails` · `/adsb/photo/{hex}` | `aircraft:live` |
+| Aircraft | `GET /api/v1/adsb/history` | `aircraft:history` |
+| Ships | `GET /api/v1/marinetraffic/vessels` · `/marinetraffic/vessel/{id}` | `ships:live` |
+| Weather | `GET /api/v1/weather/{current,radar,point}` · `/weather/grid/manifest` · `/weather/grid` | `weather:live` |
+| Beaches & sharks | `GET /api/v1/beachwatch` · `/beachsafe` · `/beachsafe/beach/{slug}` · `/dorsal/reports` | `beaches:live` |
+| News | `GET /api/v1/news/rss` · `/news/sources` | `news:live` |
+| Pager | `GET /api/v1/pager/hits` | `pager:live` |
+| Radio summaries | `GET /api/v1/summaries` · `/summaries/latest` | `summaries:history` |
+| History | `GET /api/v1/data/history` · `/data/history/incident/{source}/{source_id}` | the history of at least one stored feed (`*:history`) — see [Stored history](#stored-history) |
 | History | `GET /api/v1/data/history/filters` | none — public |
+| Reference | `GET /api/v1/agency/extended` · `/agency/extended/{slug}` | none — public |
 | Service | `GET /api/v1/health` · `/api/v1/status` | none — public |
 | — | `GET /api/v1/openapi.json` | any valid key |
 
-Every feed a key can read is on `/api/v1/`; each is still served at its old
-`/api/…` path as well, with the same scopes, until that path is retired.
+Most of these are still served at their old `/api/…` path as well, the same
+handler with the same scope, until that path is retired. Not on `/api/v1/`, and
+not readable by a key in the feed form: the per-agency fire incident feeds
+(`/api/rfs/incidents`, `/api/qld-fire/incidents`, `/api/vic-emergency/events`,
+`/api/nt-fire/incidents`, `/api/wa-emergency/incidents`, `/api/sa-fire/cfs` and
+`/mfs`), which this site's map and the Discord bot read — keys read them merged,
+at `/api/v1/fires` — and boundaries (`/api/boundaries/…`, the council names
+included), the radio site list and reception transcripts.
 
 A few old paths have no `/api/v1/` twin because another endpoint already
 answers the same thing: `/api/endeavour/current/raw` and `/future/raw` (use
@@ -135,9 +143,38 @@ The fire-tower cameras' `imageUrl` is a path on this API, to be joined to its
 origin: `/api/v1/centralwatch/image/{id}` from `/api/v1/`, and the old
 `/api/centralwatch/image/{id}` from the old path.
 
-`/rfs/incidents/raw` on v1 is the RFS's own `majorIncidents.json`, exactly as
-published at the last poll; the old `/api/rfs/incidents/raw` keeps its RSS-based
-shape until it is retired.
+### Fires
+
+`GET /api/v1/fires` is every fire service's incidents in one GeoJSON
+FeatureCollection — NSW RFS, the QLD Fire Department, VIC Emergency, WA DFES,
+SA CFS and MFS and NT Fire and Rescue — each record in the same shape:
+
+| Property | |
+|---|---|
+| `id` | Stable across polls, built from the agency's own id |
+| `source` | `rfs`, `qld_fire`, `vic_emergency`, `nt_fire`, `wa_incident`, `sa_cfs` or `sa_mfs` — the same names stored history uses |
+| `agency` | The publishing service: `RFS`, `QFD`, `CFA`, `SES`, `DFES`, `SACFS`, `SAMFS`, `NTFRS`, … |
+| `state` | `NSW`, `QLD`, `VIC`, `NT`, `WA` or `SA` |
+| `layer` | `fire`, or `flood` / `hazard` for the other incidents these services publish (and `hazard` for any kind of record not known yet) |
+| `title`, `status`, `location` | As the agency words them |
+| `category` | Kind of incident as the agency classes it — "Grass Fire", "Building Fire", … |
+| `alert_level` | Advice, Watch and Act, Emergency Warning — or empty / "Not Applicable" |
+| `responsible_agency` | As the agency gives it |
+| `updated_at` | Last update, ISO 8601 UTC; `null` when the agency gives no time with a zone — then `details.updated` has its own wording |
+| `is_active` | `false` once closed (only with `all=1`) |
+| `polygons` | Fire grounds or warning areas, outer rings of `[longitude, latitude]`; empty when none |
+| `details` | The agency's own extra fields under their own names (RFS `size`, `councilArea`; QFD `vehiclesOnScene`; VIC `capEvent`, `text`; WA `region`; SA `district`; …) |
+
+The services publish more than fires — VIC Emergency carries floods and other
+hazards, the QLD and NT services rescues and hazmat — and those come too,
+tagged by `layer`. Filters, each a comma list: `source=`, `state=` (any case)
+and `layer=` (`layer=fire` for fires only); an unknown value is a
+`400 validation_failed` naming it. Closed incidents are left out unless
+`all=1`. The collection also carries `sources`, one entry per service asked
+for, with how many records it gave (after the filters) and when this server
+last read it (`updated_at`, `null` if it has not yet) — so a service that is
+down shows as missing, not as having no fires. Records from NT Fire and Rescue
+are theirs: credit NTFRS if you republish them.
 
 ### Stored history
 
@@ -145,36 +182,27 @@ shape until it is retired.
 by default one record per incident, its latest, newest first — and
 `/data/history/incident/{source}/{source_id}` every stored snapshot of one
 incident. Records carry the archived source they came from (`source`), and a
-key reads an archived source's history when its scopes cover that source's
-scope source and type, with `window:history`:
+key reads an archived source when it holds that feed's history:
 
-| Archived `source` | Scopes |
+| Feed | Archived `source` |
 |---|---|
-| `rfs` | `source:rfs type:incidents` |
-| `nt_fire` | `source:ntfrs type:incidents` |
-| `qld_fire` · `qld_warning` | `source:qfd`, `type:incidents` · `type:warnings` |
-| `vic_emergency` | `source:vic type:incidents` |
-| `wa_incident` · `wa_warning` | `source:dfes`, `type:incidents` · `type:warnings` |
-| `sa_cfs` · `sa_mfs` | `source:safire type:incidents` |
-| `act_ambulance` | `source:actas type:incidents` |
-| `bom_land` · `bom_marine` | `source:bom type:warnings` |
-| `traffic_incident`, `traffic_roadwork`, `traffic_flood`, `traffic_fire`, `traffic_majorevent`, `traffic_alpine`, `traffic_lga`, `traffic_works` | `source:livetraffic type:hazards` |
-| `endeavour_current` · `endeavour_planned` · `endeavour_maintenance` | `source:endeavour type:outages` |
-| `essential_current` · `essential_planned` · `essential_future` | `source:essential type:outages` |
-| `ausgrid` | `source:ausgrid type:outages` |
-| `dorsal` | `source:dorsal type:hazards` |
-| `pager` | `source:pager type:pager` |
+| `fires:history` | `rfs`, `qld_fire`, `vic_emergency`, `nt_fire`, `wa_incident`, `sa_cfs`, `sa_mfs` |
+| `warnings:history` | `bom_land`, `bom_marine`, `qld_warning`, `wa_warning` |
+| `ambulance:history` | `act_ambulance` |
+| `roads:history` | `traffic_incident`, `traffic_roadwork`, `traffic_flood`, `traffic_fire`, `traffic_majorevent`, `traffic_alpine`, `traffic_lga`, `traffic_works` |
+| `outages:history` | `endeavour_current`, `endeavour_planned`, `endeavour_maintenance`, `ausgrid`, `essential_current`, `essential_planned`, `essential_future` |
+| `beaches:history` | `dorsal` |
+| `pager:history` | `pager` |
 
-So `source:rfs source:qfd type:incidents window:history` reads the stored
-history of `rfs` and `qld_fire`, but not `qld_warning`. Without `?source=`, a
-key's answer holds only the sources it covers; naming one it does not is a
-`403 api_key_scope_forbidden` that says which. People's own reports
-(`user_incident`) are never readable through a key. Because the answer depends
-on the key, it comes with `Cache-Control: private, no-store`.
-
-In the reference these endpoints list `source:*` and `type:*` in their
-`x-scopes`: here that means *any* source or type scope gets in, and the answer
-is narrowed to what the key covers — not that the key must hold `source:*`.
+So `fires:history` reads the stored history of every fire service, but not
+`qld_warning`. Without `?source=`, a key's answer holds only the sources it
+covers; naming one it does not is a `403 api_key_scope_forbidden` that says
+which. People's own reports (`user_incident`) are never readable through a key.
+Because the answer depends on the key, it comes with
+`Cache-Control: private, no-store`. In the reference these endpoints list
+`*:history` as their `x-scopes`: the history of any feed in the table above
+gets in (`aircraft:history` and `summaries:history` have endpoints of their
+own, so they do not), and the answer is narrowed to the feeds the key holds.
 
 Page with `cursor` (the previous page's `next_cursor`); `offset` works too, up
 to 10,000. `total` is the number of matching records, or 0 when they could not
@@ -224,10 +252,11 @@ GeoJSON tools can read the response directly. Coordinates are
 `[longitude, latitude]` (WGS84), as GeoJSON has them.
 
 **Field names.** Names the API itself defines — `data`, `error`, query
-parameters — are `snake_case`. A feed's records keep the field names they have
-always had, which for several fire feeds are camelCase (`alertLevel`,
-`updatedISO`): the map, the bot and existing clients read those names, and v1
-does not rename them.
+parameters, and every field of an endpoint made for this API, such as
+`/api/v1/fires` — are `snake_case`. A feed carried over from the old paths
+keeps the field names it always had, which for some are camelCase
+(`alertLevel`, `updatedISO`): the map, the bot and existing clients read those
+names, and v1 does not rename them.
 
 **Times** take the form each feed gives them, and the reference says which:
 an ISO 8601 timestamp (with its offset), unix seconds, or text for display
@@ -291,30 +320,46 @@ too.
 
 The unversioned `/api/…` paths keep the error bodies they always had.
 
-## The reference: `openapi.json` and `/api/docs`
+## The reference: `openapi.json` and `/api-docs`
 
 `GET /api/v1/openapi.json` is the OpenAPI 3.1 description of `/api/v1/`, and
 every valid key may fetch it — a `read` key too. It is **filtered to the key**:
 the public endpoints plus the ones its scopes reach. It is not wrapped in
 `data`, so tools can read it as it is, and it is never cached.
 
-`https://api.forcequit.xyz/api/docs` renders it. The page asks for your key,
-keeps it in that browser tab only (`sessionStorage`), fetches the description
-with it and shows it with "Try it" on each endpoint. The page and its viewer are
-served by this API; its Content-Security-Policy lets it reach this API and
-nothing else, so the key is sent nowhere but here. The viewer is
-[Scalar](https://github.com/scalar/scalar) (MIT), vendored at
-`backends/node/assets/scalar/` — that directory's README says how to update it.
+The readable reference is a page on the site, linked to your account:
+`https://nswpsn.forcequit.xyz/api-docs`, and the **API docs** button on your
+profile's API keys card. Sign in and it shows the description as far as your
+**active** keys reach — every endpoint at least one of them can read, plus the
+public ones; a revoked or expired key adds nothing. Owner and staff see the
+whole document. With no active key the page says so and points to the API keys
+card; signed out, it asks you to sign in.
+
+The page never handles a key. It reads the description signed in, from
+`GET /api/api-keys/openapi.json` on the API (`api/apiKeys.ts`) — the Supabase
+session, not a key; `403 no_active_key` when you hold none; never cached — the
+same committed document `/api/v1/openapi.json` serves, filtered once per key
+and joined (`filterSpecForKeys` in `api/v1/openapi.ts`). "Try it" is off:
+a key sent from a web page is refused (`api_key_browser_use`), so it could never
+work there. Each endpoint keeps its example request to copy into a terminal.
+
+The viewer is [Scalar](https://github.com/scalar/scalar) (MIT), vendored at
+`vendor/scalar/` in the site and loaded from there — nothing comes from a CDN.
+It is set to send nothing anywhere (no telemetry, request proxy, web fonts, AI
+agent or MCP), and loads only once there is a reference to show. That
+directory's README says how to update it.
 
 ## Changing the API
 
 The description is generated from the routes, so the code is the documentation.
 To put an endpoint on `/api/v1/`, or change one that is there:
 
-1. **Scope.** The route declares what it serves, as its first middleware:
-   `scoped({ source, type, window })` (`services/auth/apiKeyScopes.ts`). Without
-   one, no scoped key can read it.
-2. **Description.** `describeRoute({ operationId, tags: [one tag], summary,
+1. **Scope.** The route declares the feed and window it serves, as its first
+   middleware: `scoped({ feed, window })` (`services/auth/apiKeyScopes.ts`).
+   Without one, no scoped key can read it. A new feed is a new row in `FEEDS`
+   there (label, what it covers, its windows) — staff then see it in the table,
+   and nobody holds it until they tick it.
+2. **Description.** `describeRoute({ operationId, tags: [the feed's tag], summary,
    description, responses })` from `hono-openapi`. Responses come from
    `api/v1/schemas.ts`: `okJson(schema, …)` plus `GATED_ERRORS` for a route that
    needs a key, `VALIDATION_ERROR` where input can be refused.

@@ -27,7 +27,7 @@ import {
 export const firmsRouter = new Hono();
 
 // What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
-const SCOPE_HAZARDS = scoped({ source: 'firms', type: 'hazards', window: 'live' });
+const SCOPE_HAZARDS = scoped({ feed: 'fires', window: 'live' });
 
 // What /api/v1/ documents (api/v1/openapi.ts).
 const FirmsHotspots = featureCollection(
@@ -82,7 +82,7 @@ firmsRouter.get(
   SCOPE_HAZARDS,
   describeRoute({
     operationId: 'getFirmsHotspots',
-    tags: ['Hazards'],
+    tags: ['Fires'],
     summary: 'Satellite fire hotspots',
     description:
       'NASA FIRMS VIIRS hotspot detections over Australia from the last 24 hours, each as its pixel footprint. A hotspot is a heat signature seen from orbit, not a confirmed fire.',

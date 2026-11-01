@@ -50,6 +50,7 @@ Consequences you have to work with:
 | `/staff` | `staff.html` | Role-gated operations surface |
 | `/dashboard` | `dashboard.html` | Discord-OAuth management UI for the bot |
 | `/login`, `/signup`, `/profile` | … | Accounts |
+| `/api-docs` | `api-docs.html` | The API reference, signed in: what the person's active API keys can read (all of it for staff), in the vendored Scalar viewer. See [`../api.md`](../api.md) |
 | `/verify-email`, `/reset-password`, `/change-password` | … | Account flows |
 | `/about`, `/contact`, `/links`, `/privacy`, `/terms` | … | Static content |
 | `/map-editor` | `map-editor.html` | **A redirect stub.** The editor merged into `map.html`, which enables editor mode automatically when a signed-in user has the role. The stub only keeps old links working |
@@ -84,6 +85,7 @@ describes the public surface as audio-free.
 | `config.sample.js` | Config template — copy to `config.js` |
 | `agency-data.json` | Agency directory `agency.html` reads |
 | `assets/`, `data/`, `shared/` | Icons, geo and reference datasets, the alert catalog |
+| `vendor/scalar/` | The API reference viewer (Scalar, MIT), committed as published — no CDN. Its README says how to update it |
 
 ## `config.js`
 

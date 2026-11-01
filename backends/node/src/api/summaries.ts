@@ -108,7 +108,7 @@ function rowToSummary(row: SummaryRow): SummaryShape {
 export const summariesRouter = new Hono();
 
 // What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
-const SCOPE_SUMMARIES_HISTORY = scoped({ source: 'rdio', type: 'summaries', window: 'history' });
+const SCOPE_SUMMARIES_HISTORY = scoped({ feed: 'summaries', window: 'history' });
 
 // ---------------------------------------------------------------------------
 // What /api/v1/ documents (api/v1/openapi.ts)
@@ -217,7 +217,7 @@ summariesRouter.get(
   SCOPE_SUMMARIES_HISTORY,
   describeRoute({
     operationId: 'getLatestSummary',
-    tags: ['Radio'],
+    tags: ['Radio summaries'],
     summary: 'The latest radio summary',
     description:
       "The most recent AI-written summary of the radio traffic AusAware receives. AusAware records each reception and transcribes it by speech recognition; once an hour, at five minutes to the hour (Sydney time), a language model summarises that hour's transcripts, and the summary is released on the hour — so the last few minutes of an hour may not be in it. Summaries can also be written on demand from the latest transcripts. A summary is a model's reading of machine transcripts: it can be wrong.",
@@ -257,7 +257,7 @@ summariesRouter.get(
   SCOPE_SUMMARIES_HISTORY,
   describeRoute({
     operationId: 'getSummaries',
-    tags: ['Radio'],
+    tags: ['Radio summaries'],
     summary: 'Radio summaries',
     description:
       'The AI-written summaries of the radio traffic AusAware receives (see the latest summary), newest period first, a page at a time. Summaries not yet released are left out. Filter by type, by hour, or by date.',

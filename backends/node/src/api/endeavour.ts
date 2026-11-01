@@ -49,7 +49,7 @@ import {
 export const endeavourRouter = new Hono();
 
 // What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
-const SCOPE_OUTAGES = scoped({ source: 'endeavour', type: 'outages', window: 'live' });
+const SCOPE_OUTAGES = scoped({ feed: 'outages', window: 'live' });
 
 interface SupabaseAreaRaw {
   incident_id?: string;
@@ -169,7 +169,7 @@ endeavourRouter.get(
   SCOPE_OUTAGES,
   describeRoute({
     operationId: 'getEndeavourCurrent',
-    tags: ['Outages'],
+    tags: ['Power outages'],
     summary: 'Endeavour Energy unplanned outages',
     description:
       "Unplanned electricity outages on Endeavour Energy's network now, from Endeavour Energy's public outage data, with the address, cause and timing joined onto each outage area. Refreshed every minute.",
@@ -186,7 +186,7 @@ endeavourRouter.get(
   SCOPE_OUTAGES,
   describeRoute({
     operationId: 'getEndeavourMaintenance',
-    tags: ['Outages'],
+    tags: ['Power outages'],
     summary: 'Endeavour Energy planned work under way',
     description:
       "Planned outages on Endeavour Energy's network that are under way: the work's status says so, or its start time has passed. From Endeavour Energy's public outage data; refreshed every five minutes.",
@@ -207,7 +207,7 @@ endeavourRouter.get(
   SCOPE_OUTAGES,
   describeRoute({
     operationId: 'getEndeavourFuture',
-    tags: ['Outages'],
+    tags: ['Power outages'],
     summary: 'Endeavour Energy planned work to come',
     description:
       "Planned outages on Endeavour Energy's network that have not started yet. From Endeavour Energy's public outage data; refreshed every five minutes.",
@@ -226,7 +226,7 @@ endeavourRouter.get(
   SCOPE_OUTAGES,
   describeRoute({
     operationId: 'getEndeavourPlanned',
-    tags: ['Outages'],
+    tags: ['Power outages'],
     summary: 'Endeavour Energy planned outages',
     description:
       "Every planned outage on Endeavour Energy's network: the work under way (as /endeavour/maintenance) followed by the work still to come (as /endeavour/future). Refreshed every five minutes.",
@@ -266,7 +266,7 @@ endeavourRouter.get(
   SCOPE_OUTAGES,
   describeRoute({
     operationId: 'getEndeavourCurrentAreas',
-    tags: ['Outages'],
+    tags: ['Power outages'],
     summary: 'Endeavour Energy outage areas other than planned work, unprocessed',
     description:
       "Endeavour Energy's outage areas that are not planned work, exactly as Endeavour Energy publishes them, for clients that process them themselves — no address, cause or timing joined on (/endeavour/current has those). Read from Endeavour Energy on each request.",
@@ -315,7 +315,7 @@ endeavourRouter.get(
   SCOPE_OUTAGES,
   describeRoute({
     operationId: 'getEndeavourPlannedAreas',
-    tags: ['Outages'],
+    tags: ['Power outages'],
     summary: 'Endeavour Energy planned-work outage areas, unprocessed',
     description:
       "Endeavour Energy's outage areas marked as planned work, exactly as Endeavour Energy publishes them, for clients that process them themselves. Despite the path, this includes planned work already under way, not only work to come. Read from Endeavour Energy on each request.",
@@ -361,7 +361,7 @@ endeavourRouter.get(
   SCOPE_OUTAGES,
   describeRoute({
     operationId: 'getEndeavourPostcodes',
-    tags: ['Outages'],
+    tags: ['Power outages'],
     summary: 'Postcodes in Endeavour Energy outages',
     description:
       "The postcodes in Endeavour Energy's outage data — taken from its outage points, at most 5,000 of them read — each once, sorted. Read from Endeavour Energy when asked, and a good answer is kept for an hour.",

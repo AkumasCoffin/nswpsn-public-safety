@@ -29,7 +29,7 @@ import { assertShape, envelope, GATED_ERRORS, okJson, type SameShape } from './v
 export const ausgridRouter = new Hono();
 
 // What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
-const SCOPE_OUTAGES = scoped({ source: 'ausgrid', type: 'outages', window: 'live' });
+const SCOPE_OUTAGES = scoped({ feed: 'outages', window: 'live' });
 
 // ---------------------------------------------------------------------------
 // What /api/v1/ documents (api/v1/openapi.ts)
@@ -103,7 +103,7 @@ ausgridRouter.get(
   SCOPE_OUTAGES,
   describeRoute({
     operationId: 'getAusgridOutages',
-    tags: ['Outages'],
+    tags: ['Power outages'],
     summary: 'Ausgrid outages',
     description: `Electricity outages on Ausgrid's network, from Ausgrid's public outage map, polled every two minutes when polling is on. ${POLLING_OFF}`,
     responses: {
@@ -127,7 +127,7 @@ ausgridRouter.get(
   SCOPE_OUTAGES,
   describeRoute({
     operationId: 'getAusgridStats',
-    tags: ['Outages'],
+    tags: ['Power outages'],
     summary: 'Ausgrid outage counts',
     description: `Ausgrid's own outage counters, as its public outage map publishes them, polled every two minutes when polling is on. ${POLLING_OFF}`,
     responses: {

@@ -34,9 +34,10 @@
  * or location: which RECEIVERS exist and where stays role-gated
  * (/api/adsb/receivers is the precedent).
  *
- * GET /api/radio/grn-sites is also served at /api/v1/ (server.ts mirrors it),
- * wrapped in `data` there (api/v1/respond.ts). monitored-sites is not — it is
- * node status, for the site's own map — and neither is the owner's PATCH.
+ * None of these is on /api/v1/. GET /api/radio/grn-sites is this site's own
+ * reference data, for the map, which API keys do not read (the ok()/fail()
+ * v1 shapes in it date from when it was mirrored); monitored-sites is node
+ * status, for the site's own map; and the PATCH is the owner's.
  */
 import { Hono } from 'hono';
 import { readFileSync, statSync } from 'node:fs';
@@ -48,14 +49,12 @@ import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { requireRole, isOwner } from '../services/auth/roles.js';
 import { hub } from '../services/nodes/hub.js';
-import { scoped } from '../services/auth/apiKeyScopes.js';
 import { fail, ok } from './v1/respond.js';
 import { envelope, ErrorBody, GATED_ERRORS, okJson, UNAVAILABLE_ERROR } from './v1/schemas.js';
 
 export const radioPublicRouter = new Hono();
 
-// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
-const SCOPE_RADIO = scoped({ source: 'radio', type: 'radio', window: 'any' });
+// No scope: the radio site list is this site's own reference data, which API keys do not read.
 
 /** How stale a snapshot may be and still count as "monitoring". */
 const MONITORED_WINDOW_SECONDS = 5 * 60;
@@ -252,7 +251,8 @@ export async function seedGrnSitesIfEmpty(): Promise<void> {
   }
 }
 
-// What /api/v1/ documents (api/v1/openapi.ts). Each site is the stored record
+// The answer's shape, for describeRoute() below; the route is not on /api/v1/,
+// so the API description (api/v1/openapi.ts) leaves it out. Each site is the stored record
 // as it is, under the dataset's own field names; a field is absent when the
 // record has no value for it. The seed file's values are not all of one type,
 // so the schema says what each field has actually held.
@@ -301,7 +301,6 @@ let _grnCache: { at: number; body: Record<string, unknown> } | null = null;
 
 radioPublicRouter.get(
   '/api/radio/grn-sites',
-  SCOPE_RADIO,
   describeRoute({
     operationId: 'getGrnSites',
     tags: ['Radio'],

@@ -1,30 +1,33 @@
 /**
  * What a named API key may read — its scopes.
  *
- * A scope is one of three dimensions, `main:sub` like the role names
+ * A scope is one feed and one window, `feed:window` like the role names
  * (services/auth/roles.ts):
  *
- *   source:<key>    whose data — rfs, livetraffic, adsb, pager, … (SCOPE_SOURCES)
- *   type:<family>   what kind — incidents, warnings, outages, … (SCOPE_TYPES)
- *   window:live     what the map shows now, polled each minute and cached
- *   window:history  stored records over time
+ *   fires:live      the fire services' incidents as the map shows them now
+ *   fires:history   the same incidents as stored over time
  *
- * and any dimension may be `*`. An endpoint declares the source, type and
- * window it serves (`scoped()` below, on the route itself), and a key is let
- * through when it matches all three. A key always reads, never writes.
+ * FEEDS lists the feeds and which windows each has: `live` is what the map
+ * shows now, polled each minute and cached; `history` is stored records over
+ * time. Staff grant a key a set of feed/window cells (the table on the staff
+ * page), and a key reads an endpoint when it holds the cell the endpoint
+ * declares (`scoped()` below, on the route itself). A key always reads, never
+ * writes. There are no wildcards: a feed added later is granted to nobody
+ * until staff tick it.
  *
  * The literal scope `read` is the old rule, kept for every key made before
  * scopes were enforced: GET or HEAD on the fixed list of upstream feeds in
- * LEGACY_READ_PREFIXES, nothing else. A key whose scopes hold `read`, or hold
- * no source:/type:/window: scope at all, is judged by that list and nothing
- * else — so turning scopes on changed nothing for existing keys.
+ * LEGACY_READ_PREFIXES, nothing else. A key whose scopes hold `read` is judged
+ * by that list and nothing else — so turning scopes on changed nothing for
+ * existing keys. A scope this table does not know grants nothing.
  *
- * What is deliberately NOT a scope: anything about people or nodes. Live data
- * is what the public map shows; node status (receivers, monitored sites),
- * profiles, accounts, user-submitted incidents and site statistics are never
- * declared, so no scope reaches them.
+ * What is deliberately NOT a feed: anything about people or nodes, and this
+ * site's own reference data. Live data is what the public map shows; node
+ * status (receivers, monitored sites), profiles, accounts, user-submitted
+ * incidents, site statistics, boundaries, the radio site list and reception
+ * transcripts are never declared, so no scope reaches them.
  *
- * The source list lives here, not in shared/alert-catalog.json: that file is
+ * The feed list lives here, not in shared/alert-catalog.json: that file is
  * what the Discord bot and its dashboard alert on, and not every source is an
  * alert on purpose. A test keeps the two aligned where they overlap.
  */
@@ -32,99 +35,93 @@ import type { Context, MiddlewareHandler } from 'hono';
 import { matchedRoutes } from 'hono/route';
 import { unversionedPath } from '../../lib/apiVersion.js';
 
-/** Sources a key can be scoped to. Labels are what staff and users see. */
-export const SCOPE_SOURCES: Readonly<Record<string, string>> = {
-  rfs: 'NSW Rural Fire Service',
-  firms: 'NASA FIRMS hotspots',
-  vic: 'VIC Emergency',
-  qfd: 'QLD Fire Department',
-  dfes: 'WA DFES',
-  safire: 'SA CFS / MFS',
-  ntfrs: 'NT Fire and Rescue',
-  actas: 'ACT Ambulance',
-  bom: 'Bureau of Meteorology',
-  livetraffic: 'Live Traffic NSW',
-  transport: 'Public transport',
-  adsb: 'Aircraft (ADS-B)',
-  aviation: 'Airport cameras',
-  marinetraffic: 'Ships (AIS)',
-  weather: 'Weather',
-  beach: 'Beachwatch and BeachSafe',
-  dorsal: 'Shark reports',
-  endeavour: 'Endeavour Energy',
-  ausgrid: 'Ausgrid',
-  essential: 'Essential Energy',
-  centralwatch: 'Fire-tower cameras',
-  qldtraffic: 'QLD Traffic cameras',
-  news: 'News',
-  boundaries: 'Boundaries',
-  pager: 'Pager messages',
-  radio: 'Radio site reference',
-  rdio: 'Radio summaries and transcripts',
-};
+export type ScopeWindow = 'live' | 'history';
 
-/** Kinds of data. */
-export const SCOPE_TYPES: Readonly<Record<string, string>> = {
-  incidents: 'Incidents',
-  warnings: 'Warnings',
-  outages: 'Power outages',
-  hazards: 'Hazards',
-  cameras: 'Cameras',
-  weather: 'Weather',
-  transit: 'Public transport',
-  aircraft: 'Aircraft',
-  vessels: 'Ships',
-  pager: 'Pager messages',
-  radio: 'Radio sites',
-  summaries: 'Radio summaries',
-  transcripts: 'Reception transcripts',
-  news: 'News',
-  boundaries: 'Boundaries',
-};
+export interface Feed {
+  /** What staff and users see in the table. */
+  label: string;
+  /** What the feed takes in, in a line, for the table's tooltip and the docs. */
+  covers: string;
+  /** The windows an endpoint of this feed serves; the table offers only these. */
+  windows: readonly ScopeWindow[];
+}
 
-export const SCOPE_WINDOWS: Readonly<Record<'live' | 'history', string>> = {
-  live: 'Live — what the map shows now',
-  history: 'History — stored records over time',
-};
+/** The feeds a key can be granted, in the order the table lists them. */
+export const FEEDS = {
+  fires: {
+    label: 'Fires',
+    covers:
+      'Every fire service in one feed (NSW RFS, QLD Fire Department, VIC Emergency, WA DFES, SA CFS and MFS, NT Fire and Rescue), satellite hotspots and fire danger ratings',
+    windows: ['live', 'history'],
+  },
+  warnings: {
+    label: 'Warnings',
+    covers: 'Bureau of Meteorology warnings and the QLD and WA emergency warnings',
+    windows: ['live', 'history'],
+  },
+  ambulance: { label: 'ACT Ambulance', covers: 'ACT Ambulance Service incidents', windows: ['live', 'history'] },
+  outages: {
+    label: 'Power outages',
+    covers: 'Endeavour Energy, Ausgrid and Essential Energy outages',
+    windows: ['live', 'history'],
+  },
+  roads: {
+    label: 'Road hazards',
+    covers: 'Live Traffic NSW incidents, roadworks, floods, fires, major events, alpine conditions and council works',
+    windows: ['live', 'history'],
+  },
+  cameras: {
+    label: 'Cameras',
+    covers: 'Traffic, QLD traffic and flood, airport and fire-tower cameras',
+    windows: ['live'],
+  },
+  transport: { label: 'Public transport', covers: 'Vehicles, stops, lines, trips, departures and alerts', windows: ['live'] },
+  aircraft: { label: 'Aircraft', covers: 'ADS-B positions, trails and photos; history replays past positions', windows: ['live', 'history'] },
+  ships: { label: 'Ships', covers: 'AIS vessel positions and details', windows: ['live'] },
+  weather: { label: 'Weather', covers: 'Current conditions, radar, the forecast grid and point forecasts', windows: ['live'] },
+  beaches: {
+    label: 'Beaches & sharks',
+    covers: 'Beachwatch water quality, BeachSafe conditions and SharkSmart reports',
+    windows: ['live', 'history'],
+  },
+  news: { label: 'News', covers: 'Emergency and weather news from public RSS feeds', windows: ['live'] },
+  pager: { label: 'Pager messages', covers: 'Pager hits from the Pagermon relay', windows: ['live', 'history'] },
+  summaries: { label: 'Radio summaries', covers: 'The hourly and ad-hoc radio summaries', windows: ['history'] },
+} as const satisfies Readonly<Record<string, Feed>>;
 
-export type ScopeDim = 'source' | 'type' | 'window';
-const DIMS: readonly ScopeDim[] = ['source', 'type', 'window'];
-const VALUES: Record<ScopeDim, Readonly<Record<string, string>>> = {
-  source: SCOPE_SOURCES,
-  type: SCOPE_TYPES,
-  window: SCOPE_WINDOWS,
-};
+export type FeedKey = keyof typeof FEEDS;
+
+const isFeed = (key: string): key is FeedKey => Object.prototype.hasOwnProperty.call(FEEDS, key);
 
 /** The pre-scope rule, held by every key made before scopes were enforced. */
 export const LEGACY_READ = 'read';
 
-/** At most this many scopes on one key — the whole taxonomy is about fifty. */
+/** Every cell of the table is about thirty; this is just a sanity bound. */
 const MAX_SCOPES = 64;
 
 /**
- * What one endpoint serves. `source`/`type` are a key of their table; a
- * window of 'any' is reference data that fits either window (a key with any
- * window scope passes).
+ * What one endpoint serves: a feed and a window. A feed of '*' is a route
+ * spanning feeds (stored history): any scope in that window gets in, and the
+ * route serves only what the key's scopes cover (historySourcesFor below).
  */
 export interface ScopeNeed {
-  source: string;
-  type: string;
-  window: 'live' | 'history' | 'any';
+  feed: FeedKey | '*';
+  window: ScopeWindow;
 }
 
 /** The one need every valid key satisfies (its own API description). */
 export const ANY_KEY = Object.freeze({ anyKey: true as const });
 export type RouteNeed = ScopeNeed | typeof ANY_KEY;
 
-const SCOPE_RE = /^(source|type|window):([a-z0-9_]+|\*)$/;
+const SCOPE_RE = /^([a-z_]+):(live|history)$/;
 
-function parse(scope: string): { dim: ScopeDim; value: string } | null {
+/** A scope in the feed:window form, if it is one the table offers. */
+export function parseScope(scope: string): { feed: FeedKey; window: ScopeWindow } | null {
   const m = SCOPE_RE.exec(scope);
-  if (!m) return null;
-  const dim = m[1] as ScopeDim;
-  const value = m[2]!;
-  if (value !== '*' && !Object.prototype.hasOwnProperty.call(VALUES[dim], value)) return null;
-  return { dim, value };
+  if (!m || !isFeed(m[1]!)) return null;
+  const feed = m[1];
+  const window = m[2] as ScopeWindow;
+  return (FEEDS[feed].windows as readonly ScopeWindow[]).includes(window) ? { feed, window } : null;
 }
 
 /** Trimmed, lower-case, de-duplicated and sorted, so equal sets compare equal. */
@@ -133,23 +130,23 @@ export function canonicalScopes(list: readonly string[]): string[] {
 }
 
 /**
- * Judged by the old feed list: it holds `read`, or nothing in the new form —
- * a key from before scopes, or one issued by hand with a scope that never
- * meant anything. Such a key keeps exactly the access it always had.
+ * Judged by the old feed list: it holds `read`, which every key made before
+ * scopes has, and keeps exactly the access it always had. Nothing else is:
+ * a scope this table does not know — the retired source:/type:/window: form,
+ * or a typo issued by hand — grants nothing, rather than falling back to a
+ * list wider than whatever it was meant to be.
  */
 export function isLegacyScopes(scopes: readonly string[]): boolean {
-  if (scopes.includes(LEGACY_READ)) return true;
-  return !scopes.some((s) => parse(s) !== null);
+  return scopes.includes(LEGACY_READ);
 }
 
 export type ScopesCheck = { ok: true; scopes: string[] } | { ok: false; error: string };
 
 /**
- * A scope list from a request body. Every entry must be a known scope; a set
- * in the new form needs at least one scope in each dimension (a key with no
- * window could never read anything), and `read` stands alone. `allowLegacy`
- * is for staff: a user cannot ask for the old blanket rule, staff may grant it.
- * `allowEmpty` is for the user's request, where asking for scopes is optional.
+ * A scope list from a request body. Every entry must be a cell the table
+ * offers, and `read` stands alone. `allowLegacy` is for staff: a user cannot
+ * ask for the old blanket rule, staff may grant it. `allowEmpty` is for the
+ * user's request, where asking for scopes is optional.
  */
 export function validateScopes(
   raw: unknown,
@@ -171,33 +168,28 @@ export function validateScopes(
     if (scopes.length > 1) return { ok: false, error: `"${LEGACY_READ}" cannot be combined with other scopes` };
     return { ok: true, scopes };
   }
-  const bad = scopes.filter((s) => parse(s) === null);
+  const bad = scopes.filter((s) => parseScope(s) === null);
   if (bad.length) return { ok: false, error: `unknown scope${bad.length === 1 ? '' : 's'}: ${bad.join(', ')}` };
-  const missing = DIMS.filter((d) => !scopes.some((s) => s.startsWith(`${d}:`)));
-  if (missing.length) {
-    return { ok: false, error: `scopes need at least one ${missing.map((d) => `${d}:`).join(', ')} scope` };
-  }
   return { ok: true, scopes };
 }
 
-/** The scopes that satisfy a need, as people write them — for messages and the API description. */
+/**
+ * The scopes that satisfy a need, as people write them — for messages and the
+ * API description. A route spanning feeds is met by any scope in its window,
+ * written `*:history`.
+ */
 export function needScopes(need: RouteNeed): string[] {
   if ('anyKey' in need) return [];
-  return [
-    `source:${need.source}`,
-    `type:${need.type}`,
-    need.window === 'any' ? 'window:live|history' : `window:${need.window}`,
-  ];
+  return [`${need.feed}:${need.window}`];
 }
 
-function dimAllows(held: ReadonlySet<string>, dim: ScopeDim, value: string): boolean {
-  if (held.has(`${dim}:*`)) return true;
-  if (dim === 'window' && value === 'any') return [...held].some((s) => s.startsWith('window:'));
-  // A route that spans that dimension (stored history spans sources and
-  // types): any scope in it gets in, and the route serves only what the
-  // key's scopes cover (historySourcesFor below).
-  if (value === '*') return [...held].some((s) => s.startsWith(`${dim}:`));
-  return held.has(`${dim}:${value}`);
+/** The need an `x-scopes` entry of the API description stands for (needScopes, read back). */
+export function needFromScope(scope: string): ScopeNeed | null {
+  const m = /^(\*|[a-z_]+):(live|history)$/.exec(scope);
+  if (!m) return null;
+  if (m[1] === '*') return { feed: '*', window: m[2] as ScopeWindow };
+  const parsed = parseScope(scope);
+  return parsed && { feed: parsed.feed, window: parsed.window };
 }
 
 // ---------------------------------------------------------------------------
@@ -206,69 +198,76 @@ function dimAllows(held: ReadonlySet<string>, dim: ScopeDim, value: string): boo
 
 /**
  * Every `source` value the archive stores (archive_* tables, the column
- * /api/data/history filters on), and the scope source and type it is the
- * history of. A key reads an archived source's records when its scopes cover
- * that source and type, and window:history — the same rule as a live route.
+ * /api/data/history filters on), and the feed it is the history of. A key
+ * reads an archived source's records when it holds that feed's history cell.
  *
  * Left out on purpose, so no key ever reads them through history:
  * `user_incident` (people's own reports, carrying user ids),
- * `radio_summary` (served by /api/summaries under its own scope), and the
+ * `radio_summary` (served by /api/summaries under its own feed), and the
  * retired `essential_energy_cancelled`.
  */
-export const HISTORY_SOURCES: Readonly<Record<string, { source: string; type: string }>> = {
-  rfs: { source: 'rfs', type: 'incidents' },
-  nt_fire: { source: 'ntfrs', type: 'incidents' },
-  qld_fire: { source: 'qfd', type: 'incidents' },
-  qld_warning: { source: 'qfd', type: 'warnings' },
-  vic_emergency: { source: 'vic', type: 'incidents' },
-  wa_incident: { source: 'dfes', type: 'incidents' },
-  wa_warning: { source: 'dfes', type: 'warnings' },
-  sa_cfs: { source: 'safire', type: 'incidents' },
-  sa_mfs: { source: 'safire', type: 'incidents' },
-  act_ambulance: { source: 'actas', type: 'incidents' },
-  bom_land: { source: 'bom', type: 'warnings' },
-  bom_marine: { source: 'bom', type: 'warnings' },
-  traffic_incident: { source: 'livetraffic', type: 'hazards' },
-  traffic_roadwork: { source: 'livetraffic', type: 'hazards' },
-  traffic_flood: { source: 'livetraffic', type: 'hazards' },
-  traffic_fire: { source: 'livetraffic', type: 'hazards' },
-  traffic_majorevent: { source: 'livetraffic', type: 'hazards' },
-  traffic_alpine: { source: 'livetraffic', type: 'hazards' },
-  traffic_lga: { source: 'livetraffic', type: 'hazards' },
-  traffic_works: { source: 'livetraffic', type: 'hazards' },
-  endeavour_current: { source: 'endeavour', type: 'outages' },
-  endeavour_planned: { source: 'endeavour', type: 'outages' },
-  endeavour_maintenance: { source: 'endeavour', type: 'outages' },
-  ausgrid: { source: 'ausgrid', type: 'outages' },
-  essential_current: { source: 'essential', type: 'outages' },
-  essential_planned: { source: 'essential', type: 'outages' },
-  essential_future: { source: 'essential', type: 'outages' },
-  dorsal: { source: 'dorsal', type: 'hazards' },
-  pager: { source: 'pager', type: 'pager' },
+export const HISTORY_SOURCES: Readonly<Record<string, FeedKey>> = {
+  rfs: 'fires',
+  nt_fire: 'fires',
+  qld_fire: 'fires',
+  vic_emergency: 'fires',
+  wa_incident: 'fires',
+  sa_cfs: 'fires',
+  sa_mfs: 'fires',
+  qld_warning: 'warnings',
+  wa_warning: 'warnings',
+  bom_land: 'warnings',
+  bom_marine: 'warnings',
+  act_ambulance: 'ambulance',
+  traffic_incident: 'roads',
+  traffic_roadwork: 'roads',
+  traffic_flood: 'roads',
+  traffic_fire: 'roads',
+  traffic_majorevent: 'roads',
+  traffic_alpine: 'roads',
+  traffic_lga: 'roads',
+  traffic_works: 'roads',
+  endeavour_current: 'outages',
+  endeavour_planned: 'outages',
+  endeavour_maintenance: 'outages',
+  ausgrid: 'outages',
+  essential_current: 'outages',
+  essential_planned: 'outages',
+  essential_future: 'outages',
+  dorsal: 'beaches',
+  pager: 'pager',
 };
 
 /**
  * The archived sources a key in the new form may read through stored history:
- * those whose scope source and type it covers, when it holds window:history.
- * Empty for a `read` key — the old feed list never included history.
+ * those of every feed whose history cell it holds. Empty for a `read` key —
+ * the old feed list never included history.
  */
 export function historySourcesFor(scopes: readonly string[]): string[] {
   if (isLegacyScopes(scopes)) return [];
   const held = new Set(scopes);
-  if (!dimAllows(held, 'window', 'history')) return [];
   return Object.entries(HISTORY_SOURCES)
-    .filter(([, s]) => dimAllows(held, 'source', s.source) && dimAllows(held, 'type', s.type))
+    .filter(([, feed]) => held.has(`${feed}:history`))
     .map(([archived]) => archived);
 }
 
 /** Does a key in the new form satisfy this need? */
 export function scopesSatisfy(scopes: readonly string[], need: RouteNeed): boolean {
   if ('anyKey' in need) return true;
-  const held = new Set(scopes);
-  return dimAllows(held, 'source', need.source)
-    && dimAllows(held, 'type', need.type)
-    && dimAllows(held, 'window', need.window);
+  // A route spanning feeds (stored history) admits a key holding that window
+  // of a feed it can actually answer for — aircraft:history or
+  // summaries:history alone would get in only to be refused every record.
+  if (need.feed === '*') {
+    return scopes.some((s) => {
+      const p = parseScope(s);
+      return p !== null && p.window === need.window && SPANNED_FEEDS.has(p.feed);
+    });
+  }
+  return scopes.includes(`${need.feed}:${need.window}`);
 }
+
+/** The feeds a route spanning feeds answers for: those the archive stores. */
+const SPANNED_FEEDS: ReadonlySet<FeedKey> = new Set(Object.values(HISTORY_SOURCES));
 
 // ---------------------------------------------------------------------------
 // The old rule, for `read` keys.
@@ -335,6 +334,9 @@ const LEGACY_READ_PREFIXES: readonly string[] = [
 const LEGACY_READ_PATHS: ReadonlySet<string> = new Set([
   '/api/beachsafe',
   '/api/beachwatch',
+  // The fire services merged (api/fires.ts): nothing a `read` key could not
+  // already read one agency at a time, and where /api/v1/ serves them now.
+  '/api/fires',
 ]);
 
 function legacyReadAllows(method: string, path: string): boolean {
@@ -356,13 +358,13 @@ const COMPOSED_HANDLER = '__COMPOSED_HANDLER';
 type ScopedHandler = MiddlewareHandler & { [SCOPE]?: RouteNeed };
 
 const declared = new Map<string, ScopeNeed>();
-/** Whether a route spanning sources (stored history) has been declared. */
-let spanning = false;
+/** The windows a route spanning feeds (stored history) has been declared for. */
+const spanning = new Set<ScopeWindow>();
 
 /**
  * Declare what a route serves, as its first middleware:
  *
- *   rfsRouter.get('/api/rfs/incidents', scoped(RFS_INCIDENTS), (c) => …)
+ *   firesRouter.get('/api/v1/fires', scoped({ feed: 'fires', window: 'live' }), (c) => …)
  *
  * It only annotates — the request goes straight on. Enforcing it here would
  * be too late: the credential gate (apiKey.ts) has to refuse before any
@@ -380,23 +382,21 @@ export function scoped(need: RouteNeed): MiddlewareHandler {
   };
   mw[SCOPE] = need;
   if ('anyKey' in need) return mw;
-  if (need.source === '*' || need.type === '*') spanning = true;
-  else declared.set(`${need.source}|${need.type}|${need.window}`, need);
+  if (need.feed === '*') spanning.add(need.window);
+  else declared.set(`${need.feed}:${need.window}`, need);
   return mw;
 }
 
 /**
- * Every need declared on a route so far — the combinations a key can actually
- * use. A route spanning sources (stored history) stands for the history of
- * each archived source, so it is listed as those, each a plain combination a
- * scope picker can match.
+ * Every feed/window cell a route serves so far — the cells a key can actually
+ * use. A route spanning feeds (stored history) stands for the history of each
+ * feed the archive holds, so it is listed as those.
  */
-export function declaredNeeds(): ScopeNeed[] {
-  const out = new Map(declared);
-  if (spanning) {
-    for (const s of Object.values(HISTORY_SOURCES)) {
-      out.set(`${s.source}|${s.type}|history`, { source: s.source, type: s.type, window: 'history' });
-    }
+export function declaredNeeds(): Array<{ feed: FeedKey; window: ScopeWindow }> {
+  const out = new Map<string, { feed: FeedKey; window: ScopeWindow }>();
+  for (const [k, n] of declared) if (n.feed !== '*') out.set(k, { feed: n.feed, window: n.window });
+  for (const window of spanning) {
+    for (const feed of new Set(Object.values(HISTORY_SOURCES))) out.set(`${feed}:${window}`, { feed, window });
   }
   return [...out.values()];
 }
@@ -467,15 +467,14 @@ export function keyMayRequest(
       message: 'This path is not part of the data API keys can read.',
     };
   }
-  if (scopesSatisfy(scopes, route.need)) return { ok: true };
-  // A spanning dimension (`source:*` on stored history) is met by any scope
-  // in it, so it is never what is missing — name only what is.
-  const missing = needScopes(route.need).filter((s) => !s.endsWith(':*'));
-  return {
-    ok: false,
-    error: 'api_key_scope_forbidden',
-    message: `This key's scopes do not cover this endpoint. It needs ${missing.join(', ')}.`,
-  };
+  const need = route.need;
+  if (scopesSatisfy(scopes, need)) return { ok: true };
+  if ('anyKey' in need) return { ok: true };
+  const message =
+    need.feed === '*'
+      ? `This key's scopes do not cover this endpoint. It needs the ${need.window} of at least one of: ${[...SPANNED_FEEDS].map((f) => `${f}:${need.window}`).join(', ')}.`
+      : `This key's scopes do not cover this endpoint. It needs ${needScopes(need).join(', ')}.`;
+  return { ok: false, error: 'api_key_scope_forbidden', message };
 }
 
 /**

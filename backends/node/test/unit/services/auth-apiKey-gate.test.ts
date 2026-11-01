@@ -20,7 +20,7 @@ vi.mock('../../../src/lib/log.js', () => ({
 import { requireApiKey } from '../../../src/services/auth/apiKey.js';
 import { mintBrowserToken } from '../../../src/services/auth/browserToken.js';
 import { _clearApiKeyCache, lookupPrefix } from '../../../src/services/auth/apiKeys.js';
-import { scoped } from '../../../src/services/auth/apiKeyScopes.js';
+import { FEEDS, scoped } from '../../../src/services/auth/apiKeyScopes.js';
 
 const SITE = 'https://nswpsn.forcequit.xyz';
 const UA = 'Mozilla/5.0 gate-test';
@@ -215,116 +215,184 @@ describe('requireApiKey', () => {
         expect(bot.status).toBe(200);
       });
 
-      it('reaches the versioned twin of a feed it can read', async () => {
+      it('reaches the versioned twin of a feed it can read, and the merged fire feed', async () => {
+        queryMock.mockResolvedValue({ rows: [{ ...keyRow(), rate_limit_per_min: 100 }], rowCount: 1 });
         const app = new Hono();
         app.use('*', requireApiKey);
-        app.get('/api/v1/rfs/incidents', (c) => c.json(body(c)));
+        app.get('/api/v1/rfs/fdr', (c) => c.json(body(c)));
         app.get('/api/v1/summaries', (c) => c.json(body(c)));
-        expect((await app.request('/api/v1/rfs/incidents', h)).status).toBe(200);
-        expect((await app.request('/api/v1/summaries', h)).status).toBe(403);
+        app.get('/api/v1/fires', scoped({ feed: 'fires', window: 'live' }), (c) => c.json(body(c)));
+        expect((await app.request('/api/v1/rfs/fdr', h)).status).toBe(200);
+        const summaries = await app.request('/api/v1/summaries', h);
+        expect(summaries.status).toBe(403);
+        expect(await summaries.json()).toMatchObject({ error: { code: 'api_key_path_forbidden' } });
+        // Every fire service in one feed: what it could already read one agency at a time.
+        const fires = await app.request('/api/v1/fires', h);
+        expect(fires.status).toBe(200);
+        expect(await fires.json()).toMatchObject({ auth: 'apikey' });
       });
     });
 
-    // A key with scopes in the new form reads what its scopes cover, and the
-    // routes say what they serve (scoped(), apiKeyScopes.ts).
+    // A key with scopes in the new form reads the feed/window cells it holds,
+    // and the routes say which cell they serve (scoped(), apiKeyScopes.ts).
     describe('scoped keys', () => {
       const h = { headers: { Authorization: `Bearer ${KEY}` } };
+      /** Every cell of the staff table. */
+      const EVERY_CELL = Object.entries(FEEDS).flatMap(([feed, f]) => f.windows.map((w) => `${feed}:${w}`));
       function scopedApp() {
         const app = new Hono();
         app.use('*', requireApiKey);
-        app.get('/api/rfs/incidents', scoped({ source: 'rfs', type: 'incidents', window: 'live' }), (c) => c.json(body(c)));
-        app.get('/api/rfs/fdr', scoped({ source: 'rfs', type: 'warnings', window: 'live' }), (c) => c.json(body(c)));
-        app.get('/api/adsb/history', scoped({ source: 'adsb', type: 'aircraft', window: 'history' }), (c) => c.json(body(c)));
-        app.get('/api/pager/hits', scoped({ source: 'pager', type: 'pager', window: 'any' }), (c) => c.json(body(c)));
-        // Node status: declared by nothing, so no scope reaches it.
+        const fires = scoped({ feed: 'fires', window: 'live' });
+        app.get('/api/fires', fires, (c) => c.json(body(c)));
+        app.get('/api/rfs/fdr', fires, (c) => c.json(body(c)));
+        app.get('/api/bom/warnings', scoped({ feed: 'warnings', window: 'live' }), (c) => c.json(body(c)));
+        app.get('/api/adsb/history', scoped({ feed: 'aircraft', window: 'history' }), (c) => c.json(body(c)));
+        app.get('/api/data/history', scoped({ feed: '*', window: 'history' }), (c) => c.json(body(c)));
+        // Declared by nothing, so no scope reaches them: node status, the
+        // per-agency fire routes (this site's and the bot's), this site's own
+        // reference data, and reception transcripts.
         app.get('/api/adsb/receivers', (c) => c.json(body(c)));
+        app.get('/api/rfs/incidents', (c) => c.json(body(c)));
+        // (Not lga-names: that one is public, for the signup form.)
+        app.get('/api/boundaries/:kind', (c) => c.json(body(c)));
+        app.get('/api/radio/grn-sites', (c) => c.json(body(c)));
+        app.get('/api/rdio/calls/:callId', (c) => c.json(body(c)));
         return app;
       }
       function withScopes(scopes: string[], over: Record<string, unknown> = {}) {
         queryMock.mockResolvedValue({ rows: [{ ...keyRow(), scopes, rate_limit_per_min: 100, ...over }], rowCount: 1 });
       }
+      const refusal = async (res: Response) => ((await res.json()) as { error: string; message: string });
 
-      it('reads a route its scopes cover', async () => {
-        withScopes(['source:rfs', 'type:incidents', 'window:live']);
-        const res = await scopedApp().request('/api/rfs/incidents', h);
-        expect(res.status).toBe(200);
-        expect(await res.json()).toMatchObject({ auth: 'apikey', key: 'abcdefghij' });
-      });
-
-      it('is refused on each dimension it lacks, with the scopes the route needs', async () => {
-        withScopes(['source:rfs', 'type:incidents', 'window:live']);
+      it('reads every route that serves a cell it holds', async () => {
+        withScopes(['fires:live']);
         const app = scopedApp();
-        for (const path of ['/api/rfs/fdr', '/api/adsb/history', '/api/pager/hits']) {
+        for (const path of ['/api/fires', '/api/rfs/fdr']) {
           const res = await app.request(path, h);
-          expect(res.status).toBe(403);
-          expect(await res.json()).toMatchObject({ error: 'api_key_scope_forbidden' });
+          expect(res.status, path).toBe(200);
+          expect(await res.json(), path).toMatchObject({ auth: 'apikey', key: 'abcdefghij' });
         }
-        const res = await app.request('/api/rfs/fdr', h);
-        expect(((await res.json()) as { message: string }).message).toContain('type:warnings');
       });
 
-      it('wildcards, and window "any" for reference data', async () => {
-        withScopes(['source:*', 'type:*', 'window:history']);
+      it('is refused on every cell it lacks, told which cell the route needs', async () => {
+        withScopes(['fires:live']);
         const app = scopedApp();
-        expect((await app.request('/api/adsb/history', h)).status).toBe(200);
-        expect((await app.request('/api/pager/hits', h)).status).toBe(200);
-        expect((await app.request('/api/rfs/incidents', h)).status).toBe(403);
+        const needs: Record<string, string> = {
+          '/api/bom/warnings': 'It needs warnings:live.',
+          '/api/adsb/history': 'It needs aircraft:history.',
+          '/api/data/history':
+            'It needs the history of at least one of: fires:history, warnings:history, ambulance:history, ' +
+            'roads:history, outages:history, beaches:history, pager:history.',
+        };
+        for (const [path, need] of Object.entries(needs)) {
+          const res = await app.request(path, h);
+          expect(res.status, path).toBe(403);
+          const body = await refusal(res);
+          expect(body.error, path).toBe('api_key_scope_forbidden');
+          expect(body.message, path).toContain(need);
+        }
       });
 
-      it('never reaches an undeclared route, however wide its scopes', async () => {
-        withScopes(['source:*', 'type:*', 'window:*']);
-        const res = await scopedApp().request('/api/adsb/receivers', h);
-        expect(res.status).toBe(403);
-        expect(await res.json()).toMatchObject({ error: 'api_key_scope_forbidden' });
+      it('the other window of a feed it holds is not enough', async () => {
+        withScopes(['aircraft:live', 'fires:history']);
+        const app = scopedApp();
+        expect((await app.request('/api/adsb/history', h)).status).toBe(403);
+        expect((await app.request('/api/fires', h)).status).toBe(403);
+      });
+
+      it('stored history admits the history cell of a feed the archive holds (the route narrows it)', async () => {
+        for (const scopes of [['fires:history'], ['pager:history'], ['aircraft:history', 'warnings:history']]) {
+          withScopes(scopes);
+          _clearApiKeyCache();
+          const app = scopedApp();
+          expect((await app.request('/api/data/history', h)).status, scopes.join()).toBe(200);
+          // Live routes still need their own cell.
+          expect((await app.request('/api/fires', h)).status, scopes.join()).toBe(403);
+        }
+      });
+
+      it('…and refuses history held only elsewhere: aircraft and summaries are not in the archive', async () => {
+        for (const scopes of [['aircraft:history'], ['summaries:history'], ['aircraft:history', 'summaries:history']]) {
+          withScopes(scopes);
+          _clearApiKeyCache();
+          const app = scopedApp();
+          const res = await app.request('/api/data/history', h);
+          expect(res.status, scopes.join()).toBe(403);
+          expect((await refusal(res)).error, scopes.join()).toBe('api_key_scope_forbidden');
+          // Its own history route is still its own.
+          if (scopes.includes('aircraft:history')) expect((await app.request('/api/adsb/history', h)).status).toBe(200);
+        }
+      });
+
+      it('a key holding only retired or unknown scopes grants nothing, refused as a scoped key', async () => {
+        for (const scopes of [['source:rfs', 'type:incidents', 'window:live'], ['fires:liv']]) {
+          withScopes(scopes);
+          _clearApiKeyCache();
+          const app = scopedApp();
+          // Declared routes, and the undeclared ones a `read` key would reach: all refused
+          // with the scoped code, never judged by the old list.
+          for (const path of ['/api/fires', '/api/rfs/fdr', '/api/data/history', '/api/rfs/incidents', '/api/boundaries/lga']) {
+            const res = await app.request(path, h);
+            expect(res.status, `${scopes.join()} ${path}`).toBe(403);
+            expect((await refusal(res)).error, `${scopes.join()} ${path}`).toBe('api_key_scope_forbidden');
+          }
+        }
+      });
+
+      it('never reaches an undeclared route, however many cells it holds', async () => {
+        withScopes(EVERY_CELL);
+        const app = scopedApp();
+        for (const path of ['/api/adsb/receivers', '/api/rfs/incidents', '/api/boundaries/lga', '/api/radio/grn-sites', '/api/rdio/calls/7']) {
+          const res = await app.request(path, h);
+          expect(res.status, path).toBe(403);
+          expect(await refusal(res), path).toEqual({
+            error: 'api_key_scope_forbidden',
+            message: 'This path is not part of the data API keys can read.',
+          });
+        }
       });
 
       it('never writes', async () => {
-        withScopes(['source:*', 'type:*', 'window:*']);
+        withScopes(EVERY_CELL);
         const app = scopedApp();
-        app.post('/api/rfs/incidents', (c) => c.json(body(c)));
-        const res = await app.request('/api/rfs/incidents', { method: 'POST', ...h });
+        app.post('/api/fires', (c) => c.json(body(c)));
+        const res = await app.request('/api/fires', { method: 'POST', ...h });
         expect(res.status).toBe(403);
         expect(await res.json()).toMatchObject({ error: 'api_key_scope_forbidden' });
       });
 
       it('a path no route serves is a 404, not a refusal', async () => {
-        withScopes(['source:rfs', 'type:incidents', 'window:live']);
-        expect((await scopedApp().request('/api/rfs/nope', h)).status).toBe(404);
+        withScopes(['fires:live']);
+        expect((await scopedApp().request('/api/fires/nope', h)).status).toBe(404);
       });
 
       it('still spends the budget on refusals', async () => {
-        withScopes(['source:rfs', 'type:incidents', 'window:live'], { rate_limit_per_min: 2 });
+        withScopes(['fires:live'], { rate_limit_per_min: 2 });
         const app = scopedApp();
-        expect((await app.request('/api/rfs/fdr', h)).status).toBe(403);
-        expect((await app.request('/api/rfs/fdr', h)).status).toBe(403);
-        expect((await app.request('/api/rfs/incidents', h)).status).toBe(429);
+        expect((await app.request('/api/bom/warnings', h)).status).toBe(403);
+        expect((await app.request('/api/bom/warnings', h)).status).toBe(403);
+        expect((await app.request('/api/fires', h)).status).toBe(429);
       });
 
-      it('is still refused from a web page, but not from a same-origin read with no Origin', async () => {
-        withScopes(['source:rfs', 'type:incidents', 'window:live']);
+      it("is refused from any web page: an Origin from anywhere, or a browser's Sec-Fetch-Site", async () => {
+        withScopes(['fires:live']);
         const app = scopedApp();
-        const page = await app.request('/api/rfs/incidents', { headers: { ...h.headers, Origin: 'https://someone-elses.site' } });
-        expect(page.status).toBe(403);
-        expect(await page.json()).toMatchObject({ error: 'api_key_browser_use' });
-        // A same-origin GET carries no Origin header (Fetch spec) — what the
-        // API's own docs page relies on to load the spec with a key.
-        const same = await app.request('/api/rfs/incidents', { headers: { ...h.headers, 'Sec-Fetch-Site': 'same-origin' } });
-        expect(same.status).toBe(200);
-      });
-
-      it('lets the API’s own page through when the browser says so — Safari sends Origin even same-origin', async () => {
-        withScopes(['source:rfs', 'type:incidents', 'window:live']);
-        const app = scopedApp();
-        const safari = await app.request('/api/rfs/incidents', {
-          headers: { ...h.headers, Origin: 'https://api.forcequit.xyz', 'Sec-Fetch-Site': 'same-origin' },
-        });
-        expect(safari.status).toBe(200);
-        // Our own site is same-SITE, not same-origin: still a web page using a key.
-        for (const site of ['same-site', 'cross-site', 'none']) {
-          const res = await app.request('/api/rfs/incidents', {
-            headers: { ...h.headers, Origin: SITE, 'Sec-Fetch-Site': site },
-          });
-          expect(res.status, site).toBe(403);
+        expect((await app.request('/api/fires', h)).status).toBe(200);
+        const browser: Array<Record<string, string>> = [
+          { Origin: 'https://someone-elses.site' },
+          // Our own site is same-SITE: still a web page using a key.
+          { Origin: SITE, 'Sec-Fetch-Site': 'same-site' },
+          // This API's own origin, as Safari sends it, and a same-origin GET,
+          // which carries no Origin at all: no page here uses a key any more.
+          { Origin: 'https://api.forcequit.xyz', 'Sec-Fetch-Site': 'same-origin' },
+          { 'Sec-Fetch-Site': 'same-origin' },
+          { 'Sec-Fetch-Site': 'cross-site' },
+          { 'Sec-Fetch-Site': 'none' },
+        ];
+        for (const extra of browser) {
+          const res = await app.request('/api/fires', { headers: { ...h.headers, ...extra } });
+          expect(res.status, JSON.stringify(extra)).toBe(403);
+          expect(await res.json(), JSON.stringify(extra)).toMatchObject({ error: 'api_key_browser_use' });
         }
       });
     });

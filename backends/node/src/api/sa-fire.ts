@@ -12,7 +12,9 @@
  * They are still archived, the way NT's closed records are; `?all=1`
  * returns them too, for debugging.
  *
- * Both are also served at /api/v1/ (server.ts mirrors them).
+ * Both are this site's routes, for the map and the Discord bot; neither is
+ * on /api/v1/. API keys read the CFS and MFS alongside every other fire
+ * service at /api/v1/fires (api/fires.ts).
  */
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -24,7 +26,6 @@ import {
   saMfsActiveSnapshot,
   type SaSnapshot,
 } from '../sources/saFire.js';
-import { scoped } from '../services/auth/apiKeyScopes.js';
 import { geo } from './v1/respond.js';
 import {
   assertShape,
@@ -42,10 +43,10 @@ import {
 
 export const saFireRouter = new Hono();
 
-// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
-const SCOPE_INCIDENTS = scoped({ source: 'safire', type: 'incidents', window: 'live' });
+// No scope: API keys read the fire services together, through /api/v1/fires (api/fires.ts).
 
-// What /api/v1/ documents (api/v1/openapi.ts).
+// The answers' shape, for describeRoute() below. The routes are not on
+// /api/v1/, so the API description (api/v1/openapi.ts) leaves them out.
 const SaIncidents = featureCollection(
   feature(
     PointGeometry,
@@ -69,7 +70,6 @@ const Query = z.object({ all: flag('1 includes completed incidents as well') });
 
 saFireRouter.get(
   '/api/sa-fire/cfs',
-  SCOPE_INCIDENTS,
   describeRoute({
     operationId: 'getSaCfsIncidents',
     tags: ['Incidents'],
@@ -82,7 +82,6 @@ saFireRouter.get(
 );
 saFireRouter.get(
   '/api/sa-fire/mfs',
-  SCOPE_INCIDENTS,
   describeRoute({
     operationId: 'getSaMfsIncidents',
     tags: ['Incidents'],

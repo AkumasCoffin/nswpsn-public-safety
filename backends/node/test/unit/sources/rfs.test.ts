@@ -126,14 +126,6 @@ describe('rfs.fetchRfs', () => {
     expect(f1.properties.alertLevel).toBe('Watch and Act');
   });
 
-  it('keeps the feed as published for the v1 raw route', async () => {
-    const feed = fixture();
-    fetchJsonMock.mockResolvedValueOnce(feed);
-    const { fetchRfs, rfsFeedSnapshot } = await import('../../../src/sources/rfs.js');
-    await fetchRfs();
-    expect(rfsFeedSnapshot()).toEqual(feed);
-  });
-
   it('throws when the body is not the feed, so the last good snapshot stays', async () => {
     fetchJsonMock.mockResolvedValueOnce({ error: 'maintenance' });
     const { fetchRfs } = await import('../../../src/sources/rfs.js');

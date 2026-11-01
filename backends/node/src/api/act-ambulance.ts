@@ -28,7 +28,7 @@ import {
 export const actAmbulanceRouter = new Hono();
 
 // What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
-const SCOPE_INCIDENTS = scoped({ source: 'actas', type: 'incidents', window: 'live' });
+const SCOPE_INCIDENTS = scoped({ feed: 'ambulance', window: 'live' });
 
 // What /api/v1/ documents (api/v1/openapi.ts).
 const ActAmbulanceIncidents = featureCollection(
@@ -57,7 +57,7 @@ actAmbulanceRouter.get(
   SCOPE_INCIDENTS,
   describeRoute({
     operationId: 'getActAmbulanceIncidents',
-    tags: ['Incidents'],
+    tags: ['Ambulance'],
     summary: 'ACT Ambulance Service responses',
     description: 'ACT Ambulance Service responses still running, from the ACT ESA feed.',
     responses: { ...okJson(ActAmbulanceIncidents, 'A GeoJSON FeatureCollection of responses'), ...GATED_ERRORS },

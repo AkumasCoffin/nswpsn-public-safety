@@ -20,7 +20,7 @@ import { assertShape, envelope, GATED_ERRORS, okJson, type SameShape } from './v
 export const bomRouter = new Hono();
 
 // What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
-const SCOPE_WARNINGS = scoped({ source: 'bom', type: 'warnings', window: 'live' });
+const SCOPE_WARNINGS = scoped({ feed: 'warnings', window: 'live' });
 
 // What /api/v1/ documents (api/v1/openapi.ts).
 const BomWarnings = z.object({
