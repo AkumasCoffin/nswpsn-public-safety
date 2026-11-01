@@ -279,7 +279,7 @@ ten minutes. Some endpoints read their source when asked instead — the traffic
 `/raw` feeds, a single airport's cameras, a vessel's details, and the transport
 endpoints, which keep each answer for a few seconds; the reference says so on
 each. Some responses carry their
-own `Cache-Control`.
+own `Cache-Control`; an error is never marked cacheable.
 
 **When a source can't be read.** A feed served from memory keeps answering with
 its last good data. An endpoint that reads its source when asked answers an

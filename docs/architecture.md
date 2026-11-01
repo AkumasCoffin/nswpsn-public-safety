@@ -138,9 +138,12 @@ Take NSW RFS incidents.
    share one narrow allowlist of exact first-party origins
    (`src/services/auth/firstParty.ts`) rather than a wildcard.
 6. **Draw.** `map.html` fetches `/api/rfs/incidents` and adds Leaflet markers.
-   For a set of cheap GETs the response carries
-   `Cache-Control: public, max-age=30, stale-while-revalidate=300`, so repeat
-   hits are absorbed by the CDN.
+   For a set of cheap GETs (`CACHEABLE_PATHS` in `src/server.ts`) a 2xx
+   answer carries `Cache-Control: public, max-age=30, stale-while-revalidate=300`,
+   so a browser re-reading within 30 s does not ask again. Cloudflare passes
+   API answers through uncached (`cf-cache-status: DYNAMIC`). A refusal or a
+   failure gets no such header: kept, a 401 would be handed straight back to
+   the page's retry with a fresh token.
 
 ### Registry contents
 
@@ -313,8 +316,8 @@ matching repeater pin as *Monitoring*. The comment block at `map.html:18386` is 
 touch any of it: the agents re-report every ~60s regardless of traffic, so the
 badge is *"a live lock, not a traffic echo"*.
 
-Both are listed in `CACHEABLE_PATHS` (`src/server.ts:259-260`), so the CDN
-absorbs repeat hits.
+Both are listed in `CACHEABLE_PATHS` (`src/server.ts`), so a browser keeps
+each answer for 30 s.
 
 "Right now" is SDR-Trunk's own `site_last_seen_ms` — when the decoder last
 actually heard the site — inside a five-minute window. Three predicates are

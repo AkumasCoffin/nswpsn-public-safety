@@ -166,6 +166,26 @@ describe('answers on /api/v1/', () => {
   it('the public 30 s cache applies to the v1 twin of a cacheable path', async () => {
     expect((await get('/api/v1/fires')).headers.get('Cache-Control')).toBe('public, max-age=30, stale-while-revalidate=300');
   });
+
+  it('a refusal or a failure on a cacheable path is not cached, on either path', async () => {
+    for (const path of ['/api/v1/fires', '/api/fires', '/api/v1/bom/warnings', '/api/bom/warnings']) {
+      const res = await get(path, {});
+      expect(res.status, path).toBe(401);
+      expect(res.headers.get('Cache-Control'), path).toBeNull();
+    }
+    // /api/rfs/incidents is cacheable; its v1 path does not exist.
+    const missing = await get('/api/v1/rfs/incidents');
+    expect(missing.status).toBe(404);
+    expect(missing.headers.get('Cache-Control')).toBeNull();
+    queryMock.mockImplementation(async () => {
+      throw new Error('db down');
+    });
+    for (const path of ['/api/v1/data/history', '/api/data/history']) {
+      const res = await get(path);
+      expect(res.status, path).toBeGreaterThanOrEqual(500);
+      expect(res.headers.get('Cache-Control'), path).toBeNull();
+    }
+  });
 });
 
 describe('not found and errors', () => {

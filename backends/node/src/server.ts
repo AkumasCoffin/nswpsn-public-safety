@@ -306,6 +306,11 @@ export function createApp() {
   app.use('*', async (c, next) => {
     await next();
     if (c.req.method !== 'GET') return;
+    // Only an answer worth repeating. A browser that kept a 401 for 30 s
+    // (and 300 more stale) would hand it straight back to the retry that
+    // follows it — api-session.js re-mints after a 401 and asks again at
+    // once — and a kept 503 would outlast the outage it reports.
+    if (c.res.status < 200 || c.res.status >= 300) return;
     const path = unversionedPath(new URL(c.req.url).pathname);
     if (!CACHEABLE_PATHS.includes(path)) return;
     if (!c.res.headers.has('Cache-Control')) {
