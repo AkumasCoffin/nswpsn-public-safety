@@ -200,9 +200,11 @@ says the same, beside a curl example on `/api/v1/`. A bell notification about a
 request links to `/#api-keys`, which opens that card.
 
 ```
-map.html  ──►  /api/v1/rfs/incidents     (RFS fires)
-          ──►  /api/v1/{qld-fire,nt-fire,sa-fire,vic-emergency,wa-emergency,act-ambulance}/*
-                                         (the other states' fire and emergency feeds)
+map.html  ──►  /api/rfs/incidents        (RFS fires)
+          ──►  /api/{qld-fire/incidents,nt-fire,sa-fire,vic-emergency,wa-emergency/incidents}
+                                         (the other states' fire services — site routes;
+                                          API keys read them merged, at /api/v1/fires)
+          ──►  /api/v1/{qld-fire,wa-emergency}/warnings, /api/v1/act-ambulance/incidents
           ──►  /api/v1/traffic/*         (seven hazard kinds, works + cameras)
           ──►  /api/v1/endeavour/{current,maintenance,future}, /api/v1/essential/outages
           ──►  /api/v1/pager/hits        (pager pins; a 503 keeps the last pins)
@@ -221,7 +223,7 @@ map.html  ──►  /api/v1/rfs/incidents     (RFS fires)
           ──►  /api/v1/dorsal/reports?hours=168  (SharkSmart layer)
           ──►  /api/incidents            (community-added)
 
-live.html ──►  per-source counts, /api/v1/rfs/incidents, /api/v1/bom/warnings
+live.html ──►  per-source counts, /api/rfs/incidents, /api/v1/bom/warnings
                (weather), /api/v1/traffic/*, /api/v1/{endeavour,essential}/*,
                /api/v1/ausgrid/stats, /api/v1/{beachwatch,beachsafe},
                /api/v1/summaries/latest, /api/v1/news/rss, /api/stats/history,

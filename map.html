@@ -5822,7 +5822,7 @@ function initPagerHoursFromStorage() {
         if (cached.data && (now - cached.timestamp) < LAYER_CACHE_TTL) {
           data = cached.data;
         } else {
-          const res = await apiFetch(`${PROXY_BASE}/api/v1/rfs/incidents`);
+          const res = await apiFetch(`${PROXY_BASE}/api/rfs/incidents`);
           data = await res.json();
           layerCache.rfs_incidents = { data, timestamp: now };
         }
@@ -5910,7 +5910,7 @@ function initPagerHoursFromStorage() {
       // filtered out server-side; road crashes are routed to Hazards
       // instead of here.
       try {
-        const data = await fetchFireFeed('nt_fire_incidents', '/api/v1/nt-fire/incidents');
+        const data = await fetchFireFeed('nt_fire_incidents', '/api/nt-fire/incidents');
         (data.features || []).forEach((feature, idx) => {
           const props = feature.properties || {};
           if (props.layer === 'hazard') return; // road crashes -> Hazards layer
@@ -5979,7 +5979,7 @@ function initPagerHoursFromStorage() {
       // shows as both until it doesn't.
       try {
         const [incRes, warnRes] = await Promise.all([
-          fetchFireFeed('qld_fire_incidents', '/api/v1/qld-fire/incidents'),
+          fetchFireFeed('qld_fire_incidents', '/api/qld-fire/incidents'),
           fetchFireFeed('qld_fire_warnings', '/api/v1/qld-fire/warnings'),
         ]);
         // When upstream does populate the reference, the warning's alert
@@ -6082,7 +6082,7 @@ function initPagerHoursFromStorage() {
       // the NSW/RFS records Victoria re-publishes, which we already ingest
       // straight from the RFS.
       try {
-        const data = await fetchFireFeed('vic_emergency_events', '/api/v1/vic-emergency/events');
+        const data = await fetchFireFeed('vic_emergency_events', '/api/vic-emergency/events');
         (data.features || []).forEach((feature, idx) => {
           const props = feature.properties || {};
           if (props.layer !== 'fire') return;
@@ -6154,7 +6154,7 @@ function initPagerHoursFromStorage() {
       // disagreeing about the same fire.
       try {
         const [waIncRes, waWarnRes] = await Promise.all([
-          fetchFireFeed('wa_emergency_incidents', '/api/v1/wa-emergency/incidents'),
+          fetchFireFeed('wa_emergency_incidents', '/api/wa-emergency/incidents'),
           fetchFireFeed('wa_emergency_warnings', '/api/v1/wa-emergency/warnings'),
         ]);
         const waWarnByEvent = new Map();
@@ -6242,8 +6242,8 @@ function initPagerHoursFromStorage() {
       // fires arrive here.
       try {
         const [saCfsRes, saMfsRes] = await Promise.all([
-          fetchFireFeed('sa_cfs_incidents', '/api/v1/sa-fire/cfs'),
-          fetchFireFeed('sa_mfs_incidents', '/api/v1/sa-fire/mfs'),
+          fetchFireFeed('sa_cfs_incidents', '/api/sa-fire/cfs'),
+          fetchFireFeed('sa_mfs_incidents', '/api/sa-fire/mfs'),
         ]);
 
         const pushSa = (feature, idx) => {
@@ -10513,13 +10513,13 @@ function initPagerHoursFromStorage() {
             j('/api/v1/traffic/majorevent'),
             j('/api/v1/traffic/lga'),
             j('/api/v1/traffic/works'),
-            j('/api/v1/nt-fire/incidents'),
-            j('/api/v1/qld-fire/incidents'),
-            j('/api/v1/vic-emergency/events'),
-            j('/api/v1/wa-emergency/incidents'),
+            j('/api/nt-fire/incidents'),
+            j('/api/qld-fire/incidents'),
+            j('/api/vic-emergency/events'),
+            j('/api/wa-emergency/incidents'),
             j('/api/v1/wa-emergency/warnings'),
-            j('/api/v1/sa-fire/cfs'),
-            j('/api/v1/sa-fire/mfs'),
+            j('/api/sa-fire/cfs'),
+            j('/api/sa-fire/mfs'),
           ]);
           // NT Fire & Rescue turns out to road crashes as well as fires.
           // The crashes belong with the other road incidents, not on the
@@ -11772,8 +11772,8 @@ function initPagerHoursFromStorage() {
           const [fl, wrkFl, vicFl, waFl, waFlW] = await Promise.all([
             jf('/api/v1/traffic/flood'),
             jf('/api/v1/traffic/works'),
-            jf('/api/v1/vic-emergency/events'),
-            jf('/api/v1/wa-emergency/incidents'),
+            jf('/api/vic-emergency/events'),
+            jf('/api/wa-emergency/incidents'),
             jf('/api/v1/wa-emergency/warnings'),
           ]);
           // Victoria's water: the EMV warning layer is mostly riverine
@@ -20927,7 +20927,7 @@ function initPagerHoursFromStorage() {
         // STAGE 1: Critical data - RFS + Traffic (most used toggleable layers)
         // Waze prefetches removed — the ingest is retired (see docs/waze-userscript.md).
         const stage1 = [
-          { key: 'rfs_incidents', url: '/api/v1/rfs/incidents' },
+          { key: 'rfs_incidents', url: '/api/rfs/incidents' },
           { key: 'traffic_incidents', url: '/api/v1/traffic/incidents' },
         ];
         totalLoaded += await fetchBatch(stage1, 'Stage 1');
@@ -21031,7 +21031,7 @@ function initPagerHoursFromStorage() {
       // This fetches from backend's pre-warmed SQLite cache - should be fast
       const prewarmTasks = [
         // Core emergency data (always needs to be fresh)
-        apiFetch(`${PROXY_BASE}/api/v1/rfs/incidents`).then(r => r.json()).then(d => { layerCache.rfs_incidents = { data: d, timestamp: Date.now() }; }).catch(() => {}),
+        apiFetch(`${PROXY_BASE}/api/rfs/incidents`).then(r => r.json()).then(d => { layerCache.rfs_incidents = { data: d, timestamp: Date.now() }; }).catch(() => {}),
         // Traffic hazards (most used toggleable layers)
         apiFetch(`${PROXY_BASE}/api/v1/traffic/incidents`).then(r => r.json()).then(d => { layerCache.traffic_incidents = { data: d, timestamp: Date.now() }; }).catch(() => {}),
         // Waze prefetches removed with the retired ingest — the hazards and

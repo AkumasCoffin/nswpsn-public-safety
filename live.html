@@ -4310,7 +4310,7 @@
         }).catch(() => {}),
         
         // RFS - use count from API and cache for RFS list
-        apiFetch(`${API_BASE}/api/v1/rfs/incidents`).then(r => r.json()).then(d => {
+        apiFetch(`${API_BASE}/api/rfs/incidents`).then(r => r.json()).then(d => {
           apiDataCache.rfs = d;
           results.emergency.rfs = d.count !== undefined ? d.count : (d.features?.length || 0);
           
@@ -5618,7 +5618,7 @@
       const MAX_VISIBLE = 6;
 
       // Use the API proxy which returns GeoJSON with pre-parsed fields
-      apiFetch(`${API_BASE}/api/v1/rfs/incidents`)
+      apiFetch(`${API_BASE}/api/rfs/incidents`)
         .then(response => { if (!response.ok) throw new Error(response.status); return response.json(); })
         .then(data => {
           const features = data.features || [];
