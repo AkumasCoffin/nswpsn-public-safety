@@ -25,6 +25,7 @@ vi.mock('../../../src/services/agencyData.js', async (orig) => ({
 import { liveStore } from '../../../src/store/live.js';
 import { _clearApiKeyCache, lookupPrefix } from '../../../src/services/auth/apiKeys.js';
 import { declaredNeeds, FEEDS } from '../../../src/services/auth/apiKeyScopes.js';
+import { ALERT_TYPE_DEFS } from '../../../src/services/alertCatalog.js';
 
 const STATIC = { 'X-API-Key': 'test-api-key' };
 const KEY = 'ak_abcdefghij_' + 'K'.repeat(32);
@@ -311,5 +312,25 @@ describe('the feed table and the routes agree, with every router mounted', () =>
 
   it('no route names a feed the table does not have', () => {
     for (const n of declaredNeeds()) expect(Object.keys(FEEDS), cell(n)).toContain(n.feed);
+  });
+});
+
+describe('the Discord bot polls each catalog feed where it is', () => {
+  // shared/alert-catalog.json's endpoints are what the bot polls. A typo there
+  // is a 404 the bot logs and an alert type that silently never fires.
+  const served = () => new Set(app.routes.filter((r) => r.method === 'GET').map((r) => r.path));
+  const polled = ALERT_TYPE_DEFS.flatMap((t) => (t.endpoint ? [{ key: t.key, path: t.endpoint.split('?')[0]! }] : []));
+
+  it('every endpoint is a route the app serves', () => {
+    const paths = served();
+    for (const p of polled) expect(paths.has(p.path), `${p.key}: ${p.path}`).toBe(true);
+  });
+
+  it('a feed that is on /api/v1/ is polled there', () => {
+    const paths = served();
+    for (const p of polled) {
+      if (p.path.startsWith('/api/v1/')) continue;
+      expect(paths.has(p.path.replace('/api/', '/api/v1/')), `${p.key}: ${p.path}`).toBe(false);
+    }
   });
 });

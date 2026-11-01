@@ -757,7 +757,8 @@ def says_the_same(a: str, b: str) -> bool:
     return na in nb or nb in na
 
 
-# Endpoints whose payload is a GeoJSON Feature the interstate container reads.
+# Endpoints whose payload is a GeoJSON Feature the interstate container reads,
+# as /api/ paths: a feed polled on /api/v1/ is matched with the v1 folded off.
 # At module level, not on the class: a comprehension inside a class body gets
 # its own scope and cannot see sibling class attributes, so deriving the set
 # in there raises NameError at import — which takes the whole bot down.
@@ -772,7 +773,7 @@ _INTERSTATE_ENDPOINTS = (
 _INCIDENT_TYPES = frozenset(
     ['rfs'] + [
         t['key'] for t in alert_catalog.TYPE_DEFS
-        if str(t.get('endpoint') or '').startswith(_INTERSTATE_ENDPOINTS)
+        if str(t.get('endpoint') or '').replace('/api/v1/', '/api/', 1).startswith(_INTERSTATE_ENDPOINTS)
     ]
 )
 

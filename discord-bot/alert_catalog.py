@@ -266,12 +266,23 @@ def matches(item: Any, type_key: str) -> bool:
     return True
 
 
+def _at(data: Any, path: str) -> Any:
+    """The value at a dotted path ('data.warnings'), or None where it isn't."""
+    for key in path.split('.'):
+        if not isinstance(data, dict):
+            return None
+        data = data.get(key)
+    return data
+
+
 def items_from(data: Any, type_key: str) -> List[Any]:
     """Pull this type's records out of its endpoint's response body.
 
-    itemsPath names the wrapping key ('features', 'warnings', 'outages'), is ''
-    for a bare list, or a list of candidate keys where upstream is inconsistent
-    about capitalisation. The discriminator then narrows a shared feed.
+    itemsPath is a dotted path to the list ('features', 'data.warnings' — a
+    feed on /api/v1/ that is not GeoJSON comes wrapped in {data: ...}), is ''
+    for a bare list, or a list of candidate paths where upstream is
+    inconsistent about capitalisation. The discriminator then narrows a
+    shared feed.
     """
     t = type_def(type_key)
     if not t:
@@ -283,11 +294,12 @@ def items_from(data: Any, type_key: str) -> List[Any]:
     elif isinstance(path, list):
         items = []
         for candidate in path:
-            if isinstance(data, dict) and isinstance(data.get(candidate), list):
-                items = data[candidate]
+            found = _at(data, candidate)
+            if isinstance(found, list):
+                items = found
                 break
     else:
-        items = data.get(path) if isinstance(data, dict) else None
+        items = _at(data, path)
         if not isinstance(items, list):
             items = []
 

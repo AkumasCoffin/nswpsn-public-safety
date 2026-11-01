@@ -2339,12 +2339,12 @@ class NSWPSNBot(commands.Bot):
                 if t == 'radio_summary':
                     headers = {'Authorization': f'Bearer {API_KEY}', 'User-Agent': 'AusAwareBot/1.0', 'X-Client-Type': 'discord-bot'}
                     async with aiohttp.ClientSession() as session:
-                        async with session.get(f"{API_BASE_URL}/api/summaries/latest", headers=headers, timeout=20) as resp:
+                        async with session.get(f"{API_BASE_URL}/api/v1/summaries/latest", headers=headers, timeout=20) as resp:
                             if resp.status != 200:
                                 errors.append(f"{t}: backend returned {resp.status}")
                                 continue
                             payload = await resp.json()
-                    row = (payload or {}).get('hourly')
+                    row = ((payload or {}).get('data') or {}).get('hourly')
                     if not row:
                         errors.append(f"{t}: no summary row yet")
                         continue
@@ -5141,7 +5141,7 @@ _SUMMARY_HISTORY_LIMIT = 24
 
 
 async def _summary_fetch(date: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
-    """Fetch hourly summaries from /api/summaries. Returns newest-first list,
+    """Fetch hourly summaries from /api/v1/summaries. Returns newest-first list,
     or None on backend error, or empty list if nothing matches."""
     import aiohttp
     headers = {
@@ -5155,14 +5155,14 @@ async def _summary_fetch(date: Optional[str] = None) -> Optional[List[Dict[str, 
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(
-                f"{API_BASE_URL}/api/summaries",
+                f"{API_BASE_URL}/api/v1/summaries",
                 headers=headers, params=params, timeout=15,
             ) as resp:
                 if resp.status != 200:
-                    logger.warning(f"/api/summaries returned {resp.status}")
+                    logger.warning(f"/api/v1/summaries returned {resp.status}")
                     return None
                 payload = await resp.json()
-        return list(payload.get('results') or [])
+        return list((payload.get('data') or {}).get('results') or [])
     except Exception as e:
         logger.error(f"_summary_fetch error: {type(e).__name__}: {e}")
         return None

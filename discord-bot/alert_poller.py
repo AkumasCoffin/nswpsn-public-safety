@@ -27,9 +27,9 @@ class AlertPoller:
         # API endpoints mapping.
         # NOTE: Some canonical alert_types share a single backend fetch and are
         # split out by `_extract_items` / dispatcher inspection:
-        #   - 'bom_land' uses /api/bom/warnings (the warnings response is split
+        #   - 'bom_land' uses /api/v1/bom/warnings (the warnings response is split
         #     into bom_land / bom_marine by category at extraction time).
-        #   - 'endeavour_planned' uses /api/endeavour/planned (current outages
+        #   - 'endeavour_planned' uses /api/v1/endeavour/planned (current outages
         #     come back as 'endeavour_current').
         #   - 'essential_unplanned'/'essential_future' point at the Essential
         #     Energy backend endpoints.
@@ -493,7 +493,10 @@ class AlertPoller:
             if isinstance(data, Exception):
                 logger.warning(f"Fetch error for {alert_type}: {data}")
                 continue
-            if not data:
+            # An empty list counts as no data too, as it always has: the
+            # bootstrap waits for a feed with something in it. /api/v1/ wraps
+            # a bare list, so there an empty one arrives as {data: []}.
+            if not data or (isinstance(data, dict) and 'data' in data and not data['data']):
                 logger.debug(f"  → No data returned for {alert_type}")
                 continue
 
@@ -683,7 +686,7 @@ class AlertPoller:
         return new_alerts
 
     async def _check_radio_summary(self) -> List[Dict[str, Any]]:
-        """Poll /api/summaries/latest and emit an alert when a new summary id
+        """Poll /api/v1/summaries/latest and emit an alert when a new summary id
         appears. The backend releases scheduled hourly rows just before the
         top-of-hour (release_at ~= hour-top - 30s) so this naturally fires
         within one poll tick of a new summary going live.
@@ -703,11 +706,11 @@ class AlertPoller:
         if not presets:
             return []
 
-        payload = await self._fetch('/api/summaries/latest')
+        payload = await self._fetch('/api/v1/summaries/latest')
         if not payload:
             return []
 
-        row = payload.get('hourly')
+        row = (payload.get('data') or {}).get('hourly')
         if not row or not row.get('id'):
             return []
 
@@ -936,7 +939,12 @@ class AlertPoller:
         return new_messages
     
     async def _fetch_pager_from_api(self) -> List[Dict[str, Any]]:
-        """Fetch recent pager messages (NSW paging network) from the backend"""
+        """Fetch recent pager messages (NSW paging network) from the backend.
+
+        Stays on /api/, not /api/v1/: when the database is slow or down,
+        /api/pager/hits still answers from the hits the backend holds in
+        memory, where /api/v1/pager/hits answers 503 and alerts would stop.
+        """
         url = f"{self.api_base_url}/api/pager/hits"
         headers = {
             'Authorization': f'Bearer {self.api_key}',

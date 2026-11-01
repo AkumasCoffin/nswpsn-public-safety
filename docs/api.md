@@ -381,6 +381,7 @@ To put an endpoint on `/api/v1/`, or change one that is there:
    `openapi.json` with the change. `test/unit/api/openapi.test.ts` fails while
    it is stale, and checks every v1 operation is described and declares its
    credential.
-8. **Deploy before anything uses it.** The site goes live on push; the backend
-   only when the owner deploys. A page, the bot or a document switches to a v1
-   path in a later commit, after the deploy.
+8. **Deploy before anything uses it.** Nothing goes live until the owner
+   deploys. A page, the bot or a document switches to a v1 path in a later
+   commit, pushed after the deploy that brings the path. The bot reads the
+   catalog when it starts, so its switch takes a restart as well.

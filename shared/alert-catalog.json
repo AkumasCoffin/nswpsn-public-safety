@@ -13,7 +13,12 @@
     "",
     "archiveSource is the data_history `source` value and is deliberately",
     "many-types-to-one: the five Victorian agencies all carry vic_emergency.",
-    "The logs page groups by archiveSource; Discord alerts key on `key`."
+    "The logs page groups by archiveSource; Discord alerts key on `key`.",
+    "",
+    "endpoint is what the bot polls. A feed on /api/v1/ is polled there; the",
+    "per-agency fire feeds and The Wire are not on /api/v1/ and stay on /api/.",
+    "/api/v1/ wraps a body that is not GeoJSON in {data: ...}, so itemsPath",
+    "is a dotted path into it ('data.warnings'; 'data' for a bare list)."
   ],
 
   "_severityComment": [
@@ -87,7 +92,7 @@
       "key": "firms", "provider": "firms", "label": "Fire Hotspots", "botLabel": "FIRMS Fire Hotspots",
       "agency": "NASA", "agencyLabel": "NASA FIRMS",
       "feedShape": "firms",
-      "archiveSource": null, "endpoint": "/api/firms/hotspots", "itemsPath": "features",
+      "archiveSource": null, "endpoint": "/api/v1/firms/hotspots", "itemsPath": "features",
       "extract": "firms_cluster",
       "color": "#f97316", "icon": "🛰️", "severityScale": null, "subtypeAware": false
     },
@@ -144,7 +149,7 @@
       "key": "qfd_warning", "provider": "qfd", "label": "Warnings", "botLabel": "QFD Warnings",
       "agency": "QFD", "agencyLabel": "QLD Fire Dept",
       "feedShape": "geo_fire_warning",
-      "archiveSource": "qld_warning", "endpoint": "/api/qld-fire/warnings", "itemsPath": "features",
+      "archiveSource": "qld_warning", "endpoint": "/api/v1/qld-fire/warnings", "itemsPath": "features",
       "aliases": ["qld_warning"],
       "color": "#dc2626", "icon": "⚠️", "severityScale": "fire", "subtypeAware": true
     },
@@ -160,7 +165,7 @@
       "key": "dfes_warning", "provider": "dfes", "label": "Warnings", "botLabel": "DFES Warnings",
       "agency": "DFES", "agencyLabel": "DFES (WA)",
       "feedShape": "geo_fire_warning",
-      "archiveSource": "wa_warning", "endpoint": "/api/wa-emergency/warnings", "itemsPath": "features",
+      "archiveSource": "wa_warning", "endpoint": "/api/v1/wa-emergency/warnings", "itemsPath": "features",
       "aliases": ["wa_warning"],
       "color": "#e11d48", "icon": "⚠️", "severityScale": "fire", "subtypeAware": true
     },
@@ -201,7 +206,7 @@
       "key": "act_ambulance", "provider": "actas", "label": "Responses", "botLabel": "ACT Ambulance",
       "agency": "ACTAS", "agencyLabel": "ACT Ambulance Service",
       "feedShape": "geo_act",
-      "archiveSource": "act_ambulance", "endpoint": "/api/act-ambulance/incidents", "itemsPath": "features",
+      "archiveSource": "act_ambulance", "endpoint": "/api/v1/act-ambulance/incidents", "itemsPath": "features",
       "color": "#38bdf8", "icon": "🚑", "severityScale": null, "subtypeAware": false
     },
 
@@ -209,7 +214,7 @@
       "key": "bom_land", "provider": "bom", "label": "Land Warnings", "botLabel": "BOM Land Warnings",
       "agency": "AU/BOM", "agencyLabel": "Bureau of Meteorology",
       "feedShape": "bom",
-      "archiveSource": "bom_land", "endpoint": "/api/bom/warnings", "itemsPath": "warnings",
+      "archiveSource": "bom_land", "endpoint": "/api/v1/bom/warnings", "itemsPath": "data.warnings",
       "discriminator": { "field": "category", "notEquals": "marine" },
       "color": "#1e90ff", "icon": "⛈️", "severityScale": "bom", "subtypeAware": true
     },
@@ -217,7 +222,7 @@
       "key": "bom_marine", "provider": "bom", "label": "Marine Warnings", "botLabel": "BOM Marine Warnings",
       "agency": "AU/BOM", "agencyLabel": "Bureau of Meteorology",
       "feedShape": "bom",
-      "archiveSource": "bom_marine", "endpoint": "/api/bom/warnings", "itemsPath": "warnings",
+      "archiveSource": "bom_marine", "endpoint": "/api/v1/bom/warnings", "itemsPath": "data.warnings",
       "discriminator": { "field": "category", "equals": "marine" },
       "color": "#4169e1", "icon": "🌊", "severityScale": "bom", "subtypeAware": true
     },
@@ -226,56 +231,56 @@
       "key": "traffic_incident", "provider": "livetraffic", "label": "Incidents", "botLabel": "Traffic Incidents",
       "agency": "TFNSW", "agencyLabel": "Transport for NSW",
       "feedShape": "geo_traffic",
-      "archiveSource": "traffic_incident", "endpoint": "/api/traffic/incidents", "itemsPath": "features",
+      "archiveSource": "traffic_incident", "endpoint": "/api/v1/traffic/incidents", "itemsPath": "features",
       "color": "#ffa500", "icon": "🚗", "severityScale": null, "subtypeAware": true
     },
     {
       "key": "traffic_roadwork", "provider": "livetraffic", "label": "Roadwork", "botLabel": "Traffic Roadwork",
       "agency": "TFNSW", "agencyLabel": "Transport for NSW",
       "feedShape": "geo_traffic",
-      "archiveSource": "traffic_roadwork", "endpoint": "/api/traffic/roadwork", "itemsPath": "features",
+      "archiveSource": "traffic_roadwork", "endpoint": "/api/v1/traffic/roadwork", "itemsPath": "features",
       "color": "#ffd700", "icon": "🚧", "severityScale": null, "subtypeAware": true
     },
     {
       "key": "traffic_flood", "provider": "livetraffic", "label": "Flooding", "botLabel": "Flood Hazards",
       "agency": "TFNSW", "agencyLabel": "Transport for NSW",
       "feedShape": "geo_traffic",
-      "archiveSource": "traffic_flood", "endpoint": "/api/traffic/flood", "itemsPath": "features",
+      "archiveSource": "traffic_flood", "endpoint": "/api/v1/traffic/flood", "itemsPath": "features",
       "color": "#00ced1", "icon": "🌊", "severityScale": null, "subtypeAware": true
     },
     {
       "key": "traffic_fire", "provider": "livetraffic", "label": "Fires", "botLabel": "Traffic Fires",
       "agency": "TFNSW", "agencyLabel": "Transport for NSW",
       "feedShape": "geo_traffic",
-      "archiveSource": "traffic_fire", "endpoint": "/api/traffic/fire", "itemsPath": "features",
+      "archiveSource": "traffic_fire", "endpoint": "/api/v1/traffic/fire", "itemsPath": "features",
       "color": "#ff6347", "icon": "🔥", "severityScale": null, "subtypeAware": true
     },
     {
       "key": "traffic_majorevent", "provider": "livetraffic", "label": "Major Events", "botLabel": "Major Events",
       "agency": "TFNSW", "agencyLabel": "Transport for NSW",
       "feedShape": "geo_traffic",
-      "archiveSource": "traffic_majorevent", "endpoint": "/api/traffic/majorevent", "itemsPath": "features",
+      "archiveSource": "traffic_majorevent", "endpoint": "/api/v1/traffic/majorevent", "itemsPath": "features",
       "color": "#ff8c00", "icon": "🎉", "severityScale": null, "subtypeAware": true
     },
     {
       "key": "traffic_alpine", "provider": "livetraffic", "label": "Alpine", "botLabel": "Alpine Conditions",
       "agency": "TFNSW", "agencyLabel": "Transport for NSW",
       "feedShape": "geo_traffic",
-      "archiveSource": "traffic_alpine", "endpoint": "/api/traffic/alpine", "itemsPath": "features",
+      "archiveSource": "traffic_alpine", "endpoint": "/api/v1/traffic/alpine", "itemsPath": "features",
       "color": "#67e8f9", "icon": "🏔️", "severityScale": null, "subtypeAware": true
     },
     {
       "key": "traffic_lga", "provider": "livetraffic", "label": "Council Roads", "botLabel": "Council Roads",
       "agency": "TFNSW", "agencyLabel": "Transport for NSW",
       "feedShape": "geo_traffic",
-      "archiveSource": "traffic_lga", "endpoint": "/api/traffic/lga", "itemsPath": "features",
+      "archiveSource": "traffic_lga", "endpoint": "/api/v1/traffic/lga", "itemsPath": "features",
       "color": "#ffd700", "icon": "🚧", "severityScale": null, "subtypeAware": true
     },
     {
       "key": "traffic_works", "provider": "livetraffic", "label": "Works & ACT", "botLabel": "Roadwork & Works",
       "agency": "TFNSW", "agencyLabel": "Transport for NSW",
       "feedShape": "geo_traffic",
-      "archiveSource": "traffic_works", "endpoint": "/api/traffic/works", "itemsPath": "features",
+      "archiveSource": "traffic_works", "endpoint": "/api/v1/traffic/works", "itemsPath": "features",
       "color": "#facc15", "icon": "🚧", "severityScale": null, "subtypeAware": true
     },
 
@@ -283,14 +288,14 @@
       "key": "endeavour_current", "provider": "endeavour", "label": "Current Outages", "botLabel": "Endeavour Current Outages",
       "agency": "ENDEAVOUR", "agencyLabel": "Endeavour Energy",
       "feedShape": "endeavour",
-      "archiveSource": "endeavour_current", "endpoint": "/api/endeavour/current", "itemsPath": "",
+      "archiveSource": "endeavour_current", "endpoint": "/api/v1/endeavour/current", "itemsPath": "data",
       "color": "#8b008b", "icon": "⚡", "severityScale": null, "subtypeAware": false
     },
     {
       "key": "endeavour_planned", "provider": "endeavour", "label": "Planned Outages", "botLabel": "Endeavour Planned Outages",
       "agency": "ENDEAVOUR", "agencyLabel": "Endeavour Energy",
       "feedShape": "endeavour",
-      "archiveSource": "endeavour_planned", "endpoint": "/api/endeavour/planned", "itemsPath": "",
+      "archiveSource": "endeavour_planned", "endpoint": "/api/v1/endeavour/planned", "itemsPath": "data",
       "color": "#6a1b9a", "icon": "🔧", "severityScale": null, "subtypeAware": false
     },
 
@@ -298,7 +303,7 @@
       "key": "ausgrid", "provider": "ausgrid", "label": "Outages", "botLabel": "Ausgrid Outages",
       "agency": "AUSGRID", "agencyLabel": "Ausgrid",
       "feedShape": "ausgrid",
-      "archiveSource": "ausgrid", "endpoint": "/api/ausgrid/outages", "itemsPath": ["Markers", "markers"],
+      "archiveSource": "ausgrid", "endpoint": "/api/v1/ausgrid/outages", "itemsPath": ["data.Markers", "data.markers"],
       "color": "#e67e22", "icon": "⚡", "severityScale": null, "subtypeAware": false
     },
 
@@ -306,14 +311,14 @@
       "key": "essential_unplanned", "provider": "essential", "label": "Unplanned Outages", "botLabel": "Essential Energy Unplanned Outages",
       "agency": "ESSENTIAL", "agencyLabel": "Essential Energy",
       "feedShape": "essential",
-      "archiveSource": "essential_current", "endpoint": "/api/essential/outages?feed=current&type=unplanned", "itemsPath": "outages",
+      "archiveSource": "essential_current", "endpoint": "/api/v1/essential/outages?feed=current&type=unplanned", "itemsPath": "data.outages",
       "color": "#22d3ee", "icon": "⚡", "severityScale": null, "subtypeAware": false
     },
     {
       "key": "essential_future", "provider": "essential", "label": "Future Outages", "botLabel": "Essential Energy Future Outages",
       "agency": "ESSENTIAL", "agencyLabel": "Essential Energy",
       "feedShape": "essential",
-      "archiveSource": "essential_future", "endpoint": "/api/essential/future", "itemsPath": "outages",
+      "archiveSource": "essential_future", "endpoint": "/api/v1/essential/future", "itemsPath": "data.outages",
       "aliases": ["essential_planned"],
       "color": "#0891b2", "icon": "📅", "severityScale": null, "subtypeAware": false
     },
@@ -354,7 +359,7 @@
       "key": "shark_report", "provider": "dorsal", "label": "Shark Reports", "botLabel": "Shark Reports",
       "agency": "DORSAL", "agencyLabel": "Dorsal Watch",
       "feedShape": "geo_point",
-      "archiveSource": "dorsal", "endpoint": "/api/dorsal/reports", "itemsPath": "features",
+      "archiveSource": "dorsal", "endpoint": "/api/v1/dorsal/reports", "itemsPath": "features",
       "color": "#2dd4bf", "icon": "🦈", "severityScale": null, "subtypeAware": true
     }
   ]

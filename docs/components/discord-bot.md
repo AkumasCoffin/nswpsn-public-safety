@@ -99,7 +99,7 @@ must not skip the rest and must not stop the loop, because nothing restarts it.
 `AlertPoller` (`alert_poller.py`) holds the endpoint map. Several canonical alert
 types share one backend fetch and are split apart at extraction:
 
-- `bom_land` and `bom_marine` both come from `/api/bom/warnings`, split by
+- `bom_land` and `bom_marine` both come from `/api/v1/bom/warnings`, split by
   category;
 - `cfa`, `deeca`, `vicses`, `emv` and `esta` all come from
   `/api/vic-emergency/events` — one feed carries every Victorian publisher, split
@@ -109,10 +109,22 @@ types share one backend fetch and are split apart at extraction:
   the embed builder's routing, where the hand-written lists those replaced had
   never gained the newer agencies and still carried the pre-rename `qld_warning`
   and `wa_warning` spellings;
-- `endeavour_planned` uses `/api/endeavour/planned`; current outages come back as
-  `endeavour_current`;
+- `endeavour_planned` uses `/api/v1/endeavour/planned`; current outages come back
+  as `endeavour_current`;
 - the interstate feeds are all RFS-shaped GeoJSON and refresh upstream every
   2 minutes (NT: 5), so the 60s cycle mostly sees no change.
+
+A feed is polled on `/api/v1/` where it is there, and on `/api/` where it is not.
+The per-agency fire incident feeds (RFS, the Victorian feed, QFD, DFES, SA and NT)
+are not on `/api/v1/` — API keys read them merged, at `/api/v1/fires` — and nor is
+The Wire, which is this site's own content. `/api/v1/` wraps a body that is not
+GeoJSON in `{data: …}`, so `itemsPath` in the catalog is a dotted path
+(`data.warnings`, or `data` for a bare list), and an empty `{data: []}` counts as
+no data, as an empty bare list always has, so a source's bootstrap waits for a
+fetch with something in it. Pager stays on `/api/pager/hits`: when the database
+is slow or down that path still answers from the hits the backend holds in
+memory, where `/api/v1/pager/hits` answers 503 and pager alerts would stop. The
+radio-summary checker and `/summary` read `/api/v1/summaries`.
 
 Dispatch is **one message per alert**, each a Components V2 `LayoutView`. Alerts
 keep their poll-result order within a channel and the send queue paces them.
