@@ -448,6 +448,73 @@ class AlertPoller:
             out.append(rep)
         return out
 
+    async def _new_alerts_for(self, loop, alert_type: str, data: Any) -> List[Dict[str, Any]]:
+        """The alerts in one fetched feed that have not been seen, marked seen."""
+        items = self._extract_items(alert_type, data)
+
+        # On a source's first SUCCESSFUL fetch after startup, bootstrap
+        # it: mark every currently-active item as seen without firing
+        # an alert. Without this, a restart after downtime surfaces
+        # every active outage / incident / pager hit as "new" — the
+        # bot then tries to send thousands of messages at once,
+        # saturates the 500-message queue, and drops a bunch of them
+        # as "Message queue full". Production saw 2126 alerts on a
+        # single restart cycle.
+        #
+        # Per-source (not a global first-cycle flag) so a source whose
+        # first fetch failed still gets bootstrapped when it recovers,
+        # instead of flooding on cycle 2. Counted as bootstrapped only once
+        # the batch is written, so a failed write is tried again next cycle.
+        if alert_type not in self._bootstrapped:
+            logger.info(
+                f"  → {alert_type}: Bootstrapping {len(items)} items "
+                "(marking as seen, no alerts)"
+            )
+            batch = [(alert_type, self._get_alert_id(alert_type, item)) for item in items]
+            await loop.run_in_executor(None, self.db.mark_alerts_seen_batch, batch)
+            self._bootstrapped.add(alert_type)
+            return []
+        logger.debug(f"  → {alert_type}: {len(items)} items")
+
+        # Build candidate list and check all at once (one DB query per few
+        # hundred instead of one per alert). De-dupe by id WITHIN this cycle:
+        # two distinct items can resolve to the same alert id (the
+        # stable-fields fallback for Waze alerts with no upstream uuid
+        # collides when type/subtype/street/rounded-location match — e.g.
+        # several flood road-closures on the same street). Without de-duping,
+        # filter_unseen_alerts returns that id once per copy and we post
+        # the identical alert several times in one batch.
+        item_by_id = {}
+        candidates = []
+        for item in items:
+            aid = self._get_alert_id(alert_type, item)
+            if aid in item_by_id:
+                continue
+            item_by_id[aid] = item
+            candidates.append((alert_type, aid))
+
+        # Run synchronous DB calls in executor to avoid blocking the event loop
+        unseen = await loop.run_in_executor(None, self.db.filter_unseen_alerts, candidates)
+        if not unseen:
+            logger.debug(f"  → No new {alert_type} alerts")
+            return []
+
+        # Mark all unseen as seen in one batch commit
+        await loop.run_in_executor(None, self.db.mark_alerts_seen_batch, unseen)
+
+        alerts = []
+        for _, alert_id in unseen:
+            item = item_by_id[alert_id]
+            source_ts = self._get_alert_timestamp(alert_type, item)
+            alerts.append({
+                'type': alert_type,
+                'id': alert_id,
+                'data': item,
+                'timestamp': source_ts.isoformat()
+            })
+            logger.info(f"New alert: {alert_type} - {alert_id}")
+        return alerts
+
     async def check_alerts(self) -> List[Dict[str, Any]]:
         """Check all alert types for new alerts"""
         new_alerts = []
@@ -511,72 +578,14 @@ class AlertPoller:
                 logger.debug(f"  → {alert_type}: The Wire is not live — skipping")
                 continue
 
-            items = self._extract_items(alert_type, data)
-            original_count = len(items)
+            # A source that fails here (a database error on its ids, say) is
+            # skipped for this cycle. It used to end the cycle, and with it
+            # every other source's alerts, user incidents and radio summaries.
+            try:
+                new_alerts.extend(await self._new_alerts_for(loop, alert_type, data))
+            except Exception as e:
+                logger.error(f"Error checking {alert_type} alerts: {e}")
 
-            # On a source's first SUCCESSFUL fetch after startup, bootstrap
-            # it: mark every currently-active item as seen without firing
-            # an alert. Without this, a restart after downtime surfaces
-            # every active outage / incident / pager hit as "new" — the
-            # bot then tries to send thousands of messages at once,
-            # saturates the 500-message queue, and drops a bunch of them
-            # as "Message queue full". Production saw 2126 alerts on a
-            # single restart cycle.
-            #
-            # Per-source (not a global first-cycle flag) so a source whose
-            # first fetch failed still gets bootstrapped when it recovers,
-            # instead of flooding on cycle 2.
-            if alert_type not in self._bootstrapped:
-                self._bootstrapped.add(alert_type)
-                logger.info(
-                    f"  → {alert_type}: Bootstrapping {original_count} items "
-                    "(marking as seen, no alerts)"
-                )
-                batch = [(alert_type, self._get_alert_id(alert_type, item)) for item in items]
-                await loop.run_in_executor(None, self.db.mark_alerts_seen_batch, batch)
-                items = []
-            else:
-                logger.debug(f"  → {alert_type}: {len(items)} items")
-
-            # Build candidate list and check all at once (single DB query
-            # instead of N). De-dupe by id WITHIN this cycle: two distinct
-            # items can resolve to the same alert id (the stable-fields
-            # fallback for Waze alerts with no upstream uuid collides when
-            # type/subtype/street/rounded-location match — e.g. several flood
-            # road-closures on the same street). Without de-duping,
-            # filter_unseen_alerts returns that id once per copy and we post
-            # the identical alert several times in one batch.
-            item_by_id = {}
-            candidates = []
-            for item in items:
-                aid = self._get_alert_id(alert_type, item)
-                if aid in item_by_id:
-                    continue
-                item_by_id[aid] = item
-                candidates.append((alert_type, aid))
-
-            # Run synchronous DB calls in executor to avoid blocking the event loop
-            unseen = await loop.run_in_executor(None, self.db.filter_unseen_alerts, candidates)
-
-            if unseen:
-                # Mark all unseen as seen in one batch commit
-                await loop.run_in_executor(None, self.db.mark_alerts_seen_batch, unseen)
-
-                for _, alert_id in unseen:
-                    item = item_by_id[alert_id]
-                    source_ts = self._get_alert_timestamp(alert_type, item)
-                    alert = {
-                        'type': alert_type,
-                        'id': alert_id,
-                        'data': item,
-                        'timestamp': source_ts.isoformat()
-                    }
-                    new_alerts.append(alert)
-                    logger.info(f"New alert: {alert_type} - {alert_id}")
-
-            if not unseen:
-                logger.debug(f"  → No new {alert_type} alerts")
-        
         # Check user incidents from Supabase
         user_incident_alerts = await self._check_user_incidents()
         if user_incident_alerts:

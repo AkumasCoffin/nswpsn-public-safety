@@ -187,10 +187,22 @@ which is how a burst overflowed the queue. discord.py still enforces Discord's
 per-channel and global rate limits, so concurrency cannot exceed them; it just
 keeps every channel making progress.
 
-Two robustness details worth knowing before you touch the dispatch path:
+Three robustness details worth knowing before you touch the poll and dispatch path:
 
 - A `@tasks.loop` that raises an unhandled exception **stops and is not
   auto-restarted**, so the loops carry outer guards.
+- **One source cannot stop the others.** `check_alerts` checks each subscribed
+  source on its own (`_new_alerts_for`) and logs a failure as
+  `Error checking <type> alerts`, skipping that source for the cycle. A failure
+  used to end the cycle, and with it every source's alerts, user incidents and
+  radio summaries. A FIRMS feed of ~10,000 hotspots did exactly that, on and off,
+  from at least 2026-10-27 to 2026-11-02: its seen-check was one
+  `(alert_type, alert_id) IN (…)` query, which Postgres nests one OR deeper per
+  pair until its 2 MB stack runs out (`stack depth limit exceeded`, logged every
+  minute for hours at a time). `filter_unseen_alerts` now asks 400 pairs at a
+  time; 4,000 still passed on the bot's database. A source is counted as
+  bootstrapped only once its seen-batch is written, so a failed write is retried
+  next cycle instead of flooding.
 - An over-budget container is dropped rather than raised. By the time dispatch
   runs, the poller has already marked every alert in the batch as seen — so one
   bad container must degrade to "that container missing", never to an exception

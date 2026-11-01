@@ -1219,24 +1219,32 @@ class Database:
         finally:
             conn.close()
 
+    # Pairs per query in filter_unseen_alerts. Postgres nests a row IN list one
+    # OR deeper per pair, and a FIRMS feed of ~10,000 hotspots overflowed its
+    # 2MB stack ("stack depth limit exceeded"): every alert cycle failed until
+    # the feed shrank. 4,000 pairs still pass there; SQLite allows 999 parameters.
+    UNSEEN_QUERY_PAIRS = 400
+
     def filter_unseen_alerts(self, alerts: List[tuple]) -> List[tuple]:
         """Given a list of (alert_type, alert_id) tuples, return only those not yet seen.
-        Uses a single DB query instead of one per alert."""
+        One query per UNSEEN_QUERY_PAIRS pairs instead of one per alert."""
         if not alerts:
             return []
+        seen = set()
         conn = self._connect()
         try:
             c = conn.cursor()
-            if USE_POSTGRES:
-                # Build a VALUES list for a single query
-                values_str = ','.join(c.mogrify('(%s,%s)', (at, ai)).decode() for at, ai in alerts)
-                c.execute(f'SELECT alert_type, alert_id FROM seen_alerts WHERE (alert_type, alert_id) IN ({values_str})')
-            else:
-                placeholders = ','.join(['(?,?)'] * len(alerts))
-                flat = [v for pair in alerts for v in pair]
-                c.execute(f'SELECT alert_type, alert_id FROM seen_alerts WHERE (alert_type, alert_id) IN ({placeholders})', flat)
-            seen = {(row[0] if isinstance(row, tuple) else row['alert_type'],
-                     row[1] if isinstance(row, tuple) else row['alert_id']) for row in c.fetchall()}
+            for start in range(0, len(alerts), self.UNSEEN_QUERY_PAIRS):
+                part = alerts[start:start + self.UNSEEN_QUERY_PAIRS]
+                if USE_POSTGRES:
+                    values_str = ','.join(c.mogrify('(%s,%s)', (at, ai)).decode() for at, ai in part)
+                    c.execute(f'SELECT alert_type, alert_id FROM seen_alerts WHERE (alert_type, alert_id) IN ({values_str})')
+                else:
+                    placeholders = ','.join(['(?,?)'] * len(part))
+                    flat = [v for pair in part for v in pair]
+                    c.execute(f'SELECT alert_type, alert_id FROM seen_alerts WHERE (alert_type, alert_id) IN ({placeholders})', flat)
+                seen.update((row[0] if isinstance(row, tuple) else row['alert_type'],
+                             row[1] if isinstance(row, tuple) else row['alert_id']) for row in c.fetchall())
         finally:
             conn.close()
         return [(at, ai) for at, ai in alerts if (at, ai) not in seen]
