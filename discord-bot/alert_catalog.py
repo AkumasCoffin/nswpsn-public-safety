@@ -55,7 +55,23 @@ def _load() -> Dict[str, Any]:
         if t['provider'] not in providers:
             raise ValueError(
                 'alert type %s names unknown provider %s' % (t['key'], t['provider']))
+        if t.get('state') is not None and t['state'] not in STATE_CODES:
+            raise ValueError(
+                'alert type %s names unknown state %s' % (t['key'], t['state']))
     return cat
+
+
+# The states a preset's States filter can name (filters.states), as the
+# dashboard stores them. Same list and order as the backend's AU_STATES.
+STATE_CODES = ('NSW', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'NT', 'ACT')
+
+# Full names, for records that write their state out (shark reports carry the
+# feed's own text).
+_STATE_NAMES = {
+    'new south wales': 'NSW', 'victoria': 'VIC', 'queensland': 'QLD',
+    'south australia': 'SA', 'western australia': 'WA', 'tasmania': 'TAS',
+    'northern territory': 'NT', 'australian capital territory': 'ACT',
+}
 
 
 CATALOG: Dict[str, Any] = _load()
@@ -176,6 +192,58 @@ def color(key: str) -> Optional[int]:
 def icon(key: str) -> str:
     t = type_def(key)
     return t.get('icon', '') if t else ''
+
+
+def home_state(key: str) -> Optional[str]:
+    """The one state every record of this type is in, or None for a type whose
+    records span states (BOM, FIRMS, shark reports, pager, The Wire)."""
+    t = type_def(key)
+    return t.get('state') if t else None
+
+
+def state_code(value: Any) -> Optional[str]:
+    """A state as a code (NSW, VIC, …) from a code or a full name, else None."""
+    s = str(value or '').strip()
+    if not s:
+        return None
+    if s.upper() in STATE_CODES:
+        return s.upper()
+    return _STATE_NAMES.get(s.lower())
+
+
+def alert_state(key: str, item: Any) -> Optional[str]:
+    """Which state an alert is in, or None when that cannot be known.
+
+    The record's own `state` first — properties.state on a GeoJSON feature
+    (every road record carries one, Live Traffic NSW's included), a top-level
+    state on a flat record — then the type's home state from the catalog.
+    """
+    if isinstance(item, dict):
+        props = item.get('properties')
+        if isinstance(props, dict):
+            code = state_code(props.get('state'))
+            if code:
+                return code
+        code = state_code(item.get('state'))
+        if code:
+            return code
+    return home_state(key)
+
+
+def passes_states(states: Any, key: str, item: Any) -> bool:
+    """The States filter: True when the alert is in one of `states`.
+
+    An empty or missing list is no filter. An alert whose state cannot be
+    known passes — the catalog's rule for every filter is never to drop an
+    alert over missing metadata.
+    """
+    if not states or not isinstance(states, (list, tuple)):
+        return True
+    wanted = {state_code(s) for s in states} - {None}
+    if not wanted:
+        return True
+    st = alert_state(key, item)
+    return st is None or st in wanted
 
 
 def general_picker_types() -> Dict[str, str]:

@@ -142,6 +142,32 @@ describe('validateFilters: subtype_filters', () => {
   });
 });
 
+describe('validateFilters: states', () => {
+  it('upper-cases, de-duplicates and stores in AU_STATES order', () => {
+    expect(validateFilters({ states: ['act', 'NSW', ' nsw ', 'Qld'] })).toEqual({ states: ['NSW', 'QLD', 'ACT'] });
+  });
+
+  it('drops blanks, and the key with them when nothing is left', () => {
+    expect(validateFilters({ states: ['', '  '] })).toEqual({});
+    expect(validateFilters({ states: [] })).toEqual({});
+  });
+
+  it('rejects anything but a known state code', () => {
+    expect(() => validateFilters({ states: ['NSW', 'New South Wales'] })).toThrow(/states must be among NSW, VIC/);
+    expect(() => validateFilters({ states: ['NZ'] })).toThrow(FilterValidationError);
+  });
+
+  it('rejects a non-list and a non-string entry', () => {
+    expect(() => validateFilters({ states: 'NSW' })).toThrow(/states must be a list/);
+    expect(() => validateFilters({ states: [1] })).toThrow(/each entry must be a string/);
+  });
+
+  it('round-trips beside the other filters', () => {
+    expect(validateFilters({ keywords_include: ['flood'], states: ['VIC'], geofilter: { type: 'ring', lat: -37.8, lng: 145, radius_m: 1000 } }))
+      .toEqual({ keywords_include: ['flood'], states: ['VIC'], geofilter: { type: 'ring', lat: -37.8, lng: 145, radius_m: 1000 } });
+  });
+});
+
 describe('validateGeofilter: discriminated union', () => {
   it('rejects unknown type', () => {
     expect(() => validateGeofilter({ type: 'square' })).toThrow(/geofilter\.type must be one of/);

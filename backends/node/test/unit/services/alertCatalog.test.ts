@@ -20,6 +20,7 @@ import {
   alertTypeDef,
   catalogForClient,
 } from '../../../src/services/alertCatalog.js';
+import { AU_STATES } from '../../../src/lib/stateMask.js';
 
 /** Repo root — walk up until shared/alert-catalog.json is there. */
 function repoRoot(): string {
@@ -84,6 +85,28 @@ describe('catalog integrity', () => {
     for (const t of ALERT_TYPE_DEFS) {
       if (t.extract === 'bespoke') expect(t.endpoint).toBeNull();
       else expect(t.endpoint, `${t.key} has no endpoint`).toBeTruthy();
+    }
+  });
+
+  it('a home state is a known code, and every one-state agency has one', () => {
+    for (const t of ALERT_TYPE_DEFS) {
+      if (t.state !== undefined) expect(AU_STATES, t.key).toContain(t.state);
+    }
+    // A fire service, ACT Ambulance or a power distributor serves one state,
+    // so a preset's States filter has to know which: without it, every
+    // alert of the type would pass as "state unknown".
+    const ONE_STATE_SHAPES = new Set(['geo_fire', 'geo_fire_warning', 'geo_act', 'endeavour', 'ausgrid', 'essential']);
+    for (const t of ALERT_TYPE_DEFS) {
+      if (ONE_STATE_SHAPES.has((t as { feedShape?: string }).feedShape ?? '')) {
+        expect(t.state, `${t.key} has no home state`).toBeTruthy();
+      }
+    }
+    expect(alertTypeDef('rfs')?.state).toBe('NSW');
+    expect(alertTypeDef('esta')?.state).toBe('VIC');
+    expect(alertTypeDef('qfd_warning')?.state).toBe('QLD');
+    // Types whose records span states carry none.
+    for (const k of ['bom_land', 'firms', 'shark_report', 'wire_article', 'user_incident', 'radio_summary']) {
+      expect(alertTypeDef(k)?.state, k).toBeUndefined();
     }
   });
 });

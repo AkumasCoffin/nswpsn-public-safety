@@ -156,7 +156,7 @@ WEBSITE_URL = "https://nswpsn.forcequit.xyz/"
 
 
 # ============================================================================
-# Per-preset alert filters (keywords / severity floor / geofilter).
+# Per-preset alert filters (keywords / severity floor / states / geofilter).
 # Evaluated in the dispatchers after resolve_preset_effective_state passes —
 # preset.filters JSONB shape:
 #   {
@@ -165,6 +165,12 @@ WEBSITE_URL = "https://nswpsn.forcequit.xyz/"
 #     "severity_min": {"rfs": "watch_and_act", "bom_land": "major", ...}
 #         # Dict keyed by alert_type → token. Legacy: a single string applied
 #         # generically (whichever per-type scale matches) is still accepted.
+#     "states": ["NSW", "ACT"],            # any-of, state codes
+#         # An alert's state is its record's own `state` (every road record
+#         # carries one), else its type's home state from the catalog
+#         # (alert_catalog.alert_state). Unknown state (BOM, FIRMS, pager…)
+#         # passes. It is not a region for _SCOPED_ONLY_ALERT_TYPES: a
+#         # hotspot carries no state, so it would pass every States filter.
 #     "geofilter": { "type": "bbox" | "ring" | "polygon", ... }
 #         bbox:    {"lat_min", "lng_min", "lat_max", "lng_max"}
 #         ring:    {"lat", "lng", "radius_m"}
@@ -553,6 +559,11 @@ def preset_alert_matches(preset: dict, alert_type: str, alert_data: dict) -> boo
             # as severity, so a missing field never blocks legit traffic.
             if token and token not in allowed:
                 return False
+
+    # Pass-through when the alert's state cannot be known — same policy as
+    # the other gates (alert_catalog.passes_states).
+    if not alert_catalog.passes_states(f.get('states'), alert_type, alert_data):
+        return False
 
     gf = f.get('geofilter')
     # Legacy: a top-level `bbox` without a geofilter wrapper is treated as

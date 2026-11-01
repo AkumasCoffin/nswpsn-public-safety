@@ -448,6 +448,12 @@ class AlertPoller:
             out.append(rep)
         return out
 
+    # A cycle with more than this many new items in one source, making up more
+    # than this share of it, is an upstream id change, not news (see
+    # _new_alerts_for).
+    REBASELINE_MIN_NEW = 200
+    REBASELINE_SHARE = 0.5
+
     async def _new_alerts_for(self, loop, alert_type: str, data: Any) -> List[Dict[str, Any]]:
         """The alerts in one fetched feed that have not been seen, marked seen."""
         items = self._extract_items(alert_type, data)
@@ -501,6 +507,18 @@ class AlertPoller:
 
         # Mark all unseen as seen in one batch commit
         await loop.run_in_executor(None, self.db.mark_alerts_seen_batch, unseen)
+
+        # Most of a feed new at once is not news: the ids changed upstream —
+        # a source swapped behind an endpoint (the interstate road feeds
+        # moving off Live Traffic's aggregate), or a new id scheme — and the
+        # bot was not restarted to bootstrap it. Re-baseline quietly instead
+        # of posting the whole feed to every channel subscribed without a
+        # region. Real bursts stay well under half a feed.
+        if len(unseen) > self.REBASELINE_MIN_NEW and len(unseen) > len(candidates) * self.REBASELINE_SHARE:
+            logger.warning(
+                f"re-baselining {alert_type}: {len(unseen)} of {len(candidates)} items new at once"
+            )
+            return []
 
         alerts = []
         for _, alert_id in unseen:

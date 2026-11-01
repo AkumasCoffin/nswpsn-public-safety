@@ -187,7 +187,7 @@ which is how a burst overflowed the queue. discord.py still enforces Discord's
 per-channel and global rate limits, so concurrency cannot exceed them; it just
 keeps every channel making progress.
 
-Three robustness details worth knowing before you touch the poll and dispatch path:
+Four robustness details worth knowing before you touch the poll and dispatch path:
 
 - A `@tasks.loop` that raises an unhandled exception **stops and is not
   auto-restarted**, so the loops carry outer guards.
@@ -203,6 +203,15 @@ Three robustness details worth knowing before you touch the poll and dispatch pa
   time; 4,000 still passed on the bot's database. A source is counted as
   bootstrapped only once its seen-batch is written, so a failed write is retried
   next cycle instead of flooding.
+- **Most of a feed new at once is re-baselined, not posted.** When more than 200
+  of a bootstrapped source's items are new in one cycle and they are more than
+  half of it (`REBASELINE_MIN_NEW`, `REBASELINE_SHARE` in `alert_poller.py`),
+  the ids changed upstream — a source swapped in behind an endpoint, as the
+  interstate road feeds were when they moved off Live Traffic's aggregate, or a
+  new id scheme — and the bot was not restarted to bootstrap it. They are marked
+  seen with a `re-baselining <type>: N of M items new at once` warning and
+  nothing is posted; without it, every channel subscribed to the type with no
+  region would get the whole feed. Real bursts stay well under half a feed.
 - An over-budget container is dropped rather than raised. By the time dispatch
   runs, the poller has already marked every alert in the batch as seen — so one
   bad container must degrade to "that container missing", never to an exception
@@ -215,7 +224,25 @@ has its own alert types, role pings and filters:
 
 - keyword include/exclude;
 - a severity floor (RFS watch-and-act, BOM major);
-- a geographic bounding box, so a preset only fires for alerts inside a region.
+- sub-types, per source;
+- **states** (`filters.states`, e.g. `["NSW", "ACT"]`): only alerts from the
+  ticked states;
+- a geographic shape (box, circle or polygon), so a preset only fires for
+  alerts inside a region.
+
+An alert's state is its record's own `state` — every road record carries one,
+since the road feeds cover other states as well as NSW — or else its type's
+home state, the `state` field of `shared/alert-catalog.json` (every fire
+service, ACT Ambulance and each power distributor belongs to one state).
+`alert_catalog.alert_state` decides; `preset_alert_matches` gates on
+`alert_catalog.passes_states`. An alert whose state cannot be known — BOM
+warnings, satellite hotspots, pager, The Wire without a state — passes, as
+every filter lets an alert with missing metadata through. That is also why a
+States filter does not count as a region for the scoped-only types (FIRMS,
+shark reports): a hotspot carries no state, so it would pass every States
+filter. The dashboard's filters card offers the states as a tick-list, and the
+API keeps them as upper-case codes in a fixed order
+(`services/dashboardFilterValidator.ts`).
 
 Muting is a **four-tier hierarchy with inheritance**: guild → channel → preset →
 per-alert-type.
