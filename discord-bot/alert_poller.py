@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import logging
 import re
+from collections import Counter
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Optional
 
@@ -453,6 +454,15 @@ class AlertPoller:
     # _new_alerts_for).
     REBASELINE_MIN_NEW = 200
     REBASELINE_SHARE = 0.5
+    # The same test for each state of a feed merging several states' records,
+    # with a lower floor: one state may have only a few hundred.
+    REBASELINE_STATE_MIN_NEW = 50
+
+    @staticmethod
+    def _record_state(item: Any) -> str:
+        """The state a record says it is in (properties.state), '' for none."""
+        props = item.get('properties') if isinstance(item, dict) else None
+        return str(props.get('state') or '') if isinstance(props, dict) else ''
 
     async def _new_alerts_for(self, loop, alert_type: str, data: Any) -> List[Dict[str, Any]]:
         """The alerts in one fetched feed that have not been seen, marked seen."""
@@ -519,6 +529,25 @@ class AlertPoller:
                 f"re-baselining {alert_type}: {len(unseen)} of {len(candidates)} items new at once"
             )
             return []
+
+        # A feed merging several states' records (the road feeds) can have one
+        # state's ids change — SA's roadworks becoming one record per job, VIC
+        # moving to Transport Victoria's own API — while staying well under
+        # half new as a whole. The same test for each state absorbs that state
+        # alone, and the others' news still goes out.
+        state_of = {aid: self._record_state(item_by_id[aid]) for _, aid in candidates}
+        if len(set(state_of.values()) - {''}) > 1:
+            total = Counter(state_of.values())
+            new = Counter(state_of[aid] for _, aid in unseen)
+            quiet = {
+                s for s, n in new.items()
+                if s and n > self.REBASELINE_STATE_MIN_NEW and n > total[s] * self.REBASELINE_SHARE
+            }
+            for s in sorted(quiet):
+                logger.warning(
+                    f"re-baselining {alert_type} for {s}: {new[s]} of {total[s]} items new at once"
+                )
+            unseen = [u for u in unseen if state_of[u[1]] not in quiet]
 
         alerts = []
         for _, alert_id in unseen:

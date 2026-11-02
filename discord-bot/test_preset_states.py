@@ -114,5 +114,42 @@ check(len(out) == 200, 'exactly 200 new is under the bar: alerted')
 out, _, _ = asyncio.run(cycle_with(220, 210))
 check(out == [], '210 of 220 new: re-baselined')
 
+
+async def states_cycle(old, swap):
+    """Bootstrap a road feed of {state: count} records, then give `swap` {state: n} of them new ids."""
+    db = FakeDB()
+    p = alert_poller.AlertPoller('http://x', 'k', db)
+    p._extract_items = lambda t, d: d['items']
+    p._get_alert_id = lambda t, item: item['properties']['id']
+    p._get_alert_timestamp = lambda t, item: alert_poller.datetime.now(alert_poller.timezone.utc)
+    loop = asyncio.get_running_loop()
+
+    def rec(state, rid):
+        r = road(state)
+        r['properties'] = dict(r['properties'], id=rid)
+        return r
+
+    items = [rec(s, f'{s}-old-{i}') for s, n in old.items() for i in range(n)]
+    await p._new_alerts_for(loop, 'traffic_roadwork', {'items': items})
+    swapped = []
+    for s, n in old.items():
+        k = swap.get(s, 0)
+        swapped += [rec(s, f'{s}-new-{i}') for i in range(k)] + [rec(s, f'{s}-old-{i}') for i in range(k, n)]
+    out = await p._new_alerts_for(loop, 'traffic_roadwork', {'items': swapped})
+    return sorted(a['id'] for a in out), db
+
+
+# SA's roadworks becoming one record per job: 405 new ids in a feed of 1,184.
+feed = {'NSW': 320, 'QLD': 329, 'SA': 405, 'VIC': 13, 'ACT': 117}
+out, db = asyncio.run(states_cycle(feed, {'SA': 405, 'NSW': 1}))
+check(out == ['NSW-new-0'], "one state's ids all new: that state re-baselined, the others' news alerted")
+check(('traffic_roadwork', 'SA-new-0') in db.seen, '...and its new ids are marked seen')
+out, _ = asyncio.run(states_cycle(feed, {'ACT': 40, 'QLD': 3}))
+check(len(out) == 43, "40 of a state's 117 new: an ordinary burst, alerted")
+out, _ = asyncio.run(states_cycle(feed, {'VIC': 13}))
+check(len(out) == 13, 'all of a small state new, under the floor of 50: alerted')
+out, _ = asyncio.run(states_cycle({'NSW': 100}, {'NSW': 60}))
+check(len(out) == 60, 'a feed of one state keeps the feed-wide test only: 60 of 100 alerted')
+
 print('\nFAILED:' if FAILS else '\nALL PASSED', *FAILS, sep='\n  ')
 sys.exit(1 if FAILS else 0)
