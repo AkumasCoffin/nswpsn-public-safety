@@ -4077,16 +4077,18 @@
     // to filter them apart. This tracks the real category per marker so the
     // panel can offer one pill per category the data actually contains.
     const _hazardExcludedCategories = new Set();
-    // Responding agencies the user has switched off. Only records that
-    // name one are affected - see the note where hazard markers are built.
-    const _hazardExcludedAgencies = new Set();
+    // States and publishers the user has switched off. Every record has
+    // both: the road feeds name them, and the councils' and emergency
+    // services' records are tagged where the feeds are merged.
+    const _hazardExcludedStates = new Set();
+    const _hazardExcludedPublishers = new Set();
 
     // Floods was a single-source layer until Victoria's SES warnings
     // arrived on it, so it had no marker registry and no panel at all.
     // Same shape as the hazard one: keep the markers flat, rebuild
     // membership when a pill flips.
-    const _floodMarkers = []; // [{marker, agency}]
-    const _floodExcludedAgencies = new Set();
+    const _floodMarkers = []; // [{marker, state}]
+    const _floodExcludedStates = new Set();
     // 'waze' dropped with the retired ingest. It also gates the Waze subtype
     // pill block below, which would otherwise render an empty section.
     const _hazardSelectedSources = new Set(['livetraffic']);
@@ -4143,10 +4145,14 @@
     // the per-marker type alongside the marker. Filtering then just
     // re-projects the flat list into roadworkLayer based on the
     // currently-selected type set.
-    const _roadworkMarkers = [];        // [{marker, type, source}]
+    // A record can have more than one entry: an SA job is a pin at each end
+    // and its road as a line. Only the first entry of a record counts
+    // towards the panel's numbers; the rest are `extra`.
+    const _roadworkMarkers = [];        // [{marker, type, source, state, extra?, line?}]
     const _roadworkAvailableTypes = []; // distinct types in current dataset, ordered
     const _roadworkSelectedTypes = new Set(); // populated from available on first load
     const _roadworkSelectedSources = new Set(['livetraffic']); // 'waze' dropped with the retired ingest
+    const _roadworkExcludedStates = new Set();
 
     // Camera filter states and sub-layers
     const cameraFilters = {
@@ -10020,6 +10026,13 @@ function initPagerHoursFromStorage() {
 
     /** Mount/unmount one entry on `layer`, honouring the current LOD. */
     function _lodMount(layer, entry, want) {
+      // A road drawn as a line looks the same at every zoom: no dot for it.
+      if (entry.line) {
+        if (want && !entry._pinOn) { layer.addLayer(entry.marker); entry._pinOn = true; }
+        else if (!want && entry._pinOn) { layer.removeLayer(entry.marker); entry._pinOn = false; }
+        entry._shown = !!entry._pinOn;
+        return;
+      }
       const wantDot = want && _lodDots();
       const wantPin = want && !wantDot;
       if (entry._pinOn && !wantPin) { layer.removeLayer(entry.marker); entry._pinOn = false; }
@@ -10045,7 +10058,8 @@ function initPagerHoursFromStorage() {
           && !(m.source === 'waze' && m.subtypeLabel
                && _hazardExcludedSubtypes.has(m.subtypeLabel))
           && !(m.mainCategory && _hazardExcludedCategories.has(m.mainCategory))
-          && !(m.agency && _hazardExcludedAgencies.has(m.agency))
+          && !(m.state && _hazardExcludedStates.has(m.state))
+          && !(m.publisher && _hazardExcludedPublishers.has(m.publisher))
           && _cullEntryInView(m, bounds);
         const sl = hazardSubLayers[m.type];
         if (!sl) continue;
@@ -10649,21 +10663,34 @@ function initPagerHoursFromStorage() {
                 lastUpdated: f.properties.updatedISO || '',
               },
             }));
+          // Each record's state and publisher, for the State and Publisher
+          // rows. The road feeds name both (their `state` and `source`);
+          // the councils' and the emergency services' records are tagged
+          // here. `publisher` is its own property because the draw loop
+          // below overwrites `source`.
+          const tagged = (features, state, publisher) => (features || []).map((f) => ({
+            ...f,
+            properties: {
+              ...f.properties,
+              state: (f.properties || {}).state || state,
+              publisher: publisher || (f.properties || {}).source || 'livetraffic',
+            },
+          }));
           trafficData = {
             type: 'FeatureCollection',
             features: [
-              ...(inc.features || []),
-              ...(alp.features || []),
-              ...(fir.features || []),
-              ...(maj.features || []),
+              ...tagged(inc.features, 'NSW'),
+              ...tagged(alp.features, 'NSW'),
+              ...tagged(fir.features, 'NSW'),
+              ...tagged(maj.features, 'NSW'),
               // The council records that aren't roadwork: hazards, adverse
               // weather, flooding, changed traffic conditions.
-              ...(lgaHz.features || []).filter((f) => !_isCouncilRoadwork(f.properties)),
-              ...ntCrashes,
-              ...qldCrashes,
-              ...vicHazards,
-              ...waHazards,
-              ...saHazards,
+              ...tagged((lgaHz.features || []).filter((f) => !_isCouncilRoadwork(f.properties)), 'NSW', 'council'),
+              ...tagged(ntCrashes, 'NT', 'emergency'),
+              ...tagged(qldCrashes, 'QLD', 'emergency'),
+              ...tagged(vicHazards, 'VIC', 'emergency'),
+              ...tagged(waHazards, 'WA', 'emergency'),
+              ...tagged(saHazards, 'SA', 'emergency'),
             ],
           };
           layerCache.hazards_merged = { data: trafficData, timestamp: now };
@@ -11024,12 +11051,8 @@ function initPagerHoursFromStorage() {
                 opacity: 0.95
               });
               _hazardMarkers.push({ marker, type: category, source: 'livetraffic', subtypeLabel: null,
-                // Only the emergency-service records carry this. The road
-                // authority and council records deliberately do not: their
-                // OrgName is the reporting council, and 128 of those would
-                // bury the handful of agencies the row exists to filter.
-                // Markers without one are never hidden by the agency row.
-                agency: props.responderAgency || null,
+                state: props.state || '',
+                publisher: props.publisher || '',
                 // Colour for the zoomed-out canvas dot, matching the bucket.
                 color: category === 'accident' ? '#ef4444' : category === 'closures' ? '#a855f7' : '#f97316',
                 // Canonical form: the merged feeds disagree on casing and
@@ -11496,26 +11519,65 @@ function initPagerHoursFromStorage() {
               const [lon, lat] = feature.geometry.coordinates;
               if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
               const props = feature.properties || {};
-              const icon = L.divIcon({
-                className: 'custom-pin',
-                html: getRoadworkIcon(props, false),
-                iconSize: [24, 24],
-                iconAnchor: [12, 12]
+              const type = _roadworkClassify(props, false);
+              // Council roadwork comes from NSW's council feed.
+              const state = props.state || 'NSW';
+              // An SA job lists its sites along the road: a pin at each
+              // end. Anything else, or a job whose sites are all at one
+              // spot, is one pin at its own place.
+              const sites = (Array.isArray(props.sites) ? props.sites : [])
+                .filter((s) => s && Number.isFinite(s.lat) && Number.isFinite(s.lon));
+              const first = sites[0];
+              const last = sites[sites.length - 1];
+              const pins = first && (first.lat !== last.lat || first.lon !== last.lon)
+                ? [[first.lat, first.lon], [last.lat, last.lon]]
+                : [[lat, lon]];
+              pins.forEach(([plat, plon], i) => {
+                const icon = L.divIcon({
+                  className: 'custom-pin',
+                  html: getRoadworkIcon(props, false),
+                  iconSize: [24, 24],
+                  iconAnchor: [12, 12]
+                });
+                const marker = L.marker([plat, plon], { icon });
+                marker.bindTooltip(buildRoadworkTooltip(props, plat, plon), {
+                  direction: 'top',
+                  offset: [0, -10],
+                  opacity: 0.95
+                });
+                _roadworkMarkers.push({
+                  marker,
+                  type,
+                  source: 'livetraffic',
+                  state,
+                  // The second end pin is the same record.
+                  extra: i > 0,
+                  // Colour for the zoomed-out canvas dot.
+                  color: '#eab308',
+                  latlng: L.latLng(plat, plon),
+                });
               });
-              const marker = L.marker([lat, lon], { icon });
-              marker.bindTooltip(buildRoadworkTooltip(props, lat, lon), {
-                direction: 'top',
-                offset: [0, -10],
-                opacity: 0.95
-              });
-              _roadworkMarkers.push({
-                marker,
-                type: _roadworkClassify(props, false),
-                source: 'livetraffic',
-                // Colour for the zoomed-out canvas dot.
-                color: '#eab308',
-                latlng: L.latLng(lat, lon),
-              });
+              // The road the works are on, in red, where the record carries
+              // it: an SA job's road between its ends, QLD's own lines.
+              const lines = (Array.isArray(props.encodedPolylines) ? props.encodedPolylines : [])
+                .map((l) => l && l.coords).filter(Boolean);
+              if (!lines.length && props.encodedPolyline) lines.push(props.encodedPolyline);
+              for (const enc of lines) {
+                const latLngs = decodeGooglePolyline(enc);
+                if (latLngs.length < 2) continue;
+                const road = L.polyline(latLngs, {
+                  color: '#ef4444',
+                  weight: 5,
+                  opacity: 0.85,
+                  lineCap: 'round',
+                  lineJoin: 'round'
+                });
+                road.bindTooltip(buildRoadworkTooltip(props, lat, lon), { sticky: true, opacity: 0.95 });
+                _roadworkMarkers.push({
+                  marker: road, type, source: 'livetraffic', state,
+                  extra: true, line: true, mbounds: road.getBounds(),
+                });
+              }
               totalCount++;
             }
           });
@@ -11583,11 +11645,18 @@ function initPagerHoursFromStorage() {
         const desired =
           _roadworkSelectedTypes.has(m.type)
           && _roadworkSelectedSources.has(m.source)
+          && !(m.state && _roadworkExcludedStates.has(m.state))
           && _cullEntryInView(m, bounds);
         _lodMount(roadworkLayer, m, desired);
       }
     }
     registerViewportCuller(_renderRoadworkVisible);
+    window.toggleRoadworkStatePill = function (key) {
+      if (_roadworkExcludedStates.has(key)) _roadworkExcludedStates.delete(key);
+      else _roadworkExcludedStates.add(key);
+      _renderRoadworkVisible();
+      refreshActiveFilterPanel();
+    };
     function toggleRoadworkSourcePill(src) {
       if (_roadworkSelectedSources.has(src)) _roadworkSelectedSources.delete(src);
       else _roadworkSelectedSources.add(src);
@@ -11832,7 +11901,11 @@ function initPagerHoursFromStorage() {
               const props = feature.properties || {};
               const pulseClass = isWithinMinutes(props.created, 15) ? 'rfs-pulse' : '';
               const tooltip = buildTrafficTooltip(props);
-              
+              // The road feeds name their state; Victoria's and WA's
+              // warnings are theirs; the rest is NSW's.
+              const state = props.state
+                || (props.region === 'Victoria' ? 'VIC' : props.region === 'Western Australia' ? 'WA' : 'NSW');
+
               // Decode and render polyline if available
               const encodedPoly = props.encodedPolyline;
               const polyStrings = Array.isArray(encodedPoly) ? encodedPoly : (encodedPoly ? [encodedPoly] : []);
@@ -11851,6 +11924,8 @@ function initPagerHoursFromStorage() {
                     lineJoin: 'round'
                   }).addTo(floodsLayer);
                   polyline.bindTooltip(tooltip, { sticky: true, opacity: 0.95 });
+                  // Registered with its record's pin, so the State row hides both.
+                  _floodMarkers.push({ marker: polyline, state, extra: true });
                 }
               }
               
@@ -11867,10 +11942,7 @@ function initPagerHoursFromStorage() {
                 offset: [0, -10],
                 opacity: 0.95
               });
-              // Only the emergency-service records name a responding
-              // agency; the road-authority ones pass the agency row
-              // untouched, the same way they do on Hazards.
-              _floodMarkers.push({ marker, agency: props.responderAgency || null });
+              _floodMarkers.push({ marker, state });
               // A warning area, where the agency published one - the same
               // rings the Fires layer draws around a fire ground.
               for (const ring of (props.polygons || [])) {
@@ -11883,7 +11955,7 @@ function initPagerHoursFromStorage() {
                   color: '#06b6d4', weight: 2, fillColor: '#06b6d4', fillOpacity: 0.12
                 }).addTo(floodsLayer);
                 area.bindTooltip(tooltip, { sticky: true, opacity: 0.95 });
-                _floodMarkers.push({ marker: area, agency: props.responderAgency || null });
+                _floodMarkers.push({ marker: area, state, extra: true });
               }
               floodCount++;
             }
@@ -11954,6 +12026,8 @@ function initPagerHoursFromStorage() {
         console.error('Floods error (Waze)', e);
       }
       
+      // A reload mounts everything; take the states switched off back off.
+      _rebuildFloodLayer();
       console.log(`Loaded ${floodCount} flood items (Live Traffic + Waze)`);
     }
 
@@ -12238,6 +12312,18 @@ function initPagerHoursFromStorage() {
     function _ffPill(active, label, onclickJs) {
       return `<button class="floating-filter-pill ${active ? 'active' : ''}" onclick="${onclickJs}">${label}</button>`;
     }
+    // States and territories, in the order the site lists them.
+    const _STATE_ORDER = ['NSW', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'NT', 'ACT'];
+    /** A State row: a pill per state with records, counted; nothing when
+     *  there is only one, as its pill could only hide the whole layer. */
+    function _ffStateRow(counts, excluded, toggleName) {
+      const rank = (s) => (_STATE_ORDER.indexOf(s) + 1) || 99;
+      const keys = Object.keys(counts).filter(Boolean).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+      if (keys.length < 2) return '';
+      const pills = keys.map((s) => _ffPill(!excluded.has(s), `${escapeHtml(s)} (${counts[s].toLocaleString()})`,
+                                            `${toggleName}('${jsArg(s)}')`)).join('');
+      return `<div class="ff-section-label">State</div><div class="floating-filter-pills">${pills}</div>`;
+    }
     // Pill variant that carries a per-pill colour. Used by AIS to keep
     // the filter buttons visually matched to the on-map pin colour for
     // each ship type. `glyph` is rendered before the label — pass a
@@ -12297,13 +12383,30 @@ function initPagerHoursFromStorage() {
       toggleHazardFilter(key, hazardFilters[key]);
       refreshActiveFilterPanel();
     };
-    // Which responding agency's records to show. Only the emergency
-    // services tag themselves, so this can never hide a road-authority pin.
-    window.toggleHazardAgencyPill = function (key) {
-      if (_hazardExcludedAgencies.has(key)) _hazardExcludedAgencies.delete(key);
-      else _hazardExcludedAgencies.add(key);
+    // Which states' and which publishers' records to show.
+    window.toggleHazardStatePill = function (key) {
+      if (_hazardExcludedStates.has(key)) _hazardExcludedStates.delete(key);
+      else _hazardExcludedStates.add(key);
       _rebuildHazardSubLayers();
       refreshActiveFilterPanel();
+    };
+    window.toggleHazardPublisherPill = function (key) {
+      if (_hazardExcludedPublishers.has(key)) _hazardExcludedPublishers.delete(key);
+      else _hazardExcludedPublishers.add(key);
+      _rebuildHazardSubLayers();
+      refreshActiveFilterPanel();
+    };
+    // Who published a record: the road feeds by name, and the two groups
+    // tagged where the feeds are merged. VIC records read from Live
+    // Traffic's re-share are Live Traffic NSW's.
+    const _HAZARD_PUBLISHERS = {
+      livetraffic: 'Live Traffic NSW',
+      qldtraffic: 'QLDTraffic',
+      traffic_sa: 'Traffic SA',
+      roads_act: 'Roads ACT',
+      transport_vic: 'Transport Victoria',
+      council: 'NSW councils',
+      emergency: 'Emergency services',
     };
     // One pill per category the Live Traffic feed actually publishes,
     // rather than the three coarse buckets the sub-layers use.
@@ -12337,9 +12440,11 @@ function initPagerHoursFromStorage() {
           if (!_hazardSelectedSources.has(m.source)) continue;
           if (m.source === 'waze' && m.subtypeLabel
               && _hazardExcludedSubtypes.has(m.subtypeLabel)) continue;
-          // Respect the Category row too — otherwise excluding a category
-          // removed pins while these bucket counts stayed put.
+          // Respect the Category, State and Publisher rows too — otherwise
+          // excluding one removed pins while these bucket counts stayed put.
           if (m.mainCategory && _hazardExcludedCategories.has(m.mainCategory)) continue;
+          if (m.state && _hazardExcludedStates.has(m.state)) continue;
+          if (m.publisher && _hazardExcludedPublishers.has(m.publisher)) continue;
           if (typeCounts[m.type] !== undefined) typeCounts[m.type]++;
         }
         const typePills = items.map((it) => {
@@ -12395,28 +12500,30 @@ function initPagerHoursFromStorage() {
         // Busiest first, same as the roadwork Type row.
         const catKeys = Object.keys(catCounts)
           .sort((a, b) => catCounts[b] - catCounts[a] || a.localeCompare(b));
-        // Responding agency. Routing is by event, so a CFA hazmat call
-        // and an SES rescue land here rather than on Fires - without this
-        // row they would be the only records with no way to filter by who
-        // is attending.
-        const agencyCounts = {};
+        // State and publisher. The layer spans every state, from the road
+        // feeds, the councils and the emergency services' road crashes and
+        // hazards; no agency row, as who attends is not what anyone looks
+        // the layer up by.
+        const stateCounts = {};
+        const publisherCounts = {};
         for (const m of _hazardMarkers) {
-          if (!m.agency) continue;
           if (!_hazardSelectedSources.has(m.source)) continue;
-          agencyCounts[m.agency] = (agencyCounts[m.agency] || 0) + 1;
+          if (m.state) stateCounts[m.state] = (stateCounts[m.state] || 0) + 1;
+          if (m.publisher) publisherCounts[m.publisher] = (publisherCounts[m.publisher] || 0) + 1;
         }
-        const agencyKeys = Object.keys(agencyCounts)
-          .sort((a, b) => agencyCounts[b] - agencyCounts[a] || a.localeCompare(b));
-        let agencyBlock = '';
-        if (agencyKeys.length) {
-          const agencyPills = agencyKeys.map((k) => {
-            const on = !_hazardExcludedAgencies.has(k);
-            return _ffPill(on, `${escapeHtml(agencyLabel(k))} (${agencyCounts[k].toLocaleString()})`,
-                           `toggleHazardAgencyPill('${jsArg(k)}')`);
+        const stateBlock = _ffStateRow(stateCounts, _hazardExcludedStates, 'toggleHazardStatePill');
+        const publisherKeys = Object.keys(publisherCounts)
+          .sort((a, b) => publisherCounts[b] - publisherCounts[a] || a.localeCompare(b));
+        let publisherBlock = '';
+        if (publisherKeys.length > 1) {
+          const publisherPills = publisherKeys.map((k) => {
+            const on = !_hazardExcludedPublishers.has(k);
+            return _ffPill(on, `${escapeHtml(_HAZARD_PUBLISHERS[k] || k)} (${publisherCounts[k].toLocaleString()})`,
+                           `toggleHazardPublisherPill('${jsArg(k)}')`);
           }).join('');
-          agencyBlock = `
-            <div class="ff-section-label">Agency</div>
-            <div class="floating-filter-pills">${agencyPills}</div>
+          publisherBlock = `
+            <div class="ff-section-label">Publisher</div>
+            <div class="floating-filter-pills">${publisherPills}</div>
           `;
         }
         let categoryBlock = '';
@@ -12438,7 +12545,8 @@ function initPagerHoursFromStorage() {
           ${LiveTrafficVocab.panelHeader('incident')}
           <div class="ff-section-label">Group <span style="opacity:.6;font-weight:400;">(${ltCount.toLocaleString()} total)</span></div>
           <div class="floating-filter-pills">${typePills}</div>
-          ${agencyBlock}
+          ${stateBlock}
+          ${publisherBlock}
           ${categoryBlock}
           ${subtypeBlock}
         `;
@@ -12473,21 +12581,19 @@ function initPagerHoursFromStorage() {
       const lbl = document.querySelector('#floating-filter-panel #ff-heat-opacity-val');
       if (lbl) lbl.textContent = `${v}%`;
     };
-    // Floods. Single-source until Victoria's SES flood warnings landed
-    // here, which is what the agency row is for - without it those would
-    // be the only records on the map with no way to filter by who issued
-    // them. Records with no agency (the road authority's road-flooding
-    // reports) are never hidden by it.
+    // Floods: flooded roads from every state's road feed, and Victoria's
+    // and WA's flood warnings — filtered by state. A record's road line and
+    // warning area go with its pin.
     function _rebuildFloodLayer() {
       for (const m of _floodMarkers) {
-        const desired = !(m.agency && _floodExcludedAgencies.has(m.agency));
+        const desired = !(m.state && _floodExcludedStates.has(m.state));
         if (desired) { if (!floodsLayer.hasLayer(m.marker)) floodsLayer.addLayer(m.marker); }
         else if (floodsLayer.hasLayer(m.marker)) floodsLayer.removeLayer(m.marker);
       }
     }
-    window.toggleFloodAgencyPill = function (key) {
-      if (_floodExcludedAgencies.has(key)) _floodExcludedAgencies.delete(key);
-      else _floodExcludedAgencies.add(key);
+    window.toggleFloodStatePill = function (key) {
+      if (_floodExcludedStates.has(key)) _floodExcludedStates.delete(key);
+      else _floodExcludedStates.add(key);
       _rebuildFloodLayer();
       refreshActiveFilterPanel();
     };
@@ -12496,25 +12602,17 @@ function initPagerHoursFromStorage() {
       label: 'Floods',
       color: '#06b6d4',
       render() {
-        const agencyCounts = {};
-        let unattributed = 0;
+        const stateCounts = {};
+        let total = 0;
         for (const m of _floodMarkers) {
-          if (m.agency) agencyCounts[m.agency] = (agencyCounts[m.agency] || 0) + 1;
-          else unattributed += 1;
+          if (m.extra) continue;
+          total += 1;
+          if (m.state) stateCounts[m.state] = (stateCounts[m.state] || 0) + 1;
         }
-        const keys = Object.keys(agencyCounts)
-          .sort((a, b) => agencyCounts[b] - agencyCounts[a] || a.localeCompare(b));
-        const pills = keys.map((k) => {
-          const on = !_floodExcludedAgencies.has(k);
-          return _ffPill(on, `${escapeHtml(agencyLabel(k))} (${agencyCounts[k].toLocaleString()})`,
-                         `toggleFloodAgencyPill('${jsArg(k)}')`);
-        }).join('');
+        const stateBlock = _ffStateRow(stateCounts, _floodExcludedStates, 'toggleFloodStatePill');
         return `
           <h4><i class="fa-solid fa-water" style="color:#06b6d4;"></i> Floods</h4>
-          ${pills ? `<div class="ff-section-label">Agency</div><div class="floating-filter-pills">${pills}</div>` : ''}
-          <div style="font-size:10px;color:#64748b;margin-top:6px;">
-            ${unattributed.toLocaleString()} record${unattributed === 1 ? '' : 's'} with no agency published (road authority and council reports) - always shown
-          </div>
+          ${stateBlock || `<div style="font-size:11px;color:#94a3b8;">${total.toLocaleString()} record${total === 1 ? '' : 's'}${total ? `, all ${escapeHtml(Object.keys(stateCounts)[0] || '')}` : ''}</div>`}
         `;
       },
     };
@@ -12731,13 +12829,20 @@ function initPagerHoursFromStorage() {
             <div style="font-size:11px;color:#94a3b8;font-style:italic;">Loading roadwork data…</div>
           `;
         }
+        // One count per record (not per end pin or line); type counts
+        // follow the State row, as the hazard ones do.
         const typeCounts = {};
+        const stateCounts = {};
         let ltCount = 0, wzCount = 0;
         for (const m of _roadworkMarkers) {
-          typeCounts[m.type] = (typeCounts[m.type] || 0) + 1;
+          if (m.extra) continue;
+          if (m.state) stateCounts[m.state] = (stateCounts[m.state] || 0) + 1;
           if (m.source === 'livetraffic') ltCount++;
           else if (m.source === 'waze') wzCount++;
+          if (m.state && _roadworkExcludedStates.has(m.state)) continue;
+          typeCounts[m.type] = (typeCounts[m.type] || 0) + 1;
         }
+        const stateBlock = _ffStateRow(stateCounts, _roadworkExcludedStates, 'toggleRoadworkStatePill');
         // Busiest types first — alphabetical buried the useful buckets
         // behind one-off job names once the national feeds merged in.
         const orderedTypes = _roadworkAvailableTypes
@@ -12755,6 +12860,7 @@ function initPagerHoursFromStorage() {
         // pill whose only effect was hiding the entire layer.
         return `
           ${LiveTrafficVocab.panelHeader('roadwork')}
+          ${stateBlock}
           <div class="ff-section-label">Type <span style="opacity:.6;font-weight:400;">(${ltCount.toLocaleString()} total)</span></div>
           <div class="floating-filter-pills">${typePills}</div>
         `;
