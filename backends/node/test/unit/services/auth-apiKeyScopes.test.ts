@@ -208,7 +208,7 @@ describe('keyMayRequest', () => {
     // The retired source/type/window grammar, or a typo: a scoped key holding nothing.
     for (const scopes of [RETIRED, ['fires:liv']]) {
       it(`${scopes.join(',')}: refused every declared route, as a scoped key, never by the old list`, () => {
-        for (const [path, need] of [['/api/v1/fires', FIRES], ['/api/v1/data/history', HISTORY]] as const) {
+        for (const [path, need] of [['/api/v1/fires', FIRES], ['/api/v1/history', HISTORY]] as const) {
           expect(keyMayRequest(scopes, 'GET', path, matched(need)), path).toMatchObject({ ok: false, error: 'api_key_scope_forbidden' });
         }
         // A path the old list has, and that `read` reaches — not this key.
@@ -287,7 +287,7 @@ describe('keyCanRead — the gate’s answer for a route, as the API description
     expect(keyCanRead(FIRES_LIVE, '/api/v1/fires', FIRES)).toBe(true);
     expect(keyCanRead(FIRES_LIVE, '/api/v1/bom/warnings', { feed: 'warnings', window: 'live' })).toBe(false);
     expect(keyCanRead(FIRES_LIVE, '/api/v1/fires', null)).toBe(false);
-    expect(keyCanRead(['pager:history'], '/api/v1/data/history', HISTORY)).toBe(true);
+    expect(keyCanRead(['pager:history'], '/api/v1/history', HISTORY)).toBe(true);
   });
 
   it('judges a `read` key by the path, templates included', () => {
@@ -295,7 +295,7 @@ describe('keyCanRead — the gate’s answer for a route, as the API description
     expect(keyCanRead(['read'], '/api/v1/fires', FIRES)).toBe(true);
     expect(keyCanRead(['read'], '/api/v1/agency/extended/{slug}', null)).toBe(false);
     // The old list never included history, declared or not.
-    expect(keyCanRead(['read'], '/api/v1/data/history', HISTORY)).toBe(false);
+    expect(keyCanRead(['read'], '/api/v1/history', HISTORY)).toBe(false);
   });
 });
 
@@ -425,7 +425,7 @@ describe('stored history: a route spanning feeds, narrowed per key', () => {
   it('a refusal names every cell that would get in', () => {
     expect(SPANNED).toEqual(['fires', 'warnings', 'ambulance', 'roads', 'outages', 'beaches', 'pager']);
     for (const scopes of [FIRES_LIVE, ['aircraft:history'], ['summaries:history']]) {
-      expect(keyMayRequest(scopes, 'GET', '/api/v1/data/history', { matched: true, need: HISTORY }), scopes[0]).toEqual({
+      expect(keyMayRequest(scopes, 'GET', '/api/v1/history', { matched: true, need: HISTORY }), scopes[0]).toEqual({
         ok: false,
         error: 'api_key_scope_forbidden',
         message: HISTORY_REFUSAL,

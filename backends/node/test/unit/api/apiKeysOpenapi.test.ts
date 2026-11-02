@@ -72,7 +72,7 @@ const DOC: OpenApiDoc = {
     '/api/v1/fires': gated('Fires', 'fires:live', 'Fires'),
     '/api/v1/bom/warnings': gated('Warnings', 'warnings:live', 'BomWarnings'),
     '/api/v1/adsb/aircraft': gated('Aircraft', 'aircraft:live', 'Aircraft'),
-    '/api/v1/data/history': gated('History', '*:history', 'History'),
+    '/api/v1/history': gated('History', '*:history', 'History'),
     '/api/v1/health': { get: { operationId: 'getHealth', tags: ['Service'], security: [], responses: ref('Health') } },
   },
   components: {
@@ -177,7 +177,7 @@ describe('GET /api/api-keys/openapi.json', () => {
     const { res, paths } = await get();
     expect(res.status).toBe(200);
     // k4 has not expired yet: the history of an archived feed opens stored history.
-    expect(paths.sort()).toEqual(['/api/v1/data/history', '/api/v1/fires', '/api/v1/health']);
+    expect(paths.sort()).toEqual(['/api/v1/fires', '/api/v1/health', '/api/v1/history']);
   });
 
   it('history the archive does not hold (aircraft) does not open stored history', async () => {
@@ -198,7 +198,7 @@ describe('GET /api/api-keys/openapi.json', () => {
     const { paths } = await get();
     expect(paths).toContain('/api/v1/bom/warnings'); // on the old feed list
     expect(paths).toContain('/api/v1/fires'); // the scoped key's
-    expect(paths).not.toContain('/api/v1/data/history'); // neither reaches it
+    expect(paths).not.toContain('/api/v1/history'); // neither reaches it
   });
 
   it('owner and staff see the whole document, with or without keys of their own', async () => {

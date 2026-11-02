@@ -220,9 +220,11 @@ map.html  ──►  /api/rfs/incidents        (RFS fires)
                                           flood and major events for NSW, QLD,
                                           VIC, SA and ACT)
           ──►  /api/traffic/cameras      (cameras: site routes, never on /api/v1/)
-          ──►  /api/v1/endeavour/{current,maintenance,future}, /api/v1/essential/outages
+          ──►  /api/endeavour/{current,maintenance,future}, /api/essential/outages
+                                         (site routes; keys read them merged, at /api/v1/outages)
           ──►  /api/v1/pager/hits        (pager pins; a 503 keeps the last pins)
-          ──►  /api/v1/data/history      (an incident's change trail)
+          ──►  /api/v1/data/history      (an incident's change trail; the old v1 name
+                                          of /api/v1/history, kept until the pages move)
           ──►  /api/v1/firms/hotspots    (satellite hotspots)
           ──►  /api/v1/adsb/{aircraft,trails,history,photo/:hex}
           ──►  /api/adsb/receivers       (node status — never on /api/v1/)
@@ -239,12 +241,13 @@ map.html  ──►  /api/rfs/incidents        (RFS fires)
           ──►  /api/incidents            (community-added)
 
 live.html ──►  per-source counts, /api/rfs/incidents, /api/v1/bom/warnings
-               (weather), /api/v1/traffic/*, /api/v1/{endeavour,essential}/*,
-               /api/v1/ausgrid/stats, /api/v1/{beachwatch,beachsafe},
+               (weather), /api/v1/traffic/*, /api/{endeavour,essential}/*,
+               /api/ausgrid/stats, /api/v1/{beachwatch,beachsafe},
                /api/v1/summaries/latest, /api/news/rss (site route), /api/stats/history,
                /api/heartbeat
 
-logs.html ──►  /api/v1/data/history, /api/v1/data/history/filters,
+logs.html ──►  /api/v1/data/history, /api/v1/data/history/filters (the old v1
+               name of /api/v1/history, kept until the pages move),
                /api/v1/pager/hits, /api/v1/summaries
 ```
 

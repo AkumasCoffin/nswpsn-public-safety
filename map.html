@@ -10144,9 +10144,9 @@ function initPagerHoursFromStorage() {
         
         if (needCurr || needMaint || needFut) {
           const fetches = await Promise.all([
-            needCurr ? apiFetch(`${PROXY_BASE}/api/v1/endeavour/current`).then(r => r.json()).then(j => j.data).catch(() => []) : Promise.resolve(currCached.data),
-            needMaint ? apiFetch(`${PROXY_BASE}/api/v1/endeavour/maintenance`).then(r => r.json()).then(j => j.data).catch(() => []) : Promise.resolve(maintCached.data),
-            needFut ? apiFetch(`${PROXY_BASE}/api/v1/endeavour/future`).then(r => r.json()).then(j => j.data).catch(() => []) : Promise.resolve(futCached.data)
+            needCurr ? apiFetch(`${PROXY_BASE}/api/endeavour/current`).then(r => r.json()).catch(() => []) : Promise.resolve(currCached.data),
+            needMaint ? apiFetch(`${PROXY_BASE}/api/endeavour/maintenance`).then(r => r.json()).catch(() => []) : Promise.resolve(maintCached.data),
+            needFut ? apiFetch(`${PROXY_BASE}/api/endeavour/future`).then(r => r.json()).catch(() => []) : Promise.resolve(futCached.data)
           ]);
           endeavourCurrentRes = fetches[0];
           endeavourMaintenanceRes = fetches[1];
@@ -10185,7 +10185,7 @@ function initPagerHoursFromStorage() {
         const needEss = !essCached.data || (essNow - essCached.timestamp) >= LAYER_CACHE_TTL;
         
         if (needEss) {
-          essentialData = await apiFetch(`${PROXY_BASE}/api/v1/essential/outages?lite=1`).then(r => r.json()).then(j => j.data).catch(() => ({ outages: [] }));
+          essentialData = await apiFetch(`${PROXY_BASE}/api/essential/outages?lite=1`).then(r => r.json()).catch(() => ({ outages: [] }));
           layerCache.essential_energy = { data: essentialData, timestamp: essNow };
         } else {
           essentialData = essCached.data;
@@ -20936,9 +20936,9 @@ function initPagerHoursFromStorage() {
           { key: 'beachsafe', url: '/api/v1/beachsafe', unwrap: true },
           { key: 'dorsal_reports', url: '/api/v1/dorsal/reports?hours=168' },
           { key: 'weather_current', url: '/api/v1/weather/current' },
-          { key: 'endeavour_current', url: '/api/v1/endeavour/current', unwrap: true },
-          { key: 'endeavour_maintenance', url: '/api/v1/endeavour/maintenance', unwrap: true },
-          { key: 'endeavour_future', url: '/api/v1/endeavour/future', unwrap: true },
+          { key: 'endeavour_current', url: '/api/endeavour/current' },
+          { key: 'endeavour_maintenance', url: '/api/endeavour/maintenance' },
+          { key: 'endeavour_future', url: '/api/endeavour/future' },
         ];
         totalLoaded += await fetchBatch(stage3, 'Stage 3');
         

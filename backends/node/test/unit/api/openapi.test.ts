@@ -99,7 +99,15 @@ describe('openapi.json', () => {
     expect(op).toBeDefined();
     expect(op.tags).toEqual(['Fires']);
     expect(op['x-scopes']).toEqual(['fires:live']);
-    expect(fresh.paths['/api/v1/data/history']?.['get']['x-scopes']).toEqual(['*:history']);
+    expect(fresh.paths['/api/v1/history']?.['get']['x-scopes']).toEqual(['*:history']);
+  });
+
+  it('every electricity distributor is one operation, under the outages feed', () => {
+    const op = fresh.paths['/api/v1/outages']?.['get'];
+    expect(op).toBeDefined();
+    expect(op.tags).toEqual(['Power outages']);
+    expect(op['x-scopes']).toEqual(['outages:live']);
+    expect(ops(fresh).filter((o) => o.op.tags[0] === 'Power outages').map((o) => o.path)).toEqual(['/api/v1/outages']);
   });
 
   it('describes none of this site\'s own routes', () => {
@@ -115,6 +123,12 @@ describe('openapi.json', () => {
       '/api/v1/sa-fire/mfs',
       '/api/v1/radio/grn-sites',
       '/api/v1/rdio/calls/{callId}',
+      '/api/v1/endeavour/current',
+      '/api/v1/essential/outages',
+      '/api/v1/ausgrid/outages',
+      // The old name of /api/v1/history, kept only for this site's pages.
+      '/api/v1/data/history',
+      '/api/v1/data/history/filters',
     ]) {
       expect(paths, gone).not.toContain(gone);
     }
@@ -155,7 +169,7 @@ describe('filterSpecForKey', () => {
     expect(seen).toContain('/api/v1/firms/hotspots');
     expect(seen).not.toContain('/api/v1/qld-fire/warnings'); // another feed
     expect(seen).not.toContain('/api/v1/bom/warnings');
-    expect(seen).not.toContain('/api/v1/data/history'); // history
+    expect(seen).not.toContain('/api/v1/history'); // history
     expect(seen).toContain('/api/v1/health');
     expect(seen).toContain('/api/v1/agency/extended/{slug}');
   });
@@ -176,7 +190,7 @@ describe('filterSpecForKey', () => {
     const live = ops(filterSpecForKey(fresh, EVERY_CELL.filter((s) => s.endsWith(':live')))).map((o) => o.path);
     const historyOps = ops(fresh).filter((o) => String(o.op['x-scopes']?.[0] ?? '').endsWith(':history'));
     expect(historyOps.map((o) => o.path)).toEqual(
-      expect.arrayContaining(['/api/v1/adsb/history', '/api/v1/data/history', '/api/v1/summaries']),
+      expect.arrayContaining(['/api/v1/adsb/history', '/api/v1/history', '/api/v1/summaries']),
     );
     expect(live).toHaveLength(ops(fresh).length - historyOps.length);
     expect(live).not.toContain('/api/v1/adsb/history');
@@ -187,8 +201,8 @@ describe('filterSpecForKey', () => {
 
   it('stored history: the history cell of one archived feed is enough to see it, and nothing else of the feed\'s', () => {
     const seen = ops(filterSpecForKey(fresh, ['pager:history'])).map((o) => o.path);
-    expect(seen).toContain('/api/v1/data/history');
-    expect(seen).toContain('/api/v1/data/history/incident/{source}/{source_id}');
+    expect(seen).toContain('/api/v1/history');
+    expect(seen).toContain('/api/v1/history/incident/{source}/{source_id}');
     expect(seen).not.toContain('/api/v1/adsb/history'); // another feed's history
     expect(seen).not.toContain('/api/v1/pager/hits'); // live
   });
@@ -200,12 +214,12 @@ describe('filterSpecForKey', () => {
     expect(seen).toContain('/api/v1/rfs/fdr');
     expect(seen).toContain('/api/v1/fires');
     expect(seen).not.toContain('/api/v1/summaries');
-    expect(seen).not.toContain('/api/v1/data/history');
+    expect(seen).not.toContain('/api/v1/history');
   });
 
   it('stored history is not shown to a key whose history cells the archive does not hold', () => {
     const seen = ops(filterSpecForKey(fresh, ['aircraft:history', 'summaries:history'])).map((o) => o.path);
-    expect(seen).not.toContain('/api/v1/data/history');
+    expect(seen).not.toContain('/api/v1/history');
     expect(seen).toContain('/api/v1/adsb/history');
     expect(seen).toContain('/api/v1/summaries');
   });

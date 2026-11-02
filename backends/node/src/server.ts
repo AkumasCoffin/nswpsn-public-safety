@@ -29,6 +29,7 @@ import { radioPublicRouter } from './api/radio-public.js';
 import { endeavourRouter } from './api/endeavour.js';
 import { ausgridRouter } from './api/ausgrid.js';
 import { essentialRouter } from './api/essential.js';
+import { outagesRouter } from './api/outages.js';
 import { heartbeatRouter } from './api/heartbeat.js';
 import { statsRouter } from './api/stats.js';
 // Incidents / editor / users (W5).
@@ -291,6 +292,7 @@ export function createApp() {
     '/api/bom/warnings',
     '/api/rfs/incidents',
     '/api/fires',
+    '/api/outages',
     '/api/traffic/incidents',
     '/api/traffic/cameras',
     '/api/beachwatch',
@@ -436,21 +438,14 @@ export function createApp() {
   app.route('/', radioPublicRouter);
   // Not on /api/v1/: the site list is this site's own reference data, and
   // monitored-sites is node status.
-  // Power + heartbeat + stats
+  // Power + heartbeat + stats. The per-distributor outage routes are this
+  // site's and the bot's; API keys read every distributor together, at
+  // /api/v1/outages (api/outages.ts).
   app.route('/', endeavourRouter);
-  // Not /current/raw or /future/raw: byte-for-byte the same as /current/all and /future/all.
-  mirror(app, endeavourRouter, [
-    '/api/endeavour/current', '/api/endeavour/maintenance', '/api/endeavour/future', '/api/endeavour/planned',
-    '/api/endeavour/current/all', '/api/endeavour/future/all', '/api/endeavour/postcodes',
-  ]);
   app.route('/', ausgridRouter);
-  mirror(app, ausgridRouter, ['/api/ausgrid/outages', '/api/ausgrid/stats']);
   app.route('/', essentialRouter);
-  // Not /api/essential/outages/future: byte-for-byte the same as /api/essential/future.
-  mirror(app, essentialRouter, [
-    '/api/essential/outages', '/api/essential/planned', '/api/essential/future',
-    '/api/essential/outages/current', '/api/essential/outages/raw',
-  ]);
+  app.route('/', outagesRouter);
+  mirror(app, outagesRouter, ['/api/outages']);
   app.route('/', heartbeatRouter);
   app.route('/', statsRouter);
   // Incidents + editor + users (W5)
@@ -467,10 +462,10 @@ export function createApp() {
   app.route('/', referralsRouter);
   app.route('/', usersRouter);
   app.route('/', apiKeysRouter);
-  // Data-history archive reads (W6)
+  // Data-history archive reads (W6). On /api/v1/ these are /api/v1/history…
+  // (lib/apiVersion.ts). Not /sources or /stats: counts across every source,
+  // for this site's own pages; no key reaches them.
   app.route('/', dataHistoryRouter);
-  // Not /sources or /stats: counts across every source, for this site's own
-  // pages; no key reaches them.
   mirror(app, dataHistoryRouter, [
     '/api/data/history', '/api/data/history/filters', '/api/data/history/incident/:source/:source_id',
   ]);

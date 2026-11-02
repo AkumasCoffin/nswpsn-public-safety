@@ -4174,7 +4174,7 @@
       // Parallel fetch all endpoints
       const fetches = [
         // Ausgrid stats
-        apiFetch(`${API_BASE}/api/v1/ausgrid/stats`).then(r => r.json()).then(j => j.data).then(d => {
+        apiFetch(`${API_BASE}/api/ausgrid/stats`).then(r => r.json()).then(d => {
           results.power.ausgrid.unplanned = (d.OutageUnplannedPdoCount || 0) + (d.OutageUnplannedRdoCount || 0);
           results.power.ausgrid.planned = d.OutagePlannedTodayCount || 0;
           results.power.ausgrid.customers = (d.OutageUnplannedPdoCustomers || 0) + (d.OutageUnplannedRdoCustomers || 0);
@@ -4182,7 +4182,7 @@
         }).catch(() => setDotStatus('dot-ausgrid', false)),
         
         // Endeavour current - API now filters invalid dates and returns count
-        apiFetch(`${API_BASE}/api/v1/endeavour/current`).then(r => r.json()).then(j => j.data).then(d => {
+        apiFetch(`${API_BASE}/api/endeavour/current`).then(r => r.json()).then(d => {
           apiDataCache.endeavour = apiDataCache.endeavour || {};
           apiDataCache.endeavour.current = d;
           
@@ -4201,7 +4201,7 @@
         }).catch(() => setDotStatus('dot-endeavour', false)),
         
         // Endeavour maintenance (active planned maintenance)
-        apiFetch(`${API_BASE}/api/v1/endeavour/maintenance`).then(r => r.json()).then(j => j.data).then(d => {
+        apiFetch(`${API_BASE}/api/endeavour/maintenance`).then(r => r.json()).then(d => {
           apiDataCache.endeavour = apiDataCache.endeavour || {};
           apiDataCache.endeavour.maintenance = d;
           
@@ -4218,7 +4218,7 @@
         }).catch(() => {}),
         
         // Endeavour future (planned outages)
-        apiFetch(`${API_BASE}/api/v1/endeavour/future`).then(r => r.json()).then(j => j.data).then(d => {
+        apiFetch(`${API_BASE}/api/endeavour/future`).then(r => r.json()).then(d => {
           apiDataCache.endeavour = apiDataCache.endeavour || {};
           apiDataCache.endeavour.future = d;
           
@@ -4227,7 +4227,7 @@
         }).catch(() => {}),
         
         // Essential Energy outages (current + future)
-        apiFetch(`${API_BASE}/api/v1/essential/outages`).then(r => r.json()).then(j => j.data).then(d => {
+        apiFetch(`${API_BASE}/api/essential/outages`).then(r => r.json()).then(d => {
           apiDataCache.essential = d;
           const outages = d?.outages || (Array.isArray(d) ? d : []);
           outages.forEach(o => {
@@ -4592,10 +4592,10 @@
       
       try {
         const [endeavourCurrent, endeavourMaintenance, endeavourFuture, essentialOutages] = await Promise.all([
-          apiFetch(`${API_BASE}/api/v1/endeavour/current`).then(r => r.json()).then(j => j.data).catch(() => []),
-          apiFetch(`${API_BASE}/api/v1/endeavour/maintenance`).then(r => r.json()).then(j => j.data).catch(() => []),
-          apiFetch(`${API_BASE}/api/v1/endeavour/future`).then(r => r.json()).then(j => j.data).catch(() => []),
-          apiFetch(`${API_BASE}/api/v1/essential/outages`).then(r => r.json()).then(j => j.data).catch(() => [])
+          apiFetch(`${API_BASE}/api/endeavour/current`).then(r => r.json()).catch(() => []),
+          apiFetch(`${API_BASE}/api/endeavour/maintenance`).then(r => r.json()).catch(() => []),
+          apiFetch(`${API_BASE}/api/endeavour/future`).then(r => r.json()).catch(() => []),
+          apiFetch(`${API_BASE}/api/essential/outages`).then(r => r.json()).catch(() => [])
         ]);
         
         const items = [];

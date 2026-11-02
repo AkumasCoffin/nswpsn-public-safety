@@ -17,6 +17,11 @@
  *
  * Cursor pagination is the default path. Offset is honoured for
  * legacy callers but capped at MAX_OFFSET=10_000.
+ *
+ * On /api/v1/ these are /api/v1/history, /history/filters and
+ * /history/incident/… (lib/apiVersion.ts renames them); /sources and /stats
+ * are not versioned. ?feed= names feeds of the key table instead of archived
+ * sources: feed=fires is every fire service's source.
  */
 import { Hono } from 'hono';
 import { AU_STATES } from '../lib/stateMask.js';
@@ -160,12 +165,44 @@ interface ParsedQuery {
   params: DataHistoryParams;
   /** Raw filter view echoed back in `query.filters_applied`. */
   rawFilters: Record<string, unknown>;
+  /** The feeds named by ?feed=, when it was given. */
+  feeds: string[] | null;
 }
 
-function parseQuery(url: URL): ParsedQuery | { error: string; status: number } {
+/** The feeds whose records the archive stores, in the key table's terms (HISTORY_SOURCES). */
+const HISTORY_FEEDS: readonly string[] = [...new Set(Object.values(HISTORY_SOURCES))];
+
+/** The archived sources of these feeds. */
+function sourcesOfFeeds(feeds: readonly string[]): string[] {
+  return Object.entries(HISTORY_SOURCES)
+    .filter(([, feed]) => feeds.includes(feed))
+    .map(([source]) => source);
+}
+
+function parseQuery(url: URL): ParsedQuery | { error: string; status: number; message?: string } {
   const q = url.searchParams;
 
-  const sources = commaList(q.get('source'));
+  let sources = commaList(q.get('source'));
+  // ?feed=fires,roads — every archived source of those feeds, as the key
+  // table names them; with ?source= as well, the sources named that are in
+  // those feeds.
+  const feedsRaw = commaList(q.get('feed'));
+  const feeds = feedsRaw ? [...new Set(feedsRaw.map((f) => f.toLowerCase()))] : null;
+  if (feeds) {
+    const unknown = feeds.filter((f) => !HISTORY_FEEDS.includes(f));
+    if (unknown.length) {
+      return { error: 'unknown_feed', status: 400, message: `unknown feed: ${unknown.join(', ')} (one of ${HISTORY_FEEDS.join(', ')})` };
+    }
+    const ofFeeds = sourcesOfFeeds(feeds);
+    if (sources) {
+      const outside = sources.filter((s) => !ofFeeds.includes(s));
+      if (outside.length) {
+        return { error: 'source_not_in_feed', status: 400, message: `not a source of ${feeds.join(', ')}: ${outside.join(', ')}` };
+      }
+    } else {
+      sources = ofFeeds;
+    }
+  }
   const sourceId = q.get('source_id') || null;
   const category = commaList(q.get('category'));
   const subcategory = commaList(q.get('subcategory'));
@@ -255,6 +292,7 @@ function parseQuery(url: URL): ParsedQuery | { error: string; status: number } {
   // Build the filters_applied echo — Python only includes keys that
   // the user actually passed.
   const rawFilters: Record<string, unknown> = {};
+  if (feeds) rawFilters['feed'] = feeds;
   if (sources) rawFilters['source'] = sources;
   if (category) rawFilters['category'] = category;
   if (subcategory) rawFilters['subcategory'] = subcategory;
@@ -268,7 +306,7 @@ function parseQuery(url: URL): ParsedQuery | { error: string; status: number } {
   if (until !== null) rawFilters['until'] = sydneyIsoFromUnix(until);
   if (params.unique) rawFilters['unique'] = true;
 
-  return { params, rawFilters };
+  return { params, rawFilters, feeds };
 }
 
 // ---------------------------------------------------------------------------
@@ -462,8 +500,11 @@ const opt = (description: string) => z.string().optional().catch(undefined).desc
 // only describes it. It refuses nothing: the two parameters that can be
 // refused (cursor, offset) are refused by the handler, in its own words.
 const HistoryQuery = z.object({
+  feed: opt(
+    `Only the records of these feeds, comma-separated: ${HISTORY_FEEDS.join(', ')} — each the feed of the key table, standing for its archived sources. An unknown feed is refused (400), as is one the key does not hold the history of (403). With source, the sources named must belong to these feeds`,
+  ),
   source: opt(
-    `Only these archived sources, comma-separated: ${SOURCE_NAMES}. A key reads only the sources its scopes cover; naming another is refused (403), and leaving this out means all of them`,
+    `Only these archived sources, comma-separated: ${SOURCE_NAMES}. A key reads only the sources its scopes cover; naming another is refused (403), and leaving this out means all of them (or all of feed's)`,
   ),
   source_id: opt("Only the incident with this id (the source's own)"),
   category: opt('Only these categories, comma-separated'),
@@ -510,12 +551,12 @@ dataHistoryRouter.get(
     tags: ['History'],
     summary: 'Stored records',
     description:
-      "Every source's records as this server stored them over time: by default one record per incident (its latest), newest first. Filter by source, time, place and text; page with cursor (or offset, up to 10,000). Records are kept for the server's retention window. A key reads only the archived sources of the feeds whose history it holds — fires:history the fire services' sources, warnings:history the warnings', and so on.",
+      "Every source's records as this server stored them over time: by default one record per incident (its latest), newest first. Filter by feed or source, time, place and text; page with cursor (or offset, up to 10,000). Records are kept for the server's retention window. A key reads only the archived sources of the feeds whose history it holds — fires:history the fire services' sources, warnings:history the warnings', and so on.",
     responses: {
       ...okJson(envelope(HistoryPage), 'A page of records'),
       ...GATED_ERRORS,
       400: {
-        description: 'cursor is malformed, or offset is past 10,000 (validation_failed; details.max_offset)',
+        description: 'cursor is malformed, offset is past 10,000 (validation_failed; details.max_offset), or feed names a feed with no stored history or is given with a source outside it (validation_failed)',
         content: { 'application/json': { schema: resolver(ErrorBody) } },
       },
       503: {
@@ -548,16 +589,21 @@ dataHistoryRouter.get(
         { max_offset: MAX_OFFSET },
       );
     }
-    return fail(c, 400, 'validation_failed', parsed.error, { error: parsed.error });
+    const message = parsed.message ?? parsed.error;
+    return fail(c, 400, 'validation_failed', message, { error: parsed.error, message });
   }
 
-  const { params, rawFilters } = parsed;
+  const { params, rawFilters, feeds } = parsed;
 
   // A named key reads only the archived sources its scopes cover, and its
   // answer is its own: never cached in between.
   const readable = readableSources(c);
   if (readable) {
     c.header('Cache-Control', 'private, no-store');
+    const refusedFeeds = (feeds ?? []).filter((f) => sourcesOfFeeds([f]).some((s) => !readable.includes(s)));
+    if (refusedFeeds.length) {
+      return refuseSources(c, `This key's scopes do not cover the history of: ${refusedFeeds.join(', ')}.`);
+    }
     if (params.sources) {
       const refused = params.sources.filter((s) => !readable.includes(s));
       if (refused.length) {
@@ -967,7 +1013,7 @@ const HistoryFilters = z
           count: z.number().int().describe('Records in the window'),
           types: z.array(
             z.object({
-              alert_type: z.string().describe('The archived source: what /data/history takes as source'),
+              alert_type: z.string().describe('The archived source: what /history takes as source'),
               name: z.string(),
               count: z.number().int(),
               categories: z.array(Facet),
@@ -993,7 +1039,7 @@ assertShape<SameShape<z.infer<typeof HistoryFilters>, FilterFacets>>();
 const HistoryFiltersQuery = z.object({
   source: opt('Only this archived source'),
   since: opt(`The window starts at this time, ${UNIX}`),
-  date_from: opt('The window starts on this date or time when since is not given (as /data/history reads it)'),
+  date_from: opt('The window starts on this date or time when since is not given (as /history reads it)'),
   hours: opt('The window is the last this many hours, when neither since nor date_from is given'),
   days: opt('The window is the last this many days, when no earlier parameter is given'),
 });
@@ -1275,7 +1321,7 @@ dataHistoryRouter.get(
     tags: ['History'],
     summary: "One incident's stored snapshots",
     description:
-      'Every snapshot this server stored of one incident, oldest first, each with the record exactly as the source gave it: how the incident changed over time. {source} is an archived source (as /data/history returns it) and {source_id} the incident\'s id from that source. An incident with no snapshots answers an empty list. A key reads only the sources its scopes cover.',
+      'Every snapshot this server stored of one incident, oldest first, each with the record exactly as the source gave it: how the incident changed over time. {source} is an archived source (as /history returns it) and {source_id} the incident\'s id from that source. An incident with no snapshots answers an empty list. A key reads only the sources its scopes cover.',
     responses: {
       ...okJson(envelope(HistoryIncident), "The incident's snapshots"),
       ...GATED_ERRORS,

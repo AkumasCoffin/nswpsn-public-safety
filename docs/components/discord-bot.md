@@ -109,8 +109,10 @@ types share one backend fetch and are split apart at extraction:
   the embed builder's routing, where the hand-written lists those replaced had
   never gained the newer agencies and still carried the pre-rename `qld_warning`
   and `wa_warning` spellings;
-- `endeavour_planned` uses `/api/v1/endeavour/planned`; current outages come back
-  as `endeavour_current`;
+- `endeavour_planned` uses `/api/endeavour/planned`; current outages come back
+  as `endeavour_current`. The outage types poll each distributor's own `/api/`
+  route, unwrapped: API keys read the distributors merged at `/api/v1/outages`,
+  and the per-distributor routes are not on `/api/v1/`;
 - the interstate feeds are all RFS-shaped GeoJSON and refresh upstream every
   2 minutes (NT: 5), so the 60s cycle mostly sees no change;
 - the road types `traffic_incident`, `traffic_roadwork`, `traffic_flood` and

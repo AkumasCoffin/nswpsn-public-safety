@@ -29,7 +29,7 @@ class AlertPoller:
         # split out by `_extract_items` / dispatcher inspection:
         #   - 'bom_land' uses /api/v1/bom/warnings (the warnings response is split
         #     into bom_land / bom_marine by category at extraction time).
-        #   - 'endeavour_planned' uses /api/v1/endeavour/planned (current outages
+        #   - 'endeavour_planned' uses /api/endeavour/planned (current outages
         #     come back as 'endeavour_current').
         #   - 'essential_unplanned'/'essential_future' point at the Essential
         #     Energy backend endpoints.

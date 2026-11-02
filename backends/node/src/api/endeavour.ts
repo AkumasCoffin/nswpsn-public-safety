@@ -20,13 +20,14 @@
  * `cached_data is not None` branch returning the live-fetch fallback,
  * which itself returns `[]` on error.
  *
- * All of these but the two `/raw` routes are also served at /api/v1/
- * (server.ts mirrors them), wrapped in `data` there (api/v1/respond.ts).
- * `/current/raw` and `/future/raw` are not: they answer exactly what
- * `/current/all` and `/future/all` do. Where a route reads Endeavour on
- * the request (`/all`, `/postcodes`), the old path answers an empty 200
- * when Endeavour cannot be read, as it always has; /api/v1/ answers 503
- * service_unavailable, so an outage does not read as "no outages".
+ * Where a route reads Endeavour on the request (`/all`, `/raw`,
+ * `/postcodes`), it answers an empty 200 when Endeavour cannot be read, as
+ * it always has.
+ *
+ * This site's routes, for the map, the live page and the Discord bot: none
+ * is on /api/v1/ nor declares a scope, so no scoped API key reaches them. An
+ * API key reads every distributor's outages together, at /api/v1/outages
+ * (api/outages.ts).
  */
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -35,21 +36,10 @@ import { liveStore } from '../store/live.js';
 import type { EndeavourOutage } from '../sources/endeavour.js';
 import { callSupabase } from '../sources/endeavour.js';
 import { log } from '../lib/log.js';
-import { scoped } from '../services/auth/apiKeyScopes.js';
-import { fail, isV1, ok } from './v1/respond.js';
-import {
-  assertShape,
-  envelope,
-  GATED_ERRORS,
-  okJson,
-  UNAVAILABLE_ERROR,
-  type SameShape,
-} from './v1/schemas.js';
+import { ok } from './v1/respond.js';
+import { assertShape, envelope, GATED_ERRORS, okJson, type SameShape } from './v1/schemas.js';
 
 export const endeavourRouter = new Hono();
-
-// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
-const SCOPE_OUTAGES = scoped({ feed: 'outages', window: 'live' });
 
 interface SupabaseAreaRaw {
   incident_id?: string;
@@ -80,7 +70,7 @@ function readArray(key: string): EndeavourOutage[] {
 }
 
 // ---------------------------------------------------------------------------
-// What /api/v1/ documents (api/v1/openapi.ts)
+// The answers' shapes
 // ---------------------------------------------------------------------------
 
 const AS_GIVEN = 'as Endeavour Energy gives it';
@@ -157,16 +147,12 @@ const EndeavourPostcodes = z
   })
   .meta({ id: 'EndeavourPostcodes' });
 
-const UNREADABLE = "Endeavour Energy's outage data could not be read just now.";
-const NOT_THE_LIST = 'Endeavour Energy did not answer with its outage data just now.';
-
 // ---------------------------------------------------------------------------
 // Routes
 // ---------------------------------------------------------------------------
 
 endeavourRouter.get(
   '/api/endeavour/current',
-  SCOPE_OUTAGES,
   describeRoute({
     operationId: 'getEndeavourCurrent',
     tags: ['Power outages'],
@@ -183,7 +169,6 @@ endeavourRouter.get(
 
 endeavourRouter.get(
   '/api/endeavour/maintenance',
-  SCOPE_OUTAGES,
   describeRoute({
     operationId: 'getEndeavourMaintenance',
     tags: ['Power outages'],
@@ -204,7 +189,6 @@ endeavourRouter.get(
 // frontend keeps working.
 endeavourRouter.get(
   '/api/endeavour/future',
-  SCOPE_OUTAGES,
   describeRoute({
     operationId: 'getEndeavourFuture',
     tags: ['Power outages'],
@@ -223,7 +207,6 @@ endeavourRouter.get(
 // scheduled, flat list. Mirrors Python line 5348-5364.
 endeavourRouter.get(
   '/api/endeavour/planned',
-  SCOPE_OUTAGES,
   describeRoute({
     operationId: 'getEndeavourPlanned',
     tags: ['Power outages'],
@@ -249,7 +232,7 @@ endeavourRouter.get(
 // the same — no LiveStore involvement — for clients that need the un-
 // normalised area record. Failures degrade to [] so a Supabase blip
 // doesn't 500 the route.
-endeavourRouter.get('/api/endeavour/current/raw', SCOPE_OUTAGES, async (c) => {
+endeavourRouter.get('/api/endeavour/current/raw', async (c) => {
   try {
     const areas = await fetchAreas();
     return c.json(
@@ -263,7 +246,6 @@ endeavourRouter.get('/api/endeavour/current/raw', SCOPE_OUTAGES, async (c) => {
 
 endeavourRouter.get(
   '/api/endeavour/current/all',
-  SCOPE_OUTAGES,
   describeRoute({
     operationId: 'getEndeavourCurrentAreas',
     tags: ['Power outages'],
@@ -273,32 +255,25 @@ endeavourRouter.get(
     responses: {
       ...okJson(envelope(EndeavourAreas), 'Every outage area not marked PLANNED'),
       ...GATED_ERRORS,
-      ...UNAVAILABLE_ERROR,
     },
   }),
   async (c) => {
     try {
       const areas = await readAreas();
-      if (!areas) {
-        // The old path has always answered an empty list (200) rather than an error.
-        if (!isV1(c)) return ok(c, []);
-        log.warn('endeavour current/all: not a list');
-        return fail(c, 503, 'service_unavailable', NOT_THE_LIST);
-      }
+      // Answered an empty list (200), as it always has, rather than an error.
+      if (!areas) return ok(c, []);
       return ok(
         c,
         areas.filter((a) => (a.outage_type ?? '').toUpperCase() !== 'PLANNED') satisfies z.infer<typeof EndeavourAreas>,
       );
     } catch (err) {
       log.warn({ err: (err as Error).message }, 'endeavour current/all failed');
-      // The old path has always answered an empty list (200) rather than an error.
-      if (!isV1(c)) return ok(c, []);
-      return fail(c, 503, 'service_unavailable', UNREADABLE);
+      return ok(c, []);
     }
   },
 );
 
-endeavourRouter.get('/api/endeavour/future/raw', SCOPE_OUTAGES, async (c) => {
+endeavourRouter.get('/api/endeavour/future/raw', async (c) => {
   try {
     const areas = await fetchAreas();
     return c.json(
@@ -312,7 +287,6 @@ endeavourRouter.get('/api/endeavour/future/raw', SCOPE_OUTAGES, async (c) => {
 
 endeavourRouter.get(
   '/api/endeavour/future/all',
-  SCOPE_OUTAGES,
   describeRoute({
     operationId: 'getEndeavourPlannedAreas',
     tags: ['Power outages'],
@@ -322,27 +296,20 @@ endeavourRouter.get(
     responses: {
       ...okJson(envelope(EndeavourAreas), 'Every outage area marked PLANNED'),
       ...GATED_ERRORS,
-      ...UNAVAILABLE_ERROR,
     },
   }),
   async (c) => {
     try {
       const areas = await readAreas();
-      if (!areas) {
-        // The old path has always answered an empty list (200) rather than an error.
-        if (!isV1(c)) return ok(c, []);
-        log.warn('endeavour future/all: not a list');
-        return fail(c, 503, 'service_unavailable', NOT_THE_LIST);
-      }
+      // Answered an empty list (200), as it always has, rather than an error.
+      if (!areas) return ok(c, []);
       return ok(
         c,
         areas.filter((a) => (a.outage_type ?? '').toUpperCase() === 'PLANNED') satisfies z.infer<typeof EndeavourAreas>,
       );
     } catch (err) {
       log.warn({ err: (err as Error).message }, 'endeavour future/all failed');
-      // The old path has always answered an empty list (200) rather than an error.
-      if (!isV1(c)) return ok(c, []);
-      return fail(c, 503, 'service_unavailable', UNREADABLE);
+      return ok(c, []);
     }
   },
 );
@@ -358,7 +325,6 @@ interface OutagePointRow { postcode?: string | null }
 
 endeavourRouter.get(
   '/api/endeavour/postcodes',
-  SCOPE_OUTAGES,
   describeRoute({
     operationId: 'getEndeavourPostcodes',
     tags: ['Power outages'],
@@ -368,7 +334,6 @@ endeavourRouter.get(
     responses: {
       ...okJson(envelope(EndeavourPostcodes), 'The postcodes'),
       ...GATED_ERRORS,
-      ...UNAVAILABLE_ERROR,
     },
   }),
   async (c) => {
@@ -381,12 +346,8 @@ endeavourRouter.get(
         method: 'GET',
         query: { select: 'postcode', limit: '5000' },
       });
-      if (!Array.isArray(data)) {
-        // The old path has always answered an empty list (200) rather than an error.
-        if (!isV1(c)) return ok(c, { postcodes: [], count: 0 });
-        log.warn('endeavour postcodes: not a list');
-        return fail(c, 503, 'service_unavailable', NOT_THE_LIST);
-      }
+      // Answered an empty list (200), as it always has, rather than an error.
+      if (!Array.isArray(data)) return ok(c, { postcodes: [], count: 0 });
       const seen = new Set<string>();
       for (const row of data as OutagePointRow[]) {
         const pc = row.postcode;
@@ -398,9 +359,7 @@ endeavourRouter.get(
       return ok(c, payload);
     } catch (err) {
       log.warn({ err: (err as Error).message }, 'endeavour postcodes failed');
-      // The old path has always answered an empty list (200) rather than an error.
-      if (!isV1(c)) return ok(c, { postcodes: [], count: 0 });
-      return fail(c, 503, 'service_unavailable', UNREADABLE);
+      return ok(c, { postcodes: [], count: 0 });
     }
   },
 );

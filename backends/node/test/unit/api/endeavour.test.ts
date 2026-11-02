@@ -1,12 +1,11 @@
 /**
- * Endeavour Energy outages on /api/v1/ and on their old /api/ paths.
+ * Endeavour Energy outages on their /api/ paths — this site's and the bot's,
+ * not on /api/v1/ (an API key reads /api/v1/outages).
  *
- * One handler serves both (api/v1/mirror.ts): the lists are wrapped in `data`
- * on v1 and bare on the old paths. The routes that read Endeavour's outage
- * service on the request (/current/all, /future/all, /postcodes) keep the
- * empty 200 the old path always sent when it cannot be read, and answer 503
- * service_unavailable on v1. /current/raw and /future/raw stay off v1. The
- * old paths are checked byte for byte.
+ * The routes that read Endeavour's outage service on the request
+ * (/current/all, /future/all, /current/raw, /future/raw, /postcodes) answer
+ * an empty 200 when it cannot be read, as they always have. Checked byte for
+ * byte.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Hono } from 'hono';
@@ -21,23 +20,13 @@ vi.mock('../../../src/sources/shared/http.js', () => ({
   HttpError: class extends Error {},
 }));
 
-const V1_PATHS = [
-  '/api/endeavour/current',
-  '/api/endeavour/maintenance',
-  '/api/endeavour/future',
-  '/api/endeavour/planned',
-  '/api/endeavour/current/all',
-  '/api/endeavour/future/all',
-  '/api/endeavour/postcodes',
-];
+const LISTS = ['/api/endeavour/current', '/api/endeavour/maintenance', '/api/endeavour/future', '/api/endeavour/planned'];
 
 async function app() {
   const { endeavourRouter } = await import('../../../src/api/endeavour.js');
-  const { mirror } = await import('../../../src/api/v1/mirror.js');
   const { notFound, onError } = await import('../../../src/api/v1/respond.js');
   const a = new Hono();
   a.route('/', endeavourRouter);
-  mirror(a, endeavourRouter, V1_PATHS);
   a.notFound(notFound);
   a.onError(onError);
   return a;
@@ -47,8 +36,6 @@ async function get(a: Hono, path: string) {
   const res = await a.request(path);
   return { status: res.status, type: res.headers.get('content-type'), text: await res.text() };
 }
-
-const v1 = (p: string) => p.replace(/^\/api\//, '/api/v1/');
 
 function outage(id: string, outageType: string, extra: Record<string, unknown> = {}) {
   return {
@@ -91,7 +78,7 @@ beforeEach(async () => {
 });
 
 describe('the outage lists from the poll', () => {
-  it('answers each list — wrapped in data on v1, bare on the old path', async () => {
+  it('answers each list as the poll left it', async () => {
     liveStore.set('endeavour_current', CURRENT);
     liveStore.set('endeavour_maintenance', MAINTENANCE);
     liveStore.set('endeavour_planned', FUTURE);
@@ -105,7 +92,6 @@ describe('the outage lists from the poll', () => {
     };
     for (const [p, list] of Object.entries(want)) {
       expect(await get(a, p), p).toEqual({ status: 200, type: 'application/json', text: JSON.stringify(list) });
-      expect(await get(a, v1(p)), p).toEqual({ status: 200, type: 'application/json', text: JSON.stringify({ data: list }) });
     }
     expect(fetchJsonMock).not.toHaveBeenCalled();
   });
@@ -113,10 +99,7 @@ describe('the outage lists from the poll', () => {
   it('an empty list before the first poll, or when the snapshot is not a list', async () => {
     liveStore.set('endeavour_maintenance', { not: 'a list' });
     const a = await app();
-    for (const p of V1_PATHS.slice(0, 4)) {
-      expect((await get(a, p)).text, p).toBe('[]');
-      expect((await get(a, v1(p))).text, p).toBe('{"data":[]}');
-    }
+    for (const p of LISTS) expect((await get(a, p)).text, p).toBe('[]');
   });
 });
 
@@ -125,47 +108,32 @@ describe('the outage areas read on the request', () => {
     fetchJsonMock.mockResolvedValue(AREAS);
     const a = await app();
     expect(await get(a, '/api/endeavour/current/all')).toEqual({ status: 200, type: 'application/json', text: JSON.stringify(NOT_PLANNED) });
-    expect(await get(a, '/api/v1/endeavour/current/all')).toEqual({
-      status: 200,
-      type: 'application/json',
-      text: JSON.stringify({ data: NOT_PLANNED }),
-    });
     expect(await get(a, '/api/endeavour/future/all')).toEqual({ status: 200, type: 'application/json', text: JSON.stringify(PLANNED) });
-    expect(await get(a, '/api/v1/endeavour/future/all')).toEqual({
-      status: 200,
-      type: 'application/json',
-      text: JSON.stringify({ data: PLANNED }),
-    });
     expect(String(fetchJsonMock.mock.calls[0]?.[0])).toContain('/rpc/get_outage_areas_fast');
     expect(fetchJsonMock.mock.calls[0]?.[1]).toMatchObject({ method: 'POST' });
   });
 
-  it('when Endeavour cannot be read: the old path its empty 200, v1 a 503', async () => {
+  it('when Endeavour cannot be read, or answers with something that is not a list: an empty 200', async () => {
     fetchJsonMock.mockRejectedValue(new Error('HTTP 502'));
     const a = await app();
     for (const p of ['/api/endeavour/current/all', '/api/endeavour/future/all']) {
       expect(await get(a, p), p).toEqual({ status: 200, type: 'application/json', text: '[]' });
-      const res = await get(a, v1(p));
-      expect(res.status, p).toBe(503);
-      expect(JSON.parse(res.text), p).toEqual({ error: { code: 'service_unavailable', message: expect.any(String) } });
     }
-  });
-
-  it('an answer that is not a list is a failure on v1, an empty list on the old path', async () => {
+    fetchJsonMock.mockReset();
     fetchJsonMock.mockResolvedValue({ message: 'JWT expired' });
-    const a = await app();
     for (const p of ['/api/endeavour/current/all', '/api/endeavour/future/all']) {
-      expect((await get(a, p)).text, p).toBe('[]');
-      const res = await get(a, v1(p));
-      expect(res.status, p).toBe(503);
-      expect(JSON.parse(res.text).error.code, p).toBe('service_unavailable');
+      expect(await get(a, p), p).toEqual({ status: 200, type: 'application/json', text: '[]' });
     }
   });
 
-  it('a real empty list is an empty list on v1 too', async () => {
-    fetchJsonMock.mockResolvedValue([]);
+  it('/current/raw and /future/raw answer what /current/all and /future/all do', async () => {
+    fetchJsonMock.mockResolvedValue(AREAS);
     const a = await app();
-    expect(await get(a, '/api/v1/endeavour/current/all')).toEqual({ status: 200, type: 'application/json', text: '{"data":[]}' });
+    expect(await get(a, '/api/endeavour/current/raw')).toEqual({ status: 200, type: 'application/json', text: JSON.stringify(NOT_PLANNED) });
+    expect(await get(a, '/api/endeavour/future/raw')).toEqual({ status: 200, type: 'application/json', text: JSON.stringify(PLANNED) });
+    fetchJsonMock.mockReset();
+    fetchJsonMock.mockRejectedValue(new Error('down'));
+    expect(await get(a, '/api/endeavour/current/raw')).toEqual({ status: 200, type: 'application/json', text: '[]' });
   });
 });
 
@@ -173,22 +141,18 @@ describe('/endeavour/postcodes', () => {
   const ROWS = [{ postcode: '2750' }, { postcode: '2000' }, { postcode: '2750' }, { postcode: null }, { postcode: '' }];
   const WANT = { postcodes: ['2000', '2750'], count: 2 };
 
-  it('answers the distinct postcodes, sorted — wrapped on v1 — and keeps them for an hour', async () => {
+  it('answers the distinct postcodes, sorted, and keeps them for an hour', async () => {
     fetchJsonMock.mockResolvedValue(ROWS);
     const a = await app();
     expect(await get(a, '/api/endeavour/postcodes')).toEqual({ status: 200, type: 'application/json', text: JSON.stringify(WANT) });
-    expect(await get(a, '/api/v1/endeavour/postcodes')).toEqual({
-      status: 200,
-      type: 'application/json',
-      text: JSON.stringify({ data: WANT }),
-    });
+    expect(await get(a, '/api/endeavour/postcodes')).toEqual({ status: 200, type: 'application/json', text: JSON.stringify(WANT) });
     expect(fetchJsonMock).toHaveBeenCalledTimes(1);
     const url = String(fetchJsonMock.mock.calls[0]?.[0]);
     expect(url).toContain('/outage-points');
     expect(url).toContain('limit=5000');
   });
 
-  it('a failure is never kept: the old path its empty 200, v1 a 503, and the next request asks again', async () => {
+  it('a failure is never kept: an empty 200, and the next request asks again', async () => {
     fetchJsonMock.mockRejectedValue(new Error('timeout'));
     const a = await app();
     expect(await get(a, '/api/endeavour/postcodes')).toEqual({
@@ -196,19 +160,16 @@ describe('/endeavour/postcodes', () => {
       type: 'application/json',
       text: '{"postcodes":[],"count":0}',
     });
-    const res = await get(a, '/api/v1/endeavour/postcodes');
-    expect(res.status).toBe(503);
-    expect(JSON.parse(res.text)).toEqual({ error: { code: 'service_unavailable', message: expect.any(String) } });
 
     fetchJsonMock.mockReset();
     fetchJsonMock.mockResolvedValue('not a list');
     expect((await get(a, '/api/endeavour/postcodes')).text).toBe('{"postcodes":[],"count":0}');
-    expect((await get(a, '/api/v1/endeavour/postcodes')).status).toBe(503);
+    expect((await get(a, '/api/endeavour/postcodes')).text).toBe('{"postcodes":[],"count":0}');
     expect(fetchJsonMock).toHaveBeenCalledTimes(2);
 
     fetchJsonMock.mockReset();
     fetchJsonMock.mockResolvedValue(ROWS);
-    expect((await get(a, '/api/v1/endeavour/postcodes')).text).toBe(JSON.stringify({ data: WANT }));
+    expect((await get(a, '/api/endeavour/postcodes')).text).toBe(JSON.stringify(WANT));
     expect(fetchJsonMock).toHaveBeenCalledTimes(1);
   });
 
@@ -219,30 +180,6 @@ describe('/endeavour/postcodes', () => {
     fetchJsonMock.mockReset();
     fetchJsonMock.mockRejectedValue(new Error('down'));
     expect((await get(a, '/api/endeavour/postcodes')).text).toBe(JSON.stringify(WANT));
-    expect((await get(a, '/api/v1/endeavour/postcodes')).text).toBe(JSON.stringify({ data: WANT }));
     expect(fetchJsonMock).not.toHaveBeenCalled();
-  });
-});
-
-describe('the mirror', () => {
-  it('/current/raw and /future/raw stay off v1, and are unchanged on the old path', async () => {
-    fetchJsonMock.mockResolvedValue(AREAS);
-    const a = await app();
-    expect(await get(a, '/api/endeavour/current/raw')).toEqual({ status: 200, type: 'application/json', text: JSON.stringify(NOT_PLANNED) });
-    expect(await get(a, '/api/endeavour/future/raw')).toEqual({ status: 200, type: 'application/json', text: JSON.stringify(PLANNED) });
-    for (const p of ['/api/v1/endeavour/current/raw', '/api/v1/endeavour/future/raw']) {
-      const res = await get(a, p);
-      expect(res.status, p).toBe(404);
-      expect(JSON.parse(res.text).error.code, p).toBe('not_found');
-    }
-    fetchJsonMock.mockReset();
-    fetchJsonMock.mockRejectedValue(new Error('down'));
-    expect(await get(a, '/api/endeavour/current/raw')).toEqual({ status: 200, type: 'application/json', text: '[]' });
-  });
-
-  it('serves every in-scope route on /api/v1/', async () => {
-    fetchJsonMock.mockResolvedValue([]);
-    const a = await app();
-    for (const p of V1_PATHS) expect((await a.request(v1(p))).status, p).toBe(200);
   });
 });

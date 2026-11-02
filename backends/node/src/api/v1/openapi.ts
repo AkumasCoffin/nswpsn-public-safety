@@ -40,6 +40,7 @@ import {
   type ScopeNeed,
 } from '../../services/auth/apiKeyScopes.js';
 import { isPublicPath } from '../../services/auth/apiKey.js';
+import { isOldV1Path } from '../../lib/apiVersion.js';
 import { log } from '../../lib/log.js';
 import { mirroredRoutes } from './mirror.js';
 import { fail } from './respond.js';
@@ -71,8 +72,8 @@ export const DOCUMENTATION = {
     { name: 'Fires', description: 'Every fire service in one feed with the QLD and WA public warnings, satellite hotspots and fire danger ratings' },
     { name: 'Weather warnings', description: 'Bureau of Meteorology land and marine warnings' },
     { name: 'Ambulance', description: 'ACT Ambulance Service incidents' },
-    { name: 'Power outages', description: 'Endeavour Energy, Ausgrid and Essential Energy outages, unplanned and planned' },
-    { name: 'Road hazards', description: 'Live Traffic NSW incidents, roadworks, floods, fires and events' },
+    { name: 'Power outages', description: "Every electricity distributor's outages in one feed — Endeavour Energy, Essential Energy and Ausgrid — unplanned and planned" },
+    { name: 'Road hazards', description: "Road incidents, roadworks, floods and events: NSW's from Live Traffic NSW, QLD's, VIC's, SA's and the ACT's from their own feeds" },
     { name: 'Public transport', description: 'Public transport vehicles, stops, lines and alerts' },
     { name: 'Aircraft', description: 'Aircraft positions and tracks from ADS-B' },
     { name: 'Ships', description: 'Vessel positions from AIS' },
@@ -114,6 +115,9 @@ export async function buildSpec(app: Hono): Promise<OpenApiDoc> {
     // can actually be refused; most query schemas only fall back to defaults.
     defaultValidationErrorResponse: false,
   })) as unknown as OpenApiDoc;
+  // A renamed route's old v1 path answers only until this site's pages move
+  // off it (lib/apiVersion.ts); it is not part of the API.
+  for (const p of Object.keys(spec.paths)) if (isOldV1Path(p)) delete spec.paths[p];
 
   for (const route of mirroredRoutes()) {
     const op = spec.paths[openApiPath(route.path)]?.[route.method.toLowerCase()];

@@ -62,12 +62,31 @@ const ACT = {
 };
 const BOM = { warnings: [{ title: 'Flood Watch' }], count: 1, counts: { land: 1, marine: 0 } };
 
+/** Each distributor's outage routes: the site's and the bot's; a key reads /api/v1/outages. */
+const DISTRIBUTOR_ROUTES = [
+  '/api/endeavour/current',
+  '/api/endeavour/maintenance',
+  '/api/endeavour/future',
+  '/api/endeavour/planned',
+  '/api/endeavour/current/all',
+  '/api/endeavour/future/all',
+  '/api/endeavour/postcodes',
+  '/api/essential/outages',
+  '/api/essential/planned',
+  '/api/essential/future',
+  '/api/essential/outages/current',
+  '/api/essential/outages/raw',
+  '/api/ausgrid/outages',
+  '/api/ausgrid/stats',
+];
+
 /**
- * Per-agency incident and warning routes, boundaries, the radio site list,
- * transcripts, camera images and news outlets' feeds: this site's routes, not
- * the API's.
+ * Per-agency incident and warning routes, each distributor's outage routes,
+ * boundaries, the radio site list, transcripts, camera images and news
+ * outlets' feeds: this site's routes, not the API's.
  */
 const NOT_ON_V1 = [
+  ...DISTRIBUTOR_ROUTES.map((p) => p.replace('/api/', '/api/v1/')),
   '/api/v1/rfs/incidents',
   '/api/v1/rfs/incidents/raw',
   '/api/v1/nt-fire/incidents',
@@ -209,7 +228,7 @@ describe('answers on /api/v1/', () => {
     queryMock.mockImplementation(async () => {
       throw new Error('db down');
     });
-    for (const path of ['/api/v1/data/history', '/api/data/history']) {
+    for (const path of ['/api/v1/history', '/api/data/history']) {
       const res = await get(path);
       expect(res.status, path).toBeGreaterThanOrEqual(500);
       expect(res.headers.get('Cache-Control'), path).toBeNull();
@@ -237,12 +256,26 @@ describe('not found and errors', () => {
     }
   });
 
-  it('…but the site\'s own fire routes still answer on /api/, as before', async () => {
+  it('…but the site\'s own fire and outage routes still answer on /api/, as before', async () => {
     const rfs = await get('/api/rfs/incidents');
     expect(rfs.status).toBe(200);
     expect(await rfs.json()).toEqual(RFS);
     for (const path of ['/api/nt-fire/incidents', '/api/qld-fire/incidents', '/api/vic-emergency/events', '/api/wa-emergency/incidents', '/api/sa-fire/cfs', '/api/sa-fire/mfs']) {
       expect((await get(path)).status, path).toBe(200);
+    }
+    // The outage lists from the poll (the rest read the distributor on the request).
+    for (const path of ['/api/endeavour/current', '/api/essential/outages', '/api/ausgrid/outages', '/api/ausgrid/stats']) {
+      expect((await get(path)).status, path).toBe(200);
+    }
+  });
+
+  it('stored history is /api/v1/history; the old v1 name answers too, until the site\'s pages move', async () => {
+    for (const path of ['/api/v1/history', '/api/v1/data/history', '/api/v1/history/filters', '/api/v1/data/history/filters']) {
+      expect((await get(path)).status, path).toBe(200);
+    }
+    // Public under either name, as /api/data/history/filters is.
+    for (const path of ['/api/v1/history/filters', '/api/v1/data/history/filters']) {
+      expect((await get(path, {})).status, path).toBe(200);
     }
   });
 
@@ -300,6 +333,7 @@ describe('the gate on /api/v1/', () => {
       '/api/radio/grn-sites',
       '/api/rdio/calls/7',
       '/api/adsb/receivers',
+      ...DISTRIBUTOR_ROUTES,
       ...CAMERAS_AND_NEWS,
     ];
     for (const path of own) {
@@ -344,19 +378,22 @@ describe('the gate on /api/v1/', () => {
     expect((await get('/api/v1/bom/warnings', asKey)).status).toBe(200);
   });
 
-  it('a `read` key keeps the old per-agency fire paths, and reads the merged feed on both paths', async () => {
-    for (const path of ['/api/rfs/incidents', '/api/nt-fire/incidents', '/api/sa-fire/cfs', '/api/v1/fires', '/api/fires']) {
+  it('a `read` key keeps the old per-agency fire and outage paths, and reads the merged feeds on both paths', async () => {
+    for (const path of [
+      '/api/rfs/incidents', '/api/nt-fire/incidents', '/api/sa-fire/cfs', '/api/v1/fires', '/api/fires',
+      '/api/endeavour/current', '/api/essential/outages', '/api/ausgrid/outages', '/api/v1/outages', '/api/outages',
+    ]) {
       expect((await get(path, asKey)).status, path).toBe(200);
     }
     // Still not stored history: the old list never had it.
-    const history = await get('/api/v1/data/history', asKey);
+    const history = await get('/api/v1/history', asKey);
     expect(history.status).toBe(403);
     expect((await history.json()).error.code).toBe('api_key_path_forbidden');
   });
 
   it('a key holding only retired scopes reads nothing: refused as a scoped key, not by the old list', async () => {
     keyScopes = ['source:rfs', 'type:incidents', 'window:live'];
-    for (const path of ['/api/v1/fires', '/api/v1/bom/warnings', '/api/rfs/incidents', '/api/v1/data/history']) {
+    for (const path of ['/api/v1/fires', '/api/v1/bom/warnings', '/api/rfs/incidents', '/api/v1/history']) {
       const res = await get(path, asKey);
       expect(res.status, path).toBe(403);
       const body = await res.json();
@@ -366,10 +403,10 @@ describe('the gate on /api/v1/', () => {
 
   it('stored history: fires:history gets in, aircraft:history alone does not', async () => {
     keyScopes = ['fires:history'];
-    expect((await get('/api/v1/data/history', asKey)).status).toBe(200);
+    expect((await get('/api/v1/history', asKey)).status).toBe(200);
     _clearApiKeyCache();
     keyScopes = ['aircraft:history'];
-    const res = await get('/api/v1/data/history', asKey);
+    const res = await get('/api/v1/history', asKey);
     expect(res.status).toBe(403);
     expect((await res.json()).error.code).toBe('api_key_scope_forbidden');
   });

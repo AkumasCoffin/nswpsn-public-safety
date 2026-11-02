@@ -7,7 +7,11 @@
  * /api/v1/, with the SAME handler chain — the same middleware, the same
  * scoped() declaration (so the credential gate judges both paths alike), the
  * same zod validators and describeRoute() metadata. Only what a handler does
- * with isV1(c) (respond.ts) differs between the two.
+ * with isV1(c) (respond.ts) differs between the two. The v1 path is the /api/
+ * path with v1/ added, but for the few renamed (lib/apiVersion.ts: stored
+ * history is /api/v1/history); a renamed route also answers at its old v1
+ * path while this site's pages still ask for it there, left out of the
+ * registry so nothing describes it.
  *
  * `only` is an allow-list on purpose: what is versioned is a decision per
  * route (the public data API — docs/api.md), and a route added to a router
@@ -23,7 +27,7 @@
  * the end throws too, rather than be guessed at.
  */
 import type { Hono, MiddlewareHandler } from 'hono';
-import { toV1Path } from '../../lib/apiVersion.js';
+import { oldV1Paths, toV1Path } from '../../lib/apiVersion.js';
 
 /** One route on /api/v1/, as mirror() registered it. */
 export interface MirroredRoute {
@@ -62,6 +66,9 @@ function covers(pattern: string, path: string): boolean {
   return pSegs.every((seg, i) => seg === segs[i] || seg.startsWith(':') || segs[i]!.startsWith(':'));
 }
 
+/** Every v1 path a route answers at: its own, then any old name kept for this site's pages. */
+const v1PathsOf = (path: string): string[] => [toV1Path(path), ...oldV1Paths(path)];
+
 export function mirror(app: Hono, router: Hono, only: readonly string[]): void {
   const wanted = new Set(only);
   // Per wanted path, its chain in registration order: router middleware
@@ -79,7 +86,7 @@ export function mirror(app: Hono, router: Hono, only: readonly string[]): void {
     if (r.method === 'ALL') {
       for (const p of only) {
         if (!covers(r.path, p)) continue;
-        app.use(toV1Path(p), r.handler as MiddlewareHandler);
+        for (const v1 of v1PathsOf(p)) app.use(v1, r.handler as MiddlewareHandler);
         chains.get(p)?.push({ method: 'ALL', handler: r.handler }) ?? chains.set(p, [{ method: 'ALL', handler: r.handler }]);
       }
       continue;
@@ -98,7 +105,7 @@ export function mirror(app: Hono, router: Hono, only: readonly string[]): void {
       }
       continue;
     }
-    app.on(r.method, toV1Path(r.path), r.handler as MiddlewareHandler);
+    for (const v1 of v1PathsOf(r.path)) app.on(r.method, v1, r.handler as MiddlewareHandler);
     chains.get(r.path)?.push({ method: r.method, handler: r.handler }) ?? chains.set(r.path, [{ method: r.method, handler: r.handler }]);
   }
 

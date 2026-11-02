@@ -487,7 +487,9 @@ shows now, polled and cached; `history` — stored records over time). A feed
 groups the sources a person would ask for together: Fires is every fire service
 and the QFD and DFES public warnings (read merged at `/api/v1/fires`,
 `api/fires.ts`, each record's `kind` saying which), satellite hotspots and fire
-danger ratings; Power outages is all three distributors.
+danger ratings; Power outages is all three distributors (read merged at
+`/api/v1/outages`, `api/outages.ts`, each record's `kind` and `status` saying
+whether it is unplanned or planned and whether the power is off now).
 
 Each route a key may reach **declares** the one cell it serves with
 `scoped({ feed, window })` as its first middleware; a key passes when it holds
@@ -500,7 +502,9 @@ path no route serves is the ordinary 404. `GET /api/api-keys/scope-catalog`
 gives the pickers the feeds with only the windows some route declares
 (`declaredNeeds`), and a test keeps `FEEDS` and the declarations in step.
 
-Stored history spans feeds, so `/api/data/history` and its `/incident` route
+Stored history spans feeds, so `/api/data/history` (`/api/v1/history` on v1 —
+`lib/apiVersion.ts` renames it, and keeps the old v1 name answering for the
+site's pages until they move) and its `/incident` route
 declare `scoped({ feed: '*', window: 'history' })`, which any `<feed>:history`
 cell satisfies; the handler then narrows the query to `historySourcesFor(...)`,
 the archived sources of the feeds whose history the key holds
@@ -508,7 +512,9 @@ the archived sources of the feeds whose history the key holds
 `fires`, `bom_land` is `warnings`, `traffic_fire` is `roads`). Naming another source is a 403; a key's
 history answer is `Cache-Control: private, no-store`. Callers that are not
 named keys (the site, the static key) are not narrowed. `user_incident` is not
-in the map, so no key reads it.
+in the map, so no key reads it. `?feed=` takes the table's feeds in place of
+archived sources (`feed=fires` is every fire service's), and a key is refused a
+feed whose history it does not hold.
 
 Never declared, so never readable with a key: anything about people or nodes —
 profiles and accounts, user-submitted incidents, site statistics, the cache and
@@ -525,7 +531,10 @@ per-agency fire incident and warning routes (`/api/rfs/incidents`,
 `/api/qld-fire/{incidents,warnings}`, `/api/vic-emergency/events`,
 `/api/nt-fire/incidents`, `/api/wa-emergency/{incidents,warnings}`,
 `/api/sa-fire/{cfs,mfs}`) are undeclared too and off `/api/v1/`: the map and
-the bot read them in each agency's own shape, keys read the merged feed. Live
+the bot read them in each agency's own shape, keys read the merged feed. So are
+each distributor's outage routes (`/api/endeavour/…`, `/api/essential/…`,
+`/api/ausgrid/…`), which the map, the live page and the bot read; keys read
+`/api/v1/outages`. Live
 data means what the public map shows; the only
 node-derived data in it is aircraft and pager traffic. The feed list lives here
 and not in `shared/alert-catalog.json`, which is what the bot alerts on (a test

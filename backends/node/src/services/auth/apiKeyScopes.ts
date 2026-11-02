@@ -64,7 +64,7 @@ export const FEEDS = {
   ambulance: { label: 'ACT Ambulance', covers: 'ACT Ambulance Service incidents', windows: ['live', 'history'] },
   outages: {
     label: 'Power outages',
-    covers: 'Endeavour Energy, Ausgrid and Essential Energy outages',
+    covers: 'Every electricity distributor in one feed (Endeavour Energy, Essential Energy, Ausgrid), unplanned and planned',
     windows: ['live', 'history'],
   },
   roads: {
@@ -331,9 +331,11 @@ const LEGACY_READ_PREFIXES: readonly string[] = [
 const LEGACY_READ_PATHS: ReadonlySet<string> = new Set([
   '/api/beachsafe',
   '/api/beachwatch',
-  // The fire services merged (api/fires.ts): nothing a `read` key could not
-  // already read one agency at a time, and where /api/v1/ serves them now.
+  // The fire services merged (api/fires.ts), and the electricity distributors
+  // (api/outages.ts): nothing a `read` key could not already read one agency
+  // at a time, and where /api/v1/ serves them now.
   '/api/fires',
+  '/api/outages',
 ]);
 
 /** Under a prefix above, but camera images: no key reads them. */

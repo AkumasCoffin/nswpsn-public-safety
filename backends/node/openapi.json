@@ -25,11 +25,11 @@
     },
     {
       "name": "Power outages",
-      "description": "Endeavour Energy, Ausgrid and Essential Energy outages, unplanned and planned"
+      "description": "Every electricity distributor's outages in one feed — Endeavour Energy, Essential Energy and Ausgrid — unplanned and planned"
     },
     {
       "name": "Road hazards",
-      "description": "Live Traffic NSW incidents, roadworks, floods, fires and events"
+      "description": "Road incidents, roadworks, floods and events: NSW's from Live Traffic NSW, QLD's, VIC's, SA's and the ACT's from their own feeds"
     },
     {
       "name": "Public transport",
@@ -2945,785 +2945,245 @@
         ],
         "additionalProperties": false
       },
-      "EndeavourOutages": {
-        "type": "array",
-        "items": {
-          "$ref": "#/components/schemas/EndeavourOutage"
-        }
-      },
-      "EndeavourOutage": {
+      "Outages": {
         "type": "object",
         "properties": {
-          "id": {
+          "type": {
             "type": "string",
-            "description": "Endeavour Energy's incident id; empty when it gives none"
+            "const": "FeatureCollection"
           },
-          "suburb": {
-            "type": "string",
-            "description": "Title case. When Endeavour Energy stops giving one for an outage, the last it gave; \"Unknown\" when there has been none"
-          },
-          "streets": {
-            "type": "string",
-            "description": "The street affected, as Endeavour Energy gives it; kept from earlier when it stops giving one, else empty"
-          },
-          "customersAffected": {
-            "type": "number",
-            "description": "Customers without power; 0 when not given"
-          },
-          "status": {
-            "type": "string",
-            "description": "Endeavour Energy's status in words: Active, Scheduled, Crew Dispatched or Damage Assessed, otherwise its own status in title case"
-          },
-          "cause": {
-            "type": "string",
-            "description": "The cause (else the sub-cause), as Endeavour Energy gives it; for planned work with none, \"Planned maintenance\"; otherwise empty when not given"
-          },
-          "outageType": {
-            "type": "string",
-            "enum": [
-              "Unplanned",
-              "Current Maintenance",
-              "Future Maintenance"
-            ],
-            "description": "Unplanned; Current Maintenance (planned work under way — its status says so, or its start has passed); Future Maintenance (planned work not yet started)"
-          },
-          "startTime": {
-            "description": "When it started or starts, as Endeavour Energy gives it; null when not given or not a usable date",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "estimatedRestoration": {
-            "description": "When power is due back — the end time, else the estimated time of restoration — as Endeavour Energy gives it; null when not given or not a usable date",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "lastUpdated": {
-            "type": "string",
-            "description": "When the record was last updated, as Endeavour Energy gives it; empty when not given"
-          },
-          "latitude": {
-            "description": "Centre of the affected area; null when not given",
-            "type": [
-              "number",
-              "null"
-            ]
-          },
-          "longitude": {
-            "description": "Centre of the affected area; null when not given",
-            "type": [
-              "number",
-              "null"
-            ]
-          },
-          "postcode": {
-            "type": "string",
-            "description": "As Endeavour Energy gives it; kept from earlier when it stops giving one, else empty"
-          },
-          "hasGPS": {
-            "type": "boolean",
-            "description": "true when latitude and longitude are both given"
-          },
-          "endTime": {
-            "description": "Planned work only: the same as estimatedRestoration",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "duration": {
-            "description": "Planned work only; empty",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "suburb",
-          "streets",
-          "customersAffected",
-          "status",
-          "cause",
-          "outageType",
-          "startTime",
-          "estimatedRestoration",
-          "lastUpdated",
-          "latitude",
-          "longitude",
-          "postcode",
-          "hasGPS"
-        ],
-        "additionalProperties": false
-      },
-      "EndeavourAreas": {
-        "type": "array",
-        "items": {
-          "type": "object",
-          "properties": {
-            "incident_id": {
-              "description": "The id the processed outage lists carry as `id`",
-              "type": "string"
-            },
-            "outage_type": {
-              "description": "PLANNED for planned work, in some letter case",
-              "type": "string"
-            },
-            "incident_status": {
-              "type": "string"
-            },
-            "customers_affected": {
-              "description": "Customers without power",
-              "type": [
-                "number",
-                "null"
-              ]
-            },
-            "center_lat": {
-              "description": "Centre of the affected area",
-              "type": [
-                "number",
-                "null"
-              ]
-            },
-            "center_lng": {
-              "description": "Centre of the affected area",
-              "type": [
-                "number",
-                "null"
-              ]
-            }
-          },
-          "additionalProperties": {},
-          "description": "An outage area exactly as Endeavour Energy publishes it"
-        }
-      },
-      "EndeavourPostcodes": {
-        "type": "object",
-        "properties": {
-          "postcodes": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "Each once, sorted"
-          },
-          "count": {
-            "type": "integer",
-            "minimum": -9007199254740991,
-            "maximum": 9007199254740991,
-            "description": "Number of postcodes"
-          }
-        },
-        "required": [
-          "postcodes",
-          "count"
-        ],
-        "additionalProperties": false
-      },
-      "AusgridOutages": {
-        "type": "object",
-        "properties": {
-          "Markers": {
+          "features": {
             "type": "array",
             "items": {
               "type": "object",
               "properties": {
-                "OutageId": {
-                  "description": "Ausgrid's id for the outage",
-                  "type": [
-                    "string",
-                    "number",
-                    "null"
-                  ]
-                },
-                "JobId": {
+                "type": {
                   "type": "string",
-                  "description": "Empty: the outage's details are not read from Ausgrid"
+                  "const": "Feature"
                 },
-                "Suburb": {
-                  "type": "string",
-                  "description": "The area Ausgrid names; empty when not given"
-                },
-                "StreetName": {
-                  "type": "string",
-                  "description": "Empty: the outage's details are not read from Ausgrid"
-                },
-                "Streets": {
-                  "type": "string",
-                  "description": "Empty: the outage's details are not read from Ausgrid"
-                },
-                "Postcode": {
-                  "type": "string",
-                  "description": "Empty: the outage's details are not read from Ausgrid"
-                },
-                "CustomersAffected": {
-                  "type": "integer",
-                  "minimum": -9007199254740991,
-                  "maximum": 9007199254740991,
-                  "description": "Customers without power; 0 when not given"
-                },
-                "OutageType": {
-                  "type": "string",
-                  "enum": [
-                    "Planned",
-                    "Unplanned"
-                  ],
-                  "description": "Planned when Ausgrid shows it as planned, otherwise Unplanned"
-                },
-                "Cause": {
-                  "type": "string",
-                  "description": "As Ausgrid gives it; empty when not given"
-                },
-                "Reason": {
-                  "type": "string",
-                  "description": "Empty: the outage's details are not read from Ausgrid"
-                },
-                "Detail": {
-                  "type": "string",
-                  "description": "Empty: the outage's details are not read from Ausgrid"
-                },
-                "StatusText": {
-                  "type": "string",
-                  "description": "Empty: the outage's details are not read from Ausgrid"
-                },
-                "StartTime": {
-                  "type": "string",
-                  "description": "When it started. As Ausgrid gives it; empty when not given"
-                },
-                "EstRestoration": {
-                  "type": "string",
-                  "description": "When power is expected back. As Ausgrid gives it; empty when not given"
-                },
-                "EndDateTime": {
-                  "type": "string",
-                  "description": "The same as EstRestoration"
-                },
-                "Latitude": {
-                  "description": "The outage's marker; null when not given",
-                  "type": [
-                    "number",
-                    "null"
-                  ]
-                },
-                "Longitude": {
-                  "description": "The outage's marker; null when not given",
-                  "type": [
-                    "number",
-                    "null"
-                  ]
-                },
-                "Status": {
-                  "description": "As Ausgrid gives it",
-                  "type": [
-                    "string",
-                    "number",
-                    "null"
-                  ]
-                },
-                "Classification": {
-                  "description": "As Ausgrid gives it",
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "Polygons": {
-                  "type": "array",
-                  "items": {},
-                  "description": "The outage's areas, as Ausgrid gives them"
-                },
-                "outageId": {
-                  "description": "The same as OutageId",
-                  "type": [
-                    "string",
-                    "number",
-                    "null"
-                  ]
-                },
-                "suburb": {
-                  "type": "string",
-                  "description": "The same as Suburb"
-                },
-                "streetName": {
-                  "type": "string",
-                  "description": "The same as StreetName"
-                },
-                "streets": {
-                  "type": "string",
-                  "description": "The same as Streets"
-                },
-                "postcode": {
-                  "type": "string",
-                  "description": "The same as Postcode"
-                },
-                "customersAffected": {
-                  "type": "integer",
-                  "minimum": -9007199254740991,
-                  "maximum": 9007199254740991,
-                  "description": "The same as CustomersAffected"
-                },
-                "outageType": {
-                  "type": "string",
-                  "enum": [
-                    "Planned",
-                    "Unplanned"
-                  ],
-                  "description": "The same as OutageType"
-                },
-                "cause": {
-                  "type": "string",
-                  "description": "The same as Cause"
-                },
-                "startTime": {
-                  "type": "string",
-                  "description": "The same as StartTime"
-                },
-                "estRestoration": {
-                  "type": "string",
-                  "description": "The same as EstRestoration"
-                },
-                "endDateTime": {
-                  "type": "string",
-                  "description": "The same as EndDateTime"
-                },
-                "latitude": {
-                  "description": "The same as Latitude",
-                  "type": [
-                    "number",
-                    "null"
-                  ]
-                },
-                "longitude": {
-                  "description": "The same as Longitude",
-                  "type": [
-                    "number",
-                    "null"
-                  ]
-                }
-              },
-              "required": [
-                "OutageId",
-                "JobId",
-                "Suburb",
-                "StreetName",
-                "Streets",
-                "Postcode",
-                "CustomersAffected",
-                "OutageType",
-                "Cause",
-                "Reason",
-                "Detail",
-                "StatusText",
-                "StartTime",
-                "EstRestoration",
-                "EndDateTime",
-                "Latitude",
-                "Longitude",
-                "Status",
-                "Classification",
-                "Polygons",
-                "outageId",
-                "suburb",
-                "streetName",
-                "streets",
-                "postcode",
-                "customersAffected",
-                "outageType",
-                "cause",
-                "startTime",
-                "estRestoration",
-                "endDateTime",
-                "latitude",
-                "longitude"
-              ],
-              "additionalProperties": false
-            },
-            "description": "One record per outage, each field under two names: PascalCase and camelCase"
-          },
-          "Polygons": {
-            "type": "array",
-            "items": {},
-            "description": "Every outage's areas together, as Ausgrid gives them"
-          }
-        },
-        "required": [
-          "Markers",
-          "Polygons"
-        ],
-        "additionalProperties": false
-      },
-      "AusgridStats": {
-        "description": "Ausgrid's outage counters, exactly as Ausgrid publishes them; null when there are none to give"
-      },
-      "EssentialOutages": {
-        "type": "object",
-        "properties": {
-          "outages": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "incidentId": {
-                  "type": "string",
-                  "description": "Essential Energy's id for the outage"
-                },
-                "title": {
-                  "type": "string",
-                  "description": "The locality, else the reason, else \"Power Outage\""
-                },
-                "suburb": {
-                  "type": "string",
-                  "description": "The locality the outage is named after, as published; may be empty"
-                },
-                "outageType": {
-                  "type": "string",
-                  "enum": [
-                    "planned",
-                    "unplanned"
-                  ],
-                  "description": "As Essential Energy marks it; unplanned when it marks neither"
-                },
-                "feedType": {
-                  "type": "string",
-                  "enum": [
-                    "current",
-                    "future"
-                  ],
-                  "description": "Which of Essential Energy's feeds it is in: outages now, or outages to come"
-                },
-                "latitude": {
-                  "description": "The outage's marker; null when the feed gives none",
-                  "type": [
-                    "number",
-                    "null"
-                  ]
-                },
-                "longitude": {
-                  "description": "The outage's marker; null when the feed gives none",
-                  "type": [
-                    "number",
-                    "null"
-                  ]
-                },
-                "cause": {
-                  "type": "string",
-                  "description": "The reason Essential Energy gives; \"Unknown\" when it gives none"
-                },
-                "customersAffected": {
-                  "type": "integer",
-                  "minimum": -9007199254740991,
-                  "maximum": 9007199254740991,
-                  "description": "Customers without power; 0 when not given"
-                },
-                "timeOff": {
-                  "type": "string",
-                  "description": "When the power went or goes off, as Essential Energy writes it (normally DD/MM/YYYY HH:mm:ss); empty when not given"
-                },
-                "estTimeOn": {
-                  "type": "string",
-                  "description": "When the power is expected back. As Essential Energy writes it; empty when not given"
-                },
-                "lastUpdated": {
-                  "type": "string",
-                  "description": "As Essential Energy writes it; empty when not given"
-                },
-                "status": {
-                  "type": "string",
-                  "enum": [
-                    "active",
-                    "scheduled"
-                  ],
-                  "description": "active in the current feed, scheduled in the future feed"
-                },
-                "source": {
-                  "type": "string",
-                  "enum": [
-                    "essential_current",
-                    "essential_planned",
-                    "essential_future"
-                  ],
-                  "description": "essential_current: unplanned, in the current feed; essential_planned: planned, in the current feed; essential_future: in the future feed"
-                },
-                "sourceTimestamp": {
-                  "description": "timeOff rewritten as YYYY-MM-DDTHH:mm:ss, with no time zone; timeOff unchanged when it is not in the usual form; null when there is none",
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "polygon": {
-                  "description": "The outage area's outline as [longitude, latitude] points; null when the feed gives none. Left out when lite=1",
+                "geometry": {
                   "anyOf": [
                     {
-                      "type": "array",
-                      "items": {
-                        "type": "array",
-                        "prefixItems": [
-                          {
-                            "type": "number"
-                          },
-                          {
-                            "type": "number"
-                          }
-                        ],
-                        "items": false,
-                        "minItems": 2,
-                        "maxItems": 2,
-                        "description": "[longitude, latitude] (WGS84)"
-                      }
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "Point"
+                        },
+                        "coordinates": {
+                          "type": "array",
+                          "prefixItems": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "number"
+                            }
+                          ],
+                          "items": false,
+                          "minItems": 2,
+                          "maxItems": 2,
+                          "description": "[longitude, latitude] (WGS84)"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "coordinates"
+                      ],
+                      "additionalProperties": false
                     },
                     {
                       "type": "null"
                     }
-                  ]
+                  ],
+                  "description": "Where the distributor marks the outage; null when it gives no position"
                 },
-                "provider": {
-                  "type": "string",
-                  "const": "Essential Energy"
+                "properties": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "description": "The distributor's own id for the outage; unique with source"
+                    },
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "endeavour_current",
+                        "endeavour_planned",
+                        "essential_current",
+                        "essential_planned",
+                        "essential_future",
+                        "ausgrid"
+                      ],
+                      "description": "What stored history files it under (/api/v1/history?source=…&source_id=<id> finds its past): endeavour_current for unplanned and endeavour_planned for planned Endeavour Energy outages; essential_current (unplanned), essential_planned (planned, under way) and essential_future (to come) for Essential Energy; ausgrid"
+                    },
+                    "distributor": {
+                      "type": "string",
+                      "enum": [
+                        "endeavour",
+                        "essential",
+                        "ausgrid"
+                      ]
+                    },
+                    "state": {
+                      "type": "string",
+                      "const": "NSW",
+                      "description": "All three distributors are in NSW"
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "unplanned",
+                        "planned"
+                      ],
+                      "description": "unplanned (a fault) or planned (scheduled work)"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "active",
+                        "scheduled"
+                      ],
+                      "description": "active: the power is off now (every unplanned outage, and planned work under way); scheduled: planned work not yet started"
+                    },
+                    "area": {
+                      "type": "string",
+                      "description": "The suburb or locality, as the distributor names it; empty when it gives none"
+                    },
+                    "customers_affected": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991,
+                      "description": "Customers without power; 0 when not given"
+                    },
+                    "cause": {
+                      "type": "string",
+                      "description": "The cause, as the distributor gives it (Endeavour Energy's planned work with none: \"Planned maintenance\"); empty when not given"
+                    },
+                    "start_at": {
+                      "description": "When the power went or goes off, ISO 8601 UTC; null when the distributor gives none, or one that cannot be read (then details has it as written)",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "restore_at": {
+                      "description": "When the power is expected back, ISO 8601 UTC; null when the distributor gives none, or one that cannot be read (then details has it as written)",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "updated_at": {
+                      "description": "When the distributor last updated the outage, ISO 8601 UTC; null when the distributor gives none, or one that cannot be read (then details has it as written); Ausgrid gives none",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "polygons": {
+                      "type": "array",
+                      "items": {
+                        "type": "array",
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "number"
+                          }
+                        }
+                      },
+                      "description": "The outage area's outline as outer rings of [longitude, latitude]; empty when the distributor gives none (Essential Energy gives one)"
+                    },
+                    "details": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {},
+                      "description": "The distributor's own extra fields, under the per-distributor feed's names (Endeavour Energy: streets, postcode, status; Essential Energy: title)"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "source",
+                    "distributor",
+                    "state",
+                    "kind",
+                    "status",
+                    "area",
+                    "customers_affected",
+                    "cause",
+                    "start_at",
+                    "restore_at",
+                    "updated_at",
+                    "polygons",
+                    "details"
+                  ],
+                  "additionalProperties": false
                 }
               },
               "required": [
-                "incidentId",
-                "title",
-                "suburb",
-                "outageType",
-                "feedType",
-                "latitude",
-                "longitude",
-                "cause",
-                "customersAffected",
-                "timeOff",
-                "estTimeOn",
-                "lastUpdated",
-                "status",
-                "source",
-                "sourceTimestamp",
-                "provider"
+                "type",
+                "geometry",
+                "properties"
               ],
               "additionalProperties": false
-            },
-            "description": "The current feed, then the future feed, each in its own order"
-          },
-          "count": {
-            "type": "integer",
-            "minimum": -9007199254740991,
-            "maximum": 9007199254740991,
-            "description": "Number of outages"
-          },
-          "planned": {
-            "type": "integer",
-            "minimum": -9007199254740991,
-            "maximum": 9007199254740991,
-            "description": "How many of them are planned"
-          },
-          "unplanned": {
-            "type": "integer",
-            "minimum": -9007199254740991,
-            "maximum": 9007199254740991,
-            "description": "How many of them are unplanned"
-          },
-          "future": {
-            "type": "integer",
-            "minimum": -9007199254740991,
-            "maximum": 9007199254740991,
-            "description": "How many of them are in the future feed"
-          },
-          "totalCustomersAffected": {
-            "type": "integer",
-            "minimum": -9007199254740991,
-            "maximum": 9007199254740991,
-            "description": "customersAffected summed over the outages"
-          }
-        },
-        "required": [
-          "outages",
-          "count",
-          "planned",
-          "unplanned",
-          "future",
-          "totalCustomersAffected"
-        ],
-        "additionalProperties": false
-      },
-      "EssentialOutageList": {
-        "type": "object",
-        "properties": {
-          "outages": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/EssentialOutage"
             }
           },
           "count": {
             "type": "integer",
             "minimum": -9007199254740991,
             "maximum": 9007199254740991,
-            "description": "Number of outages"
+            "description": "Number of features"
           },
-          "totalCustomersAffected": {
-            "type": "integer",
-            "minimum": -9007199254740991,
-            "maximum": 9007199254740991,
-            "description": "customersAffected summed over the outages"
-          }
-        },
-        "required": [
-          "outages",
-          "count",
-          "totalCustomersAffected"
-        ],
-        "additionalProperties": false
-      },
-      "EssentialOutage": {
-        "type": "object",
-        "properties": {
-          "incidentId": {
-            "type": "string",
-            "description": "Essential Energy's id for the outage"
-          },
-          "title": {
-            "type": "string",
-            "description": "The locality, else the reason, else \"Power Outage\""
-          },
-          "suburb": {
-            "type": "string",
-            "description": "The locality the outage is named after, as published; may be empty"
-          },
-          "outageType": {
-            "type": "string",
-            "enum": [
-              "planned",
-              "unplanned"
-            ],
-            "description": "As Essential Energy marks it; unplanned when it marks neither"
-          },
-          "feedType": {
-            "type": "string",
-            "enum": [
-              "current",
-              "future"
-            ],
-            "description": "Which of Essential Energy's feeds it is in: outages now, or outages to come"
-          },
-          "latitude": {
-            "description": "The outage's marker; null when the feed gives none",
-            "type": [
-              "number",
-              "null"
-            ]
-          },
-          "longitude": {
-            "description": "The outage's marker; null when the feed gives none",
-            "type": [
-              "number",
-              "null"
-            ]
-          },
-          "cause": {
-            "type": "string",
-            "description": "The reason Essential Energy gives; \"Unknown\" when it gives none"
-          },
-          "customersAffected": {
-            "type": "integer",
-            "minimum": -9007199254740991,
-            "maximum": 9007199254740991,
-            "description": "Customers without power; 0 when not given"
-          },
-          "timeOff": {
-            "type": "string",
-            "description": "When the power went or goes off, as Essential Energy writes it (normally DD/MM/YYYY HH:mm:ss); empty when not given"
-          },
-          "estTimeOn": {
-            "type": "string",
-            "description": "When the power is expected back. As Essential Energy writes it; empty when not given"
-          },
-          "lastUpdated": {
-            "type": "string",
-            "description": "As Essential Energy writes it; empty when not given"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "active",
-              "scheduled"
-            ],
-            "description": "active in the current feed, scheduled in the future feed"
-          },
-          "source": {
-            "type": "string",
-            "enum": [
-              "essential_current",
-              "essential_planned",
-              "essential_future"
-            ],
-            "description": "essential_current: unplanned, in the current feed; essential_planned: planned, in the current feed; essential_future: in the future feed"
-          },
-          "sourceTimestamp": {
-            "description": "timeOff rewritten as YYYY-MM-DDTHH:mm:ss, with no time zone; timeOff unchanged when it is not in the usual form; null when there is none",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "polygon": {
-            "anyOf": [
-              {
-                "type": "array",
-                "items": {
-                  "type": "array",
-                  "prefixItems": [
-                    {
-                      "type": "number"
-                    },
-                    {
-                      "type": "number"
-                    }
-                  ],
-                  "items": false,
-                  "minItems": 2,
-                  "maxItems": 2,
-                  "description": "[longitude, latitude] (WGS84)"
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "distributor": {
+                  "type": "string",
+                  "enum": [
+                    "endeavour",
+                    "essential",
+                    "ausgrid"
+                  ]
+                },
+                "name": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991,
+                  "description": "Outages from this distributor in this answer, after the filters"
+                },
+                "updated_at": {
+                  "description": "When this server last read all of the distributor's outage feeds (the earliest of their last reads), ISO 8601 UTC; null if one has not been read yet — as for Ausgrid, which is not being read for now",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 }
               },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The outage area's outline as [longitude, latitude] points; null when the feed gives none"
-          },
-          "provider": {
-            "type": "string",
-            "const": "Essential Energy"
+              "required": [
+                "distributor",
+                "name",
+                "count",
+                "updated_at"
+              ],
+              "additionalProperties": false
+            },
+            "description": "One entry per distributor asked for, in this order"
           }
         },
         "required": [
-          "incidentId",
-          "title",
-          "suburb",
-          "outageType",
-          "feedType",
-          "latitude",
-          "longitude",
-          "cause",
-          "customersAffected",
-          "timeOff",
-          "estTimeOn",
-          "lastUpdated",
-          "status",
-          "source",
-          "sourceTimestamp",
-          "polygon",
-          "provider"
+          "type",
+          "features",
+          "count",
+          "sources"
         ],
         "additionalProperties": false
-      },
-      "EssentialOutagesRaw": {
-        "type": "array",
-        "items": {
-          "$ref": "#/components/schemas/EssentialOutage"
-        }
       },
       "HistoryPage": {
         "type": "object",
@@ -3997,7 +3457,7 @@
                     "properties": {
                       "alert_type": {
                         "type": "string",
-                        "description": "The archived source: what /data/history takes as source"
+                        "description": "The archived source: what /history takes as source"
                       },
                       "name": {
                         "type": "string"
@@ -9122,741 +8582,31 @@
         ]
       }
     },
-    "/api/v1/endeavour/current": {
+    "/api/v1/outages": {
       "get": {
-        "operationId": "getEndeavourCurrent",
+        "operationId": "getOutages",
         "tags": [
           "Power outages"
         ],
-        "summary": "Endeavour Energy unplanned outages",
-        "description": "Unplanned electricity outages on Endeavour Energy's network now, from Endeavour Energy's public outage data, with the address, cause and timing joined onto each outage area. Refreshed every minute.",
+        "summary": "Every distributor, one feed",
+        "description": "Electricity outages on Endeavour Energy's, Essential Energy's and Ausgrid's networks — unplanned and planned, now and to come — from each distributor's public outage data, in one shape: the common fields every distributor has, plus `details` for each one's own. `kind` says whether an outage is unplanned or planned, and `status` whether the power is off now or the work is still to come; distributor, kind and status narrow the list. Times are UTC; Essential Energy writes its own without a zone, so they are read as Sydney time. `sources` says per distributor how many outages it gave and when this server last read it: Ausgrid's outage map service has stopped answering, so it is not being read for now and gives none. Refreshed every one to five minutes.",
         "responses": {
           "200": {
-            "description": "Every unplanned outage",
+            "description": "A GeoJSON FeatureCollection of outages",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {
-                      "$ref": "#/components/schemas/EndeavourOutages"
-                    }
-                  },
-                  "required": [
-                    "data"
-                  ],
-                  "additionalProperties": false
+                  "$ref": "#/components/schemas/Outages"
                 }
               }
             }
           },
-          "401": {
-            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+          "400": {
+            "description": "A query parameter is not valid (validation_failed)",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "The key is over its per-minute limit (rate_limited)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "ApiKey": []
-          }
-        ],
-        "x-scopes": [
-          "outages:live"
-        ]
-      }
-    },
-    "/api/v1/endeavour/maintenance": {
-      "get": {
-        "operationId": "getEndeavourMaintenance",
-        "tags": [
-          "Power outages"
-        ],
-        "summary": "Endeavour Energy planned work under way",
-        "description": "Planned outages on Endeavour Energy's network that are under way: the work's status says so, or its start time has passed. From Endeavour Energy's public outage data; refreshed every five minutes.",
-        "responses": {
-          "200": {
-            "description": "Every planned outage under way",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {
-                      "$ref": "#/components/schemas/EndeavourOutages"
-                    }
-                  },
-                  "required": [
-                    "data"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "The key is over its per-minute limit (rate_limited)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "ApiKey": []
-          }
-        ],
-        "x-scopes": [
-          "outages:live"
-        ]
-      }
-    },
-    "/api/v1/endeavour/future": {
-      "get": {
-        "operationId": "getEndeavourFuture",
-        "tags": [
-          "Power outages"
-        ],
-        "summary": "Endeavour Energy planned work to come",
-        "description": "Planned outages on Endeavour Energy's network that have not started yet. From Endeavour Energy's public outage data; refreshed every five minutes.",
-        "responses": {
-          "200": {
-            "description": "Every planned outage still to come",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {
-                      "$ref": "#/components/schemas/EndeavourOutages"
-                    }
-                  },
-                  "required": [
-                    "data"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "The key is over its per-minute limit (rate_limited)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "ApiKey": []
-          }
-        ],
-        "x-scopes": [
-          "outages:live"
-        ]
-      }
-    },
-    "/api/v1/endeavour/planned": {
-      "get": {
-        "operationId": "getEndeavourPlanned",
-        "tags": [
-          "Power outages"
-        ],
-        "summary": "Endeavour Energy planned outages",
-        "description": "Every planned outage on Endeavour Energy's network: the work under way (as /endeavour/maintenance) followed by the work still to come (as /endeavour/future). Refreshed every five minutes.",
-        "responses": {
-          "200": {
-            "description": "Planned work under way, then planned work to come",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {
-                      "$ref": "#/components/schemas/EndeavourOutages"
-                    }
-                  },
-                  "required": [
-                    "data"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "The key is over its per-minute limit (rate_limited)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "ApiKey": []
-          }
-        ],
-        "x-scopes": [
-          "outages:live"
-        ]
-      }
-    },
-    "/api/v1/endeavour/current/all": {
-      "get": {
-        "operationId": "getEndeavourCurrentAreas",
-        "tags": [
-          "Power outages"
-        ],
-        "summary": "Endeavour Energy outage areas other than planned work, unprocessed",
-        "description": "Endeavour Energy's outage areas that are not planned work, exactly as Endeavour Energy publishes them, for clients that process them themselves — no address, cause or timing joined on (/endeavour/current has those). Read from Endeavour Energy on each request.",
-        "responses": {
-          "200": {
-            "description": "Every outage area not marked PLANNED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {
-                      "$ref": "#/components/schemas/EndeavourAreas"
-                    }
-                  },
-                  "required": [
-                    "data"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "The key is over its per-minute limit (rate_limited)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "ApiKey": []
-          }
-        ],
-        "x-scopes": [
-          "outages:live"
-        ]
-      }
-    },
-    "/api/v1/endeavour/future/all": {
-      "get": {
-        "operationId": "getEndeavourPlannedAreas",
-        "tags": [
-          "Power outages"
-        ],
-        "summary": "Endeavour Energy planned-work outage areas, unprocessed",
-        "description": "Endeavour Energy's outage areas marked as planned work, exactly as Endeavour Energy publishes them, for clients that process them themselves. Despite the path, this includes planned work already under way, not only work to come. Read from Endeavour Energy on each request.",
-        "responses": {
-          "200": {
-            "description": "Every outage area marked PLANNED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {
-                      "$ref": "#/components/schemas/EndeavourAreas"
-                    }
-                  },
-                  "required": [
-                    "data"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "The key is over its per-minute limit (rate_limited)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "ApiKey": []
-          }
-        ],
-        "x-scopes": [
-          "outages:live"
-        ]
-      }
-    },
-    "/api/v1/endeavour/postcodes": {
-      "get": {
-        "operationId": "getEndeavourPostcodes",
-        "tags": [
-          "Power outages"
-        ],
-        "summary": "Postcodes in Endeavour Energy outages",
-        "description": "The postcodes in Endeavour Energy's outage data — taken from its outage points, at most 5,000 of them read — each once, sorted. Read from Endeavour Energy when asked, and a good answer is kept for an hour.",
-        "responses": {
-          "200": {
-            "description": "The postcodes",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {
-                      "$ref": "#/components/schemas/EndeavourPostcodes"
-                    }
-                  },
-                  "required": [
-                    "data"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "The key is over its per-minute limit (rate_limited)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "ApiKey": []
-          }
-        ],
-        "x-scopes": [
-          "outages:live"
-        ]
-      }
-    },
-    "/api/v1/ausgrid/outages": {
-      "get": {
-        "operationId": "getAusgridOutages",
-        "tags": [
-          "Power outages"
-        ],
-        "summary": "Ausgrid outages",
-        "description": "Electricity outages on Ausgrid's network, from Ausgrid's public outage map, polled every two minutes when polling is on. Polling is off for now because Ausgrid's outage map service has stopped answering, so this is empty until it returns.",
-        "responses": {
-          "200": {
-            "description": "The outages and their areas",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {
-                      "$ref": "#/components/schemas/AusgridOutages"
-                    }
-                  },
-                  "required": [
-                    "data"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "The key is over its per-minute limit (rate_limited)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "ApiKey": []
-          }
-        ],
-        "x-scopes": [
-          "outages:live"
-        ]
-      }
-    },
-    "/api/v1/ausgrid/stats": {
-      "get": {
-        "operationId": "getAusgridStats",
-        "tags": [
-          "Power outages"
-        ],
-        "summary": "Ausgrid outage counts",
-        "description": "Ausgrid's own outage counters, as its public outage map publishes them, polled every two minutes when polling is on. Polling is off for now because Ausgrid's outage map service has stopped answering, so this is empty until it returns.",
-        "responses": {
-          "200": {
-            "description": "Ausgrid's counters, or null",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {
-                      "$ref": "#/components/schemas/AusgridStats"
-                    }
-                  },
-                  "required": [
-                    "data"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "The key is over its per-minute limit (rate_limited)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "ApiKey": []
-          }
-        ],
-        "x-scopes": [
-          "outages:live"
-        ]
-      }
-    },
-    "/api/v1/essential/outages": {
-      "get": {
-        "operationId": "getEssentialOutages",
-        "tags": [
-          "Power outages"
-        ],
-        "summary": "Essential Energy outages",
-        "description": "Electricity outages on Essential Energy's network — unplanned and planned, now and to come — from Essential Energy's public outage feeds (current and future), with counts. feed and type narrow the list (the counts are of what is left), and lite=1 leaves out the polygons. Refreshed every three minutes.",
-        "responses": {
-          "200": {
-            "description": "The outages, with counts",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {
-                      "$ref": "#/components/schemas/EssentialOutages"
-                    }
-                  },
-                  "required": [
-                    "data"
-                  ],
-                  "additionalProperties": false
                 }
               }
             }
@@ -9905,39 +8655,27 @@
         "parameters": [
           {
             "in": "query",
-            "name": "feed",
+            "name": "distributor",
             "schema": {
-              "type": "string",
-              "enum": [
-                "current",
-                "future"
-              ]
+              "type": "string"
             },
-            "description": "Only the outages in this feed: current (outages now) or future (outages to come). Letter case does not matter; any other value is ignored."
+            "description": "Comma-separated; any of endeavour, essential, ausgrid. Leave out for all."
           },
           {
             "in": "query",
-            "name": "type",
+            "name": "kind",
             "schema": {
-              "type": "string",
-              "enum": [
-                "planned",
-                "unplanned"
-              ]
+              "type": "string"
             },
-            "description": "Only outages of this kind. Letter case does not matter; any other value is ignored."
+            "description": "Comma-separated; any of unplanned, planned. Leave out for all."
           },
           {
             "in": "query",
-            "name": "lite",
+            "name": "status",
             "schema": {
-              "type": "string",
-              "enum": [
-                "0",
-                "1"
-              ]
+              "type": "string"
             },
-            "description": "1 leaves out each outage's polygon, the heaviest field"
+            "description": "Comma-separated; any of active, scheduled. Leave out for all."
           }
         ],
         "security": [
@@ -9950,330 +8688,14 @@
         ]
       }
     },
-    "/api/v1/essential/planned": {
-      "get": {
-        "operationId": "getEssentialPlanned",
-        "tags": [
-          "Power outages"
-        ],
-        "summary": "Essential Energy planned outages",
-        "description": "Planned outages on Essential Energy's network, under way and to come: the outages marked planned in Essential Energy's public outage feeds, the current feed's first. Refreshed every three minutes.",
-        "responses": {
-          "200": {
-            "description": "Every planned outage",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {
-                      "$ref": "#/components/schemas/EssentialOutageList"
-                    }
-                  },
-                  "required": [
-                    "data"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "The key is over its per-minute limit (rate_limited)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "ApiKey": []
-          }
-        ],
-        "x-scopes": [
-          "outages:live"
-        ]
-      }
-    },
-    "/api/v1/essential/future": {
-      "get": {
-        "operationId": "getEssentialFuture",
-        "tags": [
-          "Power outages"
-        ],
-        "summary": "Essential Energy outages to come",
-        "description": "Outages on Essential Energy's network that are still to come: everything in Essential Energy's future-outages feed. Refreshed every three minutes.",
-        "responses": {
-          "200": {
-            "description": "Every outage in the future feed",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {
-                      "$ref": "#/components/schemas/EssentialOutageList"
-                    }
-                  },
-                  "required": [
-                    "data"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "The key is over its per-minute limit (rate_limited)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "ApiKey": []
-          }
-        ],
-        "x-scopes": [
-          "outages:live"
-        ]
-      }
-    },
-    "/api/v1/essential/outages/current": {
-      "get": {
-        "operationId": "getEssentialCurrent",
-        "tags": [
-          "Power outages"
-        ],
-        "summary": "Essential Energy outages now",
-        "description": "Outages on Essential Energy's network now, unplanned and planned: everything in Essential Energy's current-outages feed. Refreshed every three minutes.",
-        "responses": {
-          "200": {
-            "description": "Every outage in the current feed",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {
-                      "$ref": "#/components/schemas/EssentialOutageList"
-                    }
-                  },
-                  "required": [
-                    "data"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "The key is over its per-minute limit (rate_limited)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "ApiKey": []
-          }
-        ],
-        "x-scopes": [
-          "outages:live"
-        ]
-      }
-    },
-    "/api/v1/essential/outages/raw": {
-      "get": {
-        "operationId": "getEssentialOutagesRaw",
-        "tags": [
-          "Power outages"
-        ],
-        "summary": "Essential Energy outages, read now",
-        "description": "Every outage in both of Essential Energy's public outage feeds, read from Essential Energy on this request rather than taken from the last poll: the current feed's outages, then the future feed's, in the same record shape as the other Essential Energy endpoints. When only one feed can be read, the answer is what that one gave, with nothing to say the other failed; when neither can be read, the answer is 503.",
-        "responses": {
-          "200": {
-            "description": "The outages in both feeds",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {
-                      "$ref": "#/components/schemas/EssentialOutagesRaw"
-                    }
-                  },
-                  "required": [
-                    "data"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "The key is over its per-minute limit (rate_limited)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Something the endpoint depends on is down, or (where a key is needed) the key could not be checked; try again shortly (service_unavailable, auth_unavailable)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "ApiKey": []
-          }
-        ],
-        "x-scopes": [
-          "outages:live"
-        ]
-      }
-    },
-    "/api/v1/data/history": {
+    "/api/v1/history": {
       "get": {
         "operationId": "getHistory",
         "tags": [
           "History"
         ],
         "summary": "Stored records",
-        "description": "Every source's records as this server stored them over time: by default one record per incident (its latest), newest first. Filter by source, time, place and text; page with cursor (or offset, up to 10,000). Records are kept for the server's retention window. A key reads only the archived sources of the feeds whose history it holds — fires:history the fire services' sources, warnings:history the warnings', and so on.",
+        "description": "Every source's records as this server stored them over time: by default one record per incident (its latest), newest first. Filter by feed or source, time, place and text; page with cursor (or offset, up to 10,000). Records are kept for the server's retention window. A key reads only the archived sources of the feeds whose history it holds — fires:history the fire services' sources, warnings:history the warnings', and so on.",
         "responses": {
           "200": {
             "description": "A page of records",
@@ -10295,7 +8717,7 @@
             }
           },
           "400": {
-            "description": "cursor is malformed, or offset is past 10,000 (validation_failed; details.max_offset)",
+            "description": "cursor is malformed, offset is past 10,000 (validation_failed; details.max_offset), or feed names a feed with no stored history or is given with a source outside it (validation_failed)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10348,11 +8770,19 @@
         "parameters": [
           {
             "in": "query",
+            "name": "feed",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only the records of these feeds, comma-separated: fires, warnings, ambulance, roads, outages, beaches, pager — each the feed of the key table, standing for its archived sources. An unknown feed is refused (400), as is one the key does not hold the history of (403). With source, the sources named must belong to these feeds"
+          },
+          {
+            "in": "query",
             "name": "source",
             "schema": {
               "type": "string"
             },
-            "description": "Only these archived sources, comma-separated: rfs, nt_fire, qld_fire, vic_emergency, wa_incident, sa_cfs, sa_mfs, qld_warning, wa_warning, bom_land, bom_marine, act_ambulance, traffic_incident, traffic_roadwork, traffic_flood, traffic_fire, traffic_majorevent, traffic_alpine, traffic_lga, traffic_works, endeavour_current, endeavour_planned, endeavour_maintenance, ausgrid, essential_current, essential_planned, essential_future, dorsal, pager. A key reads only the sources its scopes cover; naming another is refused (403), and leaving this out means all of them"
+            "description": "Only these archived sources, comma-separated: rfs, nt_fire, qld_fire, vic_emergency, wa_incident, sa_cfs, sa_mfs, qld_warning, wa_warning, bom_land, bom_marine, act_ambulance, traffic_incident, traffic_roadwork, traffic_flood, traffic_fire, traffic_majorevent, traffic_alpine, traffic_lga, traffic_works, endeavour_current, endeavour_planned, endeavour_maintenance, ausgrid, essential_current, essential_planned, essential_future, dorsal, pager. A key reads only the sources its scopes cover; naming another is refused (403), and leaving this out means all of them (or all of feed's)"
           },
           {
             "in": "query",
@@ -10589,7 +9019,7 @@
         ]
       }
     },
-    "/api/v1/data/history/filters": {
+    "/api/v1/history/filters": {
       "get": {
         "operationId": "getHistoryFilters",
         "tags": [
@@ -10641,7 +9071,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "The window starts on this date or time when since is not given (as /data/history reads it)"
+            "description": "The window starts on this date or time when since is not given (as /history reads it)"
           },
           {
             "in": "query",
@@ -10663,14 +9093,14 @@
         "security": []
       }
     },
-    "/api/v1/data/history/incident/{source}/{source_id}": {
+    "/api/v1/history/incident/{source}/{source_id}": {
       "get": {
         "operationId": "getHistoryIncident",
         "tags": [
           "History"
         ],
         "summary": "One incident's stored snapshots",
-        "description": "Every snapshot this server stored of one incident, oldest first, each with the record exactly as the source gave it: how the incident changed over time. {source} is an archived source (as /data/history returns it) and {source_id} the incident's id from that source. An incident with no snapshots answers an empty list. A key reads only the sources its scopes cover.",
+        "description": "Every snapshot this server stored of one incident, oldest first, each with the record exactly as the source gave it: how the incident changed over time. {source} is an archived source (as /history returns it) and {source_id} the incident's id from that source. An incident with no snapshots answers an empty list. A key reads only the sources its scopes cover.",
         "responses": {
           "200": {
             "description": "The incident's snapshots",

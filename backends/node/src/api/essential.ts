@@ -14,12 +14,13 @@
  *   /api/essential/future        → line 5280-5290.
  *     {outages, count, totalCustomersAffected} for the future feed.
  *
- * All of these but /api/essential/outages/future are also served at
- * /api/v1/ (server.ts mirrors them), wrapped in `data` there
- * (api/v1/respond.ts). /outages/future is not: it answers exactly what
- * /essential/future does. /outages/raw reads both feeds on the request;
- * when neither can be read the old path answers `[]` (200), as it always
- * has, and /api/v1/ answers 503 service_unavailable.
+ * /outages/raw reads both feeds on the request; when neither can be read
+ * it answers `[]` (200), as it always has.
+ *
+ * This site's routes, for the map, the live page and the Discord bot: none
+ * is on /api/v1/ nor declares a scope, so no scoped API key reaches them. An
+ * API key reads every distributor's outages together, at /api/v1/outages
+ * (api/outages.ts).
  */
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -28,8 +29,7 @@ import { liveStore } from '../store/live.js';
 import type { EssentialOutage } from '../sources/essential.js';
 import { fetchFeed } from '../sources/essential.js';
 import { log } from '../lib/log.js';
-import { scoped } from '../services/auth/apiKeyScopes.js';
-import { fail, isV1, ok } from './v1/respond.js';
+import { ok } from './v1/respond.js';
 import {
   assertShape,
   envelope,
@@ -38,14 +38,10 @@ import {
   LonLat,
   okJson,
   queryValidator,
-  UNAVAILABLE_ERROR,
   type SameShape,
 } from './v1/schemas.js';
 
 export const essentialRouter = new Hono();
-
-// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
-const SCOPE_OUTAGES = scoped({ feed: 'outages', window: 'live' });
 
 function readArray(key: string): EssentialOutage[] {
   const data = liveStore.getData<EssentialOutage[]>(key);
@@ -59,7 +55,7 @@ function totalCustomers(items: EssentialOutage[]): number {
 }
 
 // ---------------------------------------------------------------------------
-// What /api/v1/ documents (api/v1/openapi.ts)
+// The answers' shapes
 // ---------------------------------------------------------------------------
 
 const AS_WRITTEN = 'As Essential Energy writes it; empty when not given';
@@ -156,7 +152,6 @@ const EVERY = 'Refreshed every three minutes.';
 
 essentialRouter.get(
   '/api/essential/outages',
-  SCOPE_OUTAGES,
   describeRoute({
     operationId: 'getEssentialOutages',
     tags: ['Power outages'],
@@ -218,7 +213,6 @@ essentialRouter.get(
 // Bot-canonical alias: planned items from current + future feeds combined.
 essentialRouter.get(
   '/api/essential/planned',
-  SCOPE_OUTAGES,
   describeRoute({
     operationId: 'getEssentialPlanned',
     tags: ['Power outages'],
@@ -245,7 +239,6 @@ essentialRouter.get(
 // Bot-canonical alias: just the future feed contents.
 essentialRouter.get(
   '/api/essential/future',
-  SCOPE_OUTAGES,
   describeRoute({
     operationId: 'getEssentialFuture',
     tags: ['Power outages'],
@@ -271,7 +264,6 @@ essentialRouter.get(
 // LiveStore key our poller writes to.
 essentialRouter.get(
   '/api/essential/outages/current',
-  SCOPE_OUTAGES,
   describeRoute({
     operationId: 'getEssentialCurrent',
     tags: ['Power outages'],
@@ -294,7 +286,7 @@ essentialRouter.get(
 
 // /api/essential/outages/future — future-feed outages only. Python
 // line 5250-5260.
-essentialRouter.get('/api/essential/outages/future', SCOPE_OUTAGES, (c) => {
+essentialRouter.get('/api/essential/outages/future', (c) => {
   const items = readArray('essential_future');
   return c.json({
     outages: items,
@@ -309,38 +301,31 @@ essentialRouter.get('/api/essential/outages/future', SCOPE_OUTAGES, (c) => {
 // upstream is shipping. We keep the same behaviour for parity.
 essentialRouter.get(
   '/api/essential/outages/raw',
-  SCOPE_OUTAGES,
   describeRoute({
     operationId: 'getEssentialOutagesRaw',
     tags: ['Power outages'],
     summary: 'Essential Energy outages, read now',
-    description: `Every outage in both of ${FEEDS}, read from Essential Energy on this request rather than taken from the last poll: the current feed's outages, then the future feed's, in the same record shape as the other Essential Energy endpoints. When only one feed can be read, the answer is what that one gave, with nothing to say the other failed; when neither can be read, the answer is 503.`,
+    description: `Every outage in both of ${FEEDS}, read from Essential Energy on this request rather than taken from the last poll: the current feed's outages, then the future feed's, in the same record shape as the other Essential Energy endpoints. When only one feed can be read, the answer is what that one gave, with nothing to say the other failed; when neither can be read, it is empty.`,
     responses: {
       ...okJson(envelope(EssentialOutagesRaw), 'The outages in both feeds'),
       ...GATED_ERRORS,
-      ...UNAVAILABLE_ERROR,
     },
   }),
   async (c) => {
     const out: EssentialOutage[] = [];
-    let failed = 0;
     for (const feed of ['current', 'future'] as const) {
       try {
         const items = await fetchFeed(feed);
         out.push(...items);
       } catch (err) {
-        failed += 1;
         log.warn(
           { err: (err as Error).message, feed },
           'essential raw fetch failed',
         );
       }
     }
-    // The old path has always answered what it read — an empty list (200)
-    // when neither feed could be read.
-    if (failed === 2 && isV1(c)) {
-      return fail(c, 503, 'service_unavailable', "Essential Energy's outage feeds could not be read just now.");
-    }
+    // What it read — an empty list (200) when neither feed could be read, as
+    // it always has.
     return ok(c, out satisfies z.infer<typeof EssentialOutagesRaw>);
   },
 );

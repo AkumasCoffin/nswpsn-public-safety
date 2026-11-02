@@ -13,26 +13,26 @@
  *                          the empty payload on missing LiveStore data.
  *   /api/ausgrid/stats   → upstream counter object verbatim.
  *
- * Both are also served at /api/v1/ (server.ts mirrors them), wrapped in
- * `data` there (api/v1/respond.ts). The poller is off by default
- * (AUSGRID_DISABLED) while Ausgrid's endpoints are not answering.
+ * The poller is off by default (AUSGRID_DISABLED) while Ausgrid's
+ * endpoints are not answering.
+ *
+ * This site's routes, for the map, the live page and the Discord bot:
+ * neither is on /api/v1/ nor declares a scope, so no scoped API key reaches
+ * them. An API key reads every distributor's outages together, at
+ * /api/v1/outages (api/outages.ts).
  */
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { describeRoute } from 'hono-openapi';
 import { liveStore } from '../store/live.js';
 import type { AusgridOutage, AusgridOutagesPayload } from '../sources/ausgrid.js';
-import { scoped } from '../services/auth/apiKeyScopes.js';
 import { ok } from './v1/respond.js';
 import { assertShape, envelope, GATED_ERRORS, okJson, type SameShape } from './v1/schemas.js';
 
 export const ausgridRouter = new Hono();
 
-// What a scoped API key needs to read these routes (services/auth/apiKeyScopes.ts).
-const SCOPE_OUTAGES = scoped({ feed: 'outages', window: 'live' });
-
 // ---------------------------------------------------------------------------
-// What /api/v1/ documents (api/v1/openapi.ts)
+// The answers' shapes
 // ---------------------------------------------------------------------------
 
 const NOT_READ = "Empty: the outage's details are not read from Ausgrid";
@@ -100,7 +100,6 @@ const POLLING_OFF =
 
 ausgridRouter.get(
   '/api/ausgrid/outages',
-  SCOPE_OUTAGES,
   describeRoute({
     operationId: 'getAusgridOutages',
     tags: ['Power outages'],
@@ -124,7 +123,6 @@ ausgridRouter.get(
 
 ausgridRouter.get(
   '/api/ausgrid/stats',
-  SCOPE_OUTAGES,
   describeRoute({
     operationId: 'getAusgridStats',
     tags: ['Power outages'],

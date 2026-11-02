@@ -59,7 +59,7 @@ this server stored over time. Each ticked cell is one scope, written
 | Fires | `fires:live` · `fires:history` | Every fire service in one feed — NSW RFS, QLD Fire Department, VIC Emergency, WA DFES, SA CFS and MFS, NT Fire and Rescue — with the QLD Fire Department and WA DFES public warnings, plus satellite hotspots and fire danger ratings |
 | Weather warnings | `warnings:live` · `warnings:history` | Bureau of Meteorology land and marine warnings |
 | ACT Ambulance | `ambulance:live` · `ambulance:history` | ACT Ambulance Service incidents |
-| Power outages | `outages:live` · `outages:history` | Endeavour Energy, Ausgrid and Essential Energy |
+| Power outages | `outages:live` · `outages:history` | Every electricity distributor in one feed — Endeavour Energy, Essential Energy and Ausgrid ([below](#outages)) |
 | Road hazards | `roads:live` · `roads:history` | Road incidents, roadworks, flooded roads and major events in NSW, QLD, VIC, SA and the ACT ([below](#roads)); NSW road fires, alpine conditions and council works |
 | Public transport | `transport:live` | Vehicles, stops, lines, trips, departures, alerts |
 | Aircraft | `aircraft:live` · `aircraft:history` | ADS-B positions, trails, photos; history replays past positions |
@@ -91,8 +91,8 @@ leaves out the camera records Live Traffic's aggregate feed carries.
 fixed list of paths keys could always read, on `/api/` and on `/api/v1/` alike.
 That list is by path prefix and predates scopes, so it is broader in places: it
 includes the per-agency fire feeds at their old paths, `/api/boundaries/` and
-everything under `/api/radio/` — and it reaches `/api/v1/fires`, the fire feeds
-it already read, merged. It once held the camera and news routes too; those
+everything under `/api/radio/` — and it reaches `/api/v1/fires` and
+`/api/v1/outages`, the fire and outage feeds it already read, merged. It once held the camera and news routes too; those
 came off it with the cameras and news (2026-11-02). A scope that is neither
 `read` nor a cell of the table grants nothing. New keys are granted feeds; a
 request cannot ask for `read`.
@@ -106,9 +106,7 @@ request cannot ask for `read`.
 | Fires | `GET /api/v1/rfs/fdr` — fire danger ratings and total fire bans by district | `fires:live` |
 | Weather warnings | `GET /api/v1/bom/warnings` | `warnings:live` |
 | Ambulance | `GET /api/v1/act-ambulance/incidents` | `ambulance:live` |
-| Power outages | `GET /api/v1/endeavour/{current,maintenance,future,planned}` · `/endeavour/current/all` · `/endeavour/future/all` · `/endeavour/postcodes` | `outages:live` |
-| Power outages | `GET /api/v1/essential/{outages,planned,future}` · `/essential/outages/current` · `/essential/outages/raw` | `outages:live` |
-| Power outages | `GET /api/v1/ausgrid/outages` · `/ausgrid/stats` | `outages:live` |
+| Power outages | `GET /api/v1/outages` — every electricity distributor, one feed ([below](#outages)) | `outages:live` |
 | Road hazards | `GET /api/v1/traffic/{incidents,roadwork,flood,fire,majorevent,alpine,lga}` ([below](#roads)) and each one's `/raw` · `/traffic/lga-incidents` · `/traffic/all-feeds` | `roads:live` |
 | Public transport | `GET /api/v1/transport/{vehicles,lines,stops,alerts}` · `/transport/shape/{id}` · `/transport/trip/{date}/{tripId}/{instance}` · `/transport/departures/{stopId}` | `transport:live` |
 | Aircraft | `GET /api/v1/adsb/aircraft` · `/adsb/trails` · `/adsb/photo/{hex}` | `aircraft:live` |
@@ -118,8 +116,8 @@ request cannot ask for `read`.
 | Beaches & sharks | `GET /api/v1/beachwatch` · `/beachsafe` · `/beachsafe/beach/{slug}` · `/dorsal/reports` | `beaches:live` |
 | Pager | `GET /api/v1/pager/hits` | `pager:live` |
 | Radio summaries | `GET /api/v1/summaries` · `/summaries/latest` | `summaries:history` |
-| History | `GET /api/v1/data/history` · `/data/history/incident/{source}/{source_id}` | the history of at least one stored feed (`*:history`) — see [Stored history](#stored-history) |
-| History | `GET /api/v1/data/history/filters` | none — public |
+| History | `GET /api/v1/history` · `/history/incident/{source}/{source_id}` | the history of at least one stored feed (`*:history`) — see [Stored history](#stored-history) |
+| History | `GET /api/v1/history/filters` | none — public |
 | Reference | `GET /api/v1/agency/extended` · `/agency/extended/{slug}` | none — public |
 | Service | `GET /api/v1/health` · `/api/v1/status` | none — public |
 | — | `GET /api/v1/openapi.json` | any valid key |
@@ -130,17 +128,16 @@ not readable by a key in the feed form: the per-agency fire incident and
 warning feeds (`/api/rfs/incidents`, `/api/qld-fire/incidents` and `/warnings`,
 `/api/vic-emergency/events`, `/api/nt-fire/incidents`,
 `/api/wa-emergency/incidents` and `/warnings`, `/api/sa-fire/cfs` and `/mfs`),
-which this site's map and the Discord bot read — keys read them merged, at
-`/api/v1/fires` — boundaries (`/api/boundaries/…`, the council names included),
+and each distributor's outage routes (`/api/endeavour/…`, `/api/essential/…`,
+`/api/ausgrid/…`), which this site's map and live page and the Discord bot
+read — keys read them merged, at `/api/v1/fires` and `/api/v1/outages` —
+boundaries (`/api/boundaries/…`, the council names included),
 the radio site list, reception transcripts, and the camera and news routes
 (`/api/traffic/cameras`, `/api/qld/…`, `/api/aviation/…`,
 `/api/centralwatch/…`, `/api/news/…`), which no key reads at all.
 
-A few old paths have no `/api/v1/` twin because another endpoint already
-answers the same thing: `/api/endeavour/current/raw` and `/future/raw` (use
-`/endeavour/current/all` and `/future/all`), `/api/essential/outages/future`
-(use `/essential/future`) and `/api/beachsafe/details`, which is always empty
-(use `/beachsafe/beach/{slug}`). They go when the old paths are retired.
+`/api/beachsafe/details` has no `/api/v1/` twin: it is always empty (use
+`/beachsafe/beach/{slug}`), and it goes when the old paths are retired.
 
 ### Roads
 
@@ -201,11 +198,43 @@ server last read it (`updated_at`, `null` if it has not yet) — so a service
 that is down shows as missing, not as having no fires. Records from NT Fire and
 Rescue are theirs: credit NTFRS if you republish them.
 
+### Outages
+
+`GET /api/v1/outages` is every electricity distributor's outages in one GeoJSON
+FeatureCollection — Endeavour Energy, Essential Energy and Ausgrid, all in NSW —
+unplanned and planned, now and to come, each record in the same shape:
+
+| Property | |
+|---|---|
+| `id` | The distributor's own id; unique with `source` |
+| `source` | What stored history files it under, so `/history?source=…&source_id=<id>` finds its past: `endeavour_current` (unplanned) or `endeavour_planned`; `essential_current` (unplanned), `essential_planned` (planned, under way) or `essential_future` (to come); `ausgrid` |
+| `distributor` | `endeavour`, `essential` or `ausgrid` |
+| `state` | `NSW` |
+| `kind` | `unplanned` (a fault) or `planned` (scheduled work) |
+| `status` | `active` — the power is off now (every unplanned outage, and planned work under way) — or `scheduled`, planned work not yet started |
+| `area` | The suburb or locality as the distributor names it; empty when it gives none |
+| `customers_affected` | Customers without power; 0 when not given |
+| `cause` | As the distributor gives it; empty when not given |
+| `start_at`, `restore_at`, `updated_at` | When the power went or goes off, when it is expected back, and the distributor's last update — ISO 8601 UTC, or `null` when not given or not readable (then `details` has it as written) |
+| `polygons` | The outage area's outline, outer rings of `[longitude, latitude]`; empty when the distributor gives none (Essential Energy gives one) |
+| `details` | The distributor's own extra fields under their own names (Endeavour Energy `streets`, `postcode` and its own `status` wording; Essential Energy `title`) |
+
+The geometry is the distributor's marker, or `null` when it gives no position.
+Essential Energy writes its times with no zone; they are NSW time and are read
+as Sydney time. Filters, each a comma list in any case: `distributor=`,
+`kind=` and `status=` (`status=active` for the power off now); an unknown value
+is a `400 validation_failed` naming it. The collection also carries `sources`,
+one entry per distributor asked for, with how many outages it gave (after the
+filters) and when this server last read all of its feeds (`updated_at`, `null`
+if one has not been read yet). Ausgrid's outage map service stopped answering,
+so it is not being read for now: it gives no outages and its `updated_at` is
+`null`.
+
 ### Stored history
 
-`/data/history` serves what this server stored from each source over time —
+`/history` serves what this server stored from each source over time —
 by default one record per incident, its latest, newest first — and
-`/data/history/incident/{source}/{source_id}` every stored snapshot of one
+`/history/incident/{source}/{source_id}` every stored snapshot of one
 incident. Records carry the archived source they came from (`source`), and a
 key reads an archived source when it holds that feed's history:
 
@@ -222,7 +251,10 @@ key reads an archived source when it holds that feed's history:
 So `fires:history` reads the stored history of every fire service and the QFD
 and DFES warnings, but not the BOM's (`bom_land`). Without `?source=`, a key's answer holds only the sources it
 covers; naming one it does not is a `403 api_key_scope_forbidden` that says
-which. People's own reports (`user_incident`) are never readable through a key.
+which. `?feed=fires,roads` names feeds of this table instead — every archived
+source of each; with `?source=` too, the sources named must be in those feeds
+(`400 validation_failed` otherwise, and for a feed the table does not have);
+a feed whose history the key does not hold is a `403` naming it. People's own reports (`user_incident`) are never readable through a key.
 Because the answer depends on the key, it comes with
 `Cache-Control: private, no-store`. In the reference these endpoints list
 `*:history` as their `x-scopes`: the history of any feed in the table above
@@ -234,14 +266,26 @@ to 10,000. `total` is the number of matching records, or 0 when they could not
 be counted in time, and is not computed for a page fetched by cursor. A page
 that some part of the archive did not answer in time is not served: it is a
 `503 service_unavailable` naming the tables in `details.failed_tables`, so a
-short page never reads as the whole answer. `/data/history/filters` (public)
+short page never reads as the whole answer. `/history/filters` (public)
 lists the sources, categories, statuses and states there are to filter by.
+
+These were `/api/v1/data/history…` at first (the v1 twin of
+`/api/data/history`, which keeps its name). That old v1 name still answers, for
+this site's own pages until they move, and is not in the reference; use
+`/history`.
 
 ## Versions
 
 `/api/v1/` is the public data API. Within v1 a change only adds: new endpoints,
 new fields, new optional parameters. Removing or renaming something, or
 changing what a field means, is a new version.
+
+Before v1 had any outside users (2026-11-02), its shape was still being
+settled, and some of it changed: the per-agency fire feeds, then each
+distributor's outage routes, were merged into `/api/v1/fires` and
+`/api/v1/outages` and left v1; the camera and news routes left it;
+`/traffic/works` became part of the feed for each record's kind; and
+`/data/history` became `/history`.
 
 Each v1 endpoint is also still served at its original `/api/…` path, by the
 same handler. The old path answers exactly as it always did — same body, same
@@ -287,7 +331,8 @@ names, and v1 does not rename them.
 an ISO 8601 timestamp (with its offset), unix seconds, or text for display
 (`updated`, `issued`). Where a record has both, the ISO field (`updatedISO`,
 `acq_datetime`) is the one to compute with. Times this API writes itself —
-stored history's `fetched_at_iso` and `last_seen_iso`, the filters' date range —
+stored history's `fetched_at_iso` and `last_seen_iso`, the filters' date range,
+every time in `/fires` and `/outages` —
 are ISO 8601 in UTC (`…Z`) on `/api/v1/`. (The old paths write those as Sydney
 wall-clock time with no offset, and still do.)
 
