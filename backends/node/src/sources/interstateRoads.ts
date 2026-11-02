@@ -377,8 +377,19 @@ export function qldRecords(data: unknown, now = Date.now()): TrafficFeature[] {
 // SA — Department for Infrastructure and Transport
 // ---------------------------------------------------------------------------
 
-/** Open data: roadworks (and a few incidents) across SA. Pages of 1,000. */
+/**
+ * Open data: roadworks (and a few incidents) across SA. Pages of 1,000.
+ *
+ * The layer is reloaded whole every minute or so, and each load numbers its
+ * records afresh (ROADWORKS_AND_INCIDENTS_ID, GIS_LINK_ID, ESRI_OID) in an
+ * order of its own — seen 2026-11-02: two loads 27 seconds apart, every id
+ * new, every record the same. So a record is known by what it says
+ * (saWorksRecords' `idFrom: 'content'`), and the pages are read in an order
+ * of what the records say (SA_ROADWORKS_ORDER), so a reload between two
+ * pages does not move records across the page boundary.
+ */
 export const SA_ROADWORKS_URL = 'https://maps.sa.gov.au/arcgis/rest/services/DPTIExtTransport/TrafficSAOpenData/MapServer/0/query';
+export const SA_ROADWORKS_ORDER = 'START_DATE,LATITUDE,LONGITUDE,REC_TYPE,LOCAL_ROAD,SIDE_STREET,SUBURB,DESCRIPTION,END_DATE';
 /** Open data: current incidents. */
 export const SA_INCIDENTS_URL =
   'https://dit-cms-prod.geohub.sa.gov.au/arcgis/rest/services/TrafficSATime_OpenData/TrafficSATime_OpenData/MapServer/0/query';
@@ -420,11 +431,51 @@ async function arcgisFeatures(base: string, extra: Record<string, string> = {}, 
 }
 
 /** SA's roadworks and incidents layers (the same fields, in either case). */
-export function saWorksRecords(features: readonly Obj[], now = Date.now()): TrafficFeature[] {
-  const out: TrafficFeature[] = [];
-  for (const f of features) {
+/**
+ * What a roadworks-layer record says about where and what it is — not its
+ * end, lanes or speed limit, which SA may change while the works go on — as
+ * the base of an id that survives SA's reloads.
+ */
+const SA_IDENTITY = ['rec_type', 'latitude', 'longitude', 'start_date', 'local_road', 'side_street', 'suburb', 'traffic_dir', 'description'];
+/** Numbers SA reissues on every load: never part of an id or of a record's content. */
+const SA_RELOAD_NUMBERS = new Set(['roadworks_and_incidents_id', 'gis_link_id', 'esri_oid', 'objectid']);
+
+/**
+ * Ids for the roadworks layer, one per feature, from what each says. Records
+ * alike in SA_IDENTITY (a handful — the same works listed twice, or differing
+ * only in their end) are told apart by the rest of what they say, in a fixed
+ * order, as `~2`, `~3`.
+ */
+export function saContentIds(features: readonly Obj[]): string[] {
+  const rows = features.map((f) => {
     const a = obj(f['attributes']);
-    const id = str(attr(a, 'roadworks_and_incidents_id')) || str(attr(a, 'incident_id'));
+    const all = Object.keys(a)
+      .filter((k) => !SA_RELOAD_NUMBERS.has(k.toLowerCase()))
+      .sort((x, y) => x.toLowerCase().localeCompare(y.toLowerCase()))
+      .map((k) => `${k.toLowerCase()}=${str(a[k])}`)
+      .join('|');
+    return { base: shortHash(SA_IDENTITY.map((k) => str(attr(a, k))).join('|')), all };
+  });
+  const groups = new Map<string, number[]>();
+  rows.forEach((r, i) => (groups.get(r.base) ?? groups.set(r.base, []).get(r.base)!).push(i));
+  const ids: string[] = new Array(features.length);
+  for (const [base, idx] of groups) {
+    idx.sort((x, y) => (rows[x]!.all < rows[y]!.all ? -1 : rows[x]!.all > rows[y]!.all ? 1 : 0));
+    idx.forEach((i, n) => (ids[i] = n === 0 ? `rw:${base}` : `rw:${base}~${n + 1}`));
+  }
+  return ids;
+}
+
+export function saWorksRecords(
+  features: readonly Obj[],
+  now = Date.now(),
+  idFrom: 'field' | 'content' = 'field',
+): TrafficFeature[] {
+  const out: TrafficFeature[] = [];
+  const contentIds = idFrom === 'content' ? saContentIds(features) : null;
+  for (const [i, f] of features.entries()) {
+    const a = obj(f['attributes']);
+    const id = contentIds ? contentIds[i]! : str(attr(a, 'roadworks_and_incidents_id')) || str(attr(a, 'incident_id'));
     const lat = num(attr(a, 'latitude')) ?? num(obj(f['geometry'])['y']);
     const lon = num(attr(a, 'longitude')) ?? num(obj(f['geometry'])['x']);
     if (!id || lat === null || lon === null) continue;
@@ -783,7 +834,15 @@ export function fetchQldRoads(): Promise<TrafficSnapshot> {
 
 export function fetchSaRoads(): Promise<TrafficSnapshot> {
   return collectParts('SA', [
-    ['roadworks', async () => saWorksRecords(await arcgisFeatures(SA_ROADWORKS_URL, { returnGeometry: 'false' }))],
+    [
+      'roadworks',
+      async () =>
+        saWorksRecords(
+          await arcgisFeatures(SA_ROADWORKS_URL, { returnGeometry: 'false', orderByFields: SA_ROADWORKS_ORDER }),
+          Date.now(),
+          'content',
+        ),
+    ],
     ['incidents', async () => saWorksRecords(await arcgisFeatures(SA_INCIDENTS_URL, { returnGeometry: 'false' }))],
     ['closures', async () => saClosureRecords(await arcgisFeatures(SA_CLOSURES_URL, {}, 2000, 3))],
     ['outback', async () => saOutbackRecords(await arcgisFeatures(SA_OUTBACK_URL, { where: 'CODE<>1' }, 1000, 3))],

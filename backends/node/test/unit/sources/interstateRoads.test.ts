@@ -196,6 +196,34 @@ describe('SA', () => {
     expect(saWorksRecords([works({ END_DATE: NOW - 1000 })], NOW)).toEqual([]);
   });
 
+  it("the roadworks layer: ids from what a record says, the same across SA's reloads", () => {
+    // SA reloads the layer every minute or so, numbering every record afresh and in another order.
+    const load1 = [
+      works({ ROADWORKS_AND_INCIDENTS_ID: '3441713417', GIS_LINK_ID: 99993441713417, ESRI_OID: 1 }),
+      works({ ROADWORKS_AND_INCIDENTS_ID: '3441713418', GIS_LINK_ID: 99993441713418, ESRI_OID: 2, SUBURB: 'SHEIDOW PARK', LATITUDE: -35.08 }),
+    ];
+    const load2 = [
+      works({ ROADWORKS_AND_INCIDENTS_ID: '3441716554', GIS_LINK_ID: 99993441716554, ESRI_OID: 7, SUBURB: 'SHEIDOW PARK', LATITUDE: -35.08 }),
+      works({ ROADWORKS_AND_INCIDENTS_ID: '3441716553', GIS_LINK_ID: 99993441716553, ESRI_OID: 8 }),
+    ];
+    const ids = (load: typeof load1) => saWorksRecords(load, NOW, 'content').map((r) => r.properties.id);
+    const first = ids(load1);
+    expect(first[0]).toMatch(/^sa:rw:[0-9a-f]{16}$/);
+    expect(new Set(first).size).toBe(2);
+    expect(ids(load2)).toEqual([first[1], first[0]]);
+    // An extended end, or a change of lanes or speed, is the same works.
+    expect(ids([works({ ROADWORKS_AND_INCIDENTS_ID: '9', END_DATE: NOW + 9 * DAY, NO_LANES_CLOSED: 2, SPEED_LIMIT: 25 })])).toEqual([first[0]]);
+  });
+
+  it('records alike in where and what are told apart by the rest, whatever order they come in', () => {
+    const a = works({ ROADWORKS_AND_INCIDENTS_ID: '1', END_DATE: NOW + 2 * DAY });
+    const b = works({ ROADWORKS_AND_INCIDENTS_ID: '2', END_DATE: NOW + 3 * DAY });
+    const one = saWorksRecords([a, b], NOW, 'content').map((r) => r.properties.id);
+    expect(one[1]).toBe(`${one[0]}~2`);
+    const swapped = saWorksRecords([{ attributes: { ...b.attributes, ROADWORKS_AND_INCIDENTS_ID: '8' } }, { attributes: { ...a.attributes, ROADWORKS_AND_INCIDENTS_ID: '9' } }], NOW, 'content');
+    expect(swapped.map((r) => r.properties.id)).toEqual([one[1], one[0]]);
+  });
+
   it("closures and detours: their line, the closure's own words, and only while in force", () => {
     const geometry = { paths: [[[138.49, -34.84], [138.495, -34.845], [138.5, -34.85]]] };
     const out = saClosureRecords(
