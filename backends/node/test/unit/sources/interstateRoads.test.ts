@@ -24,6 +24,7 @@ import {
   qldRecords,
   roadRecord,
   saClosureRecords,
+  saJobRecords,
   saOutbackRecords,
   saWorksRecords,
   vicRecords,
@@ -196,32 +197,84 @@ describe('SA', () => {
     expect(saWorksRecords([works({ END_DATE: NOW - 1000 })], NOW)).toEqual([]);
   });
 
-  it("the roadworks layer: ids from what a record says, the same across SA's reloads", () => {
-    // SA reloads the layer every minute or so, numbering every record afresh and in another order.
-    const load1 = [
-      works({ ROADWORKS_AND_INCIDENTS_ID: '3441713417', GIS_LINK_ID: 99993441713417, ESRI_OID: 1 }),
-      works({ ROADWORKS_AND_INCIDENTS_ID: '3441713418', GIS_LINK_ID: 99993441713418, ESRI_OID: 2, SUBURB: 'SHEIDOW PARK', LATITUDE: -35.08 }),
-    ];
-    const load2 = [
-      works({ ROADWORKS_AND_INCIDENTS_ID: '3441716554', GIS_LINK_ID: 99993441716554, ESRI_OID: 7, SUBURB: 'SHEIDOW PARK', LATITUDE: -35.08 }),
-      works({ ROADWORKS_AND_INCIDENTS_ID: '3441716553', GIS_LINK_ID: 99993441716553, ESRI_OID: 8 }),
-    ];
-    const ids = (load: typeof load1) => saWorksRecords(load, NOW, 'content').map((r) => r.properties.id);
-    const first = ids(load1);
-    expect(first[0]).toMatch(/^sa:rw:[0-9a-f]{16}$/);
-    expect(new Set(first).size).toBe(2);
-    expect(ids(load2)).toEqual([first[1], first[0]]);
-    // An extended end, or a change of lanes or speed, is the same works.
-    expect(ids([works({ ROADWORKS_AND_INCIDENTS_ID: '9', END_DATE: NOW + 9 * DAY, NO_LANES_CLOSED: 2, SPEED_LIMIT: 25 })])).toEqual([first[0]]);
+  it('the incidents layer: its direction list and "No Restriction" read as words', () => {
+    const [r] = saWorksRecords(
+      [works({ REC_TYPE: 'INCIDENT', TRAFFIC_DIR: '[{"direction": "SOUTHBOUND", "lanes_closed": 0}, {"direction": "NORTHBOUND", "lanes_closed": 0}]', NO_LANES_CLOSED: null, SPEED_LIMIT: 'No Restriction' })],
+      NOW,
+    );
+    expect(r!.properties).toMatchObject({ affectedDirection: 'Southbound, Northbound', speedLimit: '', otherAdvice: '' });
   });
 
-  it('records alike in where and what are told apart by the rest, whatever order they come in', () => {
-    const a = works({ ROADWORKS_AND_INCIDENTS_ID: '1', END_DATE: NOW + 2 * DAY });
-    const b = works({ ROADWORKS_AND_INCIDENTS_ID: '2', END_DATE: NOW + 3 * DAY });
-    const one = saWorksRecords([a, b], NOW, 'content').map((r) => r.properties.id);
-    expect(one[1]).toBe(`${one[0]}~2`);
-    const swapped = saWorksRecords([{ attributes: { ...b.attributes, ROADWORKS_AND_INCIDENTS_ID: '8' } }, { attributes: { ...a.attributes, ROADWORKS_AND_INCIDENTS_ID: '9' } }], NOW, 'content');
-    expect(swapped.map((r) => r.properties.id)).toEqual([one[1], one[0]]);
+  // The roadworks layer lists a job site by site, as SA sends it: lanes and speed as words.
+  const site = (over: Record<string, unknown> = {}) =>
+    works({ ROADWORKS_AND_INCIDENTS_ID: '3441713417', GIS_LINK_ID: 99993441713417, ESRI_OID: 1, NO_LANES_CLOSED: 'Shuttle Flow', SPEED_LIMIT: '40', ...over });
+  const hallett = site({ SIDE_STREET: 'Patpa Dr', LATITUDE: -35.07, LONGITUDE: 138.5 });
+  const middle = site({ SIDE_STREET: 'Zwerner Dr', LATITUDE: -35.08, LONGITUDE: 138.51, END_DATE: NOW + 2 * DAY });
+  const sheidow = site({ SIDE_STREET: 'Majors Rd', SUBURB: 'SHEIDOW PARK', LATITUDE: -35.09, LONGITUDE: 138.52, NO_LANES_CLOSED: 'One Lane', SPEED_LIMIT: '60' });
+
+  it('the roadworks layer: one record per job, pinned at its middle site, its ends named', () => {
+    const out = saJobRecords([hallett, middle, sheidow], NOW);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.geometry.coordinates).toEqual([138.51, -35.08]);
+    expect(out[0]!.properties).toMatchObject({
+      type: 'Roadwork', mainCategory: '24hr Roadworks', incidentType: 'ROADWORK', incidentKind: 'Planned', title: 'Line Marking & Painting',
+      roads: 'Lonsdale Road, Sheidow Park to Hallett Cove', crossStreet: 'Majors Rd', secondLocation: 'Patpa Dr', locationQualifier: 'between',
+      otherAdvice: '3 sites over 3 km. Shuttle flow at 2, one lane closed at 1.', affectedDirection: 'Both Directions', speedLimit: '40',
+      start: new Date(NOW - DAY).toISOString(), end: new Date(NOW + 2 * DAY).toISOString(), state: 'SA', source: 'traffic_sa',
+    });
+    expect(out[0]!.properties.id).toMatch(/^sa:job:[0-9a-f]{16}$/);
+    expect(out[0]!.properties.sites).toEqual([
+      { lat: -35.09, lon: 138.52, crossStreet: 'Majors Rd', suburb: 'Sheidow Park', direction: 'Both Directions', lanes: 'one lane closed', speedLimit: '60' },
+      { lat: -35.08, lon: 138.51, crossStreet: 'Zwerner Dr', suburb: 'Hallett Cove', direction: 'Both Directions', lanes: 'shuttle flow', speedLimit: '40' },
+      { lat: -35.07, lon: 138.5, crossStreet: 'Patpa Dr', suburb: 'Hallett Cove', direction: 'Both Directions', lanes: 'shuttle flow', speedLimit: '40' },
+    ]);
+  });
+
+  it("a job keeps its id across SA's reloads, a moved end, changed lanes and an added site", () => {
+    const [first] = saJobRecords([hallett, middle, sheidow], NOW);
+    // Reloaded: every number reissued, another order; the end moved out, a site's lanes changed, a site added.
+    const reload = (s: ReturnType<typeof site>, n: number, over: Record<string, unknown> = {}) => ({
+      attributes: { ...s.attributes, ROADWORKS_AND_INCIDENTS_ID: `34417165${n}`, GIS_LINK_ID: 9999344171650 + n, ESRI_OID: 70 + n, ...over },
+    });
+    const [again] = saJobRecords(
+      [reload(sheidow, 1), reload(hallett, 2, { END_DATE: NOW + 9 * DAY }), reload(middle, 3, { NO_LANES_CLOSED: 'Contraflow' }), site({ SIDE_STREET: 'Lonsdale Hwy', LATITUDE: -35.1 })],
+      NOW,
+    );
+    expect(again!.properties.id).toBe(first!.properties.id);
+    expect(again!.properties.sites).toHaveLength(4);
+    expect(again!.properties.end).toBe(new Date(NOW + 9 * DAY).toISOString());
+    // Another start is another job.
+    expect(saJobRecords([site({ START_DATE: NOW - 2 * DAY })], NOW)[0]!.properties.id).not.toBe(first!.properties.id);
+  });
+
+  it('sites that restrict nothing, or have ended, are left out, and a job with none left goes', () => {
+    const free = { NO_LANES_CLOSED: 'None', SPEED_LIMIT: 'No Restriction' };
+    const out = saJobRecords(
+      [
+        hallett,
+        site({ ...free, SIDE_STREET: 'Free St', LATITUDE: -35.2 }),
+        site({ SIDE_STREET: 'Done St', LATITUDE: -35.3, END_DATE: NOW - 1000 }),
+        site({ ...free, DESCRIPTION: 'Mowing', SIDE_STREET: 'Grass Rd' }),
+        site({ NO_LANES_CLOSED: 'None', DESCRIPTION: 'Vms Trailer', SIDE_STREET: 'Sign Rd' }),
+      ],
+      NOW,
+    );
+    expect(out.map((r) => [r.properties.title, r.properties.sites!.map((s) => s.crossStreet), r.properties.otherAdvice])).toEqual([
+      ['Line Marking & Painting', ['Patpa Dr'], 'Shuttle flow'],
+      ['Vms Trailer', ['Sign Rd'], '40 km/h limit'],
+    ]);
+  });
+
+  it("the layer's incidents stay records of their own, by incident number", () => {
+    const out = saJobRecords(
+      [hallett, site({ REC_TYPE: 'INCIDENT', INCIDENT_ID: 87254, DESCRIPTION: 'Ferry Closed', LOCAL_ROAD: 'Birdsville Track', SUBURB: null, NO_LANES_CLOSED: null, SPEED_LIMIT: null, END_DATE: null })],
+      NOW,
+    );
+    expect(out.map((r) => [r.properties.id.replace(/[0-9a-f]{16}$/, '…'), r.properties.type, r.properties.title])).toEqual([
+      ['sa:job:…', 'Roadwork', 'Line Marking & Painting'],
+      ['sa:incident:87254', 'Incident', 'Ferry Closed'],
+    ]);
+    expect(out[1]!.properties.sites).toBeUndefined();
   });
 
   it("closures and detours: their line, the closure's own words, and only while in force", () => {
@@ -435,6 +488,18 @@ describe('fetching', () => {
     const planUrls = fetchJsonMock.mock.calls.map((c) => String(c[0])).filter((u) => u.includes('Road_Closures_public_view'));
     expect(planUrls).toHaveLength(2);
     expect(planUrls[0]).toContain('outSR=4326');
+  });
+
+  it("SA reads its roadworks layer in an order of what the records say, one record per job", async () => {
+    const { fetchSaRoads, SA_ROADWORKS_URL } = await import('../../../src/sources/interstateRoads.js');
+    const site = (side: string, lat: number) => ({
+      attributes: { REC_TYPE: '24HR ROADWORKS', DESCRIPTION: 'Asphalt Works', LOCAL_ROAD: 'Barrier Highway', SUBURB: 'BURRA', SIDE_STREET: side, LATITUDE: lat, LONGITUDE: 138.9, START_DATE: Date.now() - DAY, END_DATE: Date.now() + DAY, NO_LANES_CLOSED: 'Shuttle Flow', SPEED_LIMIT: '40' },
+    });
+    fetchJsonMock.mockImplementation(async (url: string) => (url.startsWith(SA_ROADWORKS_URL) ? { features: [site('A St', -33.6), site('B St', -33.7)] } : { features: [] }));
+    const snap = await fetchSaRoads();
+    expect(snap.features.map((f) => [f.properties.id.replace(/[0-9a-f]{16}$/, '…'), f.properties.sites?.length])).toEqual([['sa:job:…', 2]]);
+    const url = String(fetchJsonMock.mock.calls.find((c) => String(c[0]).startsWith(SA_ROADWORKS_URL))![0]);
+    expect(new URL(url).searchParams.get('orderByFields')).toMatch(/^START_DATE,/);
   });
 
   it('VIC falls back to the Live Traffic aggregate while Transport Victoria refuses the key', async () => {

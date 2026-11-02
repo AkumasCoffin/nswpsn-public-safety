@@ -162,6 +162,15 @@ written as text. `/traffic/fire`, `/traffic/alpine` and `/traffic/lga` are
 NSW's alone. There used to be a `/traffic/works`, Live Traffic's re-share of
 the other states; it is gone, its records now on the feed for their kind.
 
+SA lists its roadworks site by site, a record for each cross street along a
+job. Here each job is one record, pinned at the site nearest its middle: its
+`roads` names the suburbs at either end ("Barrier Highway, Paratoo to
+Cockburn"), its `otherAdvice` says how many sites over what distance and what
+they do to traffic ("59 sites over 313 km. Shuttle flow at each."), and
+`sites` lists every one. Sites that restrict nothing — no lane closed and no
+speed limit — are left out. A job keeps its `id` while SA adds sites to it or
+moves its end, which SA does as the works go on.
+
 ### Fires
 
 `GET /api/v1/fires` is every fire service's incidents in one GeoJSON

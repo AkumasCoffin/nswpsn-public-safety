@@ -146,7 +146,9 @@ const TrafficHazards = featureCollection(
       adviceB: z.string().describe(PROSE),
       roads: z
         .string()
-        .describe('The affected roads, each as "street suburb", separated by "; " (or the feed\'s own text, where it gives the roads as text)'),
+        .describe(
+          'The affected roads, each as "street suburb", separated by "; " (or the feed\'s own text, where it gives the roads as text); an SA job over several suburbs as "road, suburb to suburb", the suburbs at either end',
+        ),
       affectedDirection: z
         .string()
         .describe(`${FIRST_ROAD}: its affectedDirection, else its conditionTendency — empty in the hazard feeds as currently published`),
@@ -199,6 +201,22 @@ const TrafficHazards = featureCollection(
       credit: z
         .string()
         .describe("The attribution its publisher asks for — show it with the record. The QLD, SA and VIC data is published under CC BY 4.0"),
+      sites: z
+        .array(
+          z.object({
+            lat: z.number(),
+            lon: z.number(),
+            crossStreet: z.string(),
+            suburb: z.string(),
+            direction: z.string(),
+            lanes: z.string().describe('What the site does to the lanes, in words ("shuttle flow", "one lane closed"); empty for nothing'),
+            speedLimit: z.string().describe('km/h; empty for no limit'),
+          }),
+        )
+        .optional()
+        .describe(
+          "SA's roadworks only. SA lists works site by site, a record for each cross street along a job; here each job is one record, pinned at the site nearest its middle, and this lists every site. Sites that restrict nothing (no lane closed, no speed limit) are left out",
+        ),
     }),
   ),
 ).meta({ id: 'TrafficHazards' });

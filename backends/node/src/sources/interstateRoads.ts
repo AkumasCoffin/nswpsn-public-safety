@@ -47,6 +47,7 @@ import { encodePolyline } from './shared/polyline.js';
 import {
   fetchTrafficWorks,
   worksArchiveSource,
+  type RoadSite,
   type RoadSource,
   type RoadState,
   type TrafficFeature,
@@ -119,6 +120,7 @@ export interface RoadInput {
   state: RoadState;
   source: RoadSource;
   credit: string;
+  sites?: RoadSite[];
 }
 
 /** A record in the Live Traffic shape. */
@@ -174,6 +176,7 @@ export function roadRecord(r: RoadInput): TrafficFeature {
       state: r.state,
       source: r.source,
       credit: r.credit,
+      ...(r.sites ? { sites: r.sites } : {}),
     },
   };
 }
@@ -380,13 +383,15 @@ export function qldRecords(data: unknown, now = Date.now()): TrafficFeature[] {
 /**
  * Open data: roadworks (and a few incidents) across SA. Pages of 1,000.
  *
- * The layer is reloaded whole every minute or so, and each load numbers its
- * records afresh (ROADWORKS_AND_INCIDENTS_ID, GIS_LINK_ID, ESRI_OID) in an
- * order of its own — seen 2026-11-02: two loads 27 seconds apart, every id
- * new, every record the same. So a record is known by what it says
- * (saWorksRecords' `idFrom: 'content'`), and the pages are read in an order
- * of what the records say (SA_ROADWORKS_ORDER), so a reload between two
- * pages does not move records across the page boundary.
+ * The layer lists works site by site — a record for each cross street along
+ * a job (seen 2026-11-02: 1,481 records, 499 jobs, one job 59 sites over
+ * 314 km) — so saJobRecords makes one record of each job. It is reloaded
+ * whole every minute or so, and each load numbers its records afresh
+ * (ROADWORKS_AND_INCIDENTS_ID, GIS_LINK_ID, ESRI_OID) in an order of its own
+ * — two loads 27 seconds apart, every id new, every record the same — so
+ * those numbers are never an id, and the pages are read in an order of what
+ * the records say (SA_ROADWORKS_ORDER), so a reload between two pages does
+ * not move records across the page boundary.
  */
 export const SA_ROADWORKS_URL = 'https://maps.sa.gov.au/arcgis/rest/services/DPTIExtTransport/TrafficSAOpenData/MapServer/0/query';
 export const SA_ROADWORKS_ORDER = 'START_DATE,LATITUDE,LONGITUDE,REC_TYPE,LOCAL_ROAD,SIDE_STREET,SUBURB,DESCRIPTION,END_DATE';
@@ -430,60 +435,73 @@ async function arcgisFeatures(base: string, extra: Record<string, string> = {}, 
   return out;
 }
 
-/** SA's roadworks and incidents layers (the same fields, in either case). */
-/**
- * What a roadworks-layer record says about where and what it is — not its
- * end, lanes or speed limit, which SA may change while the works go on — as
- * the base of an id that survives SA's reloads.
- */
-const SA_IDENTITY = ['rec_type', 'latitude', 'longitude', 'start_date', 'local_road', 'side_street', 'suburb', 'traffic_dir', 'description'];
-/** Numbers SA reissues on every load: never part of an id or of a record's content. */
-const SA_RELOAD_NUMBERS = new Set(['roadworks_and_incidents_id', 'gis_link_id', 'esri_oid', 'objectid']);
+/** SA's words for a site's lanes, as advice. */
+const SA_LANES: Readonly<Record<string, string>> = {
+  'shuttle flow': 'shuttle flow',
+  'one lane': 'one lane closed',
+  'two lanes': 'two lanes closed',
+  'three lanes': 'three lanes closed',
+  contraflow: 'contraflow',
+  closure: 'road closed',
+  'lateral shift': 'lanes shifted',
+  'slip lane': 'slip lane closed',
+  'bike lane': 'bike lane closed',
+};
 
-/**
- * Ids for the roadworks layer, one per feature, from what each says. Records
- * alike in SA_IDENTITY (a handful — the same works listed twice, or differing
- * only in their end) are told apart by the rest of what they say, in a fixed
- * order, as `~2`, `~3`.
- */
-export function saContentIds(features: readonly Obj[]): string[] {
-  const rows = features.map((f) => {
-    const a = obj(f['attributes']);
-    const all = Object.keys(a)
-      .filter((k) => !SA_RELOAD_NUMBERS.has(k.toLowerCase()))
-      .sort((x, y) => x.toLowerCase().localeCompare(y.toLowerCase()))
-      .map((k) => `${k.toLowerCase()}=${str(a[k])}`)
-      .join('|');
-    return { base: shortHash(SA_IDENTITY.map((k) => str(attr(a, k))).join('|')), all };
-  });
-  const groups = new Map<string, number[]>();
-  rows.forEach((r, i) => (groups.get(r.base) ?? groups.set(r.base, []).get(r.base)!).push(i));
-  const ids: string[] = new Array(features.length);
-  for (const [base, idx] of groups) {
-    idx.sort((x, y) => (rows[x]!.all < rows[y]!.all ? -1 : rows[x]!.all > rows[y]!.all ? 1 : 0));
-    idx.forEach((i, n) => (ids[i] = n === 0 ? `rw:${base}` : `rw:${base}~${n + 1}`));
-  }
-  return ids;
+/** What a site does to the lanes, in words; '' for nothing. A number is lanes closed. */
+function saLanes(v: unknown): string {
+  const n = num(v);
+  if (n !== null) return n > 0 ? `${n} lane${n === 1 ? '' : 's'} closed` : '';
+  const s = str(v).toLowerCase();
+  return s === '' || s === 'none' ? '' : (SA_LANES[s] ?? s);
 }
 
+/** A speed limit in km/h; '' for none ("No Restriction"). */
+function saSpeed(v: unknown): string {
+  const n = num(v);
+  return n !== null && n > 0 ? String(n) : '';
+}
+
+/** "Both Directions", or the incidents layer's list (`[{"direction": "NORTHBOUND", …}]`) as "Northbound, Southbound". */
+function saDirection(v: unknown): string {
+  const s = str(v);
+  if (!s.startsWith('[')) return s;
+  try {
+    const list = JSON.parse(s) as unknown;
+    const dirs = (Array.isArray(list) ? list : []).map((d) => titleCase(str(obj(d)['direction']))).filter(Boolean);
+    return [...new Set(dirs)].join(', ');
+  } catch {
+    return '';
+  }
+}
+
+const sentence = (s: string): string => (s ? s[0]!.toUpperCase() + s.slice(1) : s);
+
+/** Kilometres between two [longitude, latitude] points. */
+function kmBetween(a: readonly number[], b: readonly number[]): number {
+  const rad = Math.PI / 180;
+  const dLat = (b[1]! - a[1]!) * rad;
+  const dLon = (b[0]! - a[0]!) * rad;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a[1]! * rad) * Math.cos(b[1]! * rad) * Math.sin(dLon / 2) ** 2;
+  return 12_742 * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+/** One record per feature: SA's incidents layer, by its own ids (stable: incident number, position and road). */
 export function saWorksRecords(
   features: readonly Obj[],
   now = Date.now(),
-  idFrom: 'field' | 'content' = 'field',
+  idOf: (a: Obj) => string = (a) => str(attr(a, 'roadworks_and_incidents_id')) || str(attr(a, 'incident_id')),
 ): TrafficFeature[] {
   const out: TrafficFeature[] = [];
-  const contentIds = idFrom === 'content' ? saContentIds(features) : null;
-  for (const [i, f] of features.entries()) {
+  for (const f of features) {
     const a = obj(f['attributes']);
-    const id = contentIds ? contentIds[i]! : str(attr(a, 'roadworks_and_incidents_id')) || str(attr(a, 'incident_id'));
+    const id = idOf(a);
     const lat = num(attr(a, 'latitude')) ?? num(obj(f['geometry'])['y']);
     const lon = num(attr(a, 'longitude')) ?? num(obj(f['geometry'])['x']);
     if (!id || lat === null || lon === null) continue;
     if (ended(isoTime(attr(a, 'end_date')), now)) continue;
     const recType = str(attr(a, 'rec_type')).toUpperCase();
     const isWorks = recType.includes('ROADWORK');
-    const lanes = num(attr(a, 'no_lanes_closed'));
-    const dir = str(attr(a, 'traffic_dir'));
     out.push(
       roadRecord({
         id: `sa:${id}`,
@@ -496,9 +514,9 @@ export function saWorksRecords(
         title: htmlToProse(attr(a, 'description')) || titleCase(recType),
         roads: joinText(str(attr(a, 'local_road')), titleCase(str(attr(a, 'suburb')))),
         crossStreet: str(attr(a, 'side_street')),
-        otherAdvice: lanes ? `${lanes} lane${lanes === 1 ? '' : 's'} closed` : '',
-        affectedDirection: dir === '[]' ? '' : dir.replace(/[[\]"]/g, ''),
-        speedLimit: str(attr(a, 'speed_limit')),
+        otherAdvice: sentence(saLanes(attr(a, 'no_lanes_closed'))),
+        affectedDirection: saDirection(attr(a, 'traffic_dir')),
+        speedLimit: saSpeed(attr(a, 'speed_limit')),
         expectedDelay: str(attr(a, 'highest_delay')),
         start: isoTime(attr(a, 'start_date')),
         end: isoTime(attr(a, 'end_date')),
@@ -509,6 +527,134 @@ export function saWorksRecords(
     );
   }
   return out;
+}
+
+/**
+ * What makes sites one job: the same works on the same road from the same
+ * start. Not the end, which SA moves out as the works go on (most of its
+ * 24-hour roadworks, some started months ago, "end" within the month), nor
+ * the lanes or speed limit, which change while they do.
+ */
+const SA_JOB = ['rec_type', 'description', 'local_road', 'start_date'];
+
+const bySite = (x: RoadSite, y: RoadSite): number =>
+  x.lat - y.lat ||
+  x.lon - y.lon ||
+  [x.crossStreet, x.suburb, x.direction, x.lanes, x.speedLimit].join('|').localeCompare([y.crossStreet, y.suburb, y.direction, y.lanes, y.speedLimit].join('|'));
+
+/**
+ * The roadworks layer, one record per job. A site that restricts nothing —
+ * no lane closed and no speed limit (222 of 1,481 on 2026-11-02) — is left
+ * out, and a job with no site left goes with it. A job keeps its id while SA
+ * adds sites, moves its end or changes its lanes. It is pinned at the site
+ * nearest the middle of its sites, its roads name the suburbs at either end,
+ * its advice says how many sites over what distance and what they do to the
+ * lanes, and `sites` lists every one. The layer's few incidents stay records
+ * of their own.
+ */
+export function saJobRecords(features: readonly Obj[], now = Date.now()): TrafficFeature[] {
+  const jobs = new Map<string, { a: Obj; sites: RoadSite[]; ends: string[] }>();
+  const incidents: Obj[] = [];
+  for (const f of features) {
+    const a = obj(f['attributes']);
+    if (!str(attr(a, 'rec_type')).toUpperCase().includes('ROADWORK')) {
+      incidents.push(f);
+      continue;
+    }
+    const lat = num(attr(a, 'latitude'));
+    const lon = num(attr(a, 'longitude'));
+    const end = isoTime(attr(a, 'end_date'));
+    if (lat === null || lon === null || ended(end, now)) continue;
+    const lanes = saLanes(attr(a, 'no_lanes_closed'));
+    const speedLimit = saSpeed(attr(a, 'speed_limit'));
+    if (!lanes && !speedLimit) continue;
+    const key = SA_JOB.map((k) => str(attr(a, k))).join('|');
+    const job = jobs.get(key) ?? jobs.set(key, { a, sites: [], ends: [] }).get(key)!;
+    job.sites.push({
+      lat,
+      lon,
+      crossStreet: str(attr(a, 'side_street')),
+      suburb: titleCase(str(attr(a, 'suburb'))),
+      direction: saDirection(attr(a, 'traffic_dir')),
+      lanes,
+      speedLimit,
+    });
+    job.ends.push(end);
+  }
+
+  const out: TrafficFeature[] = [];
+  for (const [key, { a, sites, ends }] of jobs) {
+    sites.sort(bySite);
+    const at = (s: RoadSite): number[] => [s.lon, s.lat];
+    // Its ends: the two sites furthest apart.
+    let [from, to, span] = [sites[0]!, sites[0]!, 0];
+    for (let i = 0; i < sites.length; i++) {
+      for (let j = i + 1; j < sites.length; j++) {
+        const d = kmBetween(at(sites[i]!), at(sites[j]!));
+        if (d > span) [from, to, span] = [sites[i]!, sites[j]!, d];
+      }
+    }
+    // Its pin: the site nearest the middle.
+    const mid = [sites.reduce((n, s) => n + s.lon, 0) / sites.length, sites.reduce((n, s) => n + s.lat, 0) / sites.length];
+    const pin = sites.reduce((best, s) => (kmBetween(at(s), mid) < kmBetween(at(best), mid) ? s : best));
+
+    const road = str(attr(a, 'local_road'));
+    const suburbs = new Set(sites.map((s) => s.suburb).filter(Boolean));
+    const roads =
+      from.suburb && to.suburb && from.suburb !== to.suburb
+        ? `${road}, ${from.suburb} to ${to.suburb}`
+        : joinText(road, from.suburb || to.suburb || ([...suburbs][0] ?? ''));
+
+    // What each site does: its lanes, else its speed limit (the bot shows no speedLimit).
+    const does = (s: RoadSite): string => s.lanes || `${s.speedLimit} km/h limit`;
+    const counts = new Map<string, number>();
+    for (const s of sites) counts.set(does(s), (counts.get(does(s)) ?? 0) + 1);
+    const said = [...counts]
+      .sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]))
+      .map(([what, n]) => (n === sites.length ? `${what} at each` : `${what} at ${n}`))
+      .join(', ');
+    const advice =
+      sites.length === 1
+        ? sentence(does(sites[0]!))
+        : `${sites.length} sites${span >= 1 ? ` over ${Math.round(span)} km` : ''}. ${sentence(said)}.`;
+
+    const speeds = sites.map((s) => Number(s.speedLimit)).filter((n) => n > 0);
+    const directions = [...new Set(sites.map((s) => s.direction).filter(Boolean))];
+    const known = ends.filter(Boolean).sort();
+    const recType = str(attr(a, 'rec_type')).toUpperCase();
+    out.push(
+      roadRecord({
+        id: `sa:job:${shortHash(key)}`,
+        lon: pin.lon,
+        lat: pin.lat,
+        type: 'Roadwork',
+        mainCategory: titleCase(recType),
+        incidentType: 'ROADWORK',
+        incidentKind: 'Planned',
+        title: htmlToProse(attr(a, 'description')) || titleCase(recType),
+        roads,
+        crossStreet: from.crossStreet,
+        secondLocation: sites.length > 1 ? to.crossStreet : '',
+        locationQualifier: sites.length > 1 && from.crossStreet && to.crossStreet ? 'between' : '',
+        otherAdvice: advice,
+        affectedDirection: directions.length > 1 ? 'Both Directions' : (directions[0] ?? ''),
+        speedLimit: speeds.length ? String(Math.min(...speeds)) : '',
+        start: isoTime(attr(a, 'start_date')),
+        end: known[known.length - 1] ?? '',
+        state: 'SA',
+        source: 'traffic_sa',
+        credit: SA_CREDIT,
+        sites,
+      }),
+    );
+  }
+  // The incidents layer does not carry these (seen: a ferry closed on the
+  // Birdsville Track). Their incident number, else what they say, is their id.
+  const incidentId = (a: Obj): string => {
+    const n = num(attr(a, 'incident_id'));
+    return `incident:${n !== null && n > 0 ? String(n) : shortHash(SA_JOB.map((k) => str(attr(a, k))).join('|'))}`;
+  };
+  return out.concat(saWorksRecords(incidents, now, incidentId));
 }
 
 /** Traffic SA's closures and detours still in force. */
@@ -821,7 +967,7 @@ export async function collectParts(
     }
   });
   if (!anyAnswer) throw firstError instanceof Error ? firstError : new Error(`${state}: every part failed`);
-  // One record per id: SA's roadworks layer carries an incident its incidents layer does too.
+  // One record per id, should two parts ever carry the same record.
   const byId = new Map<string, TrafficFeature>();
   for (const f of features) if (!byId.has(f.properties.id)) byId.set(f.properties.id, f);
   const unique = [...byId.values()];
@@ -837,11 +983,7 @@ export function fetchSaRoads(): Promise<TrafficSnapshot> {
     [
       'roadworks',
       async () =>
-        saWorksRecords(
-          await arcgisFeatures(SA_ROADWORKS_URL, { returnGeometry: 'false', orderByFields: SA_ROADWORKS_ORDER }),
-          Date.now(),
-          'content',
-        ),
+        saJobRecords(await arcgisFeatures(SA_ROADWORKS_URL, { returnGeometry: 'false', orderByFields: SA_ROADWORKS_ORDER })),
     ],
     ['incidents', async () => saWorksRecords(await arcgisFeatures(SA_INCIDENTS_URL, { returnGeometry: 'false' }))],
     ['closures', async () => saClosureRecords(await arcgisFeatures(SA_CLOSURES_URL, {}, 2000, 3))],

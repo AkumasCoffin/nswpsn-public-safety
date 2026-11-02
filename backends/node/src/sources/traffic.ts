@@ -142,7 +142,22 @@ export interface TrafficFeature {
     source: RoadSource;
     /** The attribution its publisher asks for, to show beside it. */
     credit: string;
+    /** A job its publisher lists site by site (SA's roadworks): every site, the record's own place among them. */
+    sites?: RoadSite[];
   };
+}
+
+/** One site of a job listed site by site. */
+export interface RoadSite {
+  lat: number;
+  lon: number;
+  crossStreet: string;
+  suburb: string;
+  direction: string;
+  /** What the site does to the lanes, in words ("shuttle flow", "one lane closed"); '' for nothing. */
+  lanes: string;
+  /** km/h; '' for no limit. */
+  speedLimit: string;
 }
 
 /** The states road records come from. */
