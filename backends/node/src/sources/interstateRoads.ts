@@ -18,8 +18,8 @@
  *        works and events) and its unplanned road closures, on the ACT
  *        Government's ArcGIS.
  *   VIC  Transport Victoria's planned and unplanned road disruption APIs when
- *        VIC_TRANSPORT_API_KEY is set; until then, the Live Traffic aggregate's
- *        VIC records, as before.
+ *        VIC_TRANSPORT_API_KEY is set; until then, or while Transport Victoria
+ *        refuses every request, the Live Traffic aggregate's VIC records.
  *
  * Each record takes the Live Traffic record shape (sources/traffic.ts), with
  * its `state`, its publisher in `source` and the attribution it asks for in
@@ -734,6 +734,7 @@ const _lastGood = new Map<string, { at: number; records: TrafficFeature[] }>();
 export function _resetInterstateMemory(): void {
   _lastGood.clear();
   _vicPlanned = null;
+  _vicOnAggregate = false;
 }
 
 /**
@@ -796,13 +797,32 @@ export function fetchActRoads(): Promise<TrafficSnapshot> {
   ]);
 }
 
-export function fetchVicRoads(): Promise<TrafficSnapshot> {
+/** Whether VIC is being read from the aggregate because the official API refused — logged when it changes. */
+let _vicOnAggregate = false;
+
+export async function fetchVicRoads(): Promise<TrafficSnapshot> {
   const key = config.VIC_TRANSPORT_API_KEY;
   if (!key) return collectParts('VIC', [['aggregate', vicFromAggregate]]);
-  return collectParts('VIC', [
-    ['unplanned', () => vicUnplanned(key)],
-    ['planned', () => vicPlanned(key)],
-  ]);
+  try {
+    const snap = await collectParts('VIC', [
+      ['unplanned', () => vicUnplanned(key)],
+      ['planned', () => vicPlanned(key)],
+    ]);
+    if (_vicOnAggregate) log.info('interstate roads: VIC is read from Transport Victoria again');
+    _vicOnAggregate = false;
+    return snap;
+  } catch (err) {
+    // A key Transport Victoria refuses (a wrong one, or one it has revoked)
+    // would otherwise hold VIC at its last snapshot indefinitely.
+    if (!_vicOnAggregate) {
+      log.warn(
+        { err: (err as Error).message },
+        'interstate roads: Transport Victoria refused every request — reading VIC from the Live Traffic aggregate until it answers (check VIC_TRANSPORT_API_KEY: the "API Key" under Subscription Keys on the portal profile)',
+      );
+    }
+    _vicOnAggregate = true;
+    return collectParts('VIC', [['aggregate', vicFromAggregate]]);
+  }
 }
 
 /** Every state's records of one type, for the NSW feed of that type to carry too. */

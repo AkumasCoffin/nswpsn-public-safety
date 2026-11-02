@@ -408,4 +408,24 @@ describe('fetching', () => {
     expect(planUrls).toHaveLength(2);
     expect(planUrls[0]).toContain('outSR=4326');
   });
+
+  it('VIC falls back to the Live Traffic aggregate while Transport Victoria refuses the key', async () => {
+    const { fetchVicRoads } = await import('../../../src/sources/interstateRoads.js');
+    const { config } = await import('../../../src/config.js');
+    const held = config.VIC_TRANSPORT_API_KEY;
+    (config as { VIC_TRANSPORT_API_KEY?: string }).VIC_TRANSPORT_API_KEY = 'not-the-subscription-key';
+    try {
+      fetchJsonMock.mockImplementation(async (url: string) => {
+        if (url.includes('opendata.transport.vic.gov.au')) throw new Error(`HTTP 401 for ${url}`);
+        return [];
+      });
+      const snap = await fetchVicRoads();
+      expect(snap.count).toBe(0);
+      const urls = fetchJsonMock.mock.calls.map((c) => String(c[0]));
+      expect(urls.some((u) => u.includes('opendata.transport.vic.gov.au'))).toBe(true);
+      expect(urls.some((u) => u.includes('livetraffic.com'))).toBe(true);
+    } finally {
+      (config as { VIC_TRANSPORT_API_KEY?: string }).VIC_TRANSPORT_API_KEY = held;
+    }
+  });
 });
