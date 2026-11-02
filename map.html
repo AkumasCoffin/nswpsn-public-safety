@@ -7969,7 +7969,7 @@ function initPagerHoursFromStorage() {
       if (seen === 'loading') return undefined;
       _changeTrails.set(key, 'loading');
       try {
-        const url = `${PROXY_BASE}/api/v1/data/history?source=${encodeURIComponent(source)}`
+        const url = `${PROXY_BASE}/api/v1/history?source=${encodeURIComponent(source)}`
           + `&source_id=${encodeURIComponent(sourceId)}&limit=50&order=desc&full=1&unique=0`;
         const res = await apiFetch(url);
         if (!res.ok) throw new Error('HTTP ' + res.status);

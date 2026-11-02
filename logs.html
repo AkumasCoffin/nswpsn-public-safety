@@ -549,7 +549,7 @@
     async function loadFilters() {
       try {
         const hours = getHoursParam();
-        const url = hours ? `${API_BASE}/api/v1/data/history/filters?hours=${hours}` : `${API_BASE}/api/v1/data/history/filters`;
+        const url = hours ? `${API_BASE}/api/v1/history/filters?hours=${hours}` : `${API_BASE}/api/v1/history/filters`;
         const res = await apiFetch(url);
         const data = (await res.json()).data;
 
@@ -1187,7 +1187,7 @@
         const hours = getHoursParam();
         const hoursParam = hours ? `&hours=${hours}` : '';
 
-        // The /api/v1/data/history/filters response (in `data`) is provider/type-nested:
+        // The /api/v1/history/filters response (in `data`) is provider/type-nested:
         //   { providers: [{ types: [{ alert_type, categories, subcategories,
         //                              statuses, severities, ... }] }] }
         // Older flat top-level keys are gone. flattenFilterResponse() walks the
@@ -1223,7 +1223,7 @@
           // Fetch from both endeavour sources and combine
           const sources = sourceToQuery.split(',');
           const flatResults = await Promise.all(
-            sources.map(s => apiFetch(`${API_BASE}/api/v1/data/history/filters?source=${s.trim()}${hoursParam}`)
+            sources.map(s => apiFetch(`${API_BASE}/api/v1/history/filters?source=${s.trim()}${hoursParam}`)
               .then(r => r.json()).then(j => flattenFilterResponse(j.data)))
           );
 
@@ -1270,7 +1270,7 @@
             severities:    Array.from(sevMap.values()).sort((a, b) => b.count - a.count),
           };
         } else {
-          const res = await apiFetch(`${API_BASE}/api/v1/data/history/filters?source=${sourceToQuery}${hoursParam}`);
+          const res = await apiFetch(`${API_BASE}/api/v1/history/filters?source=${sourceToQuery}${hoursParam}`);
           data = flattenFilterResponse((await res.json()).data);
         }
         
@@ -1912,7 +1912,7 @@
       
       try {
         console.log('Searching with params:', params.toString());
-        const res = await apiFetch(`${API_BASE}/api/v1/data/history?${params}`);
+        const res = await apiFetch(`${API_BASE}/api/v1/history?${params}`);
 
         if (res.status === 400) {
           // Server-side offset cap — only fires if cursor wasn't usable
@@ -2683,7 +2683,7 @@
         // latest snapshot, then bailed on `records.length <= 1`. An
         // ambulance job that went Pending -> On Route -> On Scene over 45
         // snapshots returned exactly one.
-        const url = `${API_BASE}/api/v1/data/history?source=${item.source}&source_id=${encodeURIComponent(item.source_id)}&limit=50&order=desc&full=1&unique=0`;
+        const url = `${API_BASE}/api/v1/history?source=${item.source}&source_id=${encodeURIComponent(item.source_id)}&limit=50&order=desc&full=1&unique=0`;
         console.log('History URL:', url);
         const res = await AusApi.fetch(url);
         if (!res.ok) throw new Error(`API returned ${res.status}`);
@@ -2998,7 +2998,7 @@
               
               // ~20m radius, search all pagers (unique=0 explicit to
               // include ended ones — backend default is now unique=1)
-              const proximityUrl = `${API_BASE}/api/v1/data/history?source=pager&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100&unique=0&full=1`;
+              const proximityUrl = `${API_BASE}/api/v1/history?source=pager&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100&unique=0&full=1`;
               const proxRes = await AusApi.fetch(proximityUrl);
               if (!proxRes.ok) throw new Error(`API returned ${proxRes.status}`);
               const proxData = (await proxRes.json()).data;
@@ -3059,7 +3059,7 @@
               
               // Search nearby (~20m radius), unique=0 explicit to
               // include ended incidents (backend default is now unique=1)
-              const incUrl = `${API_BASE}/api/v1/data/history?source=rfs,traffic_incident,traffic_fire&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100&unique=0&full=1`;
+              const incUrl = `${API_BASE}/api/v1/history?source=rfs,traffic_incident,traffic_fire&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100&unique=0&full=1`;
               const incRes = await AusApi.fetch(incUrl);
               if (!incRes.ok) throw new Error(`API returned ${incRes.status}`);
               const incData = (await incRes.json()).data;
@@ -3182,7 +3182,7 @@
           
           // ~20m radius, search all pagers (unique=0 explicit to
           // include ended ones — backend default is now unique=1)
-          const url = `${API_BASE}/api/v1/data/history?source=pager&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100&unique=0&full=1`;
+          const url = `${API_BASE}/api/v1/history?source=pager&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100&unique=0&full=1`;
           const res = await AusApi.fetch(url);
           if (!res.ok) throw new Error(`API returned ${res.status}`);
           const data = (await res.json()).data;
@@ -3275,7 +3275,7 @@
         document.body.appendChild(toast);
         
         try {
-          const url = `${API_BASE}/api/v1/data/history?source=${source}&source_id=${encodeURIComponent(sourceId)}&limit=1&unique=1`;
+          const url = `${API_BASE}/api/v1/history?source=${source}&source_id=${encodeURIComponent(sourceId)}&limit=1&unique=1`;
           const res = await AusApi.fetch(url);
           if (!res.ok) throw new Error(`API returned ${res.status}`);
           const data = (await res.json()).data;
@@ -4321,7 +4321,7 @@
     // Strip a leading 'DD Month YYYY HH:MM:SS' / 'HH:MM:SS' dispatch date
     // from a pager body (new CAD lines embed one; each row already has its
     // own timestamp). Mirrors the backend's stripLeadingPagerDate — needed
-    // here because /api/v1/data/history serves archived rows verbatim, including
+    // here because /api/v1/history serves archived rows verbatim, including
     // ones archived before the backend started stripping.
     function stripPagerDate(s) {
       return String(s || '')
@@ -4561,7 +4561,7 @@
         }
         // -1 = all time, don't add any time filter
         
-        const res = await apiFetch(`${API_BASE}/api/v1/data/history?${params}`);
+        const res = await apiFetch(`${API_BASE}/api/v1/history?${params}`);
         if (!res.ok) return;
 
         const data = (await res.json()).data;

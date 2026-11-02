@@ -223,8 +223,7 @@ map.html  ──►  /api/rfs/incidents        (RFS fires)
           ──►  /api/endeavour/{current,maintenance,future}, /api/essential/outages
                                          (site routes; keys read them merged, at /api/v1/outages)
           ──►  /api/v1/pager/hits        (pager pins; a 503 keeps the last pins)
-          ──►  /api/v1/data/history      (an incident's change trail; the old v1 name
-                                          of /api/v1/history, kept until the pages move)
+          ──►  /api/v1/history           (an incident's change trail)
           ──►  /api/v1/firms/hotspots    (satellite hotspots)
           ──►  /api/v1/adsb/{aircraft,trails,history,photo/:hex}
           ──►  /api/adsb/receivers       (node status — never on /api/v1/)
@@ -246,8 +245,7 @@ live.html ──►  per-source counts, /api/rfs/incidents, /api/v1/bom/warnings
                /api/v1/summaries/latest, /api/news/rss (site route), /api/stats/history,
                /api/heartbeat
 
-logs.html ──►  /api/v1/data/history, /api/v1/data/history/filters (the old v1
-               name of /api/v1/history, kept until the pages move),
+logs.html ──►  /api/v1/history, /api/v1/history/filters,
                /api/v1/pager/hits, /api/v1/summaries
 ```
 

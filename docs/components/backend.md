@@ -503,8 +503,9 @@ gives the pickers the feeds with only the windows some route declares
 (`declaredNeeds`), and a test keeps `FEEDS` and the declarations in step.
 
 Stored history spans feeds, so `/api/data/history` (`/api/v1/history` on v1 —
-`lib/apiVersion.ts` renames it, and keeps the old v1 name answering for the
-site's pages until they move) and its `/incident` route
+`lib/apiVersion.ts` renames it, and keeps the old v1 name answering for pages
+opened before the site moved off it, until old paths are retired) and its
+`/incident` route
 declare `scoped({ feed: '*', window: 'history' })`, which any `<feed>:history`
 cell satisfies; the handler then narrows the query to `historySourcesFor(...)`,
 the archived sources of the feeds whose history the key holds

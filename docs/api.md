@@ -283,9 +283,9 @@ short page never reads as the whole answer. `/history/filters` (public)
 lists the sources, categories, statuses and states there are to filter by.
 
 These were `/api/v1/data/history…` at first (the v1 twin of
-`/api/data/history`, which keeps its name). That old v1 name still answers, for
-this site's own pages until they move, and is not in the reference; use
-`/history`.
+`/api/data/history`, which keeps its name). That old v1 name still answers for
+now, for this site's pages opened before they moved, and is not in the
+reference; use `/history`.
 
 ## Versions
 
