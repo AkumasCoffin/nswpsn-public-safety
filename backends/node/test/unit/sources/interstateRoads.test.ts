@@ -12,6 +12,10 @@ const { fetchJsonMock } = vi.hoisted(() => ({ fetchJsonMock: vi.fn() }));
 vi.mock('../../../src/sources/shared/http.js', () => ({
   fetchText: vi.fn(),
   fetchJson: fetchJsonMock,
+  // DIT's road drawing for SA's roadworks: not to be had here, so jobs come without lines.
+  fetchBuffer: vi.fn(async () => {
+    throw new Error('no network in tests');
+  }),
   fetchRaw: vi.fn(),
   HttpError: class extends Error {},
 }));
@@ -31,6 +35,7 @@ import {
   _resetInterstateMemory,
 } from '../../../src/sources/interstateRoads.js';
 import { decodePolyline, encodePolyline } from '../../../src/sources/shared/polyline.js';
+import { parseSaRoads } from '../../../src/sources/saRoads.js';
 import { liveStore } from '../../../src/store/live.js';
 
 const NOW = Date.UTC(2026, 10, 2, 0, 0, 0); // 2026-11-02T00:00Z
@@ -263,6 +268,43 @@ describe('SA', () => {
       ['Line Marking & Painting', ['Patpa Dr'], 'Shuttle flow'],
       ['Vms Trailer', ['Sign Rd'], '40 km/h limit'],
     ]);
+  });
+
+  // Lonsdale Road as DIT might draw it: 4 km on a straight line through the three sites (1, 2 and 3 km along).
+  const lonsdale = parseSaRoads([
+    {
+      features: [
+        { properties: { gis_road_no: '03400', side: 'U/L', start_rrd: 0, end_rrd: 4 }, geometry: { type: 'MultiLineString', coordinates: [[[138.49, -35.06], [138.53, -35.1]]] } },
+      ],
+    },
+  ]);
+  const onRoad = (s: ReturnType<typeof site>) => ({ attributes: { ...s.attributes, ROAD_NO: 3400 } });
+
+  it('on a road DIT draws: sites in order along it, and the road between the ends as its line', () => {
+    const [job] = saJobRecords([onRoad(sheidow), onRoad(hallett), onRoad(middle)], NOW, lonsdale);
+    const p = job!.properties;
+    expect(p.sites!.map((s) => s.crossStreet)).toEqual(['Patpa Dr', 'Zwerner Dr', 'Majors Rd']);
+    expect(p).toMatchObject({ roads: 'Lonsdale Road, Hallett Cove to Sheidow Park', crossStreet: 'Patpa Dr', secondLocation: 'Majors Rd', otherAdvice: '3 sites over 2 km. Shuttle flow at 2, one lane closed at 1.' });
+    const line = decodePolyline(p.encodedPolyline);
+    expect(line[0]![0]).toBeCloseTo(138.5, 4);
+    expect(line[line.length - 1]![0]).toBeCloseTo(138.52, 4);
+    expect(p.encodedPolylines).toHaveLength(1);
+  });
+
+  it('no line for sites all at one spot, or off every road DIT draws', () => {
+    const [here] = saJobRecords([onRoad(hallett), onRoad(site({ NO_LANES_CLOSED: 'One Lane' }))], NOW, lonsdale);
+    expect(here!.properties.sites).toHaveLength(2);
+    expect(here!.properties.encodedPolylines).toEqual([]);
+    const [elsewhere] = saJobRecords([hallett, middle], NOW, lonsdale);
+    expect(elsewhere!.properties.encodedPolylines).toEqual([]);
+  });
+
+  it('a site off the road: the line covers the sites on it, the order is by distance', () => {
+    const far = onRoad(site({ SIDE_STREET: 'Far Rd', LATITUDE: -35.2, LONGITUDE: 138.52 }));
+    const [job] = saJobRecords([onRoad(hallett), onRoad(middle), far], NOW, lonsdale);
+    expect(job!.properties.sites!.map((s) => s.crossStreet)).toEqual(['Far Rd', 'Zwerner Dr', 'Patpa Dr']);
+    const line = decodePolyline(job!.properties.encodedPolyline);
+    expect([line[0]![0], line[line.length - 1]![0]].map((x) => Number(x.toFixed(4)))).toEqual([138.5, 138.51]);
   });
 
   it("the layer's incidents stay records of their own, by incident number", () => {

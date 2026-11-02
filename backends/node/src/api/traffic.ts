@@ -215,7 +215,7 @@ const TrafficHazards = featureCollection(
         )
         .optional()
         .describe(
-          "SA's roadworks only. SA lists works site by site, a record for each cross street along a job; here each job is one record, pinned at the site nearest its middle, and this lists every site. Sites that restrict nothing (no lane closed, no speed limit) are left out",
+          "SA's roadworks only. SA lists works site by site, a record for each cross street along a job; here each job is one record, pinned at the site nearest its middle, and this lists every site in order along the road, from one end to the other. Its encodedPolylines are the road between the end sites, from the Department for Infrastructure and Transport's drawing of SA's main roads (CC BY 3.0 AU) — part of the job where that drawing has only part of the road, none where it lacks the road. Sites that restrict nothing (no lane closed, no speed limit) are left out",
         ),
     }),
   ),

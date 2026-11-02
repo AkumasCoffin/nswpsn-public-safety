@@ -164,10 +164,14 @@ the other states; it is gone, its records now on the feed for their kind.
 
 SA lists its roadworks site by site, a record for each cross street along a
 job. Here each job is one record, pinned at the site nearest its middle: its
-`roads` names the suburbs at either end ("Barrier Highway, Paratoo to
-Cockburn"), its `otherAdvice` says how many sites over what distance and what
-they do to traffic ("59 sites over 313 km. Shuttle flow at each."), and
-`sites` lists every one. Sites that restrict nothing — no lane closed and no
+`roads` names the suburbs at either end ("Barrier Highway, Cockburn to
+Paratoo"), its `otherAdvice` says how many sites over what distance and what
+they do to traffic ("59 sites over 373 km. Shuttle flow at each."), and
+`sites` lists every one in order along the road. Its `encodedPolylines` are
+the road between the end sites, from the Department for Infrastructure and
+Transport's drawing of SA's main roads (its Functional Hierarchy, CC BY 3.0
+AU), which covers about nine in ten roadwork sites; a job on a road it does
+not draw has no line. Sites that restrict nothing — no lane closed and no
 speed limit — are left out. A job keeps its `id` while SA adds sites to it or
 moves its end, which SA does as the works go on.
 

@@ -44,6 +44,7 @@ import { registerSource } from '../services/sourceRegistry.js';
 import { fetchJson } from './shared/http.js';
 import { htmlToProse } from './shared/prose.js';
 import { encodePolyline } from './shared/polyline.js';
+import { placeOnRoad, roadStretch, saRoads, _resetSaRoads, type SaRoads } from './saRoads.js';
 import {
   fetchTrafficWorks,
   worksArchiveSource,
@@ -542,17 +543,22 @@ const bySite = (x: RoadSite, y: RoadSite): number =>
   x.lon - y.lon ||
   [x.crossStreet, x.suburb, x.direction, x.lanes, x.speedLimit].join('|').localeCompare([y.crossStreet, y.suburb, y.direction, y.lanes, y.speedLimit].join('|'));
 
+/** How far off its road's line (km) a site may lie and still be placed along it. */
+const SA_ON_ROAD_KM = 0.2;
+
 /**
  * The roadworks layer, one record per job. A site that restricts nothing —
  * no lane closed and no speed limit (222 of 1,481 on 2026-11-02) — is left
  * out, and a job with no site left goes with it. A job keeps its id while SA
- * adds sites, moves its end or changes its lanes. It is pinned at the site
- * nearest the middle of its sites, its roads name the suburbs at either end,
- * its advice says how many sites over what distance and what they do to the
- * lanes, and `sites` lists every one. The layer's few incidents stay records
- * of their own.
+ * adds sites, moves its end or changes its lanes. Its `sites` run along the
+ * road from one end to the other; on a road in `roads` (DIT's drawing, see
+ * saRoads.ts) its line is the road between the first and the last, and its
+ * distance is along the road. It is pinned at the site nearest the middle of
+ * its sites, its roads name the suburbs at either end, and its advice says
+ * how many sites over what distance and what they do to the lanes. The
+ * layer's few incidents stay records of their own.
  */
-export function saJobRecords(features: readonly Obj[], now = Date.now()): TrafficFeature[] {
+export function saJobRecords(features: readonly Obj[], now = Date.now(), roads: SaRoads | null = null): TrafficFeature[] {
   const jobs = new Map<string, { a: Obj; sites: RoadSite[]; ends: string[] }>();
   const incidents: Obj[] = [];
   for (const f of features) {
@@ -583,24 +589,46 @@ export function saJobRecords(features: readonly Obj[], now = Date.now()): Traffi
   }
 
   const out: TrafficFeature[] = [];
-  for (const [key, { a, sites, ends }] of jobs) {
-    sites.sort(bySite);
+  for (const [key, { a, sites: found, ends }] of jobs) {
+    found.sort(bySite);
     const at = (s: RoadSite): number[] => [s.lon, s.lat];
-    // Its ends: the two sites furthest apart.
-    let [from, to, span] = [sites[0]!, sites[0]!, 0];
-    for (let i = 0; i < sites.length; i++) {
-      for (let j = i + 1; j < sites.length; j++) {
-        const d = kmBetween(at(sites[i]!), at(sites[j]!));
-        if (d > span) [from, to, span] = [sites[i]!, sites[j]!, d];
+    // Its sites in order along the road: where DIT draws the road
+    // (saRoads.ts) at every site, by where each is along it; otherwise from
+    // one of the two sites furthest apart to the other. Its line is the road
+    // between the furthest-apart sites DIT draws it at — part of the job
+    // where DIT draws only part of the road (seen: R M Williams Way).
+    const roadNo = String(num(attr(a, 'road_no')) ?? '');
+    const placed = roads && roadNo ? found.map((s) => placeOnRoad(roads, roadNo, s.lon, s.lat)) : [];
+    const onRoad = placed.map((p) => (p !== null && p.km <= SA_ON_ROAD_KM ? p.at : null));
+    const ats = onRoad.filter((x): x is number => x !== null);
+    const lines = ats.length >= 2 && Math.max(...ats) - Math.min(...ats) > 0.01 ? roadStretch(roads!, roadNo, Math.min(...ats), Math.max(...ats)) : [];
+    let sites: RoadSite[];
+    let span: number;
+    if (found.length && ats.length === found.length) {
+      const along = new Map(found.map((s, i) => [s, onRoad[i]!]));
+      sites = [...found].sort((x, y) => along.get(x)! - along.get(y)! || bySite(x, y));
+      span = Math.max(...ats) - Math.min(...ats);
+    } else {
+      let [x, y, d] = [found[0]!, found[0]!, 0];
+      for (let i = 0; i < found.length; i++) {
+        for (let j = i + 1; j < found.length; j++) {
+          const dij = kmBetween(at(found[i]!), at(found[j]!));
+          if (dij > d) [x, y, d] = [found[i]!, found[j]!, dij];
+        }
       }
+      const fromX = new Map(found.map((s) => [s, kmBetween(at(x), at(s))]));
+      sites = [...found].sort((p, q) => fromX.get(p)! - fromX.get(q)! || bySite(p, q));
+      span = d;
     }
+    const from = sites[0]!;
+    const to = sites[sites.length - 1]!;
     // Its pin: the site nearest the middle.
     const mid = [sites.reduce((n, s) => n + s.lon, 0) / sites.length, sites.reduce((n, s) => n + s.lat, 0) / sites.length];
     const pin = sites.reduce((best, s) => (kmBetween(at(s), mid) < kmBetween(at(best), mid) ? s : best));
 
     const road = str(attr(a, 'local_road'));
     const suburbs = new Set(sites.map((s) => s.suburb).filter(Boolean));
-    const roads =
+    const where =
       from.suburb && to.suburb && from.suburb !== to.suburb
         ? `${road}, ${from.suburb} to ${to.suburb}`
         : joinText(road, from.suburb || to.suburb || ([...suburbs][0] ?? ''));
@@ -627,12 +655,13 @@ export function saJobRecords(features: readonly Obj[], now = Date.now()): Traffi
         id: `sa:job:${shortHash(key)}`,
         lon: pin.lon,
         lat: pin.lat,
+        lines,
         type: 'Roadwork',
         mainCategory: titleCase(recType),
         incidentType: 'ROADWORK',
         incidentKind: 'Planned',
         title: htmlToProse(attr(a, 'description')) || titleCase(recType),
-        roads,
+        roads: where,
         crossStreet: from.crossStreet,
         secondLocation: sites.length > 1 ? to.crossStreet : '',
         locationQualifier: sites.length > 1 && from.crossStreet && to.crossStreet ? 'between' : '',
@@ -932,6 +961,7 @@ export function _resetInterstateMemory(): void {
   _lastGood.clear();
   _vicPlanned = null;
   _vicOnAggregate = false;
+  _resetSaRoads();
 }
 
 /**
@@ -983,7 +1013,11 @@ export function fetchSaRoads(): Promise<TrafficSnapshot> {
     [
       'roadworks',
       async () =>
-        saJobRecords(await arcgisFeatures(SA_ROADWORKS_URL, { returnGeometry: 'false', orderByFields: SA_ROADWORKS_ORDER })),
+        saJobRecords(
+          await arcgisFeatures(SA_ROADWORKS_URL, { returnGeometry: 'false', orderByFields: SA_ROADWORKS_ORDER }),
+          Date.now(),
+          await saRoads(),
+        ),
     ],
     ['incidents', async () => saWorksRecords(await arcgisFeatures(SA_INCIDENTS_URL, { returnGeometry: 'false' }))],
     ['closures', async () => saClosureRecords(await arcgisFeatures(SA_CLOSURES_URL, {}, 2000, 3))],
