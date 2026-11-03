@@ -31,7 +31,7 @@ backends/node/
   src/store/archive.ts  ArchiveWriter — history, batched into PostgreSQL
   src/db/pool.ts        pg pool wrapper
   src/db/migrate.ts     migration runner
-  src/db/migrations/    136 numbered .sql files
+  src/db/migrations/    137 numbered .sql files
   src/lib/              logger, timezone, masks, relay-error formatting
   assets/               node-versions.json (agent manifest), rfs-zones.json
   openapi.json          the API description, generated — `npm run openapi`
@@ -681,11 +681,12 @@ either; the backend substitutes them when it forwards.
 
 ## Database
 
-PostgreSQL, 136 numbered migrations in `src/db/migrations/`, applied by
+PostgreSQL, 137 numbered migrations in `src/db/migrations/`, applied by
 `src/db/migrate.ts` at boot and by `npm run migrate` before the restart on
 deploy. The runner is idempotent, so applying twice is a no-op. New schema is a
 new numbered file; never edit an applied one. The most recent are `130`–`136`,
-which moved `node_radio_events` to daily partitions (below).
+which moved `node_radio_events` to daily partitions (below), and `137`, which
+dropped the recorded flag's columns and `node_pending_recordings`.
 
 A file whose **first line** is `-- noTransaction` runs outside a transaction,
 which is what `CREATE INDEX CONCURRENTLY` needs; the runner sends the whole file
@@ -759,8 +760,8 @@ ask for.
   the parent, which every insert also needs; waiting behind a long staff read
   would hold ingest up for as long as the read. A timeout is retried next hour.
 - **Storage parameters are per partition.** A partitioned parent's are not
-  inherited, so the function sets `fillfactor = 85` and the 0.05 autovacuum
-  factors on each day (see below).
+  inherited, so the function sets the 0.05 autovacuum factors on each day (see
+  below). Day partitions keep the default fillfactor since `137`.
 - **ANALYZE the parent.** Autovacuum analyses partitions but never a
   partitioned parent, whose statistics the planner uses for the grouping
   lookup's self-join; the pruner does it daily and after each drop.
@@ -811,9 +812,9 @@ Things to know before touching it:
 - **Nothing updates a row after insert except a patch merge.** The `recorded`
   flag and `audio_bytes` were stamped by matching each rdio upload back to one
   reception (`markRecorded`, with `node_pending_recordings` for uploads that
-  beat their event). That matching is gone; the columns are no longer written
-  or read. Per-node upload counts and bytes still come from the relay itself,
-  in `node_call_stats`.
+  beat their event). That matching was removed and `137` dropped the columns,
+  their hourly counterparts and the pending table. Per-node upload counts and
+  bytes still come from the relay itself, in `node_call_stats`.
 - **`id` is a plain sequence default, not an identity** (`130`). PostgreSQL 17+
   will not attach a table with an identity column of its own. The sequence is
   named in the insert SQL and is deliberately not `OWNED BY` any column: it
@@ -823,7 +824,9 @@ Things to know before touching it:
 `124` also sets `autovacuum_vacuum_scale_factor` and
 `autovacuum_analyze_scale_factor` to 0.05 on `node_radio_events` and
 `adsb_tracks` (and production also carries `fillfactor = 85` on the legacy
-table, set by hand); `135` puts the same three on every day partition. At the 0.2 cluster default, `node_radio_events` needed ~1.13 M
+table, set by hand); `135` put the same three on every day partition. `137`
+took fillfactor back off the days: its 15 % reserve was there so the recorded
+update could stay on its page, and that update no longer exists. At the 0.2 cluster default, `node_radio_events` needed ~1.13 M
 dead tuples before autovacuum would fire and simply idled below the threshold for
 days at a time. These are deliberate per-table overrides — not leftovers to tidy
 away.

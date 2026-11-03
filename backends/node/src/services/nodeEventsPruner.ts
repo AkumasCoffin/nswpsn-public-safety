@@ -53,13 +53,6 @@ const RETENTION_DAYS = 30;
  *  trend, not a permanent record. ~1.4k rows/site/day at this cadence. */
 const DECODE_SAMPLE_RETENTION_DAYS = 7;
 
-/** Parked call uploads (migration 070) are measured in MINUTES, not days.
- *  A pending row exists only to survive the gap between an upload and the
- *  activity event it belongs to — a few seconds. One still sitting here after
- *  ten minutes has no event coming (the call was never decoded on this node,
- *  or its events were dropped), so it is waste, and this is the one node table
- *  with no natural upper bound on its growth. */
-const PENDING_RECORDING_RETENTION_MINUTES = 10;
 const BATCH_SIZE = 5000;
 
 const RADIO = 'node_radio_events';
@@ -87,19 +80,14 @@ async function pruneTable(
     | 'node_radio_events'
     | 'node_radio_events_legacy'
     | 'node_pager_events'
-    | 'node_site_decode_samples'
-    | 'node_pending_recordings',
+    | 'node_site_decode_samples',
 ): Promise<number> {
   const pool = await getWriterPool();
   if (!pool) return 0;
-  // Each table brings its own timestamp column and window; pending uploads are
-  // the only one measured in minutes.
+  // Each table brings its own timestamp column and window.
   const samples = table === 'node_site_decode_samples';
-  const pending = table === 'node_pending_recordings';
-  const tsCol = pending ? 'created_at' : samples ? 'sampled_at' : 'received_at';
-  const age = pending
-    ? `${PENDING_RECORDING_RETENTION_MINUTES} minutes`
-    : `${samples ? DECODE_SAMPLE_RETENTION_DAYS : RETENTION_DAYS} days`;
+  const tsCol = samples ? 'sampled_at' : 'received_at';
+  const age = `${samples ? DECODE_SAMPLE_RETENTION_DAYS : RETENTION_DAYS} days`;
 
   // Radio detail is the ONLY source the hourly rollups can be derived from, so
   // it must never be pruned past what the rollup has already summarised. In
@@ -289,10 +277,9 @@ export async function pruneNodeEventsOnce(): Promise<void> {
     }
     const pager = await pruneTable('node_pager_events');
     const decode = await pruneTable('node_site_decode_samples');
-    const pending = await pruneTable('node_pending_recordings');
-    if (radio > 0 || dropped > 0 || pager > 0 || decode > 0 || pending > 0) {
+    if (radio > 0 || dropped > 0 || pager > 0 || decode > 0) {
       log.info(
-        { radio, radio_partitions_dropped: dropped, pager, decode, pending },
+        { radio, radio_partitions_dropped: dropped, pager, decode },
         'node events pruner: removed expired detail rows',
       );
     }

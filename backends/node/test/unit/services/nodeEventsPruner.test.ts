@@ -75,7 +75,7 @@ describe('pruneNodeEventsOnce rollup guard', () => {
     highWater.mockResolvedValue(null);
     await pruneNodeEventsOnce();
 
-    for (const table of ['node_pager_events', 'node_site_decode_samples', 'node_pending_recordings']) {
+    for (const table of ['node_pager_events', 'node_site_decode_samples']) {
       const calls = forTable(table);
       expect(calls).toHaveLength(1);
       expect(calls[0]!.sql).not.toContain('$1::timestamptz');
@@ -178,7 +178,7 @@ describe('radio retention once partitioned', () => {
     const s = clientSql();
     expect(s).toContain('ROLLBACK');
     expect(s).toContain('DROP TABLE IF EXISTS node_radio_events_20260102');
-    // The pager/decode/pending prunes still ran.
+    // The pager/decode prunes still ran.
     expect(forTable('node_pager_events')).toHaveLength(1);
   });
 
