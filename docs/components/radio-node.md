@@ -213,6 +213,11 @@ That is the right outcome, and it is why the two paths exist.
 `activityship` runs **regardless of whether the audio feed is enabled**: the
 metadata is wanted even when a node's feed is off.
 
+A node's clock matters here. An event stamped more than 48 hours from the
+backend's time is **skipped** and logged as "timestamp more than 48h from
+server time (node clock?)"; it is acknowledged, so the agent moves on rather
+than re-sending it. Keep NTP running on the node host.
+
 `siteship` replaces the full snapshot each time — no cursor — and **pauses while a
 site survey is running**, because a survey locks onto sites all over the council
 area and none of them is a site this node monitors.

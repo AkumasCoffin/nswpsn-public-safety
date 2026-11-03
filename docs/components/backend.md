@@ -31,7 +31,7 @@ backends/node/
   src/store/archive.ts  ArchiveWriter — history, batched into PostgreSQL
   src/db/pool.ts        pg pool wrapper
   src/db/migrate.ts     migration runner
-  src/db/migrations/    129 numbered .sql files
+  src/db/migrations/    132 numbered .sql files
   src/lib/              logger, timezone, masks, relay-error formatting
   assets/               node-versions.json (agent manifest), rfs-zones.json
   openapi.json          the API description, generated — `npm run openapi`
@@ -681,15 +681,25 @@ either; the backend substitutes them when it forwards.
 
 ## Database
 
-PostgreSQL, 129 numbered migrations in `src/db/migrations/`, applied by
+PostgreSQL, 132 numbered migrations in `src/db/migrations/`, applied by
 `src/db/migrate.ts` at boot and by `npm run migrate` before the restart on
 deploy. The runner is idempotent, so applying twice is a no-op. New schema is a
-new numbered file; never edit an applied one. The most recent are `122`, a
-global colour palette, `123`, a third per-site attribution on the radio hourly
-rollups, and `124`, index and autovacuum work on `node_radio_events`.
+new numbered file; never edit an applied one. The most recent are `130`–`132`,
+the first half of moving `node_radio_events` to daily partitions (below).
+
+A file whose **first line** is `-- noTransaction` runs outside a transaction,
+which is what `CREATE INDEX CONCURRENTLY` needs; the runner sends the whole file
+as one query, so such a file must hold exactly one statement. `131` and `132`
+are the first. Deploy runs migrations while the old process is still serving,
+so anything that would hold a table lock for more than a moment belongs in one
+of these, and a transactional file that takes a brief exclusive lock should
+start with `SET LOCAL lock_timeout` so it fails the deploy rather than queueing
+every writer behind a long read.
 
 The database runs in its own Proxmox LXC container: 2 vCPU, 5 GB RAM,
-`shared_buffers` 1 GB, on storage the kernel reports as rotational. Nothing here
+`shared_buffers` 1 GB, on a ZFS mirror since 2026-11-03 (it was on a single
+2.5-inch 5400 rpm drive before, which is where the cold-read numbers below
+were measured). Nothing here
 is sized for a working set that does not fit in page cache, which is why the
 next section exists.
 
@@ -729,26 +739,43 @@ timeout.
 
 Three things to know before touching it:
 
-- **`uq_nre_node_stream_event` is correctness, not performance.** Both ingest
-  paths say `ON CONFLICT (node_id, stream_id, source_event_id) DO NOTHING`
-  (`services/nodeEvents.ts`), which is what makes a re-sent agent batch
-  idempotent. Never drop it. It is also the largest object on the table and
+- **The dedup index is correctness, not performance.** Both ingest paths say
+  `ON CONFLICT DO NOTHING` (`services/nodeEvents.ts`), which is what makes a
+  re-sent agent batch idempotent. The index is `uq_nre_node_stream_event`
+  (`node_id, stream_id, source_event_id`), and since `131` also
+  `uq_nre_node_stream_event_ts`, the same plus `received_at`, which a table
+  partitioned on `received_at` requires. The partition cutover drops the first;
+  never drop the second. The conflict target is left open on purpose: a named
+  target must match exactly one valid index, which would tie the insert to the
+  state of a migration. This index is also the largest object on the table and
   bloats faster than the rest, because its inserts land in node/stream order
-  rather than append order; `scripts/reindex-nre-unique.mjs` rebuilds it
-  concurrently, with no service stop.
+  rather than append order; `scripts/reindex-nre-unique.mjs` rebuilds the
+  three-column one concurrently, with no service stop.
+- **A reception more than 48 h from server time is skipped**, not re-stamped
+  with the server's clock (`radioReceivedAt`). With `received_at` in the dedup
+  key, a re-stamped re-send would be stored twice, and a reception filed at a
+  made-up time could never join its real call anyway. It is logged, and counted
+  as neither accepted nor failed so the agent does not re-send it forever. The
+  pager path still re-stamps.
 - **The node-led indexes are inflated by a type choice.** `node_id` is `TEXT`
   averaging 35 bytes — a UUID stored as text — so every index leading on it pays
   that per row. By contrast `idx_nre_time` (`received_at` alone) is 123 MB and
   shows no bloat at all. Narrowing the column would shrink four indexes at once,
   but it is a foreign key to `nodes(id)` and has not been attempted.
-- **`logical_call_id` is set by the INSERT, not by a follow-up UPDATE.** It used
+- **`logical_call_id` is set by the INSERT, never by a follow-up UPDATE.** It used
   to be stamped immediately after insert, which left a dead row version for
   *every* event — and since the column is indexed, the update could never be HOT,
   so all fourteen indexes took a second entry each. That was the engine behind a
   standing 17 % dead-tuple ratio. The grouping lookup already knows the call
-  before inserting, so only the event that OPENS a call still takes a second
-  write (one per call, against ~29 events per call). If you add a column to
-  either insert, keep it that way.
+  before inserting; the event that OPENS a call draws its own id from
+  `node_radio_events_id_seq` in a CTE and writes it to both `id` and
+  `logical_call_id`. That last step came later (`130`), once production showed
+  30 % of rows open a call, not the one in ~29 that had been assumed. If you add
+  a column to either insert, keep it that way.
+- **`id` is a plain sequence default, not an identity** (`130`). The sequence is
+  named in the insert SQL and is deliberately not `OWNED BY` the column: once
+  the table is partitioned, the partition that holds today's rows will
+  eventually be dropped, and the parent's default must not go with it.
 
 `124` also sets `autovacuum_vacuum_scale_factor` and
 `autovacuum_analyze_scale_factor` to 0.05 on `node_radio_events` and

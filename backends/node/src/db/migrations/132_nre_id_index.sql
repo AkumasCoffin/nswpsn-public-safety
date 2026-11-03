@@ -1,0 +1,20 @@
+-- noTransaction
+--
+-- 132: a plain (non-unique) index on node_radio_events.id.
+--
+-- The primary key already indexes id, but a partitioned table cannot have a
+-- primary key on id alone (it would have to include received_at), and the
+-- by-id lookups — the per-event group lookup's anchor join, markRecorded, the
+-- claimed-upload update — need an index on id in every partition. When the
+-- table is attached as the first partition, Postgres adopts an existing
+-- partition index only if it matches the parent's exactly, uniqueness
+-- included, so the unique pkey would not do: without this, the cutover would
+-- build a fresh 6M-row index while holding an exclusive lock.
+--
+-- CONCURRENTLY for the same reason as 131, and so the sole statement here.
+--
+-- RECOVERY if the build is interrupted:
+--   DROP INDEX CONCURRENTLY IF EXISTS idx_nre_id;
+--   DELETE FROM schema_migrations WHERE filename = '132_nre_id_index.sql';
+-- and deploy again.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_nre_id ON node_radio_events (id);

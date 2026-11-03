@@ -1,0 +1,26 @@
+-- noTransaction
+--
+-- 131: the re-send dedup key, with received_at added.
+--
+-- node_radio_events is going to be partitioned by day on received_at, and a
+-- unique index on a partitioned table must contain the partition key. This is
+-- that index, built ahead of time on the existing table so the cutover can
+-- adopt it instead of building one. Until then it sits beside
+-- uq_nre_node_stream_event (044), which the cutover drops.
+--
+-- Both ingest inserts say `ON CONFLICT DO NOTHING` with no target, so either
+-- index (or both) turns a re-sent event into a skip.
+--
+-- CONCURRENTLY because deploy.sh runs migrations while the old process is
+-- still serving and inserting, and this takes minutes on ~6M rows. That needs
+-- `-- noTransaction` on the first line and this to be the only statement in
+-- the file (the runner sends the file as one query).
+--
+-- RECOVERY if the build is interrupted: it leaves an INVALID index, and a
+-- re-run's IF NOT EXISTS would skip it by name and record this file anyway.
+-- Run, as the owner:
+--   DROP INDEX CONCURRENTLY IF EXISTS uq_nre_node_stream_event_ts;
+--   DELETE FROM schema_migrations WHERE filename = '131_nre_uq_with_time.sql';
+-- and deploy again. The cutover migration refuses to run on an invalid one.
+CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS uq_nre_node_stream_event_ts
+  ON node_radio_events (node_id, stream_id, source_event_id, received_at);

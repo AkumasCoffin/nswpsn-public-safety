@@ -7,7 +7,7 @@
  *   - recordActivityEvents: new group / joined group logical_calls 1/0
  *   - dedupe: ON CONFLICT DO NOTHING re-send → accepted 0, no bucket bumps
  *   - grouping across two nodes' events with the same systemId+target ±5s
- *   - atMs clock sanity clamp (now±48h)
+ *   - atMs clock sanity (now±48h): out-of-range radio events are skipped
  *   - fire-safe contract: DB failure never throws, ROLLBACK is attempted
  *   - markRecorded: closest-row match stamps recorded+bytes (+hourly bytes),
  *     no-match is a clean no-op
@@ -147,13 +147,22 @@ describe('recordActivityEvents', () => {
     expect(find?.[1]).toEqual([12345]);
     expect(find?.[3]).toBe(777);
 
-    // Opening a call is the one case that still needs a second write: the
-    // group is this row's own id, which does not exist until the insert
-    // returns. `SET logical_call_id = id` takes only the row id.
-    expect(callWith('SET logical_call_id')).toEqual(['101']);
+    // Opening a call takes no second write either: the insert draws its own
+    // id first and stamps it as the call's id in the same statement. The
+    // parameter is null ("no group found") and the SQL fills it from the id.
+    expect(countCalls('SET logical_call_id')).toBe(0);
+    const insSql = clientQuery.mock.calls
+      .map((a) => String(a[0]))
+      .find((s) => s.includes('INSERT INTO node_radio_events'));
+    expect(insSql).toContain("nextval('node_radio_events_id_seq')");
+    expect(insSql).toContain('COALESCE($20::bigint, (SELECT id FROM n))');
+    // No conflict target: the dedup index is changing shape (migration 131),
+    // and a named target would have to match exactly one valid index.
+    expect(insSql).toContain('ON CONFLICT DO NOTHING');
 
     // INSERT carries the dedupe triple + the new columns.
     const ins = callWith('INSERT INTO node_radio_events');
+    expect(ins?.at(-1)).toBeNull();
     // [nodeId, receivedAt, streamId, sourceEventId, action, eventType,
     //  system, talkgroup, sourceUnit, frequency, timeslot, encrypted,
     //  rfss, site, nac, wacn]
@@ -198,7 +207,7 @@ describe('recordActivityEvents', () => {
     armQueries({ foundRadio: null, insertIds: ['101'] });
     const a = await recordActivityEvents('node-aaaa', 'stream-aaaa', [{ ...baseEvent }]);
     expect(a).toEqual({ accepted: 1, failed: 0 });
-    expect(callWith('SET logical_call_id')).toEqual(['101']);
+    expect(callWith('INSERT INTO node_radio_events')?.at(-1)).toBeNull();
 
     // …node B's reception 2s later finds it and JOINS (no logical increment).
     clientQuery.mockReset();
@@ -217,13 +226,13 @@ describe('recordActivityEvents', () => {
     expect(countCalls('node_radio_hourly')).toBe(0);
   });
 
-  it('writes one row version per event: only the call-opening event is updated', async () => {
-    // The ratio this whole arrangement exists for. Every event used to be
-    // INSERTed and then immediately UPDATEd, which left a dead row version
-    // behind for each one — and because logical_call_id is indexed, the update
-    // could never be HOT, so every index on the table took a second entry too.
-    // A call averages ~29 events here, so at one update per CALL rather than
-    // per event the churn drops by about that factor.
+  it('writes one row version per event, call-opening events included', async () => {
+    // Every event used to be INSERTed and then immediately UPDATEd, which left
+    // a dead row version behind for each one — and because logical_call_id is
+    // indexed, the update could never be HOT, so every index on the table took
+    // a second entry too. That was cut to the call-opening event, and then to
+    // nothing: the opener now takes its own id inside the insert, which
+    // matters because 30 % of production rows open a call.
     let opened = false;
     armQueries({
       // First event finds nothing and opens the call; the rest find it.
@@ -238,7 +247,10 @@ describe('recordActivityEvents', () => {
 
     expect(accepted).toEqual({ accepted: 5, failed: 0 });
     expect(countCalls('INSERT INTO node_radio_events')).toBe(5);
-    expect(countCalls('SET logical_call_id')).toBe(1);
+    expect(countCalls('SET logical_call_id')).toBe(0);
+    // Only the first had no group to join; the rest carry the opener's id.
+    expect(callWith('INSERT INTO node_radio_events', 0)?.at(-1)).toBeNull();
+    expect(callWith('INSERT INTO node_radio_events', 4)?.at(-1)).toBe('101');
   });
 
   it('dedupes a re-sent event: accepted 0, no stamps', async () => {
@@ -259,7 +271,8 @@ describe('recordActivityEvents', () => {
       { ...baseEvent, id: 3 },
     ]);
     expect(accepted).toEqual({ accepted: 2, failed: 0 });
-    expect(countCalls('SET logical_call_id')).toBe(2);
+    expect(countCalls('INSERT INTO node_radio_events')).toBe(3);
+    expect(countCalls('SET logical_call_id')).toBe(0);
   });
 
   it('encodes unknown systemId/target as -1 in the lock key', async () => {
@@ -270,14 +283,30 @@ describe('recordActivityEvents', () => {
     expect(callWith('pg_advisory_xact_lock')).toEqual(['nrc:-1:-1']);
   });
 
-  it('clamps a wildly wrong node clock to now', async () => {
+  it('skips an event from a wildly wrong node clock, without failing the batch', async () => {
+    // Skipped, not re-stamped with the server's now: a made-up time can never
+    // join its real call, and with received_at in the dedup key a re-sent batch
+    // would get a different "now" each attempt and be stored twice.
     armQueries({ foundRadio: null, insertIds: ['101'] });
-    await recordActivityEvents('node-aaaa', 'stream-1234', [
-      { ...baseEvent, atMs: new Date('1999-01-01T00:00:00Z').getTime() },
+    const r = await recordActivityEvents('node-aaaa', 'stream-1234', [
+      { ...baseEvent, id: 1, atMs: new Date('1999-01-01T00:00:00Z').getTime() },
+      { ...baseEvent, id: 2, atMs: Date.now() + 3 * 24 * 3600_000 },
+      { ...baseEvent, id: 3 },
     ]);
-    const ins = callWith('INSERT INTO node_radio_events');
-    const receivedAt = new Date(ins?.[1] as string).getTime();
-    expect(Math.abs(receivedAt - Date.now())).toBeLessThan(60_000);
+    // Neither accepted nor failed: a failure refuses the ack, and the agent
+    // would re-send events that can never be stored, forever.
+    expect(r).toEqual({ accepted: 1, failed: 0 });
+    expect(countCalls('INSERT INTO node_radio_events')).toBe(1);
+    expect(callWith('INSERT INTO node_radio_events')?.[3]).toBe(3);
+    // Nothing at all is done for the skipped ones — not even a lock.
+    expect(countCalls('pg_advisory_xact_lock')).toBe(1);
+  });
+
+  it('keeps an event within the 48h window at its own time', async () => {
+    armQueries({ foundRadio: null, insertIds: ['101'] });
+    const atMs = Date.now() - 47 * 3600_000;
+    await recordActivityEvents('node-aaaa', 'stream-1234', [{ ...baseEvent, atMs }]);
+    expect(callWith('INSERT INTO node_radio_events')?.[1]).toBe(new Date(atMs).toISOString());
   });
 
   it('never throws when the DB fails, rolls back, and keeps processing the batch', async () => {
@@ -343,6 +372,9 @@ describe('recordActivityEvents claiming a parked upload', () => {
     const flag = callWith('SET recorded = true');
     expect(flag?.[0]).toBe(90_000);
     expect(flag?.[1]).toBe('101');
+    // The row's own received_at rides along, so a day-partitioned table can
+    // go straight to the right partition.
+    expect(flag?.[2]).toBe(callWith('INSERT INTO node_radio_events')?.[1]);
     // The bytes live on the detail row; the rollup sums them from there, so
     // nothing needs to fold them into a bucket at claim time.
     expect(countCalls('INSERT INTO node_radio_hourly ')).toBe(0);
@@ -821,7 +853,7 @@ describe('mis-decoded P25 identity', () => {
 describe('recordScannerCall system identity', () => {
   const call = {
     nodeId: 'scanner-abc',
-    receivedAt: new Date('2026-08-23T04:26:12.000Z'),
+    receivedAt: new Date(Date.now() - 60_000),
     talkgroup: 30003,
     sourceUnit: 2319851,
     frequency: 419362500,
@@ -1015,7 +1047,7 @@ describe('logical grouping rules', () => {
     armQueries({ foundRadio: null, insertIds: ['501'] });
     await recordScannerCall({
       nodeId: 'scanner-abc',
-      receivedAt: new Date('2026-08-23T04:26:12.000Z'),
+      receivedAt: new Date(Date.now() - 60_000),
       talkgroup: 30003,
       sourceUnit: 2319851,
       frequency: 419362500,
@@ -1044,7 +1076,7 @@ describe('logical grouping rules', () => {
 describe('recordScannerCall patch grouping', () => {
   const call = {
     nodeId: 'scanner-abc',
-    receivedAt: new Date('2026-08-23T04:26:12.000Z'),
+    receivedAt: new Date(Date.now() - 60_000),
     talkgroup: 30003,
     sourceUnit: 2319851,
     frequency: 419362500,
@@ -1097,6 +1129,31 @@ describe('recordScannerCall patch grouping', () => {
     // is stamped by the INSERT, so no second write happens at all.
     expect(countCalls('SET logical_call_id')).toBe(0);
     expect(callWith('INSERT INTO node_radio_events')?.at(-1)).toBe('900');
+  });
+
+  it('opens a call with no second write: the insert takes its own id', async () => {
+    armQueries({ foundRadio: null, insertIds: ['505'] });
+
+    await recordScannerCall(call);
+
+    expect(countCalls('SET logical_call_id')).toBe(0);
+    expect(callWith('INSERT INTO node_radio_events')?.at(-1)).toBeNull();
+    const insSql = clientQuery.mock.calls
+      .map((a) => String(a[0]))
+      .find((s) => s.includes('INSERT INTO node_radio_events'));
+    expect(insSql).toContain('COALESCE($12::bigint, (SELECT id FROM n))');
+    expect(insSql).toContain('ON CONFLICT DO NOTHING');
+  });
+
+  it('skips a call stamped more than 48h from server time', async () => {
+    armQueries({ foundRadio: null, insertIds: ['506'] });
+    connectMock.mockClear();
+
+    const ok = await recordScannerCall({ ...call, receivedAt: new Date('1999-01-01T00:00:00Z') });
+
+    expect(ok).toBe(false);
+    expect(countCalls('INSERT INTO node_radio_events')).toBe(0);
+    expect(connectMock).not.toHaveBeenCalled();
   });
 
   it('an unpatched talkgroup is a list of one and locks on itself', async () => {

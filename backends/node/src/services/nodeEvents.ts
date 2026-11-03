@@ -12,9 +12,9 @@
  * PAGER (unchanged from 043): every relayed page is recorded via
  * recordPagerEvent.
  *
- * Both paths write a DETAIL row (30-day retention — see nodeEventsPruner.ts)
- * and roll into the hourly FOREVER buckets (node_radio_hourly /
- * node_radio_hourly_sys / node_pager_hourly) in the same transaction.
+ * Both paths write a DETAIL row (30-day retention — see nodeEventsPruner.ts).
+ * The radio hourly FOREVER buckets (node_radio_hourly*) are no longer written
+ * here: since migration 080 nodeHourlyRollup.ts derives them from these rows.
  *
  * Logical grouping: the same over-the-air transmission heard by N nodes
  * arrives as N events. Rows within ±5s on the same (system, talkgroup)
@@ -164,7 +164,8 @@ const RECORDED_DIAG = process.env['RECORDED_DIAG'] === '1';
 
 /** A node with a wildly wrong clock must not scatter rows across the
  *  timeline (they'd never prune / group). Anything outside now±48h is
- *  replaced with the server's now. */
+ *  replaced with the server's now on the pager path, and SKIPPED on the two
+ *  radio paths — see radioReceivedAt. */
 const CLOCK_SANITY_MS = 48 * 60 * 60 * 1000;
 
 /**
@@ -235,9 +236,25 @@ export function isRealTalkerAlias(alias: string, radioId: number | null): boolea
 }
 
 function clampReceivedAt(d: Date): Date {
+  return radioReceivedAt(d) ?? new Date();
+}
+
+/**
+ * A radio reception's own timestamp, or null when it is unusable (not a date,
+ * or more than CLOCK_SANITY_MS from now), in which case the reception is
+ * skipped rather than filed at the server's clock.
+ *
+ * Re-stamping was the pager rule applied here too, and it is wrong for radio
+ * twice over. A reception filed at a made-up moment can never join the call it
+ * really belonged to, so it only ever forked a phantom call of its own. And the
+ * dedup key includes received_at (migration 131, needed to partition the table
+ * by day): an agent re-sending a batch after a failure would get a different
+ * "now" on each attempt, and the re-send would be stored twice.
+ */
+function radioReceivedAt(d: Date): Date | null {
   const t = d instanceof Date ? d.getTime() : NaN;
-  if (!Number.isFinite(t)) return new Date();
-  if (Math.abs(t - Date.now()) > CLOCK_SANITY_MS) return new Date();
+  if (!Number.isFinite(t)) return null;
+  if (Math.abs(t - Date.now()) > CLOCK_SANITY_MS) return null;
   return d;
 }
 
@@ -424,10 +441,49 @@ export function _resetCanonicalSystems(): void {
 }
 
 /**
+ * The activity path's insert. Two things about it are deliberate.
+ *
+ * THE ROW'S ID IS DRAWN FIRST. The event that opens a call has no existing
+ * group to join ($20 is null), and its call's id is its own row id. That used
+ * to mean inserting and then `UPDATE ... SET logical_call_id = id`: a second
+ * heap tuple per opener, and since logical_call_id is indexed the update could
+ * never be HOT, so every index on the table took a second entry. Openers are
+ * not rare — 30 % of rows on production (2026-11-03) — so taking nextval() in
+ * the CTE and writing it to both columns removes one row version and a dozen
+ * index entries per opener. A CTE that calls a volatile function is evaluated
+ * once however often it is referenced, so both columns get the same value. A
+ * re-send that then hits the dedup index throws its value away; ids only need
+ * to be unique and increasing, and gaps are already normal. The sequence name
+ * is fixed by migration 130.
+ *
+ * THE CONFLICT TARGET IS LEFT OPEN. The dedup index is moving from
+ * (node_id, stream_id, source_event_id) to the same plus received_at (131),
+ * which partitioning on received_at requires. A named target must match one
+ * index exactly, and an INVALID index cannot be an arbiter, so naming either
+ * would tie this statement to the state of a migration. With no target, any
+ * unique violation is a skip; the only other unique index is the id itself,
+ * which a sequence cannot collide on.
+ */
+const INSERT_EVENT_SQL = `
+  WITH n AS (SELECT nextval('node_radio_events_id_seq') AS id)
+  INSERT INTO node_radio_events
+    (id, node_id, received_at, stream_id, source_event_id,
+     action, event_type, system, talkgroup, source_unit,
+     frequency, timeslot, encrypted,
+     site_rfss, site_id, site_nac, wacn,
+     system_label, source_alias, patch_members, logical_call_id)
+  VALUES ((SELECT id FROM n), $1, $2::timestamptz, $3, $4, $5, $6, $7, $8, $9,
+          $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
+          COALESCE($20::bigint, (SELECT id FROM n)))
+  ON CONFLICT DO NOTHING
+  RETURNING id`;
+
+/**
  * Record a batch of activity events for one node/stream. Returns how many
  * were NEWLY inserted (deduped re-sends are skipped silently — the unique
- * (node_id, stream_id, source_event_id) index + ON CONFLICT DO NOTHING
- * makes re-posting a batch idempotent).
+ * dedup index + ON CONFLICT DO NOTHING makes re-posting a batch idempotent)
+ * and how many failed. An event whose timestamp is unusable is neither: it is
+ * skipped and logged (radioReceivedAt).
  *
  * Batching choice: ONE pooled connection for the whole batch, but a
  * SEPARATE transaction per event. Rationale: the advisory xact lock that
@@ -467,9 +523,16 @@ export async function recordActivityEvents(
     const client = await pool.connect();
     let failures = 0;
     let lastErr: unknown = null;
+    let badClock = 0;
     try {
       for (const ev of events) {
-        const receivedAt = clampReceivedAt(new Date(ev.atMs));
+        const receivedAt = radioReceivedAt(new Date(ev.atMs));
+        if (receivedAt === null) {
+          // Neither accepted nor failed: a failure would refuse the ack and
+          // have the agent re-send an event that can never be stored, forever.
+          badClock++;
+          continue;
+        }
         const label = ev.systemName ?? null;
         // Identity BEFORE grouping: the system id is half the logical-call
         // key, so a reception read with corrupt ids has to be put right here
@@ -519,29 +582,16 @@ export async function recordActivityEvents(
           );
           const existingGroup = found.rows[0]?.logical_call_id ?? null;
 
-          // Dedupe: a re-sent event hits the unique (node_id, stream_id,
-          // source_event_id) index → no row returned → skip stamps/buckets.
+          // Dedupe: a re-sent event hits the unique dedup index → no row
+          // returned → skip stamps/buckets. See INSERT_EVENT_SQL for why the
+          // conflict target is left open.
           //
-          // logical_call_id is written HERE, not by a follow-up UPDATE. The
+          // logical_call_id is written HERE, never by a follow-up UPDATE. The
           // lookup above already resolved which call this event belongs to,
-          // and updating a just-inserted row cost a second row version on
-          // every single event: logical_call_id is indexed, so the update
-          // could never be HOT and every index on the table took a second
-          // entry. A call averages ~29 events, so only the one that OPENS a
-          // call still needs the update below — it is the only event whose
-          // group is its own id, which does not exist until the insert
-          // returns.
+          // and the event that OPENS a call (existingGroup null) takes the id
+          // the insert itself draws — see INSERT_EVENT_SQL.
           const ins = await client.query<{ id: string }>(
-            `INSERT INTO node_radio_events
-               (node_id, received_at, stream_id, source_event_id,
-                action, event_type, system, talkgroup, source_unit,
-                frequency, timeslot, encrypted,
-                site_rfss, site_id, site_nac, wacn,
-                system_label, source_alias, patch_members, logical_call_id)
-             VALUES ($1, $2::timestamptz, $3, $4, $5, $6, $7, $8, $9,
-                     $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
-             ON CONFLICT (node_id, stream_id, source_event_id) DO NOTHING
-             RETURNING id`,
+            INSERT_EVENT_SQL,
             [
               nodeId,
               receivedAt.toISOString(),
@@ -582,15 +632,6 @@ export async function recordActivityEvents(
             await client.query('COMMIT');
             continue;
           }
-          if (existingGroup === null) {
-            // This event opened the call, so the group IS this row. Still a
-            // second write, but one per call rather than one per event.
-            await client.query(
-              `UPDATE node_radio_events SET logical_call_id = id WHERE id = $1`,
-              [rowId],
-            );
-          }
-
           // Remember the radio's over-the-air name permanently. This is where
           // aliases actually arrive — nearly all of them ride patch calls —
           // and node_radio_events is pruned at 30 days, so without a durable
@@ -651,9 +692,12 @@ export async function recordActivityEvents(
           );
           const claimedBytes = claimed.rows[0] ? Number(claimed.rows[0].audio_bytes) || 0 : null;
           if (claimedBytes !== null) {
+            // received_at alongside the id so the update can go straight to
+            // the right day once the table is partitioned on it.
             await client.query(
-              `UPDATE node_radio_events SET recorded = true, audio_bytes = $1 WHERE id = $2`,
-              [claimedBytes, rowId],
+              `UPDATE node_radio_events SET recorded = true, audio_bytes = $1
+                WHERE id = $2 AND received_at = $3::timestamptz`,
+              [claimedBytes, rowId, receivedAt.toISOString()],
             );
           }
 
@@ -676,6 +720,12 @@ export async function recordActivityEvents(
           node: nodeId.slice(0, 8),
         },
         'nodeEvents: recordActivityEvents partial failure',
+      );
+    }
+    if (badClock > 0) {
+      log.warn(
+        { skipped: badClock, of: events.length, node: nodeId.slice(0, 8) },
+        'nodeEvents: receptions skipped, timestamp more than 48h from server time (node clock?)',
       );
     }
     if (corrected > 0) {
@@ -810,10 +860,13 @@ export async function markRecorded(
         // property of the RADIO, so the first sighting is as good as any, and
         // never overwriting means a later call that happened to carry no alias
         // cannot blank one we already know.
+        // (id, received_at) rather than id alone so that, once the table is
+        // partitioned on received_at, the outer update can be pointed at one
+        // day instead of probing every day's id index.
         `UPDATE node_radio_events SET recorded = true, audio_bytes = $4,
                 source_alias = COALESCE(source_alias, $7::text)
-          WHERE id = (
-            SELECT id FROM node_radio_events
+          WHERE (id, received_at) = (
+            SELECT id, received_at FROM node_radio_events
              WHERE node_id = $1
                AND ($2::int[] IS NULL OR talkgroup = ANY($2::int[]))
                AND recorded = false
@@ -1423,7 +1476,16 @@ export async function recordScannerCall(call: ScannerCall): Promise<boolean> {
   if (!pool) return false;
 
   const shifted = new Date(call.receivedAt.getTime() + config.SCANNER_TIME_OFFSET_MS);
-  const receivedAt = clampReceivedAt(shifted);
+  const receivedAt = radioReceivedAt(shifted);
+  if (receivedAt === null) {
+    // See radioReceivedAt. The audio itself was already relayed; only our own
+    // record of it is skipped.
+    log.warn(
+      { node: call.nodeId.slice(0, 8), at: call.receivedAt.toISOString() },
+      'nodeEvents: scanner call skipped, timestamp more than 48h from server time',
+    );
+    return false;
+  }
   const sys = await resolveScannerSystem();
   const system = sys.system;
   const alias =
@@ -1494,22 +1556,23 @@ export async function recordScannerCall(call: ScannerCall): Promise<boolean> {
     );
     const existingGroup = found.rows[0]?.logical_call_id ?? null;
 
-    // logical_call_id rides the insert, as on the activity path above: the
-    // lookup has already resolved the group, and a follow-up update would
-    // leave a dead row version behind for every reception.
+    // logical_call_id rides the insert, as on the activity path above, and a
+    // reception that opens its call takes the id the insert draws — the same
+    // arrangement, for the same reasons, as INSERT_EVENT_SQL.
     const ins = await client.query<{ id: string }>(
-      `INSERT INTO node_radio_events
-         (node_id, received_at, stream_id, source_event_id,
+      `WITH n AS (SELECT nextval('node_radio_events_id_seq') AS id)
+       INSERT INTO node_radio_events
+         (id, node_id, received_at, stream_id, source_event_id,
           action, event_type, system, wacn, system_label,
           talkgroup, source_unit,
           frequency, encrypted, recorded, audio_bytes, source_alias,
           logical_call_id)
-       VALUES ($1, $2::timestamptz, 'scanner', $3,
+       VALUES ((SELECT id FROM n), $1, $2::timestamptz, 'scanner', $3,
                'CALL', 'CALL_GROUP', $4, $5, $6,
                $7, $8,
                $9, false, true, $10, $11,
-               $12)
-       ON CONFLICT (node_id, stream_id, source_event_id) DO NOTHING
+               COALESCE($12::bigint, (SELECT id FROM n)))
+       ON CONFLICT DO NOTHING
        RETURNING id`,
       [
         call.nodeId,
@@ -1536,13 +1599,6 @@ export async function recordScannerCall(call: ScannerCall): Promise<boolean> {
       await client.query('COMMIT');
       return true;
     }
-    if (existingGroup === null) {
-      // No node had this transmission open: this reception is the call.
-      await client.query(`UPDATE node_radio_events SET logical_call_id = id WHERE id = $1`, [
-        rowId,
-      ]);
-    }
-
     // The scanner's own OTA is durable identity like any other.
     if (alias && call.sourceUnit !== null) {
       await client.query(
