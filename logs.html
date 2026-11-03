@@ -2936,6 +2936,17 @@
       }
     }
     
+    // The stored-at window a nearby search covers: the day either side of the
+    // item, which is what its results are filtered to below (plus an hour for
+    // a row stored a poll after its own timestamp). A window counted back
+    // from now found nothing for an item more than a week old, and had the
+    // archive read every row of the week to test where each one was.
+    function nearbyWindow(timeMs) {
+      if (!timeMs) return 'hours=168';
+      const t = Math.floor(timeMs / 1000);
+      return `since=${t - 86400}&until=${t + 86400 + 3600}`;
+    }
+
     async function loadLinkedIncidents(item, requestToken) {
       const linkedSection = document.getElementById('linked-incidents-section');
       if (!linkedSection) return;
@@ -2998,7 +3009,7 @@
               
               // ~20m radius, search all pagers (unique=0 explicit to
               // include ended ones — backend default is now unique=1)
-              const proximityUrl = `${API_BASE}/api/v1/history?source=pager&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100&unique=0&full=1`;
+              const proximityUrl = `${API_BASE}/api/v1/history?source=pager&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&${nearbyWindow(pagerTime)}&limit=100&unique=0&full=1`;
               const proxRes = await AusApi.fetch(proximityUrl);
               if (!proxRes.ok) throw new Error(`API returned ${proxRes.status}`);
               const proxData = (await proxRes.json()).data;
@@ -3059,7 +3070,7 @@
               
               // Search nearby (~20m radius), unique=0 explicit to
               // include ended incidents (backend default is now unique=1)
-              const incUrl = `${API_BASE}/api/v1/history?source=rfs,traffic_incident,traffic_fire&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100&unique=0&full=1`;
+              const incUrl = `${API_BASE}/api/v1/history?source=rfs,traffic_incident,traffic_fire&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&${nearbyWindow(pagerTime)}&limit=100&unique=0&full=1`;
               const incRes = await AusApi.fetch(incUrl);
               if (!incRes.ok) throw new Error(`API returned ${incRes.status}`);
               const incData = (await incRes.json()).data;
@@ -3182,7 +3193,7 @@
           
           // ~20m radius, search all pagers (unique=0 explicit to
           // include ended ones — backend default is now unique=1)
-          const url = `${API_BASE}/api/v1/history?source=pager&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100&unique=0&full=1`;
+          const url = `${API_BASE}/api/v1/history?source=pager&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&${nearbyWindow(incidentTime)}&limit=100&unique=0&full=1`;
           const res = await AusApi.fetch(url);
           if (!res.ok) throw new Error(`API returned ${res.status}`);
           const data = (await res.json()).data;
