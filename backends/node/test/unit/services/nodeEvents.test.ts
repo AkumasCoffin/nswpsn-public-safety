@@ -45,6 +45,13 @@ vi.mock('../../../src/services/rdioPatches.js', async (importOriginal) => {
   return { ...actual, rdioPatches: vi.fn(async () => patchLookup) };
 });
 
+/** The day-partition runway (nodeEventsPruner.ts). Only its trigger matters
+ *  here: an insert that finds no partition for its day asks for one. */
+const requestPartitions = vi.fn();
+vi.mock('../../../src/services/nodeEventsPruner.js', () => ({
+  requestNodeEventPartitions: () => requestPartitions(),
+}));
+
 import {
   patchMembersOf,
   recordActivityEvents,
@@ -300,6 +307,36 @@ describe('recordActivityEvents', () => {
     expect(callWith('INSERT INTO node_radio_events')?.[3]).toBe(3);
     // Nothing at all is done for the skipped ones — not even a lock.
     expect(countCalls('pg_advisory_xact_lock')).toBe(1);
+  });
+
+  it('an insert with no partition for its day fails that event and asks for the runway', async () => {
+    requestPartitions.mockReset();
+    clientQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('INSERT INTO node_radio_events')) {
+        throw Object.assign(
+          new Error('no partition of relation "node_radio_events" found for row'),
+          { code: '23514' },
+        );
+      }
+      return { rows: [] };
+    });
+    const r = await recordActivityEvents('node-aaaa', 'stream-1234', [{ ...baseEvent }]);
+    // Failed, so the route refuses the ack and the agent re-sends it — by
+    // which time the partition exists.
+    expect(r).toEqual({ accepted: 0, failed: 1 });
+    expect(requestPartitions).toHaveBeenCalledTimes(1);
+  });
+
+  it('any other check violation does not touch the partitions', async () => {
+    requestPartitions.mockReset();
+    clientQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('INSERT INTO node_radio_events')) {
+        throw Object.assign(new Error('new row violates check constraint "x"'), { code: '23514' });
+      }
+      return { rows: [] };
+    });
+    await recordActivityEvents('node-aaaa', 'stream-1234', [{ ...baseEvent }]);
+    expect(requestPartitions).not.toHaveBeenCalled();
   });
 
   it('keeps an event within the 48h window at its own time', async () => {

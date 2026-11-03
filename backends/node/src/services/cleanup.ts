@@ -24,6 +24,7 @@
  * updated row counts.
  */
 import { getPool } from '../db/pool.js';
+import { partitionsEndingBy, type PartitionRow } from '../db/partitions.js';
 import { log } from '../lib/log.js';
 import { pruneOldSnapshots } from './statsArchiver.js';
 import {
@@ -80,48 +81,15 @@ const stats: CleanupStats = {
 let timer: NodeJS.Timeout | null = null;
 let running = false;
 
-interface PartitionRow {
-  parent: string;
-  partition: string;
-  range_to: string;
-  row_count: string;
-}
-
 /**
  * Find every monthly partition whose upper bound (range_to) is at or
- * before the cutoff. Postgres stores partition bounds in
- * pg_class.relpartbound; we parse the FROM/TO via pg_get_expr.
+ * before the cutoff. See db/partitions.ts.
  */
-async function findExpiredPartitions(
-  client: { query: (sql: string, params?: unknown[]) => Promise<{ rows: PartitionRow[] }> },
+function findExpiredPartitions(
+  client: Parameters<typeof partitionsEndingBy>[0],
   cutoffIso: string,
 ): Promise<PartitionRow[]> {
-  const sql = `
-    WITH parts AS (
-      SELECT
-        parent.relname::text AS parent,
-        child.relname::text AS partition,
-        pg_get_expr(child.relpartbound, child.oid) AS bound
-      FROM pg_inherits
-      JOIN pg_class parent ON parent.oid = pg_inherits.inhparent
-      JOIN pg_class child  ON child.oid  = pg_inherits.inhrelid
-      WHERE parent.relname = ANY($1::text[])
-    )
-    SELECT
-      parent,
-      partition,
-      -- bound is "FOR VALUES FROM ('YYYY-MM-DD ...') TO ('YYYY-MM-DD ...')".
-      -- Pull the second timestamp.
-      regexp_replace(bound, $2, '\\1') AS range_to,
-      0::text AS row_count
-    FROM parts
-    WHERE bound LIKE 'FOR VALUES FROM%'
-      AND regexp_replace(bound, $2, '\\1')::timestamptz <= $3::timestamptz
-  `;
-  const re =
-    "FOR VALUES FROM \\(.+\\) TO \\('([^']+)'\\)";
-  const r = await client.query(sql, [ARCHIVE_TABLES, re, cutoffIso]);
-  return r.rows;
+  return partitionsEndingBy(client, ARCHIVE_TABLES, cutoffIso);
 }
 
 /**

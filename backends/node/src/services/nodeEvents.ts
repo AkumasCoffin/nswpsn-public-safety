@@ -33,6 +33,15 @@ import { getPool, getWriterPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { config } from '../config.js';
 import { rdioPatches, groupingTalkgroup } from './rdioPatches.js';
+import { requestNodeEventPartitions } from './nodeEventsPruner.js';
+
+/** Postgres refusing a row because node_radio_events has no partition for its
+ *  day (migration 135): SQLSTATE 23514 is any check_violation, so the message
+ *  decides. */
+function isNoPartitionError(err: unknown): boolean {
+  const e = err as { code?: string; message?: string } | null;
+  return e?.code === '23514' && /no partition of relation/.test(e.message ?? '');
+}
 
 /**
  * How far apart two receptions of ONE transmission may be stamped.
@@ -707,6 +716,9 @@ export async function recordActivityEvents(
           await client.query('ROLLBACK').catch(() => {});
           failures += 1;
           lastErr = err;
+          // The event fails and the agent re-sends it; this makes sure the
+          // day's partition exists by then instead of at the next hourly tick.
+          if (isNoPartitionError(err)) requestNodeEventPartitions();
         }
       }
     } finally {
@@ -1626,6 +1638,7 @@ export async function recordScannerCall(call: ScannerCall): Promise<boolean> {
     // audio, so a failed capture is a logged gap, never a thrown error — a
     // 500 here caused rdio to retry a call it had successfully relayed.
     log.error({ err, node: call.nodeId.slice(0, 8) }, 'nodeEvents: recordScannerCall failed');
+    if (isNoPartitionError(err)) requestNodeEventPartitions();
     return false;
   } finally {
     client.release();

@@ -79,6 +79,7 @@ import {
   stopRdioIncidentAlertLoop,
 } from './services/rdioIncidentAlerts.js';
 import {
+  ensureNodeEventPartitions,
   startNodeEventsPruner,
   stopNodeEventsPruner,
 } from './services/nodeEventsPruner.js';
@@ -139,6 +140,9 @@ async function preflight(): Promise<void> {
   } catch (err) {
     log.error({ err }, 'boot: ensureArchivePartitions failed');
   }
+  // Same for the radio detail table's day partitions (migration 135), before
+  // the port binds and the node ingest routes take traffic. Never throws.
+  await ensureNodeEventPartitions();
   archiveWriter.startFlushLoop();
   startActivityMode(); // sweeper for stale heartbeats; toggles polling cadence
   startFilterCacheRefresh(); // 5-min archive-backed facet refresh for /api/data/history/filters

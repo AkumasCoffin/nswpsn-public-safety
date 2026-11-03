@@ -31,7 +31,7 @@ backends/node/
   src/store/archive.ts  ArchiveWriter — history, batched into PostgreSQL
   src/db/pool.ts        pg pool wrapper
   src/db/migrate.ts     migration runner
-  src/db/migrations/    132 numbered .sql files
+  src/db/migrations/    136 numbered .sql files
   src/lib/              logger, timezone, masks, relay-error formatting
   assets/               node-versions.json (agent manifest), rfs-zones.json
   openapi.json          the API description, generated — `npm run openapi`
@@ -681,11 +681,11 @@ either; the backend substitutes them when it forwards.
 
 ## Database
 
-PostgreSQL, 132 numbered migrations in `src/db/migrations/`, applied by
+PostgreSQL, 136 numbered migrations in `src/db/migrations/`, applied by
 `src/db/migrate.ts` at boot and by `npm run migrate` before the restart on
 deploy. The runner is idempotent, so applying twice is a no-op. New schema is a
-new numbered file; never edit an applied one. The most recent are `130`–`132`,
-the first half of moving `node_radio_events` to daily partitions (below).
+new numbered file; never edit an applied one. The most recent are `130`–`136`,
+which moved `node_radio_events` to daily partitions (below).
 
 A file whose **first line** is `-- noTransaction` runs outside a transaction,
 which is what `CREATE INDEX CONCURRENTLY` needs; the runner sends the whole file
@@ -726,31 +726,67 @@ genuinely large and run off the request path.
 
 ### node_radio_events: the one table whose storage needs watching
 
-Every reception the radio nodes report lands here — 5.6 M rows on a 30-day
-retention — and it is read by the hourly rollup, by every staff Data page and by
-the ingest path's own grouping lookup. It is also the only table where the index
-footprint is worth thinking about: before migration `124` it carried 5795 MB of
-index against 1454 MB of heap, four times more index than data, in a container
-with 1 GB of shared buffers. That ratio decides whether a day-wide range scan
-costs ~120 ms warm or ~35 s cold, and the cold case is not hypothetical: it
-stalled the rollup's catch-up after the `123` deploy until
-`services/nodeHourlyRollup.ts` was given smaller batches and its own statement
-timeout.
+Every reception the radio nodes report lands here — ~6 M rows on a 30-day
+retention, ~220 k a day — and it is read by the hourly rollup, by every staff
+Data page and by the ingest path's own grouping lookup. Before migration `124`
+it carried 5795 MB of index against 1454 MB of heap, in a container with 1 GB of
+shared buffers; that ratio decides whether a day-wide range scan costs ~120 ms
+warm or ~35 s cold, and the cold case stalled the rollup's catch-up after the
+`123` deploy until `services/nodeHourlyRollup.ts` was given smaller batches and
+its own statement timeout.
 
-Three things to know before touching it:
+**Since `135` it is partitioned by UTC day.** Partitions are named
+`node_radio_events_YYYYMMDD`, bounds `[day, day + 1)` in UTC. The table as it
+was before is the first partition, `node_radio_events_legacy`, covering
+everything below the bound `133` set (three days after that deploy); it was
+attached, not copied, so the cutover was catalogue-only. Readers did not
+change: they all bound `received_at`, so the planner reads only the days they
+ask for.
+
+- **Retention is `DROP TABLE`**, one partition a day, in
+  `services/nodeEventsPruner.ts`: a day goes once its upper bound is past both
+  30 days ago and the rollup's high-water mark (the old rule, unchanged). That
+  replaced ~36 k single-row `DELETE`s an hour and the dead tuples they left. The
+  legacy partition is trimmed by the old `DELETE` until its own bound passes the
+  line, then dropped the same way.
+- **The runway**: the same hourly job, and boot before the port binds, make
+  sure a partition exists from yesterday to a week ahead, through
+  `ensure_node_radio_events_partition(date)` (migration `135`), which creates
+  the table, sets its storage parameters and then `ATTACH`es it (a lighter lock
+  than `CREATE ... PARTITION OF`). An insert that still finds no partition fails
+  that one event, which the agent re-sends, and triggers the runway at once.
+- **Every DROP and ATTACH runs under a 3 s `lock_timeout`.** Both briefly lock
+  the parent, which every insert also needs; waiting behind a long staff read
+  would hold ingest up for as long as the read. A timeout is retried next hour.
+- **Storage parameters are per partition.** A partitioned parent's are not
+  inherited, so the function sets `fillfactor = 85` and the 0.05 autovacuum
+  factors on each day (see below).
+- **ANALYZE the parent.** Autovacuum analyses partitions but never a
+  partitioned parent, whose statistics the planner uses for the grouping
+  lookup's self-join; the pruner does it daily and after each drop.
+- **Eight indexes per day**, not twelve: the dedup index (below), `id`,
+  `logical_call_id`, `received_at`, `(system, talkgroup, received_at)`,
+  `(source_unit, received_at)`, `(node_id, talkgroup, received_at)` and `110`'s
+  partial talkgroup index. The four partial call-predicate indexes from
+  `080`/`115`/`116` were not carried over (the predicate matches 81 % of rows,
+  and a day partition bounds the time range they existed to order); they
+  remain on the legacy partition until it is dropped.
+- **There is no primary key on the parent.** A partitioned table's unique
+  indexes must include the partition key, and `id` must stay one global
+  sequence for `logical_call_id` and the `ORDER BY id` in the rollup, so `id`
+  has a plain index on every partition instead.
+
+Things to know before touching it:
 
 - **The dedup index is correctness, not performance.** Both ingest paths say
   `ON CONFLICT DO NOTHING` (`services/nodeEvents.ts`), which is what makes a
-  re-sent agent batch idempotent. The index is `uq_nre_node_stream_event`
-  (`node_id, stream_id, source_event_id`), and since `131` also
-  `uq_nre_node_stream_event_ts`, the same plus `received_at`, which a table
-  partitioned on `received_at` requires. The partition cutover drops the first;
-  never drop the second. The conflict target is left open on purpose: a named
-  target must match exactly one valid index, which would tie the insert to the
-  state of a migration. This index is also the largest object on the table and
-  bloats faster than the rest, because its inserts land in node/stream order
-  rather than append order; `scripts/reindex-nre-unique.mjs` rebuilds the
-  three-column one concurrently, with no service stop.
+  re-sent agent batch idempotent. It is `(node_id, stream_id, source_event_id,
+  received_at)` — `received_at` because a partitioned table requires it. Never
+  drop it. The conflict target is left open on purpose: a named target must
+  match exactly one valid index, which would tie the insert to the state of a
+  migration. `scripts/reindex-nre-unique.mjs` rebuilt the old three-column
+  version and does not apply since `135`; a day partition's copy is ~1/30 the
+  size and is dropped with its day, so bloat no longer accumulates.
 - **A reception more than 48 h from server time is skipped**, not re-stamped
   with the server's clock (`radioReceivedAt`). With `received_at` in the dedup
   key, a re-stamped re-send would be stored twice, and a reception filed at a
@@ -772,14 +808,16 @@ Three things to know before touching it:
   `logical_call_id`. That last step came later (`130`), once production showed
   30 % of rows open a call, not the one in ~29 that had been assumed. If you add
   a column to either insert, keep it that way.
-- **`id` is a plain sequence default, not an identity** (`130`). The sequence is
-  named in the insert SQL and is deliberately not `OWNED BY` the column: once
-  the table is partitioned, the partition that holds today's rows will
-  eventually be dropped, and the parent's default must not go with it.
+- **`id` is a plain sequence default, not an identity** (`130`). PostgreSQL 17+
+  will not attach a table with an identity column of its own. The sequence is
+  named in the insert SQL and is deliberately not `OWNED BY` any column: it
+  belonged to the table that is now the legacy partition, and dropping that
+  must not take the parent's default with it.
 
 `124` also sets `autovacuum_vacuum_scale_factor` and
 `autovacuum_analyze_scale_factor` to 0.05 on `node_radio_events` and
-`adsb_tracks`. At the 0.2 cluster default, `node_radio_events` needed ~1.13 M
+`adsb_tracks` (and production also carries `fillfactor = 85` on the legacy
+table, set by hand); `135` puts the same three on every day partition. At the 0.2 cluster default, `node_radio_events` needed ~1.13 M
 dead tuples before autovacuum would fire and simply idled below the threshold for
 days at a time. These are deliberate per-table overrides — not leftovers to tidy
 away.

@@ -1,5 +1,11 @@
 #!/usr/bin/env node
 /**
+ * OBSOLETE SINCE MIGRATION 135. node_radio_events is partitioned by day, this
+ * index no longer exists (the dedup index is now per partition and includes
+ * received_at), and each day's copy is dropped with its day, so the bloat this
+ * reclaimed no longer builds up. Kept for its history; it exits without doing
+ * anything when it finds the index gone.
+ *
  * Rebuild uq_nre_node_stream_event, the ingest dedup index, to reclaim its
  * bloat.
  *
@@ -70,6 +76,14 @@ async function main() {
       [TABLE, INDEX],
     );
     if (before.rows.length === 0) {
+      const kind = await pool.query(
+        `SELECT relkind FROM pg_class WHERE oid = to_regclass($1)`,
+        [TABLE],
+      );
+      if (kind.rows[0]?.relkind === 'p') {
+        console.log(`${TABLE} is partitioned by day (migration 135); this script no longer applies.`);
+        return;
+      }
       console.error(`${INDEX} does not exist on ${TABLE} — nothing to do.`);
       console.error('That index is ingest\'s ON CONFLICT target; if it is really');
       console.error('missing, recreate it before worrying about its size.');
