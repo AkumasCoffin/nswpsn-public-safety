@@ -65,12 +65,9 @@ describe('rollupNodeHourlyOnce', () => {
   });
 
   it('re-derives the recent past, not just the hours it has never seen', async () => {
-    // `recorded` is not final when an hour ends. markRecorded sets it when the
-    // audio arrives, which lands after the call and so, often enough, after
-    // the hour it belongs to was summarised. A cursor that only moved forward
-    // left that hour permanently short — invisible while nothing read these
-    // tables, and wrong numbers on the page the moment a tile is served from
-    // one.
+    // An hour is not final when it ends: an automatic patch is merged when the
+    // audio upload arrives, and a node back from an outage re-sends late. A
+    // cursor that only moved forward would keep that hour as first counted.
     armCursor('2026-08-24T10:00:00.000Z');
     const hours = await rollupNodeHourlyOnce(new Date('2026-08-24T11:30:00.000Z'));
 
@@ -239,9 +236,9 @@ describe('rollupNodeHourlyOnce', () => {
     expect(sys).toContain('logical_calls_tg, logical_calls_site');
     // The site drill-down's encrypted tile needs the same per-site attribution:
     // under rn = 1 a simulcast call is encrypted at its lowest site only.
-    expect(sys).toContain('encrypted_calls_site, recorded_calls_site');
+    expect(sys).toContain('encrypted_calls_site)');
     expect(sys).toContain('(COUNT(*) FILTER (WHERE a.rn_site = 1 AND a.call_encrypted))::int');
-    expect(sys).toContain('(COUNT(*) FILTER (WHERE a.rn_site = 1 AND a.call_recorded))::int');
+    expect(sys).not.toContain('recorded');
   });
 
   it('files each reception under ONE radio, so a node or site sum is its receptions', async () => {
@@ -279,7 +276,7 @@ describe('rollupNodeHourlyOnce', () => {
     // Partitioned by the CALL alone. Adding talkgroup counts a patched call
     // once per member talkgroup — 407 against a true 406 on the same hour.
     expect(sys).toContain('PARTITION BY r.hour, r.logical_call_id');
-    // encrypted/recorded belong to the CALL, so they are resolved across all
+    // encrypted belongs to the CALL, so it is resolved across all
     // of its receptions before the attribution filter picks the counting row.
     expect(sys).toContain('bool_or(r.encrypted) OVER w');
     expect(sys).toContain('WHERE a.rn = 1 AND a.call_encrypted');

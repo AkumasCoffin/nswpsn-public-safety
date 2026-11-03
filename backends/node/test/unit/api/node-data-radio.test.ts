@@ -437,7 +437,7 @@ describe('display enrichment (labels, site names, aliases)', () => {
     queryMock.mockImplementation((sql: string) => {
       if (sql.includes('DISTINCT ON (system_id, rfss, site_id)')) return { rows: [SNAPSHOT_ROW] };
       if (sql.includes('AS talkgroups')) {
-        return { rows: [{ calls: 5, logical: 3, enc: 0, rec: 0, talkgroups: 1, sites: 1 }] };
+        return { rows: [{ calls: 5, logical: 3, enc: 0, talkgroups: 1, sites: 1 }] };
       }
       if (sql.includes('GROUP BY talkgroup')) {
         return { rows: [{ talkgroup: 10101, calls: 5, logical: 3, enc: 0, last_seen: LAST_SEEN }] };
@@ -704,7 +704,7 @@ describe('CALL_GROUP filter (talkgroup voice calls only)', () => {
               id: r.logical, at: LAST_SEEN, system: 721, talkgroup: r.talkgroup,
               talkgroup_label: null, system_label: null, source_unit: 555, source_alias: null,
               frequency: null, action: 'CALL', event_type: r.event_type,
-              encrypted: r.enc, recorded: false, receptions: 1,
+              encrypted: r.enc, receptions: 1,
               sites: [], nodes: [{ id: 'n1', name: 'Node 1' }],
             })),
         };
@@ -1097,7 +1097,7 @@ describe('system and site drill-downs (rollups, migration 126)', () => {
     const totals = calls.find((c) => c.sql.includes('AS talkgroups'));
     expect(totals?.sql).toContain('logical_calls_site AS logical');
     expect(totals?.sql).toContain('encrypted_calls_site AS enc');
-    expect(totals?.sql).toContain('recorded_calls_site AS rec');
+    expect(totals?.sql).not.toContain('recorded');
   });
 
   it('/system counts calls once per call, the fleet-wide attribution', async () => {
@@ -1125,7 +1125,7 @@ describe('system and site drill-downs (rollups, migration 126)', () => {
   it('/site builds totals, top radios, nodes and exact last-seen from the rollups', async () => {
     queryMock.mockImplementation((sql: string) => {
       if (sql.includes('AS talkgroups')) {
-        return { rows: [{ calls: 40, logical: 20, enc: 4, rec: 9, talkgroups: 3, sites: 1 }] };
+        return { rows: [{ calls: 40, logical: 20, enc: 4, talkgroups: 3, sites: 1 }] };
       }
       if (sql.includes('GROUP BY talkgroup')) {
         return { rows: [{ talkgroup: 10101, calls: 30, logical: 15, enc: 0, last_seen: T('2026-10-14T05:00:00Z') }] };
@@ -1154,7 +1154,7 @@ describe('system and site drill-downs (rollups, migration 126)', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.totals).toEqual({
-      calls: 40, logicalCalls: 20, encryptedCalls: 4, recordedCalls: 9,
+      calls: 40, logicalCalls: 20, encryptedCalls: 4,
       talkgroups: 3, radios: 57, sites: 1, nodes: 1,
     });
     // The rollup's hour is overridden by the moment the heard table kept.

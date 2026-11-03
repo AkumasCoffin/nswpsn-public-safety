@@ -34,7 +34,7 @@ function poolOf(rows: Record<string, unknown[]> = {}) {
     if (sql.includes('node_radio_hourly_sys')) {
       return { rows: (sql.includes('site_rfss <> -1') ? rows['sites'] : rows['tg']) ?? [] };
     }
-    if (sql.includes('AS bytes')) return { rows: rows['perNode'] ?? [] };
+    if (sql.includes('GROUP BY node_id')) return { rows: rows['perNode'] ?? [] };
     return { rows: rows['series'] ?? [] };
   });
   return { pool: { query } as never, query, seen };
@@ -140,7 +140,7 @@ describe('radioListsFromRollup', () => {
       sites: [{ site_rfss: 4, site_id: 85, receptions: 7 }],
       unit: [{ unit: 999, alias: 'CAR 1', receptions: 5 }],
       series: [{ bucket: new Date('2026-08-24T10:00:00Z'), n: 4 }],
-      perNode: [{ node_id: 'n1', calls: 12, bytes: '345' }],
+      perNode: [{ node_id: 'n1', calls: 12 }],
     });
     const r = await radioListsFromRollup(pool, '24h', EDGE);
     expect(r).not.toBeNull();

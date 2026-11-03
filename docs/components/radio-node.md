@@ -205,8 +205,8 @@ fleet page instead of failing silently.
 
 **The activity feed is what creates the permanent record.** Rows in
 `node_radio_events` come only from it (`backends/node/src/services/nodeEvents.ts`,
-migration 044); the audio upload merely calls `markRecorded()` on the closest
-matching event row. So a reception on an encrypted talkgroup — no audio to
+migration 044); the audio upload only merges an automatic patch's calls, and
+flags nothing on the rows. So a reception on an encrypted talkgroup — no audio to
 recover — is still recorded with its full P25 identity, site and encryption flag.
 That is the right outcome, and it is why the two paths exist.
 

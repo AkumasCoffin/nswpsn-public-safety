@@ -21,7 +21,7 @@
  *   - a RECEPTION is one (logical call, node, site), not one stored row — vce
  *     emits a GRANT and a CALL for the same receipt and repeats the grant on a
  *     re-grant;
- *   - a call is encrypted/recorded if ANY of its receptions was.
+ *   - a call is encrypted if ANY of its receptions was.
  *
  * The first pass over the 30 days of detail IS the backfill; there is no
  * separate migration step.
@@ -83,10 +83,12 @@ const MAX_BATCHES_PER_TICK = 8;
 /**
  * How far back each pass re-derives, on top of the hours it has never seen.
  *
- * Covers the lag between a call and its audio: markRecorded lands after the
- * call ends and can cross an hour boundary, so the hour just closed is not
- * final when it closes. Six hours is far more slack than that needs and costs
- * six DELETE+INSERT pairs an hour against a table of tens of rows per hour.
+ * Covers what changes a call after it ends: an automatic patch is merged when
+ * the audio upload arrives, and a node that lost its link re-sends queued
+ * receptions late. Either can cross an hour boundary, so the hour just closed
+ * is not final when it closes. Six hours is far more slack than that needs and
+ * costs six DELETE+INSERT pairs an hour against a table of tens of rows per
+ * hour.
  */
 const REDERIVE_HOURS = 6;
 
@@ -232,8 +234,7 @@ async function rollupRange(
                 COALESCE(system, 0) AS system,
                 COALESCE(talkgroup, 0) AS talkgroup,
                 COALESCE(site_rfss, -1) AS rfss,
-                COALESCE(site_id, -1) AS site,
-                audio_bytes
+                COALESCE(site_id, -1) AS site
            FROM node_radio_events
           WHERE received_at >= $1::timestamptz - ${CALL_LOOKBACK}
             AND received_at < $3::timestamptz
@@ -242,15 +243,14 @@ async function rollupRange(
          ${CALL_HOUR}
        ), r AS (
          SELECT ch.hour, e.node_id, e.system, e.talkgroup, e.logical_call_id,
-                e.rfss, e.site, MAX(e.audio_bytes) AS audio_bytes
+                e.rfss, e.site
            FROM ev e JOIN ch USING (logical_call_id)
           GROUP BY 1, 2, 3, 4, 5, 6, 7
        )
        INSERT INTO node_radio_hourly
-         (hour, node_id, system, talkgroup, calls, audio_bytes, logical_calls)
+         (hour, node_id, system, talkgroup, calls, logical_calls)
        SELECT r.hour, r.node_id, r.system, r.talkgroup,
               COUNT(*)::int,
-              COALESCE(SUM(r.audio_bytes), 0)::bigint,
               COUNT(DISTINCT r.logical_call_id)::int
          FROM r
         GROUP BY r.hour, r.node_id, r.system, r.talkgroup`,
@@ -275,7 +275,7 @@ async function rollupRange(
     // window=all needs. Receptions stay a plain COUNT(*): those really are
     // per-site, and they already summed correctly.
     //
-    // encrypted/recorded are properties of the CALL, so they are resolved
+    // encrypted is a property of the CALL, so it is resolved
     // across all of its receptions with a window before the attribution
     // filter picks the row to count them in.
     await client.query(
@@ -301,8 +301,8 @@ async function rollupRange(
     // patched call is one call at the site, however many talkgroups carried
     // it. See migration 123.
     //
-    // encrypted_calls_site / recorded_calls_site count the same per-site
-    // attribution's calls that were encrypted / recorded, for the site
+    // encrypted_calls_site counts the same per-site attribution's calls that
+    // were encrypted, for the site
     // drill-down's tiles (migration 126). The fleet-wide pair credits a
     // simulcast call to its lowest site only, so a site total built from them
     // reads near zero at every other site in the group.
@@ -313,7 +313,7 @@ async function rollupRange(
                 COALESCE(talkgroup, 0) AS talkgroup,
                 COALESCE(site_rfss, -1) AS rfss,
                 COALESCE(site_id, -1) AS site,
-                encrypted, recorded
+                encrypted
            FROM node_radio_events
           WHERE received_at >= $1::timestamptz - ${CALL_LOOKBACK}
             AND received_at < $3::timestamptz
@@ -323,14 +323,12 @@ async function rollupRange(
        ), r AS (
          SELECT ch.hour, e.system, e.talkgroup, e.rfss, e.site,
                 e.logical_call_id, e.node_id,
-                bool_or(e.encrypted) AS encrypted,
-                bool_or(e.recorded) AS recorded
+                bool_or(e.encrypted) AS encrypted
            FROM ev e JOIN ch USING (logical_call_id)
           GROUP BY 1, 2, 3, 4, 5, 6, 7
        ), a AS (
          SELECT r.*,
                 bool_or(r.encrypted) OVER w AS call_encrypted,
-                bool_or(r.recorded) OVER w AS call_recorded,
                 ROW_NUMBER() OVER (
                   PARTITION BY r.hour, r.logical_call_id
                   ORDER BY r.system, r.talkgroup, r.rfss, r.site, r.node_id
@@ -348,19 +346,17 @@ async function rollupRange(
        )
        INSERT INTO node_radio_hourly_sys
          (hour, system, talkgroup, site_rfss, site_id,
-          calls, logical_calls, receptions, encrypted_calls, recorded_calls,
+          calls, logical_calls, receptions, encrypted_calls,
           logical_calls_tg, logical_calls_site,
-          encrypted_calls_site, recorded_calls_site)
+          encrypted_calls_site)
        SELECT a.hour, a.system, a.talkgroup, a.rfss, a.site,
               COUNT(*)::int,
               (COUNT(*) FILTER (WHERE a.rn = 1))::int,
               COUNT(*)::int,
               (COUNT(*) FILTER (WHERE a.rn = 1 AND a.call_encrypted))::int,
-              (COUNT(*) FILTER (WHERE a.rn = 1 AND a.call_recorded))::int,
               (COUNT(*) FILTER (WHERE a.rn_tg = 1))::int,
               (COUNT(*) FILTER (WHERE a.rn_site = 1))::int,
-              (COUNT(*) FILTER (WHERE a.rn_site = 1 AND a.call_encrypted))::int,
-              (COUNT(*) FILTER (WHERE a.rn_site = 1 AND a.call_recorded))::int
+              (COUNT(*) FILTER (WHERE a.rn_site = 1 AND a.call_encrypted))::int
          FROM a
         GROUP BY a.hour, a.system, a.talkgroup, a.rfss, a.site`,
       range,
@@ -390,20 +386,18 @@ async function rollupRange(
          SELECT id, logical_call_id, talkgroup, patch_members, node_id,
                 COALESCE(site_rfss, -1) AS rfss, COALESCE(site_id, -1) AS site,
                 COALESCE(system, 0) AS system,
-                recorded, received_at
+                received_at
            FROM node_radio_events
           WHERE received_at >= $1::timestamptz - ${CALL_LOOKBACK}
             AND received_at < $3::timestamptz
             AND ${CALL_GROUP}
        ), tx AS (
          -- One row per call this pass owns: when it started, what talkgroup it
-         -- started on, and whether anything ever recorded it. The hour filter
-         -- is CALL_HOUR's, spelled out because this one also needs home and
-         -- rec; everything downstream joins tx, so a call belonging to an
+         -- started on. The hour filter is CALL_HOUR's, spelled out because
+         -- this one also needs home; everything downstream joins tx, so a call belonging to an
          -- earlier hour drops out of the whole statement.
          SELECT * FROM (
            SELECT logical_call_id,
-                  bool_or(recorded) AS rec,
                   (array_agg(talkgroup ORDER BY id))[1] AS home,
                   (array_agg(date_trunc('hour', received_at) ORDER BY id))[1] AS hour
              FROM ev GROUP BY logical_call_id
@@ -429,15 +423,14 @@ async function rollupRange(
          -- calls per (hour, home) cannot double-count the way the per-site
          -- table could. That is what buying the narrower grain gets us.
          SELECT hour, home,
-                COUNT(*)::int AS transmissions,
-                (COUNT(*) FILTER (WHERE rec))::int AS recorded
+                COUNT(*)::int AS transmissions
            FROM tx GROUP BY 1, 2
        )
        INSERT INTO node_radio_hourly_rx
-         (hour, home_talkgroup, receptions, receptions_home, transmissions, recorded)
+         (hour, home_talkgroup, receptions, receptions_home, transmissions)
        SELECT rx.hour, COALESCE(rx.home, 0),
               rx.receptions, rx.receptions_home,
-              COALESCE(c.transmissions, 0), COALESCE(c.recorded, 0)
+              COALESCE(c.transmissions, 0)
          FROM rx
          LEFT JOIN calls c ON c.hour = rx.hour AND c.home IS NOT DISTINCT FROM rx.home`,
       range,
@@ -588,13 +581,11 @@ export async function rollupNodeHourlyOnce(now: Date = new Date()): Promise<numb
 
     // Re-derive a few hours BEHIND the cursor as well as ahead of it.
     //
-    // `recorded` is not final when an hour ends. markRecorded sets it when the
-    // audio arrives, which is routinely after the call — and so, often enough,
-    // after the hour it belongs to has already been summarised. A cursor that
-    // only moves forward never revisits that hour, so its recorded count stays
-    // permanently short. Nothing noticed while nothing read these tables; the
-    // moment the ingested tile is served from here it becomes wrong numbers on
-    // the page.
+    // An hour is not final when it ends. An automatic patch is merged when the
+    // call's audio arrives, routinely after the call, and a node back from an
+    // outage re-sends receptions late — either can land after the hour they
+    // belong to has been summarised. A cursor that only moves forward never
+    // revisits that hour, so its figures would stay as first counted.
     //
     // DELETE-then-INSERT per hour makes re-running free of consequence, so the
     // cheapest correct answer is simply to redo the recent past every pass.

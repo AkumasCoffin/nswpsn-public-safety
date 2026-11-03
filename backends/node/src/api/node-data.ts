@@ -7,9 +7,8 @@
  *   - node_radio_hourly / node_radio_hourly_sys / node_pager_hourly (forever)
  *
  * Radio rows are vce ACTIVITY events (migration 044): `system` is the P25
- * systemId, and each event carries action/event_type/encrypted plus a
- * `recorded` flag set when the matching rdio call upload landed (audio
- * exists). talkgroup_label/system_label are no longer populated by ingest —
+ * systemId, and each event carries action/event_type/encrypted.
+ * talkgroup_label/system_label are no longer populated by ingest —
  * labels stay null for now (planned: resolve from the global agencies
  * config at read time).
  *
@@ -427,10 +426,11 @@ async function tgValidConfigured(prefix = ''): Promise<string> {
  *                 population and leave that tile reading zero.
  *   no_tgid       rdio has no such talkgroup programmed, so it refuses the
  *                 upload. This never had a chance of being ingested.
- *   ingested      rdio accepted it — one row in its call list.
- *   not_recorded  everything else: rdio could have taken this and did not. The
- *                 pipeline-health number, and the only one that should ever
- *                 trend toward zero.
+ *   ingested      everything else: a talkgroup rdio is programmed for. Not
+ *                 confirmed per transmission (the upload-to-reception match
+ *                 that used to prove it was removed), so an upload that never
+ *                 reached rdio still counts here. Missing channels are found
+ *                 from rdio's own logs instead.
  *
  * Its EXTRA receptions are classified by why they are extra:
  *   dropped_patch on another talkgroup of the same patch
@@ -455,8 +455,7 @@ function radioReceptionsSql(
 ): string {
   return `WITH ev AS MATERIALIZED (
             SELECT id, logical_call_id, talkgroup, patch_members, node_id,
-                   COALESCE(site_rfss, -1) AS rfss, COALESCE(site_id, -1) AS site,
-                   recorded
+                   COALESCE(site_rfss, -1) AS rfss, COALESCE(site_id, -1) AS site
               FROM node_radio_events
              WHERE ${where}
           ), tx AS (
@@ -467,7 +466,6 @@ function radioReceptionsSql(
             -- leaves ties that resolve arbitrarily, and home -- with it the
             -- whole patch/site split -- would differ run to run.
             SELECT logical_call_id,
-                   bool_or(recorded) AS rec,
                    (array_agg(talkgroup ORDER BY id))[1] AS home
               FROM ev GROUP BY logical_call_id
           ), expanded AS (
@@ -492,8 +490,7 @@ function radioReceptionsSql(
                      -- network to no_tgid. cardinality() = 0 skips the test.
                      WHEN cardinality(${progParam}::int[]) > 0
                           AND t.home <> ALL(${progParam}::int[]) THEN 'no_tgid'
-                     WHEN t.rec THEN 'ingested'
-                     ELSE 'not_recorded' END AS outcome
+                     ELSE 'ingested' END AS outcome
               FROM agg a JOIN tx t USING (logical_call_id)
           )
           SELECT COALESCE(SUM(receptions), 0)::int AS received,
@@ -501,7 +498,6 @@ function radioReceptionsSql(
                  (COUNT(*) FILTER (WHERE outcome = 'ingested'))::int AS ingested,
                  (COUNT(*) FILTER (WHERE outcome = 'no_tgid'))::int AS no_tgid,
                  (COUNT(*) FILTER (WHERE outcome = 'enc'))::int AS enc,
-                 (COUNT(*) FILTER (WHERE outcome = 'not_recorded'))::int AS not_recorded,
                  COALESCE(SUM(d_patch), 0)::int AS dropped_patch,
                  COALESCE(SUM(d_site), 0)::int AS dropped_site
             FROM k${hideEnc ? ` WHERE outcome <> 'enc'` : ''}`;
@@ -822,14 +818,13 @@ function overviewBegin(key: string): {
   };
 }
 
-/** The eight tile figures, however they were sourced. */
+/** The seven tile figures, however they were sourced. */
 export interface RadioTotals {
   received: number;
   transmissions: number;
   ingested: number;
   no_tgid: number;
   enc: number;
-  not_recorded: number;
   dropped_patch: number;
   dropped_site: number;
 }
@@ -840,7 +835,7 @@ export interface RadioTotals {
  *
  * Written once and shared by the rollup read so the precedence cannot drift
  * from radioReceptionsSql's CASE: encrypted beats unprogrammed beats
- * recorded, and cardinality() = 0 means "we could not ask rdio" rather than
+ * ingested, and cardinality() = 0 means "we could not ask rdio" rather than
  * "nothing is programmed" — the same guard, for the same reason.
  */
 export function outcomeSql(homeCol: string, encParam: string, progParam: string) {
@@ -981,7 +976,7 @@ export async function radioTotalsFromRollup(
        COALESCE(SUM(transmissions) FILTER (WHERE ${isEnc}), 0)::int AS enc,
        COALESCE(SUM(transmissions) FILTER (
          WHERE NOT (${isEnc}) AND (${isNoTgid})), 0)::int       AS no_tgid,
-       COALESCE(SUM(recorded) FILTER (
+       COALESCE(SUM(transmissions) FILTER (
          WHERE NOT (${isEnc}) AND NOT (${isNoTgid})), 0)::int   AS ingested
      FROM node_radio_hourly_rx
     WHERE hour >= date_trunc('hour', now()) - $1::interval
@@ -1011,28 +1006,13 @@ export async function radioTotalsFromRollup(
   const transmissions = add('transmissions');
   const enc = add('enc');
   const no_tgid = add('no_tgid');
-  const ingested = add('ingested');
-  // The residual, so the four outcome buckets always account for every
-  // transmission exactly — the identity the detail path's CASE/ELSE gives for
-  // free. Clamped because it is derived rather than counted: if the rollup and
-  // the live hour ever disagree enough to overshoot, a tile reading -3 is a
-  // worse answer than 0, and the warn is how we find out rather than hearing
-  // it from a screenshot.
-  const residual = transmissions - ingested - enc - no_tgid;
-  if (residual < 0) {
-    log.warn(
-      { received, transmissions, ingested, enc, no_tgid, residual },
-      'overview: rollup outcomes exceed transmissions — clamping not_recorded',
-    );
-  }
 
   return {
     received,
     transmissions,
     enc,
     no_tgid,
-    ingested,
-    not_recorded: Math.max(0, residual),
+    ingested: add('ingested'),
     dropped_patch: add('dropped_patch'),
     dropped_site: add('dropped_site'),
   };
@@ -1040,7 +1020,7 @@ export async function radioTotalsFromRollup(
 
 /** The five list/series result sets, however they were sourced. */
 export interface RadioLists {
-  perNode: Array<{ node_id: string; calls: unknown; bytes: unknown }>;
+  perNode: Array<{ node_id: string; calls: unknown }>;
   topTg: Array<{
     system: number | null;
     talkgroup: number | null;
@@ -1085,7 +1065,7 @@ const liveHour = (seam: string) => `received_at >= ${seam}`;
  *                  contains the site, so summing them is exact.
  *   topUnits       node_radio_hourly_unit, the only genuinely new grain.
  *   series         node_radio_hourly.calls, which is RECEPTIONS.
- *   perNode        the same, plus its audio bytes.
+ *   perNode        the same, per node.
  *
  * The chart and the per-node card therefore change what they count: they
  * tallied raw event rows, and the vce feed emits a GRANT and a CALL for the
@@ -1222,27 +1202,24 @@ export async function radioListsFromRollup(
        )
        SELECT bucket, SUM(n)::int AS n FROM r GROUP BY 1 ORDER BY 1`,
     ),
-    () => q<{ node_id: string; calls: unknown; bytes: unknown }>(
-      // MAX per deduped reception, matching the rollup: the same call can
-      // arrive as several event rows and only one of them carries the size.
+    () => q<{ node_id: string; calls: unknown }>(
+      // One per deduped reception, matching the rollup: the same call can
+      // arrive as several event rows.
       `WITH r AS (
-         SELECT node_id, calls, audio_bytes AS bytes
+         SELECT node_id, calls
            FROM node_radio_hourly WHERE ${ROLLUP_HOURS}
          UNION ALL
-         SELECT node_id, COUNT(*)::int, COALESCE(SUM(audio_bytes), 0)::bigint
+         SELECT node_id, COUNT(*)::int
            FROM (
-             SELECT logical_call_id, node_id,
+             SELECT DISTINCT logical_call_id, node_id,
                     COALESCE(system, 0) AS system, COALESCE(talkgroup, 0) AS talkgroup,
-                    COALESCE(site_rfss, -1) AS rfss, COALESCE(site_id, -1) AS site,
-                    MAX(audio_bytes) AS audio_bytes
+                    COALESCE(site_rfss, -1) AS rfss, COALESCE(site_id, -1) AS site
                FROM node_radio_events
               WHERE ${LIVE_HOUR} AND ${CALL_GROUP}
-              GROUP BY 1, 2, 3, 4, 5, 6
            ) d
           GROUP BY node_id
        )
-       SELECT node_id, SUM(calls)::int AS calls,
-              COALESCE(SUM(bytes), 0)::bigint AS bytes
+       SELECT node_id, SUM(calls)::int AS calls
          FROM r GROUP BY node_id`,
     ),
   ]);
@@ -1318,12 +1295,11 @@ nodeDataRouter.get(
       let receptionsIngested = 0;
       let droppedNoTgid = 0;
       let droppedEnc = 0;
-      let droppedNotRecorded = 0;
       let droppedPatch = 0;
       let droppedSite = 0;
       let pages = 0;
       let pagesLogical = 0;
-      let perNodeRadioRows: Array<{ node_id: string; calls: unknown; bytes: unknown }> = [];
+      let perNodeRadioRows: Array<{ node_id: string; calls: unknown }> = [];
       let perNodePagerRows: Array<{ node_id: string; pages: unknown }> = [];
       let topTgRows: Array<{
         system: number | null;
@@ -1431,7 +1407,6 @@ nodeDataRouter.get(
                   ingested: unknown;
                   no_tgid: unknown;
                   enc: unknown;
-                  not_recorded: unknown;
                   dropped_patch: unknown;
                   dropped_site: unknown;
                 }>(
@@ -1455,9 +1430,8 @@ nodeDataRouter.get(
                 )
               : null,
             () => wantRadioDetail
-              ? pool.query<{ node_id: string; calls: unknown; bytes: unknown }>(
-                  `SELECT node_id, COUNT(*)::int AS calls,
-                          COALESCE(SUM(audio_bytes), 0)::bigint AS bytes
+              ? pool.query<{ node_id: string; calls: unknown }>(
+                  `SELECT node_id, COUNT(*)::int AS calls
                      FROM node_radio_events
                     WHERE ${nAllFloor}${CALL_GROUP}${nAllAnd} GROUP BY node_id`,
                   nAllParams,
@@ -1547,7 +1521,6 @@ nodeDataRouter.get(
         receptionsIngested = num(rtAll?.ingested);
         droppedNoTgid = num(rtAll?.no_tgid);
         droppedEnc = num(rtAll?.enc);
-        droppedNotRecorded = num(rtAll?.not_recorded);
         droppedPatch = num(rtAll?.dropped_patch);
         droppedSite = num(rtAll?.dropped_site);
         pages = num(pagerTotQ?.rows[0]?.raw);
@@ -1590,7 +1563,6 @@ nodeDataRouter.get(
                 ingested: unknown;
                 no_tgid: unknown;
                 enc: unknown;
-                not_recorded: unknown;
                 dropped_patch: unknown;
                 dropped_site: unknown;
               }>(
@@ -1615,9 +1587,8 @@ nodeDataRouter.get(
               )
             : null,
           () => wantRadioDetail
-            ? pool.query<{ node_id: string; calls: unknown; bytes: unknown }>(
-                `SELECT node_id, COUNT(*)::int AS calls,
-                        COALESCE(SUM(audio_bytes), 0)::bigint AS bytes
+            ? pool.query<{ node_id: string; calls: unknown }>(
+                `SELECT node_id, COUNT(*)::int AS calls
                    FROM node_radio_events
                   WHERE ${radioCond} AND ${CALL_GROUP} GROUP BY node_id`,
                 radioParams,
@@ -1708,7 +1679,6 @@ nodeDataRouter.get(
         receptionsIngested = num(rt?.ingested);
         droppedNoTgid = num(rt?.no_tgid);
         droppedEnc = num(rt?.enc);
-        droppedNotRecorded = num(rt?.not_recorded);
         droppedPatch = num(rt?.dropped_patch);
         droppedSite = num(rt?.dropped_site);
         pages = num(pTot?.rows[0]?.raw);
@@ -1726,7 +1696,7 @@ nodeDataRouter.get(
       // Merge the two perNode result sets on node_id.
       const perNodeMap = new Map<
         string,
-        { nodeId: string; name: string | null; kind: string | null; calls: number; pages: number; bytes: number }
+        { nodeId: string; name: string | null; kind: string | null; calls: number; pages: number }
       >();
       const ensureNode = (id: string) => {
         let e = perNodeMap.get(id);
@@ -1738,7 +1708,6 @@ nodeDataRouter.get(
             kind: meta?.kind ?? null,
             calls: 0,
             pages: 0,
-            bytes: 0,
           };
           perNodeMap.set(id, e);
         }
@@ -1747,7 +1716,6 @@ nodeDataRouter.get(
       for (const r of perNodeRadioRows) {
         const e = ensureNode(r.node_id);
         e.calls += num(r.calls);
-        e.bytes += num(r.bytes);
       }
       for (const r of perNodePagerRows) {
         const e = ensureNode(r.node_id);
@@ -1792,7 +1760,6 @@ nodeDataRouter.get(
           receptionsIngested,
           droppedNoTgid,
           droppedEnc,
-          droppedNotRecorded,
           droppedPatch,
           droppedSite,
           pages,
@@ -2077,7 +2044,6 @@ nodeDataRouter.get(
               action: string | null;
               event_type: string | null;
               encrypted: boolean;
-              recorded: boolean;
               receptions: number;
               talkgroups: number[] | null;
               patch_members: number[] | null;
@@ -2089,7 +2055,7 @@ nodeDataRouter.get(
               // from a REPRESENTATIVE reception — the action='CALL' row if any,
               // else the most recent — via array_agg(... ORDER BY
               // (action='CALL') DESC, received_at DESC)[1]; sites/nodes/
-              // receptions/encrypted/recorded still aggregate across ALL
+              // receptions/encrypted still aggregate across ALL
               // receptions. CALL_GROUP guards the hydrate too so only call-group
               // receptions contribute (the page ids are already call-group).
               `SELECT e.logical_call_id::text AS id,
@@ -2109,7 +2075,6 @@ nodeDataRouter.get(
                       (array_agg(e.action ORDER BY (e.action = 'CALL') DESC, e.received_at DESC))[1] AS action,
                       (array_agg(e.event_type ORDER BY (e.action = 'CALL') DESC, e.received_at DESC))[1] AS event_type,
                       bool_or(e.encrypted) AS encrypted,
-                      bool_or(e.recorded) AS recorded,
                       COUNT(*)::int AS receptions,
                       -- Every talkgroup this transmission was actually
                       -- received on. For a patch that is the whole received
@@ -2243,9 +2208,8 @@ nodeDataRouter.get(
               frequency: d.frequency !== null ? Number(d.frequency) : null,
               action: d.action,
               eventType: d.event_type,
-              // A logical call is "encrypted"/"recorded" if ANY reception was.
+              // A logical call is "encrypted" if ANY reception was.
               encrypted: d.encrypted === true,
-              recorded: d.recorded === true,
               // DISTINCT above is over the whole object, so a site whose
               // receptions disagree on frequency (a grant and its call read a
               // moment apart) arrives twice. Collapse to one entry per site,
@@ -2364,12 +2328,6 @@ interface ScopedDetail {
     calls: number;
     logicalCalls: number;
     encryptedCalls: number;
-    /** Calls whose audio reached central rdio. The counterpart to
-     *  encryptedCalls: encrypted traffic can never have audio, so a
-     *  contributor comparing the two can tell "my node isn't uploading" apart
-     *  from "this talkgroup is encrypted". Counted over DISTINCT logical calls
-     *  so it compares like-for-like against logicalCalls. */
-    recordedCalls: number;
     talkgroups: number;
     radios: number;
     sites: number;
@@ -2428,7 +2386,6 @@ async function scopedRadioDetail(
       calls: unknown;
       logical: unknown;
       enc: unknown;
-      rec: unknown;
       talkgroups: unknown;
       radios: unknown;
       sites: unknown;
@@ -2437,7 +2394,6 @@ async function scopedRadioDetail(
       `SELECT COUNT(*)::int AS calls,
               COUNT(DISTINCT logical_call_id)::int AS logical,
               (COUNT(DISTINCT logical_call_id) FILTER (WHERE encrypted))::int AS enc,
-              (COUNT(DISTINCT logical_call_id) FILTER (WHERE recorded))::int AS rec,
               (COUNT(DISTINCT talkgroup) FILTER (WHERE ${TG_VALID}))::int AS talkgroups,
               (COUNT(DISTINCT source_unit) FILTER (WHERE ${RID_VALID}))::int AS radios,
               (COUNT(DISTINCT (site_rfss, site_id))
@@ -2493,7 +2449,6 @@ async function scopedRadioDetail(
       calls: num(t?.calls),
       logicalCalls: num(t?.logical),
       encryptedCalls: num(t?.enc),
-      recordedCalls: num(t?.rec),
       talkgroups: num(t?.talkgroups),
       radios: num(t?.radios),
       sites: num(t?.sites),
@@ -2614,8 +2569,8 @@ function heardWindowSql(seam: string, where: string): string {
  * same grain — the pattern every fleet-wide read on this page uses, with the
  * same window edges (see rollupHours).
  *
- * `sys` is node_radio_hourly_sys's grain, (hour, talkgroup, site). `logical`,
- * `enc` and `rec` take the per-SITE attribution for a site and the fleet-wide
+ * `sys` is node_radio_hourly_sys's grain, (hour, talkgroup, site). `logical`
+ * and `enc` take the per-SITE attribution for a site and the fleet-wide
  * one for a system, which is what makes each of them sum to that scope's
  * distinct calls; `logical_tg` is the per-talkgroup one for the top-talkgroups
  * card. NULLs in the per-site pair (hours migration 126 has not re-derived yet)
@@ -2640,15 +2595,15 @@ function drillSources(scope: DrillScope, window: DetailWindow, edge: Date): {
     where += ' AND site_rfss = $3 AND site_id = $4';
   }
   const seam = rollupEdgeSql(edge);
-  const [logical, enc, rec] = atSite
-    ? ['logical_calls_site', 'encrypted_calls_site', 'recorded_calls_site']
-    : ['logical_calls', 'encrypted_calls', 'recorded_calls'];
+  const [logical, enc] = atSite
+    ? ['logical_calls_site', 'encrypted_calls_site']
+    : ['logical_calls', 'encrypted_calls'];
   const sys = `
     SELECT hour, talkgroup, site_rfss AS rfss, site_id AS site, receptions,
            ${logical} AS logical,
            ${atSite ? 'logical_calls_site' : 'logical_calls_tg'} AS logical_tg,
            logical_calls_site AS logical_site,
-           ${enc} AS enc, ${rec} AS rec
+           ${enc} AS enc
       FROM node_radio_hourly_sys
      WHERE ${rollupHours(seam)} AND ${where}
     UNION ALL
@@ -2658,8 +2613,7 @@ function drillSources(scope: DrillScope, window: DetailWindow, edge: Date): {
            COUNT(DISTINCT logical_call_id)::int,
            COUNT(DISTINCT logical_call_id)::int,
            COUNT(DISTINCT logical_call_id)::int,
-           (COUNT(DISTINCT logical_call_id) FILTER (WHERE encrypted))::int,
-           (COUNT(DISTINCT logical_call_id) FILTER (WHERE recorded))::int
+           (COUNT(DISTINCT logical_call_id) FILTER (WHERE encrypted))::int
       FROM node_radio_events
      WHERE ${liveHour(seam)} AND ${CALL_GROUP} AND ${where}
      GROUP BY 1, 2, 3, 4`;
@@ -2695,7 +2649,6 @@ async function drillFromRollup(
       calls: unknown;
       logical: unknown;
       enc: unknown;
-      rec: unknown;
       talkgroups: unknown;
       sites: unknown;
     }>(
@@ -2703,7 +2656,6 @@ async function drillFromRollup(
        SELECT COALESCE(SUM(receptions), 0)::int AS calls,
               COALESCE(SUM(logical), 0)::int AS logical,
               COALESCE(SUM(enc), 0)::int AS enc,
-              COALESCE(SUM(rec), 0)::int AS rec,
               (COUNT(DISTINCT talkgroup) FILTER (WHERE ${TG_VALID}))::int AS talkgroups,
               (SELECT COUNT(*) FROM (
                  SELECT 1 FROM s WHERE rfss <> -1 AND site <> -1
@@ -2773,7 +2725,6 @@ async function drillFromRollup(
         calls: num(t?.calls),
         logicalCalls: num(t?.logical),
         encryptedCalls: num(t?.enc),
-        recordedCalls: num(t?.rec),
         talkgroups: num(t?.talkgroups),
         radios: num(radQ.rows[0]?.radios),
         sites: num(t?.sites),
@@ -6187,7 +6138,6 @@ nodeDataRouter.get(
         grp: number;
         priv: number;
         encrypted: number;
-        recorded: number;
         alias: string | null;
         label: string | null;
         last_seen: Date;
@@ -6197,7 +6147,6 @@ nodeDataRouter.get(
                 COUNT(*) FILTER (WHERE ${CALL_GROUP})::int AS grp,
                 COUNT(*) FILTER (WHERE NOT (${CALL_GROUP}))::int AS priv,
                 COUNT(*) FILTER (WHERE encrypted)::int AS encrypted,
-                COUNT(*) FILTER (WHERE recorded)::int AS recorded,
                 (array_agg(source_alias ORDER BY received_at DESC)
                    FILTER (WHERE source_alias IS NOT NULL AND source_alias <> source_unit::text))[1] AS alias,
                 (array_agg(talkgroup_label ORDER BY received_at DESC)
@@ -6243,7 +6192,6 @@ nodeDataRouter.get(
           group: num(r.grp),
           private: num(r.priv),
           encrypted: num(r.encrypted),
-          recorded: num(r.recorded),
           lastSeen: iso(r.last_seen),
         })),
       });

@@ -4,15 +4,14 @@
  * The force is encrypted end to end, but a node still uploads one of its calls
  * now and then (encryption missed by the decoder, audio is noise). Central
  * rdio has none of these talkgroups, so it answered 200 and discarded each
- * one, and the relay took that 200 as delivery and flagged the call recorded.
- * The relay now acks them without forwarding, counting or stamping.
+ * one. The relay now acks them without forwarding, counting or merging.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Hoisted: the vi.mock factories below run before this file's own top level.
-const { fetchMock, markRecorded, bumpNodeCallStat } = vi.hoisted(() => ({
+const { fetchMock, mergeAutomaticPatch, bumpNodeCallStat } = vi.hoisted(() => ({
   fetchMock: vi.fn(async () => new Response('Call imported successfully.', { status: 200 })),
-  markRecorded: vi.fn(async () => undefined),
+  mergeAutomaticPatch: vi.fn(async () => undefined),
   bumpNodeCallStat: vi.fn(async () => undefined),
 }));
 
@@ -31,7 +30,7 @@ vi.mock('../../../src/services/auth/nodeToken.js', () => ({
 }));
 vi.mock('../../../src/services/nodeEvents.js', async (orig) => {
   const actual = await orig<typeof import('../../../src/services/nodeEvents.js')>();
-  return { ...actual, markRecorded, mergeAutomaticPatch: vi.fn(async () => undefined) };
+  return { ...actual, mergeAutomaticPatch };
 });
 vi.mock('../../../src/services/nodes/registry.js', async (orig) => {
   const actual = await orig<typeof import('../../../src/services/nodes/registry.js')>();
@@ -88,25 +87,25 @@ async function upload(talkgroup: string) {
 describe('POST /api/node-ingest/call-upload: NSW PF', () => {
   beforeEach(() => {
     fetchMock.mockClear();
-    markRecorded.mockClear();
+    mergeAutomaticPatch.mockClear();
     bumpNodeCallStat.mockClear();
     vi.stubGlobal('fetch', fetchMock);
   });
 
-  it('acks an NSW PF call without forwarding, counting or flagging it recorded', async () => {
+  it('acks an NSW PF call without forwarding, counting or merging it', async () => {
     const res = await upload('12502');
     // 200, so the agent dequeues it instead of retrying forever.
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ ok: true, fed: false });
     expect(fetchMock).not.toHaveBeenCalled();
     expect(bumpNodeCallStat).not.toHaveBeenCalled();
-    expect(markRecorded).not.toHaveBeenCalled();
+    expect(mergeAutomaticPatch).not.toHaveBeenCalled();
   });
 
   it('still forwards every other talkgroup', async () => {
     const res = await upload('30003');
     expect(res.status).toBe(200);
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(markRecorded).toHaveBeenCalledTimes(1);
+    expect(mergeAutomaticPatch).toHaveBeenCalledTimes(1);
   });
 });

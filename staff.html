@@ -2904,7 +2904,6 @@
     }
     .nd2-badge i { font-size: 0.58rem; }
     .nd2-badge-enc { background: rgba(245, 158, 11, 0.14); color: #fcd34d; }
-    .nd2-badge-rec { background: rgba(148, 163, 184, 0.12); color: #94a3b8; }
     .nd2-badge-patch { background: rgba(56, 189, 248, 0.14); color: #7dd3fc; }
     /* A patched transmission and the other talkgroups that carried it, as
        ONE chip. Full pills per member stacked three lines deep and looked
@@ -3880,11 +3879,6 @@
             <div class="stat-value" id="nd2-stat-ingest" style="color: #4ade80;">—</div>
             <div class="stat-label">Receptions — Ingested</div>
             <div class="nd2-stat-sub" id="nd2-stat-ingest-sub"></div>
-          </div>
-          <div class="stat-card" id="nd2-tile-notrec" style="border-color: rgba(239, 68, 68, 0.3);">
-            <div class="stat-value" id="nd2-stat-notrec" style="color: #fca5a5;">—</div>
-            <div class="stat-label">Dropped — Not Recorded</div>
-            <div class="nd2-stat-sub" id="nd2-stat-notrec-sub"></div>
           </div>
           <div class="stat-card" id="nd2-tile-notgid">
             <div class="stat-value" id="nd2-stat-notgid">—</div>
@@ -6255,7 +6249,6 @@
       const radio = scope !== 'pager';
       show('nd2-tile-recv', radio);
       show('nd2-tile-ingest', radio);
-      show('nd2-tile-notrec', radio);
       show('nd2-tile-notgid', radio);
       show('nd2-tile-dpatch', radio);
       show('nd2-tile-dsite', radio);
@@ -6284,12 +6277,7 @@
       // Dropped tile below is a share of receptions.
       set('nd2-stat-ingest', recv ? nd2Num(ingested) : '—');
       set('nd2-stat-ingest-sub', recv
-        ? `${tx ? Math.round((ingested / tx) * 100) : 0}% of transmissions — accepted by rdio`
-        : '');
-
-      set('nd2-stat-notrec', recv ? nd2Num(val(t.droppedNotRecorded)) : '—');
-      set('nd2-stat-notrec-sub', recv
-        ? `${rpct(val(t.droppedNotRecorded))}% — rdio could have taken these`
+        ? `${tx ? Math.round((ingested / tx) * 100) : 0}% of transmissions — on talkgroups rdio is programmed for`
         : '');
 
       set('nd2-stat-notgid', recv ? nd2Num(val(t.droppedNoTgid)) : '—');
@@ -6706,10 +6694,9 @@
         // Name and number in separate columns. One pill carrying both made
         // the identity column the widest on the page and left the number
         // un-scannable, which is the one thing you sort and search on.
-        // Encrypted / recorded badges — icon + title carry the meaning.
+        // Encrypted badge — icon + title carry the meaning.
         const badges =
-          (ev.encrypted ? `<span class="nd2-badge nd2-badge-enc" title="Encrypted call"><i class="fas fa-lock"></i>ENC</span>` : '') +
-          (ev.recorded ? `<span class="nd2-badge nd2-badge-rec" title="Audio recorded in rdio-scanner"><i class="fas fa-volume-high"></i></span>` : '');
+          (ev.encrypted ? `<span class="nd2-badge nd2-badge-enc" title="Encrypted call"><i class="fas fa-lock"></i>ENC</span>` : '');
         const sites = (ev.sites || []).map(s => nd2SiteChip(s)).join('');
         return `<tr>
           <td>${timeCell}</td>
@@ -8989,14 +8976,14 @@
            ...(isRadio ? [] : [{ label: 'OTA' }, { label: 'Unit' }]),
            { label: 'Calls', num: true },
            { label: 'Group', num: true }, { label: 'Private', num: true },
-           { label: 'Enc', num: true }, { label: 'Audio', num: true }, { label: 'Last seen' }],
+           { label: 'Enc', num: true }, { label: 'Last seen' }],
           rows.map(r => [
             isRadio
               ? nd2TgPill(r.id, r.label, r.color)
               : nd2RadioPill(r.id, r.color),
             ...(isRadio ? [] : [nd2NameCell(r.ota), nd2NameCell(r.alias)]),
             nd2Num(r.calls), nd2Num(r.group), nd2Num(r.private),
-            nd2Num(r.encrypted), nd2Num(r.recorded), nd2LastSeen(r.lastSeen),
+            nd2Num(r.encrypted), nd2LastSeen(r.lastSeen),
           ]));
       } catch (e) {
         body.innerHTML = `<div class="nd2-empty">Failed to load: ${escapeHtml(String(e.message || e))}</div>`;

@@ -206,12 +206,6 @@ scannerIngestRouter.post('/api/scanner-ingest/api/call-upload', async (c) => {
   }
   const startedAt = sentAt ?? new Date();
 
-  const audioField = form['audio'];
-  const audioFile = Array.isArray(audioField)
-    ? audioField.find((x) => x instanceof File)
-    : audioField;
-  const audioBytes = audioFile instanceof File ? audioFile.size : 0;
-
   // The aligned timestamp, in rdio's own unit (whole epoch seconds). The offset
   // is a whole second so this stays integral.
   const alignedSecs = alignedCallSeconds(startedAt);
@@ -329,7 +323,6 @@ scannerIngestRouter.post('/api/scanner-ingest/api/call-upload', async (c) => {
       // A scanner reports no encryption state; anything it could record audio
       // for was in the clear by definition.
       talkerAlias: formFirstString(form, 'talkerAlias'),
-      audioBytes,
     });
     return c.json({ ok: true, recorded });
   } catch (err) {

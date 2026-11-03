@@ -46,7 +46,6 @@ import { maybeFlushNodeTracks } from '../services/nodes/nodeTrackArchive.js';
 import { normalizeNodeUploadWithTrails, ingestNodeTrailPoints } from '../sources/adsb.js';
 import {
   recordActivityEvents,
-  markRecorded,
   mergeAutomaticPatch,
   recordPagerEvent,
   upsertSiteSnapshots,
@@ -120,8 +119,7 @@ function parsePatchMembers(raw: string | null): number[] {
  * the nodes (globalConfig.ts), yet a node still uploads one now and then — a
  * call whose encryption the decoder missed, recorded as noise (about 50 a day
  * on 12502 alone, October 2026). Central rdio has none of these talkgroups
- * either, so it answered each upload 200 and threw the call away, and the
- * relay, taking the 200 as delivery, flagged it recorded. The relay is the one
+ * either, so it answered each upload 200 and threw the call away. The relay is the one
  * place every node's uploads pass through, so they stop here.
  */
 const NSWPF_TALKGROUP_RANGES: ReadonlyArray<readonly [number, number]> = [
@@ -207,48 +205,17 @@ nodeIngestRouter.post('/api/node-ingest/call-upload', async (c) => {
     return c.json({ error: 'bad body' }, 400);
   }
 
-  // 6a. Recorded-flag stamp (migration 044). Deferred to the DELIVERED paths
-  //     below (feed-off, and a successful forward) rather than run here.
-  //
-  //     It used to run unconditionally at this point, before we knew whether
-  //     the call reached central rdio. A failed forward returns 502, the
-  //     agent's queue re-POSTs the identical body, and this ran AGAIN — each
-  //     time flagging another event row and folding the same audio_bytes into
-  //     node_radio_hourly, a FOREVER table. Because an outage makes every
-  //     queued call retry, that was correlated mass over-counting, not noise.
-  //     bumpNodeCallStat was immune only because it already sat in those two
-  //     branches; this now follows the same rule.
-  //
-  //     It also makes the flag truthful: `recorded` means "audio exists in
-  //     central rdio", so a call whose forward permanently failed should NOT
-  //     carry it, and no longer does.
-  const stampRecorded = async (): Promise<void> => {
+  // 6a. Automatic-patch merge. Deferred to the DELIVERED paths below
+  //     (feed-off, and a successful forward) rather than run here, so a 502
+  //     and the agent's re-POST of the same body do the work once, on the
+  //     attempt that lands.
+  const mergeUploadPatch = async (): Promise<void> => {
     if (r.kind !== 'radio') return;
     try {
-      // The call's OWN start time, not arrival time — matching is keyed on
-      // when the call happened, so a late delivery still finds its event.
+      // The call's OWN start time, not arrival time, so a late delivery still
+      // finds the calls it belongs to.
       const epoch = Number(formFirstString(form, 'dateTime') ?? '');
       const startedAt = Number.isFinite(epoch) ? new Date(epoch * 1000) : new Date();
-      const audioField = form['audio'];
-      const audioFile = Array.isArray(audioField)
-        ? audioField.find((x) => x instanceof File)
-        : audioField;
-      await markRecorded(
-        node.id,
-        safeInt(formFirstString(form, 'talkgroup')),
-        startedAt,
-        audioFile instanceof File ? audioFile.size : 0,
-        // vce sends the calling radio and the traffic-channel frequency with
-        // every upload (RdioScannerBroadcaster: FormField.SOURCE / FREQUENCY).
-        // They identify WHICH call this audio is, which timestamp proximity
-        // alone cannot when a talkgroup is busy.
-        safeInt(formFirstString(form, 'source')),
-        safeInt(formFirstString(form, 'frequency')),
-        // The radio's over-the-air alias, when it transmitted one. Sent on
-        // every upload (FormField.TALKER_ALIAS) and previously discarded here,
-        // which is why every radio showed as a bare id.
-        formFirstString(form, 'talkerAlias') ?? null,
-      );
       // AUTOMATIC patches. vce sends the talkgroups it saw carrying this
       // transmission as `patches` (RdioScannerBroadcaster), and this upload is
       // the ONLY place that reaches us — the activity feed the grouping runs on
@@ -271,14 +238,14 @@ nodeIngestRouter.post('/api/node-ingest/call-upload', async (c) => {
         safeInt(formFirstString(form, 'source')),
       );
     } catch (err) {
-      log.warn({ err, node: node.id.slice(0, 8) }, 'node relay: recorded stamp failed');
+      log.warn({ err, node: node.id.slice(0, 8) }, 'node relay: patch merge failed');
     }
   };
 
   // 6b. NSW PF talkgroups never reach central rdio (see isNswPfTalkgroup).
   //     Acked, so the agent's queue drains instead of retrying a call that can
-  //     never be delivered. Not counted and not stamped recorded: no audio went
-  //     anywhere, and `recorded` means audio exists in central rdio.
+  //     never be delivered. Not counted and not merged: no audio went
+  //     anywhere.
   const talkgroup = safeInt(formFirstString(form, 'talkgroup'));
   if (isNswPfTalkgroup(talkgroup)) {
     log.info(`node relay: NSW PF talkgroup ${talkgroup}, not forwarded node=${node.id.slice(0, 8)}`);
@@ -301,8 +268,8 @@ nodeIngestRouter.post('/api/node-ingest/call-upload', async (c) => {
       log.warn({ err, node: node.id.slice(0, 8) }, 'node relay: stat bump failed (feed off)');
     }
     // Delivered as far as it will ever go: the feed is off by policy, not by
-    // failure, so the flag belongs here.
-    await stampRecorded();
+    // failure, so the merge belongs here.
+    await mergeUploadPatch();
     log.info(`node relay: feed off, not forwarded node=${node.id.slice(0, 8)} bytes=${bytes}`);
     return c.json({ ok: true, fed: false });
   }
@@ -362,10 +329,9 @@ nodeIngestRouter.post('/api/node-ingest/call-upload', async (c) => {
     } catch (err) {
       log.warn({ err, node: node.id.slice(0, 8) }, 'node relay: stat bump failed');
     }
-    // The audio is now in central rdio, so the flag is true. Only here —
-    // a 502 below leaves it unflagged and the agent's retry stamps it once,
-    // on the attempt that actually lands.
-    await stampRecorded();
+    // Only here: a 502 below leaves the calls unmerged and the agent's retry
+    // merges them once, on the attempt that actually lands.
+    await mergeUploadPatch();
     log.info(`node relay ok node=${node.id.slice(0, 8)} bytes=${bytes}`);
     return c.json({ ok: true });
   }

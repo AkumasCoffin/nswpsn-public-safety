@@ -251,8 +251,7 @@ NSW Police Force talkgroups (10450–10485, 11701–11708, 12001–12275,
 12501–12515; `isNswPfTalkgroup`) are acknowledged and **not** forwarded. The
 force is encrypted, so an upload on one is a call whose encryption the decoder
 missed and its audio is noise. Central rdio has none of these talkgroups and used
-to answer 200 and discard them, which the relay read as delivery and flagged the
-reception recorded. They are neither counted nor flagged now.
+to answer 200 and discard them. They are not counted now.
 
 ### 6. The backend records the reception
 
@@ -260,9 +259,16 @@ reception recorded. They are neither counted nor flagged now.
 
 The non-obvious part: those rows come **only** from the activity feed, not from
 the audio upload. Activity events carry the real P25 identity; the upload only
-calls `markRecorded()` to flag the closest matching event row `recorded=true`
-with its audio size. So a reception exists in the record whether or not anyone
+folds an automatic patch's calls together (`mergeAutomaticPatch`, from its
+`patches` field). So a reception exists in the record whether or not anyone
 could hear it — which is exactly right for an encrypted talkgroup.
+
+Nothing records whether a reception's audio reached rdio. It used to: each
+upload was matched back to one reception row and flagged it, which never lined
+up cleanly (the two sides stamp time from different clocks) and only said which
+node's copy got there. The staff Overview's **Ingested** tile now counts every
+transmission on a talkgroup rdio is programmed for, encrypted ones excepted;
+missing channels are found from rdio's own logs.
 
 **Grouping.** One transmission heard by N nodes arrives as N receptions. Rows
 within ±5s on the same `(systemId, target)` share one logical id — the detail-row

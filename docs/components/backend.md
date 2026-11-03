@@ -808,6 +808,12 @@ Things to know before touching it:
   `logical_call_id`. That last step came later (`130`), once production showed
   30 % of rows open a call, not the one in ~29 that had been assumed. If you add
   a column to either insert, keep it that way.
+- **Nothing updates a row after insert except a patch merge.** The `recorded`
+  flag and `audio_bytes` were stamped by matching each rdio upload back to one
+  reception (`markRecorded`, with `node_pending_recordings` for uploads that
+  beat their event). That matching is gone; the columns are no longer written
+  or read. Per-node upload counts and bytes still come from the relay itself,
+  in `node_call_stats`.
 - **`id` is a plain sequence default, not an identity** (`130`). PostgreSQL 17+
   will not attach a table with an identity column of its own. The sequence is
   named in the insert SQL and is deliberately not `OWNED BY` any column: it
@@ -868,9 +874,9 @@ heap pages, fast when cached (66–232 ms per query) and past 30 s when not.
 Migration `126` added `node_radio_hourly_heard`: one row per (hour, node,
 system, site, talkgroup, radio), each reception filed under the one radio that
 keyed it, so its receptions sum to `node_radio_hourly_sys`'s exactly (checked on
-prod: 58 of 58 hour×site groups equal). It also added `encrypted_calls_site` /
-`recorded_calls_site` to `node_radio_hourly_sys`: the fleet-wide pair credits a
-simulcast call to its lowest site, which on one prod range read 3,374 encrypted
+prod: 58 of 58 hour×site groups equal). It also added `encrypted_calls_site`
+to `node_radio_hourly_sys` (and a recorded counterpart, no longer written): the
+fleet-wide column credits a simulcast call to its lowest site, which on one prod range read 3,374 encrypted
 calls across the sites against 7,114 per site. `heard` is pruned at 32 days —
 nothing reads it past the drill-downs' 30. Fleet-wide drill-downs read
 `drillSources` / `drillFromRollup`; node-scoped ones keep their raw queries.

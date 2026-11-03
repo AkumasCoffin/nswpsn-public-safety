@@ -39,7 +39,7 @@ function poolOf(rollupRow: unknown, partialRow: unknown) {
 
 const ZERO = {
   received: 0, transmissions: 0, ingested: 0, no_tgid: 0,
-  enc: 0, not_recorded: 0, dropped_patch: 0, dropped_site: 0,
+  enc: 0, dropped_patch: 0, dropped_site: 0,
 };
 
 describe('outcomeSql', () => {
@@ -76,30 +76,18 @@ describe('radioTotalsFromRollup', () => {
     expect(t!.dropped_site).toBe(55);
   });
 
-  it('derives not_recorded as the residual, so the outcomes always partition', async () => {
-    // The detail path gets this free from a CASE with an ELSE. Summing four
-    // independently-counted buckets would not: any disagreement would show as
-    // tiles that do not add up to the headline, which is the one thing this
-    // page must never do.
-    const { pool } = poolOf(
-      { received: 90, transmissions: 50, ingested: 20, no_tgid: 5, enc: 7, dropped_patch: 0, dropped_site: 40 },
+  it('counts as ingested every transmission neither encrypted nor unprogrammed', async () => {
+    // The same partition the detail path's CASE/ELSE makes, so the three
+    // outcomes always add up to the transmissions.
+    const { pool, query } = poolOf(
+      { received: 90, transmissions: 50, ingested: 38, no_tgid: 5, enc: 7, dropped_patch: 0, dropped_site: 40 },
       ZERO,
     );
     const t = await radioTotalsFromRollup(pool, '24h', [], [], false, EDGE);
-    expect(t!.not_recorded).toBe(50 - 20 - 5 - 7);
-    expect(t!.ingested + t!.no_tgid + t!.enc + t!.not_recorded).toBe(t!.transmissions);
-  });
-
-  it('never returns a negative residual as a silent nonsense number', async () => {
-    // If the rollup and the partial hour ever disagree badly enough that the
-    // outcomes exceed the transmissions, that is a bug worth seeing rather
-    // than a tile reading -3.
-    const { pool } = poolOf(
-      { received: 10, transmissions: 2, ingested: 5, no_tgid: 0, enc: 0, dropped_patch: 0, dropped_site: 8 },
-      ZERO,
-    );
-    const t = await radioTotalsFromRollup(pool, '24h', [], [], false, EDGE);
-    expect(t!.not_recorded).toBeGreaterThanOrEqual(0);
+    const sql = String(query.mock.calls[0]?.[0]);
+    expect(sql).toMatch(/SUM\(transmissions\) FILTER \(\s*WHERE NOT \(.*\) AND NOT \(.*\)\), 0\)::int\s+AS ingested/);
+    expect(sql).not.toContain('recorded');
+    expect(t!.ingested + t!.no_tgid + t!.enc).toBe(t!.transmissions);
   });
 
   it('splits both halves at the one seam it was given', async () => {
