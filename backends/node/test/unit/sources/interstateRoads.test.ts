@@ -32,6 +32,9 @@ import {
   saOutbackRecords,
   saWorksRecords,
   vicRecords,
+  vicPlannedRecords,
+  vicWorkingNow,
+  vicTime,
   _resetInterstateMemory,
 } from '../../../src/sources/interstateRoads.js';
 import { decodePolyline, encodePolyline } from '../../../src/sources/shared/polyline.js';
@@ -441,6 +444,108 @@ describe('vicRecords', () => {
     expect(out[0]!.geometry.coordinates).toEqual([144.9, -37.7]);
     expect(out[0]!.properties).toMatchObject({ roads: 'Princes Hwy Werribee', expectedDelay: 'Minor delays', speedLimit: '40', incidentKind: 'Planned', end: '2026-11-20T10:00:00.000Z' });
     expect(out[0]!.properties.encodedPolyline).not.toBe('');
+  });
+});
+
+describe('VIC planned: working hours', () => {
+  // Melbourne is UTC+11 in November (AEDT).
+  const mel = (iso: string): number => Date.parse(`${iso}+11:00`);
+  const weekdays = (startTime: string, duration: string) =>
+    ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'].map((startDay) => ({ startDay, daysDuration: 1, startTime, duration, allDay: false }));
+
+  it('reads a time without an offset as Melbourne local', () => {
+    expect(vicTime('2026-11-03T09:30:00')).toBe(mel('2026-11-03T09:30:00'));
+    expect(vicTime('2026-11-03T09:30:00Z')).toBe(Date.parse('2026-11-03T09:30:00Z'));
+    // Winter: AEST, UTC+10.
+    expect(vicTime('2026-07-01T12:00:00')).toBe(Date.parse('2026-07-01T12:00:00+10:00'));
+  });
+
+  it('a day window: inside 9:30 AM + 6 h on a weekday, not after or at the weekend', () => {
+    const d = { start: '2026-01-01T00:00:00', end: '2027-01-01T00:00:00', recurrences: weekdays('9:30 AM', 'PT6H0M') };
+    expect(vicWorkingNow(d, mel('2026-11-03T10:00:00'))).toBe(true); // Tuesday
+    expect(vicWorkingNow(d, mel('2026-11-03T15:31:00'))).toBe(false);
+    expect(vicWorkingNow(d, mel('2026-11-07T10:00:00'))).toBe(false); // Saturday
+  });
+
+  it('a night window written negative runs into the next morning', () => {
+    // 9 PM with PT-15H0M is 9 PM to 6 AM.
+    const d = { start: '2026-01-01T00:00:00', end: '2027-01-01T00:00:00', recurrences: weekdays('9:00 PM', 'PT-15H0M') };
+    expect(vicWorkingNow(d, mel('2026-11-03T23:00:00'))).toBe(true);
+    expect(vicWorkingNow(d, mel('2026-11-04T05:59:00'))).toBe(true); // Tuesday night's shift
+    expect(vicWorkingNow(d, mel('2026-11-04T06:01:00'))).toBe(false);
+    expect(vicWorkingNow(d, mel('2026-11-04T12:00:00'))).toBe(false);
+    // Friday night's shift reaches Saturday morning; there is no Saturday night one.
+    expect(vicWorkingNow(d, mel('2026-11-07T02:00:00'))).toBe(true);
+    expect(vicWorkingNow(d, mel('2026-11-07T23:00:00'))).toBe(false);
+  });
+
+  it('all day, PT0H0M, and no windows at all count the whole day', () => {
+    const at = mel('2026-11-03T03:00:00');
+    const range = { start: '2026-01-01T00:00:00', end: '2027-01-01T00:00:00' };
+    expect(vicWorkingNow({ ...range, recurrences: [{ startDay: 'Tuesday', daysDuration: 1, allDay: true }] }, at)).toBe(true);
+    expect(vicWorkingNow({ ...range, recurrences: [{ startDay: 'Tuesday', daysDuration: 1, startTime: '12:00 AM', duration: 'PT0H0M', allDay: false }] }, at)).toBe(true);
+    expect(vicWorkingNow(range, at)).toBe(true);
+  });
+
+  it('outside its dates it is not working, whatever the hour', () => {
+    const recurrences = [{ startDay: 'Tuesday', daysDuration: 1, allDay: true }];
+    expect(vicWorkingNow({ start: '2026-12-01T00:00:00', end: '2027-01-01T00:00:00', recurrences }, mel('2026-11-03T10:00:00'))).toBe(false);
+    expect(vicWorkingNow({ start: '2025-01-01T00:00:00', end: '2026-11-01T00:00:00', recurrences }, mel('2026-11-03T10:00:00'))).toBe(false);
+  });
+});
+
+describe('vicPlannedRecords', () => {
+  const at = Date.parse('2026-11-03T23:00:00+11:00'); // Tuesday 11 PM in Melbourne
+  const night = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'].map((startDay) => ({ startDay, daysDuration: 1, startTime: '9:00 PM', duration: 'PT-15H0M', allDay: false }));
+  const day = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'].map((startDay) => ({ startDay, daysDuration: 1, startTime: '9:30 AM', duration: 'PT6H0M', allDay: false }));
+  const dur = (recurrences: unknown[]) => ({ start: '2026-01-01T00:00:00', end: '2027-01-01T00:00:00', recurrences });
+  const stretch = (id: string, lon: number, props: Record<string, unknown> = {}) => ({
+    type: 'Feature',
+    geometry: { type: 'GeometryCollection', geometries: [{ type: 'LineString', coordinates: [[lon, -37.8], [lon + 0.01, -37.81]] }] },
+    properties: {
+      id, status: 'Pending', eventType: 'Roadworks', eventSubtype: 'Planned roadworks', eventDueTo: 'Maintenance Works',
+      closedRoadName: 'MONASH FREEWAY ', startIntersectionLocality: 'GLEN IRIS', endIntersectionLocality: 'CHADSTONE',
+      description: 'Resurfacing. Lanes closed overnight.', impact: { impactType: 'Closures', speedLimitOnSite: '40' },
+      duration: dur(night),
+      ...props,
+    },
+  });
+
+  it('keeps closures inside their hours, one record per job with every stretch drawn', () => {
+    const out = vicPlannedRecords(
+      [
+        stretch('A', 145.0),
+        stretch('B', 145.1, { startIntersectionLocality: 'CHADSTONE', endIntersectionLocality: 'MULGRAVE' }),
+        stretch('C', 145.2, { impact: { impactType: 'Lanes blocked' } }), // not a closure
+        stretch('D', 145.3, { closedRoadName: 'PUNT ROAD', duration: dur(day) }), // outside its hours
+      ],
+      at,
+    );
+    expect(out).toHaveLength(1);
+    const p = out[0]!.properties;
+    expect(p.id).toMatch(/^vic:planned:job:[0-9a-f]{16}$/);
+    expect(p.encodedPolylines).toHaveLength(2);
+    expect(p.roads).toBe('Monash Freeway, Glen Iris to Mulgrave');
+    expect(p.otherAdvice).toBe('2 stretches of road. Resurfacing. Lanes closed overnight.');
+    expect(p).toMatchObject({ type: 'Roadwork', state: 'VIC', incidentKind: 'Planned' });
+  });
+
+  it("a job keeps its id when one of its stretches drops out", () => {
+    const both = vicPlannedRecords([stretch('A', 145.0), stretch('B', 145.1)], at);
+    const one = vicPlannedRecords([stretch('B', 145.1)], at);
+    expect(one[0]!.properties.id).toBe(both[0]!.properties.id);
+  });
+
+  it('the same layer by day leaves the night works out', () => {
+    expect(vicPlannedRecords([stretch('A', 145.0)], Date.parse('2026-11-04T12:00:00+11:00'))).toHaveLength(0);
+  });
+
+  it('special events stay one record each while they are on, closure or not', () => {
+    const out = vicPlannedRecords(
+      [stretch('E', 145.0, { eventType: 'Special event', impact: { impactType: 'Lanes affected' } })],
+      at,
+    );
+    expect(out.map((r) => [r.properties.id, r.properties.type])).toEqual([['vic:planned:E', 'Major Event']]);
   });
 });
 

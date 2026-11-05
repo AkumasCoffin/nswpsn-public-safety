@@ -842,7 +842,153 @@ function vicType(eventType: string, planned: boolean): RoadType {
 
 const VIC_DONE = /^(inactive|cleared|resolved|completed|cancelled|closed)$/i;
 
-/** Transport Victoria's disruptions, planned or unplanned, as road records. */
+// ---- Planned works: only what is working right now ------------------------
+//
+// Transport Victoria's planned feed is its permit register: ~10,000 records,
+// median 177 days long, each with the hours work is permitted (mostly
+// overnight). Measured 2026-11-06: 9,628 roadworks inside their dates, and
+// 4,300-5,700 inside their working hours at any time, against ~330 roadworks
+// for all of NSW. `status` does not say which: 570 of the 802 marked Active
+// were outside their hours, and 571 marked Pending were inside them. So the
+// layer keeps a planned record only while it is inside its own working hours,
+// and a roadwork only when it closes the road (owner's choice, 2026-11-06):
+// ~800-950 by day, ~2,000-2,400 overnight, before grouping per job.
+
+const MEL_PARTS = new Intl.DateTimeFormat('en-AU', {
+  timeZone: 'Australia/Melbourne', hourCycle: 'h23', weekday: 'long',
+  year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
+});
+
+/** Melbourne wall clock at an instant. */
+function melClock(ms: number): { weekday: string; minutes: number; asUtcMs: number } {
+  const f: Record<string, string> = {};
+  for (const p of MEL_PARTS.formatToParts(new Date(ms))) f[p.type] = p.value;
+  const asUtcMs = Date.UTC(+f['year']!, +f['month']! - 1, +f['day']!, +f['hour']!, +f['minute']!, +f['second']!);
+  return { weekday: f['weekday'] ?? '', minutes: +f['hour']! * 60 + +f['minute']!, asUtcMs };
+}
+
+/** A Transport Victoria time: Melbourne local unless it carries an offset. */
+export function vicTime(v: unknown): number {
+  const t = str(v);
+  if (!t) return NaN;
+  if (/(z|[+-]\d\d:?\d\d)$/i.test(t)) return Date.parse(t);
+  const naive = Date.parse(`${t}Z`);
+  if (!Number.isFinite(naive)) return NaN;
+  // The offset in force at that wall-clock time (two passes settle DST).
+  let ms = naive;
+  for (let i = 0; i < 2; i++) ms = naive - (melClock(ms).asUtcMs - ms);
+  return ms;
+}
+
+/** "9:30 AM" / "21:00" as minutes after midnight, or null. */
+function vicClockMinutes(v: unknown): number | null {
+  const m = /^(\d{1,2}):(\d\d)\s*(am|pm)?$/i.exec(str(v));
+  if (!m) return null;
+  let h = Number(m[1]);
+  if (m[3]) h = (h % 12) + (m[3].toLowerCase() === 'pm' ? 12 : 0);
+  return h * 60 + Number(m[2]);
+}
+
+/** "PT6H0M" as minutes. Overnight windows are written negative ("PT-15H0M"
+ *  from 9 PM ends at 6 AM) and a whole day as "PT0H0M": both wrap a day. */
+function vicSpanMinutes(v: unknown): number {
+  const m = /^PT(-?\d+)H(?:(-?\d+)M)?$/i.exec(str(v));
+  if (!m) return 0;
+  const n = Number(m[1]) * 60 + Number(m[2] ?? 0);
+  return n <= 0 ? n + 1440 : n;
+}
+
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+/**
+ * Whether a planned record is inside its permitted hours at `now`: within its
+ * dates, and (when it lists any) inside one of its weekly windows. A window
+ * that starts late one day runs into the next.
+ */
+export function vicWorkingNow(duration: Obj, now: number): boolean {
+  const start = vicTime(duration['start']);
+  const end = vicTime(duration['end']);
+  if (Number.isFinite(start) && now < start) return false;
+  if (Number.isFinite(end) && now > end) return false;
+  const windows = Array.isArray(duration['recurrences']) ? (duration['recurrences'] as unknown[]).map(obj) : [];
+  if (windows.length === 0) return true;
+  const clock = melClock(now);
+  const today = WEEKDAYS.indexOf(clock.weekday);
+  for (const w of windows) {
+    const day = WEEKDAYS.indexOf(str(w['startDay']));
+    if (day < 0) continue;
+    const days = Math.max(1, num(w['daysDuration']) ?? 1);
+    let from: number;
+    let len: number;
+    if (w['allDay'] === true) {
+      from = 0;
+      len = days * 1440;
+    } else {
+      const at = vicClockMinutes(w['startTime']);
+      if (at === null) continue;
+      from = at;
+      len = vicSpanMinutes(w['duration']) + (days - 1) * 1440;
+    }
+    // Minutes since this window last opened, counting back up to a week.
+    const back = (today - day + 7) % 7;
+    for (const b of [back, back + 7]) {
+      const since = clock.minutes + b * 1440 - from;
+      if (since >= 0 && since < len) return true;
+    }
+  }
+  return false;
+}
+
+/** One road record from a Transport Victoria disruption's properties. */
+function vicRecord(
+  p: Obj,
+  parts: { points: number[][]; lines: number[][][] },
+  pin: [number, number],
+  planned: boolean,
+  id: string,
+  extra: { roads?: string; otherAdvice?: string } = {},
+): TrafficFeature {
+  const ref = obj(p['reference']);
+  const impact = obj(p['impact']);
+  const duration = obj(p['duration']);
+  const eventType = str(p['eventType']);
+  const sub = str(p['eventSubType']) || str(p['eventSubtype']);
+  const type = vicType(eventType, planned);
+  const road = str(p['closedRoadName']) || str(ref['localRoadName']);
+  const locality = str(p['startIntersectionLocality']) || str(ref['startIntersectionLocality']);
+  const link = str(p['weblinkURL']);
+  return roadRecord({
+    id,
+    lon: pin[0],
+    lat: pin[1],
+    lines: parts.lines,
+    type,
+    mainCategory: eventType || (planned ? 'Planned disruption' : 'Unplanned disruption'),
+    subCategory: sub,
+    incidentType: type === 'Flood' ? 'FLOODING' : type === 'Roadwork' ? 'ROADWORK' : /crash|collision/i.test(eventType) ? 'CRASH' : '',
+    incidentKind: planned ? 'Planned' : 'Unplanned',
+    title: sub ? `${eventType || 'Disruption'}: ${sub}` : eventType || 'Disruption',
+    roads: extra.roads ?? joinText(road, locality),
+    crossStreet: str(p['startIntersectionRoadName']) || str(ref['startIntersectionRoadName']),
+    otherAdvice: extra.otherAdvice ?? htmlToProse(p['description']),
+    adviceB: str(p['eventDueTo']),
+    affectedDirection: str(impact['direction']),
+    expectedDelay: str(impact['delay']),
+    speedLimit: str(impact['speedLimitOnSite']),
+    created: isoTime(p['created']) || isoTime(duration['start']),
+    lastUpdated: isoTime(p['lastUpdated']),
+    start: isoTime(duration['start']) || isoTime(p['created']),
+    end: isoTime(duration['end']) || isoTime(p['endTime']),
+    region: str(p['localGovernmentArea']) || str(ref['localGovernmentArea']),
+    webLinks: link ? [{ url: link }] : [],
+    state: 'VIC',
+    source: 'transport_vic',
+    credit: VIC_CREDIT,
+  });
+}
+
+/** Transport Victoria's unplanned disruptions, or its planned ones taken
+ *  record by record (vicPlannedRecords is what the layer serves). */
 export function vicRecords(features: readonly unknown[], planned: boolean, now = Date.now()): TrafficFeature[] {
   const out: TrafficFeature[] = [];
   for (const f of features) {
@@ -856,42 +1002,80 @@ export function vicRecords(features: readonly unknown[], planned: boolean, now =
     const parts = geoParts(obj(f)['geometry']);
     const pin = pinOf(parts);
     if (!pin) continue;
-    const ref = obj(p['reference']);
-    const impact = obj(p['impact']);
-    const eventType = str(p['eventType']);
-    const sub = str(p['eventSubType']) || str(p['eventSubtype']);
-    const type = vicType(eventType, planned);
-    const road = str(p['closedRoadName']) || str(ref['localRoadName']);
-    const locality = str(p['startIntersectionLocality']) || str(ref['startIntersectionLocality']);
-    const link = str(p['weblinkURL']);
+    out.push(vicRecord(p, parts, pin, planned, `vic:${planned ? 'planned' : 'unplanned'}:${id}`));
+  }
+  return out;
+}
+
+/** What makes two planned roadwork records one job: the same works on the
+ *  same road over the same dates, listed once per stretch of road. */
+const vicJobKey = (p: Obj): string =>
+  [
+    str(p['eventDueTo']),
+    str(p['closedRoadName']).trim(),
+    htmlToProse(p['description']),
+    str(obj(p['duration'])['start']),
+    str(obj(p['duration'])['end']),
+  ].join('|');
+
+type VicMember = { p: Obj; parts: { points: number[][]; lines: number[][][] }; pin: [number, number] };
+
+/**
+ * The planned layer: what is inside its working hours right now, with
+ * roadworks kept only where they close the road, and one record per job.
+ *
+ * Transport Victoria lists a job once per stretch of road (4,599 records were
+ * 1,389 jobs on a Tuesday morning), so a job's stretches become one record
+ * with every stretch drawn, pinned at the stretch nearest their middle. Its id
+ * is the job's, so it keeps it while stretches come and go and each time its
+ * hours come round again. Special events stay one record each.
+ */
+export function vicPlannedRecords(features: readonly unknown[], now = Date.now()): TrafficFeature[] {
+  const out: TrafficFeature[] = [];
+  const jobs = new Map<string, VicMember[]>();
+  for (const f of features) {
+    const p = obj(obj(f)['properties']);
+    const id = str(p['id']) || str(p['eventId']);
+    if (!id) continue;
+    if (VIC_DONE.test(str(p['status']))) continue;
+    if (!vicWorkingNow(obj(p['duration']), now)) continue;
+    const parts = geoParts(obj(f)['geometry']);
+    const pin = pinOf(parts);
+    if (!pin) continue;
+    if (vicType(str(p['eventType']), true) !== 'Roadwork') {
+      out.push(vicRecord(p, parts, pin, true, `vic:planned:${id}`));
+      continue;
+    }
+    if (str(obj(p['impact'])['impactType']).toLowerCase() !== 'closures') continue;
+    const key = vicJobKey(p);
+    const job = jobs.get(key);
+    if (job) job.push({ p, parts, pin });
+    else jobs.set(key, [{ p, parts, pin }]);
+  }
+
+  for (const [key, members] of jobs) {
+    const mid = [
+      members.reduce((n, m) => n + m.pin[0], 0) / members.length,
+      members.reduce((n, m) => n + m.pin[1], 0) / members.length,
+    ];
+    const at = members.reduce((best, m) => (kmBetween(m.pin, mid) < kmBetween(best.pin, mid) ? m : best));
+    const first = members[0]!.p;
+    const road = titleCase(str(first['closedRoadName']).trim());
+    const places = [
+      ...new Set(
+        members
+          .flatMap((m) => [str(m.p['startIntersectionLocality']), str(m.p['endIntersectionLocality'])])
+          .map((x) => titleCase(x.trim()))
+          .filter(Boolean),
+      ),
+    ];
+    const roads =
+      places.length > 1 ? `${road}, ${places[0]} to ${places[places.length - 1]}` : joinText(road, places[0] ?? '');
+    const said = htmlToProse(first['description']);
     out.push(
-      roadRecord({
-        id: `vic:${planned ? 'planned' : 'unplanned'}:${id}`,
-        lon: pin[0],
-        lat: pin[1],
-        lines: parts.lines,
-        type,
-        mainCategory: eventType || (planned ? 'Planned disruption' : 'Unplanned disruption'),
-        subCategory: sub,
-        incidentType: type === 'Flood' ? 'FLOODING' : type === 'Roadwork' ? 'ROADWORK' : /crash|collision/i.test(eventType) ? 'CRASH' : '',
-        incidentKind: planned ? 'Planned' : 'Unplanned',
-        title: sub ? `${eventType || 'Disruption'}: ${sub}` : eventType || 'Disruption',
-        roads: joinText(road, locality),
-        crossStreet: str(p['startIntersectionRoadName']) || str(ref['startIntersectionRoadName']),
-        otherAdvice: htmlToProse(p['description']),
-        adviceB: str(p['eventDueTo']),
-        affectedDirection: str(impact['direction']),
-        expectedDelay: str(impact['delay']),
-        speedLimit: str(impact['speedLimitOnSite']),
-        created: isoTime(p['created']) || isoTime(duration['start']),
-        lastUpdated: isoTime(p['lastUpdated']),
-        start: isoTime(duration['start']) || isoTime(p['created']),
-        end,
-        region: str(p['localGovernmentArea']) || str(ref['localGovernmentArea']),
-        webLinks: link ? [{ url: link }] : [],
-        state: 'VIC',
-        source: 'transport_vic',
-        credit: VIC_CREDIT,
+      vicRecord(at.p, { points: [], lines: members.flatMap((m) => m.parts.lines) }, at.pin, true, `vic:planned:job:${shortHash(key)}`, {
+        roads,
+        otherAdvice: members.length > 1 ? `${members.length} stretches of road. ${said}` : said,
       }),
     );
   }
@@ -917,10 +1101,13 @@ async function vicUnplanned(key: string): Promise<TrafficFeature[]> {
   return vicRecords(features, false);
 }
 
-let _vicPlanned: { at: number; records: TrafficFeature[] } | null = null;
+/** The planned feed as last read. Kept raw: which records are inside their
+ *  working hours changes between reads, so the layer is cut from it on every
+ *  poll. */
+let _vicPlanned: { at: number; features: unknown[] } | null = null;
 
 async function vicPlanned(key: string): Promise<TrafficFeature[]> {
-  if (_vicPlanned && Date.now() - _vicPlanned.at < VIC_PLANNED_EVERY_MS) return _vicPlanned.records;
+  if (_vicPlanned && Date.now() - _vicPlanned.at < VIC_PLANNED_EVERY_MS) return vicPlannedRecords(_vicPlanned.features);
   const features: unknown[] = [];
   let token = '';
   for (let page = 0; page < 50; page++) {
@@ -931,9 +1118,8 @@ async function vicPlanned(key: string): Promise<TrafficFeature[]> {
     token = str(next['nextPageToken']);
     if (next['hasMoreRecords'] !== true || !token) break;
   }
-  const records = vicRecords(features, true);
-  _vicPlanned = { at: Date.now(), records };
-  return records;
+  _vicPlanned = { at: Date.now(), features };
+  return vicPlannedRecords(features);
 }
 
 const AGGREGATE_TYPE: Readonly<Record<string, RoadType>> = TYPE_BY_ARCHIVE_SOURCE;
