@@ -11,7 +11,7 @@ import hashlib
 import logging
 import threading
 from typing import Optional, List, Dict, Any
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import alert_catalog
 
 # Defensive: load .env here too so this module can be imported standalone
@@ -68,6 +68,26 @@ _pool_lock = threading.Lock()
 # Postgres JSONB (which reorders keys). All params values here are
 # strings / arrays-of-strings / arrays-of-objects-of-strings — no floats —
 # so there is no number-formatting drift between the languages.
+
+def _seen_before(stamp: Any, cutoff: datetime) -> bool:
+    """Whether a stored seen_alerts timestamp is older than `cutoff`.
+
+    Values are ISO strings, written in UTC by mark_*_seen; older rows came
+    from a column default with no offset. A value that will not parse counts
+    as old, so it is refreshed rather than left to expire under an item that
+    is still in its feed.
+    """
+    if isinstance(stamp, datetime):
+        t = stamp
+    else:
+        try:
+            t = datetime.fromisoformat(str(stamp))
+        except (TypeError, ValueError):
+            return True
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
+    return t < cutoff
+
 
 def _stable_json(value: Any) -> str:
     """Deterministic serializer matching JS stableJson in botActionSign.ts.
@@ -509,6 +529,19 @@ class Database:
                     )
                 ''')
         
+            # last_seen: when the item was last confirmed still in its feed.
+            # Retention runs on it, not on first_seen — see filter_unseen_alerts.
+            try:
+                if USE_POSTGRES:
+                    c.execute('ALTER TABLE seen_alerts ADD COLUMN IF NOT EXISTS last_seen TEXT')
+                else:
+                    cols = [row[1] for row in c.execute('PRAGMA table_info(seen_alerts)').fetchall()]
+                    if 'last_seen' not in cols:
+                        c.execute('ALTER TABLE seen_alerts ADD COLUMN last_seen TEXT')
+            except Exception as e:
+                logger.warning(f"seen_alerts.last_seen not added: {e}")
+                if USE_POSTGRES:
+                    conn.rollback()
             c.execute('CREATE INDEX IF NOT EXISTS idx_seen_alerts_type ON seen_alerts(alert_type)')
             c.execute('CREATE INDEX IF NOT EXISTS idx_seen_pager_hash ON seen_pager(message_hash)')
             c.execute('CREATE INDEX IF NOT EXISTS idx_incident_messages_guid ON incident_messages(incident_guid)')
@@ -1227,10 +1260,21 @@ class Database:
 
     def filter_unseen_alerts(self, alerts: List[tuple]) -> List[tuple]:
         """Given a list of (alert_type, alert_id) tuples, return only those not yet seen.
-        One query per UNSEEN_QUERY_PAIRS pairs instead of one per alert."""
+        One query per UNSEEN_QUERY_PAIRS pairs instead of one per alert.
+
+        Also confirms the ones already seen as still present: their last_seen
+        moves to now, at most once a day each. Retention (cleanup_old_seen)
+        runs on last_seen, so an id is forgotten only after it has been out of
+        its feed for the retention window. Pruned on first_seen, a roadwork
+        listed for months was forgotten 7 days after it first appeared and
+        alerted again as new — and one that drops out of its feed outside its
+        working hours and comes back each night would have re-alerted weekly."""
         if not alerts:
             return []
         seen = set()
+        stale = []
+        now = datetime.now(timezone.utc)
+        refresh_before = now - timedelta(days=1)
         conn = self._connect()
         try:
             c = conn.cursor()
@@ -1238,13 +1282,26 @@ class Database:
                 part = alerts[start:start + self.UNSEEN_QUERY_PAIRS]
                 if USE_POSTGRES:
                     values_str = ','.join(c.mogrify('(%s,%s)', (at, ai)).decode() for at, ai in part)
-                    c.execute(f'SELECT alert_type, alert_id FROM seen_alerts WHERE (alert_type, alert_id) IN ({values_str})')
+                    c.execute(f'SELECT alert_type, alert_id, COALESCE(last_seen, first_seen) FROM seen_alerts WHERE (alert_type, alert_id) IN ({values_str})')
                 else:
                     placeholders = ','.join(['(?,?)'] * len(part))
                     flat = [v for pair in part for v in pair]
-                    c.execute(f'SELECT alert_type, alert_id FROM seen_alerts WHERE (alert_type, alert_id) IN ({placeholders})', flat)
-                seen.update((row[0] if isinstance(row, tuple) else row['alert_type'],
-                             row[1] if isinstance(row, tuple) else row['alert_id']) for row in c.fetchall())
+                    c.execute(f'SELECT alert_type, alert_id, COALESCE(last_seen, first_seen) FROM seen_alerts WHERE (alert_type, alert_id) IN ({placeholders})', flat)
+                for row in c.fetchall():
+                    # RealDictRow on Postgres (values in SELECT order), Row on SQLite.
+                    at, ai, confirmed = list(row.values()) if hasattr(row, 'values') else list(row)
+                    seen.add((at, ai))
+                    if _seen_before(confirmed, refresh_before):
+                        stale.append((at, ai))
+            if stale:
+                stamp = now.isoformat()
+                if USE_POSTGRES:
+                    c.executemany('UPDATE seen_alerts SET last_seen = %s WHERE alert_type = %s AND alert_id = %s',
+                                  [(stamp, at, ai) for at, ai in stale])
+                else:
+                    c.executemany('UPDATE seen_alerts SET last_seen = ? WHERE alert_type = ? AND alert_id = ?',
+                                  [(stamp, at, ai) for at, ai in stale])
+                conn.commit()
         finally:
             conn.close()
         return [(at, ai) for at, ai in alerts if (at, ai) not in seen]
@@ -1319,10 +1376,13 @@ class Database:
                 # by mark_*_seen is honoured regardless of the DB session
                 # timezone — comparing a naive timestamp against NOW() would
                 # silently re-introduce the offset skew this fix removes.
-                c.execute("DELETE FROM seen_alerts WHERE (first_seen::timestamptz) < NOW() - INTERVAL '1 day' * %s", (days,))
+                # last_seen, not first_seen: forget an alert once it has been
+                # out of its feed for `days`, not `days` after it appeared —
+                # see filter_unseen_alerts.
+                c.execute("DELETE FROM seen_alerts WHERE (COALESCE(last_seen, first_seen)::timestamptz) < NOW() - INTERVAL '1 day' * %s", (days,))
                 c.execute("DELETE FROM seen_pager WHERE (first_seen::timestamptz) < NOW() - INTERVAL '1 day' * %s", (days,))
             else:
-                c.execute("DELETE FROM seen_alerts WHERE date(first_seen) < date(?, '-' || ? || ' days')", (cutoff_str, days))
+                c.execute("DELETE FROM seen_alerts WHERE date(COALESCE(last_seen, first_seen)) < date(?, '-' || ? || ' days')", (cutoff_str, days))
                 c.execute("DELETE FROM seen_pager WHERE date(first_seen) < date(?, '-' || ? || ' days')", (cutoff_str, days))
 
             conn.commit()
