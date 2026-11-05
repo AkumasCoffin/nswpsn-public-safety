@@ -19,6 +19,8 @@ const m = vi.hoisted(() => ({
   pool: true,
   snapshot: null as unknown,
   trails: null as unknown,
+  /** How far the track archive has written (null: nothing yet this run). */
+  through: null as number | null,
 }));
 
 vi.mock('../../../src/sources/shared/http.js', async (orig) => ({
@@ -31,6 +33,11 @@ vi.mock('../../../src/db/pool.js', () => ({
   getWriterPool: vi.fn(() => Promise.resolve(m.pool ? { query: m.query } : null)),
   closePool: vi.fn(),
   READ_POOL_MAX: 4,
+}));
+
+vi.mock('../../../src/services/adsbTrackArchive.js', async (orig) => ({
+  ...(await orig<typeof import('../../../src/services/adsbTrackArchive.js')>()),
+  adsbArchivedThroughMs: () => m.through,
 }));
 
 vi.mock('../../../src/sources/adsb.js', async (orig) => ({
@@ -99,6 +106,7 @@ beforeEach(() => {
   m.pool = true;
   m.snapshot = SNAPSHOT;
   m.trails = TRAILS;
+  m.through = null;
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -134,10 +142,15 @@ describe('GET /api/adsb/trails and /api/v1/adsb/trails', () => {
 });
 
 describe('GET /api/adsb/history and /api/v1/adsb/history', () => {
-  const H = NOW - 3_600_000; // the hour before NOW
-  const row = (offsetSec: number) => ({
-    hex: '7c6b2d', hour_bucket: new Date(H), callsign: 'POL30', reg: 'VH-PVA', type: 'B429',
-    es_tag: 'polair', sources: ['adsb_lol'], points: [[offsetSec, -33.86, 151.21, 1500]],
+  /** One stored minute (migration 139) holding one aircraft. */
+  const row = (minuteMs: number, offsetMs: number) => ({
+    minute: new Date(minuteMs),
+    aircraft: {
+      '7c6b2d': {
+        c: 'POL30', r: 'VH-PVA', t: 'B429', e: 'polair', s: ['adsb_lol'],
+        p: [[offsetMs, -33.86, 151.21, 1500]],
+      },
+    },
   });
 
   /** What the route answers for this instant: adsbHistoryAt's result, as it always was. */
@@ -146,8 +159,9 @@ describe('GET /api/adsb/history and /api/v1/adsb/history', () => {
     return JSON.stringify(await adsbHistoryAt(at, trail, NOW));
   }
 
-  it('a settled minute: the history and the long cache, on both paths', async () => {
-    m.query.mockResolvedValue({ rows: [row(3_000)] }); // 03:50
+  it('a minute on disk: the history and the long cache, on both paths', async () => {
+    m.through = NOW - 2 * 60_000; // written through 03:58
+    m.query.mockResolvedValue({ rows: [row(NOW - 10 * 60_000, 0)] }); // 03:50
     const a = await app();
     const at = NOW - 9 * 60_000 - 30_000; // 03:50:30 → snapped to 03:50
     const expected = await served(at, 15);
@@ -167,13 +181,21 @@ describe('GET /api/adsb/history and /api/v1/adsb/history', () => {
     expect(await v1.text()).toBe(`{"data":${expected}}`);
   });
 
-  it('the minute still filling gets the short cache', async () => {
+  it('a minute not yet on disk gets the short cache', async () => {
+    m.through = NOW - 2 * 60_000;
     const a = await app();
     for (const p of ['/api/adsb/history', '/api/v1/adsb/history']) {
       const res = await a.request(`${p}?at=${NOW - 30_000}`);
       expect(res.status, p).toBe(200);
       expect(res.headers.get('Cache-Control'), p).toBe('public, max-age=30, stale-while-revalidate=120');
     }
+  });
+
+  it('nothing is long-cached before this process has written a minute', async () => {
+    // After a restart only a write proves where the archive has reached.
+    const a = await app();
+    const res = await a.request(`/api/v1/adsb/history?at=${NOW - 60 * 60_000}`);
+    expect(res.headers.get('Cache-Control')).toBe('public, max-age=30, stale-while-revalidate=120');
   });
 
   it('tolerant parameters stay tolerant: junk never becomes a 400', async () => {

@@ -359,12 +359,12 @@ export const ADSB_TRACKS_MAX_MINUTES = 480;
 /**
  * Fill in registration and type for a set of traces, in one query.
  *
- * Reads the GLOBAL track table rather than the per-node one: a node's rows
- * carry only what its decoder knows (hex and transmitted callsign), while the
- * public feed's rows carry the registration an aggregator's database resolved
- * that hex to. DISTINCT ON takes the most recent row that actually has one, so
- * an aircraft whose newest hour happens to lack a registration still gets the
- * one it had an hour ago.
+ * Reads adsb_identities (migration 139) rather than the per-node tracks: a
+ * node's rows carry only what its decoder knows (hex and transmitted
+ * callsign), while the public feed carries the registration an aggregator's
+ * database resolved that hex to. The track archive keeps the latest known
+ * registration and type per hex there, and an aircraft whose newest record
+ * lacks one keeps the one it had.
  *
  * Best-effort throughout: this is a hover label. Anything the public feed never
  * saw simply stays null, and a failure leaves every trace as it was.
@@ -376,12 +376,9 @@ async function attachRegistrations(traces: NodeTrace[]): Promise<void> {
   try {
     const hexes = traces.map((t) => t.hex);
     const r = await pool.query<{ hex: string; reg: string | null; type: string | null }>(
-      `SELECT DISTINCT ON (hex) hex, reg, type
-         FROM adsb_tracks
-        WHERE hex = ANY($1::text[])
-          AND hour_bucket >= now() - interval '31 days'
-          AND (reg IS NOT NULL OR type IS NOT NULL)
-        ORDER BY hex, hour_bucket DESC`,
+      `SELECT hex, reg, type
+         FROM adsb_identities
+        WHERE hex = ANY($1::text[])`,
       [hexes],
     );
     const byHex = new Map(r.rows.map((row) => [row.hex, row]));

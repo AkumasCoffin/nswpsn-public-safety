@@ -1,15 +1,15 @@
 /**
- * Persisted aircraft tracks: writing them down, and reading them back.
+ * Aircraft history: writing it down a minute at a time, and reading it back.
  *
- * Two properties carry this feature and both are asserted directly here:
+ * The properties that carry this feature, each asserted directly here:
  *
- *  - ONE ROW PER AIRCRAFT PER HOUR. Only the current hour and the one before
- *    it are ever written, so a closed hour is immutable and the write cost
- *    stays flat however long a flight lasts.
+ *  - ONE ROW PER MINUTE, WRITTEN ONCE. A minute is inserted after it closes and
+ *    never updated, so the write cost is one statement a minute however many
+ *    aircraft are flying, and a minute on disk is final.
+ *  - WHAT IS STORED IS WHAT WAS HEARD. Positions are collected as observed, not
+ *    re-cut from the display trail, so stored history never gets coarser.
  *  - THE SAME URL FOR EVERY VIEWER. `at` is snapped to a fixed grid, so people
- *    scrubbing independently converge on one cacheable request instead of N
- *    private ones. That is the whole answer to "multiple users on the
- *    frontend", so it is a test, not a comment.
+ *    scrubbing independently converge on one cacheable request.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -21,21 +21,38 @@ vi.mock('../../../src/db/pool.js', () => ({
   closePool: vi.fn(),
 }));
 
-const HOUR = 3_600_000;
-/** 2026-09-17T04:00:00Z — an exact hour boundary, so the arithmetic is legible. */
-const H0 = Date.UTC(2026, 8, 17, 4, 0, 0);
+const MIN = 60_000;
+/** 2026-09-17T04:00:00Z — an exact boundary, so the arithmetic is legible. */
+const T0 = Date.UTC(2026, 8, 17, 4, 0, 0);
 
 const {
-  sliceTrailByHour, flushAdsbTracks, noteAdsbIdentities, _resetAdsbTrackArchive,
+  noteAdsbPositions, noteAdsbNodePoints, maybeFlushAdsbTracks, reduceMinute,
+  adsbArchivedThroughMs, adsbArchiveLateDropped, stopAdsbTrackArchive,
+  _resetAdsbTrackArchive, _flushAdsbTracksNow,
 } = await import('../../../src/services/adsbTrackArchive.js');
 const {
   adsbHistoryAt, snapHistoryBucket, clampTrailMinutes,
   HISTORY_BUCKET_MS, HISTORY_TRAIL_MAX_MIN,
 } = await import('../../../src/services/adsbHistory.js');
 
-/** A trail point as sources/adsb.ts holds it: [epochMs, lat, lon, altFt]. */
-const pt = (ms: number, lat: number, lon: number, alt: number | null = 30000) =>
-  [ms, lat, lon, alt] as [number, number, number, number | null];
+type P = [number, number, number, number | null];
+const pt = (ms: number, lat: number, lon: number, alt: number | null = 30000): P =>
+  [ms, lat, lon, alt];
+
+/** An observed aircraft record, as the poll hands it over. */
+const ac = (over: Record<string, unknown> = {}) => ({
+  hex: 'abc123', callsign: null, reg: null, type: null, esTag: null,
+  lat: -33.9, lon: 151.2, altFt: 30000, sources: ['adsb_lol'], estimated: false,
+  ...over,
+}) as never;
+
+/** The chunk inserts issued so far: [minute iso, parsed json]. */
+const chunkInserts = () => queryMock.mock.calls
+  .filter((c) => String(c[0]).includes('INSERT INTO adsb_track_chunks'))
+  .map((c) => ({ minute: (c[1] as unknown[])[0] as string, json: JSON.parse((c[1] as unknown[])[1] as string) }));
+
+const identityUpserts = () => queryMock.mock.calls
+  .filter((c) => String(c[0]).includes('INSERT INTO adsb_identities'));
 
 beforeEach(() => {
   queryMock.mockReset();
@@ -44,167 +61,194 @@ beforeEach(() => {
   _resetAdsbTrackArchive();
 });
 
-describe('cutting a trail into hours', () => {
-  it('splits one flight across the hour boundary', () => {
-    const points = [
-      pt(H0 + 50 * 60_000, -33.0, 151.0),   // 04:50
-      pt(H0 + 58 * 60_000, -33.2, 151.2),   // 04:58
-      pt(H0 + 62 * 60_000, -33.4, 151.4),   // 05:02
-    ];
-    const slices = sliceTrailByHour('abc123', points, H0 + 65 * 60_000);
-    expect(slices).toHaveLength(2);
-
-    const first = slices.find((s) => s.hourMs === H0)!;
-    const second = slices.find((s) => s.hourMs === H0 + HOUR)!;
-    expect(first.points).toHaveLength(2);
-    expect(second.points).toHaveLength(1);
-    // Offsets are seconds INTO their own hour, not into the flight.
-    expect(first.points[0]![0]).toBe(50 * 60);
-    expect(second.points[0]![0]).toBe(2 * 60);
+describe('reducing a minute', () => {
+  it('keeps a straight line to its ends plus a point every 30 s', () => {
+    // 1 Hz along a straight line: Douglas-Peucker alone would keep two points;
+    // the 30 s rule keeps the aircraft placeable through the minute.
+    const pts: P[] = [];
+    for (let s = 0; s < 60; s++) pts.push(pt(T0 + s * 1000, -33 + s * 0.001, 151));
+    const out = reduceMinute(pts);
+    expect(out[0]![0]).toBe(T0);
+    expect(out[out.length - 1]![0]).toBe(T0 + 59_000);
+    for (let i = 1; i < out.length; i++) {
+      expect(out[i]![0] - out[i - 1]![0]).toBeLessThanOrEqual(30_000);
+    }
+    expect(out.length).toBeLessThanOrEqual(4);
   });
 
-  it('leaves hours older than the last one alone', () => {
-    // The point of the hour bucketing: a long flight rewrites only the hour it
-    // is in (plus the one just closed), not its whole track, every minute.
-    const points = [
-      pt(H0 - 3 * HOUR, -31.0, 149.0),
-      pt(H0 - 2 * HOUR, -32.0, 150.0),
-      pt(H0 - HOUR + 60_000, -32.5, 150.5),
-      pt(H0 + 60_000, -33.0, 151.0),
-    ];
-    const slices = sliceTrailByHour('abc123', points, H0 + 120_000);
-    expect(slices.map((s) => s.hourMs).sort()).toEqual([H0 - HOUR, H0]);
-    // A ten-hour flight costs two rows a flush, not ten.
-    expect(slices).toHaveLength(2);
+  it('keeps a turn', () => {
+    const out = reduceMinute([
+      pt(T0, -33.0, 151.0), pt(T0 + 5_000, -33.0, 151.01), pt(T0 + 10_000, -33.01, 151.01),
+    ]);
+    expect(out).toHaveLength(3);
   });
 
-  it('still writes the hour that just closed', () => {
-    // A flush landing after the top of the hour would otherwise leave the
-    // closed hour permanently missing its final minutes.
-    const points = [pt(H0 + 59 * 60_000, -33.0, 151.0)];
-    const slices = sliceTrailByHour('abc123', points, H0 + 61 * 60_000);
-    expect(slices.map((s) => s.hourMs)).toEqual([H0]);
-  });
-
-  it('reports the real span of each slice', () => {
-    const points = [pt(H0 + 600_000, -33, 151), pt(H0 + 1_200_000, -33.1, 151.1)];
-    const [s] = sliceTrailByHour('abc123', points, H0 + 1_300_000);
-    expect(s!.firstMs).toBe(H0 + 600_000);
-    expect(s!.lastMs).toBe(H0 + 1_200_000);
-  });
-
-  it('keeps a single-point slice', () => {
-    // Enough to say the aircraft was there, which is what a coverage picture
-    // is for even when it is not enough to draw a line.
-    expect(sliceTrailByHour('abc123', [pt(H0 + 60_000, -33, 151)], H0 + 120_000))
-      .toHaveLength(1);
+  it('counts one fix seen twice once, whatever order it arrived in', () => {
+    const out = reduceMinute([
+      pt(T0 + 10_000, -33.1, 151), pt(T0, -33, 151), pt(T0 + 10_200, -33.1, 151),
+    ]);
+    expect(out.map((p) => p[0])).toEqual([T0, T0 + 10_000]);
   });
 });
 
-describe('the flush', () => {
-  const track = (hex: string, points: Array<[number, number, number, number | null]>) =>
-    ({ hex, points });
+describe('writing minutes', () => {
+  it('writes a minute once it has closed, as one row holding every aircraft', async () => {
+    noteAdsbPositions([ac(), ac({ hex: 'def456', lat: -34 })], T0 + 10_000);
+    noteAdsbPositions([ac({ lat: -33.95 })], T0 + 40_000);
+    // Still open: nothing written.
+    await _flushAdsbTracksNow(T0 + 50_000);
+    expect(chunkInserts()).toHaveLength(0);
 
-  it('writes one row per aircraft-hour and carries identity', async () => {
-    noteAdsbIdentities([{
-      hex: 'abc123', callsign: 'QFA512', reg: 'VH-VZZ', type: 'B738',
-      esTag: null, sources: ['adsb.lol', 'node:adsb-syd-01'],
-      lat: -33, lon: 151, altFt: 30000, onGround: false, gsKt: 400,
-      trackDeg: 90, category: 'A3', squawk: null, emergencySquawk: false,
-      ageSec: 1, sourceCount: 2, estimated: false, estimatedSec: null,
-    }]);
-
-    const written = await flushAdsbTracks(
-      [track('abc123', [pt(H0 + 60_000, -33, 151), pt(H0 + 120_000, -33.1, 151.1)])],
-      H0 + 180_000,
-    );
-    expect(written).toBe(1);
-
-    const [sql, values] = queryMock.mock.calls[0]!;
-    expect(sql).toContain('INSERT INTO adsb_tracks');
-    expect(sql).toContain('ON CONFLICT (hex, hour_bucket) DO UPDATE');
-    expect(values[0]).toBe('abc123');
-    expect(values[4]).toBe('QFA512');
-    expect(values[5]).toBe('VH-VZZ');
-    // sources are carried so "only my receiver" survives a scrub back.
-    expect(values[8]).toEqual(['adsb.lol', 'node:adsb-syd-01']);
-    expect(JSON.parse(values[9] as string)).toEqual([[60, -33, 151, 30000], [120, -33.1, 151.1, 30000]]);
+    await _flushAdsbTracksNow(T0 + MIN + 20_000);
+    const ins = chunkInserts();
+    expect(ins).toHaveLength(1);
+    expect(ins[0]!.minute).toBe(new Date(T0).toISOString());
+    expect(Object.keys(ins[0]!.json).sort()).toEqual(['abc123', 'def456']);
+    // Offsets are ms INTO the minute.
+    expect(ins[0]!.json.abc123.p.map((p: P) => p[0])).toEqual([10_000, 40_000]);
+    expect(adsbArchivedThroughMs()).toBe(T0 + MIN);
   });
 
-  it('never blanks out an identity it already knows', async () => {
-    const base = {
-      hex: 'abc123', reg: null, type: null, esTag: null, sources: ['adsb.lol'],
-      lat: -33, lon: 151, altFt: 30000, onGround: false, gsKt: 400,
-      trackDeg: 90, category: null, squawk: null, emergencySquawk: false,
-      ageSec: 1, sourceCount: 1, estimated: false, estimatedSec: null,
-    };
-    noteAdsbIdentities([{ ...base, callsign: 'QFA512' } as never]);
-    // A later poll where the aggregator dropped the callsign.
-    noteAdsbIdentities([{ ...base, callsign: null } as never]);
-
-    await flushAdsbTracks([track('abc123', [pt(H0 + 60_000, -33, 151)])], H0 + 120_000);
-    expect(queryMock.mock.calls[0]![1][4]).toBe('QFA512');
+  it('only ever inserts — never an UPDATE of history', async () => {
+    noteAdsbPositions([ac()], T0 + 10_000);
+    await _flushAdsbTracksNow(T0 + 2 * MIN);
+    const sql = queryMock.mock.calls.map((c) => String(c[0])).filter((s) => s.includes('adsb_track_chunks'));
+    expect(sql.every((s) => !/UPDATE/i.test(s))).toBe(true);
   });
 
-  it('unions sources across polls', async () => {
-    const base = {
-      hex: 'abc123', callsign: null, reg: null, type: null, esTag: null,
-      lat: -33, lon: 151, altFt: 30000, onGround: false, gsKt: 400,
-      trackDeg: 90, category: null, squawk: null, emergencySquawk: false,
-      ageSec: 1, sourceCount: 1, estimated: false, estimatedSec: null,
-    };
-    noteAdsbIdentities([{ ...base, sources: ['adsb.lol'] } as never]);
-    noteAdsbIdentities([{ ...base, sources: ['node:rx-1'] } as never]);
-    await flushAdsbTracks([track('abc123', [pt(H0 + 60_000, -33, 151)])], H0 + 120_000);
-    expect(queryMock.mock.calls[0]![1][8]).toEqual(['adsb.lol', 'node:rx-1']);
+  it('waits out the grace so node fixes land in their own minute', async () => {
+    noteAdsbPositions([ac()], T0 + 10_000);
+    await _flushAdsbTracksNow(T0 + MIN + 5_000);
+    expect(chunkInserts()).toHaveLength(0);
+    noteAdsbNodePoints('abc123', [pt(T0 + 59_000, -33.5, 151.5)]);
+    await _flushAdsbTracksNow(T0 + MIN + 16_000);
+    expect(chunkInserts()[0]!.json.abc123.p.map((p: P) => p[0])).toEqual([10_000, 59_000]);
   });
 
-  it('appends rather than replaces only when the slices are disjoint', async () => {
-    // The restart case. The conflict clause has to keep what was recorded
-    // before the process died, without letting a normal re-cut of the same
-    // hour double itself up.
-    await flushAdsbTracks([track('a1', [pt(H0 + 60_000, -33, 151)])], H0 + 120_000);
-    const sql = queryMock.mock.calls[0]![0] as string;
-    expect(sql).toContain('WHEN EXCLUDED.first_seen > adsb_tracks.last_seen');
-    expect(sql).toContain('adsb_tracks.points || EXCLUDED.points');
-    expect(sql).toContain('ELSE EXCLUDED.points');
-    // ...and it cannot grow without bound if a process restart-loops.
-    expect(sql).toMatch(/jsonb_array_length\(adsb_tracks\.points\) < \d+/);
+  it('archives a 1 Hz receiver at full reduced rate, however long the trail', async () => {
+    // The display trail crushes past 150 points; the archive must not care.
+    for (let m = 0; m < 5; m++) {
+      const pts: P[] = [];
+      for (let s = 0; s < 60; s++) {
+        pts.push(pt(T0 + m * MIN + s * 1000, -33 + (m * 60 + s) * 0.0005, 151 + ((m * 60 + s) % 7) * 0.001));
+      }
+      noteAdsbNodePoints('abc123', pts);
+    }
+    await _flushAdsbTracksNow(T0 + 6 * MIN);
+    const ins = chunkInserts();
+    expect(ins).toHaveLength(5);
+    for (const i of ins) expect(i.json.abc123.p.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('drops a position for a minute already written, and counts it', async () => {
+    noteAdsbPositions([ac()], T0 + 10_000);
+    await _flushAdsbTracksNow(T0 + 2 * MIN);
+    noteAdsbNodePoints('abc123', [pt(T0 + 30_000, -33, 151)]);
+    expect(adsbArchiveLateDropped()).toBe(1);
+    await _flushAdsbTracksNow(T0 + 3 * MIN);
+    expect(chunkInserts()).toHaveLength(1);
+  });
+
+  it('records the sources heard in THAT minute, not since start', async () => {
+    noteAdsbPositions([ac({ sources: ['adsb_lol', 'node:rx-1'] })], T0 + 10_000);
+    noteAdsbPositions([ac({ sources: ['adsb_lol'], lat: -33.8 })], T0 + MIN + 10_000);
+    await _flushAdsbTracksNow(T0 + 3 * MIN);
+    const [first, second] = chunkInserts();
+    expect(first!.json.abc123.s.sort()).toEqual(['adsb_lol', 'node:rx-1']);
+    expect(second!.json.abc123.s).toEqual(['adsb_lol']);
+  });
+
+  it('stamps the best identity known, which only improves', async () => {
+    noteAdsbPositions([ac({ callsign: 'QFA1', reg: 'VH-OQA' })], T0 + 10_000);
+    noteAdsbPositions([ac({ callsign: null, lat: -33.8 })], T0 + 20_000);
+    await _flushAdsbTracksNow(T0 + 2 * MIN);
+    const e = chunkInserts()[0]!.json.abc123;
+    expect(e.c).toBe('QFA1');
+    expect(e.r).toBe('VH-OQA');
+  });
+
+  it('retries a failed minute, and later minutes wait behind it', async () => {
+    noteAdsbPositions([ac()], T0 + 10_000);
+    noteAdsbPositions([ac({ lat: -33.8 })], T0 + MIN + 10_000);
+    queryMock.mockRejectedValueOnce(new Error('db away'));
+    await _flushAdsbTracksNow(T0 + 3 * MIN);
+    // One failed attempt; the second minute did not jump ahead of it.
+    expect(chunkInserts()).toHaveLength(1);
+    expect(adsbArchivedThroughMs()).toBeNull();
+    await _flushAdsbTracksNow(T0 + 4 * MIN);
+    expect(chunkInserts().map((i) => i.minute)).toEqual([
+      new Date(T0).toISOString(), new Date(T0).toISOString(), new Date(T0 + MIN).toISOString(),
+    ]);
+    expect(adsbArchivedThroughMs()).toBe(T0 + 2 * MIN);
+  });
+
+  it('gives up on a minute after ten minutes of failures', async () => {
+    noteAdsbPositions([ac()], T0 + 10_000);
+    queryMock.mockRejectedValue(new Error('db away'));
+    await _flushAdsbTracksNow(T0 + 12 * MIN);
+    queryMock.mockResolvedValue({ rows: [] });
+    queryMock.mockClear();
+    await _flushAdsbTracksNow(T0 + 13 * MIN);
+    expect(chunkInserts()).toHaveLength(0);
+  });
+
+  it('inserts under the next free seq, so two processes can share a minute', async () => {
+    noteAdsbPositions([ac()], T0 + 10_000);
+    await _flushAdsbTracksNow(T0 + 2 * MIN);
+    const sql = String(queryMock.mock.calls.find((c) => String(c[0]).includes('INSERT INTO adsb_track_chunks'))![0]);
+    expect(sql).toMatch(/COALESCE\(MAX\(seq\) \+ 1, 0\)/);
+    expect(sql).toMatch(/seq >= 0/);
+  });
+
+  it('writes the open minute at shutdown and accepts nothing after', async () => {
+    noteAdsbPositions([ac()], Date.now());
+    await stopAdsbTrackArchive();
+    expect(chunkInserts()).toHaveLength(1);
+    noteAdsbPositions([ac()], Date.now());
+    maybeFlushAdsbTracks(Date.now() + 5 * MIN);
+    await stopAdsbTrackArchive();
+    expect(chunkInserts()).toHaveLength(1);
   });
 
   it('is a no-op without a database', async () => {
     poolAvailable = false;
-    expect(await flushAdsbTracks([track('a1', [pt(H0, -33, 151)])], H0)).toBe(0);
+    noteAdsbPositions([ac()], T0 + 10_000);
+    await expect(_flushAdsbTracksNow(T0 + 2 * MIN)).resolves.toBeUndefined();
     expect(queryMock).not.toHaveBeenCalled();
   });
+});
 
-  it('writes nothing when no aircraft are being trailed', async () => {
-    expect(await flushAdsbTracks([], H0)).toBe(0);
-    expect(queryMock).not.toHaveBeenCalled();
+describe('identities', () => {
+  it('upserts registration and type only when they change', async () => {
+    noteAdsbPositions([ac({ reg: 'VH-OQA', type: 'A388' })], T0 + 10_000);
+    await _flushAdsbTracksNow(T0 + 2 * MIN);
+    noteAdsbPositions([ac({ reg: 'VH-OQA', type: 'A388', lat: -33.7 })], T0 + 2 * MIN + 10_000);
+    await _flushAdsbTracksNow(T0 + 4 * MIN);
+    expect(identityUpserts()).toHaveLength(1);
+    expect(identityUpserts()[0]![1]).toEqual([['abc123'], ['VH-OQA'], ['A388']]);
+    // And the SQL itself skips a write that would change nothing.
+    expect(String(identityUpserts()[0]![0])).toMatch(/IS DISTINCT FROM/);
   });
 
-  it('survives a failing write without throwing', async () => {
-    queryMock.mockRejectedValue(new Error('deadlock detected'));
-    await expect(
-      flushAdsbTracks([track('a1', [pt(H0 + 60_000, -33, 151)])], H0 + 120_000),
-    ).resolves.toBe(0);
+  it('sends nothing for an aircraft with neither', async () => {
+    noteAdsbPositions([ac()], T0 + 10_000);
+    await _flushAdsbTracksNow(T0 + 2 * MIN);
+    expect(identityUpserts()).toHaveLength(0);
   });
 });
 
 describe('the shared bucket', () => {
-  it('collapses viewers scrubbing to the same minute onto one request', async () => {
-    // THE multi-user property. Two people a few seconds apart must produce an
-    // identical `atMs`, or every viewer gets a private cache entry.
-    const a = snapHistoryBucket(H0 + 137_000);
-    const b = snapHistoryBucket(H0 + 172_000);
+  it('collapses viewers scrubbing to the same minute onto one request', () => {
+    const a = snapHistoryBucket(T0 + 137_000);
+    const b = snapHistoryBucket(T0 + 172_000);
     expect(a).toBe(b);
-    expect(a).toBe(H0 + 120_000);
+    expect(a).toBe(T0 + 120_000);
     expect(a % HISTORY_BUCKET_MS).toBe(0);
   });
 
   it('echoes the snapped instant, not the one asked for', async () => {
-    const h = await adsbHistoryAt(H0 + 137_000, 15, H0 + 200_000);
-    expect(h!.atMs).toBe(H0 + 120_000);
+    const h = await adsbHistoryAt(T0 + 137_000, 15, T0 + 200_000);
+    expect(h!.atMs).toBe(T0 + 120_000);
   });
 
   it('clamps the trail window', () => {
@@ -216,175 +260,107 @@ describe('the shared bucket', () => {
 });
 
 describe('reading history back', () => {
-  /** One stored row, as node-postgres hands it over. */
-  const row = (
-    hex: string, hourMs: number,
-    points: Array<[number, number, number, number | null]>,
-    extra: Record<string, unknown> = {},
-  ) => ({
-    hex, hour_bucket: new Date(hourMs),
-    callsign: null, reg: null, type: null, es_tag: null, sources: [],
-    points, ...extra,
+  /** One stored minute, as node-postgres hands a json column over. */
+  const row = (minuteMs: number, aircraft: Record<string, unknown>) =>
+    ({ minute: new Date(minuteMs), aircraft });
+  const entry = (p: P[], extra: Record<string, unknown> = {}) =>
+    ({ c: null, r: null, t: null, e: null, s: [], p, ...extra });
+
+  it('reads the window\'s minutes by primary key', async () => {
+    await adsbHistoryAt(T0 + 30 * MIN, 15, T0 + 40 * MIN);
+    const [sql, params] = queryMock.mock.calls[0]!;
+    expect(String(sql)).toMatch(/FROM adsb_track_chunks/);
+    expect(String(sql)).toMatch(/minute >= \$1::timestamptz/);
+    expect(String(sql)).toMatch(/minute <= \$2::timestamptz/);
+    expect(params).toEqual([
+      new Date(T0 + 15 * MIN).toISOString(), new Date(T0 + 30 * MIN).toISOString(),
+    ]);
   });
 
-  it('bounds on the hour first, then the window', async () => {
-    await adsbHistoryAt(H0 + 30 * 60_000, 15, H0 + 31 * 60_000);
-    const [sql, values] = queryMock.mock.calls[0]!;
-    expect(sql).toContain('hour_bucket >=');
-    expect(sql).toContain('hour_bucket <=');
-    expect(sql).toContain('last_seen  >=');
-    expect(sql).toContain('first_seen <=');
-    // 04:30 with a 15-minute trail lives entirely inside the 04:00 hour.
-    expect(values[0]).toBe(new Date(H0).toISOString());
-    expect(values[1]).toBe(new Date(H0).toISOString());
-  });
-
-  it('spans two hour buckets when the window straddles the boundary', async () => {
-    await adsbHistoryAt(H0 + 5 * 60_000, 15, H0 + 6 * 60_000);
-    const values = queryMock.mock.calls[0]![1];
-    expect(values[0]).toBe(new Date(H0 - HOUR).toISOString());
-    expect(values[1]).toBe(new Date(H0).toISOString());
-  });
-
-  it('stitches an aircraft back together across the hour boundary', async () => {
-    // The hour split is a storage detail; nothing downstream should see it.
-    queryMock.mockResolvedValue({
-      rows: [
-        row('abc123', H0 - HOUR, [[3500, -33.0, 151.0, 30000]], { callsign: null }),
-        row('abc123', H0, [[60, -33.2, 151.2, 31000]], { callsign: 'QFA512' }),
-      ],
-    });
-    const h = await adsbHistoryAt(H0 + 5 * 60_000, 15, H0 + 6 * 60_000);
+  it('stitches an aircraft back together across minutes, in time order', async () => {
+    queryMock.mockResolvedValueOnce({ rows: [
+      row(T0, { abc123: entry([[10_000, -33, 151, 1000], [50_000, -33.1, 151.1, 1100]]) }),
+      row(T0 + MIN, { abc123: entry([[20_000, -33.2, 151.2, 1200]]) }),
+    ] });
+    const h = await adsbHistoryAt(T0 + 2 * MIN, 15, T0 + 10 * MIN);
     expect(h!.aircraft).toHaveLength(1);
-    const t = h!.aircraft[0]!;
-    expect(t.points).toHaveLength(2);
-    expect(t.points[0]![0]).toBeLessThan(t.points[1]![0]);
-    // The later hour knew the callsign the earlier one did not.
-    expect(t.callsign).toBe('QFA512');
+    expect(h!.aircraft[0]!.points.map((p) => p[0])).toEqual([T0 + 10_000, T0 + 50_000, T0 + MIN + 20_000]);
   });
 
-  it('clips points outside the window even when the row overlaps it', async () => {
-    // The row-level bounds are coarse: the points live inside a jsonb array,
-    // so an hour that touches the window brings in points that do not.
-    queryMock.mockResolvedValue({
-      rows: [row('abc123', H0, [
-        [60, -33.0, 151.0, 30000],     // 04:01 — before a 04:20–04:35 window
-        [1_260, -33.2, 151.2, 30000],  // 04:21 — inside
-        [2_100, -33.4, 151.4, 30000],  // 04:35 — inside (the instant itself)
-        [3_000, -33.6, 151.6, 30000],  // 04:50 — after
-      ])],
-    });
-    const h = await adsbHistoryAt(H0 + 35 * 60_000, 15, H0 + 40 * 60_000);
-    const pts = h!.aircraft[0]!.points;
-    expect(pts).toHaveLength(2);
-    expect(pts[0]![0]).toBe(H0 + 21 * 60_000);
-    expect(pts[1]![0]).toBe(H0 + 35 * 60_000);
+  it('includes a point exactly on the instant, and none after it', async () => {
+    queryMock.mockResolvedValueOnce({ rows: [
+      row(T0 + 4 * MIN, { abc123: entry([[0, -33, 151, null], [10_000, -33.1, 151.1, null]]) }),
+    ] });
+    const h = await adsbHistoryAt(T0 + 4 * MIN, 15, T0 + 10 * MIN);
+    expect(h!.aircraft[0]!.points.map((p) => p[0])).toEqual([T0 + 4 * MIN]);
+  });
+
+  it('clips points before the window', async () => {
+    // The window is [T0, T0 + 15 min]; a row reaching back past it is clipped.
+    queryMock.mockResolvedValueOnce({ rows: [
+      row(T0 - MIN, { abc123: entry([[50_000, -33, 151, null]]) }),
+      row(T0, { abc123: entry([[10_000, -33.1, 151.1, null]]) }),
+    ] });
+    const h = await adsbHistoryAt(T0 + 15 * MIN, 15, T0 + 20 * MIN);
+    expect(h!.aircraft[0]!.points.map((p) => p[0])).toEqual([T0 + 10_000]);
   });
 
   it('drops an aircraft whose every point fell outside the window', async () => {
-    queryMock.mockResolvedValue({
-      rows: [row('abc123', H0, [[60, -33.0, 151.0, 30000]])],
-    });
-    const h = await adsbHistoryAt(H0 + 35 * 60_000, 15, H0 + 40 * 60_000);
+    queryMock.mockResolvedValueOnce({ rows: [
+      row(T0 + 5 * MIN, { abc123: entry([[30_000, -33, 151, null]]) }),
+    ] });
+    const h = await adsbHistoryAt(T0 + 5 * MIN, 15, T0 + 10 * MIN);
     expect(h!.aircraft).toHaveLength(0);
-    expect(h!.count).toBe(0);
   });
 
-  it('converts stored offsets back to absolute times', async () => {
-    queryMock.mockResolvedValue({ rows: [row('abc123', H0, [[600, -33, 151, 12000]])] });
-    const h = await adsbHistoryAt(H0 + 12 * 60_000, 15, H0 + 13 * 60_000);
-    expect(h!.aircraft[0]!.points[0]).toEqual([H0 + 600_000, -33, 151, 12000]);
+  it('merges two rows of one minute and drops the fix they share', async () => {
+    queryMock.mockResolvedValueOnce({ rows: [
+      row(T0, { abc123: entry([[10_000, -33, 151, null], [30_000, -33.1, 151, null]], { s: ['adsb_lol'] }) }),
+      row(T0, { abc123: entry([[30_000, -33.1, 151, null], [50_000, -33.2, 151, null]], { s: ['node:rx-1'] }) }),
+    ] });
+    const h = await adsbHistoryAt(T0 + MIN, 15, T0 + 10 * MIN);
+    const t = h!.aircraft[0]!;
+    expect(t.points.map((p) => p[0])).toEqual([T0 + 10_000, T0 + 30_000, T0 + 50_000]);
+    expect(t.sources.sort()).toEqual(['adsb_lol', 'node:rx-1']);
   });
 
-  it('carries sources so the "my receiver" filter survives a scrub', async () => {
-    queryMock.mockResolvedValue({
-      rows: [row('abc123', H0, [[600, -33, 151, 12000]], { sources: ['node:rx-1'] })],
-    });
-    const h = await adsbHistoryAt(H0 + 12 * 60_000, 15, H0 + 13 * 60_000);
-    expect(h!.aircraft[0]!.sources).toEqual(['node:rx-1']);
+  it('reports the sources of the newest minute the aircraft was heard in', async () => {
+    // A receiver that heard it ten minutes ago is not credited with it now.
+    queryMock.mockResolvedValueOnce({ rows: [
+      row(T0, { abc123: entry([[10_000, -33, 151, null]], { s: ['adsb_lol', 'node:rx-1'] }) }),
+      row(T0 + 9 * MIN, { abc123: entry([[10_000, -33.5, 151, null]], { s: ['adsb_lol'] }) }),
+    ] });
+    const h = await adsbHistoryAt(T0 + 10 * MIN, 15, T0 + 20 * MIN);
+    expect(h!.aircraft[0]!.sources).toEqual(['adsb_lol']);
+  });
+
+  it('takes the newest identity, keeping what a later minute forgot', async () => {
+    queryMock.mockResolvedValueOnce({ rows: [
+      row(T0, { abc123: entry([[10_000, -33, 151, null]], { c: 'QFA1', r: 'VH-OQA' }) }),
+      row(T0 + MIN, { abc123: entry([[10_000, -33.1, 151, null]], { c: 'QFA2', r: null }) }),
+    ] });
+    const h = await adsbHistoryAt(T0 + 2 * MIN, 15, T0 + 10 * MIN);
+    expect(h!.aircraft[0]!.callsign).toBe('QFA2');
+    expect(h!.aircraft[0]!.reg).toBe('VH-OQA');
   });
 
   it('reports the retention window with every answer', async () => {
-    const h = await adsbHistoryAt(H0, 15, H0 + 60_000);
+    const h = await adsbHistoryAt(T0, 15, T0 + MIN);
     expect(h!.retentionDays).toBeGreaterThan(0);
-    expect(h!.oldestMs).toBeLessThan(H0);
+    expect(h!.oldestMs).toBeLessThan(T0);
   });
 
   it('returns null rather than throwing when there is no database', async () => {
     poolAvailable = false;
-    expect(await adsbHistoryAt(H0, 15, H0)).toBeNull();
+    expect(await adsbHistoryAt(T0, 15, T0 + MIN)).toBeNull();
   });
 
-  it('says so when it truncates', async () => {
-    const rows = [];
-    for (let i = 0; i < 4100; i += 1) {
-      rows.push(row(`h${i}`, H0, [[600 + (i % 60), -33, 151, 12000]]));
-    }
-    queryMock.mockResolvedValue({ rows });
-    const h = await adsbHistoryAt(H0 + 12 * 60_000, 15, H0 + 13 * 60_000);
+  it('says so when it truncates, keeping the most recently heard', async () => {
+    const many: Record<string, unknown> = {};
+    for (let i = 0; i < 4001; i++) many[`h${i}`] = entry([[i % 60_000, -33, 151, null]]);
+    queryMock.mockResolvedValueOnce({ rows: [row(T0, many)] });
+    const h = await adsbHistoryAt(T0 + MIN, 15, T0 + 2 * MIN);
     expect(h!.truncated).toBe(true);
     expect(h!.count).toBe(4000);
-    expect(h!.aircraft).toHaveLength(4000);
-  });
-
-  it('does not claim truncation when it fits', async () => {
-    queryMock.mockResolvedValue({ rows: [row('abc123', H0, [[600, -33, 151, 12000]])] });
-    const h = await adsbHistoryAt(H0 + 12 * 60_000, 15, H0 + 13 * 60_000);
-    expect(h!.truncated).toBe(false);
-  });
-});
-
-describe('which receiver heard it, at the instant being viewed', () => {
-  /** A stored row, as the archive writes one. */
-  const row = (hourMs: number, sources: string[], secs: number[]) => ({
-    hex: 'abc123', hour_bucket: new Date(hourMs),
-    callsign: null, reg: null, type: null, es_tag: null,
-    sources,
-    points: secs.map((s) => [s, -33.8, 151.2, 30000]),
-  });
-
-  it('reports only the sources from the hour on screen', async () => {
-    // The reported fault: the map's receiver filter showed aircraft a node had
-    // heard at some OTHER point in the trail. Sources are recorded per hour and
-    // the stitch unioned every hour the trail touched, so scrubbing to 04:05
-    // inherited attribution from an aircraft the node only caught at 05:55.
-    queryMock.mockResolvedValue({
-      rows: [
-        row(H0, ['agg:one'], [300]),
-        row(H0 + HOUR, ['agg:one', 'node:ours'], [3300]),
-      ],
-    });
-    const d = await adsbHistoryAt(H0 + 5 * 60_000, 120, H0 + 2 * HOUR);
-    expect(d!.aircraft[0]!.sources).toEqual(['agg:one']);
-  });
-
-  it('still reports the node in the hour it actually heard it', async () => {
-    queryMock.mockResolvedValue({
-      rows: [
-        row(H0, ['agg:one'], [300]),
-        row(H0 + HOUR, ['agg:one', 'node:ours'], [3300]),
-      ],
-    });
-    const d = await adsbHistoryAt(H0 + HOUR + 55 * 60_000, 120, H0 + 2 * HOUR);
-    expect(d!.aircraft[0]!.sources).toContain('node:ours');
-  });
-
-  it('keeps the union when the viewed hour has no row of its own', async () => {
-    // A trail can reach into the window from an earlier hour. There is no
-    // attribution for an hour that recorded none, and the union is the only
-    // thing left to say — better than claiming nothing heard it.
-    queryMock.mockResolvedValue({
-      rows: [row(H0, ['agg:one', 'node:ours'], [3599])],
-    });
-    const d = await adsbHistoryAt(H0 + HOUR + 60_000, 120, H0 + 2 * HOUR);
-    expect(d!.aircraft[0]!.sources).toEqual(['agg:one', 'node:ours']);
-  });
-
-  it('de-duplicates a repeated source', async () => {
-    queryMock.mockResolvedValue({
-      rows: [row(H0, ['node:ours', 'node:ours', 'agg:one'], [300])],
-    });
-    const d = await adsbHistoryAt(H0 + 5 * 60_000, 120, H0 + HOUR);
-    expect(d!.aircraft[0]!.sources).toEqual(['node:ours', 'agg:one']);
   });
 });

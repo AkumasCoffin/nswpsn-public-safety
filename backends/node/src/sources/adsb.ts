@@ -26,16 +26,18 @@
  * so a short holdover keeps an aircraft's last position for up to 90 s
  * (one full rotation is ~60 s) — see applyHoldover.
  */
+import { simplifyTrail } from '../lib/simplifyTrail.js';
 import { fetchJson } from './shared/http.js';
 import { registerSource } from '../services/sourceRegistry.js';
 import { liveStore } from '../store/live.js';
 import { config } from '../config.js';
 import { log } from '../lib/log.js';
 import { nodeAdsbRecords, nodeAdsbFeedCount } from '../services/nodes/adsbNodeStore.js';
-// One-way, like the node store above: this module hands the archive its
-// trails, the archive never reaches back for them.
+// One-way, like the node store above: this module hands the archive the
+// positions it observed, the archive never reaches back for them.
 import {
-  noteAdsbIdentities,
+  noteAdsbPositions,
+  noteAdsbNodePoints,
   maybeFlushAdsbTracks,
 } from '../services/adsbTrackArchive.js';
 
@@ -770,6 +772,10 @@ async function fetchUpstream(up: Upstream, circles: readonly Circle[]): Promise<
 
 type TrailPoint = [number, number, number, number | null]; // [t, lat, lon, altFt]
 
+// Shared with services/adsbTrackArchive.ts, which must not import this module
+// at runtime (this module imports it). Re-exported so callers keep one name.
+export { simplifyTrail };
+
 const TRAIL_RECENT_MS = 10 * 60_000; // full-resolution window
 const TRAIL_SIMPLIFY_TRIGGER = 60; // points before old-portion simplify
 const TRAIL_MAX_POINTS = 150; // hard cap per hex (larger epsilon on overflow)
@@ -787,49 +793,6 @@ export interface AdsbTrailsSnapshot {
   /** hex → [[lat, lon, altFt|null], ...] oldest→newest (5 dp coords). */
   trails: Record<string, Array<[number, number, number | null]>>;
   fetched_at: string;
-}
-
-/** Douglas-Peucker on [t, lat, lon, alt] points (lat/lon distance). */
-export function simplifyTrail(pts: TrailPoint[], epsilon: number): TrailPoint[] {
-  if (pts.length <= 2) return pts;
-  const keep = new Array<boolean>(pts.length).fill(false);
-  keep[0] = keep[pts.length - 1] = true;
-  const stack: Array<[number, number]> = [[0, pts.length - 1]];
-  while (stack.length) {
-    const seg = stack.pop() as [number, number];
-    const a = pts[seg[0]] as TrailPoint;
-    const b = pts[seg[1]] as TrailPoint;
-    let maxD = 0;
-    let maxI = -1;
-    const dx = b[2] - a[2];
-    const dy = b[1] - a[1];
-    const len2 = dx * dx + dy * dy;
-    for (let i = seg[0] + 1; i < seg[1]; i++) {
-      const p = pts[i] as TrailPoint;
-      let d: number;
-      if (len2 === 0) {
-        const ex = p[2] - a[2];
-        const ey = p[1] - a[1];
-        d = Math.sqrt(ex * ex + ey * ey);
-      } else {
-        const t = ((p[2] - a[2]) * dx + (p[1] - a[1]) * dy) / len2;
-        const cx = a[2] + Math.max(0, Math.min(1, t)) * dx;
-        const cy = a[1] + Math.max(0, Math.min(1, t)) * dy;
-        const ex = p[2] - cx;
-        const ey = p[1] - cy;
-        d = Math.sqrt(ex * ex + ey * ey);
-      }
-      if (d > maxD) {
-        maxD = d;
-        maxI = i;
-      }
-    }
-    if (maxD > epsilon && maxI !== -1) {
-      keep[maxI] = true;
-      stack.push([seg[0], maxI], [maxI, seg[1]]);
-    }
-  }
-  return pts.filter((_, i) => keep[i]);
 }
 
 /**
@@ -887,6 +850,9 @@ export function ingestNodeTrailPoints(
     .filter((p) => p[0] <= nowMs && p[0] > nowMs - TRAIL_RECENT_MS)
     .sort((a, b) => a[0] - b[0]);
   if (fresh.length === 0) return;
+  // The archive keeps every one of these at the rate the receiver heard
+  // them; the trail below thins them for display.
+  noteAdsbNodePoints(hex, fresh);
 
   let buf = _trails.get(hex);
   if (!buf) {
@@ -960,11 +926,7 @@ export function adsbTrailsSnapshot(): AdsbTrailsSnapshot {
   return _trailsSnapshot;
 }
 
-/** One aircraft's raw, timestamped trail — the archive's input.
- *
- *  The served snapshot drops timestamps (a path does not need them) and rounds
- *  to 5 dp, both of which history does need, so persistence reads the buffer
- *  rather than the snapshot. */
+/** One aircraft's raw, timestamped trail. */
 export interface ArchivableTrack {
   hex: string;
   /** [epochMs, lat, lon, altFt|null], oldest first. */
@@ -972,11 +934,11 @@ export interface ArchivableTrack {
 }
 
 /**
- * Every live trail, for services/adsbTrackArchive.ts.
+ * Every live trail with its timestamps, which the served snapshot drops.
  *
- * Exposed here rather than exporting `_trails` itself so the buffer stays
- * owned by this module — the archive reads, it never appends or prunes, and
- * the decimation rules stay in one place.
+ * Exposed rather than exporting `_trails` itself so the buffer stays owned by
+ * this module. History does NOT read it: the trail is thinned for display, so
+ * services/adsbTrackArchive.ts collects positions as they are observed.
  */
 export function adsbTrailsForArchive(): ArchivableTrack[] {
   const out: ArchivableTrack[] = [];
@@ -1039,11 +1001,12 @@ export async function fetchAdsbAircraft(): Promise<AdsbSnapshot> {
   // fabricated positions indistinguishable from real ones.
   const observed = merged.filter((a) => !a.estimated);
   updateTrails(observed, Date.now());
-  // Persist the trails for the historical view. Driven from here rather than
-  // its own timer so it can only ever see trails this poll has finished
-  // writing; it rate-limits itself to once a minute.
-  noteAdsbIdentities(observed);
-  maybeFlushAdsbTracks(adsbTrailsForArchive(), Date.now());
+  // Persist for the historical view: the observed positions go into the
+  // archive's current minute, and any minute that has closed is written.
+  // Driven from here rather than its own timer so a write can only ever
+  // follow a finished poll.
+  noteAdsbPositions(observed, Date.now());
+  maybeFlushAdsbTracks(Date.now());
 
   // Stable ordering: emergency services first, then lowest altitude —
   // matches the frontend's render cap so a truncated list keeps the

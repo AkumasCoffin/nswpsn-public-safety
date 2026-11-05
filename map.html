@@ -15528,6 +15528,9 @@ function initPagerHoursFromStorage() {
     // that always starts off.
 
     let adsbHistoryMode = false;
+    /** An aircraft not heard for this long before the viewed instant is not
+     *  drawn. History stores a point at least every 30 s while one is heard. */
+    const ADSB_HIST_STALE_SEC = 120;
     let _adsbHistAtMs = null;         // the instant being viewed
     let _adsbHistSeq = 0;             // discards responses overtaken by a newer scrub
     let _adsbHistDebounce = null;
@@ -15866,7 +15869,10 @@ function initPagerHoursFromStorage() {
 
     async function loadAdsbHistory() {
       if (!adsbHistoryMode) return;
-      const at = _adsbHistAtMs;
+      // Snapped to the minute here, not just on the server: the server snaps
+      // too, but a URL carrying the raw millisecond is unique per viewer, so
+      // nobody would ever share a cached answer.
+      const at = _adsbHistAtMs ? Math.floor(_adsbHistAtMs / 60_000) * 60_000 : null;
       if (!at) return;
       const seq = ++_adsbHistSeq;
       _adsbHistLoading = true;
@@ -15885,6 +15891,10 @@ function initPagerHoursFromStorage() {
         for (const t of (data.aircraft || [])) {
           const pos = _adsbHistInterpolate(t.points, atMs);
           if (!pos) continue;
+          // Not heard for two minutes before the instant: it has landed or
+          // left coverage. Holding it at its last fix for the rest of the
+          // trail window would show it parked in mid-air.
+          if (pos.ageSec > ADSB_HIST_STALE_SEC) continue;
           const course = _adsbHistCourse(t.points, atMs);
           aircraft.push({
             hex: t.hex,
@@ -15933,7 +15943,7 @@ function initPagerHoursFromStorage() {
     function adsbHistoryStart() {
       adsbHistoryStopPlay();   // a stale timer from a previous visit
       adsbHistoryMode = true;
-      _adsbHistAtMs = Date.now() - ADSB_HIST_LAG_MS;
+      _adsbHistAtMs = Math.floor((Date.now() - ADSB_HIST_LAG_MS) / 60_000) * 60_000;
       _adsbHistCount = null;
       _adsbHistTruncated = false;
       // The live poll would overwrite the frozen picture on its next tick.

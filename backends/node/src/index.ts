@@ -97,6 +97,7 @@ import {
   startAdsbDailyFlush,
   stopAdsbDailyFlush,
 } from './services/nodes/adsbNodeStore.js';
+import { stopAdsbTrackArchive } from './services/adsbTrackArchive.js';
 import {
   startNodeUptimeFlush,
   stopNodeUptimeFlush,
@@ -307,6 +308,9 @@ async function shutdown(signal: string) {
     // Awaited: writes out the partial minute of ADS-B counters rather than
     // discarding it on every restart.
     await stopAdsbDailyFlush();
+    // And the minute of aircraft positions in progress, so a deploy does not
+    // leave a hole in the history map.
+    await stopAdsbTrackArchive();
     await stopNodeUptimeFlush();
     await stopApiKeyUsageFlush();
     stopWhisperHealth();

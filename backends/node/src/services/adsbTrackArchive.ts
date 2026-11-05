@@ -1,272 +1,381 @@
 /**
- * Spill the in-memory aircraft trails to Postgres, so the map can be scrubbed
- * back in time.
+ * Write aircraft positions down, one row per minute, so the map can be scrubbed
+ * back in time (migration 139).
  *
- * There is no second ingest here. `sources/adsb.ts` already assembles exactly
- * what history needs — a per-hex, time-stamped, Douglas-Peucker simplified
- * trail, built from the MERGED snapshot and with dead-reckoned positions
- * filtered out — and this module writes that structure down. Which is also why
- * a fleet of feeder nodes needs no special handling: the merge unions every
- * aggregator and every node by hex before a trail point exists, so one
- * aircraft is one track however many receivers heard it.
+ * Positions are collected here as they are OBSERVED — once per poll from the
+ * merged picture, and at full rate from our own receivers' uploads — into a
+ * per-minute accumulator. Shortly after a minute closes it is reduced and
+ * inserted as one row, and never touched again.
  *
- * Rows are keyed (hex, hour). Only the current hour and the one before it are
- * ever written, so a closed hour is immutable, the UPDATE churn is bounded to
- * the aircraft currently flying, and the archive never has to read before it
- * writes.
+ * It deliberately does NOT read the live trails in sources/adsb.ts. Those are a
+ * display structure: they thin everything older than ten minutes and crush a
+ * trail past 150 points, so re-cutting history from them (as the previous
+ * hour-row archive did every minute) stored a picture that got coarser after it
+ * was written, and lost the start of the hour for anything orbiting or fed at
+ * 1 Hz. Collecting separately means what is stored is what was heard.
+ *
+ * Multiple feeder nodes still need no special handling: the poll merges every
+ * aggregator and every node by hex before a position is noted, so one aircraft
+ * is one track however many receivers heard it.
  */
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
-// TYPE-ONLY, deliberately — the same rule adsbNodeStore.ts follows.
-// sources/adsb.ts imports this module at runtime to hand its trails over, so
-// a runtime import back the other way would close a cycle between the poller
-// and the archive. The trails are therefore PASSED IN rather than pulled.
-import type { AdsbAircraft, ArchivableTrack } from '../sources/adsb.js';
+import { simplifyTrail, type TrackPoint } from '../lib/simplifyTrail.js';
+// TYPE-ONLY, deliberately: sources/adsb.ts imports this module at runtime to
+// hand positions over, so a runtime import back the other way would close a
+// cycle between the poller and the archive.
+import type { AdsbAircraft } from '../sources/adsb.js';
+
+const MINUTE_MS = 60_000;
 
 /**
- * How often trails are written down.
- *
- * The poll runs every ~8 s; writing on each one would be six times the work
- * for six times the bloat and no more history, because the trail decimation
- * upstream stores a point a minute at best for anything not manoeuvring.
- * History therefore lags live by up to a minute, which is invisible — the live
- * view already covers the last several minutes.
+ * How long after a minute closes it is written. Node uploads carry fixes
+ * stamped when they were taken, a few seconds before they arrive; the grace
+ * lets those land in their own minute. Positions from the poll are stamped
+ * when the poll looked, so they are never late.
  */
-const FLUSH_INTERVAL_MS = 60_000;
+const WRITE_GRACE_MS = 15_000;
 
 /**
- * Upper bound on the points stored for one aircraft-hour.
- *
- * Only reachable through the disjoint-append path below (a restart mid-hour),
- * since the in-memory buffer is itself capped at 150. A backstop, not a
- * working limit.
+ * A closed minute that failed to write is retried on each poll for this long,
+ * then dropped. A gap in history is preferable to a backlog that grows for as
+ * long as the database is away.
  */
-const MAX_POINTS_PER_HOUR = 400;
+const RETRY_FOR_MS = 10 * MINUTE_MS;
 
-/** Aircraft written per statement. Keeps one flush to a handful of round
- *  trips without building a single multi-megabyte query. */
-const BATCH_SIZE = 200;
+/**
+ * Within a minute, a position is kept when dropping it would move the path by
+ * more than this (~50 m), or when 30 s have passed since the last one kept. The
+ * second rule is readsb's: a point at least every 30 s whatever the aircraft is
+ * doing, so playback can always place it. First and last are always kept.
+ */
+const REDUCE_EPSILON_DEG = 0.0005;
+const REDUCE_MAX_GAP_MS = 30_000;
 
-const HOUR_MS = 3_600_000;
+/** Two fixes this close are the same fix seen twice (matches the trails). */
+const SAME_FIX_MS = 400;
+
+/** An identity not heard from in this long is forgotten. */
+const IDENTITY_TTL_MS = 30 * MINUTE_MS;
+
+/** adsb_identities rows are re-sent at least this often, so the retention
+ *  prune (on updated_at) never takes an aircraft that is still flying. */
+const IDENTITY_REFRESH_MS = 24 * 60 * MINUTE_MS;
 
 interface Identity {
   callsign: string | null;
   reg: string | null;
   type: string | null;
   esTag: string | null;
+  lastSeenMs: number;
+}
+
+interface MinuteAircraft {
+  points: TrackPoint[];
   sources: Set<string>;
 }
 
 /**
- * Identity per hex, accumulated across polls.
- *
- * Not on the trail: the trail is positions, and this is who they belong to.
- * Kept because identity ARRIVES LATE — an aircraft is usually tracked for a
- * while before it transmits a callsign, and the aggregators differ in how
- * complete their registration/type databases are, so the record that first
- * gave us a position often is not the one that names it.
+ * Identity per hex, carried across minutes. Identity ARRIVES LATE — an aircraft
+ * is usually tracked for a while before it transmits a callsign, and the
+ * aggregators differ in how complete their registration databases are — so a
+ * minute is stamped with the best identity known when it is written.
  */
 const identities = new Map<string, Identity>();
 
-let lastFlushMs = 0;
-let flushing = false;
+/** minute start (ms) → hex → what was heard in that minute. */
+const minutes = new Map<number, Map<string, MinuteAircraft>>();
 
-/** Fold one poll's OBSERVED records into the identity map. Estimated records
- *  must not be passed in — they are excluded from trails for the same reason,
- *  and an archive entry should only exist for something that was heard. */
-export function noteAdsbIdentities(observed: AdsbAircraft[]): void {
+/** End (exclusive) of the newest minute this process has written. Positions
+ *  older than this are late and are dropped. Null until the first write. */
+let writtenThroughMs: number | null = null;
+
+/** What this process last wrote to adsb_identities per hex, and when. */
+const identitiesWritten = new Map<string, { key: string; atMs: number }>();
+
+let lateDropped = 0;
+let flushing: Promise<void> | null = null;
+let stopped = false;
+
+function minuteOf(ms: number): number {
+  return Math.floor(ms / MINUTE_MS) * MINUTE_MS;
+}
+
+/** Add one position to its minute, with the sources that reported it. */
+function addPoint(hex: string, p: TrackPoint, sources: readonly string[]): void {
+  const m = minuteOf(p[0]);
+  if (writtenThroughMs !== null && m < writtenThroughMs) {
+    lateDropped += 1;
+    return;
+  }
+  let byHex = minutes.get(m);
+  if (!byHex) {
+    byHex = new Map();
+    minutes.set(m, byHex);
+  }
+  let ac = byHex.get(hex);
+  if (!ac) {
+    ac = { points: [], sources: new Set() };
+    byHex.set(hex, ac);
+  }
+  for (const s of sources) ac.sources.add(s);
+  ac.points.push(p);
+}
+
+/**
+ * Fold one poll's OBSERVED aircraft in: identity, sources and position.
+ * Estimated (dead-reckoned) records must not be passed in — they move, and an
+ * archived position must be one that was heard.
+ */
+export function noteAdsbPositions(observed: AdsbAircraft[], nowMs: number): void {
+  if (stopped) return;
   for (const a of observed) {
     let id = identities.get(a.hex);
     if (!id) {
-      id = { callsign: null, reg: null, type: null, esTag: null, sources: new Set() };
+      id = { callsign: null, reg: null, type: null, esTag: null, lastSeenMs: nowMs };
       identities.set(a.hex, id);
     }
-    // Only ever improves: a later record that has forgotten the callsign must
-    // not blank out one we already know.
+    // Only ever improves: a record that has forgotten the callsign must not
+    // blank out one already known.
     if (a.callsign) id.callsign = a.callsign;
     if (a.reg) id.reg = a.reg;
     if (a.type) id.type = a.type;
     if (a.esTag) id.esTag = a.esTag;
-    for (const s of a.sources) id.sources.add(s);
+    id.lastSeenMs = nowMs;
+    addPoint(a.hex, [nowMs, a.lat, a.lon, a.altFt], a.sources);
   }
-}
-
-/** Drop identities for aircraft no longer being trailed, so the map cannot
- *  grow without bound across a long uptime. */
-function pruneIdentities(liveHexes: Set<string>): void {
-  for (const hex of identities) {
-    if (!liveHexes.has(hex[0])) identities.delete(hex[0]);
-  }
-}
-
-interface HourSlice {
-  hex: string;
-  hourMs: number;
-  firstMs: number;
-  lastMs: number;
-  /** [secondsIntoHour, lat, lon, altFt|null] */
-  points: Array<[number, number, number, number | null]>;
 }
 
 /**
- * Cut one aircraft's trail into the hour slices worth writing.
- *
- * Only the current hour and the previous one. Earlier hours were written while
- * they were current and are finished; rewriting them would serve no purpose
- * and would let the upstream simplification — which progressively coarsens
- * points older than ten minutes — degrade history that was already stored at
- * full in-window resolution.
- *
- * The previous hour is included, rather than just the current one, because a
- * flush landing shortly after the top of the hour would otherwise leave the
- * hour that just closed missing its final seconds forever.
+ * Positions one of our receivers carried between its uploads, at the rate its
+ * decoder saw them. Stamped when each fix was taken, so they can belong to a
+ * minute the poll has moved past. Sources come from the poll, which sees the
+ * same node in its merged records.
  */
-export function sliceTrailByHour(
-  hex: string,
-  points: ReadonlyArray<readonly [number, number, number, number | null]>,
+export function noteAdsbNodePoints(hex: string, points: ReadonlyArray<TrackPoint>): void {
+  if (stopped) return;
+  for (const p of points) addPoint(hex, [p[0], p[1], p[2], p[3]], []);
+}
+
+/**
+ * Reduce one aircraft's minute to the points worth storing: time order, one
+ * point per fix, then Douglas-Peucker at ~50 m with a point forced at least
+ * every 30 s.
+ */
+export function reduceMinute(points: TrackPoint[]): TrackPoint[] {
+  const sorted = [...points].sort((a, b) => a[0] - b[0]);
+  const unique: TrackPoint[] = [];
+  for (const p of sorted) {
+    const prev = unique[unique.length - 1];
+    if (prev && (p[0] - prev[0] <= SAME_FIX_MS || (prev[1] === p[1] && prev[2] === p[2]))) {
+      continue;
+    }
+    unique.push(p);
+  }
+  if (unique.length <= 2) return unique;
+  const kept = new Set(simplifyTrail(unique, REDUCE_EPSILON_DEG));
+  const out: TrackPoint[] = [];
+  let lastKept = -Infinity;
+  for (const p of unique) {
+    if (kept.has(p) || p[0] - lastKept >= REDUCE_MAX_GAP_MS) {
+      out.push(p);
+      lastKept = p[0];
+    }
+  }
+  return out;
+}
+
+const r5 = (v: number): number => Math.round(v * 1e5) / 1e5;
+
+/** The json stored for one minute. Exported for the backfill's tests. */
+export function minuteJson(
+  minuteMs: number,
+  byHex: Map<string, MinuteAircraft>,
+  identityOf: (hex: string) => Identity | undefined,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [hex, ac] of byHex) {
+    const pts = reduceMinute(ac.points);
+    if (pts.length === 0) continue;
+    const id = identityOf(hex);
+    out[hex] = {
+      c: id?.callsign ?? null,
+      r: id?.reg ?? null,
+      t: id?.type ?? null,
+      e: id?.esTag ?? null,
+      s: Array.from(ac.sources),
+      p: pts.map((p) => [
+        p[0] - minuteMs,
+        r5(p[1]),
+        r5(p[2]),
+        p[3] === null ? null : Math.round(p[3]),
+      ]),
+    };
+  }
+  return out;
+}
+
+/** Insert one minute under the next free seq. */
+async function insertMinute(
+  pool: NonNullable<Awaited<ReturnType<typeof getPool>>>,
+  minuteMs: number,
+  json: Record<string, unknown>,
+): Promise<void> {
+  await pool.query(
+    `INSERT INTO adsb_track_chunks (minute, seq, aircraft)
+     SELECT $1::timestamptz, COALESCE(MAX(seq) + 1, 0), $2::json
+       FROM adsb_track_chunks
+      WHERE minute = $1::timestamptz AND seq >= 0`,
+    [new Date(minuteMs).toISOString(), JSON.stringify(json)],
+  );
+}
+
+/**
+ * Send registration/type for aircraft written this pass, but only when they
+ * changed since this process last sent them or a day has passed.
+ */
+async function upsertIdentities(
+  pool: NonNullable<Awaited<ReturnType<typeof getPool>>>,
+  hexes: Iterable<string>,
   nowMs: number,
-): HourSlice[] {
-  const currentHour = Math.floor(nowMs / HOUR_MS) * HOUR_MS;
-  const previousHour = currentHour - HOUR_MS;
-  const byHour = new Map<number, HourSlice>();
-
-  for (const p of points) {
-    const t = p[0];
-    const hourMs = Math.floor(t / HOUR_MS) * HOUR_MS;
-    if (hourMs !== currentHour && hourMs !== previousHour) continue;
-    let slice = byHour.get(hourMs);
-    if (!slice) {
-      slice = { hex, hourMs, firstMs: t, lastMs: t, points: [] };
-      byHour.set(hourMs, slice);
-    }
-    slice.points.push([Math.round((t - hourMs) / 1000), p[1], p[2], p[3]]);
-    if (t < slice.firstMs) slice.firstMs = t;
-    if (t > slice.lastMs) slice.lastMs = t;
+): Promise<void> {
+  const rows: Array<[string, string | null, string | null]> = [];
+  for (const hex of hexes) {
+    const id = identities.get(hex);
+    if (!id || (!id.reg && !id.type)) continue;
+    const key = `${id.reg ?? ''}|${id.type ?? ''}`;
+    const prev = identitiesWritten.get(hex);
+    if (prev && prev.key === key && nowMs - prev.atMs < IDENTITY_REFRESH_MS) continue;
+    rows.push([hex, id.reg, id.type]);
   }
-
-  // A single point is a dot, not a track. It is still enough to say the
-  // aircraft was there, so it is kept — the historical view interpolates
-  // between points and a lone point simply renders where it is.
-  return Array.from(byHour.values());
-}
-
-function iso(ms: number): string {
-  return new Date(ms).toISOString();
+  if (rows.length === 0) return;
+  await pool.query(
+    `INSERT INTO adsb_identities (hex, reg, type, updated_at)
+     SELECT u.hex, u.reg, u.type, now()
+       FROM unnest($1::text[], $2::text[], $3::text[]) AS u(hex, reg, type)
+     ON CONFLICT (hex) DO UPDATE SET
+       reg = COALESCE(EXCLUDED.reg, adsb_identities.reg),
+       type = COALESCE(EXCLUDED.type, adsb_identities.type),
+       updated_at = now()
+     WHERE (adsb_identities.reg, adsb_identities.type)
+             IS DISTINCT FROM (COALESCE(EXCLUDED.reg, adsb_identities.reg),
+                               COALESCE(EXCLUDED.type, adsb_identities.type))
+        OR adsb_identities.updated_at < now() - interval '1 day'`,
+    [rows.map((r) => r[0]), rows.map((r) => r[1]), rows.map((r) => r[2])],
+  );
+  for (const [hex, reg, type] of rows) {
+    identitiesWritten.set(hex, { key: `${reg ?? ''}|${type ?? ''}`, atMs: nowMs });
+  }
 }
 
 /**
- * Write the current and previous hour for every live aircraft.
- *
- * The conflict clause is where the care is:
- *
- *  - `points` normally REPLACES, because the incoming slice is the same hour
- *    re-cut from the authoritative in-memory buffer, including whatever
- *    simplification has since been applied to it.
- *  - It APPENDS instead when the incoming slice begins after the stored one
- *    ended. That only happens when the process restarted mid-hour and started
- *    a fresh buffer: replacing there would throw away the part of the hour
- *    recorded before the restart.
- *  - Identity fields only improve — COALESCE(new, old), never the reverse, or
- *    a record that momentarily forgot a callsign would erase it.
- *  - `sources` unions, so an hour heard by two receivers lists both. Written
- *    with containment operators rather than ARRAY(SELECT DISTINCT unnest(...)):
- *    plain operators, no subquery inside ON CONFLICT, and it converges — the
- *    concat branch can fire at most once, because the next flush's incoming
- *    set is then a subset of what was stored and the first branch keeps it.
- *    The reader de-duplicates, so the single concat cannot show a source
- *    twice.
+ * Write every minute that is ready: closed and past its grace, or — at
+ * shutdown — every minute held, including the open one.
  */
-export async function flushAdsbTracks(
-  tracks: ReadonlyArray<ArchivableTrack>,
-  nowMs: number = Date.now(),
-): Promise<number> {
+async function writeReady(nowMs: number, all: boolean): Promise<void> {
   const pool = await getPool();
-  if (!pool) return 0;
-
-  const live = new Set(tracks.map((t) => t.hex));
-  pruneIdentities(live);
-
-  const slices: HourSlice[] = [];
-  for (const t of tracks) {
-    for (const s of sliceTrailByHour(t.hex, t.points, nowMs)) slices.push(s);
+  const ready = Array.from(minutes.keys())
+    .filter((m) => all || m + MINUTE_MS + WRITE_GRACE_MS <= nowMs)
+    .sort((a, b) => a - b);
+  if (ready.length === 0) return;
+  if (!pool) {
+    // Nothing to write to: drop rather than hold positions forever.
+    for (const m of ready) minutes.delete(m);
+    return;
   }
-  if (slices.length === 0) return 0;
 
-  let written = 0;
-  for (let i = 0; i < slices.length; i += BATCH_SIZE) {
-    const batch = slices.slice(i, i + BATCH_SIZE);
-    const values: unknown[] = [];
-    const tuples = batch.map((s) => {
-      const id = identities.get(s.hex);
-      const base = values.length;
-      values.push(
-        s.hex, iso(s.hourMs), iso(s.firstMs), iso(s.lastMs),
-        id?.callsign ?? null, id?.reg ?? null, id?.type ?? null, id?.esTag ?? null,
-        id ? Array.from(id.sources) : [],
-        JSON.stringify(s.points),
-      );
-      return `($${base + 1}, $${base + 2}::timestamptz, $${base + 3}::timestamptz,`
-        + ` $${base + 4}::timestamptz, $${base + 5}, $${base + 6}, $${base + 7},`
-        + ` $${base + 8}, $${base + 9}::text[], $${base + 10}::jsonb)`;
-    });
-
+  const written = new Set<string>();
+  for (const m of ready) {
+    const byHex = minutes.get(m);
+    if (!byHex) continue;
     try {
-      await pool.query(
-        `INSERT INTO adsb_tracks
-           (hex, hour_bucket, first_seen, last_seen, callsign, reg, type, es_tag, sources, points)
-         VALUES ${tuples.join(', ')}
-         ON CONFLICT (hex, hour_bucket) DO UPDATE SET
-           points = CASE
-             WHEN EXCLUDED.first_seen > adsb_tracks.last_seen
-              AND jsonb_array_length(adsb_tracks.points) < ${MAX_POINTS_PER_HOUR}
-             THEN adsb_tracks.points || EXCLUDED.points
-             ELSE EXCLUDED.points
-           END,
-           first_seen = LEAST(adsb_tracks.first_seen, EXCLUDED.first_seen),
-           last_seen  = GREATEST(adsb_tracks.last_seen, EXCLUDED.last_seen),
-           callsign   = COALESCE(EXCLUDED.callsign, adsb_tracks.callsign),
-           reg        = COALESCE(EXCLUDED.reg, adsb_tracks.reg),
-           type       = COALESCE(EXCLUDED.type, adsb_tracks.type),
-           es_tag     = COALESCE(EXCLUDED.es_tag, adsb_tracks.es_tag),
-           sources    = CASE
-             WHEN EXCLUDED.sources <@ adsb_tracks.sources THEN adsb_tracks.sources
-             WHEN adsb_tracks.sources <@ EXCLUDED.sources THEN EXCLUDED.sources
-             ELSE adsb_tracks.sources || EXCLUDED.sources
-           END`,
-        values,
-      );
-      written += batch.length;
+      const json = minuteJson(m, byHex, (hex) => identities.get(hex));
+      if (Object.keys(json).length > 0) await insertMinute(pool, m, json);
+      for (const hex of byHex.keys()) written.add(hex);
+      minutes.delete(m);
+      // Monotonic: a minute written at shutdown, or after a clock step, never
+      // moves it back.
+      const end = m + MINUTE_MS;
+      if (!all && (writtenThroughMs === null || end > writtenThroughMs)) writtenThroughMs = end;
     } catch (err) {
-      // One interval of positions, at worst. Same posture as flushAdsbDaily:
-      // a gap in a coverage picture is preferable to a retry queue, and the
-      // next flush re-cuts the same hour from memory anyway.
-      log.debug({ err, rows: batch.length }, 'adsb track flush failed');
+      if (nowMs - (m + MINUTE_MS) > RETRY_FOR_MS) {
+        minutes.delete(m);
+        log.warn(
+          { err: (err as Error).message, minute: new Date(m).toISOString() },
+          'adsb track archive: minute dropped after retries',
+        );
+      } else {
+        log.debug({ err: (err as Error).message }, 'adsb track archive: write failed, retrying');
+      }
+      // Later minutes wait: written out of order, a retry would land behind
+      // writtenThroughMs and its positions would read as late.
+      break;
     }
   }
-  return written;
+
+  try {
+    await upsertIdentities(pool, written, nowMs);
+  } catch (err) {
+    log.debug({ err: (err as Error).message }, 'adsb identity upsert failed');
+  }
+
+  for (const [hex, id] of identities) {
+    if (nowMs - id.lastSeenMs > IDENTITY_TTL_MS) {
+      identities.delete(hex);
+      identitiesWritten.delete(hex);
+    }
+  }
 }
 
 /**
- * Called once per poll. Rate-limits itself to FLUSH_INTERVAL_MS rather than
- * being scheduled separately, so the archive can only ever write trails the
- * poller has finished updating.
+ * Called once per poll. Writes whatever minutes have closed; at most one write
+ * pass runs at a time.
  */
-export function maybeFlushAdsbTracks(
-  tracks: ReadonlyArray<ArchivableTrack>,
-  nowMs: number = Date.now(),
-): void {
-  if (flushing) return;
-  if (nowMs - lastFlushMs < FLUSH_INTERVAL_MS) return;
-  lastFlushMs = nowMs;
-  flushing = true;
-  void flushAdsbTracks(tracks, nowMs)
-    .catch((err) => log.debug({ err }, 'adsb track flush threw'))
-    .finally(() => { flushing = false; });
+export function maybeFlushAdsbTracks(nowMs: number = Date.now()): void {
+  if (flushing || stopped) return;
+  flushing = writeReady(nowMs, false)
+    .catch((err) => log.debug({ err }, 'adsb track archive pass threw'))
+    .finally(() => { flushing = null; });
+}
+
+/**
+ * The end of the newest minute on disk, for the history route's cache rule: a
+ * minute is final once written, and not before. Null until the first write.
+ */
+export function adsbArchivedThroughMs(): number | null {
+  return writtenThroughMs;
+}
+
+/** Positions that arrived for a minute already written, since start. */
+export function adsbArchiveLateDropped(): number {
+  return lateDropped;
+}
+
+/**
+ * Shutdown: wait for any pass in flight, then write everything held, the open
+ * minute included. The next process writes its part of that minute under the
+ * next seq and the reader unions them.
+ */
+export async function stopAdsbTrackArchive(): Promise<void> {
+  stopped = true;
+  if (flushing) await flushing;
+  await writeReady(Date.now(), true).catch((err) =>
+    log.warn({ err: (err as Error).message }, 'adsb track archive: shutdown write failed'),
+  );
 }
 
 /** TEST-ONLY. */
 export function _resetAdsbTrackArchive(): void {
   identities.clear();
-  lastFlushMs = 0;
-  flushing = false;
+  minutes.clear();
+  identitiesWritten.clear();
+  writtenThroughMs = null;
+  lateDropped = 0;
+  flushing = null;
+  stopped = false;
+}
+
+/** TEST-ONLY: run one write pass and wait for it. */
+export async function _flushAdsbTracksNow(nowMs: number, all = false): Promise<void> {
+  await writeReady(nowMs, all);
 }

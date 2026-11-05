@@ -372,6 +372,31 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
         log.warn({ err: (err as Error).message }, 'cleanup: adsb-tracks prune failed');
       }
 
+      // 2c-bis-2. Prune aircraft history (migration 139): one row per minute,
+      // ~1,440 a day, and the per-hex identities no write has refreshed in the
+      // window (the archive re-sends a flying aircraft's at least daily).
+      // adsb_tracks above is no longer written; its prune empties it.
+      try {
+        const chunkDays = Number.isFinite(retentionDays) ? retentionDays : DEFAULT_RETENTION_DAYS;
+        const r = await client.query(
+          `DELETE FROM adsb_track_chunks
+            WHERE minute < (NOW() - ($1 || ' days')::interval)`,
+          [String(chunkDays)],
+        );
+        const ids = await client.query(
+          `DELETE FROM adsb_identities
+            WHERE updated_at < (NOW() - ($1 || ' days')::interval)`,
+          [String(chunkDays)],
+        );
+        const n = (r.rowCount ?? 0) + (ids.rowCount ?? 0);
+        if (n > 0) {
+          rowsDeleted += n;
+          log.info({ chunks: r.rowCount, identities: ids.rowCount }, 'cleanup: pruned aircraft history');
+        }
+      } catch (err) {
+        log.warn({ err: (err as Error).message }, 'cleanup: aircraft-history prune failed');
+      }
+
       // 2c-ter. Prune stored coverage envelopes (migration 104). One row per
       // node per day, so this is a handful of rows even for a large fleet —
       // it exists for tidiness and for the FK-less case of a node whose rows

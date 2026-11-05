@@ -831,6 +831,42 @@ dead tuples before autovacuum would fire and simply idled below the threshold fo
 days at a time. These are deliberate per-table overrides — not leftovers to tidy
 away.
 
+### Aircraft history: one row per minute, written once
+
+The map's history playback (`GET /api/v1/adsb/history?at=&trail=`) asks one
+question: where was every aircraft between `at − trail` and `at`. So history
+is stored as time slices, the way readsb's heatmap is: `adsb_track_chunks`
+(`139`) holds one row per minute with every aircraft heard in it, as `json`
+`{hex: {c, r, t, e, s, p: [[msIntoMinute, lat, lon, alt]]}}` under lz4. A
+30-minute window is at most 31 primary-key rows.
+
+- **Collected as heard, not re-cut from the live trail.**
+  `services/adsbTrackArchive.ts` takes each poll's observed (never estimated)
+  aircraft and our receivers' 1 Hz points into a per-minute accumulator. The
+  live trail in `sources/adsb.ts` is a display structure that thins and
+  crushes itself, and the old hour-row archive (`adsb_tracks`, `103`) re-cut
+  history from it every minute, so stored hours got coarser after they were
+  written and a restart could wipe the first part of the hour.
+- **Written once.** A minute is reduced (Douglas-Peucker at ~50 m, a point at
+  least every 30 s) and inserted about 15 s after it closes, never updated:
+  one insert a minute in place of ~26 k updates an hour. Positions arriving
+  for a minute already written are dropped and counted.
+- **`seq` lets two processes share a minute.** A graceful shutdown writes the
+  minute in progress; the next process writes its part of the same minute
+  under the next seq, and the reader unions them. The one-off backfill
+  (`scripts/backfill-adsb-chunks.mjs`) writes seq −1.
+- **Only a write proves a minute is final.** The route long-caches an answer
+  only when its minute is at or below what this process has written
+  (`adsbArchivedThroughMs`); before the first write after a restart,
+  everything gets the 30 s cache.
+- **Registration by hex** lives in `adsb_identities`, written only when it
+  changes (and refreshed daily so retention never takes a flying aircraft),
+  for the receiver hover labels that a time-sliced table cannot answer by
+  index.
+
+`adsb_tracks` is no longer written or read; it stays as the rollback path
+until a later migration drops it.
+
 ### Rollup reads: the seam has to be visible to the planner
 
 Every fleet-wide staff Data read (overview tiles and lists, systems, talkgroups,

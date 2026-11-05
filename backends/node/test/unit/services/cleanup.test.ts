@@ -112,4 +112,13 @@ describe('runCleanupOnce', () => {
     expect(ran('SET statement_timeout = 0')).toHaveLength(1);
     expect(ran('RESET statement_timeout')).toHaveLength(1);
   });
+
+  it('prunes aircraft history minutes and stale identities on the retention window', async () => {
+    armOneExpiredPartition();
+    await runCleanupOnce(31);
+    expect(ran('DELETE FROM adsb_track_chunks')).toHaveLength(1);
+    expect(paramsOf('DELETE FROM adsb_track_chunks')).toEqual(['31']);
+    expect(ran('DELETE FROM adsb_identities')).toHaveLength(1);
+    expect(paramsOf('DELETE FROM adsb_identities')).toEqual(['31']);
+  });
 });

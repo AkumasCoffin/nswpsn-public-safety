@@ -36,10 +36,10 @@ import {
 import {
   adsbHistoryAt,
   adsbHistoryOldestMs,
-  snapHistoryBucket,
   HISTORY_TRAIL_DEFAULT_MIN,
   type AdsbHistory,
 } from '../services/adsbHistory.js';
+import { adsbArchivedThroughMs } from '../services/adsbTrackArchive.js';
 import { DATA_RETENTION_DAYS } from '../lib/retention.js';
 import { requireRole, canViewNodeData } from '../services/auth/roles.js';
 import { listNodes } from '../services/nodes/registry.js';
@@ -265,7 +265,7 @@ adsbRouter.get('/api/adsb/receivers', requireRole(canViewNodeData), async (c) =>
 // GET /api/adsb/history?at=<epoch ms>&trail=<minutes>
 //
 // Where everything was at an instant, plus the track flown into it. Backed by
-// adsb_tracks (migration 103), which stores one row per aircraft per hour.
+// adsb_track_chunks (migration 139), which stores one row per minute.
 //
 // `at` is SNAPPED to a fixed grid inside the service and echoed back, and the
 // response is deliberately not scoped to a viewport. Both choices exist so
@@ -322,13 +322,16 @@ adsbRouter.get(
         });
       }
 
-      // A closed bucket can never change, so it is worth caching hard. The most
-      // recent one is still filling — the archive flushes once a minute — so it
-      // gets the short window instead. Set here rather than left to
-      // CACHEABLE_PATHS, whose blanket 30s would throw away most of the sharing
-      // the bucketing exists to create (that middleware only fills in a
-      // Cache-Control header that is absent).
-      const settled = snapHistoryBucket(now) - data.atMs >= 2 * 60_000;
+      // A minute on disk never changes, so an answer whose every minute is
+      // written is worth caching hard. Anything newer is still being
+      // collected, so it gets the short window instead — and so does
+      // everything after a restart until this process has written a minute,
+      // since only a write proves where the archive has reached. Set here
+      // rather than left to CACHEABLE_PATHS, whose blanket 30s would throw
+      // away most of the sharing the bucketing exists to create (that
+      // middleware only fills in a Cache-Control header that is absent).
+      const through = adsbArchivedThroughMs();
+      const settled = through !== null && data.atMs + 60_000 <= through;
       c.header(
         'Cache-Control',
         settled
