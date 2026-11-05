@@ -107,6 +107,9 @@
 
       function onKey(e) {
         if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+        // Enter on a focused Cancel means Cancel: tabbing to it and pressing
+        // Enter must never confirm a delete.
+        else if (e.key === 'Enter' && cancelBtn && document.activeElement === cancelBtn) { e.preventDefault(); onCancel(); }
         else if (e.key === 'Enter' && (kind !== 'prompt' || document.activeElement === input)) { e.preventDefault(); onOk(); }
       }
       document.addEventListener('keydown', onKey, true);

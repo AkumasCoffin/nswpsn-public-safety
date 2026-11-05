@@ -42,7 +42,7 @@
 import { getWriterPool } from '../db/pool.js';
 import { partitionsEndingBy } from '../db/partitions.js';
 import { log } from '../lib/log.js';
-import { rollupHighWater } from './nodeHourlyRollup.js';
+import { rederiveInProgress, rollupHighWater } from './nodeHourlyRollup.js';
 
 const PRUNE_INTERVAL_MS = 60 * 60_000; // hourly
 const RETENTION_DAYS = 30;
@@ -206,6 +206,12 @@ async function dropExpiredRadioPartitions(): Promise<number> {
   const water = await rollupHighWater();
   if (water === null) {
     log.warn({ table: RADIO }, 'node events pruner: rollup has not run, skipping radio drop');
+    return 0;
+  }
+  // A whole day dropped under the backward re-derive walk loses that day's
+  // rollups — see rederiveInProgress. The walk ends within about a day.
+  if (await rederiveInProgress()) {
+    log.info({ table: RADIO }, 'node events pruner: history re-derive running, holding radio drop');
     return 0;
   }
   const retention = new Date(Date.now() - RETENTION_DAYS * 86_400_000);

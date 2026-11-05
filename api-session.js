@@ -76,8 +76,14 @@
     return mint();
   }
 
-  // Forget the token so the next call mints. Used after a 401.
-  function invalidate() {
+  // Forget the token so the next call mints. Used after a 401. Given the
+  // token that was refused, forgets only that one: a 401 that lands after a
+  // newer token was minted (a burst of requests sent with the old one) must
+  // not throw the new one away, or each late 401 mints again until the mint
+  // endpoint rate-limits the page.
+  function invalidate(refused) {
+    const v = load();
+    if (refused && v && v.token !== refused) return;
     cached = null;
     try { sessionStorage.removeItem(STORE_KEY); } catch (e) { /* ignore */ }
   }
@@ -91,10 +97,11 @@
   // backend says the token is the problem.
   async function apiFetch(url, options) {
     const opts = Object.assign({}, options || {});
-    opts.headers = await headers(opts.headers);
+    const sent = await token();
+    opts.headers = Object.assign({}, opts.headers || {}, { Authorization: `Bearer ${sent}` });
     let res = await fetch(url, opts);
     if (res.status === 401) {
-      invalidate();
+      invalidate(sent);
       opts.headers = await headers(options && options.headers);
       res = await fetch(url, opts);
     }

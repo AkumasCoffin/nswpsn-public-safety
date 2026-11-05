@@ -2024,7 +2024,19 @@ nodeDataRouter.get(
       const total = countRes.rows[0]?.n ?? 0;
       const page = pageRes.rows;
 
-      const radioIds = page.filter((r) => r.type === 'radio').map((r) => r.id);
+      const radioRows = page.filter((r) => r.type === 'radio');
+      const radioIds = radioRows.map((r) => r.id);
+      // The page's own time span, widened so every reception of each call is
+      // inside it: node_radio_events is partitioned on received_at, and a
+      // lookup by logical_call_id alone opens every day partition. A call
+      // spans seconds, so ten minutes either side is ample slack.
+      const CALL_SLACK_MS = 10 * 60 * 1000;
+      const radioSpan = radioRows.length > 0
+        ? [
+            new Date(Math.min(...radioRows.map((r) => new Date(r.at).getTime())) - CALL_SLACK_MS).toISOString(),
+            new Date(Math.max(...radioRows.map((r) => new Date(r.at).getTime())) + CALL_SLACK_MS).toISOString(),
+          ]
+        : null;
       const pagerIds = page.filter((r) => r.type === 'pager').map((r) => r.id);
 
       // Hydrate each page id with FULL group aggregates (all receptions of
@@ -2093,6 +2105,7 @@ nodeDataRouter.get(
                          FROM node_radio_events pm,
                               LATERAL unnest(pm.patch_members) AS m
                         WHERE pm.logical_call_id = e.logical_call_id
+                          AND pm.received_at BETWEEN ${'$2'}::timestamptz AND ${'$3'}::timestamptz
                           AND pm.patch_members IS NOT NULL) AS patch_members,
                       -- Each receiving site with the traffic channel IT used.
                       -- The LCN belongs per site, not on the call: one
@@ -2109,8 +2122,9 @@ nodeDataRouter.get(
                  FROM node_radio_events e
                  JOIN nodes n ON n.id = e.node_id
                 WHERE e.logical_call_id = ANY(${'$1'}::bigint[]) AND ${callGroup('e.')}
+                  AND e.received_at BETWEEN ${'$2'}::timestamptz AND ${'$3'}::timestamptz
                 GROUP BY e.logical_call_id`,
-              [radioIds],
+              [radioIds, radioSpan![0], radioSpan![1]],
             )
           : null,
         pagerIds.length > 0

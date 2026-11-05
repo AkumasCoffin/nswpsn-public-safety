@@ -70,7 +70,7 @@ const RAW_SOURCE_TO_ALERT_TYPE: Record<string, string> = {
   waze_police: 'waze_police',
   waze_roadwork: 'waze_roadwork',
   pager: 'pager',
-  dorsal: 'shark_report',
+  dorsal: 'dorsal',
   // LiveStore keys (the Node poller's source name) → alert_type. Without
   // these, the filter facet computation walks liveStore.keys() and
   // returns 0 for RFS, BoM, traffic_incidents because their LiveStore
@@ -79,7 +79,7 @@ const RAW_SOURCE_TO_ALERT_TYPE: Record<string, string> = {
   rfs_incidents: 'rfs',
   bom_warnings: 'bom_land',
   traffic_incidents: 'traffic_incident',
-  dorsal_reports: 'shark_report',
+  dorsal_reports: 'dorsal',
 };
 
 const ALERT_TYPE_PROVIDER: Record<string, [string, string]> = {
@@ -122,7 +122,10 @@ const ALERT_TYPE_PROVIDER: Record<string, [string, string]> = {
   user_incident: ['user', 'User Incidents'],
   radio_summary: ['rdio', 'Hourly Summaries'],
   act_ambulance: ['actas', 'Responses'],
-  shark_report: ['dorsal', 'Shark Reports'],
+  // Keyed by the archived source, as every other type is: the logs page
+  // sends a type's key back as ?source=, and no archive row says
+  // 'shark_report' (that is the Discord alert type's name).
+  dorsal: ['dorsal', 'Shark Reports'],
 };
 
 const PROVIDER_DISPLAY: Record<string, { name: string; icon: string; color: string }> = {

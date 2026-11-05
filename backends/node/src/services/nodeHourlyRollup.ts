@@ -725,6 +725,30 @@ export async function rollupHighWater(): Promise<Date | null> {
   }
 }
 
+/**
+ * Whether the backward re-derive walk is still running (rederive_below set).
+ *
+ * The walk computes its floor — the oldest hour it may touch — once per tick,
+ * from the oldest detail row. The pruner drops detail a whole UTC day at a
+ * time, so a drop landing mid-walk would leave up to a day of hours above
+ * that floor with no detail: the walk would DELETE their rollup rows and
+ * insert nothing, losing them for good. The pruner therefore holds its drops
+ * until the walk has finished, which takes about a day at most. An unreadable
+ * state counts as running, for the same reason rollupHighWater's null blocks.
+ */
+export async function rederiveInProgress(): Promise<boolean> {
+  try {
+    const pool = await getWriterPool();
+    if (!pool) return true;
+    const r = await pool.query<{ rederive_below: Date | null }>(
+      `SELECT rederive_below FROM node_rollup_state WHERE id`,
+    );
+    return (r.rows[0]?.rederive_below ?? null) !== null;
+  } catch {
+    return true;
+  }
+}
+
 /** One tick, guarded against overlapping with the previous one. */
 async function tick(): Promise<void> {
   if (tickRunning) return;

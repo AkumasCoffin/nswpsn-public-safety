@@ -62,6 +62,19 @@ function isNoPartitionError(err: unknown): boolean {
 const GROUP_WINDOW_SECONDS = 5;
 
 /**
+ * How far any row of a logical call can sit from a time inside it — the bound
+ * every "all rows of this call" lookup carries so it reads one or two day
+ * partitions instead of all thirty (node_radio_events is partitioned on
+ * received_at; a predicate on logical_call_id alone prunes nothing).
+ *
+ * A member joins only within GROUP_WINDOW_SECONDS of the group's anchor, so a
+ * call spans seconds; an automatic-patch merge folds calls that themselves sat
+ * inside that window. Two minutes is an order of magnitude of slack, and keeps
+ * the slice small: it lands in one partition, or two across midnight UTC.
+ */
+const CALL_SPAN_BOUND = "interval '2 minutes'";
+
+/**
  * The candidate logical call a new reception may join. Shared by both radio
  * ingest paths so the activity feed and the scanner feed group identically.
  *
@@ -107,6 +120,8 @@ function groupLookupSql(systemCond: string): string {
                    SELECT 1
                      FROM node_radio_events x
                     WHERE x.logical_call_id = c.logical_call_id
+                      AND x.received_at BETWEEN $3::timestamptz - ${CALL_SPAN_BOUND}
+                                            AND $3::timestamptz + ${CALL_SPAN_BOUND}
                       AND $5::integer IS NOT NULL
                       AND $6::integer IS NOT NULL
                       AND $7::bigint IS NOT NULL
@@ -748,8 +763,10 @@ export async function mergeAutomaticPatch(
     const losers = ids.filter((id) => id !== survivor);
     const res = await client.query(
       `UPDATE node_radio_events SET logical_call_id = $1
-        WHERE logical_call_id = ANY($2::bigint[])`,
-      [survivor, losers],
+        WHERE logical_call_id = ANY($2::bigint[])
+          AND received_at BETWEEN $3::timestamptz - ${CALL_SPAN_BOUND}
+                             AND $3::timestamptz + ${CALL_SPAN_BOUND}`,
+      [survivor, losers, at.toISOString()],
     );
     await client.query('COMMIT');
     log.info(

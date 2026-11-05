@@ -11,6 +11,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const poolQuery = vi.fn();
 const highWater = vi.fn();
+const rederiving = vi.fn();
 /** The checked-out client the partition jobs use for their transactions. */
 const clientQuery = vi.fn();
 const clientRelease = vi.fn();
@@ -30,6 +31,7 @@ vi.mock('../../../src/lib/log.js', () => ({
 // over `highWater` directly — reach it through the hoisted vi.fn instead.
 vi.mock('../../../src/services/nodeHourlyRollup.js', () => ({
   rollupHighWater: (...args: unknown[]) => highWater(...args),
+  rederiveInProgress: (...args: unknown[]) => rederiving(...args),
 }));
 
 import {
@@ -46,6 +48,8 @@ const forTable = (table: string): Array<{ sql: string; params: unknown[] }> =>
 beforeEach(() => {
   poolQuery.mockReset();
   highWater.mockReset();
+  rederiving.mockReset();
+  rederiving.mockResolvedValue(false);
   // One pass per table: delete nothing, so the batching loop exits at once.
   poolQuery.mockResolvedValue({ rows: [], rowCount: 0 });
 });
@@ -188,6 +192,18 @@ describe('radio retention once partitioned', () => {
     await pruneNodeEventsOnce();
     expect(clientSql().filter((s) => s.startsWith('DROP TABLE'))).toHaveLength(0);
     expect(forTable('node_radio_events_legacy')).toHaveLength(0);
+  });
+
+  it('holds every drop while the history re-derive walk is running', async () => {
+    // A day dropped mid-walk would leave hours above the walk's floor with no
+    // detail: it would delete their rollups and write nothing back.
+    highWater.mockResolvedValue(new Date());
+    rederiving.mockResolvedValue(true);
+    expired = [{ partition: 'node_radio_events_20260101', range_to: '2026-01-02T00:00:00Z' }];
+    await pruneNodeEventsOnce();
+    expect(clientSql().filter((s) => s.startsWith('DROP TABLE'))).toHaveLength(0);
+    // The pager/decode prunes still ran.
+    expect(forTable('node_pager_events')).toHaveLength(1);
   });
 
   it('never drops a table it did not create, whatever the probe returns', async () => {
