@@ -74,11 +74,25 @@ export class HttpError extends Error {
     message: string,
     readonly status: number | null,
     url: string,
+    /** A non-2xx response's Retry-After, in ms from now; null when absent. */
+    readonly retryAfterMs: number | null = null,
   ) {
     super(message);
     this.url = redactUrl(url);
     Object.defineProperty(this, 'fullUrl', { value: url, enumerable: false });
   }
+}
+
+/**
+ * Retry-After as ms from `nowMs`: either delay-seconds or an HTTP date. Null
+ * when absent or unreadable, so the caller falls back to its own backoff.
+ */
+export function parseRetryAfter(value: string | null | undefined, nowMs: number): number | null {
+  if (!value) return null;
+  const v = value.trim();
+  if (/^\d+$/.test(v)) return Number(v) * 1000;
+  const at = Date.parse(v);
+  return Number.isFinite(at) ? Math.max(0, at - nowMs) : null;
 }
 
 export interface FetchOptions {
@@ -121,6 +135,7 @@ async function doFetch(
         `HTTP ${res.status} for ${safeUrl}`,
         res.status,
         url,
+        parseRetryAfter(res.headers.get('retry-after'), Date.now()),
       );
     }
     // Pass headers through as a vanilla Headers-shaped object so

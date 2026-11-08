@@ -13,18 +13,23 @@
  * islands, verified by set-cover: every land point is within 447 km of
  * a centre). High-traffic circles sit centred on the capitals.
  *
- * Politeness: adsb.fi, airplanes.live and adsb.one ask for ≤1
- * request/second, which makes 28 circles × 4 upstreams per poll
- * impossible at a live cadence. Instead each poll PARTITIONS the
- * circles into one shard per upstream (7 circles each, staggered 1 s
- * apart), and the shard↔upstream assignment rotates every poll — so
- * every circle is fetched from some upstream every poll, and from
- * every upstream over any 4 polls. Instantaneous per-upstream rate
- * never exceeds 1 req/s; the average is ~0.5 req/s at the ~15 s
- * effective cadence (8 s re-arm + ~7 s staggered sweep). Aircraft that
+ * Politeness: adsb.fi, airplanes.live and adsb.one document 1
+ * request/second; adsb.lol's limit moves with its load and it says a 4xx
+ * means the client is doing something wrong. 28 circles × 4 upstreams per
+ * poll is impossible at a live cadence, so each poll PARTITIONS the
+ * circles among the upstreams that are answering (staggered STAGGER_MS
+ * apart on each host), and the assignment rotates every poll — every
+ * circle is fetched from some upstream every poll, and from every
+ * answering upstream over a few polls. With all four up that is 7
+ * circles each at the ~16 s effective cadence (8 s re-arm + the sweep).
+ *
+ * An upstream that refuses us (401/403) or rate-limits us (429) is
+ * PAUSED rather than polled into the ground — see recordUpstreamHealth:
+ * its sweep stops at the first such answer, its circles go to the others,
+ * and it gets a single probe circle when the pause ends. Aircraft that
  * only one aggregator can see would otherwise blink during rotation,
  * so a short holdover keeps an aircraft's last position for up to 90 s
- * (one full rotation is ~60 s) — see applyHoldover.
+ * — see applyHoldover.
  */
 import { simplifyTrail } from '../lib/simplifyTrail.js';
 import { fetchJson } from './shared/http.js';
@@ -105,7 +110,7 @@ const UPSTREAMS: readonly Upstream[] = [
   {
     id: 'adsb_fi',
     url: (c) =>
-      `https://opendata.adsb.fi/api/v2/lat/${c.lat}/lon/${c.lon}/dist/${RADIUS_NM}`,
+      `https://opendata.adsb.fi/api/v3/lat/${c.lat}/lon/${c.lon}/dist/${RADIUS_NM}`,
   },
   {
     id: 'airplanes_live',
@@ -458,23 +463,134 @@ interface UpstreamResult {
   circlesTotal: number;
   records: AdsbAircraft[];
   error?: string;
+  /** A circle came back 401/403. */
+  refused?: boolean;
+  /** A circle came back 429. */
+  limited?: boolean;
+  retryAfterMs?: number | null;
 }
 
 /**
- * Shard the circle list for one poll: upstream `upstreamIndex` takes
- * the circles where (i + tick) % UPSTREAMS.length matches. At any tick
- * the shards partition CIRCLES exactly (28 % 4 === 0), and rotating by
- * tick walks every circle through every upstream over 4 polls — so no
- * circle is permanently blind to one aggregator's feeder coverage, and
- * an upstream outage only ever staleneses a quarter of the map for one
- * poll.
+ * Spacing between one host's requests in a sweep. A shade over the
+ * documented 1 req/s: the timers all start together and fire late by
+ * varying amounts, so exactly 1000 ms could put two requests closer than
+ * a second, and adsb.fi counts 429s toward a temporary IP ban.
  */
-export function shardCircles(tick: number, upstreamIndex: number): Circle[] {
-  const n = UPSTREAMS.length;
-  return CIRCLES.filter((_, i) => (((i + tick) % n) + n) % n === upstreamIndex);
+const STAGGER_MS = 1_100;
+
+/**
+ * Shard the circle list for one poll among `probes` upstreams that get a
+ * single circle each and `full` upstreams that share the rest. The list is
+ * rotated by tick before it is dealt, so at any tick the shards partition
+ * CIRCLES exactly, and over successive polls every circle passes through
+ * every full upstream — no circle is permanently blind to one aggregator's
+ * feeder coverage.
+ */
+export function shardCircles(tick: number, full: number, probes = 0): Circle[][] {
+  const n = CIRCLES.length;
+  const order = CIRCLES.map((_, j) => CIRCLES[(((j + tick) % n) + n) % n]!);
+  const shards: Circle[][] = Array.from({ length: probes + full }, () => []);
+  let k = 0;
+  for (let p = 0; p < probes && k < n; p++) shards[p]!.push(order[k++]!);
+  for (let j = 0; k < n; j++, k++) shards[probes + (full > 0 ? j % full : 0)]!.push(order[k]!);
+  return shards;
 }
 
 let _pollTick = 0;
+
+// --- Upstream health ----------------------------------------------------
+// Refused (401/403): the host has decided not to serve us — airplanes.live
+// answers with a "contact us" message, adsb.one with a Cloudflare challenge.
+// Nothing we send changes that, so one probe an hour.
+const REFUSED_PAUSE_MS = 60 * 60_000;
+// Rate-limited (429): honour Retry-After, else back off from 30 s doubling.
+const LIMITED_MIN_PAUSE_MS = 30_000;
+const LIMITED_MAX_PAUSE_MS = 10 * 60_000;
+// Anything else (timeouts, 5xx) is usually transient; only a run of polls
+// with every circle failing pauses it.
+const FAILING_POLLS = 3;
+const FAILING_PAUSE_MS = 2 * 60_000;
+
+type PauseReason = 'refused' | 'rate_limited' | 'failing';
+interface UpstreamHealth {
+  pausedUntil: number;
+  /** Why it was last paused; null while healthy. Non-null and past
+   *  pausedUntil means its next poll is a single-circle probe. */
+  reason: PauseReason | null;
+  error: string | null;
+  limitedPauseMs: number;
+  failedPolls: number;
+}
+const _health = new Map<string, UpstreamHealth>();
+
+function healthOf(id: string): UpstreamHealth {
+  let h = _health.get(id);
+  if (!h) {
+    h = { pausedUntil: 0, reason: null, error: null, limitedPauseMs: 0, failedPolls: 0 };
+    _health.set(id, h);
+  }
+  return h;
+}
+
+/** Each upstream's circles for this poll; empty for one that is paused. */
+function planShards(tick: number, nowMs: number): Circle[][] {
+  const due = UPSTREAMS.map((u, i) => ({ i, h: healthOf(u.id) })).filter(({ h }) => h.pausedUntil <= nowMs);
+  let probes = due.filter(({ h }) => h.reason !== null);
+  let full = due.filter(({ h }) => h.reason === null);
+  // Nobody healthy to share the map: the probes take all of it rather than
+  // leave it dark. A probe that fails again just pauses again.
+  if (full.length === 0) {
+    full = probes;
+    probes = [];
+  }
+  const dealt = shardCircles(tick, full.length, probes.length);
+  const out: Circle[][] = UPSTREAMS.map(() => []);
+  [...probes, ...full].forEach(({ i }, k) => (out[i] = dealt[k] ?? []));
+  return out;
+}
+
+/**
+ * Fold one poll's result for an upstream into its health, and log only the
+ * transitions — a source that has been refusing us for a day says so once.
+ */
+function recordUpstreamHealth(up: Upstream, r: UpstreamResult, nowMs: number): void {
+  const h = healthOf(up.id);
+  if (r.circlesTotal === 0) return; // paused this poll
+  const pause = (reason: PauseReason, ms: number, error: string): void => {
+    if (h.reason === null) {
+      log.warn({ upstream: up.id, error, pauseSec: Math.round(ms / 1000) }, `adsb: upstream ${reason}, pausing`);
+    }
+    h.reason = reason;
+    h.error = error;
+    h.pausedUntil = nowMs + ms;
+  };
+  if (r.refused) {
+    pause('refused', REFUSED_PAUSE_MS, r.error ?? 'refused');
+    return;
+  }
+  if (r.limited) {
+    h.limitedPauseMs = Math.min(
+      LIMITED_MAX_PAUSE_MS,
+      Math.max(LIMITED_MIN_PAUSE_MS, h.limitedPauseMs * 2),
+    );
+    pause('rate_limited', r.retryAfterMs ?? h.limitedPauseMs, r.error ?? 'HTTP 429');
+    return;
+  }
+  if (r.circlesOk === 0) {
+    h.failedPolls += 1;
+    // A failed probe goes straight back to sleep.
+    if (h.reason !== null || h.failedPolls >= FAILING_POLLS) {
+      pause(h.reason ?? 'failing', h.reason === 'refused' ? REFUSED_PAUSE_MS : FAILING_PAUSE_MS, r.error ?? 'unknown error');
+    }
+    return;
+  }
+  if (h.reason !== null) log.info({ upstream: up.id, was: h.reason }, 'adsb: upstream answering again');
+  h.reason = null;
+  h.error = null;
+  h.pausedUntil = 0;
+  h.limitedPauseMs = 0;
+  h.failedPolls = 0;
+}
 
 // Holdover: each poll sees every circle from ONE aggregator, so an
 // aircraft only a different aggregator's feeders receive would blink
@@ -701,22 +817,27 @@ export function applyHoldover(fresh: AdsbAircraft[], nowMs: number): AdsbAircraf
   return Array.from(out.values());
 }
 
-/** TEST-ONLY: reset holdover + rotation state between unit tests. */
+/** TEST-ONLY: reset holdover, rotation and upstream health between unit tests. */
 export function _resetAdsbHoldoverForTests(): void {
   _lastSeen.clear();
   _pollTick = 0;
+  _health.clear();
 }
 
 /**
- * Fetch one upstream's shard of circles, staggered 1 s apart to
+ * Fetch one upstream's shard of circles, staggered STAGGER_MS apart to
  * respect the ~1 req/s politeness ceiling. Per-circle failures are
  * tolerated (that circle just contributes nothing); the upstream is
- * only marked down when every circle fails.
+ * only marked down when every circle fails. A 401/403/429 stops the
+ * rest of the sweep: the host has told us to go away or slow down, and
+ * the remaining circles would only repeat the answer.
  */
 async function fetchUpstream(up: Upstream, circles: readonly Circle[]): Promise<UpstreamResult> {
+  let halted: { refused: boolean; retryAfterMs: number | null } | null = null;
   const results = await Promise.all(
     circles.map(async (c, i) => {
-      if (i > 0) await new Promise((r) => setTimeout(r, i * 1000));
+      if (i > 0) await new Promise((r) => setTimeout(r, i * STAGGER_MS));
+      if (halted) return { ok: false as const, error: 'skipped' };
       try {
         const body = await fetchJson<ReadsbPointResponse>(up.url(c), {
           timeoutMs: 8_000,
@@ -733,7 +854,11 @@ async function fetchUpstream(up: Upstream, circles: readonly Circle[]): Promise<
         }
         return { ok: true as const, records };
       } catch (err) {
-        return { ok: false as const, error: (err as Error).message };
+        const e = err as Error & { status?: number | null; retryAfterMs?: number | null };
+        if (e.status === 401 || e.status === 403 || e.status === 429) {
+          halted ??= { refused: e.status !== 429, retryAfterMs: e.retryAfterMs ?? null };
+        }
+        return { ok: false as const, error: e.message };
       }
     }),
   );
@@ -755,7 +880,14 @@ async function fetchUpstream(up: Upstream, circles: readonly Circle[]): Promise<
     circlesTotal: circles.length,
     records,
   };
-  if (circlesOk === 0) out.error = errors[0] ?? 'unknown error';
+  if (circlesOk === 0) out.error = errors.find((e) => e !== 'skipped') ?? errors[0] ?? 'unknown error';
+  const stop = halted as { refused: boolean; retryAfterMs: number | null } | null;
+  if (stop) {
+    if (stop.refused) out.refused = true;
+    else out.limited = true;
+    out.retryAfterMs = stop.retryAfterMs;
+    out.error ??= errors.find((e) => e !== 'skipped');
+  }
   return out;
 }
 
@@ -957,15 +1089,32 @@ export function _resetAdsbTrailsForTests(): void {
 
 export async function fetchAdsbAircraft(): Promise<AdsbSnapshot> {
   // Upstreams in parallel — different hosts, no shared rate limit.
-  // Each gets this poll's shard of the circle rotation.
+  // Each answering one gets this poll's shard of the circle rotation; a
+  // paused one gets none and reports why.
   // ADSB_DISABLED turns off UPSTREAM polling only; our own feeder nodes keep
   // reporting through the same pipeline below.
   const tick = _pollTick++;
+  const planNow = Date.now();
+  const shards = planShards(tick, planNow);
   const results = config.ADSB_DISABLED
     ? []
     : await Promise.all(
-        UPSTREAMS.map((u, i) => fetchUpstream(u, shardCircles(tick, i))),
+        UPSTREAMS.map(async (u, i): Promise<UpstreamResult> => {
+          const circles = shards[i] ?? [];
+          if (circles.length > 0) return fetchUpstream(u, circles);
+          const h = healthOf(u.id);
+          return {
+            id: u.id,
+            ok: false,
+            circlesOk: 0,
+            circlesTotal: 0,
+            records: [],
+            error: `paused (${h.reason ?? 'no circles'}) until ${new Date(h.pausedUntil).toISOString()}: ${h.error ?? ''}`.trim(),
+          };
+        }),
       );
+  const doneNow = Date.now();
+  results.forEach((r, i) => recordUpstreamHealth(UPSTREAMS[i]!, r, doneNow));
 
   // Our own ADS-B feeder nodes are just another source: a ~5s cadence against
   // the aggregators' ~15s, covering whatever the circle rotation misses.
@@ -1061,9 +1210,9 @@ export default function register(): void {
   registerSource<AdsbSnapshot>({
     name: 'adsb_aircraft',
     family: 'misc',
-    // The poller re-arms *after* each run completes; 8 s + ~7 s of
-    // staggered shard fetching lands the effective cadence at ~15 s
-    // (≤ 1 req/s instantaneous, ~0.5 req/s average per upstream).
+    // The poller re-arms *after* each run completes; 8 s + the staggered
+    // sweep (~7.7 s with four upstreams answering, ~15 s with two) lands
+    // the effective cadence at ~16-23 s, under 1 req/s on every host.
     intervalMs: 8_000,
     fetch: fetchAdsbAircraft,
   });
