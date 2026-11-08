@@ -352,30 +352,11 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
         );
       }
 
-      // 2c-bis. Prune persisted aircraft tracks (migration 103). Plain
-      // DELETE rather than a partition drop: one row per aircraft per hour is
-      // ~20-25k rows/day, so a whole retention window is under a million and
-      // the partition machinery the archive_* tables need would be pure
-      // overhead here. Parameterised interval for the same NaN reason as 2d.
-      try {
-        const trackDays = Number.isFinite(retentionDays) ? retentionDays : DEFAULT_RETENTION_DAYS;
-        const r = await client.query(
-          `DELETE FROM adsb_tracks
-            WHERE hour_bucket < (NOW() - ($1 || ' days')::interval)`,
-          [String(trackDays)],
-        );
-        if ((r.rowCount ?? 0) > 0) {
-          rowsDeleted += r.rowCount ?? 0;
-          log.info({ rows: r.rowCount }, 'cleanup: pruned adsb_tracks');
-        }
-      } catch (err) {
-        log.warn({ err: (err as Error).message }, 'cleanup: adsb-tracks prune failed');
-      }
-
-      // 2c-bis-2. Prune aircraft history (migration 139): one row per minute,
+      // 2c-bis. Prune aircraft history (migration 139): one row per minute,
       // ~1,440 a day, and the per-hex identities no write has refreshed in the
       // window (the archive re-sends a flying aircraft's at least daily).
-      // adsb_tracks above is no longer written; its prune empties it.
+      // Plain DELETE rather than a partition drop: a whole retention window is
+      // ~45k rows. Parameterised interval for the same NaN reason as 2d.
       try {
         const chunkDays = Number.isFinite(retentionDays) ? retentionDays : DEFAULT_RETENTION_DAYS;
         const r = await client.query(

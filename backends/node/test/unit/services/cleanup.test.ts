@@ -120,5 +120,7 @@ describe('runCleanupOnce', () => {
     expect(paramsOf('DELETE FROM adsb_track_chunks')).toEqual(['31']);
     expect(ran('DELETE FROM adsb_identities')).toHaveLength(1);
     expect(paramsOf('DELETE FROM adsb_identities')).toEqual(['31']);
+    // adsb_tracks was dropped by 140.
+    expect(ran('DELETE FROM adsb_tracks')).toHaveLength(0);
   });
 });

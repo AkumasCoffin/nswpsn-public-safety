@@ -6,8 +6,8 @@
  * since the backend last came up. The coverage envelope beside it was persisted
  * and looked healthy, which made the map read as broken rather than as young.
  *
- * Not a filter over the global adsb_tracks, which already stores every merged
- * track with its `sources`: those rows only exist for aircraft that reached the
+ * Not a filter over the global history (adsb_track_chunks), which stores every merged
+ * track with its `sources`: those only exist for aircraft that reached the
  * public merge, and a node whose feed is PAUSED contributes nothing to it. A
  * receiver's own diagnostics have to be built from its own uploads, which is
  * the same line the feed gate is drawn on everywhere else here.

@@ -853,8 +853,8 @@ is stored as time slices, the way readsb's heatmap is: `adsb_track_chunks`
   for a minute already written are dropped and counted.
 - **`seq` lets two processes share a minute.** A graceful shutdown writes the
   minute in progress; the next process writes its part of the same minute
-  under the next seq, and the reader unions them. The one-off backfill
-  (`scripts/backfill-adsb-chunks.mjs`) writes seq −1.
+  under the next seq, and the reader unions them. Seq −1 rows are the
+  one-off backfill from `adsb_tracks`.
 - **Only a write proves a minute is final.** The route long-caches an answer
   only when its minute is at or below what this process has written
   (`adsbArchivedThroughMs`); before the first write after a restart,
@@ -864,8 +864,8 @@ is stored as time slices, the way readsb's heatmap is: `adsb_track_chunks`
   for the receiver hover labels that a time-sliced table cannot answer by
   index.
 
-`adsb_tracks` is no longer written or read; it stays as the rollback path
-until a later migration drops it.
+`adsb_tracks` was kept as the rollback path until the playback had been
+checked across the cutover, then dropped by `140`.
 
 ### Rollup reads: the seam has to be visible to the planner
 
