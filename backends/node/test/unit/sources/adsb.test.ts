@@ -238,6 +238,24 @@ describe('adsb.shardCircles', () => {
       expect(new Set(owners).size).toBe(full);
     }
   });
+
+  it('gives a capped upstream no more than its share and the rest to the others', async () => {
+    const { shardCircles, CIRCLES } = await import('../../../src/sources/adsb.js');
+    const all = [...CIRCLES].map((c) => c.id).sort();
+    const shards = shardCircles(0, 2, 1, [3, Infinity]);
+    expect(shards.map((s) => s.length)).toEqual([1, 3, CIRCLES.length - 4]);
+    expect(ids(shards)).toEqual(all);
+  });
+
+  it('with every upstream capped, leaves out the circles dealt most recently', async () => {
+    const { shardCircles, CIRCLES } = await import('../../../src/sources/adsb.js');
+    // Circles 0-9 were dealt last poll, the rest the poll before.
+    const lastDealt = CIRCLES.map((_, i) => (i < 10 ? 5 : 4));
+    const shards = shardCircles(6, 2, 0, [5, 4], lastDealt);
+    expect(shards.map((s) => s.length)).toEqual([5, 4]);
+    const dealt = new Set(shards.flat().map((c) => c.id));
+    for (let i = 0; i < 10; i++) expect(dealt.has(CIRCLES[i]!.id)).toBe(false);
+  });
 });
 
 describe('adsb.trails', () => {
@@ -525,6 +543,34 @@ describe('adsb upstream health', () => {
     vi.setSystemTime(Date.now() + 1_000);
     await poll();
     expect(callsTo('adsb.lol')).toBe(0);
+  });
+
+  it('a 429 halves the circles it is dealt, and clean polls earn them back', async () => {
+    let limit = true;
+    fetchJsonMock.mockImplementation((url: string) =>
+      limit && url.includes('adsb.lol') ? Promise.reject(status(429)) : Promise.resolve({ ac: [raw()] }),
+    );
+    await poll(); // asked for 7, refused: share 3, paused 30 s
+    limit = false;
+    const at = (ms: number) => vi.setSystemTime(Date.now() + ms);
+
+    fetchJsonMock.mockClear();
+    at(31_000);
+    await poll();
+    expect(callsTo('adsb.lol')).toBe(1); // the probe
+
+    // Rejoined at its reduced share; the other three take up the rest.
+    for (let i = 0; i < 4; i++) {
+      fetchJsonMock.mockClear();
+      at(20_000);
+      await poll();
+      expect(callsTo('adsb.lol')).toBe(3);
+      expect(fetchJsonMock.mock.calls).toHaveLength(28);
+    }
+    fetchJsonMock.mockClear();
+    at(20_000);
+    await poll();
+    expect(callsTo('adsb.lol')).toBe(4);
   });
 
   it('with every upstream paused the probes cover the whole map', async () => {

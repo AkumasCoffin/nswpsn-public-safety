@@ -26,7 +26,10 @@
  * An upstream that refuses us (401/403) or rate-limits us (429) is
  * PAUSED rather than polled into the ground — see recordUpstreamHealth:
  * its sweep stops at the first such answer, its circles go to the others,
- * and it gets a single probe circle when the pause ends. Aircraft that
+ * and it gets a single probe circle when the pause ends. A 429 also halves
+ * how many circles that upstream is dealt per poll, and the share grows
+ * back one circle at a time while it answers cleanly, so it settles at
+ * what the host will take instead of cycling in and out of pauses. Aircraft that
  * only one aggregator can see would otherwise blink during rotation,
  * so a short holdover keeps an aircraft's last position for up to 90 s
  * — see applyHoldover.
@@ -485,18 +488,51 @@ const STAGGER_MS = 1_100;
  * CIRCLES exactly, and over successive polls every circle passes through
  * every full upstream — no circle is permanently blind to one aggregator's
  * feeder coverage.
+ *
+ * `caps` limits how many circles each full upstream may take (its rate-limit
+ * share); what a capped upstream can't take goes to the others. Only when
+ * every one is at its cap are circles left out, and then `lastDealt` (the
+ * tick each circle was last dealt, by CIRCLES index) puts the longest-waiting
+ * circles first, so the ones left out change every poll instead of the same
+ * corner of the map going dark.
  */
-export function shardCircles(tick: number, full: number, probes = 0): Circle[][] {
+export function shardCircles(
+  tick: number,
+  full: number,
+  probes = 0,
+  caps?: readonly number[],
+  lastDealt?: readonly number[],
+): Circle[][] {
+  return shardCircleIndexes(tick, full, probes, caps, lastDealt).map((s) => s.map((i) => CIRCLES[i]!));
+}
+
+function shardCircleIndexes(
+  tick: number,
+  full: number,
+  probes: number,
+  caps?: readonly number[],
+  lastDealt?: readonly number[],
+): number[][] {
   const n = CIRCLES.length;
-  const order = CIRCLES.map((_, j) => CIRCLES[(((j + tick) % n) + n) % n]!);
-  const shards: Circle[][] = Array.from({ length: probes + full }, () => []);
+  const order = CIRCLES.map((_, j) => (((j + tick) % n) + n) % n);
+  // Stable: with nothing left out last poll every circle ties, and the
+  // rotation above stands.
+  if (lastDealt) order.sort((a, b) => (lastDealt[a] ?? -1) - (lastDealt[b] ?? -1));
+  const shards: number[][] = Array.from({ length: probes + full }, () => []);
   let k = 0;
   for (let p = 0; p < probes && k < n; p++) shards[p]!.push(order[k++]!);
-  for (let j = 0; k < n; j++, k++) shards[probes + (full > 0 ? j % full : 0)]!.push(order[k]!);
+  const capOf = (j: number): number => caps?.[j] ?? Infinity;
+  for (let j = 0; k < n && full > 0; j = (j + 1) % full) {
+    if (shards.slice(probes).every((s, q) => s.length >= capOf(q))) break;
+    if (shards[probes + j]!.length >= capOf(j)) continue;
+    shards[probes + j]!.push(order[k++]!);
+  }
   return shards;
 }
 
 let _pollTick = 0;
+/** The tick each circle (by CIRCLES index) was last dealt to an upstream. */
+const _circleDealtTick: number[] = [];
 
 // --- Upstream health ----------------------------------------------------
 // Refused (401/403): the host has decided not to serve us — airplanes.live
@@ -506,6 +542,10 @@ const REFUSED_PAUSE_MS = 60 * 60_000;
 // Rate-limited (429): honour Retry-After, else back off from 30 s doubling.
 const LIMITED_MIN_PAUSE_MS = 30_000;
 const LIMITED_MAX_PAUSE_MS = 10 * 60_000;
+// ...and halve its circles per poll. Each run of this many clean polls that
+// used its whole share earns one circle back (~1 min at the poll cadence):
+// slow enough that it doesn't walk straight back into the limit it just hit.
+const SHARE_GROW_POLLS = 4;
 // Anything else (timeouts, 5xx) is usually transient; only a run of polls
 // with every circle failing pauses it.
 const FAILING_POLLS = 3;
@@ -520,13 +560,20 @@ interface UpstreamHealth {
   error: string | null;
   limitedPauseMs: number;
   failedPolls: number;
+  /** Most circles it is dealt per poll; Infinity until it has rate-limited us. */
+  share: number;
+  /** Clean polls at its full share since the share last changed. */
+  cleanAtShare: number;
 }
 const _health = new Map<string, UpstreamHealth>();
 
 function healthOf(id: string): UpstreamHealth {
   let h = _health.get(id);
   if (!h) {
-    h = { pausedUntil: 0, reason: null, error: null, limitedPauseMs: 0, failedPolls: 0 };
+    h = {
+      pausedUntil: 0, reason: null, error: null, limitedPauseMs: 0, failedPolls: 0,
+      share: Infinity, cleanAtShare: 0,
+    };
     _health.set(id, h);
   }
   return h;
@@ -543,9 +590,16 @@ function planShards(tick: number, nowMs: number): Circle[][] {
     full = probes;
     probes = [];
   }
-  const dealt = shardCircles(tick, full.length, probes.length);
+  const dealt = shardCircleIndexes(
+    tick,
+    full.length,
+    probes.length,
+    full.map(({ h }) => h.share),
+    _circleDealtTick,
+  );
+  for (const s of dealt) for (const c of s) _circleDealtTick[c] = tick;
   const out: Circle[][] = UPSTREAMS.map(() => []);
-  [...probes, ...full].forEach(({ i }, k) => (out[i] = dealt[k] ?? []));
+  [...probes, ...full].forEach(({ i }, k) => (out[i] = (dealt[k] ?? []).map((c) => CIRCLES[c]!)));
   return out;
 }
 
@@ -569,6 +623,14 @@ function recordUpstreamHealth(up: Upstream, r: UpstreamResult, nowMs: number): v
     return;
   }
   if (r.limited) {
+    // Halve what it was actually asked for: a share it never used is no
+    // evidence it can take that much.
+    const prevShare = h.share;
+    h.share = Math.max(1, Math.floor(Math.min(h.share, r.circlesTotal) / 2));
+    h.cleanAtShare = 0;
+    if (h.share !== prevShare) {
+      log.info({ upstream: up.id, share: h.share }, 'adsb: upstream rate-limited, fewer circles per poll');
+    }
     h.limitedPauseMs = Math.min(
       LIMITED_MAX_PAUSE_MS,
       Math.max(LIMITED_MIN_PAUSE_MS, h.limitedPauseMs * 2),
@@ -585,6 +647,15 @@ function recordUpstreamHealth(up: Upstream, r: UpstreamResult, nowMs: number): v
     return;
   }
   if (h.reason !== null) log.info({ upstream: up.id, was: h.reason }, 'adsb: upstream answering again');
+  // Grow the share back only on polls that used all of it (a probe doesn't),
+  // and stop counting once it covers the whole map.
+  if (Number.isFinite(h.share) && h.reason === null && r.circlesTotal >= h.share) {
+    h.cleanAtShare += 1;
+    if (h.cleanAtShare >= SHARE_GROW_POLLS) {
+      h.share = h.share + 1 >= CIRCLES.length ? Infinity : h.share + 1;
+      h.cleanAtShare = 0;
+    }
+  }
   h.reason = null;
   h.error = null;
   h.pausedUntil = 0;
@@ -822,6 +893,7 @@ export function _resetAdsbHoldoverForTests(): void {
   _lastSeen.clear();
   _pollTick = 0;
   _health.clear();
+  _circleDealtTick.length = 0;
 }
 
 /**
